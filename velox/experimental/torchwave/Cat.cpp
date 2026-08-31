@@ -23,8 +23,10 @@
 #include "velox/experimental/torchwave/WaveGraph.h"
 
 #include <ATen/ATen.h>
+#include <fmt/format.h>
 #include <folly/CppAttributes.h>
 #include <gflags/gflags.h>
+#include <algorithm>
 #include <iostream>
 
 // elt_trace is now WaveConfig::kernelDebugOutput
@@ -32,6 +34,9 @@
 namespace torch::wave {
 
 namespace {
+
+constexpr std::string_view kCatTarget = "torch.ops.aten.cat.default";
+constexpr std::string_view kStackTarget = "torch.ops.aten.stack.default";
 
 SizeExpr translateSizeExpr(const SizeExpr& expr, const FormalToActual& map) {
   SizeExpr result;
@@ -49,6 +54,117 @@ SizeExpr translateSizeExpr(const SizeExpr& expr, const FormalToActual& map) {
     result.args.push_back(translateSizeExpr(child, map));
   }
   return result;
+}
+
+// The 'dim' attribute of a concat, still in torch's (possibly negative) form.
+// Defaults to 0, matching both schemas.
+int64_t concatDimAttribute(NodeCP node) {
+  const auto* attr = node->tryGetAttribute("dim");
+  if (attr && std::holds_alternative<int64_t>(attr->value)) {
+    return std::get<int64_t>(attr->value);
+  }
+  return 0;
+}
+
+ConcatSpec concatSpec(NodeCP node, const ValueTypes& types) {
+  ConcatSpec spec;
+  spec.isStack = node->target() == kStackTarget;
+  int64_t dim = concatDimAttribute(node);
+  const auto& inputs = node->inputs();
+  if (!inputs.empty() &&
+      inputs[0].value->type().kind() == nativert::Type::Kind::TensorList) {
+    auto elements = inputs[0].value->getListElements();
+    if (!elements.empty()) {
+      auto elementRank = types.rank(elements[0]);
+      if (elementRank >= 0) {
+        spec.outRank =
+            spec.isStack ? static_cast<int8_t>(elementRank + 1) : elementRank;
+      }
+    }
+  }
+  if (dim < 0 && spec.outRank > 0) {
+    dim += spec.outRank;
+  }
+  spec.dim = static_cast<int32_t>(dim);
+  return spec;
+}
+
+// Rewrites a negative 'dim' attribute to its non-negative form. Subgraph
+// deduplication compares the raw attribute value, and the generated code bakes
+// the axis in, so a dim of -1 on a 2-d concat and on a 3-d concat must not look
+// alike. Called from maybeReplace, once the operand ranks are known.
+void normalizeConcatDim(NodeCP node, const ValueTypes& types) {
+  auto dim = concatDimAttribute(node);
+  if (dim >= 0) {
+    return;
+  }
+  auto outRank = concatSpec(node, types).outRank;
+  if (outRank <= 0) {
+    return;
+  }
+  auto* attr = const_cast<nativert::Attribute*>(node->tryGetAttribute("dim"));
+  if (attr) {
+    attr->value = dim + outRank;
+  }
+}
+
+// Falls back to the eager op whenever the fused form cannot lay the result out:
+// an unknown or too-large rank, a join axis outside the result, a dim that is
+// only known at run time, or operands of differing rank (torch's legacy
+// empty-operand cat).
+bool concatIsStandalone(NodeCP node, const ValueTypes& types) {
+  const auto& inputs = node->inputs();
+  if (inputs.empty() ||
+      inputs[0].value->type().kind() != nativert::Type::Kind::TensorList) {
+    return true;
+  }
+  auto elements = inputs[0].value->getListElements();
+  if (elements.empty()) {
+    return true;
+  }
+  // The generated code bakes in the axis, so it must be a constant attribute.
+  if (node->tryGetInput("dim") != nullptr) {
+    return true;
+  }
+  auto spec = concatSpec(node, types);
+  if (spec.outRank < 1 || spec.outRank > kMaxDims) {
+    return true;
+  }
+  if (spec.dim < 0 || spec.dim >= spec.outRank) {
+    return true;
+  }
+  auto elementRank = spec.elementRank();
+  // A stack over 0-d operands is well formed -- N scalars become a 1-d,
+  // N-element result -- but a cat needs an existing axis to join along.
+  if (elementRank < 0 || (elementRank == 0 && !spec.isStack)) {
+    return true;
+  }
+  for (auto* element : elements) {
+    if (types.rank(element) != elementRank) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<ValueConstraint> concatOutputConstraints(
+    NodeCP node,
+    const ValueTypes& types) {
+  const auto& inputs = node->inputs();
+  if (inputs.empty()) {
+    return {};
+  }
+  auto elements = inputs[0].value->getListElements();
+  if (elements.empty()) {
+    return {};
+  }
+  auto rank = types.rank(elements[0]);
+  if (node->target() == kStackTarget && rank >= 0) {
+    // A stack concatenates along a new dim, so rank = element rank + 1.
+    rank = static_cast<int8_t>(rank + 1);
+  }
+  // Both ops materialize a fresh, densely-laid-out output.
+  return {{.rank = rank, .contiguity = Contiguity::kContiguous}};
 }
 
 // Returns true if any node in the producer chain of 'node' (stopping at
@@ -81,104 +197,146 @@ bool hasShapeOnDeviceInChain(
   return false;
 }
 
-struct CatInputInfo {
-  nativert::ValueId formalId;
-  SizeExpr sizeExpr;
-  OutputReserveFunc reserveShape;
-  bool hasShapeOnDevice{false};
-  bool isSubgraphInput{false};
-  bool isView{false};
-};
+// The launch-time shape of one operand, coerced to 'rank' dimensions.
+std::vector<Dim> concatInputShape(
+    const ConcatInputInfo& info,
+    int8_t rank,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map) {
+  std::vector<Dim> shape;
+  if (info.reserveShape) {
+    static const NodeMap emptyNodeMap;
+    auto shapes = info.reserveShape(nullptr, frame, map, nullptr, emptyNodeMap);
+    TORCH_CHECK(
+        !shapes.empty(), "reserveShape returned no shape for a concat operand");
+    shape = std::move(shapes[0]);
+  } else if (info.sizeExpr.op != SizeShortcut::kNone) {
+    shape = translateSizeExpr(info.sizeExpr, map).dims(&frame);
+  }
+  if (shape.empty()) {
+    // No size expression resolved: the operand contributes nothing, as for the
+    // undefined tensor a zero-length cat operand arrives as.
+    return std::vector<Dim>(rank, 0);
+  }
+  auto shapeRank = static_cast<int8_t>(shape.size());
+  if (shapeRank == rank) {
+    return shape;
+  }
+  if (rank == 1) {
+    Dim numElements = 1;
+    for (auto extent : shape) {
+      numElements *= extent;
+    }
+    return {numElements};
+  }
+  TORCH_CHECK(
+      shapeRank < rank,
+      "Concat operand %",
+      info.valueId,
+      " resolved to a rank-",
+      static_cast<int>(shapeRank),
+      " shape, expected rank ",
+      static_cast<int>(rank));
+  // A broadcast size expression drops leading 1-dims; restore them.
+  shape.insert(shape.begin(), rank - shapeRank, 1);
+  return shape;
+}
 
-// Computes per-input sizes, allocates or resizes the cat output tensor, and
-// sets up narrow views for computed inputs so they write directly into the
-// cat output.
-std::vector<std::vector<Dim>> reserveCatOutput(
-    const std::vector<CatInputInfo>& inputInfos,
-    nativert::ValueId catFormalId,
+// Computes the operand shapes, allocates or resizes the concat output, and
+// hands every operand this kernel computes a view of the output region it
+// occupies, so the producing expression writes its result in place. Operands
+// the kernel copies (boundary inputs and views) get no view; __concatCopy moves
+// them at kernel time.
+std::vector<std::vector<Dim>> reserveConcatOutput(
+    const std::vector<ConcatInputInfo>& inputInfos,
+    const ConcatSpec& spec,
+    nativert::ValueId concatFormalId,
     c10::ScalarType dtype,
     nativert::ExecutionFrame& frame,
     const FormalToActual& map) {
-  std::vector<int64_t> sizes(inputInfos.size());
-  int64_t totalSize = 0;
-  for (size_t i = 0; i < inputInfos.size(); ++i) {
-    const auto& info = inputInfos[i];
-    if (info.reserveShape) {
-      static const NodeMap emptyNodeMap;
-      auto shapes =
-          info.reserveShape(nullptr, frame, map, nullptr, emptyNodeMap);
-
-      int64_t s = 1;
-      TORCH_CHECK(
-          !shapes.empty(),
-          "reserveShape returned empty shapes for cat input ",
-          i);
-      for (auto d : shapes[0]) {
-        s *= d;
-      }
-      sizes.at(i) = s;
-    } else if (info.sizeExpr.op != SizeShortcut::kNone) {
-      auto actual = translateSizeExpr(info.sizeExpr, map);
-      sizes.at(i) = actual.numElements(&frame);
-    }
-    totalSize += sizes.at(i);
+  const auto elementRank = spec.elementRank();
+  std::vector<std::vector<Dim>> shapes;
+  shapes.reserve(inputInfos.size());
+  for (const auto& info : inputInfos) {
+    shapes.push_back(concatInputShape(info, elementRank, frame, map));
   }
+  auto outShape = concatResultShape(spec, shapes);
 
-  // Allocate or resize the cat output tensor.
-  auto catActualId = catFormalId;
-  if (auto it = map.find(catFormalId); it != map.end()) {
-    catActualId = it->second;
+  auto concatActualId = concatFormalId;
+  if (auto it = map.find(concatFormalId); it != map.end()) {
+    concatActualId = it->second;
   }
-  auto& existing = frame.getIValue(catActualId);
-  at::Tensor catTensor;
-  if (existing.isTensor() && existing.toTensor().is_cuda()) {
-    catTensor = existing.toTensor();
-    if (catTensor.numel() != totalSize) {
-      catTensor.resize_({totalSize});
+  const std::vector<int64_t> outSizes(outShape.begin(), outShape.end());
+  auto& existing = frame.getIValue(concatActualId);
+  at::Tensor concatTensor;
+  if (existing.isTensor() && existing.toTensor().is_cuda() &&
+      (existing.toTensor().sizes() == c10::IntArrayRef(outSizes) ||
+       existing.toTensor().storage().use_count() == 1)) {
+    concatTensor = existing.toTensor();
+    if (concatTensor.sizes() != c10::IntArrayRef(outSizes)) {
+      concatTensor.resize_(outSizes);
     }
   } else {
-    catTensor = at::empty(
-        {totalSize}, at::TensorOptions().dtype(dtype).device(at::kCUDA));
-    frame.setIValue(catActualId, catTensor);
+    // Either there is nothing to keep, or the result is a different shape than
+    // the tensor already there AND something else holds its storage -- views of
+    // it a concat allocation group carved for the operands, which resize_ would
+    // reallocate out from under. Those views stay valid on their own reference,
+    // so starting again leaves the operands to be copied in rather than losing
+    // what they wrote.
+    concatTensor =
+        at::empty(outSizes, at::TensorOptions().dtype(dtype).device(at::kCUDA));
+    frame.setIValue(concatActualId, concatTensor);
   }
 
-  // Set up views for computed inputs. Subgraph inputs are not given
-  // views -- they are copied into the cat output by __copy at kernel time.
   bool canComputeOffset = true;
   int64_t offset = 0;
   for (size_t i = 0; i < inputInfos.size(); ++i) {
+    // 'shapes' is filled one entry per inputInfos above, so .at(i) is in range;
+    // spelled as a checked access so the invariant is enforced rather than
+    // assumed.
+    const int64_t extent =
+        spec.isStack ? 1 : static_cast<int64_t>(shapes.at(i).at(spec.dim));
     if (inputInfos[i].isSubgraphInput || inputInfos[i].isView) {
-      offset += sizes.at(i);
+      offset += extent;
       continue;
     }
-    auto inputActualId = inputInfos[i].formalId;
-    if (auto it = map.find(inputInfos[i].formalId); it != map.end()) {
+    auto inputActualId = inputInfos[i].valueId;
+    if (auto it = map.find(inputInfos[i].valueId); it != map.end()) {
       inputActualId = it->second;
     }
-    if (canComputeOffset && !inputInfos[i].hasShapeOnDevice) {
-      auto view = catTensor.narrow(0, offset, sizes.at(i));
-      if (WaveConfig::get().trace & WaveConfig::kTensors) {
-        std::cout << "  cat view v" << inputActualId << " of v" << catActualId
-                  << " offset=" << offset << " size=" << sizes.at(i) << " "
-                  << traceIValue(c10::IValue(view)) << std::endl;
+    // An earlier operand whose length the kernel itself computes leaves this
+    // one's offset unknown on the host; the kernel then patches the view's base
+    // (see the view fixup in concatSpecialForm). Only a 1-d cat gets here -- a
+    // wider concat keeps device-sized operands out of its kernel entirely.
+    const bool pending = !canComputeOffset || inputInfos[i].hasShapeOnDevice;
+    // A cat operand spans 'extent' positions along the join axis; a stack
+    // operand occupies the single position 'i', which drops that axis.
+    const int64_t start =
+        spec.isStack ? static_cast<int64_t>(i) : (pending ? 0 : offset);
+    auto view = concatOperandView(concatTensor, spec, start, extent);
+    if (WaveConfig::get().trace & WaveConfig::kTensors) {
+      std::cout << "  concat view v" << inputActualId << " of v"
+                << concatActualId << " dim=" << spec.dim << " offset=";
+      if (pending) {
+        std::cout << "pending";
+      } else {
+        std::cout << offset;
       }
-      frame.setIValue(inputActualId, std::move(view));
-      offset += sizes.at(i);
-    } else {
+      std::cout << " size=" << extent << " " << traceIValue(c10::IValue(view))
+                << std::endl;
+    }
+    frame.setIValue(inputActualId, std::move(view));
+    if (pending) {
       canComputeOffset = false;
-      auto view = catTensor.narrow(0, 0, sizes.at(i));
-      if (WaveConfig::get().trace & WaveConfig::kTensors) {
-        std::cout << "  cat view v" << inputActualId << " of v" << catActualId
-                  << " offset=pending size=" << sizes.at(i) << std::endl;
-      }
-      frame.setIValue(inputActualId, std::move(view));
+    } else {
+      offset += extent;
     }
   }
 
-  return {{static_cast<Dim>(totalSize)}};
+  return {std::move(outShape)};
 }
 
-void catSetOutputs(
+void concatSetOutputs(
     KernelOperation* op,
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
@@ -187,6 +345,8 @@ void catSetOutputs(
     bool /*inMemory*/,
     bool /*callerIsElementwise*/) {
   auto elements = node->inputs()[0].value->getListElements();
+  auto& types = waveGraph()->types();
+  auto spec = concatSpec(node, types);
 
   // Call setOutputs for each element's producer, forcing to memory.
   for (auto* elem : elements) {
@@ -197,7 +357,7 @@ void catSetOutputs(
     }
   }
 
-  std::vector<CatInputInfo> inputInfos;
+  std::vector<ConcatInputInfo> inputInfos;
   inputInfos.reserve(elements.size());
   for (auto* elem : elements) {
     if (subgraphInputs.count(elem)) {
@@ -205,7 +365,9 @@ void catSetOutputs(
       sizeExpr.op = SizeShortcut::kMax;
       sizeExpr.values.push_back(elem->id());
       inputInfos.push_back(
-          {elem->id(), std::move(sizeExpr), nullptr, false, true});
+          {.valueId = elem->id(),
+           .sizeExpr = std::move(sizeExpr),
+           .isSubgraphInput = true});
       continue;
     }
     int32_t descIdx = -1;
@@ -254,61 +416,104 @@ void catSetOutputs(
       };
     }
     inputInfos.push_back(
-        {elem->id(),
-         std::move(inputSizeExpr),
-         std::move(catReserve),
-         hasSod,
-         false,
-         elemIsView});
+        {.valueId = elem->id(),
+         .sizeExpr = std::move(inputSizeExpr),
+         .reserveShape = std::move(catReserve),
+         .hasShapeOnDevice = hasSod,
+         .mayWriteStrided = producerMayWriteStrided(elem),
+         .isSubgraphInput = false,
+         .isView = elemIsView});
   }
 
-  // Create the cat output desc.
-  auto catOutputValue = node->outputs()[0];
-  auto catFormalId = catOutputValue->id();
+  // Create the concat output desc.
+  auto concatOutputValue = node->outputs()[0];
+  auto concatFormalId = concatOutputValue->id();
 
-  auto& types = waveGraph()->types();
-  auto catId = catOutputValue->id();
   TORCH_CHECK(
-      catId >= 0 && static_cast<size_t>(catId) < types.types.size() &&
-          types.types[catId],
+      concatFormalId >= 0 &&
+          static_cast<size_t>(concatFormalId) < types.types.size() &&
+          types.types[concatFormalId],
       "No TensorMeta for cat output value ",
-      catId);
-  auto dtype = types.types[catId]->dtype();
+      concatFormalId);
+  auto dtype = types.types[concatFormalId]->dtype();
 
-  OutputDesc catDesc;
-  catDesc.sizeExpr.op = SizeShortcut::kSum;
+  OutputDesc concatDesc;
+  concatDesc.sizeExpr.op = SizeShortcut::kSum;
   for (auto* elem : elements) {
-    catDesc.sizeExpr.values.push_back(elem->id());
+    concatDesc.sizeExpr.values.push_back(elem->id());
   }
   for (const auto& info : inputInfos) {
     if (info.hasShapeOnDevice) {
-      catDesc.shapeSetOnDevice = true;
+      concatDesc.shapeSetOnDevice = true;
       break;
     }
   }
+  TORCH_CHECK(
+      spec.outRank == 1 || !concatDesc.shapeSetOnDevice,
+      node->target(),
+      ": an operand's extent is computed on device inside the concat's own "
+      "kernel, which a rank-",
+      static_cast<int>(spec.outRank),
+      " result cannot lay out");
 
-  catDesc.reserveShape =
-      [inputInfos, catFormalId, dtype](
+  // Subgraph deduplication matches on structure, dtype and the 'dim'
+  // attribute, but not on rank, so one KernelOperation can serve both a 2-d and
+  // a 3-d concat on the same axis. The generated code is rank-agnostic (it
+  // reads dims[] at run time); the host-side layout below is not, so it takes
+  // the rank from the node this invocation actually stands for. nodeMap is
+  // keyed by the ProjectOperation's formal subgraph, so a grid-variant copy of
+  // 'node' has to be mapped back to its original first.
+  const auto* valueTypes = &types;
+  auto* originalNode = waveGraph()->compileCtx()
+      ? waveGraph()->compileCtx()->originalFromVariant(node)
+      : node;
+  // originalFromVariant returns null for a node that is not a variant copy
+  // (it never went through the grid-variant rewrite), in which case the node
+  // already is its own original.
+  if (originalNode == nullptr) {
+    originalNode = node;
+  }
+  // Also handed to the allocation-group pass, which recognizes the concat from
+  // it and can then place the whole result before any operand is produced. The
+  // reserve below is one of its two readers, so the two cannot describe
+  // different operands.
+  auto layout = std::make_shared<ConcatLayout>(ConcatLayout{
+      .spec = spec,
+      .dtype = dtype,
+      .inputs = std::move(inputInfos),
+      .outputFormalId = concatFormalId,
+      .originalNode = originalNode,
+      .types = valueTypes});
+
+  concatDesc.reserveShape =
+      [layout, concatFormalId](
           nativert::ExecutionFrame& frame,
           const FormalToActual& map,
-          const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-    return reserveCatOutput(inputInfos, catFormalId, dtype, frame, map);
+          const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
+    auto [actualSpec, actualDtype] = layout->resolve(nodeMap);
+    return reserveConcatOutput(
+        layout->inputs, actualSpec, concatFormalId, actualDtype, frame, map);
   };
+  concatDesc.concatLayout = std::move(layout);
 
   addOrUpdateOutput(
-      outputValues, outputDescs, catOutputValue, std::move(catDesc));
+      outputValues, outputDescs, concatOutputValue, std::move(concatDesc));
 }
 
-// Recursively collects the leaf elements of nested cats.
-void flattenCatElements(ValueCP value, std::vector<nativert::Value*>& result) {
+// Recursively collects the leaf elements of cats nested on the same dim.
+void flattenCatElements(
+    ValueCP value,
+    int64_t dim,
+    std::vector<nativert::Value*>& result) {
   if (!value) {
     return;
   }
   auto* producer = value->producer();
-  if (producer && producer->target() == "torch.ops.aten.cat.default") {
+  if (producer && producer->target() == kCatTarget &&
+      concatDimAttribute(producer) == dim) {
     auto elements = producer->inputs()[0].value->getListElements();
     for (auto* elem : elements) {
-      flattenCatElements(elem, result);
+      flattenCatElements(elem, dim, result);
     }
   } else {
     result.push_back(const_cast<nativert::Value*>(value));
@@ -343,13 +548,120 @@ NodeCP FOLLY_NULLABLE isExclusiveSumPattern(NodeCP node) {
   return cumsumProducer;
 }
 
-std::vector<std::pair<ValueCP, ValueCP>>
-catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
-  auto* graph = waveGraph.graph();
+// True if 'operand' cannot itself fill the region of the result it occupies, so
+// something has to move its bytes there. A value with no producer, or one whose
+// producer only makes a view, has no write of its own to redirect; a value of
+// another dtype cannot be written through a view that would have to convert it;
+// and a pitched band needs a producer that indexes its output through strides.
+bool concatOperandNeedsCopy(
+    ValueCP operand,
+    int64_t dim,
+    c10::ScalarType resultDtype,
+    const ValueTypes& types) {
+  auto* producer = operand->producer();
+  if (producer == nullptr) {
+    return true;
+  }
+  const auto* producerMeta = Registry::metadata(producer->target());
+  if (producerMeta == nullptr || producerMeta->isView()) {
+    return true;
+  }
+  // An operand whose extent is settled on device must not be copied. A clone of
+  // it reserves a static shape, which launders the shapeSetOnDevice marking the
+  // group relies on to refuse a layout it cannot compute: the host would then
+  // lay the result out from a stale extent and the regions would overlap, so
+  // one operand's write lands inside another's. Left uncopied, the concat
+  // refuses the group instead, which is merely slower.
+  for (const auto& returnMeta : producerMeta->returnMeta) {
+    if (returnMeta.shapeSetOnDevice) {
+      return false;
+    }
+  }
+  const auto operandId = operand->id();
+  if (operandId >= 0 && static_cast<size_t>(operandId) < types.types.size() &&
+      types.types[operandId] &&
+      types.types[operandId]->dtype() != resultDtype) {
+    return true;
+  }
+  return dim != 0 && !producerMayWriteStrided(operand);
+}
 
-  if (auto* cumsumNode = isExclusiveSumPattern(node)) {
+// Gives every operand that cannot fill its own region of the result a clone of
+// its own to fill it with. The clone is a value a kernel writes, so the
+// allocation group carves it into the region and the ordinary machinery makes
+// it an op of its own, sized by that operand and scheduled beside the rest.
+// Without this the concat's kernel would walk those operands one after another
+// through a running offset, which is the serialization a wide concat must not
+// have. Every occurrence gets its own clone, which also settles cat([x, y, x]):
+// the two regions are filled by two different values.
+void insertConcatOperandCopies(
+    NodeCP node,
+    ValueTypes& types,
+    WaveGraph& waveGraph) {
+  if (!WaveConfig::get().parallelConcatFill) {
+    return;
+  }
+  auto* listValue = node->inputs()[0].value;
+  auto* listPack = listValue->producer();
+  if (listPack == nullptr || listPack->target() != "prim.ListPack" ||
+      listPack->inputs().size() <= 2) {
+    return;
+  }
+  const auto resultId = node->outputs()[0]->id();
+  if (resultId < 0 || static_cast<size_t>(resultId) >= types.types.size() ||
+      !types.types[resultId]) {
+    return;
+  }
+  const auto resultDtype = types.types[resultId]->dtype();
+  const int64_t dim = concatDimAttribute(node);
+
+  auto* graph = waveGraph.graph();
+  auto* mutableListPack = const_cast<nativert::Node*>(listPack);
+  auto& inputs = mutableListPack->inputs();
+
+  // Collected first: rewiring every occurrence of a value before dropping the
+  // user record keeps the two consistent, since eraseUser removes the node from
+  // the list outright rather than one use of it.
+  std::vector<ValueCP> toCopy;
+  for (const auto& input : inputs) {
+    auto* operand = input.value;
+    if (std::find(toCopy.begin(), toCopy.end(), operand) != toCopy.end()) {
+      continue;
+    }
+    if (concatOperandNeedsCopy(operand, dim, resultDtype, types)) {
+      toCopy.push_back(operand);
+    }
+  }
+
+  for (auto* operand : toCopy) {
+    for (auto& input : inputs) {
+      if (input.value != operand) {
+        continue;
+      }
+      auto* clone = graph->createNode(
+          "torch.ops.aten.clone.default",
+          {{"self", const_cast<nativert::Value*>(operand)}});
+      graph->insertBefore(clone, mutableListPack);
+      auto* copied = waveGraph.newTensorValue(clone, "cat_copy", resultDtype);
+      input.value = copied;
+      copied->addUser(mutableListPack);
+    }
+    const_cast<nativert::Value*>(operand)->eraseUser(mutableListPack);
+  }
+}
+
+std::vector<std::pair<ValueCP, ValueCP>>
+concatMaybeReplace(NodeCP node, ValueTypes& types, WaveGraph& waveGraph) {
+  normalizeConcatDim(node, types);
+  insertConcatOperandCopies(node, types, waveGraph);
+  if (node->target() == kStackTarget) {
+    return {};
+  }
+  auto* graph = waveGraph.graph();
+  const int64_t dim = concatDimAttribute(node);
+
+  if (auto* cumsumNode = dim == 0 ? isExclusiveSumPattern(node) : nullptr) {
     auto* cumsumInput = cumsumNode->inputs()[0].value;
-    auto& types = waveGraph.types();
     if (types.rank(cumsumInput) != 1) {
       return {};
     }
@@ -398,7 +710,10 @@ catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
   bool hasNestedCat = false;
   for (auto* elem : elements) {
     auto* producer = elem->producer();
-    if (producer && producer->target() == "torch.ops.aten.cat.default") {
+    // Only a cat on the same axis flattens: cat(cat(a, b, dim=1), c, dim=0) is
+    // not cat(a, b, c) on either axis.
+    if (producer && producer->target() == kCatTarget &&
+        concatDimAttribute(producer) == dim) {
       hasNestedCat = true;
       break;
     }
@@ -409,11 +724,10 @@ catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
 
   std::vector<nativert::Value*> flatElements;
   for (auto* elem : elements) {
-    flattenCatElements(elem, flatElements);
+    flattenCatElements(elem, dim, flatElements);
   }
   TORCH_CHECK(!flatElements.empty(), "flattenCatElements produced no elements");
 
-  auto& types = waveGraph.types();
   auto firstId = flatElements.at(0)->id();
   auto dtype =
       (firstId < static_cast<int>(types.types.size()) && types.types[firstId])
@@ -425,19 +739,15 @@ catMaybeReplace(NodeCP node, ValueTypes& /*types*/, WaveGraph& waveGraph) {
   graph->insertBefore(listPack, const_cast<nativert::Node*>(node));
 
   auto* newCat = graph->createNode(
-      "torch.ops.aten.cat.default", {{"tensors", listPack->outputs()[0]}});
-  for (const auto& attr : node->attributes()) {
-    if (attr.name == "dim") {
-      newCat->addAttribute({attr.name, constantToIValue(attr.value).toInt()});
-    }
-  }
+      std::string(kCatTarget), {{"tensors", listPack->outputs()[0]}});
+  newCat->addAttribute({"dim", dim});
   graph->insertBefore(newCat, const_cast<nativert::Node*>(node));
   auto* newOutput = waveGraph.newTensorValue(newCat, "cat_result", dtype);
 
   return {{node->outputs()[0], newOutput}};
 }
 
-void catSpecialForm(
+void concatSpecialForm(
     NodeCP node,
     const std::vector<ResultSpec>& /*resultSpecs*/,
     CompileCtx* ctx) {
@@ -447,31 +757,67 @@ void catSpecialForm(
   }
   auto elements = node->inputs()[0].value->getListElements();
   TORCH_CHECK(!elements.empty(), "cat requires at least one input tensor");
-  auto* catOutput = node->outputs()[0];
+  auto* concatOutput = node->outputs()[0];
 
-  // Determine element size from the first element's dtype.
   auto& types = ctx->waveGraph().types();
-  auto elemId = elements[0]->id();
-  TORCH_CHECK(
-      elemId >= 0 && static_cast<size_t>(elemId) < types.types.size() &&
-          types.types[elemId],
-      "No TensorMeta for first cat element ",
-      elemId);
-  auto dtype = types.types[elemId]->dtype();
-  auto elemSize = static_cast<int32_t>(c10::elementSize(dtype));
+  auto spec = concatSpec(node, types);
 
-  // Check which elements have shape set on device within this kernel op.
+  // The destination type is the result's, not the first operand's: torch
+  // promotes a mixed-dtype concat, and __concatCopy value-converts each element
+  // into the buffer reserveConcatOutput allocated with that dtype.
+  auto outputId = concatOutput->id();
+  TORCH_CHECK(
+      outputId >= 0 && static_cast<size_t>(outputId) < types.types.size() &&
+          types.types[outputId],
+      "No TensorMeta for cat output ",
+      outputId);
+  const auto typeName = cudaTypeString(types.types[outputId]->dtype());
+  const auto elementSize =
+      static_cast<int32_t>(c10::elementSize(types.types[outputId]->dtype()));
+
+  // Operands whose extent this same kernel computes (a fused masked_select /
+  // nonzero). Only a 1-d cat can absorb one: it patches the following views'
+  // bases on device, which a strided layout cannot express.
   std::vector<bool> sizeSetInOp(elements.size(), false);
   for (size_t i = 0; i < elements.size(); ++i) {
     std::unordered_set<ValueCP> visited;
     sizeSetInOp.at(i) = ctx->isSizeSetInThisOp(elements.at(i), visited);
+    TORCH_CHECK(
+        !sizeSetInOp[i] || spec.outRank == 1,
+        node->target(),
+        ": operand ",
+        i,
+        " has its extent computed on device inside the concat's own kernel, "
+        "which a rank-",
+        static_cast<int>(spec.outRank),
+        " result cannot lay out");
   }
 
-  auto typeName = cudaTypeString(dtype);
+  auto& op = *ctx->generatingOp();
 
   bool needsViewFixup = false;
+  // int64_t: the accumulator sums the operands' join-axis extents, which for a
+  // large 1-D cat can pass INT32_MAX before __concatCopy widens it.
   ctx->emitCode("  {\n  int64_t offset = 0;\n");
   int64_t lastAccumulated = -1;
+  // Advances 'offset' past the operands in (lastAccumulated, upTo]. Extents are
+  // read from the operand params rather than baked in: one KernelOperation
+  // serves every invocation of a matching subgraph, whose shapes differ.
+  auto accumulate = [&](int64_t upTo) {
+    std::string incrExpr;
+    for (auto j = lastAccumulated + 1; j <= upTo; ++j) {
+      if (!incrExpr.empty()) {
+        incrExpr += " + ";
+      }
+      incrExpr += ctx->param(elements[j], op) + "->dims[" +
+          std::to_string(spec.dim) + "]";
+    }
+    if (!incrExpr.empty()) {
+      ctx->emitCode("  offset += " + incrExpr + ";\n");
+    }
+    lastAccumulated = std::max(lastAccumulated, upTo);
+  };
+
   for (size_t i = 0; i < elements.size(); ++i) {
     auto* elem = elements[i];
     auto* producer = elem->producer();
@@ -481,7 +827,6 @@ void catSpecialForm(
     bool producerIsView = producerMeta && producerMeta->isView();
     bool isCopyInput = isSubgraphInput || producerIsView;
     if (isCopyInput) {
-      auto& op = *ctx->generatingOp();
       // A view element (e.g. slice(cumsum(...)) in an exclusive-prefix
       // cat([zeros, cumsum[:-1]])) is metadata-only, but its producer chain
       // holds interior fused compute that must still run -- otherwise the copy
@@ -492,19 +837,24 @@ void catSpecialForm(
         auto viewSpecs = outputSpecs(producer);
         ctx->fusedCode(producer, viewSpecs);
       }
-      std::string incrExpr;
-      for (size_t j = lastAccumulated + 1; j < i; ++j) {
-        auto p = ctx->param(elements[j], op);
-        if (!incrExpr.empty()) {
-          incrExpr += " + ";
-        }
-        incrExpr += p + "->numEl";
+      std::string offsetExpr;
+      if (spec.isStack) {
+        // Every stack operand occupies exactly one position along the new dim.
+        offsetExpr = std::to_string(i);
+      } else {
+        accumulate(static_cast<int64_t>(i) - 1);
+        offsetExpr = "offset";
       }
-      if (!incrExpr.empty()) {
-        ctx->emitCode("  offset += " + incrExpr + ";\n");
-      }
-      lastAccumulated = static_cast<int64_t>(i) - 1;
-      ctx->emitCopy(elem, catOutput, "offset", typeName);
+      ctx->emitCode(
+          fmt::format(
+              "  __concatCopy<{}, {}, {}>({}, {}, {}, {}, blockInfo);\n",
+              ctx->cudaType(elem),
+              typeName,
+              spec.isStack ? "true" : "false",
+              ctx->param(elem, op),
+              ctx->param(concatOutput, op),
+              spec.dim,
+              offsetExpr));
     } else {
       std::vector<ResultSpec> prodSpecs;
       for (auto* output : producer->outputs()) {
@@ -518,12 +868,7 @@ void catSpecialForm(
     }
 
     if (needsViewFixup && i + 1 < elements.size()) {
-      auto& op = *ctx->generatingOp();
-      for (size_t j = lastAccumulated + 1; j <= i; ++j) {
-        auto p = ctx->param(elements[j], op);
-        ctx->emitCode("  offset += " + p + "->dims[0];\n");
-      }
-      lastAccumulated = static_cast<int64_t>(i);
+      accumulate(static_cast<int64_t>(i));
       auto* nextElem = elements[i + 1];
       auto* nextProducer = nextElem->producer();
       auto* nextMeta =
@@ -532,7 +877,7 @@ void catSpecialForm(
           ctx->generatingOp()->isInput(nextElem) ||
           (nextMeta && nextMeta->isView());
       if (!nextIsCopy) {
-        ctx->callView(catOutput, nextElem, "offset", elemSize);
+        ctx->callView(concatOutput, nextElem, "offset", elementSize);
       }
       if (WaveConfig::get().kernelDebugOutput) {
         ctx->emitCode(
@@ -542,8 +887,8 @@ void catSpecialForm(
     }
   }
 
-  // A cat element's copy (__copy) partitions blocks by SOURCE index, but an
-  // in-kernel consumer (e.g. a fused elementwise add reading the cat output)
+  // A cat element's copy (__concatCopy) partitions blocks by SOURCE index, but
+  // an in-kernel consumer (e.g. a fused elementwise add reading the cat output)
   // partitions by DESTINATION index. When a copy shifts data by a nonzero
   // offset (e.g. the exclusive-prefix cat([zeros[1], cumsum[:-1]]) writing
   // offsets[1+i] = cumsum[i]), the element that lands on one block's
@@ -560,20 +905,14 @@ void catSpecialForm(
     ctx->emitBarrier();
   }
   if (needsViewFixup) {
-    auto& op = *ctx->generatingOp();
-    for (auto j = lastAccumulated + 1;
-         j < static_cast<int64_t>(elements.size());
-         ++j) {
-      auto p = ctx->param(elements[j], op);
-      ctx->emitCode("  offset += " + p + "->dims[0];\n");
-    }
+    accumulate(static_cast<int64_t>(elements.size()) - 1);
     if (WaveConfig::get().kernelDebugOutput) {
       ctx->emitCode(
           "  TRACE0(printf(\"cat final offset=%ld\\n\", (long)offset));\n");
     }
-    auto catP = ctx->param(catOutput, op);
+    auto concatParam = ctx->param(concatOutput, op);
     ctx->emitCode(
-        "  if (threadIdx.x == 0) { " + catP +
+        "  if (threadIdx.x == 0) { " + concatParam +
         "->dims[0] = offset; }\n"
         "  __syncthreads();\n");
   }
@@ -583,29 +922,133 @@ void catSpecialForm(
 
 } // namespace
 
-void registerCatMetadata() {
-  MetadataBuilder("torch.ops.aten.cat.default")
+std::vector<Dim> concatResultShape(
+    const ConcatSpec& spec,
+    const std::vector<std::vector<Dim>>& operandShapes) {
+  // The result takes its non-joined extents from the operands (which agree on
+  // them) and its joined extent from their sum, or from their count for a
+  // stack, where each operand occupies one position along a new dimension.
+  const auto elementRank = spec.elementRank();
+  std::vector<Dim> outShape(spec.outRank, 0);
+  for (const auto& shape : operandShapes) {
+    for (int8_t d = 0; d < elementRank; ++d) {
+      auto outDim = spec.isStack && d >= spec.dim ? d + 1 : d;
+      if (!spec.isStack && d == spec.dim) {
+        outShape[outDim] += shape[d];
+      } else {
+        outShape[outDim] = std::max(outShape[outDim], shape[d]);
+      }
+    }
+  }
+  if (spec.isStack) {
+    outShape[spec.dim] = static_cast<Dim>(operandShapes.size());
+  }
+  return outShape;
+}
+
+at::Tensor concatOperandView(
+    const at::Tensor& result,
+    const ConcatSpec& spec,
+    int64_t start,
+    int64_t extent) {
+  const auto baseSizes = result.sizes();
+  const auto baseStrides = result.strides();
+  c10::SmallVector<int64_t, kMaxDims> viewSizes;
+  c10::SmallVector<int64_t, kMaxDims> viewStrides;
+  for (int32_t d = 0; d < static_cast<int32_t>(baseSizes.size()); ++d) {
+    if (spec.isStack && d == spec.dim) {
+      continue;
+    }
+    viewSizes.push_back(d == spec.dim ? extent : baseSizes[d]);
+    viewStrides.push_back(baseStrides[d]);
+  }
+  return aliasTensor(
+      result,
+      viewSizes,
+      viewStrides,
+      result.storage_offset() + start * baseStrides[spec.dim]);
+}
+
+std::pair<ConcatSpec, c10::ScalarType> ConcatLayout::resolve(
+    const NodeMap& nodeMap) const {
+  auto actual = nodeMap.find(originalNode);
+  if (actual == nodeMap.end() || actual->second == originalNode ||
+      types == nullptr) {
+    return {spec, dtype};
+  }
+  auto actualId = actual->second->outputs()[0]->id();
+  return {
+      concatSpec(actual->second, *types), types->types.at(actualId)->dtype()};
+}
+
+bool concatNeedsHostShapes(NodeCP node, const ValueTypes& types) {
+  if (node->target() != kCatTarget && node->target() != kStackTarget) {
+    return false;
+  }
+  if (concatIsStandalone(node, types)) {
+    return false;
+  }
+  if (concatSpec(node, types).outRank > 1) {
+    return true;
+  }
+  // More than two operands is the allocation group's path, which lays the
+  // result out on the host and hands every operand the region it fills. There
+  // is no serial fallback that walks the operands incrementing an offset, so an
+  // operand whose extent is only settled inside the concat's own kernel has to
+  // end that kernel first and be read back as a host-side shape.
+  auto* listPack = node->inputs()[0].value->producer();
+  return listPack != nullptr && listPack->inputs().size() > 2;
+}
+
+bool concatFillsInParallel(NodeCP node, const ValueTypes& types) {
+  if (!WaveConfig::get().parallelConcatFill) {
+    return false;
+  }
+  if (node->target() != kCatTarget && node->target() != kStackTarget) {
+    return false;
+  }
+  if (concatIsStandalone(node, types)) {
+    return false;
+  }
+  // Two operands are not worth a step of their own: the pushdown costs a
+  // kernel boundary, which only pays once there are enough operands for the
+  // serial chain of copies to be the problem. Matches the threshold the concat
+  // allocation group uses.
+  auto* listPack = node->inputs()[0].value->producer();
+  return listPack && listPack->inputs().size() > 2;
+}
+
+void registerConcatMetadata() {
+  // 'dim' is a template attribute rather than a plain constant: the generated
+  // code bakes the axis in, so two structurally identical concats that differ
+  // only in 'dim' must not deduplicate onto one KernelOperation.
+  MetadataBuilder(kCatTarget)
       .sizeShortcut(SizeShortcut::kSum)
       .sizeOrdinal({0})
       .sizeArgsList({true})
-      .only1d()
-      .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            const auto& inputs = node->inputs();
-            if (inputs.empty()) {
-              return {};
-            }
-            auto elements = inputs[0].value->getListElements();
-            if (elements.empty()) {
-              return {};
-            }
-            // cat materializes a fresh, densely-laid-out output.
-            return {{.rank = types.rank(elements[0]), .contiguous = true}};
-          })
-      .maybeReplace(catMaybeReplace)
-      .setOutputs(catSetOutputs)
-      .specialForm(catSpecialForm)
+      .templateAttrs({"dim"})
+      .isStandaloneFunc(concatIsStandalone)
+      // __concatCopy decomposes the index per element and visits each element
+      // once, so a densifying clone of a concat operand only moves that
+      // addressing into the copy.
+      .layoutAgnostic()
+      .outputConstraints(concatOutputConstraints)
+      .maybeReplace(concatMaybeReplace)
+      .setOutputs(concatSetOutputs)
+      .specialForm(concatSpecialForm)
+      .registerOp();
+
+  MetadataBuilder(kStackTarget)
+      .sizeShortcut(SizeShortcut::kSum)
+      .sizeOrdinal({0})
+      .sizeArgsList({true})
+      .templateAttrs({"dim"})
+      .isStandaloneFunc(concatIsStandalone)
+      .layoutAgnostic()
+      .outputConstraints(concatOutputConstraints)
+      .maybeReplace(concatMaybeReplace)
+      .setOutputs(concatSetOutputs)
+      .specialForm(concatSpecialForm)
       .registerOp();
 }
 

@@ -125,6 +125,43 @@ torch::_export::ScalarType toExportScalarType(c10::ScalarType dtype) {
   }
 }
 
+// Rewrites a constant negative "dim" attribute to its non-negative form, so
+// the ops that read it (notably the host-side view shortcuts, which index
+// sizes()/strides() directly) never have to wrap it. A dim outside the first
+// input's rank is a malformed graph and fails here rather than at run time. A
+// dim supplied as a dynamic input, or an input of unknown rank, is left alone;
+// its reader still handles the general case.
+void normalizeDimAttribute(nativert::Node& node, const ValueTypes& types) {
+  const auto* attr = node.tryGetAttribute("dim");
+  if (!attr || !std::holds_alternative<int64_t>(attr->value)) {
+    return;
+  }
+  auto dim = std::get<int64_t>(attr->value);
+  if (node.inputs().empty()) {
+    return;
+  }
+  auto selfId = node.inputs()[0].value->id();
+  if (selfId < 0 || static_cast<size_t>(selfId) >= types.types.size() ||
+      !types.types[selfId]) {
+    return;
+  }
+  const auto rank = static_cast<int64_t>(types.types[selfId]->dim());
+  if (rank <= 0) {
+    return;
+  }
+  TORCH_CHECK(
+      dim >= -rank && dim < rank,
+      node.target(),
+      ": dim ",
+      dim,
+      " out of range for a rank-",
+      rank,
+      " input");
+  if (dim < 0) {
+    const_cast<nativert::Attribute*>(attr)->value = dim + rank;
+  }
+}
+
 } // namespace
 
 // --- Thread-local WaveGraph ---
@@ -132,6 +169,11 @@ torch::_export::ScalarType toExportScalarType(c10::ScalarType dtype) {
 WaveGraph*& waveGraph() {
   static thread_local WaveGraph* threadWaveGraph{nullptr};
   return threadWaveGraph;
+}
+
+WaveConfig*& waveConfigOverride() {
+  static thread_local WaveConfig* threadConfigOverride{nullptr};
+  return threadConfigOverride;
 }
 
 const Metadata* nodeMeta(NodeCP node) {
@@ -172,10 +214,15 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
 }
 
 WaveGraph::WaveGraph(ModelContext* modelContext)
-    : graph_(modelContext->graph.get()), modelContext_(modelContext) {
+    : graph_(modelContext->graph.get()),
+      modelContext_(modelContext),
+      configOverride_(std::move(modelContext->configOverride)) {
   waveGraph() = this;
+  auto* prevConfigOverride = waveConfigOverride();
+  waveConfigOverride() = configOverride_.get();
   SCOPE_EXIT {
     waveGraph() = nullptr;
+    waveConfigOverride() = prevConfigOverride;
   };
 
   initValueTypes(*graph_, types_, metaStorage_);
@@ -187,6 +234,29 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   optimizer_ = std::make_unique<Optimizer>(*this);
   optimizer_->optimizeGraph(graph_);
   createdValueDtypes_.clear();
+
+  // Drop read-only clones before partitioning. This has to run after
+  // optimizeGraph, which is what creates most of them (a rewritten op's output
+  // is cloned once per consumer), and before makeParallelNodes, because those
+  // clones land in different ProjectNode layers and the post-partition
+  // rewriteInPlace only ever compares clones within one layer. A clone that
+  // survives fusion costs a copy and a barrier, so eliding is a win whenever
+  // it is safe. Gated on enableReuse with the rest of the reuse work.
+  if (WaveConfig::get().enableReuse && WaveConfig::get().elideClones) {
+    elideReadOnlyClones(*graph_, types_);
+  }
+
+  // Merge equal computations. After the rewrites above, which are what create
+  // most of the duplicates (an op rewritten once per consumer), and before
+  // duplicateMetadataOps below, which deliberately inserts duplicates this
+  // would undo.
+  commonSubexpressions(*graph_, types_);
+
+  // Last of the pre-partition passes: the clone CSE above merges equal values,
+  // which would undo the duplicates this inserts.
+  if (WaveConfig::get().duplicateMetadata) {
+    duplicateMetadataOps(*graph_, types_, *this);
+  }
 
   // Graph outputs (and, for list-typed outputs, their elements) escape the
   // graph, so LaunchData must never release them as per-op intermediates.
@@ -218,6 +288,13 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
   ParallelNodes parallelNodes;
   auto* lastProjectNode = parallelNodes.makeParallelNodes(*graph_);
+
+  // Optional post-partition pass: elide redundant clones so in-place writers
+  // (e.g. index_put_) mutate their original buffer. Gated on enableReuse; a
+  // no-op otherwise.
+  if (WaveConfig::get().enableReuse) {
+    parallelNodes.rewriteInPlace(*graph_, types_);
+  }
 
   CompileCtx ctx(*this);
   compileCtx_ = &ctx;
@@ -338,6 +415,11 @@ void WaveGraph::normalizeAndAnnotateGraph() {
             nativert::Attribute{
                 std::string(schemaArg.name()), std::move(defaultVal)});
       }
+    }
+
+    // Runs after the defaults above, since 'dim' is usually one of them.
+    if (md && md->normalizeDimAttr) {
+      normalizeDimAttribute(node, types_);
     }
 
     if (md && md->makeMultiKernelVariant) {

@@ -18,6 +18,7 @@
 #include "velox/common/base/Portability.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ExchangeQueue.h"
+#include "velox/exec/OutputBufferStats.h"
 
 namespace facebook::velox::exec {
 
@@ -93,30 +94,8 @@ class ArbitraryBuffer {
 
 class DestinationBuffer {
  public:
-  /// The data transferred by the destination buffer has two phases:
-  /// 1. Buffered: the data resides in the buffer after enqueued and before
-  ///              acked / deleted.
-  /// 2. Sent: the data is removed from the buffer after it is acked or
-  ///          deleted.
-  struct Stats {
-    void recordEnqueue(const SerializedPageBase& data);
-
-    void recordAcknowledge(const SerializedPageBase& data);
-
-    void recordDelete(const SerializedPageBase& data);
-
-    bool finished{false};
-
-    /// Number of buffered bytes / rows / pages.
-    int64_t bytesBuffered{0};
-    int64_t rowsBuffered{0};
-    int64_t pagesBuffered{0};
-
-    /// Number of sent bytes / rows / pages.
-    int64_t bytesSent{0};
-    int64_t rowsSent{0};
-    int64_t pagesSent{0};
-  };
+  /// Deprecated source-compat alias; prefer DestinationBufferStats.
+  using Stats = DestinationBufferStats;
 
   void enqueue(std::shared_ptr<SerializedPageBase> data);
 
@@ -181,12 +160,17 @@ class DestinationBuffer {
   void finish();
 
   /// Returns the stats of this buffer.
-  Stats stats() const;
+  DestinationBufferStats stats() const;
 
   std::string toString();
 
  private:
   void clearNotify();
+
+  // Updates 'stats_' for one enqueued, acknowledged, or deleted page.
+  void recordEnqueue(const SerializedPageBase& data);
+  void recordAcknowledge(const SerializedPageBase& data);
+  void recordDelete(const SerializedPageBase& data);
 
   std::vector<std::shared_ptr<SerializedPageBase>> data_;
   // The sequence number of the first in 'data_'.
@@ -196,67 +180,15 @@ class DestinationBuffer {
   // The sequence number of the first item to pass to 'notify'.
   int64_t notifySequence_{0};
   uint64_t notifyMaxBytes_{0};
-  Stats stats_;
+  DestinationBufferStats stats_;
 };
 
 class Task;
 
 class OutputBuffer {
  public:
-  struct Stats {
-    Stats(
-        core::PartitionedOutputNode::Kind _kind,
-        bool _noMoreBuffers,
-        bool _noMoreData,
-        bool _finished,
-        int64_t _bufferedBytes,
-        int64_t _bufferedPages,
-        int64_t _totalBytesSent,
-        int64_t _totalRowsSent,
-        int64_t _totalPagesSent,
-        int64_t _averageBufferTimeMs,
-        int32_t _numTopBuffers,
-        const std::vector<DestinationBuffer::Stats>& _buffersStats)
-        : kind(_kind),
-          noMoreBuffers(_noMoreBuffers),
-          noMoreData(_noMoreData),
-          finished(_finished),
-          bufferedBytes(_bufferedBytes),
-          bufferedPages(_bufferedPages),
-          totalBytesSent(_totalBytesSent),
-          totalRowsSent(_totalRowsSent),
-          totalPagesSent(_totalPagesSent),
-          averageBufferTimeMs(_averageBufferTimeMs),
-          numTopBuffers(_numTopBuffers),
-          buffersStats(_buffersStats) {}
-
-    core::PartitionedOutputNode::Kind kind;
-
-    /// States of this output buffer.
-    bool noMoreBuffers{false};
-    bool noMoreData{false};
-    bool finished{false};
-
-    /// The sum of buffered bytes/pages in this output buffer.
-    int64_t bufferedBytes{0};
-    int64_t bufferedPages{0};
-
-    /// The total number of bytes/rows/pages sent via this output buffer.
-    int64_t totalBytesSent{0};
-    int64_t totalRowsSent{0};
-    int64_t totalPagesSent{0};
-
-    /// Average time each piece of data has been buffered for in milliseconds.
-    int64_t averageBufferTimeMs{0};
-
-    /// The number of largest buffers that handle 80% of the total data.
-    int32_t numTopBuffers{0};
-
-    /// Stats of the OutputBuffer's destinations.
-    std::vector<DestinationBuffer::Stats> buffersStats;
-
-    std::string toString() const;
-  };
+  /// Deprecated source-compat alias; prefer OutputBufferStats.
+  using Stats = OutputBufferStats;
 
   OutputBuffer(
       std::shared_ptr<Task> task,
@@ -273,7 +205,7 @@ class OutputBuffer {
   /// called to update the total number of broadcast or arbitrary destinations
   /// while the task is running. The function throws if this is partitioned
   /// output buffer type.
-  void updateOutputBuffers(int numBuffers, bool noMoreBuffers);
+  void updateOutputBuffers(int numDestinations, bool noMoreBuffers);
 
   /// When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
@@ -323,7 +255,7 @@ class OutputBuffer {
   bool isOverutilized() const;
 
   /// Gets the Stats of this output buffer.
-  Stats stats();
+  OutputBufferStats stats();
 
  private:
   // Percentage of maxSize below which a blocked producer should
@@ -351,7 +283,7 @@ class OutputBuffer {
 
   /// Given an updated total number of broadcast buffers, add any missing ones
   /// and enqueue data that has been produced so far (e.g. dataToBroadcast_).
-  void addOutputBuffersLocked(int numBuffers);
+  void addOutputBuffersLocked(int numDestinations);
 
   void enqueueBroadcastOutputLocked(
       std::unique_ptr<SerializedPageBase> data,
@@ -422,7 +354,7 @@ class OutputBuffer {
   // The sizes of buffers_ and finishedBufferStats_ are the same, but
   // finishedBufferStats_[i] is set if and only if buffers_[i] is null as
   // the buffer is finished and deleted.
-  std::vector<DestinationBuffer::Stats> finishedBufferStats_;
+  std::vector<DestinationBufferStats> finishedBufferStats_;
   uint32_t numFinished_{0};
   // When this reaches buffers_.size(), 'this' can be freed.
   int numFinalAcknowledges_ = 0;

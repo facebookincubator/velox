@@ -173,6 +173,18 @@ Generic Configuration
        probe.  When set to 0, no Bloom filter will be generated.  To achieve
        optimal performance, this should not be too larger than the CPU cache
        size on the host.
+   * - bypass_hash_probe_bloom_filter_min_rows
+     - integer
+     - 0
+     - The number of probe rows used to decide whether to bypass the build-side
+       Bloom filter for left joins and non-null-aware left semi-project and left
+       anti joins. When set to 0, local Bloom filter probing is disabled.
+   * - bypass_hash_probe_bloom_filter_min_pct
+     - integer
+     - 85
+     - Bypass the build-side Bloom filter if its acceptance percentage meets
+       or exceeds this value. When set to 0, the Bloom filter is bypassed
+       without sampling.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -944,6 +956,16 @@ Common Options
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns. Session: ``reader.collect_column_cpu_metrics``.
+   * - ``use-column-names``
+     - bool
+     - false
+     - Map table fields to file fields using names instead of indices. This is
+       a connector/session-level default column matching policy and applies
+       uniformly to all file formats read by the connector, for example ORC,
+       DWRF, and Parquet. Split-specific column mapping mode, when present,
+       takes precedence over this setting. The connector property is scoped by
+       connector ID, for example ``hive.use-column-names`` or ``iceberg.use-column-names``.
+       Session: ``use_column_names``.
 
 ORC Options (prefix ``hive.orc.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -957,10 +979,6 @@ ORC Options (prefix ``hive.orc.``)
      - Type
      - Default Value
      - Description
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``. Key ``hive.orc.use-column-names`` is also accepted. Session: ``orc_use_column_names``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
@@ -1018,20 +1036,16 @@ Parquet Options (prefix ``hive.parquet.``)
      - Type
      - Default Value
      - Description
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map Parquet table field names to file field names using names, not indices. Session: ``parquet_use_column_names``.
-   * - ``allow-int32-narrowing``
-     - bool
-     - false
-     - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode. Session: ``parquet_footer_speculative_io_size``.
+   * - ``allow-int32-narrowing``
+     - bool
+     - false
+     - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
    * - ``footer-memory-tracking-threshold``
      - integer
      - disabled (max uint64)
@@ -1059,7 +1073,7 @@ Parquet Options (prefix ``hive.parquet.``)
        silently over-consuming. The reservation shrinks as row groups are
        skipped by filterRowGroups and is released in full when the reader
        is destroyed. When tracking engages, the estimate is also surfaced
-       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       per scan via the runtime stat ``parquet.footerEstimatedBytes`` so
        operators can compare it against actual pool usage. Session: ``parquet_footer_memory_tracking_threshold``.
    * - ``writer.max-target-file-size``
      - capacity
@@ -1067,7 +1081,16 @@ Parquet Options (prefix ``hive.parquet.``)
      - Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
-       sorted writes. Session: ``parquet_writer_max_target_file_size``.
+       sorted writes.
+
+       Session: ``parquet_writer_max_target_file_size``.
+
+       Row-group sizing is independent of this setting and is not user-configurable: a row group is
+       flushed at a 128MB byte target or 1,048,576 rows, whichever comes first. The byte target is
+       soft - a row group may slightly exceed it, since the writer flushes only after buffered bytes
+       reach the target; the row count is a hard cap. When ``writer.max-target-file-size`` is set,
+       the writer may flush the current row group early so the accumulated file size is visible and
+       rotation can occur.
    * - ``writer.enable-dictionary``
      - bool
      - true
@@ -1107,6 +1130,13 @@ Parquet Options (prefix ``hive.parquet.``)
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
        When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
+   * - ``writer.enable-page-index``
+     - bool
+     - false
+     - Whether to write the Parquet page index (column index and offset index) when writing into
+       Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
+       index instead of the data page headers, letting readers skip pages that cannot match a filter.
+       Session: ``hive.parquet.writer.enable_page_index``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1432,6 +1462,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.decimal_to_float_high_precision_cast_enabled
+     - bool
+     - false
+     - If true, casts from ``DECIMAL`` to ``REAL``/``DOUBLE`` use a high-precision conversion
+       (via an intermediate string) for values that cannot be represented exactly by floating
+       point arithmetic, aligning the result with Spark. Disabled by default due to the
+       significant performance regression; users sensitive to precision loss can enable it.
 
 Tracing
 --------

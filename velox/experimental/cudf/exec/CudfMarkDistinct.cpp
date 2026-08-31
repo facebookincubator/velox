@@ -17,13 +17,17 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/copying.hpp>
+#include <cudf/detail/utilities/stream_pool.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/utilities/error.hpp>
+
+#include <functional>
 
 namespace facebook::velox::cudf_velox {
 
@@ -40,7 +44,8 @@ CudfMarkDistinct::CudfMarkDistinct(
           nvtx3::rgb{255, 165, 0}, // Orange
           NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput,
           std::nullopt,
-          planNode) {
+          planNode),
+      cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   const auto& inputType = planNode->sources()[0]->outputType();
   for (const auto& key : planNode->distinctKeys()) {
     auto idx = inputType->getChildIdx(key->name());
@@ -51,6 +56,16 @@ CudfMarkDistinct::CudfMarkDistinct(
 void CudfMarkDistinct::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NULL(input_);
   input_ = std::move(input);
+}
+
+void CudfMarkDistinct::doClose() {
+  // seenFilter_ references seenKeys_. State reads are ordered back onto
+  // seenStateStream_ in doGetOutput(), so stream-ordered destruction is safe.
+  seenFilter_.reset();
+  seenKeys_.reset();
+  seenStateStream_.reset();
+  cudaEvent_.reset();
+  Operator::close();
 }
 
 RowVectorPtr CudfMarkDistinct::doGetOutput() {
@@ -106,8 +121,14 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
         seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+    seenStateStream_ = stream;
 
   } else {
+    VELOX_CHECK(seenStateStream_.has_value());
+    const auto stateStream = seenStateStream_.value();
+    const std::vector<rmm::cuda_stream_view> stateStreams{stateStream};
+    cudf::detail::join_streams(stateStreams, stream);
+
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
 
     // Gather the unique keys from this batch.
@@ -121,42 +142,65 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
     // Anti-join against the persistent seenFilter_ to find new keys.
     auto newKeyLocalIndices =
         seenFilter_->anti_join(uniqueBatchKeys->view(), stream, tempMr);
+    auto [updatedSeenKeys, remappedCol] = std::invoke(
+        [&]() -> std::pair<
+                  std::unique_ptr<cudf::table>,
+                  std::unique_ptr<cudf::table>> {
+          if (newKeyLocalIndices->is_empty()) {
+            return {nullptr, nullptr};
+          }
 
-    if (!newKeyLocalIndices->is_empty()) {
-      // Map local indices back to original batch row indices via gather.
-      // Wrap device_uvector as column_view (same pattern as CudfHashJoin).
-      auto localSpan =
-          cudf::device_span<cudf::size_type const>{*newKeyLocalIndices};
-      auto localCol = cudf::column_view{localSpan};
-      auto remappedCol = cudf::gather(
-          cudf::table_view{{batchDistinctIdxCol->view()}},
-          localCol,
-          cudf::out_of_bounds_policy::DONT_CHECK,
-          stream,
-          tempMr);
+          // Map local indices back to original batch row indices via gather.
+          // Wrap device_uvector as column_view (same pattern as CudfHashJoin).
+          auto localSpan =
+              cudf::device_span<cudf::size_type const>{*newKeyLocalIndices};
+          auto localCol = cudf::column_view{localSpan};
+          auto remappedCol = cudf::gather(
+              cudf::table_view{{batchDistinctIdxCol->view()}},
+              localCol,
+              cudf::out_of_bounds_policy::DONT_CHECK,
+              stream,
+              tempMr);
+
+          // Append only the new unique keys to seenKeys_ and rebuild the
+          // filter.
+          auto newKeys = cudf::gather(
+              uniqueBatchKeys->view(),
+              localCol,
+              cudf::out_of_bounds_policy::DONT_CHECK,
+              stream,
+              tempMr);
+
+          // Append new keys and rebuild the filter. This concatenates all seen
+          // keys on every batch that introduces new keys, which is O(D) per
+          // such batch. An amortized-doubling scheme (accumulate in a pending
+          // table, consolidate when it reaches the size of seenKeys_) would
+          // reduce total copy work to O(D), but that pattern does not yet exist
+          // in this codebase.
+          // CudfHashAggregation::computePartialGroupbyStreaming and
+          // computePartialDistinctStreaming use the same unconditional
+          // concatenate-per-batch idiom.
+          std::vector<cudf::table_view> seenPlusNew = {
+              seenKeys_->view(), newKeys->view()};
+          return {
+              cudf::concatenate(seenPlusNew, stream, tempMr),
+              std::move(remappedCol)};
+        });
+
+    if (remappedCol) {
       newRowIndicesCol = std::move(remappedCol->release()[0]);
+    }
 
-      // Append only the new unique keys to seenKeys_ and rebuild the filter.
-      auto newKeys = cudf::gather(
-          uniqueBatchKeys->view(),
-          localCol,
-          cudf::out_of_bounds_policy::DONT_CHECK,
-          stream,
-          tempMr);
+    // Make the old state stream wait until its last use on this stream before
+    // the old state can be destroyed or used by another input stream.
+    streamsWaitForStream(*cudaEvent_, stateStreams, stream);
 
-      // Append new keys and rebuild the filter. This concatenates all seen
-      // keys on every batch that introduces new keys, which is O(D) per such
-      // batch. An amortized-doubling scheme (accumulate in a pending table,
-      // consolidate when it reaches the size of seenKeys_) would reduce total
-      // copy work to O(D), but that pattern does not yet exist in this
-      // codebase. CudfHashAggregation::computePartialGroupbyStreaming and
-      // computePartialDistinctStreaming use the same unconditional
-      // concatenate-per-batch idiom.
-      std::vector<cudf::table_view> seenPlusNew = {
-          seenKeys_->view(), newKeys->view()};
-      seenKeys_ = cudf::concatenate(seenPlusNew, stream, tempMr);
-      seenFilter_ = std::make_unique<cudf::filtered_join>(
-          seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+    if (updatedSeenKeys) {
+      auto updatedSeenFilter = std::make_unique<cudf::filtered_join>(
+          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream);
+      seenFilter_ = std::move(updatedSeenFilter);
+      seenKeys_ = std::move(updatedSeenKeys);
+      seenStateStream_ = stream;
     }
   }
 

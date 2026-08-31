@@ -14,11 +14,18 @@
  * limitations under the License.
  */
 
-#include "dwio/nimble/velox/reader/fb/NimbleReader.h"
-#include "dwio/nimble/velox/writer/fb/NimbleWriter.h"
+// This end-to-end test exercises the batch NimbleReader/NimbleWriter factories,
+// both now under velox/dwio/nimble/ and neither behind an fb/ segment: both are
+// OSS-exportable. Guard the whole test so the OSS build (VELOX_ENABLE_NIMBLE
+// off) does not try to build the batch reader, which stays internal-only.
+// Mirrors WriterOptionsAdapterTest.cpp.
+#ifdef VELOX_ENABLE_NIMBLE
+
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/dwio/nimble/velox/reader/NimbleReaderFactory.h"
+#include "velox/dwio/nimble/writer/WriterFactory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -240,5 +247,77 @@ TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
       .assertResults({expected});
 }
 
+// No schema evolution, complex types: array, map, struct, and array-of-struct
+// columns written and read back unchanged. Exercises the collection write+read
+// path and confirms iceberg.id stamping on collection nodes does not perturb
+// the round trip.
+TEST_F(IcebergNimbleInsertTest, roundTripComplexTypes) {
+  auto rowType =
+      ROW({"c1", "arr", "kv", "s", "arrStruct"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           MAP(INTEGER(), VARCHAR()),
+           ROW({"x", "y"}, {INTEGER(), VARCHAR()}),
+           ARRAY(ROW({"a", "b"}, {INTEGER(), VARCHAR()}))});
+  test(rowType, 0.2);
+}
+
+// Schema evolution nested under a LIST: the element struct's fields are renamed
+// (name -> label, age -> years) while keeping their Iceberg field-ids. This
+// only resolves because the writer now stamps iceberg.id on the list element's
+// struct children; without it the FieldIdResolver would fall back to name and
+// the renamed fields would read as null. Golden coverage for the
+// collection-nested field-id write path.
+TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
+  // items: array<struct<name VARCHAR, age INTEGER>>, two array rows.
+  auto elements = makeRowVector(
+      {"name", "age"},
+      {makeFlatVector<std::string>({"a", "b", "c"}),
+       makeFlatVector<int32_t>({1, 2, 3})});
+  auto items = makeArrayVector({0, 2}, elements);
+  auto writeVector = makeRowVector({"items"}, {items});
+
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  createDataSinkAndAppendData({writeVector}, path)->close();
+  auto splits = createSplitsForDirectory(path);
+
+  // Written field ids (depth-first pre-order): items=1, element struct=2,
+  // name=3, age=4. The read schema renames name->label and age->years but keeps
+  // the ids, so resolution must match by id through the list element.
+  auto readElementType = ROW({"label", "years"}, {VARCHAR(), INTEGER()});
+  auto readItemsType = ARRAY(readElementType);
+  auto readSchema = ROW({"items"}, {readItemsType});
+  std::
+      unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
+          assignments{
+              {"items",
+               makeIcebergColumnHandle(
+                   "items", readItemsType, {1, {{2, {{3, {}}, {4, {}}}}}})}};
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(readSchema)
+                  .dataColumns(readSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expectedElements = makeRowVector(
+      {"label", "years"},
+      {makeFlatVector<std::string>({"a", "b", "c"}),
+       makeFlatVector<int32_t>({1, 2, 3})});
+  auto expected =
+      makeRowVector({"items"}, {makeArrayVector({0, 2}, expectedElements)});
+  exec::test::AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")
+      .splits(splits)
+      .assertResults({expected});
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg
+
+#endif // VELOX_ENABLE_NIMBLE

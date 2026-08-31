@@ -37,16 +37,6 @@ class FileConfig {
   // --- VELOX_HIVE_CONFIG_LEGACY properties ---
 
   VELOX_HIVE_CONFIG_LEGACY(
-      kOrcUseColumnNamesSession,
-      kOrcUseColumnNames,
-      isOrcUseColumnNames,
-      "orc_use_column_names",
-      "orc.use-column-names",
-      bool,
-      false,
-      "Map ORC table field names to file field names using names, not indices.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
       kReadTimestampPartitionValueAsLocalTimeSession,
       kReadTimestampPartitionValueAsLocalTime,
       readTimestampPartitionValueAsLocalTime,
@@ -116,6 +106,21 @@ class FileConfig {
       false,
       "Preserve dictionary encoding for Nimble string column reads.")
 
+  // TODO: Deprecate this gate and pack unconditionally once the shared
+  // allocation has run in production for a while.
+  VELOX_HIVE_CONFIG_LEGACY(
+      kDirectBufferedInputSharedAllocationSession,
+      kDirectBufferedInputSharedAllocation,
+      directBufferedInputSharedAllocation,
+      "reader.direct_buffered_input_shared_allocation",
+      "reader.direct-buffered-input-shared-allocation",
+      bool,
+      false,
+      "Pack a coalesced direct read's buffers into a single shared allocation "
+      "instead of one page-rounded allocation per request. Opt-in: off by "
+      "default, enable per cluster to roll out. Affects which bytes are "
+      "allocated, never which bytes are read.")
+
   VELOX_HIVE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
@@ -127,6 +132,14 @@ class FileConfig {
       "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
 
   // --- VELOX_HIVE_CONFIG properties ---
+
+  VELOX_HIVE_CONFIG_PROPERTY(
+      kUseColumnNamesSession,
+      "use_column_names",
+      bool,
+      false,
+      "Map table fields to file fields using names, not indices.")
+  static constexpr const char* kUseColumnNames = "use-column-names";
 
   VELOX_HIVE_CONFIG(
       kFileColumnNamesReadAsLowerCaseSession,
@@ -242,6 +255,7 @@ class FileConfig {
       "quantum per stream is always issued; subsequent quanta are loaded on "
       "demand. Small streams that fit in one quantum see no reduction. "
       "Streams coalesced with eager columns may also be loaded early.")
+
   // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
 
   VELOX_HIVE_CONFIG_PROPERTY(
@@ -302,6 +316,14 @@ class FileConfig {
   size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   uint64_t filePreloadThreshold() const;
+
+  bool useColumnNames(const config::ConfigBase* session) const {
+    return session->get<bool>(
+        kUseColumnNamesSession,
+        config_->get<bool>(
+            connectorConfigPrefix_ + kUseColumnNames,
+            kUseColumnNamesSessionProperty::defaultValue));
+  }
 
   // Returns the timestamp unit used when reading timestamps from files.
   uint8_t readTimestampUnit(const config::ConfigBase* session) const;

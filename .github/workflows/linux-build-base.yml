@@ -46,14 +46,14 @@ jobs:
   get-changes:
     # Always runs — clang-tidy in the adapters job needs the changed-files
     # list and diff range in both selective and full modes.
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     outputs:
       run-clang-tidy: ${{ steps.changes.outputs.run_clang_tidy }}
       changed-files: ${{ steps.changes.outputs.files}}
       diff-range: ${{ steps.changes.outputs.range }}
       merge-base-commit: ${{ steps.changes.outputs.merge_base_commit }}
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -105,7 +105,7 @@ jobs:
     # check prevents errors when forks fast-forward their main branch.
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/czentgr/czentgr-test:thrift-deps
+    container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
       run:
         shell: bash
@@ -129,7 +129,7 @@ jobs:
       failed-cases: ${{ steps.retry-tests.outputs.failed-cases }}
       failure-details: ${{ steps.retry-tests.outputs.failure-details }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -142,7 +142,7 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             echo "Removing previous AWS SDK and s2n installations to avoid conflicts..."
@@ -296,7 +296,11 @@ jobs:
       # When clang is used a number of dependencies are excluded from the build so we don't
       # need to run clang-tidy for that.
       # Let's also run this as last step so that if skipped it doesn't affect subsequent steps.
-      - name: Install and run clang-tidy
+      - name: Install clang-tidy
+        if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
+        uses: ./.github/actions/setup-clang-tidy
+
+      - name: Run clang-tidy
         if: ${{ steps.build.outcome == 'success' && ! inputs.use-clang && needs.get-changes.outputs.run-clang-tidy == 'true' }}
         env:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
@@ -304,7 +308,6 @@ jobs:
           MERGE_BASE_COMMIT: ${{ needs.get-changes.outputs.merge-base-commit }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-          uv tool install clang-tidy==18.1.8
           git fetch origin $MERGE_BASE_COMMIT
           # The usage of GCC14 adds compiler warnings not understood by Clang/Clang-tidy.
           # We replace them for now but eventually move Clang-tidy to the Clang based build.
@@ -313,7 +316,9 @@ jobs:
           sed -i 's/-Wno-class-memaccess//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-Wno-maybe-uninitialized//g' $BUILD_PATH/compile_commands.json
           sed -i 's/-fcoroutines//g' $BUILD_PATH/compile_commands.json
-          python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE $FILES
+          # Breeze is a separate CMake project. Its files need the Breeze
+          # compile database, not the adapters build compile database.
+          python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE --exclude-dir breeze/ $FILES
 
       - name: Check cuDF Changes
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
@@ -372,7 +377,7 @@ jobs:
           tar -cvf "$CUDF_DIR/cudf-libs.tar" -C "$CUDF_DIR" cudf-libs
 
       - name: Upload cuDF Test Binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ inputs.is-full-mode && ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
         with:
           name: cudftestbinaries
@@ -387,10 +392,10 @@ jobs:
   adapters-build-status:
     if: always()
     needs: adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Linux release with adapters"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -403,7 +408,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-adapters-build
           path: /tmp/ci-failure/failure.json
@@ -413,10 +418,10 @@ jobs:
   adapters-test-status:
     if: always()
     needs: adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Linux release with adapters"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -433,7 +438,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-adapters-test
           path: /tmp/ci-failure/failure.json
@@ -467,7 +472,7 @@ jobs:
           nvidia-smi
 
       - name: Download cuDF Test Binaries
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cudftestbinaries
 
@@ -543,7 +548,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -557,7 +562,7 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -584,7 +589,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: velox
           persist-credentials: false
@@ -599,7 +604,16 @@ jobs:
           install_fmt
           install_boost
           install_fast_float
-          install_folly
+          # Build folly (and its gflags) shared under Clang so it matches the
+          # shared libvelox.so. A static folly links gflags statically, which
+          # then collides with the shared gflags velox links
+          # (VELOX_GFLAGS_TYPE=shared), registering gflags' flags twice and
+          # aborting every test at startup.
+          if [[ "${USE_CLANG}" = "true" ]]; then
+            VELOX_BUILD_SHARED=ON install_folly
+          else
+            install_folly
+          fi
           install_fizz
           install_wangle
           install_mvfst
@@ -638,6 +652,11 @@ jobs:
           BUILD_PROFILE=ubuntu-debug USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
+             # folly is now built shared (linking the system libgflags.so), so
+             # resolve gflags from SYSTEM here too. This keeps a single shared
+             # libgflags.so across folly, glog and velox instead of mixing a
+             # BUNDLED gflags into libvelox.so alongside the system one.
+             export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
           make debug 2>&1 | tee /tmp/build-output.log
@@ -700,10 +719,10 @@ jobs:
     # didn't run.
     if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Ubuntu debug with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -716,7 +735,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-ubuntu-debug-build
           path: /tmp/ci-failure/failure.json
@@ -726,10 +745,10 @@ jobs:
   ubuntu-debug-test-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: ubuntu-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Ubuntu debug with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -746,7 +765,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-ubuntu-debug-test
           path: /tmp/ci-failure/failure.json
@@ -769,7 +788,7 @@ jobs:
         shell: bash
         working-directory: velox
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           path: velox
@@ -783,7 +802,7 @@ jobs:
       - name: Install Dependencies
         env:
           VELOX_BUILD_SHARED: "ON"
-          VELOX_FBTHRIFT_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/velox/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
         run: |
           if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
             # Overwrite old setup scripts with changed versions
@@ -849,7 +868,7 @@ jobs:
   fedora-debug-build-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: fedora-debug
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Fedora debug"
     steps:
       - run: |
@@ -875,7 +894,7 @@ jobs:
 
       - name: Upload failure comment artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-fedora-build
           path: /tmp/ci-failure/failure.json
@@ -892,7 +911,7 @@ jobs:
     if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
     container:
-      image: ghcr.io/czentgr/czentgr-test:thrift-deps
+      image: ghcr.io/facebookincubator/velox-dev:adapters
       volumes:
         - /usr:/host_usr
         - /opt:/host_opt
@@ -930,7 +949,7 @@ jobs:
           # Show after
           echo "New available disk space: " $(getAvailableSpace)
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -939,6 +958,35 @@ jobs:
         # Usually actions/checkout does this but as we run in a container
         # it doesn't work
         run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
+
+      - name: Install Dependencies
+        env:
+          VELOX_BUILD_SHARED: "ON"
+          # The setup scripts are copied to / and run from there, so their own
+          # SCRIPT_DIR-relative fallback resolves to /../CMake and fails. Pass
+          # the patch path explicitly, as the other jobs do.
+          VELOX_OPENZL_CMAKE_PATCH: ${{ github.workspace }}/CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q "scripts/setup-"; then
+            echo "Removing previous AWS SDK and s2n installations to avoid conflicts..."
+            rm -rf /usr/local/include/s2n /usr/local/lib64/s2n
+            rm -rf /usr/local/include/aws
+            # Overwrite old setup scripts with changed versions
+            cp scripts/setup-* /
+
+            mkdir /tmp/build
+            cd /tmp/build
+            source /opt/rh/gcc-toolset-12/enable
+            bash /setup-centos-adapters.sh configure_dnf_for_cuda
+            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
+            # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
+            USE_CLANG=false bash /setup-centos9.sh
+
+            bash /setup-centos-adapters.sh
+
+            cd /
+            rm -rf /tmp/build # cleanup to avoid issues with disk space
+          fi
 
       - uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -1024,10 +1072,10 @@ jobs:
   asan-ubsan-build-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "BUILD: Linux sanitizers with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -1040,7 +1088,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-asan-ubsan-adapters-build
           path: /tmp/ci-failure/failure.json
@@ -1050,10 +1098,10 @@ jobs:
   asan-ubsan-test-status:
     if: ${{ inputs.is-full-mode && always() }}
     needs: asan-ubsan-adapters
-    runs-on: ubuntu-latest
+    runs-on: 4-core-ubuntu
     name: "TEST: Linux sanitizers with system dependencies"
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -1070,7 +1118,7 @@ jobs:
 
       - name: Upload failure artifact
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-failure-asan-ubsan-adapters-test
           path: /tmp/ci-failure/failure.json

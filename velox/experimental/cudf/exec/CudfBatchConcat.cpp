@@ -27,10 +27,16 @@ namespace {
 
 RowTypePtr getConcatOutputType(
     const std::shared_ptr<const core::PlanNode>& planNode) {
-  VELOX_CHECK_EQ(
-      planNode->sources().size(),
-      1,
-      "CudfBatchConcat expects a single-source plan node");
+  const auto numSources = planNode->sources().size();
+  if (planNode->is<core::AbstractJoinNode>()) {
+    VELOX_CHECK_EQ(
+        numSources,
+        2,
+        "CudfBatchConcat expects a join plan node to have exactly 2 sources");
+  } else {
+    VELOX_CHECK_EQ(
+        numSources, 1, "CudfBatchConcat expects a single-source plan node");
+  }
   return planNode->sources()[0]->outputType();
 }
 
@@ -76,6 +82,17 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
 
   // Merge tables if there are enough rows
   if (!buffer_.empty() && (currentNumRows_ >= targetRows_ || noMoreInput_)) {
+    // Concatenating a single column-bearing input only materializes a copy of
+    // the same table. Pass it through unchanged. Zero-column inputs still need
+    // the batching helper below to preserve their row count and enforce the
+    // maximum batch-size threshold.
+    if (buffer_.size() == 1 && outputType_->size() > 0) {
+      auto output = std::move(buffer_.front());
+      buffer_.clear();
+      currentNumRows_ = 0;
+      return output;
+    }
+
     // Use stream from existing buffer vectors
     const auto outputStream = buffer_[0]->stream();
     auto outputVectors = getConcatenatedCudfVectorsBatched(
@@ -113,6 +130,15 @@ RowVectorPtr CudfBatchConcat::doGetOutput() {
   }
 
   return nullptr;
+}
+
+void CudfBatchConcat::doClose() {
+  buffer_.clear();
+  while (!outputQueue_.empty()) {
+    outputQueue_.pop();
+  }
+  currentNumRows_ = 0;
+  Operator::close();
 }
 
 bool CudfBatchConcat::isFinished() {

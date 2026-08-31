@@ -629,7 +629,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -641,7 +641,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][BROADCAST {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][BROADCAST {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -653,7 +653,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][SINGLE {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][SINGLE {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -666,7 +666,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -690,7 +690,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
   }

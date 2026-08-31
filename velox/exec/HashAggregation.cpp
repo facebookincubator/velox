@@ -189,6 +189,11 @@ bool HashAggregation::abandonPartialAggregationEarly(int64_t numOutput) const {
 }
 
 void HashAggregation::addInput(RowVectorPtr input) {
+  // needsInput() returns false while input_ is set, so the driver must drain
+  // the previous batch via getOutput() before feeding another. Fail loudly if
+  // that contract is violated rather than silently overwriting and dropping
+  // input_.
+  VELOX_CHECK_NULL(input_);
   if (!pushdownChecked_) {
     mayPushdown_ = operatorCtx_->driver()->mayPushdownAggregation(this);
     pushdownChecked_ = true;
@@ -622,6 +627,15 @@ void HashAggregation::reclaim(
 }
 
 void HashAggregation::close() {
+  if (groupingSet_) {
+    const auto numToIntermediateFastPathCalls =
+        groupingSet_->numToIntermediateFastPathCalls();
+    if (numToIntermediateFastPathCalls > 0) {
+      addRuntimeStat(
+          std::string(kToIntermediateFastPathCalls),
+          RuntimeCounter(numToIntermediateFastPathCalls));
+    }
+  }
   Operator::close();
 
   output_ = nullptr;

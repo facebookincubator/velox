@@ -16,12 +16,44 @@
 
 #include "velox/common/time/Timer.h"
 
+#include <sys/resource.h>
+
 #include "velox/common/testutil/ScopedTestTime.h"
+#include "velox/common/time/CpuWallTimer.h"
 
 namespace facebook::velox {
 
 using namespace std::chrono;
 using common::testutil::ScopedTestTime;
+
+ProcessCpuWallTimer::ProcessCpuWallTimer(CpuWallTiming& timing)
+    : wallTimeStart_{steady_clock::now()},
+      cpuTimeStart_{processCpuNanos()},
+      timing_{timing} {
+  ++timing_.count;
+}
+
+ProcessCpuWallTimer::~ProcessCpuWallTimer() {
+  const auto cpuTimeEnd = processCpuNanos();
+  if (cpuTimeStart_ != kUnavailableCpuTime &&
+      cpuTimeEnd != kUnavailableCpuTime) {
+    timing_.cpuNanos += cpuTimeEnd - cpuTimeStart_;
+  }
+  timing_.wallNanos +=
+      duration_cast<nanoseconds>(steady_clock::now() - wallTimeStart_).count();
+}
+
+uint64_t ProcessCpuWallTimer::processCpuNanos() noexcept {
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    return kUnavailableCpuTime;
+  }
+  const auto toNanos = [](const timeval& value) {
+    return static_cast<uint64_t>(value.tv_sec) * 1'000'000'000 +
+        static_cast<uint64_t>(value.tv_usec) * 1'000;
+  };
+  return toNanos(usage.ru_utime) + toNanos(usage.ru_stime);
+}
 
 #ifndef NDEBUG
 

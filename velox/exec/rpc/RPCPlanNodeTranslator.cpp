@@ -49,16 +49,14 @@ std::optional<uint32_t> RPCPlanNodeTranslator::maxDrivers(
     // AddLocalExchanges optimizer inserts a ROUND_ROBIN LocalExchange that
     // distributes this single row across N drivers, causing N-1 drivers to
     // finish empty and the result to be lost. Force single-driver execution.
-    const auto& constantInputs = rpcNode->constantInputs();
-    const auto& argumentColumns = rpcNode->argumentColumns();
-    bool allConstant = !constantInputs.empty() &&
-        std::all_of(
-            constantInputs.begin(), constantInputs.end(), [](const auto& v) {
-              return v != nullptr;
-            });
+    const auto& callInputs = rpcNode->call()->inputs();
+    bool allConstant = !callInputs.empty() &&
+        std::all_of(callInputs.begin(), callInputs.end(), [](const auto& e) {
+          return e->isConstantKind();
+        });
     if (allConstant) {
       auto sourceType = rpcNode->source()->outputType();
-      if (sourceType->size() <= argumentColumns.size()) {
+      if (sourceType->size() <= callInputs.size()) {
         return 1;
       }
     }

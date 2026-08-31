@@ -179,6 +179,23 @@ class CudfVectorTest : public ::testing::Test, public VectorTestBase {
   }
 };
 
+TEST_F(CudfVectorTest, retainedSizeReportsDeviceStorage) {
+  TestCudaStream stream;
+  auto table =
+      makeTable(stream.view(), cudf::get_current_device_resource_ref());
+  stream.view().synchronize();
+
+  CudfVector vector(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      table->num_rows(),
+      std::move(table),
+      stream.view());
+
+  EXPECT_EQ(vector.estimateFlatSize(), 4 * sizeof(int32_t));
+  EXPECT_EQ(vector.retainedSize(), vector.estimateFlatSize());
+}
+
 TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;

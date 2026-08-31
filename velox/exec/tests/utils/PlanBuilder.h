@@ -127,6 +127,8 @@ class PlanBuilder {
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
   static constexpr const std::string_view kTpcdsDefaultConnectorId{
       "test-tpcds"};
+  static constexpr const std::string_view kIcebergDefaultConnectorId{
+      "test-iceberg"};
 
   ///
   /// TableScan
@@ -348,6 +350,16 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param dataColumnFieldIds Iceberg field IDs aligned positionally to
+    /// dataColumns(). An empty vector means field IDs are unavailable. When
+    /// set, these are forwarded into the HiveTableHandle so Iceberg readers
+    /// can resolve columns by Iceberg field ID rather than by ordinal position.
+    TableScanBuilder& dataColumnFieldIds(
+        std::vector<int32_t> dataColumnFieldIds) {
+      dataColumnFieldIds_ = std::move(dataColumnFieldIds);
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -366,6 +378,7 @@ class PlanBuilder {
     double sampleRate_{1.0};
     RowTypePtr dataColumns_;
     std::vector<std::string> indexColumns_;
+    std::vector<int32_t> dataColumnFieldIds_;
     std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
@@ -504,11 +517,11 @@ class PlanBuilder {
    public:
     explicit TableWriterBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
 
-    /// @param outputType The schema that will be written to the output file. It
-    /// may reference a subset or change the order of columns from the input
-    /// (upstream operator output).
-    TableWriterBuilder& outputType(RowTypePtr outputType) {
-      outputType_ = std::move(outputType);
+    /// @param targetColumns The target table's columns, in the order they are
+    /// written to the output file. It may reference a subset or change the
+    /// order of columns from the input (upstream operator output).
+    TableWriterBuilder& targetColumns(RowTypePtr targetColumns) {
+      targetColumns_ = std::move(targetColumns);
       return *this;
     }
 
@@ -629,7 +642,7 @@ class PlanBuilder {
     core::PlanNodePtr build(core::PlanNodeId id);
 
     PlanBuilder& planBuilder_;
-    RowTypePtr outputType_;
+    RowTypePtr targetColumns_;
     std::string outputDirectoryPath_;
     std::string outputFileName_;
     std::string connectorId_{kHiveDefaultConnectorId};
@@ -1256,14 +1269,16 @@ class PlanBuilder {
       int numPartitions,
       bool replicateNullsAndAny,
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Same as above, but assumes 'replicateNullsAndAny' is false.
   PlanBuilder& partitionedOutput(
       const std::vector<std::string>& keys,
       int numPartitions,
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Same as above, but allows to provide custom partition function.
   PlanBuilder& partitionedOutput(
@@ -1272,7 +1287,8 @@ class PlanBuilder {
       bool replicateNullsAndAny,
       core::PartitionFunctionSpecPtr partitionFunctionSpec,
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Adds a PartitionedOutputNode to broadcast the input data.
   ///
@@ -1282,12 +1298,14 @@ class PlanBuilder {
   /// duplicated in the output.
   PlanBuilder& partitionedOutputBroadcast(
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Adds a PartitionedOutputNode to put data into arbitrary buffer.
   PlanBuilder& partitionedOutputArbitrary(
       const std::vector<std::string>& outputLayout = {},
-      std::string serdeKind = "Presto");
+      std::string serdeKind = "Presto",
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Adds a LocalPartitionNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction. Number of partitions is determined

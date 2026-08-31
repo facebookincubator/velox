@@ -2410,7 +2410,9 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     auto exprSet = compileExpression(expr, rowType);
     auto expected =
         functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
+    // Evaluate the typed expression directly (no exec::Expr SQL round-trip) so
+    // computed-ROW dereferences and unnamed ROW fields are preserved.
+    auto actual = evaluate(makeTypedExpr(expr, rowType), input);
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
 };
@@ -2459,7 +2461,7 @@ TEST_F(CudfSimpleFilterProjectTest, nullableStructDereference) {
   auto rowType = ROW({{"r", ROW({{"a", INTEGER()}, {"b", VARCHAR()}})}});
   auto a = makeNullableFlatVector<int32_t>({1, 2, std::nullopt, 4});
   auto b = makeNullableFlatVector<std::string>({"x", std::nullopt, "z", "w"});
-  auto nullableStruct = makeRowVector({a, b}, nullEvery(2));
+  auto nullableStruct = makeRowVector({"a", "b"}, {a, b}, nullEvery(2));
   auto input = makeRowVector({"r"}, {nullableStruct});
 
   assertExpressionMatchesCpu("r.a", input, rowType);
@@ -2485,7 +2487,7 @@ TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByIndex) {
   exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
 
   auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
-  auto actual = evaluate(exprSet, input);
+  auto actual = evaluate(typed, input);
   facebook::velox::test::assertEqualVectors(expected, actual);
 }
 
@@ -2508,7 +2510,7 @@ TEST_F(CudfSimpleFilterProjectTest, rowConstructorDereferenceByName) {
   exec::ExprSet exprSet({typed}, &execCtx_, /*enableConstantFolding*/ false);
 
   auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
-  auto actual = evaluate(exprSet, input);
+  auto actual = evaluate(typed, input);
   facebook::velox::test::assertEqualVectors(expected, actual);
 }
 
