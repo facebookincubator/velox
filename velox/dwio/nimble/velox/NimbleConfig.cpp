@@ -326,6 +326,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.encoding_selection_config",
     "");
 
+/* static */ Config::Entry<std::string> Config::COMPRESSION_TYPE(
+    "nimble.compression_type",
+    "");
+
 // EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
 // production tables without consulting the Nimble team (oncall: dwios).
 /* static */ Config::Entry<const std::vector<std::string>>
