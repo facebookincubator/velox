@@ -17,10 +17,13 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/type/fbhive/HiveTypeSerializer.h"
+#include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -191,6 +194,44 @@ TEST(TestType, selectedType) {
   EXPECT_EQ(1, cutType->childAt(0)->maxId());
   EXPECT_EQ(11, cutType->childAt(1)->id());
   EXPECT_EQ(11, cutType->childAt(1)->maxId());
+}
+
+namespace {
+std::shared_ptr<memory::MemoryPool> addLeafPool() {
+  if (!memory::MemoryManager::testInstance()) {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+  return memory::memoryManager()->addLeafPool();
+}
+} // namespace
+
+// create(type, spec) leaves out the children a ScanSpec does not read, so
+// type() still names a child that is null. The readers rely on that shape.
+TEST(TestType, prunedByScanSpec) {
+  auto pool = addLeafPool();
+
+  auto rowType = ROW(
+      {"read", "pruned", "constant", "absent"},
+      {BIGINT(), ROW({"x", "y"}, {BIGINT(), BIGINT()}), BIGINT(), BIGINT()});
+
+  facebook::velox::common::ScanSpec scanSpec("<root>");
+  scanSpec.addField("read", 0);
+  scanSpec.addField("constant", 1)
+      ->setConstantValue(
+          BaseVector::createNullConstant(BIGINT(), 1, pool.get()));
+
+  auto pruned = TypeWithId::create(rowType, scanSpec);
+  EXPECT_EQ(*pruned->type(), *rowType);
+  ASSERT_EQ(pruned->size(), rowType->size());
+  EXPECT_NE(pruned->childByName("read"), nullptr);
+  EXPECT_EQ(pruned->childByName("pruned"), nullptr);
+  EXPECT_EQ(pruned->childByName("constant"), nullptr);
+  EXPECT_EQ(pruned->childByName("absent"), nullptr);
+  VELOX_ASSERT_THROW(pruned->childByName("nonexistent"), "Field not found");
+
+  auto full = TypeWithId::create(rowType);
+  EXPECT_EQ(pruned->childByName("read")->id(), full->childByName("read")->id());
+  EXPECT_EQ(pruned->maxId(), full->maxId());
 }
 
 TEST(TestType, buildTypeFromString) {
