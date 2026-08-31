@@ -28,7 +28,10 @@ namespace facebook::velox::functions::aggregate::sparksql {
 using functions::sparksql::SparkQueryConfig;
 
 namespace {
-class CollectListAggregate {
+// Fix null handling at registration time to support varying null handing
+// contracts.
+template <bool PinIgnoreNulls>
+class CollectListAggregateBase {
  public:
   using InputType = Row<Generic<T1>>;
 
@@ -53,7 +56,11 @@ class CollectListAggregate {
       const std::vector<TypePtr>& /*argTypes*/,
       const TypePtr& /*resultType*/,
       const core::QueryConfig& config) {
-    ignoreNulls_ = SparkQueryConfig{config}.collectListIgnoreNulls();
+    if constexpr (PinIgnoreNulls) {
+      ignoreNulls_ = true;
+    } else {
+      ignoreNulls_ = SparkQueryConfig{config}.collectListIgnoreNulls();
+    }
   }
 
   struct AccumulatorType {
@@ -61,7 +68,7 @@ class CollectListAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        CollectListAggregate* fn)
+        CollectListAggregateBase* fn)
         : elements_{}, ignoreNulls_(fn->ignoreNulls_) {}
 
     static constexpr bool is_fixed_size_ = false;
@@ -120,7 +127,10 @@ class CollectListAggregate {
 
 } // namespace
 
-void registerCollectListAggregate(
+namespace {
+
+template <bool PinIgnoreNulls>
+void registerCollectListAggregateImpl(
     const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
@@ -142,10 +152,27 @@ void registerCollectListAggregate(
         const std::string& name = names.front();
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes at most one argument", name);
-        return std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
+        return std::make_unique<
+            SimpleAggregateAdapter<CollectListAggregateBase<PinIgnoreNulls>>>(
             step, argTypes, resultType, &config);
       },
       withCompanionFunctions,
       overwrite);
+}
+
+} // namespace
+
+void registerCollectListAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite,
+    bool pinIgnoreNulls) {
+  if (pinIgnoreNulls) {
+    registerCollectListAggregateImpl</*PinIgnoreNulls=*/true>(
+        names, withCompanionFunctions, overwrite);
+  } else {
+    registerCollectListAggregateImpl</*PinIgnoreNulls=*/false>(
+        names, withCompanionFunctions, overwrite);
+  }
 }
 } // namespace facebook::velox::functions::aggregate::sparksql

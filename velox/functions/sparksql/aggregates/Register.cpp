@@ -71,7 +71,10 @@ void registerAggregateFunctions(
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectListAggregate(
-      {prefix + "collect_list"}, withCompanionFunctions, overwrite);
+      {prefix + "collect_list"},
+      withCompanionFunctions,
+      overwrite,
+      /*pinIgnoreNulls=*/false);
   registerRegrReplacementAggregate(prefix, withCompanionFunctions, overwrite);
   registerModeAggregate(prefix, withCompanionFunctions, overwrite);
   registerVarianceAggregate(prefix, withCompanionFunctions, overwrite);

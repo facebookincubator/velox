@@ -26,9 +26,13 @@ namespace facebook::velox::functions::aggregate::sparksql {
 /// @param withCompanionFunctions Also register companion functions.
 /// @param overwrite Whether to overwrite existing entry in the function
 /// registry.
+/// @param pinIgnoreNulls When true, null inputs are always ignored and the
+/// collect_list.ignore_nulls session config is not consulted. Use for a name
+/// whose contract fixes null handling and must not follow session config.
 void registerCollectListAggregate(
     const std::vector<std::string>& names,
     bool withCompanionFunctions,
-    bool overwrite);
+    bool overwrite,
+    bool pinIgnoreNulls);
 
 } // namespace facebook::velox::functions::aggregate::sparksql
