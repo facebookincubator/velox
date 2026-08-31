@@ -150,6 +150,13 @@ class IcebergSplitReader : public FileSplitReader {
   // projection naturally drops them from the operator output.
   void configureEqualityDeleteColumns();
 
+  // Fails if the reader tree for the current split cannot supply one of
+  // 'equalityColumnNames', which would silently match no row to delete.
+  // 'configureEqualityDeleteColumns' establishes what is checked, so a failure
+  // is an internal error.
+  void checkEqualityDeleteColumnsAreReadable(
+      const std::vector<std::string>& equalityColumnNames) const;
+
   // Names of scan-spec children that 'configureEqualityDeleteColumns'
   // pre-installed a partition-value constant on for the current split.
   // Mirrors the Java 'PARTITION_KEY' column-type distinction in

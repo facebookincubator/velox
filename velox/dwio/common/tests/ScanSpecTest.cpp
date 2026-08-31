@@ -18,10 +18,19 @@
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <atomic>
+#include <thread>
 
 namespace facebook::velox::common {
 namespace {
+
+using testing::Each;
+using testing::ElementsAre;
+using testing::Pointer;
+using testing::SizeIs;
 
 class ScanSpecTest : public testing::Test, public test::VectorTestBase {
  protected:
@@ -161,6 +170,88 @@ TEST_F(ScanSpecTest, testFilterOnConstant) {
         child.setFilter(std::make_shared<IsNotNull>());
       },
       false);
+}
+
+// A child added after the first reader tree was built appears at the end of
+// stableChildren().
+TEST_F(ScanSpecTest, stableChildrenAfterAddingChild) {
+  ScanSpec scanSpec("<root>");
+  scanSpec.addField("c0", 0);
+  scanSpec.addField("c1", 1);
+
+  auto* first = scanSpec.childByName("c0");
+  auto* second = scanSpec.childByName("c1");
+  const auto beforeAdd = scanSpec.stableChildren();
+  EXPECT_THAT(*beforeAdd, ElementsAre(Pointer(first), Pointer(second)));
+
+  auto* third = scanSpec.addField("c2", 2);
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
+
+  // The snapshot a reader tree is walking is never mutated.
+  EXPECT_THAT(*beforeAdd, ElementsAre(Pointer(first), Pointer(second)));
+
+  // 'c2' is the only child with a filter, so it sorts to the front. The
+  // stable order must not follow.
+  scanSpec.childByName("c2")->setFilter(
+      std::make_shared<BigintRange>(10, 20, false));
+  scanSpec.resetCachedValues(true);
+  ASSERT_EQ(scanSpec.children().front().get(), third);
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
+}
+
+// An add drops the published snapshot. The next call republishes the whole
+// order, held or not.
+TEST_F(ScanSpecTest, stableChildrenRepublishedAfterAdd) {
+  ScanSpec scanSpec("<root>");
+  auto* first = scanSpec.addField("c0", 0);
+  // Published and dropped, so nothing holds it when 'c1' is added.
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(Pointer(first)));
+
+  auto* second = scanSpec.addField("c1", 1);
+  const auto held = scanSpec.stableChildren();
+  EXPECT_THAT(*held, ElementsAre(Pointer(first), Pointer(second)));
+
+  // Held this time, so adding 'c2' must leave 'held' alone.
+  auto* third = scanSpec.addField("c2", 2);
+  EXPECT_THAT(*held, ElementsAre(Pointer(first), Pointer(second)));
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
+}
+
+// Two threads calling getOrCreateChild() for one name must get one child. A
+// lookup outside the insert's lock lets both miss and both create.
+TEST_F(ScanSpecTest, getOrCreateChildConcurrently) {
+  constexpr int32_t kNumThreads = 4;
+  constexpr int32_t kNumIterations = 10;
+  for (int32_t iteration = 0; iteration < kNumIterations; ++iteration) {
+    ScanSpec scanSpec("<root>");
+    // Releases every thread at once, widening the lookup-to-insert window.
+    std::atomic_bool start{false};
+    std::vector<ScanSpec*> children(kNumThreads);
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int32_t i = 0; i < kNumThreads; ++i) {
+      threads.emplace_back([&, i] {
+        while (!start.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        children[i] = scanSpec.getOrCreateChild("c0");
+      });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    ASSERT_THAT(scanSpec.children(), SizeIs(1));
+    auto* child = scanSpec.childByName("c0");
+    ASSERT_EQ(child, scanSpec.children()[0].get());
+    EXPECT_THAT(children, Each(child));
+  }
 }
 
 class TypedScanSpecTest : public testing::TestWithParam<TypePtr>,
