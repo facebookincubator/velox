@@ -16,7 +16,10 @@
 
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 
+#include <sys/mman.h>
+#include <unistd.h>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -39,8 +42,9 @@ class DeltaPageBuilder {
   // Builds a single-block page. 'deltas' holds the valuesPerBlock deltas that
   // follow the first value. 'bitWidths' holds one bit width per miniblock.
   // 'firstValue' is the value stored in the page header. Returns the encoded
-  // bytes (with trailing padding for the decoder's over-read) and fills
-  // 'expected' with the reconstructed values (firstValue + prefix sums).
+  // page bytes alone and fills 'expected' with the reconstructed values
+  // (firstValue + prefix sums). Callers supply the decoder's trailing
+  // padding, since how much of it is readable is what some tests vary.
   std::vector<uint8_t> build(
       int64_t firstValue,
       int64_t minDelta,
@@ -86,9 +90,6 @@ class DeltaPageBuilder {
       appendPackedMiniBlock(buf, stored, bitWidth);
     }
 
-    // The decoder may read up to kRequiredTrailingPadding bytes past the last
-    // page byte; mirror the page reader's padding.
-    buf.insert(buf.end(), DeltaBpDecoder::kRequiredTrailingPadding + 8, 0);
     return buf;
   }
 
@@ -195,6 +196,7 @@ void testSkipOverWideMiniBlock(uint32_t bitWidth) {
       deltas,
       bitWidths,
       expected);
+  page.insert(page.end(), DeltaBpDecoder::kRequiredTrailingPadding, 0);
   const auto* start = reinterpret_cast<const char*>(page.data());
 
   // Full decode is the trusted reference path and must round-trip the input.
@@ -226,6 +228,118 @@ void testSkipOverWideMiniBlock(uint32_t bitWidth) {
 TEST(DeltaBpDecoderTest, skipWideMiniBlock) {
   for (uint32_t bitWidth = 57; bitWidth <= 64; ++bitWidth) {
     testSkipOverWideMiniBlock(bitWidth);
+  }
+}
+
+// Owns a mapping whose last readable byte is immediately followed by an
+// inaccessible guard page. Placing a page here bounds the decoder's over-read
+// by hardware: reading further than the mapping faults instead of quietly
+// succeeding, on every build and with no sanitizer required.
+class GuardedBuffer {
+ public:
+  // Maps 'size' readable bytes ending flush against the guard page.
+  explicit GuardedBuffer(size_t size) : size_(size) {
+    const size_t pageSize = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+    mappedSize_ = ((size + pageSize - 1) / pageSize) * pageSize + pageSize;
+    mapping_ = ::mmap(
+        nullptr,
+        mappedSize_,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0);
+    VELOX_CHECK_NE(mapping_, MAP_FAILED, "Failed to map guarded buffer");
+    auto* guard = static_cast<uint8_t*>(mapping_) + mappedSize_ - pageSize;
+    VELOX_CHECK_EQ(::mprotect(guard, pageSize, PROT_NONE), 0);
+    data_ = guard - size;
+  }
+
+  ~GuardedBuffer() {
+    ::munmap(mapping_, mappedSize_);
+  }
+
+  GuardedBuffer(const GuardedBuffer&) = delete;
+  GuardedBuffer& operator=(const GuardedBuffer&) = delete;
+
+  uint8_t* data() const {
+    return data_;
+  }
+
+  size_t size() const {
+    return size_;
+  }
+
+ private:
+  const size_t size_;
+  size_t mappedSize_{0};
+  void* mapping_{nullptr};
+  uint8_t* data_{nullptr};
+};
+
+// Decodes a whole page whose readable trailing padding is exactly
+// DeltaBpDecoder::kRequiredTrailingPadding bytes, with a guard page beyond it.
+// All four miniblocks carry 'bitWidth', so the last one ends at the page end
+// and its final SIMD load reaches the furthest past the encoded data.
+void testDecodeAgainstPaddingLimit(uint32_t bitWidth) {
+  SCOPED_TRACE("bitWidth=" + std::to_string(bitWidth));
+  constexpr uint32_t kValuesPerMiniBlock = 32;
+  constexpr uint32_t kMiniBlocksPerBlock = 4;
+  constexpr uint32_t kValuesPerBlock =
+      kValuesPerMiniBlock * kMiniBlocksPerBlock;
+
+  // Set the high bit so every delta genuinely needs all 'bitWidth' bits, and
+  // vary the low bits so a dropped or misplaced value is visible.
+  const uint64_t highBit = 1ULL << (bitWidth - 1);
+  std::vector<int64_t> deltas(kValuesPerBlock);
+  for (uint32_t i = 0; i < kValuesPerBlock; ++i) {
+    deltas[i] = static_cast<int64_t>(highBit | (i % highBit));
+  }
+  const std::vector<uint32_t> bitWidths(kMiniBlocksPerBlock, bitWidth);
+
+  DeltaPageBuilder builder(kValuesPerMiniBlock, kMiniBlocksPerBlock);
+  std::vector<int64_t> expected;
+  const auto page = builder.build(
+      /*firstValue=*/0,
+      /*minDelta=*/0,
+      deltas,
+      bitWidths,
+      expected);
+
+  GuardedBuffer buffer(page.size() + DeltaBpDecoder::kRequiredTrailingPadding);
+  std::memcpy(buffer.data(), page.data(), page.size());
+  std::memset(buffer.data() + page.size(), 0, buffer.size() - page.size());
+
+  const auto* start = reinterpret_cast<const char*>(buffer.data());
+  DeltaBpDecoder decoder(start);
+  std::vector<int64_t> actual(expected.size());
+  decoder.readValues(actual.data(), static_cast<int32_t>(actual.size()));
+
+  EXPECT_EQ(actual, expected);
+  EXPECT_EQ(decoder.validValuesCount(), 0);
+  EXPECT_EQ(decoder.bufferStart(), start + page.size());
+}
+
+// Pins the trailing-padding contract the SIMD decode path depends on. The
+// bitWidth > 16 path builds its 128-bit window from loads at 'byteOff' and
+// 'byteOff + 8', so it touches up to 16 - ceil(bitWidth / 4) bytes past the
+// miniblock -- 11 at bit widths 17 through 20, the widest over-read the
+// decoder performs. Running every SIMD-eligible width against a guard page
+// placed exactly kRequiredTrailingPadding bytes out fails if that bound ever
+// grows, or if the constant is lowered to match it.
+//
+// Note that this covers the padding half of the contract only. The path also
+// requires unaligned loads, and reading an unaligned address through a
+// 'uint64_t*' is undefined behavior that x86-64 and ARM64 both execute
+// correctly, so only -fsanitize=alignment observes it. That check does run in
+// the ASAN/UBSAN build: the -fno-sanitize=alignment added for issue #15811
+// sits on CMAKE_EXE_LINKER_FLAGS, and UBSan instruments at compile time, so
+// the flag does not suppress it. It reports and recovers rather than
+// aborting, which is why a misaligned load shows up as a diagnostic without
+// failing the job. This test drives unaligned payload offsets so a regression
+// surfaces there.
+TEST(DeltaBpDecoderTest, decodeAgainstPaddingLimit) {
+  for (uint32_t bitWidth = 1; bitWidth <= 32; ++bitWidth) {
+    testDecodeAgainstPaddingLimit(bitWidth);
   }
 }
 
