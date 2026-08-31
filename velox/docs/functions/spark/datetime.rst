@@ -201,14 +201,24 @@ These functions support TIMESTAMP and DATE input types.
 
 .. spark:function:: make_date(year, month, day) -> date
 
+    *(ANSI compliant)*
+
     Returns the date from year, month and day fields.
     ``year``, ``month`` and ``day`` must be ``INTEGER``.
-    Returns NULL if inputs are not valid.
 
     The valid inputs need to meet the following conditions,
     ``month`` need to be from 1 (January) to 12 (December).
     ``day`` need to be from 1 to 31, and matches the number of days in each month.
     days of ``year-month-day - 1970-01-01`` need to be in the range of INTEGER type.
+
+    When ``spark.ansi_enabled`` is true, invalid inputs throw an error;
+    otherwise the function returns NULL. NULL inputs always return NULL
+    regardless of ANSI mode. ::
+
+        SELECT make_date(1920, 1, 25); -- 1920-01-25
+        SELECT make_date(null, 1, 25); -- NULL
+        SELECT make_date(2021, 13, 1); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+        SELECT make_date(2023, 2, 29); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 .. spark:function:: make_timestamp(year, month, day, hour, minute, second[, timezone]) -> timestamp
 
