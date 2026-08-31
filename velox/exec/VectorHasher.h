@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
@@ -71,6 +73,15 @@ class UniqueValue {
     }
     // String is stored as a pointer in data_.
     return std::string{reinterpret_cast<const char*>(data_), size_};
+  }
+
+  std::string_view bytesView() const {
+    if (size_ <= sizeof(int64_t)) {
+      return std::string_view{
+          reinterpret_cast<const char*>(&data_), static_cast<size_t>(size_)};
+    }
+    return std::string_view{
+        reinterpret_cast<const char*>(data_), static_cast<size_t>(size_)};
   }
 
   void setData(int64_t data) {
@@ -369,6 +380,17 @@ class VectorHasher {
 
   std::string toString() const;
 
+  // Serializes the value-id / range state needed to preserve non-kHash join
+  // probe behavior across process boundaries.
+  std::string serializeState() const;
+
+  // Returns the number of bytes serializeState() produces. Lets callers size a
+  // destination buffer without building the state.
+  uint32_t serializedStateSize() const;
+
+  // Restores state produced by serializeState().
+  void deserializeState(std::string_view data);
+
   size_t numUniqueValues() const {
     return numDistinct();
   }
@@ -377,6 +399,10 @@ class VectorHasher {
   static constexpr uint32_t kStringASRangeMaxSize = 7;
   static constexpr uint32_t kStringBufferUnitSize = 1024;
   static constexpr uint64_t kMaxDistinctStringsBytes = 1 << 20;
+
+  // Returns 'bloomFilter_' as the only implementation that serializeState()
+  // supports, or null if there is no bloom filter.
+  const common::BigintValuesUsingBloomFilter* bloomFilterState() const;
 
   // Maps a binary string of up to 7 bytes to int64_t. Each size maps
   // to a different numeric range, so leading zeros are considered.

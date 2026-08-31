@@ -506,6 +506,11 @@ void RowContainer::updateColumnStats(
 }
 
 void RowContainer::updateColumnStats(char* row, int32_t columnIndex) {
+  if (rowColumnsStats_.empty()) {
+    // Column stats have been invalidated.
+    return;
+  }
+
   const bool nullColumn = isNullAt(row, rowColumns_[columnIndex]);
 
   auto& columnStats = rowColumnsStats_[columnIndex];
@@ -688,6 +693,94 @@ int32_t RowContainer::storeVariableSizeAt(
   return 4 + size;
 }
 
+int32_t RowContainer::serializedFlagsOffset() const {
+  return nullOffsets_.empty() ? freeFlagOffset_ / 8 : nullByte(nullOffsets_[0]);
+}
+
+std::optional<size_t> RowContainer::fixedSerializedRowSize() const {
+  size_t rowSize = flagBytes_;
+  for (const auto& type : types_) {
+    if (!type->isFixedWidth()) {
+      return std::nullopt;
+    }
+    rowSize += typeKindSize(type->kind());
+  }
+  return rowSize;
+}
+
+size_t RowContainer::serializedRowsSize(folly::Range<char**> rows) const {
+  if (const auto rowSize = fixedSerializedRowSize()) {
+    return rowSize.value() * rows.size();
+  }
+
+  size_t fixedWidthRowSize = flagBytes_;
+  std::vector<column_index_t> variableWidthColumns;
+  for (auto i = 0; i < types_.size(); ++i) {
+    if (types_[i]->isFixedWidth()) {
+      fixedWidthRowSize += typeKindSize(types_[i]->kind());
+    } else {
+      variableWidthColumns.push_back(i);
+    }
+  }
+
+  size_t totalBytes = fixedWidthRowSize * rows.size();
+  for (const char* row : rows) {
+    for (const auto column : variableWidthColumns) {
+      // 4 bytes for size + N bytes for data.
+      totalBytes += 4 + variableSizeAt(row, column);
+    }
+  }
+  return totalBytes;
+}
+
+std::vector<RowContainer::SerializedColumn> RowContainer::serializedColumns()
+    const {
+  std::vector<SerializedColumn> layout;
+  layout.reserve(types_.size());
+  for (auto i = 0; i < types_.size(); ++i) {
+    layout.push_back(
+        {rowColumns_[i].offset(),
+         types_[i]->isFixedWidth()
+             ? static_cast<int32_t>(typeKindSize(types_[i]->kind()))
+             : 0});
+  }
+  return layout;
+}
+
+size_t RowContainer::serializeRows(
+    folly::Range<char**> rows,
+    char* destination,
+    vector_size_t* rowSizes) const {
+  const auto layout = serializedColumns();
+  const auto flagsOffset = serializedFlagsOffset();
+  auto* current = destination;
+  for (auto i = 0; i < rows.size(); ++i) {
+    const auto* row = rows[i];
+    auto* rowStart = current;
+
+    // Copy nulls and other flags.
+    ::memcpy(current, row + flagsOffset, flagBytes_);
+    current += flagBytes_;
+
+    // Copy values.
+    for (auto column = 0; column < layout.size(); ++column) {
+      if (layout[column].fixedSize != 0) {
+        ::memcpy(
+            current, row + layout[column].offset, layout[column].fixedSize);
+        current += layout[column].fixedSize;
+      } else {
+        current += extractVariableSizeAt(row, column, current);
+      }
+    }
+
+    if (rowSizes != nullptr) {
+      rowSizes[i] = static_cast<vector_size_t>(current - rowStart);
+    }
+  }
+
+  return static_cast<size_t>(current - destination);
+}
+
 void RowContainer::extractSerializedRows(
     folly::Range<char**> rows,
     const VectorPtr& result) const {
@@ -695,68 +788,20 @@ void RowContainer::extractSerializedRows(
   // dependent columns. Fixed-width columns are serialized into fixed number of
   // bytes (see typeKindSize). Variable-width columns are serialized as 4 bytes
   // of size followed by that many bytes.
+  const auto totalBytes = serializedRowsSize(rows);
 
-  // First, calculate total number of bytes needed to serialize all rows.
-
-  size_t fixedWidthRowSize = 0;
-  bool hasVariableWidth = false;
-  for (auto i = 0; i < types_.size(); ++i) {
-    const auto& type = types_[i];
-    if (type->isFixedWidth()) {
-      fixedWidthRowSize += typeKindSize(type->kind());
-    } else {
-      hasVariableWidth = true;
-    }
-  }
-
-  size_t totalBytes =
-      flagBytes_ * rows.size() + fixedWidthRowSize * rows.size();
-  if (hasVariableWidth) {
-    for (const char* row : rows) {
-      for (auto i = 0; i < types_.size(); ++i) {
-        const auto& type = types_[i];
-        if (!type->isFixedWidth()) {
-          // 4 bytes for size + N bytes for data.
-          totalBytes += 4 + variableSizeAt(row, i);
-        }
-      }
-    }
-  }
-
-  // Allocate sufficient buffer.
   auto* flatResult = result->as<FlatVector<StringView>>();
   flatResult->resize(rows.size());
   auto* rawBuffer = flatResult->getRawStringBufferWithSpace(totalBytes, true);
 
-  // Write serialized data.
-  size_t totalWritten = 0;
-  for (auto i = 0; i < rows.size(); ++i) {
-    auto* row = rows[i];
-    size_t offset = 0;
-
-    // Copy nulls and other flags.
-    ::memcpy(rawBuffer + offset, row + rowColumns_[0].nullByte(), flagBytes_);
-    offset += flagBytes_;
-
-    // Copy values.
-    for (auto j = 0; j < types_.size(); ++j) {
-      const auto& type = types_[j];
-      if (type->isFixedWidth()) {
-        const auto size = typeKindSize(type->kind());
-        ::memcpy(rawBuffer + offset, row + rowColumns_[j].offset(), size);
-        offset += size;
-      } else {
-        auto size = extractVariableSizeAt(row, j, rawBuffer + offset);
-        offset += size;
-      }
-    }
-
-    flatResult->setNoCopy(i, StringView(rawBuffer, offset));
-    rawBuffer += offset;
-    totalWritten += offset;
-  }
-
+  std::vector<vector_size_t> rowSizes(rows.size());
+  const auto totalWritten = serializeRows(rows, rawBuffer, rowSizes.data());
   VELOX_CHECK_EQ(totalWritten, totalBytes);
+
+  for (auto i = 0; i < rows.size(); ++i) {
+    flatResult->setNoCopy(i, StringView(rawBuffer, rowSizes[i]));
+    rawBuffer += rowSizes[i];
+  }
 }
 
 void RowContainer::storeSerializedRow(
@@ -765,9 +810,20 @@ void RowContainer::storeSerializedRow(
     char* row) {
   VELOX_CHECK(!vector.isNullAt(index));
   const auto serialized = vector.valueAt(index);
+  const auto consumed = storeSerializedRow(
+      std::string_view(serialized.data(), serialized.size()), row);
+  VELOX_CHECK_EQ(
+      consumed,
+      serialized.size(),
+      "Serialized row size mismatch while storing RowContainer row");
+}
+
+size_t RowContainer::storeSerializedRow(
+    std::string_view serialized,
+    char* row) {
   size_t offset = 0;
 
-  ::memcpy(row + rowColumns_[0].nullByte(), serialized.data(), flagBytes_);
+  ::memcpy(row + serializedFlagsOffset(), serialized.data(), flagBytes_);
   offset += flagBytes_;
 
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
@@ -783,6 +839,75 @@ void RowContainer::storeSerializedRow(
     }
     updateColumnStats(row, i);
   }
+  VELOX_CHECK_LE(
+      offset, serialized.size(), "Truncated serialized RowContainer row");
+  return offset;
+}
+
+size_t RowContainer::storeSerializedRows(
+    std::string_view serialized,
+    vector_size_t numRows,
+    char** rows) {
+  const auto layout = serializedColumns();
+  const auto flagsOffset = serializedFlagsOffset();
+  // Column stats are gone once they have been invalidated.
+  const bool updateStats = !rowColumnsStats_.empty();
+
+  size_t offset{0};
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    char* row = newRow();
+    rows[i] = row;
+
+    // The serialized bytes do not include the next-row pointer, which belongs
+    // to the hash table rather than to the row. Clear it so that nothing
+    // follows uninitialized memory.
+    if (nextOffset_ != 0) {
+      *reinterpret_cast<char**>(row + nextOffset_) = nullptr;
+    }
+
+    VELOX_CHECK_LE(
+        offset + flagBytes_, serialized.size(), "Truncated serialized rows");
+    ::memcpy(row + flagsOffset, serialized.data() + offset, flagBytes_);
+    offset += flagBytes_;
+
+    RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
+    for (auto column = 0; column < layout.size(); ++column) {
+      int32_t valueSize;
+      if (layout[column].fixedSize != 0) {
+        valueSize = layout[column].fixedSize;
+        ::memcpy(
+            row + layout[column].offset, serialized.data() + offset, valueSize);
+        offset += valueSize;
+      } else {
+        const auto consumed =
+            storeVariableSizeAt(serialized.data() + offset, row, column);
+        // The leading 4 bytes hold the size and are not part of the value.
+        valueSize = consumed - 4;
+        offset += consumed;
+      }
+
+      if (updateStats) {
+        auto& columnStats = rowColumnsStats_[column];
+        if (isNullAt(row, rowColumns_[column])) {
+          columnStats.addNullCell();
+        } else {
+          columnStats.addCellSize(valueSize);
+        }
+      }
+    }
+    VELOX_CHECK_LE(offset, serialized.size(), "Truncated serialized rows");
+
+    // The flag bytes carry the source container's join flags. Reset them so
+    // that every row reads back as unprobed and as a single occurrence.
+    if (probedFlagOffset_ != 0) {
+      bits::clearBit(row, probedFlagOffset_);
+    }
+    if (countOffset_ != 0) {
+      countRef(row) = 1;
+    }
+  }
+
+  return offset;
 }
 
 void RowContainer::extractString(
