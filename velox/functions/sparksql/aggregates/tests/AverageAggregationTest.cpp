@@ -360,7 +360,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMergeExtract) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-DEBUG_ONLY_TEST_F(AverageAggregationTest, abandonPartialAggregation) {
+TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   constexpr vector_size_t kBatchSize = 100;
   std::vector<RowVectorPtr> data;
   for (auto batch = 0; batch < 3; ++batch) {
@@ -389,11 +389,6 @@ DEBUG_ONLY_TEST_F(AverageAggregationTest, abandonPartialAggregation) {
                   .capturePlanNodeId(partialNodeId)
                   .finalAggregation()
                   .planNode();
-  std::atomic_bool usedToIntermediateFastPath{false};
-  SCOPED_TESTVALUE_SET(
-      "facebook::velox::exec::Aggregate::toIntermediate",
-      std::function<void(void*)>(
-          [&](void*) { usedToIntermediateFastPath = true; }));
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
@@ -409,7 +404,9 @@ DEBUG_ONLY_TEST_F(AverageAggregationTest, abandonPartialAggregation) {
       stats.at(partialNodeId)
           .customStats.at("abandonedPartialAggregationRows")
           .sum);
-  EXPECT_TRUE(usedToIntermediateFastPath);
+  EXPECT_GT(
+      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      0);
 }
 
 } // namespace
