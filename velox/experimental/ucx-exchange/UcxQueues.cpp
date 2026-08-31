@@ -241,7 +241,7 @@ void UcxOutputQueue::enqueue(
     } else if (kind_ == core::PartitionedOutputNode::Kind::kArbitrary) {
       VELOX_CHECK_EQ(destination, 0, "Arbitrary uses destination 0");
       enqueueArbitraryOutputLocked(
-          std::move(sharedData), dataAvailableCallbacks);
+          std::move(sharedData), numRows, dataAvailableCallbacks);
       updateStatsWithEnqueuedLocked(numBytes, numRows);
       success = true;
     } else {
@@ -293,7 +293,8 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
       // queue is empty. This ensures demand-driven distribution.
       if (kind_ == core::PartitionedOutputNode::Kind::kArbitrary &&
           !arbitraryBuffer_.empty()) {
-        queue->enqueueBack(std::move(arbitraryBuffer_.front()));
+        auto& front = arbitraryBuffer_.front();
+        queue->enqueueBack(std::move(front.first), front.second);
         arbitraryBuffer_.pop_front();
       }
       // Capture weak_ptr instead of raw `this` to prevent use-after-free.
@@ -384,12 +385,20 @@ void UcxOutputQueue::checkIfDone(bool oneDriverFinished) {
     // For arbitrary, drain remaining shared pool to destination queues
     // round-robin before sending end markers.
     if (kind_ == core::PartitionedOutputNode::Kind::kArbitrary) {
+      // No destination queue was ever created, so there is nowhere to drain
+      // to. Bail out before the loop, which would index queues_ out of range
+      // and divide by zero on the modulo. Same conclusion the all-null case
+      // below reaches through nullCount.
+      if (queues_.empty()) {
+        arbitraryBuffer_.clear();
+      }
       int32_t bufferId = nextArbitraryLoadIndex_;
       int32_t nullCount = 0;
       while (!arbitraryBuffer_.empty()) {
         auto* queue = queues_[bufferId].get();
         if (queue != nullptr) {
-          queue->enqueueBack(std::move(arbitraryBuffer_.front()));
+          auto& front = arbitraryBuffer_.front();
+          queue->enqueueBack(std::move(front.first), front.second);
           arbitraryBuffer_.pop_front();
           nullCount = 0;
         } else if (++nullCount >= queues_.size()) {
@@ -450,10 +459,11 @@ void UcxOutputQueue::enqueueBroadcastOutputLocked(
 
 void UcxOutputQueue::enqueueArbitraryOutputLocked(
     std::shared_ptr<cudf::packed_columns> data,
+    vector_size_t numRows,
     std::vector<UcxDataAvailable>& dataAvailableCbs) {
   VELOX_DCHECK(dataAvailableCbs.empty());
 
-  arbitraryBuffer_.push_back(std::move(data));
+  arbitraryBuffer_.emplace_back(std::move(data), numRows);
 
   // Distribute from the shared pool to destinations with waiting consumers,
   // probing round-robin so no single destination starves.
@@ -468,12 +478,14 @@ void UcxOutputQueue::enqueueArbitraryOutputLocked(
       // it. When the destination queue is empty the returned data is null.
       auto pending = queue->getAndClearNotify();
       if (pending.callback) {
-        pending.data = std::move(arbitraryBuffer_.front());
+        auto& front = arbitraryBuffer_.front();
+        pending.data = std::move(front.first);
+        pending.numRows = front.second;
         arbitraryBuffer_.pop_front();
         pending.remainingBytes.clear();
         for (const auto& item : arbitraryBuffer_) {
-          if (item != nullptr) {
-            pending.remainingBytes.push_back(item->gpu_data->size());
+          if (item.first != nullptr) {
+            pending.remainingBytes.push_back(item.first->gpu_data->size());
           }
         }
         dataAvailableCbs.push_back(std::move(pending));
