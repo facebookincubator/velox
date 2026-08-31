@@ -308,6 +308,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   void enqueueArbitraryOutputLocked(
       std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
   // Reference to the task that owns this UcxQueue.
@@ -329,7 +330,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       dataToBroadcast_;
 
   // For arbitrary: shared pool of data that any consumer can pull from.
-  std::deque<std::shared_ptr<cudf::packed_columns>> arbitraryBuffer_;
+  // Paired with the row count for the same reason QueuedPage is.
+  std::deque<std::pair<std::shared_ptr<cudf::packed_columns>, vector_size_t>>
+      arbitraryBuffer_;
 
   // For arbitrary: round-robin index for distributing data to waiting
   // consumers.
