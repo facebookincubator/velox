@@ -22,6 +22,7 @@
 #include <vector>
 #include "velox/dwio/nimble/common/Constants.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/selection/BitFlipProfile.h"
 
 #include "absl/container/flat_hash_map.h" // @manual=fbsource//third-party/abseil-cpp:container__flat_hash_map
 
@@ -238,6 +239,20 @@ class Statistics {
     return minMaxBlocks_.value();
   }
 
+  /// Per-bit-position bit-flip-probability profile (XOR-count-and-divide
+  /// between consecutive values), plus its variance and discrete gradient
+  /// across bit positions. Used to cheaply predict whether a stream is
+  /// likely to contain multiple concatenated bit-field distributions (see
+  /// SubIntSplitTopLevelPolicy.h). Not currently consumed by any production
+  /// selection path.
+  const BitFlipProfile& bitFlipProfile() const noexcept {
+    static_assert(nimble::isIntegralType<T>());
+    if (!bitFlipProfile_.has_value()) {
+      populateBitFlipProfile();
+    }
+    return bitFlipProfile_.value();
+  }
+
  private:
   Statistics() = default;
   std::span<const InputType> data_;
@@ -287,6 +302,7 @@ class Statistics {
   void populateBucketCounts() const;
   void populateMinMaxBlocks(uint16_t blockSize) const;
   void populateStringLength() const;
+  void populateBitFlipProfile() const;
 
   mutable std::optional<uint64_t> consecutiveRepeatCount_;
   mutable std::optional<uint64_t> minRepeat_;
@@ -301,6 +317,7 @@ class Statistics {
   mutable std::optional<std::optional<UniqueValueCounts<T, InputType>>>
       uniqueCounts_;
   mutable std::optional<std::vector<T>> runValues_;
+  mutable std::optional<BitFlipProfile> bitFlipProfile_;
 };
 
 } // namespace facebook::nimble
