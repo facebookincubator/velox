@@ -65,8 +65,8 @@ BitFlipProfile computeBitFlipProfile(std::span<const T> values) {
   std::array<uint64_t, kMaxBitWidth> flipCounts{};
   const size_t pairCount = values.size() - 1;
   for (size_t i = 0; i + 1 < values.size(); ++i) {
-    const UnsignedT xorVal =
-        static_cast<UnsignedT>(values[i]) ^ static_cast<UnsignedT>(values[i + 1]);
+    const UnsignedT xorVal = static_cast<UnsignedT>(values[i]) ^
+        static_cast<UnsignedT>(values[i + 1]);
     for (int b = 0; b < kBits; ++b) {
       flipCounts[b] += (xorVal >> b) & UnsignedT{1};
     }

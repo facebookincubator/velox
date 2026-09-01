@@ -91,7 +91,9 @@ TEST(SubIntSplitTopLevelPolicyTest, varianceGateRejectsConstantStream) {
   EXPECT_FALSE(bitFlipVarianceGate(profile, config));
 }
 
-TEST(SubIntSplitTopLevelPolicyTest, gradientBoundariesFindConcatenatedFieldEdges) {
+TEST(
+    SubIntSplitTopLevelPolicyTest,
+    gradientBoundariesFindConcatenatedFieldEdges) {
   const auto values = makeConcatenatedFieldsStream(10'000);
   const auto profile =
       computeBitFlipProfile<uint64_t>(std::span<const uint64_t>(values));

@@ -295,8 +295,8 @@ int runBenchmark() {
       out << total << " columns [" << label << "]: TP=" << truePositive
           << " FP=" << falsePositive << " TN=" << trueNegative
           << " FN=" << falseNegative << std::fixed << std::setprecision(3)
-          << "  precision=" << precision << " recall=" << recall
-          << " f1=" << f1 << "\n";
+          << "  precision=" << precision << " recall=" << recall << " f1=" << f1
+          << "\n";
     }
   };
   ConfusionMatrix varianceMatrix;
@@ -319,16 +319,15 @@ int runBenchmark() {
     gradientMatrix.record(
         result.gradientGatePredictsWorthTrying, result.sisWouldWin);
 
-    std::cout << "  SIS: " << result.sisCostBytes
-               << " B, best other (" << toString(result.bestOtherType)
-               << "): " << result.bestOtherCostBytes
-               << " B, SIS would win: " << (result.sisWouldWin ? "yes" : "no")
-               << ", variance gate: "
-               << (result.varianceGatePredictsWorthTrying ? "yes" : "no")
-               << (varianceCorrect ? "" : " [WRONG]")
-               << ", gradient gate: "
-               << (result.gradientGatePredictsWorthTrying ? "yes" : "no")
-               << (gradientCorrect ? "" : " [WRONG]") << "\n";
+    std::cout << "  SIS: " << result.sisCostBytes << " B, best other ("
+              << toString(result.bestOtherType)
+              << "): " << result.bestOtherCostBytes
+              << " B, SIS would win: " << (result.sisWouldWin ? "yes" : "no")
+              << ", variance gate: "
+              << (result.varianceGatePredictsWorthTrying ? "yes" : "no")
+              << (varianceCorrect ? "" : " [WRONG]") << ", gradient gate: "
+              << (result.gradientGatePredictsWorthTrying ? "yes" : "no")
+              << (gradientCorrect ? "" : " [WRONG]") << "\n";
 
     csv.beginRow();
     csv.set("driver", std::string("bench_selection_policy"));
@@ -343,12 +342,14 @@ int runBenchmark() {
     csv.set(
         "variance_gate_predicts_worth_trying",
         static_cast<int64_t>(result.varianceGatePredictsWorthTrying ? 1 : 0));
-    csv.set("variance_gate_correct", static_cast<int64_t>(varianceCorrect ? 1 : 0));
+    csv.set(
+        "variance_gate_correct", static_cast<int64_t>(varianceCorrect ? 1 : 0));
     csv.set("gate_variance", result.gateVariance);
     csv.set(
         "gradient_gate_predicts_worth_trying",
         static_cast<int64_t>(result.gradientGatePredictsWorthTrying ? 1 : 0));
-    csv.set("gradient_gate_correct", static_cast<int64_t>(gradientCorrect ? 1 : 0));
+    csv.set(
+        "gradient_gate_correct", static_cast<int64_t>(gradientCorrect ? 1 : 0));
     csv.set("num_boundaries", static_cast<int64_t>(result.numBoundaries));
     csv.set("num_bits", static_cast<int64_t>(sizeof(Phys) * 8));
     csv.set("profile_compute_ns", result.profileComputeNs);
