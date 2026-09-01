@@ -421,60 +421,41 @@ uint64_t ZstdDecompressor::decompress(
     uint64_t srcLength,
     char* dest,
     uint64_t destLength) {
-  // A single compressed block may contain multiple concatenated ZSTD frames
-  // (e.g. large string columns written by splitting the raw data across several
-  // frames). ZSTD_decompressDCtx() only decompresses the first frame, leaving
-  // the rest undecoded and downstream reads corrupted. Use streaming
-  // decompression so every frame in the block is consumed.
-  //
-  // Ask ZSTD for the upper bound across all frames; if it does not fit the
-  // caller's destination buffer, throw so the caller can grow and retry. Guard
-  // against nonsensical sizes from corrupt/hostile input.
-  const auto required = ZSTD_decompressBound(src, srcLength);
-  if (required != ZSTD_CONTENTSIZE_ERROR && required > destLength) {
-    constexpr int64_t kZstdMaxDecompressed = 1LL << 30; // 1 GiB
-    if (required > kZstdMaxDecompressed) {
-      DWIO_ENSURE_FMT(
-          false,
-          "ZSTD block requires too large a buffer ({} bytes). Info: {}",
-          required,
-          streamDebugInfo_);
-    }
-    throw ZstdDestBufferTooSmall(required, streamDebugInfo_);
-  }
-
-  thread_local std::unique_ptr<ZSTD_DStream, size_t (*)(ZSTD_DStream*)> stream{
-      ZSTD_createDStream(), ZSTD_freeDStream};
-  ZSTD_initDStream(stream.get());
-  ZSTD_inBuffer in{src, srcLength, 0};
-  ZSTD_outBuffer out{dest, destLength, 0};
-  while (in.pos < in.size) {
-    const auto code = ZSTD_decompressStream(stream.get(), &out, &in);
-    DWIO_ENSURE_FMT(
-        !ZSTD_isError(code),
-        "ZSTD returned an error: {} Info: {}",
-        ZSTD_getErrorName(code),
-        streamDebugInfo_);
-  }
-  return out.pos;
+  // ZSTD_decompressDCtx() forwards to ZSTD_decompressMultiFrame() and therefore
+  // decodes every concatenated frame in 'src'. Its only requirement is that
+  // 'destLength' holds the total decompressed size across all frames; that is
+  // satisfied by getDecompressedLength(), which returns ZSTD_decompressBound()
+  // over the whole input (see below).
+  // Reuse 'ZSTD_DCtx' per-thread to avoid repeated allocations.
+  thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> ctx{
+      ZSTD_createDCtx(), ZSTD_freeDCtx};
+  auto ret = ZSTD_decompressDCtx(ctx.get(), dest, destLength, src, srcLength);
+  DWIO_ENSURE_FMT(
+      !ZSTD_isError(ret),
+      "ZSTD returned an error: {} Info: {}",
+      ZSTD_getErrorName(ret),
+      streamDebugInfo_);
+  return ret;
 }
 
 std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
     const char* src,
     uint64_t srcLength) const {
-  auto uncompressedLength = ZSTD_getFrameContentSize(src, srcLength);
-  // in the case when decompression size is not available, return the upper
-  // bound
-  if (uncompressedLength == ZSTD_CONTENTSIZE_UNKNOWN ||
-      uncompressedLength == ZSTD_CONTENTSIZE_ERROR) {
-    return {blockSize_, false};
+  // A Parquet/ORC block may hold several concatenated ZSTD frames (large string
+  // columns). ZSTD_getFrameContentSize() reports only the first frame's size,
+  // which under-sizes the destination and makes decompress() fail with
+  // dstSize_tooSmall. Instead bound the total across all frames:
+  // ZSTD_decompressBound() never returns UNKNOWN (unlike
+  // ZSTD_findDecompressedSize(), which is only exact when every frame carries a
+  // content-size header -- streaming frames do not), and it is an upper bound,
+  // so decompress() always fits. It still requires the caller to allocate up to
+  // that bound, which is a bounded over-allocation for streaming frames.
+  if (auto bound = ZSTD_decompressBound(src, srcLength);
+      bound != ZSTD_CONTENTSIZE_ERROR) {
+    return {static_cast<int64_t>(bound), false};
   }
-  DWIO_ENSURE_LE_FMT(
-      uncompressedLength,
-      blockSize_,
-      "Insufficient buffer size. Info: {}",
-      streamDebugInfo_);
-  return {uncompressedLength, true};
+  // Unrecognized/corrupt frame header: fall back to the block size.
+  return {blockSize_, false};
 }
 
 class SnappyDecompressor : public Decompressor {

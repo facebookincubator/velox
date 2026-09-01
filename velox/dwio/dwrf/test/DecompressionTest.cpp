@@ -1244,20 +1244,17 @@ std::string zstdStreamingFrame(const std::string& data) {
 }
 
 // Decodes a raw (Parquet-style) page whose compressed bytes are 'page' by
-// streaming it through a PagedInputStream with a ZSTD decompressor, returning
-// the full decompressed output. 'blockSize' is the decompressor's block size,
-// which getDecompressedLength() falls back to for streaming frames without a
-// content-size header.
+// routing it through a PagedInputStream with a ZSTD decompressor, returning the
+// full decompressed output.
 std::string decodeZstdRawPage(
     facebook::velox::memory::MemoryPool& pool,
-    uint64_t blockSize,
     const std::string& page) {
   auto input = std::make_unique<SeekableArrayInputStream>(
       page.data(), page.size(), 1024);
   auto decompressor =
       facebook::velox::dwio::common::compression::createBlockDecompressor(
           CompressionKind_ZSTD,
-          blockSize,
+          1 << 20 /*blockSize*/,
           facebook::velox::dwio::common::compression::CompressionOptions{},
           "zstd-page");
   compression::PagedInputStream stream(
@@ -1280,9 +1277,11 @@ std::string decodeZstdRawPage(
 } // namespace
 
 // A single Parquet page's compressed data may be made of multiple concatenated
-// ZSTD frames (large string columns). The decompressor must stream-decode ALL
-// of them. The pre-fix decompressor (ZSTD_decompressDCtx) decoded only the
-// first frame, so reading a multi-frame page truncated or corrupted the output.
+// ZSTD frames (large string columns). getDecompressedLength() must size the
+// destination for the total across all frames (via ZSTD_decompressBound), and
+// decompress() (ZSTD_decompressDCtx) must decode all of them. The pre-fix code
+// sized only from the first frame's content-size, so a multi-frame page failed
+// with "Destination buffer is too small".
 TEST_F(DecompressionTest, testZstdMultiFramePage) {
   // Two distinct pieces so a truncated decode is obvious.
   const std::string part1 = "alpha-beta-gamma-delta-epsilon";
@@ -1290,19 +1289,18 @@ TEST_F(DecompressionTest, testZstdMultiFramePage) {
   const std::string expected = part1 + part2;
 
   // Build a raw page whose compressed form is two concatenated ZSTD frames.
-  const std::string multiFrame = zstdFrame(part1) + zstdFrame(part2);
+  const std::string page = zstdFrame(part1) + zstdFrame(part2);
 
-  EXPECT_EQ(
-      expected, decodeZstdRawPage(*pool_, 1 << 20 /*blockSize*/, multiFrame));
+  EXPECT_EQ(expected, decodeZstdRawPage(*pool_, page));
 }
 
 // A Parquet/ORC page may be a streaming ZSTD frame with no content-size header
-// (ZSTD_CONTENTSIZE_UNKNOWN); getDecompressedLength falls back to blockSize_
-// for it. Use a small blockSize so the fallback is too small for the decoded
-// output, which forces the grow-and-retry path.
-TEST_F(DecompressionTest, testZstdStreamingFrameSmallBlock) {
+// (ZSTD_CONTENTSIZE_UNKNOWN). getDecompressedLength() must still bound the size
+// correctly (ZSTD_decompressBound never returns UNKNOWN) so decompression fits
+// and completes.
+TEST_F(DecompressionTest, testZstdStreamingFrame) {
   const std::string expected = "streaming-frame-alpha-beta";
   const std::string page = zstdStreamingFrame(expected);
 
-  EXPECT_EQ(expected, decodeZstdRawPage(*pool_, 16 /*blockSize*/, page));
+  EXPECT_EQ(expected, decodeZstdRawPage(*pool_, page));
 }

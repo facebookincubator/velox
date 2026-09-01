@@ -187,29 +187,14 @@ bool PagedInputStream::readOrSkip(const void** data, int32_t* size) {
       *size = decompressedLength;
       outputBufferPtr_ = nullptr;
     } else {
-      // Decompress the block, growing the destination and retrying once if the
-      // block decompresses to more than getDecompressedLength() reported (e.g.
-      // a streaming ZSTD frame without a content-size header, or a block made
-      // of multiple ZSTD frames).
-      auto doDecompress = [&]() {
-        try {
-          return decompressor_->decompress(
-              input,
-              remainingLength_,
-              outputBuffer_->data(),
-              outputBuffer_->capacity());
-        } catch (const ZstdDestBufferTooSmall& e) {
-          prepareOutputBuffer(e.requiredSize);
-          return decompressor_->decompress(
-              input,
-              remainingLength_,
-              outputBuffer_->data(),
-              outputBuffer_->capacity());
-        }
-      };
       prepareOutputBuffer(decompressedLength);
-      outputBufferLength_ = withDecompressStats(
-          decompressCounter_, [&] { return doDecompress(); });
+      outputBufferLength_ = withDecompressStats(decompressCounter_, [&] {
+        return decompressor_->decompress(
+            input,
+            remainingLength_,
+            outputBuffer_->data(),
+            outputBuffer_->capacity());
+      });
       if (data) {
         *data = outputBuffer_->data();
       }
