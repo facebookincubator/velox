@@ -161,6 +161,11 @@ enum class EncodingType {
   // external provider. The alphabet is resolved independently from the
   // encoded index stream.
   SharedDictionary = 22,
+  // A slice of another encoding: carries the source encoding verbatim plus
+  // the row offset at which the slice begins, deferring the slice work to
+  // decode time. Produced only by EncodingSliceFactory, never by encoding
+  // selection.
+  Slice = 23,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
