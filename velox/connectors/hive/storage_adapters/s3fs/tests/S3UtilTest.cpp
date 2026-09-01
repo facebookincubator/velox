@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 
 #include "gtest/gtest.h"
 
@@ -127,6 +128,33 @@ TEST(S3UtilTest, isDomainExcludedFromProxy) {
   }
 }
 
+TEST(S3UtilTest, isAWSEndpoint) {
+  EXPECT_TRUE(isAWSEndpoint("s3.amazonaws.com"));
+  EXPECT_TRUE(isAWSEndpoint("s3.amazonaws.com/"));
+  EXPECT_TRUE(isAWSEndpoint("bucket.s3.us-west-2.amazonaws.com"));
+  EXPECT_FALSE(isAWSEndpoint("my-alias.internal.example.com"));
+  EXPECT_FALSE(isAWSEndpoint("foo.a3-region.amazon.com"));
+  EXPECT_FALSE(isAWSEndpoint("10.0.0.1:9000"));
+  EXPECT_FALSE(isAWSEndpoint(""));
+  // The suffix alone is not a host under it.
+  EXPECT_FALSE(isAWSEndpoint("amazonaws.com"));
+  EXPECT_FALSE(isAWSEndpoint(".amazonaws.com"));
+}
+
+TEST(S3UtilTest, defaultRegionForEndpoint) {
+  // An absent endpoint implies AWS, and so does an empty one: an empty
+  // hive.s3.endpoint is no endpoint override at all.
+  EXPECT_EQ(defaultRegionForEndpoint(""), kS3AwsGlobalRegion);
+  EXPECT_EQ(defaultRegionForEndpoint("s3.amazonaws.com"), kS3AwsGlobalRegion);
+  EXPECT_EQ(
+      defaultRegionForEndpoint("bucket.s3.us-west-2.amazonaws.com"),
+      "us-west-2");
+  // Left to the SDK, which honors AWS_REGION, the profile, and IMDS.
+  EXPECT_EQ(defaultRegionForEndpoint("10.0.0.1:9000"), std::nullopt);
+  EXPECT_EQ(
+      defaultRegionForEndpoint("my-alias.internal.example.com"), std::nullopt);
+}
+
 TEST(S3UtilTest, parseAWSRegion) {
   // bucket.s3.[region]
   EXPECT_EQ(
@@ -146,6 +174,15 @@ TEST(S3UtilTest, parseAWSRegion) {
       parseAWSStandardRegionName("foo.a3-region.amazon.com"), std::nullopt);
   EXPECT_EQ(parseAWSStandardRegionName(""), std::nullopt);
   EXPECT_EQ(parseAWSStandardRegionName("velox"), std::nullopt);
+  // Endpoints shorter than ".amazonaws.com" are not AWS hosts. A 13-character
+  // one underflows the suffix offset to npos, which rfind also returns when the
+  // suffix is absent.
+  EXPECT_EQ(parseAWSStandardRegionName("10.0.0.1:9000"), std::nullopt);
+  EXPECT_EQ(parseAWSStandardRegionName("s3.foo.com:80"), std::nullopt);
+  EXPECT_EQ(parseAWSStandardRegionName("10.0.0.1:9000/"), std::nullopt);
+  EXPECT_EQ(parseAWSStandardRegionName("minio:9000"), std::nullopt);
+  EXPECT_EQ(parseAWSStandardRegionName("amazonaws.com"), std::nullopt);
+  EXPECT_EQ(parseAWSStandardRegionName(".amazonaws.com"), std::nullopt);
 }
 
 TEST(S3UtilTest, isIpExcludedFromProxy) {

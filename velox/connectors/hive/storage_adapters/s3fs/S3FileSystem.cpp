@@ -244,7 +244,7 @@ class S3FileSystem::Impl {
     }
 
     if (s3Config_->endpointRegion().has_value()) {
-      clientConfig.region = s3Config_->endpointRegion().value();
+      clientConfig.region = awsString(s3Config_->endpointRegion().value());
     }
 
     if (s3Config_->useProxyFromEnv()) {

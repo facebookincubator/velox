@@ -1210,9 +1210,10 @@ Nimble Options (prefix ``hive.nimble.``)
      - The S3 storage endpoint server. This can be used to connect to an S3-compatible storage system instead of AWS.
    * - hive.s3.endpoint.region
      - string
-     - us-east-1
-     - The S3 storage endpoint server region. Default is set by the AWS SDK. If not configured, region will be attempted
-       to be parsed from the hive.s3.endpoint value.
+     - ``aws-global`` for AWS
+     - The S3 storage endpoint server region. If not configured, the region is parsed from the hive.s3.endpoint value.
+       For AWS it then falls back to ``aws-global``, which allows access to a bucket in any region. For other endpoints
+       the region is left to the AWS SDK, which resolves it from the environment, the active profile, or IMDS.
    * - hive.s3.path-style-access
      - bool
      - false

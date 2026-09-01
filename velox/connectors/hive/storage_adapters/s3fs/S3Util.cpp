@@ -22,6 +22,7 @@
 #include "folly/IPAddress.h"
 #include "re2/re2.h"
 
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
 
 namespace facebook::velox::filesystems {
@@ -169,22 +170,63 @@ std::optional<folly::Uri> S3ProxyConfigurationBuilder::build() {
   return proxyUri;
 }
 
+namespace {
+// The assumption is that an AWS endpoint ends with ".amazonaws.com" or
+// ".amazonaws.com/". That means for AWS we don't expect a port in the endpoint.
+const std::string_view kAmazonHostSuffix{".amazonaws.com"};
+
+std::string_view withoutTrailingSlash(std::string_view endpoint) {
+  if (!endpoint.empty() && endpoint.back() == '/') {
+    endpoint.remove_suffix(1);
+  }
+  return endpoint;
+}
+} // namespace
+
+bool isAWSEndpoint(std::string_view endpoint) {
+  endpoint = withoutTrailingSlash(endpoint);
+  // A shorter endpoint underflows the subtraction below to npos, which rfind
+  // also returns when the suffix is absent, so the match would pass.
+  if (endpoint.size() <= kAmazonHostSuffix.size()) {
+    return false;
+  }
+  return endpoint.rfind(kAmazonHostSuffix) ==
+      endpoint.size() - kAmazonHostSuffix.size();
+}
+
+std::optional<std::string> defaultRegionForEndpoint(std::string_view endpoint) {
+  if (endpoint.empty()) {
+    // No endpoint means AWS. Returning a region keeps the SDK from silently
+    // picking us-east-1, or the EC2 instance's own region, for a bucket that
+    // may live elsewhere.
+    return std::string(kS3AwsGlobalRegion);
+  }
+  auto region = parseAWSStandardRegionName(endpoint);
+  if (region.has_value()) {
+    return region;
+  }
+  // An AWS endpoint whose host names no region, e.g. 's3.amazonaws.com'. For
+  // anything else return nullopt and leave the region to the SDK, which honors
+  // AWS_REGION, the active profile, and IMDS. Note that aws-imds-enabled cannot
+  // stand in for this test: it is a permission to query IMDS rather than
+  // evidence that the peer is AWS, it defaults to true off EC2 where no IMDS
+  // exists, and a region it does yield is the instance's, not the bucket's. A
+  // DNS alias fronting AWS falls here too and needs hive.s3.endpoint.region
+  // configured explicitly.
+  return isAWSEndpoint(endpoint)
+      ? std::optional<std::string>(kS3AwsGlobalRegion)
+      : std::nullopt;
+}
+
 std::optional<std::string> parseAWSStandardRegionName(
     std::string_view endpoint) {
-  // The assumption is that the endpoint ends with
-  // ".amazonaws.com" or ".amazonaws.com/". That means for AWS we don't
-  // expect a port in the endpoint.
-  const std::string_view kAmazonHostSuffix = ".amazonaws.com";
-  auto index = endpoint.size() - kAmazonHostSuffix.size();
-  // Handle the case where the endpoint ends in a trailing slash.
-  if (!endpoint.empty() && endpoint.back() == '/') {
-    index--;
-  }
-  if (endpoint.rfind(kAmazonHostSuffix) != index) {
+  if (!isAWSEndpoint(endpoint)) {
     return std::nullopt;
   }
+  endpoint = withoutTrailingSlash(endpoint);
   // Remove the kAmazonHostSuffix.
-  std::string_view endpointPrefix = endpoint.substr(0, index);
+  std::string_view endpointPrefix =
+      endpoint.substr(0, endpoint.size() - kAmazonHostSuffix.size());
   const re2::RE2 pattern("^(?:.+\\.)?s3[-.]([a-z0-9-]+)$");
   std::string region;
   if (re2::RE2::FullMatch(endpointPrefix, pattern, &region)) {
@@ -192,7 +234,7 @@ std::optional<std::string> parseAWSStandardRegionName(
     return region;
   }
 
-  index = endpointPrefix.rfind('.');
+  auto index = endpointPrefix.rfind('.');
   if (index != std::string::npos) {
     // endpointPrefix was 'service.[region]'.
     return std::string(endpointPrefix.substr(index + 1));
