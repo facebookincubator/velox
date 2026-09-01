@@ -230,27 +230,37 @@ class NimbleIndexProjector {
   };
 
   // CSR (compressed sparse row) layout mapping stripes to request row ranges.
-  // All StripeRange entries are stored in a single flat vector (`entries`),
+  // All StripeRange entries are stored in a single flat vector (`ranges`),
   // with `offsets[i]` marking where stripe i's entries begin.
   struct StripeRanges {
-    uint32_t startStripe{0};
-    uint32_t numStripes{0};
-    // Flat storage of all per-stripe row ranges, grouped by stripe.
+    // Ascending tablet stripe indices that carry ranges. Everything else here
+    // is indexed by POSITION IN THIS VECTOR -- a "resolved stripe index" --
+    // not by tablet stripe index. Each request covers one contiguous stripe
+    // run, but the requests together only pin down an outer envelope, and for
+    // scattered lookups that envelope is far wider than the set of stripes
+    // that actually carry ranges -- 148k stripes between the first and last
+    // against ~250 that hold anything, for 128 random probes. Indexing by
+    // tablet stripe index would make the tables here scale with the envelope
+    // rather than with the work.
+    std::vector<uint32_t> resolvedStripes;
+    // Flat storage of all per-stripe row ranges, grouped by resolved stripe
+    // index.
     std::vector<StripeRange> ranges;
-    // offsets[i] = start index in ranges for stripe i (relative to
-    // startStripe). Size = numStripes + 1.
+    // offsets[i] = start index in ranges for resolvedStripes[i].
+    // Size = resolvedStripes.size() + 1.
     std::vector<uint32_t> offsets;
 
-    std::span<const StripeRange> getRanges(uint32_t stripeIndex) const {
-      NIMBLE_CHECK_LT(stripeIndex, numStripes);
+    /// @param resolvedStripeIndex Index into resolvedStripes, NOT a tablet
+    /// stripe index.
+    std::span<const StripeRange> getRanges(uint32_t resolvedStripeIndex) const {
+      NIMBLE_CHECK_LT(resolvedStripeIndex, resolvedStripes.size());
       return {
-          ranges.data() + offsets[stripeIndex],
-          offsets[stripeIndex + 1] - offsets[stripeIndex]};
+          ranges.data() + offsets[resolvedStripeIndex],
+          offsets[resolvedStripeIndex + 1] - offsets[resolvedStripeIndex]};
     }
 
     void clear() {
-      startStripe = 0;
-      numStripes = 0;
+      resolvedStripes.clear();
       ranges.clear();
       offsets.clear();
     }
@@ -311,17 +321,18 @@ class NimbleIndexProjector {
   RowRange stripeRowRangeToPack(size_t stripeOffset) const;
 
   // Records the resume key for a request that reached its maxRowsPerRequest cap
-  // in the stripe at `stripeOffset` (index relative to
-  // stripeRanges.startStripe, not an absolute stripe index). `readEndRow` is
+  // in the stripe at `resolvedStripeIndex` (an index into
+  // stripeRanges.resolvedStripes, not a tablet stripe index). `readEndRow` is
   // the request's stripe-relative end row after clipping. When `partialRead` is
   // true the cap fell inside the stripe, so the key is the row-precise key at
   // `readEndRow`; otherwise the cap landed on the stripe boundary and the key
   // resumes from the next stripe still holding this request. The stripe's
-  // absolute start row is derived from `stripeOffset`. Idempotent (no-op once a
-  // key is recorded); callers gate on Options::needResumeKey.
+  // absolute start row is derived from `resolvedStripeIndex`.
+  // Idempotent (no-op once a key is recorded); callers gate on
+  // Options::needResumeKey.
   void setResumeKey(
       uint32_t requestIndex,
-      uint32_t stripeOffset,
+      uint32_t resolvedStripeIndex,
       uint32_t readEndRow,
       bool partialRead);
 
@@ -429,6 +440,15 @@ class NimbleIndexProjector {
   // Reused across stripes; its raw input format is fixed by the tablet.
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
+  // One range tagged with the tablet stripe it falls in, before grouping.
+  // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is
+  // what produces the CSR grouping; the second key keeps each stripe's ranges
+  // in request order, which the grouped layout preserves.
+  struct ResolvedStripe {
+    uint32_t tabletStripeIndex{};
+    StripeRange range;
+  };
+
   // Per-project() call state. Set by initRequest(), populated through the
   // pipeline (lookupStripes → prepareStripes → loadStripes → processStripes),
   // and reset on return.
@@ -461,6 +481,11 @@ class NimbleIndexProjector {
     std::vector<RowRange> stripePackRanges;
     // Reusable per-request vectors.
     std::vector<uint64_t> rowsPerRequest;
+    // Stripes resolved from the cluster index, collected before grouping into
+    // StripeRanges and reused across project() calls to keep the build
+    // alloc-free. Holds one entry per (request, stripe) pair, so a stripe
+    // repeats once per request that lands in it.
+    std::vector<ResolvedStripe> resolvedStripesScratch;
     std::vector<size_t> sliceCounts;
     std::vector<size_t> emittedSlices;
     // Shared arena for all sliced stream bytes produced by one project() call.
