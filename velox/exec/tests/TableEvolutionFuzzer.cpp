@@ -154,10 +154,12 @@ constexpr int kProbeRows = 64;
 // (now expensive) write happens once per run(); this many shapes amortize it.
 constexpr int kQueryShapesPerFile = 20;
 
-VectorFuzzer::Options makeVectorFuzzerOptions() {
+VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
   VectorFuzzer::Options options;
   options.vectorSize = kDefaultVectorSize;
   options.allowSlice = false;
+  options.nullRatio = nullRatio;
+  options.containerHasNulls = nullRatio > 0;
   return options;
 }
 
@@ -254,7 +256,8 @@ int TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
 }
 
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
-    : config_(config), vectorFuzzer_(makeVectorFuzzerOptions(), config.pool) {
+    : config_(config),
+      vectorFuzzer_(makeVectorFuzzerOptions(config.nullRatio), config.pool) {
   VELOX_CHECK_GT(config_.columnCount, 0);
   VELOX_CHECK_GT(config_.evolutionCount, 0);
   VELOX_CHECK_GT(FLAGS_batches_per_file, 0);

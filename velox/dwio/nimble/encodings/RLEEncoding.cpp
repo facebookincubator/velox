@@ -16,6 +16,23 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 
 namespace facebook::nimble {
+namespace {
+
+// Counts true rows before rowLimit for alternating bool RLE runs that all have
+// the same run length.
+uint64_t countTrueWithConstantRunLength(
+    bool value,
+    uint32_t runLength,
+    uint64_t rowLimit) {
+  NIMBLE_CHECK_GT(runLength, 0, "RLE run length must be positive.");
+  const uint64_t numFullRuns = rowLimit / runLength;
+  const uint64_t tail = rowLimit % runLength;
+  const uint64_t trueFullRuns = value ? (numFullRuns + 1) / 2 : numFullRuns / 2;
+  const bool tailIsTrue = (numFullRuns % 2 == 0) ? value : !value;
+  return trueFullRuns * runLength + (tailIsTrue ? tail : 0);
+}
+
+} // namespace
 
 RLEEncoding<bool>::RLEEncoding(
     velox::memory::MemoryPool& pool,
@@ -65,6 +82,117 @@ void RLEEncoding<bool>::materializeBoolsAsBits(
     rowsLeft -= copiesRemaining_;
     copiesRemaining_ = 0;
   }
+}
+
+void RLEEncoding<bool>::countTrue(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    RangeCounts& counts,
+    const Encoding::Options& options) {
+  counts = {};
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::encodingType(encoded),
+      EncodingType::RLE,
+      "Expected RLE encoding.");
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::dataType(encoded),
+      DataType::Bool,
+      "Expected boolean RLE encoding.");
+  const auto sourceRowCount =
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
+  NIMBLE_CHECK_LE(offset, sourceRowCount);
+  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
+  NIMBLE_CHECK_GT(length, 0, "Cannot count zero rows.");
+
+  const char* pos = encoded.data() +
+      EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+  const uint32_t runLengthsSize = encoding::readUint32(pos);
+  const std::string_view runLengthsData{pos, runLengthsSize};
+  pos += runLengthsSize;
+  NIMBLE_CHECK_EQ(
+      pos + sizeof(bool), encoded.end(), "Unexpected boolean RLE encoding end");
+  bool value = encoding::read<bool>(pos);
+
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::dataType(runLengthsData),
+      DataType::Uint32,
+      "RLE run-length child must be uint32.");
+  const auto runCount =
+      EncodingPrefix::readRowCount(runLengthsData, options.useVarintRowCount);
+  NIMBLE_CHECK_GT(runCount, 0, "Boolean RLE must have at least one run.");
+
+  const uint64_t rangeEnd = static_cast<uint64_t>(offset) + length;
+  if (EncodingPrefix::encodingType(runLengthsData) == EncodingType::Constant) {
+    const char* runLengthPos = runLengthsData.data() +
+        EncodingPrefix::prefixSize(runLengthsData, options.useVarintRowCount);
+    const uint32_t runLength = encoding::readUint32(runLengthPos);
+    NIMBLE_CHECK_GE(
+        static_cast<uint64_t>(runLength) * runCount,
+        rangeEnd,
+        "Boolean RLE run lengths are too short.");
+    const auto numTrueBeforeRange =
+        countTrueWithConstantRunLength(value, runLength, offset);
+    const auto numTrueAtRangeEnd =
+        countTrueWithConstantRunLength(value, runLength, rangeEnd);
+    counts = {
+        .numTrueBeforeRange = static_cast<uint32_t>(numTrueBeforeRange),
+        .numTrueInRange =
+            static_cast<uint32_t>(numTrueAtRangeEnd - numTrueBeforeRange)};
+    return;
+  }
+
+  auto* pool = &buffer.getMemoryPool();
+  auto runLengthsEncoding = EncodingFactory{options}.create(
+      *pool, runLengthsData, [](uint32_t /*totalLength*/) -> void* {
+        return nullptr;
+      });
+  constexpr uint32_t kRunLengthChunkSize{256};
+  ScopedVector<uint32_t> runLengths{
+      std::min<uint32_t>(runCount, kRunLengthChunkSize),
+      pool,
+      options.bufferPool};
+  uint64_t row{0};
+  for (uint32_t run = 0; run < runCount;) {
+    const auto chunkSize =
+        std::min<uint32_t>(runLengths->size(), runCount - run);
+    runLengthsEncoding->materialize(chunkSize, runLengths->data());
+    for (uint32_t i = 0; i < chunkSize; ++i, ++run) {
+      const uint64_t runStart = row;
+      const uint64_t runEnd = row + (*runLengths)[i];
+      NIMBLE_CHECK_GT((*runLengths)[i], 0, "RLE run length must be positive.");
+      if (value) {
+        if (runStart < offset) {
+          counts.numTrueBeforeRange += static_cast<uint32_t>(
+              std::min<uint64_t>(runEnd, offset) - runStart);
+        }
+        const auto rangeStart = std::max<uint64_t>(runStart, offset);
+        const auto rangeLimit = std::min<uint64_t>(runEnd, rangeEnd);
+        if (rangeStart < rangeLimit) {
+          counts.numTrueInRange +=
+              static_cast<uint32_t>(rangeLimit - rangeStart);
+        }
+      }
+      row = runEnd;
+      if (row >= rangeEnd) {
+        return;
+      }
+      value = !value;
+    }
+  }
+  NIMBLE_CHECK_GE(row, rangeEnd, "Boolean RLE run lengths are too short.");
+}
+
+uint32_t RLEEncoding<bool>::countTrue(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  RangeCounts counts;
+  countTrue(encoded, offset, length, buffer, counts, options);
+  return counts.numTrueInRange;
 }
 
 } // namespace facebook::nimble

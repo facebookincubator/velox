@@ -46,10 +46,10 @@
 #include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -1247,9 +1247,9 @@ class SharedDictionaryE2ETest : public testing::Test {
       std::shared_ptr<const ExternalDictionaryResolver> externalResolver =
           nullptr) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-    VeloxReadParams params;
+    BatchReadParams params;
     params.externalDictionaryResolver = std::move(externalResolver);
-    VeloxReader reader{readFile, *leafPool_, nullptr, params};
+    BatchReader reader{readFile, *leafPool_, nullptr, params};
     velox::VectorPtr output;
     for (const auto stripeValueType : stripeValueTypes) {
       ASSERT_TRUE(reader.next(kStripeRows, output));
@@ -1267,7 +1267,7 @@ class SharedDictionaryE2ETest : public testing::Test {
       ScalarValueType valueType,
       const std::vector<StripeValueType>& stripeValueTypes) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-    VeloxReader reader{readFile, *leafPool_};
+    BatchReader reader{readFile, *leafPool_};
     velox::VectorPtr output;
     for (const auto stripeValueType : stripeValueTypes) {
       ASSERT_TRUE(reader.next(kStripeRows, output));
@@ -1285,7 +1285,7 @@ class SharedDictionaryE2ETest : public testing::Test {
       FileDictionaryAlphabetOrder alphabetOrder,
       size_t stripeCount = 1) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-    VeloxReader reader{readFile, *leafPool_};
+    BatchReader reader{readFile, *leafPool_};
     velox::VectorPtr output;
     auto expected = makeFileDictionaryStripe(alphabetOrder);
     for (size_t stripeIndex{0}; stripeIndex < stripeCount; ++stripeIndex) {
@@ -1381,6 +1381,54 @@ TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   verifyRoundTrip(file, inputType, stripeValueTypes);
 }
 
+// The stripe-scope alphabet stream has no StreamData, so it is written by a
+// separate pass that historically skipped the per-column size accounting. With
+// shared dictionary encoding most of a column's bytes live in that alphabet, so
+// the omission understated the column badly. Pin the invariant that the root
+// column's rolled-up physical size covers every byte the stripe wrote.
+TEST_F(SharedDictionaryE2ETest, sharedStripeDictionaryColumnPhysicalStats) {
+  auto options = makeSharedDictionaryWriterOptions();
+  addDictionary(
+      options,
+      InputType::FlatMapScalar,
+      sharedDictionaryConfig(
+          SharedDictionaryScope::Stripe, /*dictionaryId=*/0));
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  auto input =
+      makeStripe(InputType::FlatMapScalar, StripeValueType::Dictionary);
+  Writer writer{input->type(), std::move(writeFile), *rootPool_, options};
+  writer.write(input);
+  writer.close();
+
+  uint64_t reportedPhysicalSize{0};
+  for (const auto* stat : writer.columnStats()) {
+    reportedPhysicalSize =
+        std::max(reportedPhysicalSize, stat->getPhysicalSize());
+  }
+  ASSERT_GT(reportedPhysicalSize, 0);
+
+  // Total bytes actually written across every stream of every stripe.
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tabletOptions = test::makeTestTabletOptions(leafPool_.get());
+  auto tablet = TabletReader::create(readFile, leafPool_.get(), tabletOptions);
+  uint64_t writtenStreamBytes{0};
+  for (uint32_t stripe{0}; stripe < tablet->stripeCount(); ++stripe) {
+    const auto identifier = tablet->stripeIdentifier(stripe);
+    const auto streamCount = tablet->streamCount(identifier);
+    for (uint32_t streamId{0}; streamId < streamCount; ++streamId) {
+      writtenStreamBytes += tablet->streamSize(identifier, streamId);
+    }
+  }
+  ASSERT_GT(writtenStreamBytes, 0);
+
+  EXPECT_GE(reportedPhysicalSize, writtenStreamBytes)
+      << "root physical size " << reportedPhysicalSize << " does not cover the "
+      << writtenStreamBytes
+      << " bytes written; the shared dictionary alphabet is likely unaccounted";
+}
+
 TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
@@ -1405,7 +1453,7 @@ TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
       sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
   ASSERT_EQ(valueStreamIds.size(), 1);
 
-  VeloxReadParams params;
+  BatchReadParams params;
   const Encoding::Options encodingOptions{.useVarintRowCount = true};
   params.encodingFactory =
       [encodingOptions](
@@ -1417,7 +1465,7 @@ TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
         pool, data, std::move(stringBufferFactory));
   };
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-  VeloxReader reader{readFile, *leafPool_, nullptr, std::move(params)};
+  BatchReader reader{readFile, *leafPool_, nullptr, std::move(params)};
   velox::VectorPtr output;
   for (const auto stripeValueType : stripeValueTypes) {
     ASSERT_TRUE(reader.next(kStripeRows, output));
@@ -1942,7 +1990,7 @@ TEST_P(SharedDictionaryE2EExternalDictionaryFailureTest, fails) {
           {StripeValueType::Dictionary, StripeValueType::Direct},
           resolver);
       auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-      VeloxReader reader{readFile, *leafPool_};
+      BatchReader reader{readFile, *leafPool_};
       velox::VectorPtr output;
       NIMBLE_ASSERT_USER_THROW(
           reader.next(kStripeRows, output),

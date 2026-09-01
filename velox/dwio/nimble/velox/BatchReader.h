@@ -35,13 +35,13 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
-// The VeloxReader reads (a projection from) a file into a velox VectorPtr.
+// The BatchReader reads (a projection from) a file into a velox VectorPtr.
 // The current implementation only uses FlatVector rather than any of the
 // fancier vectors (dictionary, etc), and only supports the types needed for ML.
 
 namespace facebook::nimble {
 
-struct VeloxReadParams : public FieldReaderParams {
+struct BatchReadParams : public FieldReaderParams {
   uint64_t fileRangeStartOffset = 0;
   uint64_t fileRangeEndOffset = std::numeric_limits<uint64_t>::max();
 
@@ -90,32 +90,32 @@ struct VeloxReadParams : public FieldReaderParams {
   };
 };
 
-class VeloxReader {
+class BatchReader {
  public:
   static constexpr uint64_t kConservativeEstimatedRowSize = 1L << 20; // 1MB
 
-  VeloxReader(
+  BatchReader(
       velox::ReadFile* file,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      const VeloxReadParams& params = {});
+      const BatchReadParams& params = {});
 
-  VeloxReader(
+  BatchReader(
       std::shared_ptr<velox::ReadFile> file,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      const VeloxReadParams& params = {});
+      const BatchReadParams& params = {});
 
-  VeloxReader(
+  BatchReader(
       std::shared_ptr<const TabletReader> tabletReader,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      VeloxReadParams params = {});
+      BatchReadParams params = {});
 
-  ~VeloxReader();
+  ~BatchReader();
 
   // Returns the estimated row size from the current stripe in bytes.
   uint64_t estimatedRowSize();
@@ -167,7 +167,7 @@ class VeloxReader {
   void loadNextStripe();
 
   // Returns the base encoding factory unless the stream has an alphabet.
-  VeloxReadParams::StreamEncodingFactory createStreamEncodingFactory(
+  BatchReadParams::StreamEncodingFactory createStreamEncodingFactory(
       uint32_t valueStreamId,
       std::unique_ptr<StreamLoader> dictionaryStream) const;
 
@@ -196,7 +196,7 @@ class VeloxReader {
   velox::memory::MemoryPool& pool_;
   std::shared_ptr<const TabletReader> tabletReader_;
   std::optional<StripeIdentifier> stripeIdentifier_;
-  const VeloxReadParams parameters_;
+  const BatchReadParams parameters_;
   std::shared_ptr<const Type> schema_;
   std::shared_ptr<const velox::RowType> type_;
   std::vector<uint32_t> offsets_;
@@ -230,7 +230,7 @@ class VeloxReader {
 
   std::unique_ptr<velox::dwio::common::UnitLoader> unitLoader_;
 
-  friend class VeloxReaderHelper;
+  friend class BatchReaderHelper;
 };
 
 } // namespace facebook::nimble

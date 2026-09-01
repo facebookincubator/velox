@@ -21,6 +21,7 @@
 #include <initializer_list>
 #include <memory>
 #include <random>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -90,6 +91,8 @@ class EncodingViewTest : public ::testing::Test {
         const auto tailLength = std::min<uint32_t>(rowCount, 3);
         expectRangeRead(*view, values, rowCount - tailLength, tailLength);
       }
+      expectIndexedRead(*view, values, {});
+      expectIndexedRead(*view, values, positions);
     }
   }
 
@@ -181,6 +184,25 @@ class EncodingViewTest : public ::testing::Test {
     EXPECT_EQ(
         std::vector<PhysicalType>(actual.begin(), actual.end()),
         std::vector<PhysicalType>(expected, expected + length));
+  }
+
+  template <typename T>
+  void expectIndexedRead(
+      const nimble::EncodingView& view,
+      const nimble::Vector<T>& values,
+      const std::vector<uint32_t>& positions) {
+    SCOPED_TRACE(fmt::format("numPositions={}", positions.size()));
+    using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+    nimble::Vector<PhysicalType> actual{pool_.get(), positions.size()};
+    view.readAt(
+        std::span<const uint32_t>{positions.data(), positions.size()},
+        actual.data());
+    const auto* expected = reinterpret_cast<const PhysicalType*>(values.data());
+    for (size_t i = 0; i < positions.size(); ++i) {
+      SCOPED_TRACE(
+          fmt::format("positionIndex={}, position={}", i, positions[i]));
+      EXPECT_EQ(actual[i], expected[positions[i]]);
+    }
   }
 
   nimble::Vector<int32_t> randomInt32(uint32_t seed) {
