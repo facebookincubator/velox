@@ -2592,9 +2592,23 @@ TEST_F(ParquetReaderTest, pageSkipStats) {
     uint64_t totalRows = 0;
     VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
     while (rowReader->next(1000, result)) {
-      totalRows += result->size();
       // Load lazy columns to trigger page reads.
       LazyVector::ensureLoadedRows(result, SelectivityVector(result->size()));
+
+      const auto* rowVector = result->as<RowVector>();
+      DecodedVector decodedA(*rowVector->childAt(0));
+      DecodedVector decodedB(*rowVector->childAt(1));
+      for (vector_size_t row = 0; row < result->size(); ++row) {
+        ASSERT_FALSE(decodedA.isNullAt(row));
+        ASSERT_FALSE(decodedB.isNullAt(row));
+        const auto expectedRow = kNumWrittenRows - kNumResultRows +
+            static_cast<vector_size_t>(totalRows) + row;
+        const auto actualA = decodedA.valueAt<int64_t>(row);
+        EXPECT_EQ(actualA, expectedRow);
+        EXPECT_EQ(
+            decodedB.valueAt<int64_t>(row), (actualA * 7919) % kNumWrittenRows);
+      }
+      totalRows += result->size();
     }
     EXPECT_EQ(totalRows, kNumResultRows);
     dwio::common::RuntimeStats stats;
