@@ -63,8 +63,10 @@ set(
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
-# Probe for a system UCX install. The variables are used only to gate ucxx
-# fetching below; nothing in Velox links against UCX directly yet.
+# Probe for a system UCX install, to pick the default for
+# VELOX_ENABLE_UCX_EXCHANGE below. velox_ucx_exchange runs its own
+# find_package(ucx REQUIRED); this probe only decides whether we opt in by
+# default and whether ucxx is fetched.
 find_library(UCX_LIBRARY NAMES ucp)
 find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
 if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
@@ -72,8 +74,33 @@ if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
 else()
   set(UCX_FOUND FALSE)
 endif()
-if(UCX_FOUND)
-  message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
+
+# Whether to build the experimental UCX GPU exchange transport
+# (velox/experimental/ucx-exchange) and the cuDF-side registration that selects
+# it. Defaults to whether a system UCX was found, which reproduces the earlier
+# implicit behaviour, but can be forced either way from the command line --
+# -DVELOX_ENABLE_UCX_EXCHANGE=OFF is how the no-UCX configuration is exercised
+# on a host that does have UCX. Declared here rather than next to the other
+# options because the default depends on the probe above; cache variables are
+# global, so every subdirectory sees it. Requires VELOX_ENABLE_CUDF, since this
+# file is only reached when cuDF is enabled and the transport links cudf::cudf.
+option(
+  VELOX_ENABLE_UCX_EXCHANGE
+  "Build the experimental UCX GPU exchange transport. Requires a system UCX install."
+  ${UCX_FOUND}
+)
+if(VELOX_ENABLE_UCX_EXCHANGE AND NOT UCX_FOUND)
+  message(
+    FATAL_ERROR
+    "VELOX_ENABLE_UCX_EXCHANGE=ON but no system UCX was found (need libucp and ucp/api/ucp.h)."
+  )
+endif()
+
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  message(
+    STATUS
+    "UCX exchange enabled with ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched"
+  )
   # ucxx commit b7faed1 from 2026-07-23 (release/0.51 branch)
   set(VELOX_ucxx_VERSION 0.51)
   set(VELOX_ucxx_COMMIT b7faed1a2e8038f63676183cdb056c3b69daa15d)
@@ -84,7 +111,7 @@ if(UCX_FOUND)
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
 else()
-  message(STATUS "UCX not found -- ucxx will not be fetched")
+  message(STATUS "UCX exchange disabled -- ucxx will not be fetched")
 endif()
 
 # Use block so we don't leak variables
@@ -139,7 +166,7 @@ block(SCOPE_FOR VARIABLES)
     UPDATE_DISCONNECTED 1
   )
 
-  if(UCX_FOUND)
+  if(VELOX_ENABLE_UCX_EXCHANGE)
     FetchContent_Declare(
       ucxx
       URL ${VELOX_ucxx_SOURCE_URL}
@@ -152,7 +179,7 @@ block(SCOPE_FOR VARIABLES)
 
   FetchContent_MakeAvailable(cudf)
 
-  if(UCX_FOUND)
+  if(VELOX_ENABLE_UCX_EXCHANGE)
     FetchContent_MakeAvailable(ucxx)
   endif()
 

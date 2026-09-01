@@ -30,6 +30,9 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
+#endif
 
 #include "folly/Conv.h"
 #include "velox/exec/Driver.h"
@@ -194,6 +197,18 @@ bool CompileState::compile(bool allowCpuFallback) {
         // operator. so this CPU operators is allowed even if fallback is
         // disabled.
         isPureCpuOperator = false;
+        if (planNode && thisOpProps.canRunOnGPU) {
+          // A kept operator may still describe operators that have to run
+          // after it. That is how one plan node expanding into several
+          // operators is expressed: the replaceOperators() call below inserts
+          // them behind the kept operator and renumbers the whole driver, so
+          // the expansion needs no operator ids of its own.
+          auto replacements =
+              adapter->createReplacements(oper, planNode, ctx, id);
+          for (auto& r : replacements) {
+            replaceOp.push_back(std::move(r));
+          }
+        }
       }
     } else {
       // special case for CudfOperator
@@ -308,6 +323,16 @@ void registerCudf() {
   // Register operator adapters
   registerAllOperatorAdapters();
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Advertise the UCX transport only when this process is configured to run it.
+  // Whether a given node uses it is decided by the plan, not here. The
+  // registration lives in the transport's own module; cuDF only decides when to
+  // call it, because today cuDF is the only producer of UCX plans.
+  if (CudfConfig::getInstance().exchange) {
+    ucx_exchange::registerUcxTransports();
+  }
+#endif
+
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
   registerPrestoAggregateFunctions(prefix);
@@ -349,6 +374,13 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Unconditionally, whether or not CudfConfig::exchange was set when
+  // registerCudf() ran: the registries are process-global and erase() is a
+  // no-op for an absent key, so this must not depend on config that may have
+  // changed in between.
+  ucx_exchange::unregisterUcxTransports();
+#endif
   output_mr_.reset();
   mr_.reset();
   exec::DriverFactory::adapters.erase(
@@ -412,6 +444,25 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
+  }
+  if (config.find(kUcxExchange) != config.end()) {
+    exchange = folly::to<bool>(config[kUcxExchange]);
+  }
+  if (config.find(kUcxxErrorHandling) != config.end()) {
+    ucxxErrorHandling = folly::to<bool>(config[kUcxxErrorHandling]);
+  }
+  if (config.find(kUcxIntraNodeExchange) != config.end()) {
+    intraNodeExchange = folly::to<bool>(config[kUcxIntraNodeExchange]);
+  }
+  if (config.find(kUcxxBlockingPolling) != config.end()) {
+    ucxxBlockingPolling = folly::to<bool>(config[kUcxxBlockingPolling]);
+  }
+  if (config.find(kUcxExchangeLogLevel) != config.end()) {
+    exchangeLogLevel = folly::to<int32_t>(config[kUcxExchangeLogLevel]);
+  }
+  if (config.find(kUcxPartitionedOutputBatchRows) != config.end()) {
+    partitionedOutputBatchRows =
+        folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);

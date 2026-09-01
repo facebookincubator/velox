@@ -63,4 +63,15 @@ target_link_libraries(
     velox_test_util
 )
 
+# The ucx-exchange library is only built when VELOX_ENABLE_UCX_EXCHANGE is on,
+# so the calls into it -- registerUcxTransports() in ToCudf.cpp and the UCX
+# operator adapters in OperatorAdapters.cpp -- are compiled out otherwise.
+# Without this, configuring with VELOX_ENABLE_CUDF=ON and the UCX exchange off
+# fails: the target does not exist and ucxx was never fetched, so the
+# ucx-exchange headers do not resolve either.
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  target_link_libraries(velox_cudf_exec PRIVATE velox_ucx_exchange)
+  target_compile_definitions(velox_cudf_exec PRIVATE VELOX_ENABLE_UCX_EXCHANGE)
+endif()
+
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

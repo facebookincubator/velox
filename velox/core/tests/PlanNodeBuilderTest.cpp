@@ -504,12 +504,14 @@ TEST_F(PlanNodeBuilderTest, exchangeNode) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->outputType(), type);
     EXPECT_EQ(node->serdeKind(), serdeKind);
+    EXPECT_EQ(node->transportKind(), std::string{TransportKind::kUcx});
   };
 
   const auto node = ExchangeNode::Builder()
                         .id(id)
                         .outputType(type)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kUcx})
                         .build();
   verify(node);
 
@@ -532,6 +534,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
         EXPECT_EQ(node->sortingKeys(), sortingKeys);
         EXPECT_EQ(node->sortingOrders(), sortingOrders);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportKind(), std::string{TransportKind::kUcx});
       };
 
   const auto node = MergeExchangeNode::Builder()
@@ -540,6 +543,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
                         .sortingKeys(sortingKeys)
                         .sortingOrders(sortingOrders)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kUcx})
                         .build();
   verify(node);
 

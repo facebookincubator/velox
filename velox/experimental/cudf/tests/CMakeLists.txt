@@ -294,6 +294,21 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 
+# Only built when VELOX_ENABLE_UCX_EXCHANGE is on; without it the ucx-exchange
+# library does not exist and ucxx was never fetched.
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  velox_add_cudf_test(
+    NAME velox_cudf_ucx_transport_registration_test
+    SOURCES Main.cpp UcxTransportRegistrationTest.cpp
+    LIBS
+      ${CUDF_TEST_DEFAULT_LIBS}
+      velox_ucx_exchange
+      velox_exec_test_lib
+      velox_test_util
+    TIMEOUT 3000
+  )
+endif()
+
 velox_add_cudf_test(
   NAME velox_cudf_window_test
   SOURCES Main.cpp WindowTest.cpp

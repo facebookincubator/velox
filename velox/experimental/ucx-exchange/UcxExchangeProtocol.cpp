@@ -66,6 +66,9 @@ std::pair<std::shared_ptr<uint8_t>, size_t> MetadataMsg::serialize() {
   std::memcpy(ptr, &dataSizeBytes, sizeof(dataSizeBytes));
   ptr += sizeof(dataSizeBytes);
 
+  std::memcpy(ptr, &numRows, sizeof(numRows));
+  ptr += sizeof(numRows);
+
   WireLengthType numRemaining = remainingBytes.size();
   std::memcpy(ptr, &numRemaining, sizeof(numRemaining));
   ptr += sizeof(numRemaining);
@@ -117,6 +120,11 @@ MetadataMsg MetadataMsg::deserializeMetadataMsg(const uint8_t* buffer) {
     throw std::runtime_error("Insufficient data for dataSizeBytes");
   std::memcpy(&record.dataSizeBytes, ptr, sizeof(record.dataSizeBytes));
   ptr += sizeof(record.dataSizeBytes);
+
+  if (ptr + sizeof(record.numRows) > endPtr)
+    throw std::runtime_error("Insufficient data for numRows");
+  std::memcpy(&record.numRows, ptr, sizeof(record.numRows));
+  ptr += sizeof(record.numRows);
 
   WireLengthType numRemaining = 0;
   if (ptr + sizeof(numRemaining) > endPtr)
