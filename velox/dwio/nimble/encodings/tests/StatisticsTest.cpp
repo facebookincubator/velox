@@ -528,3 +528,44 @@ TYPED_TEST(StatisticsIntegerTests, buckets) {
     EXPECT_EQ(expectedBuckets[i], buckets[i]) << "index: " << i;
   }
 }
+
+TYPED_TEST(StatisticsIntegerTests, bitFlipProfileConstant) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+
+  std::vector<ValueType> data(100, ValueType{42});
+  auto statistics = T::create({data});
+  const auto& profile = statistics.bitFlipProfile();
+
+  EXPECT_EQ(profile.numBits, static_cast<int>(sizeof(ValueType) * 8));
+  EXPECT_EQ(profile.variance, 0.0);
+  for (int b = 0; b < profile.numBits; ++b) {
+    EXPECT_EQ(profile.flipProbability[b], 0.0) << "bit: " << b;
+  }
+}
+
+TYPED_TEST(StatisticsIntegerTests, bitFlipProfileAlternatingIsFullFlip) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+
+  std::vector<ValueType> data;
+  for (int i = 0; i < 100; ++i) {
+    data.push_back(i % 2 == 0 ? ValueType{0} : static_cast<ValueType>(-1));
+  }
+  auto statistics = T::create({data});
+  const auto& profile = statistics.bitFlipProfile();
+
+  for (int b = 0; b < profile.numBits; ++b) {
+    EXPECT_EQ(profile.flipProbability[b], 1.0) << "bit: " << b;
+  }
+  EXPECT_EQ(profile.variance, 0.0);
+}
+
+TEST(StatisticsTest, bitFlipProfileIsLazyAndCached) {
+  std::vector<uint64_t> data{0, 1, 2, 3, 4, 5};
+  auto statistics = nimble::Statistics<uint64_t>::create({data});
+  const auto& first = statistics.bitFlipProfile();
+  const auto& second = statistics.bitFlipProfile();
+  EXPECT_EQ(&first, &second);
+  EXPECT_EQ(first.numBits, 64);
+}
