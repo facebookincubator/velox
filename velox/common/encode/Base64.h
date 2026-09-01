@@ -25,28 +25,6 @@
 
 namespace facebook::velox::encoding {
 
-namespace detail {
-
-// Padding character used in encoding.
-inline constexpr char kPadding = '=';
-
-// Checks if the input Base64 string is padded.
-inline bool isPadded(const char* input, size_t inputSize) {
-  return inputSize > 0 && input[inputSize - 1] == kPadding;
-}
-
-// Counts the number of padding characters in encoded input.
-inline size_t numPadding(const char* input, size_t inputSize) {
-  size_t numPadding{0};
-  while (inputSize > 0 && input[inputSize - 1] == kPadding) {
-    ++numPadding;
-    --inputSize;
-  }
-  return numPadding;
-}
-
-} // namespace detail
-
 class Base64 {
  public:
   static const size_t kCharsetSize = 64;

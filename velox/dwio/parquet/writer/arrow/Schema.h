@@ -323,11 +323,6 @@ class PARQUET_EXPORT PrimitiveNode : public Node {
   DecimalMetadata decimalMetadata_;
   ColumnOrder columnOrder_;
 
-  // For FIXED_LEN_BYTE_ARRAY.
-  void setTypeLength(int32_t length) {
-    typeLength_ = length;
-  }
-
   bool equalsInternal(const PrimitiveNode* other) const;
 };
 

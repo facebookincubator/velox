@@ -30,6 +30,8 @@ namespace facebook::velox::encoding {
 constexpr static int kBinaryBlockByteSize = 3;
 // Size of an encoded block in bytes (4 bytes = 24 bits)
 constexpr static int kEncodedBlockByteSize = 4;
+// Padding character used in encoding.
+constexpr static char kPadding = '=';
 
 // Character sets for Base64 and Base64 URL encoding
 constexpr const Base64::Charset kBase64Charset = {
@@ -86,6 +88,21 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
+
+// Checks if the input Base64 string is padded.
+bool isPadded(const char* input, size_t inputSize) {
+  return inputSize > 0 && input[inputSize - 1] == kPadding;
+}
+
+// Counts the number of padding characters in encoded input.
+size_t numPadding(const char* input, size_t inputSize) {
+  size_t numPadding{0};
+  while (inputSize > 0 && input[inputSize - 1] == kPadding) {
+    ++numPadding;
+    --inputSize;
+  }
+  return numPadding;
+}
 
 // Validate the character in charset with ReverseIndex table
 constexpr bool checkForwardIndex(
@@ -235,13 +252,13 @@ void Base64::encodeImpl(
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       *outputPointer++ = charset[(inputBlock >> 6) & 0x3f];
       if (includePadding) {
-        *outputPointer = detail::kPadding;
+        *outputPointer = kPadding;
       }
     } else {
       *outputPointer++ = charset[(inputBlock >> 12) & 0x3f];
       if (includePadding) {
-        *outputPointer++ = detail::kPadding;
-        *outputPointer = detail::kPadding;
+        *outputPointer++ = kPadding;
+        *outputPointer = kPadding;
       }
     }
   }
@@ -376,7 +393,7 @@ Expected<size_t> Base64::calculateDecodedSize(
   }
 
   // Check if the input string is padded
-  if (detail::isPadded(input, inputSize)) {
+  if (isPadded(input, inputSize)) {
     // If padded, ensure that the string length is a multiple of the encoded
     // block size
     if (inputSize % kEncodedBlockByteSize != 0) {
@@ -388,7 +405,7 @@ Expected<size_t> Base64::calculateDecodedSize(
 
     auto decodedSize =
         (inputSize * kBinaryBlockByteSize) / kEncodedBlockByteSize;
-    auto paddingCount = detail::numPadding(input, inputSize);
+    auto paddingCount = numPadding(input, inputSize);
     inputSize -= paddingCount;
 
     // Adjust the needed size by deducting the bytes corresponding to the
@@ -567,11 +584,10 @@ Status Base64::decodeMime(const char* input, size_t inputSize, char* output) {
     int val = kBase64ReverseIndexTable[c];
 
     // Padding character.
-    if (c == detail::kPadding) {
+    if (c == kPadding) {
       // If we see '=' too early or only one '=' when two are needed → error.
       if (bitsNeeded == 18 ||
-          (bitsNeeded == 6 &&
-           (idx == inputSize || input[idx++] != detail::kPadding))) {
+          (bitsNeeded == 6 && (idx == inputSize || input[idx++] != kPadding))) {
         return Status::UserError(
             "Input byte array has wrong 4-byte ending unit.");
       }
@@ -640,7 +656,7 @@ Expected<size_t> Base64::calculateMimeDecodedSize(
   // Compute how many true Base64 chars.
   for (size_t i = 0; i < inputSize; ++i) {
     auto c = input[i];
-    if (c == detail::kPadding) {
+    if (c == kPadding) {
       decodedSize -= inputSize - i;
       break;
     }
@@ -711,14 +727,14 @@ void Base64::encodeMime(const char* input, size_t inputSize, char* output) {
     if (remaining == 1) {
       // Only one byte remains: produce two chars + two '=' paddings.
       *writePtr++ = kBase64Charset[(b0 & 0x03) << 4];
-      *writePtr++ = detail::kPadding;
-      *writePtr = detail::kPadding;
+      *writePtr++ = kPadding;
+      *writePtr = kPadding;
     } else {
       // Two bytes remain: produce three chars + one '=' padding.
       uint8_t b1 = static_cast<uint8_t>(*readPtr);
       *writePtr++ = kBase64Charset[((b0 & 0x03) << 4) | (b1 >> 4)];
       *writePtr++ = kBase64Charset[(b1 & 0x0F) << 2];
-      *writePtr = detail::kPadding;
+      *writePtr = kPadding;
     }
   }
 }
