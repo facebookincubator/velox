@@ -110,3 +110,10 @@ nimble_add_ml_id_benchmark(
 # every supported element type, so it is also the compile-coverage gate.
 nimble_add_ml_id_benchmark(
   nimble_ml_id_smoke_benchmark MlIdSmokeBenchmark.cpp)
+
+# MlIdSelectionPolicyBenchmark: measures whether the bit-flip-probability
+# top-level policies would correctly predict "SubIntSplit wins" against real
+# candidate encodings -- evidence-gathering only, does not touch production
+# selection.
+nimble_add_ml_id_benchmark(
+  nimble_ml_id_selection_policy_benchmark MlIdSelectionPolicyBenchmark.cpp)
