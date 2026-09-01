@@ -147,9 +147,8 @@ are <cite>gs://</cite>.</p>
 environment variables http_proxy, https_proxy, and no_proxy.
 The Java AWS S3 client supports this.
 The environment variables can be specified as lower case, upper case or both.
-In order to enable the use of a proxy the hive connector configuration variable
-<cite>hive.s3.use-proxy-from-env</cite> must be set to <cite>true</cite>. By default, the value
-is <cite>false</cite>.</p>
+In order to enable the use of a proxy, set the S3 configuration variable
+<code class="docutils literal notranslate"><span class="pre">s3.use-proxy-from-env</span></code> to <code class="docutils literal notranslate"><span class="pre">true</span></code>. By default, the value is <code class="docutils literal notranslate"><span class="pre">false</span></code>.</p>
 <p>This is the behavior when the proxy settings are enabled:</p>
 <ol class="arabic simple">
 <li><p>http_proxy/HTTP_PROXY, https_proxy/HTTPS_PROXY and no_proxy/NO_PROXY
