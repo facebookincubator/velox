@@ -442,14 +442,19 @@ std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
     const char* src,
     uint64_t srcLength) const {
   // A Parquet/ORC block may hold several concatenated ZSTD frames (large string
-  // columns). ZSTD_getFrameContentSize() reports only the first frame's size,
-  // which under-sizes the destination and makes decompress() fail with
-  // dstSize_tooSmall. Instead bound the total across all frames:
-  // ZSTD_decompressBound() never returns UNKNOWN (unlike
-  // ZSTD_findDecompressedSize(), which is only exact when every frame carries a
-  // content-size header -- streaming frames do not), and it is an upper bound,
-  // so decompress() always fits. It still requires the caller to allocate up to
-  // that bound, which is a bounded over-allocation for streaming frames.
+  // columns). ZSTD_getFrameContentSize() reports only the first frame, which
+  // under-sizes the destination and makes decompress() fail with
+  // dstSize_tooSmall. Prefer the exact total across all frames via
+  // ZSTD_findDecompressedSize(), which also lets the caller skip a block
+  // without decompressing it (the 'exact' flag). For streaming frames (no
+  // content-size header) it returns ZSTD_CONTENTSIZE_UNKNOWN, so fall back to
+  // the upper bound ZSTD_decompressBound(), which never returns UNKNOWN --
+  // correct, at the cost of that bound ('exact' false, so such a block cannot
+  // be skipped without decoding).
+  if (auto exact = ZSTD_findDecompressedSize(src, srcLength);
+      exact != ZSTD_CONTENTSIZE_UNKNOWN && exact != ZSTD_CONTENTSIZE_ERROR) {
+    return {static_cast<int64_t>(exact), true};
+  }
   if (auto bound = ZSTD_decompressBound(src, srcLength);
       bound != ZSTD_CONTENTSIZE_ERROR) {
     return {static_cast<int64_t>(bound), false};
