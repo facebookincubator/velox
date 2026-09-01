@@ -72,8 +72,10 @@ inline bool bitFlipVarianceGate(
 /// index `s`" (so a segment's bit range is [boundaries[i], boundaries[i+1] -
 /// 1]). Sorted, deduped, always including 0 and `profile.numBits` (the
 /// implicit outer edges of the full bit range) -- empty `profile.numBits`
-/// yields just those two edges. Used to constrain SubIntSplitSelector.h's DP
-/// grid to a small candidate set instead of every integer bit position.
+/// yields just those two edges. Currently consumed only by
+/// bitFlipGradientGate() below; using it to constrain
+/// SubIntSplitSelector.h's DP grid to a smaller candidate set is a possible
+/// follow-up, not implemented here.
 inline std::vector<int> bitFlipGradientBoundaries(
     const BitFlipProfile& profile,
     const TopLevelPolicyConfig& config) {
