@@ -24,6 +24,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -53,7 +54,16 @@ class SliceEncodingTest : public ::testing::Test {
   }
 
   std::unique_ptr<nimble::Encoding> createEncoding(std::string_view encoded) {
-    return nimble::EncodingFactory{}.create(
+    return createEncoding(encoded, nimble::Encoding::Options{});
+  }
+
+  // Reads the encoded blob with the given options. Matches the options used
+  // at write time -- required when useVarintRowCount is set, otherwise the
+  // outer prefix parses wrong and any nested construction cascades.
+  std::unique_ptr<nimble::Encoding> createEncoding(
+      std::string_view encoded,
+      const nimble::Encoding::Options& options) {
+    return nimble::EncodingFactory{options}.create(
         *pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
           return nullptr;
         });
@@ -61,8 +71,19 @@ class SliceEncodingTest : public ::testing::Test {
 
   std::string_view
   slice(std::string_view encoded, uint32_t offset, uint32_t length) {
+    return slice(encoded, offset, length, nimble::Encoding::Options{});
+  }
+
+  // Slices the encoded blob with the given options. Matches the options used
+  // at write time -- required when a per-encoding option (e.g.
+  // useVarintRowCount) must be honoured through the factory dispatch.
+  std::string_view slice(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      const nimble::Encoding::Options& options) {
     return nimble::EncodingFactory::slice(
-        encoded, offset, length, *buffer_, nimble::Encoding::Options{});
+        encoded, offset, length, *buffer_, options);
   }
 
   template <typename T>
@@ -290,6 +311,272 @@ TEST_F(SliceEncodingTest, boolSkipIsRelativeToSlice) {
   encoding->materializeBoolsAsBits(/*rowCount=*/2, &bits, /*begin=*/0);
   EXPECT_TRUE(velox::bits::isBitSet(&bits, 0));
   EXPECT_FALSE(velox::bits::isBitSet(&bits, 1));
+}
+
+// --- Deferred BlockBitPacking partial-block slicing ----------------------
+//
+// A slice that starts or ends inside a block keeps the boundary blocks whole
+// and wraps the result, instead of unpack+re-packing the partial rows into
+// byte-aligned slots.
+
+// Builds a BlockBitPacking source with several blocks whose bit widths vary --
+// two normal blocks, one constant block (bitWidth == 0), and one raw block
+// (bitWidth == kRawBlockBitWidth). blockSize is 8 so tests cover both aligned
+// and misaligned boundaries across every mode.
+nimble::Vector<int32_t> makeBlockBitPackingSource(
+    velox::memory::MemoryPool* pool) {
+  nimble::Vector<int32_t> values{pool};
+  // Block 0: narrow range [1000..1007], bit-packed at bitWidth=3.
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(1000 + i);
+  }
+  // Block 1: constant 5 -> bitWidth == 0.
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(5);
+  }
+  // Block 2: full 32-bit range -> raw block (bitWidth == 255).
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(
+        i == 3 ? std::numeric_limits<int32_t>::max()
+               : (i == 5 ? std::numeric_limits<int32_t>::min() : i * 100));
+  }
+  // Block 3: narrow again, bit-packed.
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(2000 + i);
+  }
+  return values;
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingMatchesSourceRows) {
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  // blockSize=8, four blocks -- sweep every non-empty range so aligned,
+  // partial-front, partial-back and single-block-interior cases are all
+  // covered against a raw block, a constant block, and two bit-packed ones.
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+
+      auto encoding = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(encoding->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> output{pool_.get(), length};
+      encoding->materialize(length, output.data());
+      ASSERT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapsOnlyWhenPartial) {
+  // Four blocks of 8 rows each. Block-aligned slices come back as a plain
+  // BlockBitPacking; any partial boundary -- front, back, both, or a
+  // single-block interior -- comes back wrapped in a SliceEncoding.
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  struct Case {
+    const char* name;
+    uint32_t offset;
+    uint32_t length;
+    nimble::EncodingType expectedType;
+  };
+  for (const auto& testCase : {
+           Case{
+               "alignedSingleBlock",
+               8,
+               8,
+               nimble::EncodingType::BlockBitPacking},
+           Case{
+               "alignedMultiBlock",
+               8,
+               16,
+               nimble::EncodingType::BlockBitPacking},
+           Case{
+               "alignedFullSource",
+               0,
+               32,
+               nimble::EncodingType::BlockBitPacking},
+           Case{"partialFrontOnly", 3, 5, nimble::EncodingType::Slice},
+           Case{"partialBackOnly", 0, 5, nimble::EncodingType::Slice},
+           Case{"partialAcrossBlocks", 10, 10, nimble::EncodingType::Slice},
+           Case{"partialInsideSingleBlock", 1, 3, nimble::EncodingType::Slice},
+       }) {
+    SCOPED_TRACE(testCase.name);
+    auto encoding =
+        createEncoding(slice(encoded, testCase.offset, testCase.length));
+    EXPECT_EQ(encoding->encodingType(), testCase.expectedType);
+    EXPECT_EQ(encoding->rowCount(), testCase.length);
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapperTrimsToLength) {
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  // Partial slice starting mid-block: the wrapped BlockBitPacking covers 2
+  // full blocks (block 0 + block 1 = 16 rows) and the wrapper trims to
+  // length=10.
+  auto partial = createEncoding(slice(encoded, 3, 10));
+  EXPECT_EQ(partial->rowCount(), 10);
+
+  const std::vector<int32_t> expected(
+      values.begin() + 3, values.begin() + 3 + 10);
+  nimble::Vector<int32_t> out{pool_.get(), 10};
+  partial->materialize(10, out.data());
+  EXPECT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected);
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesInt64) {
+  // Same shape as the int32 test above; the write path is templated over
+  // the physical type, so exercise the 8-byte payload memcpy too.
+  nimble::Vector<int64_t> values{pool_.get()};
+  for (int64_t i = 0; i < 8; ++i) {
+    values.push_back(int64_t{1'000'000'000} + i); // bit-packed narrow range
+  }
+  for (int64_t i = 0; i < 8; ++i) {
+    values.push_back(int64_t{-42}); // constant, bitWidth == 0
+  }
+  for (int64_t i = 0; i < 8; ++i) {
+    values.push_back(
+        i == 3 ? std::numeric_limits<int64_t>::max()
+               : (i == 5 ? std::numeric_limits<int64_t>::min()
+                         : int64_t{1} << (16 + i))); // raw, bitWidth == 255
+  }
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int64_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int64_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int64_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int64_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesPartialLastBlock) {
+  // 30 rows with blockSize=8 -> four blocks, the last with only 6 rows.
+  // Sweep exercises blockRowCount(source, source.numBlocks-1) < blockSize
+  // -- the partial last block's row count must propagate into the wrapped
+  // encoding's rowCount when a slice touches it.
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (int32_t i = 0; i < 30; ++i) {
+    values.push_back(500 + i);
+  }
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesShortSource) {
+  // Source shorter than one block -> source.firstBlockRows < blockSize and
+  // source.numBlocks == 1. Verifies the write path propagates a partial
+  // firstBlockRows into the emitted encoding's header field verbatim.
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (int32_t i = 0; i < 6; ++i) {
+    values.push_back(7000 + i);
+  }
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesVarintRowCount) {
+  // Production StreamSlicer sets useVarintRowCount=true; the write path
+  // stamps the emitted encoding's prefix with the flag, so exercise that.
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  nimble::Encoding::Options writeOptions{
+      .useVarintRowCount = true, .blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  const nimble::Encoding::Options varintOptions{.useVarintRowCount = true};
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(
+          slice(encoded, offset, length, varintOptions), varintOptions);
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
 }
 
 TEST_F(SliceEncodingTest, resetReturnsToSliceStart) {
