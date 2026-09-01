@@ -1875,6 +1875,8 @@ void Task::noMoreSplitsForGroup(
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
+  std::shared_ptr<OutputBufferManager> outputBufferManager;
+  std::optional<uint32_t> numOutputDrivers;
   std::shared_ptr<InMemoryExchangeClient> exchangeClient;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
@@ -1917,10 +1919,21 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
     }
 
     allFinished = checkNoMoreSplitGroupsLocked();
+    if (isGroupedExecution() && numDriversPerSplitGroup_ != 0 &&
+        allNodesReceivedNoMoreSplitsMessageLocked() &&
+        groupedPartitionedOutput_) {
+      outputBufferManager = bufferManager_.lock();
+      numOutputDrivers =
+          numDriversInPartitionedOutput_ * seenSplitGroups_.size();
+    }
 
     if (!isRunningLocked()) {
       exchangeClient = getExchangeClientLocked(planNodeId);
     }
+  }
+
+  if (outputBufferManager != nullptr) {
+    outputBufferManager->updateNumDrivers(taskId(), *numOutputDrivers);
   }
 
   for (auto& promise : splitPromises) {
@@ -2147,13 +2160,6 @@ bool Task::checkNoMoreSplitGroupsLocked() {
       allNodesReceivedNoMoreSplitsMessageLocked()) {
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
         numDriversUngrouped_;
-    if (groupedPartitionedOutput_) {
-      if (auto manager = bufferManager_.lock()) {
-        manager->updateNumDrivers(
-            taskId(), numDriversInPartitionedOutput_ * seenSplitGroups_.size());
-      }
-    }
-
     return checkIfFinishedLocked();
   }
 
