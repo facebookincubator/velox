@@ -174,13 +174,14 @@ uint64_t SerializedPageFileWriter::write(
             (static_cast<long double>(writeBufferSize_) * rows->size()) /
             rows->estimateFlatSize()));
     for (const auto& range : indices) {
-      for (vector_size_t offset = 0; offset < range.size; offset += batchSize) {
-        IndexRange chunk{
-            range.begin + offset, std::min(batchSize, range.size - offset)};
+      for (vector_size_t offset = 0; offset < range.size;) {
+        const auto chunkSize = std::min(batchSize, range.size - offset);
+        IndexRange chunk{range.begin + offset, chunkSize};
         append(folly::Range(&chunk, 1));
         if (batch_->size() >= writeBufferSize_) {
           writtenBytes += flush();
         }
+        offset += chunkSize;
       }
     }
   }
