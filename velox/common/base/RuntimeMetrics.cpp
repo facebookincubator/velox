@@ -14,13 +14,29 @@
  * limitations under the License.
  */
 
-#include <folly/ThreadLocal.h>
+#include <mutex>
+#include <unordered_set>
 
+#include <folly/ThreadLocal.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SuccinctPrinter.h"
 
 namespace facebook::velox {
+
+namespace {
+
+struct RuntimeMetricAggregationRegistry {
+  std::mutex mutex;
+  std::unordered_set<std::string> names;
+};
+
+RuntimeMetricAggregationRegistry& runtimeMetricAggregationRegistry() {
+  static RuntimeMetricAggregationRegistry registry;
+  return registry;
+}
+
+} // namespace
 
 void RuntimeMetric::addValue(int64_t value) {
   sum += value;
@@ -32,6 +48,24 @@ void RuntimeMetric::addValue(int64_t value) {
 void RuntimeMetric::aggregate() {
   count = std::min(count, static_cast<uint64_t>(1));
   min = max = sum;
+}
+
+void registerRuntimeMetricForOperatorAggregation(std::string name) {
+  auto& registry = runtimeMetricAggregationRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  registry.names.insert(std::move(name));
+}
+
+void unregisterRuntimeMetricForOperatorAggregation(std::string_view name) {
+  auto& registry = runtimeMetricAggregationRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  registry.names.erase(std::string(name));
+}
+
+bool isRuntimeMetricAggregatedPerOperator(std::string_view name) {
+  auto& registry = runtimeMetricAggregationRegistry();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  return registry.names.contains(std::string(name));
 }
 
 void RuntimeMetric::merge(const RuntimeCounter& value) {
