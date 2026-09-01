@@ -452,6 +452,25 @@ TEST(EncodingLayoutTests, mainlyConst) {
   testCapture<uint32_t>(captureTest, {1, 1, 1, 1, 5, 1});
 }
 
+TEST(EncodingLayoutTests, mainlyConstantV2) {
+  nimble::EncodingLayout expected{
+      nimble::EncodingType::MainlyConstantV2,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {
+          nimble::EncodingLayout{
+              nimble::EncodingType::Trivial,
+              {},
+              nimble::CompressionType::Uncompressed},
+          nimble::EncodingLayout{
+              nimble::EncodingType::Trivial,
+              {},
+              nimble::CompressionType::Uncompressed},
+      }};
+  testSerialization(expected);
+  testCapture<uint32_t>(expected, {1, 1, 1, 1, 5, 1});
+}
+
 TEST(EncodingLayoutTests, dictionary) {
   nimble::EncodingLayout expected{
       nimble::EncodingType::Dictionary,

@@ -34,6 +34,15 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier OtherValues = 1;
   };
 
+  /// Identifies the direct position and value child streams for
+  /// MainlyConstantV2.
+  struct MainlyConstantV2 {
+    /// Stores row positions for values that differ from the common value.
+    static constexpr NestedEncodingIdentifier ExceptionPositions = 0;
+    /// Stores values corresponding to ExceptionPositions.
+    static constexpr NestedEncodingIdentifier ExceptionValues = 1;
+  };
+
   struct Nullable {
     static constexpr NestedEncodingIdentifier Data = 0;
     static constexpr NestedEncodingIdentifier Nulls = 1;

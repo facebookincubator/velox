@@ -62,6 +62,7 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::SubIntSplit,
       nimble::EncodingType::FrequencyPartition,
       nimble::EncodingType::Fsst,
+      nimble::EncodingType::MainlyConstantV2,
       nimble::EncodingType::SharedDictionary};
   for (const auto encodingType : unsupportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));

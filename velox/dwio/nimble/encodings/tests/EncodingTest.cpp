@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyConstantV2Encoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
@@ -246,6 +247,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::MainlyConstantEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::MainlyConstant;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::MainlyConstantV2Encoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::MainlyConstantV2;
 };
 
 template <typename T>
@@ -469,6 +476,12 @@ struct EncodingTypeGetter<nimble::MainlyConstantEncoding<T>> {
 };
 
 template <typename T>
+struct EncodingTypeGetter<nimble::MainlyConstantV2Encoding<T>> {
+  static constexpr nimble::EncodingType value =
+      nimble::EncodingType::MainlyConstantV2;
+};
+
+template <typename T>
 struct EncodingTypeGetter<nimble::RLEEncoding<T>> {
   static constexpr nimble::EncodingType value = nimble::EncodingType::RLE;
 };
@@ -564,6 +577,7 @@ using TestTypes = ::testing::Types<
     NUMERIC_TYPES(nimble::FixedBitWidthEncoding),
     NON_BOOL_TYPES(nimble::DictionaryEncoding),
     NON_BOOL_TYPES(nimble::MainlyConstantEncoding),
+    NUMERIC_TYPES(nimble::MainlyConstantV2Encoding),
     ALL_TYPES(nimble::TrivialEncoding),
     ALL_TYPES(nimble::RLEEncoding),
     ALL_TYPES(nimble::ConstantEncoding)>;

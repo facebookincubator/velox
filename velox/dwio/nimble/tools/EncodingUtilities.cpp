@@ -63,6 +63,7 @@ void extractCompressionType(
     case EncodingType::DeltaBlock:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
+    case EncodingType::MainlyConstantV2:
     case EncodingType::Prefix:
     case EncodingType::ALP:
     case EncodingType::Fsst:
@@ -308,6 +309,47 @@ void traverseEncodings(
           "OtherValues",
           useVarintRowCount,
           visitor);
+      break;
+    }
+    case EncodingType::MainlyConstantV2: {
+      NIMBLE_CHECK_LE(dataOffset, stream.size());
+      const auto commonValueSize = detail::dataTypeSize(dataType);
+      NIMBLE_CHECK_GE(
+          stream.size() - dataOffset,
+          static_cast<size_t>(commonValueSize) + sizeof(uint32_t),
+          "Truncated MainlyConstantV2 header.");
+      const char* cursor = stream.data() + dataOffset;
+      const char* const end = stream.end();
+      cursor += commonValueSize;
+      const uint32_t exceptionPositionsBytes = encoding::readUint32(cursor);
+      NIMBLE_CHECK_GE(
+          static_cast<size_t>(end - cursor),
+          static_cast<size_t>(exceptionPositionsBytes) + sizeof(uint32_t),
+          "Truncated MainlyConstantV2 positions child.");
+      if (exceptionPositionsBytes != 0) {
+        traverseEncodings(
+            {cursor, exceptionPositionsBytes},
+            level + 1,
+            0,
+            "ExceptionPositions",
+            useVarintRowCount,
+            visitor);
+      }
+      cursor += exceptionPositionsBytes;
+      const uint32_t exceptionValuesBytes = encoding::readUint32(cursor);
+      NIMBLE_CHECK_EQ(
+          static_cast<size_t>(end - cursor),
+          exceptionValuesBytes,
+          "Invalid MainlyConstantV2 values child size.");
+      if (exceptionValuesBytes != 0) {
+        traverseEncodings(
+            {cursor, exceptionValuesBytes},
+            level + 1,
+            1,
+            "ExceptionValues",
+            useVarintRowCount,
+            visitor);
+      }
       break;
     }
     case EncodingType::Dictionary: {

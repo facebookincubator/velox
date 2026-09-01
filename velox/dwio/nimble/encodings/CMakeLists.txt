@@ -95,6 +95,7 @@ add_library(
   PFOREncoding.h
   NullableEncoding.h
   MainlyConstantEncoding.h
+  MainlyConstantV2Encoding.h
   FsstEncoding.h
   FrequencyPartitionEncoding.h
   ForEncoding.h

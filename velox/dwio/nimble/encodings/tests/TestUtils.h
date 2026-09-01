@@ -29,6 +29,7 @@
 #include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyConstantV2Encoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
@@ -112,6 +113,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::MainlyConstantEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::MainlyConstant;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::MainlyConstantV2Encoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::MainlyConstantV2;
 };
 
 template <typename T>

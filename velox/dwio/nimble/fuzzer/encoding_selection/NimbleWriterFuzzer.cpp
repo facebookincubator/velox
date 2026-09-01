@@ -148,6 +148,7 @@ bool isNumericCompatible(EncodingType encodingType) {
   switch (encodingType) {
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
+    case EncodingType::MainlyConstantV2:
     case EncodingType::Trivial:
     case EncodingType::FixedBitWidth:
     case EncodingType::Dictionary:

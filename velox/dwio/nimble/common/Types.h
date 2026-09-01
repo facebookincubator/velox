@@ -161,6 +161,11 @@ enum class EncodingType {
   // external provider. The alphabet is resolved independently from the
   // encoded index stream.
   SharedDictionary = 22,
+  /// Stores one common value plus direct row positions and values for
+  /// exceptions. Preserves row order for non-boolean numeric streams.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  MainlyConstantV2 = 23,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.

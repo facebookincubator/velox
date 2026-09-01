@@ -170,6 +170,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::DeltaBlock,
       EncodingType::Fsst,
       EncodingType::Huffman,
+      EncodingType::MainlyConstantV2,
   };
 }
 

@@ -54,6 +54,7 @@ add_executable(
   ForEncodingTest.cpp
   FrequencyPartitionEncodingTest.cpp
   MainlyConstantEncodingTest.cpp
+  MainlyConstantV2EncodingTest.cpp
   MainlyConstantEncodingViewTest.cpp
   NullableEncodingTest.cpp
   OpenZLCompressorTest.cpp

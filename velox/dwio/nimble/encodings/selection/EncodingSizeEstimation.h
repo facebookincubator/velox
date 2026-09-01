@@ -29,6 +29,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyConstantV2Encoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
@@ -95,6 +96,10 @@ struct EncodingSizeEstimation {
         // candidate. MainlyConstantEncoding::estimateSize already supports
         // usePerBlockStats + blockSize params.
         return MainlyConstantEncoding<T>::estimateSize(
+            entryCount, statistics, options);
+      }
+      case EncodingType::MainlyConstantV2: {
+        return MainlyConstantV2Encoding<T>::estimateSize(
             entryCount, statistics, options);
       }
       case EncodingType::Trivial: {

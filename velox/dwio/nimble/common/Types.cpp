@@ -48,6 +48,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::Huffman, "Huffman"},
         {EncodingType::DeltaBlock, "DeltaBlock"},
         {EncodingType::SharedDictionary, "SharedDictionary"},
+        {EncodingType::MainlyConstantV2, "MainlyConstantV2"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({
