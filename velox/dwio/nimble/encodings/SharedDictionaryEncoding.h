@@ -324,16 +324,15 @@ class SharedDictionaryAlphabet {
       std::span<const uint32_t> indices,
       typename TypeTraits<T>::physicalType* output) const {
     checkEntryType<T>();
+    for (const auto index : indices) {
+      checkEntryIndex(index);
+    }
     if (entryView_ != nullptr) {
-      for (size_t i = 0; i < indices.size(); ++i) {
-        checkEntryIndex(indices[i]);
-        entryView_->readAt(indices[i], output + i);
-      }
+      entryView_->readAt(indices, output);
       return;
     }
     const auto entries = decodedEntries<T>();
     for (size_t i = 0; i < indices.size(); ++i) {
-      checkEntryIndex(indices[i]);
       output[i] = entries[indices[i]];
     }
   }

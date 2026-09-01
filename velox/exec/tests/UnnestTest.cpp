@@ -1046,7 +1046,7 @@ TEST_P(UnnestTest, splitOutputNodeOverride) {
         planNodeIdGenerator->next(),
         std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
         unnestFields,
-        std::vector<std::string>{"s_e"},
+        std::vector<std::optional<std::string>>{"s_e"},
         std::nullopt,
         std::nullopt,
         testData.nodeSplitOutput,

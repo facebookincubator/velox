@@ -59,7 +59,7 @@ Three Reasons for the Split
      - CachedBufferedInput caches compressed bytes → decompress on every access. CachedMetadataInput caches decompressed → zero-cost on cache hit.
    * - 3
      - Shared component
-     - TabletReader is used by both the selective reader (has CachedBufferedInput ) and batch VeloxReader (has no BufferedInput at all). Can't depend on it.
+     - TabletReader is used by both the selective reader (has CachedBufferedInput ) and batch BatchReader (has no BufferedInput at all). Can't depend on it.
 
 What Goes Where
 ^^^^^^^^^^^^^^^
