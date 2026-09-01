@@ -243,8 +243,7 @@ class Statistics {
   /// between consecutive values), plus its variance and discrete gradient
   /// across bit positions. Used to cheaply predict whether a stream is
   /// likely to contain multiple concatenated bit-field distributions (see
-  /// SubIntSplitTopLevelPolicy.h). Not currently consumed by any production
-  /// selection path.
+  /// SubIntSplitTopLevelPolicy.h for consumers and scope).
   const BitFlipProfile& bitFlipProfile() const noexcept {
     static_assert(nimble::isIntegralType<T>());
     if (!bitFlipProfile_.has_value()) {

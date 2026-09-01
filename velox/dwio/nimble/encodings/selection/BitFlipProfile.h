@@ -29,6 +29,9 @@
 
 namespace facebook::nimble {
 
+/// Widest integral physical type BitFlipProfile supports.
+inline constexpr int kMaxBitWidth = 64;
+
 /// Per-bit-position flip-probability profile of an integral value stream.
 /// `flipProbability[i]` is P(bit i differs between two consecutive sampled
 /// values), estimated by XOR-count-and-divide. `variance` is the variance of
@@ -37,9 +40,9 @@ namespace facebook::nimble {
 /// the first `numBits` entries of each array are meaningful; the remainder
 /// are zero-filled.
 struct BitFlipProfile {
-  std::array<double, 64> flipProbability{};
+  std::array<double, kMaxBitWidth> flipProbability{};
   double variance{0.0};
-  std::array<double, 64> gradient{};
+  std::array<double, kMaxBitWidth> gradient{};
   int numBits{0};
 };
 
@@ -51,7 +54,7 @@ template <typename T>
 BitFlipProfile computeBitFlipProfile(std::span<const T> values) {
   using UnsignedT = std::make_unsigned_t<T>;
   constexpr int kBits = std::numeric_limits<UnsignedT>::digits;
-  static_assert(kBits <= 64);
+  static_assert(kBits <= kMaxBitWidth);
 
   BitFlipProfile profile;
   profile.numBits = kBits;
@@ -59,7 +62,7 @@ BitFlipProfile computeBitFlipProfile(std::span<const T> values) {
     return profile;
   }
 
-  std::array<uint64_t, 64> flipCounts{};
+  std::array<uint64_t, kMaxBitWidth> flipCounts{};
   const size_t pairCount = values.size() - 1;
   for (size_t i = 0; i + 1 < values.size(); ++i) {
     const UnsignedT xorVal =

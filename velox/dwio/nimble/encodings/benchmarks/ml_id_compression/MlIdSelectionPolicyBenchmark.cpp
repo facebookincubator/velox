@@ -15,10 +15,8 @@
  */
 
 // bench_selection_policy: measures whether the bit-flip-probability
-// top-level policies (SubIntSplitTopLevelPolicy.h) would correctly predict
-// "SubIntSplit wins" if wired into production selection -- evidence for a
-// future PR, not selection itself (see the scope note in
-// SubIntSplitTopLevelPolicy.h / SubIntSplitEstimator.h).
+// top-level policies (see SubIntSplitTopLevelPolicy.h for scope) would
+// correctly predict "SubIntSplit wins" if wired into production selection.
 //
 // For every dataset column this driver: computes the best cost among the
 // real, unmodified candidate encodings via
@@ -49,21 +47,28 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 
+namespace {
+// Single source of truth for the gflag defaults below: mirrors
+// TopLevelPolicyConfig's own default member initializers.
+constexpr facebook::nimble::detail::subintsplit::TopLevelPolicyConfig
+    kDefaultPolicyConfig{};
+} // namespace
+
 DEFINE_double(
     mlidsp_variance_threshold,
-    0.01,
+    kDefaultPolicyConfig.varianceGateThreshold,
     "TopLevelPolicyConfig::varianceGateThreshold override");
 DEFINE_double(
     mlidsp_gradient_multiplier,
-    2.0,
+    kDefaultPolicyConfig.gradientStdDevMultiplier,
     "TopLevelPolicyConfig::gradientStdDevMultiplier override");
 DEFINE_int32(
     mlidsp_min_gradient_boundaries,
-    1,
+    kDefaultPolicyConfig.minGradientBoundaries,
     "TopLevelPolicyConfig::minGradientBoundaries override");
 DEFINE_double(
     mlidsp_min_gradient_magnitude,
-    0.005,
+    kDefaultPolicyConfig.minGradientMagnitude,
     "TopLevelPolicyConfig::minGradientMagnitude override");
 DEFINE_int32(
     mlidsp_timing_iters,

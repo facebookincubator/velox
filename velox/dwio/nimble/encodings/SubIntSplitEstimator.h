@@ -27,13 +27,13 @@
 #include "velox/dwio/nimble/encodings/selection/BitFlipProfile.h"
 
 // Standalone SubIntSplit cost estimator for benchmarking/testing the
-// bit-flip-probability top-level policies against real cost. Deliberately
-// named differently from the `estimateSize()` convention every production
-// encoding follows (e.g. DictionaryEncoding<T>::estimateSize) -- this is not
-// wired into EncodingSizeEstimation.h or any selection path; it exists only
-// so tests and benchmarks/ml_id_compression/MlIdSelectionPolicyBenchmark.cpp
-// can compute "what would SubIntSplit's real cost and the policies' gate
-// decision have been" without touching production selection code.
+// bit-flip-probability top-level policies (see SubIntSplitTopLevelPolicy.h
+// for scope) against real cost. Deliberately named differently from the
+// `estimateSize()` convention every production encoding follows (e.g.
+// DictionaryEncoding<T>::estimateSize): it exists only so tests and
+// benchmarks/ml_id_compression/MlIdSelectionPolicyBenchmark.cpp can compute
+// "what would SubIntSplit's real cost and the policies' gate decision have
+// been" without touching production selection code.
 
 namespace facebook::nimble::detail::subintsplit {
 
@@ -54,9 +54,7 @@ struct EstimatorResult {
 // Computes SubIntSplit's real estimated size for `values`, gated by the
 // variance policy (unless `applyGate` is false, e.g. to compute an
 // unconstrained ground-truth cost). Always runs the DP's full, unconstrained
-// grid search -- narrowing that grid with the gradient policy's candidate
-// boundaries is a possible follow-up, not implemented here (see
-// SubIntSplitTopLevelPolicy.h's header comment).
+// grid search.
 template <typename PhysicalType>
 EstimatorResult estimateSubIntSplitSize(
     std::span<const PhysicalType> values,

@@ -50,32 +50,31 @@ struct TopLevelPolicyConfig {
   // edges) are found.
   int minGradientBoundaries{1};
 
-  // ... and the largest gradient value in the profile reaches at least this
-  // absolute magnitude. The adaptive threshold above is relative to each
-  // column's own gradient noise floor, so a nearly flat profile (uniform or
-  // constant-like) can still produce a handful of "boundaries" that exceed
-  // its own tiny mean + multiplier * stddev without any of them being a
-  // meaningful spike. This floor rejects that case.
+  // The gradient gate also requires the largest gradient value in the
+  // profile to reach at least this absolute magnitude. The adaptive
+  // threshold above is relative to each column's own gradient noise floor,
+  // so a nearly flat profile (uniform or constant-like) can still produce a
+  // handful of "boundaries" that exceed its own tiny mean + multiplier *
+  // stddev without any of them being a meaningful spike; this floor rejects
+  // that case.
   double minGradientMagnitude{0.005};
 };
 
-/// Predicts whether `profile` indicates a stream heterogeneous enough to be
-/// worth costing SubIntSplit against its rivals.
+// Predicts whether `profile` indicates a stream heterogeneous enough to be
+// worth costing SubIntSplit against its rivals.
 inline bool bitFlipVarianceGate(
     const BitFlipProfile& profile,
     const TopLevelPolicyConfig& config) {
   return profile.variance > config.varianceGateThreshold;
 }
 
-/// Returns candidate split points derived from spikes in `profile`'s
-/// gradient: a split point `s` means "a segment may start or end at bit
-/// index `s`" (so a segment's bit range is [boundaries[i], boundaries[i+1] -
-/// 1]). Sorted, deduped, always including 0 and `profile.numBits` (the
-/// implicit outer edges of the full bit range) -- empty `profile.numBits`
-/// yields just those two edges. Currently consumed only by
-/// bitFlipGradientGate() below; using it to constrain
-/// SubIntSplitSelector.h's DP grid to a smaller candidate set is a possible
-/// follow-up, not implemented here.
+// Returns candidate split points derived from spikes in `profile`'s
+// gradient: a split point `s` means "a segment may start or end at bit
+// index `s`" (so a segment's bit range is [boundaries[i], boundaries[i+1] -
+// 1]). Sorted, deduped, always including 0 and `profile.numBits` (the
+// implicit outer edges of the full bit range) -- empty `profile.numBits`
+// yields just those two edges. Currently consumed only by
+// bitFlipGradientGate() below.
 inline std::vector<int> bitFlipGradientBoundaries(
     const BitFlipProfile& profile,
     const TopLevelPolicyConfig& config) {
@@ -115,13 +114,11 @@ inline std::vector<int> bitFlipGradientBoundaries(
   return boundaries;
 }
 
-/// Predicts whether `profile` indicates a stream worth costing SubIntSplit
-/// against its rivals, using the gradient-boundary signal instead of
-/// variance: requires at least `config.minGradientBoundaries` interior
-/// boundaries (see bitFlipGradientBoundaries()) whose largest gradient value
-/// also reaches `config.minGradientMagnitude`. An alternative to
-/// bitFlipVarianceGate() built on the same profile, not a second stage
-/// applied after it.
+// Predicts whether `profile` indicates a stream worth costing SubIntSplit
+// against its rivals, using the gradient-boundary signal instead of
+// variance: requires at least `config.minGradientBoundaries` interior
+// boundaries (see bitFlipGradientBoundaries()) whose largest gradient value
+// also reaches `config.minGradientMagnitude`.
 inline bool bitFlipGradientGate(
     const BitFlipProfile& profile,
     const TopLevelPolicyConfig& config) {

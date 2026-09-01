@@ -122,12 +122,9 @@ TEST(SubIntSplitTopLevelPolicyTest, gradientGateAcceptsConcatenatedFields) {
 }
 
 TEST(SubIntSplitTopLevelPolicyTest, gradientGateRejectsUniformRandom) {
-  // Needs many more samples than the other gate tests: per-bit flip
-  // probability estimates have sampling stderr ~ 1/(2*sqrt(pairs)), and
-  // minGradientMagnitude has to be set relative to real (~100K+ row)
-  // columns, not a small synthetic sample -- at 10,000 rows the gradient
-  // noise floor itself exceeds the default 0.005 magnitude, and the gate
-  // (correctly, given that input) fires on noise.
+  // Needs more samples than the other gate tests: at 10,000 rows, sampling
+  // noise in the gradient exceeds minGradientMagnitude and the gate fires
+  // on it, not on a real signal.
   const auto values = makeUniformRandomStream(200'000);
   const auto profile =
       computeBitFlipProfile<uint64_t>(std::span<const uint64_t>(values));
@@ -137,12 +134,9 @@ TEST(SubIntSplitTopLevelPolicyTest, gradientGateRejectsUniformRandom) {
 }
 
 TEST(SubIntSplitTopLevelPolicyTest, gradientGateRejectsFlatProfileNoiseSpikes) {
-  // A profile flat enough that its gradient values are all tiny floating
-  // point noise: the adaptive (mean + multiplier * stddev) threshold in
-  // bitFlipGradientBoundaries() is relative to that noise floor, so it can
-  // still report a handful of "boundaries" here even though none of them are
-  // a meaningful spike. The absolute minGradientMagnitude floor exists to
-  // reject exactly this case.
+  // A flat profile whose tiny floating-point noise still clears the
+  // adaptive boundary threshold; minGradientMagnitude exists to reject
+  // exactly this case.
   BitFlipProfile profile;
   profile.numBits = 64;
   for (int i = 0; i < 64; ++i) {
