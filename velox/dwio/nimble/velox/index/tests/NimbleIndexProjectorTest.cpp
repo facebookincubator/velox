@@ -4747,6 +4747,128 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestStripeAlignedSetsResumeKeys) {
   }
 }
 
+TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestResumeKeyWithStripeGap) {
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  // 10 stripes x 100 rows; stripe s holds keys [s*100, s*100+100).
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 covers stripes 3-5, request 1 covers stripe 9, so the resolved
+  // stripe list is {3, 4, 5, 9}. No resolved stripe index equals its tablet
+  // stripe index here, so confusing the two is observable rather than benign.
+  auto bounds0 = makeRangeLookup(rowType, {"key"}, 300, 550);
+  auto bounds1 = makeRangeLookup(rowType, {"key"}, 900, 1000);
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds0, bounds1};
+  NimbleIndexProjector::Options options;
+  options.maxRowsPerRequest = 100;
+  options.needResumeKey = true;
+  auto result = projector->project(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  // Only the two stripes each request was capped in get planned; stripes 4-5
+  // hold nothing once request 0 is at its cap.
+  EXPECT_EQ(projector->stats().numReadStripes, 2);
+
+  // Request 0 caps on stripe 3's boundary and continues into stripe 4, which
+  // is adjacent and still holds it, so it resumes.
+  const auto& capped = result.responses[0];
+  ASSERT_EQ(capped.slices.size(), 1);
+  EXPECT_EQ(readEmbeddedRowRange(capped.slices[0]).numRows(), 100);
+  ASSERT_TRUE(capped.resumeKey.has_value());
+  EXPECT_EQ(readEmbeddedResumeKey(capped.slices[0]), capped.resumeKey);
+
+  // Request 1 caps on stripe 9's boundary, which is the last resolved stripe.
+  // Nothing follows it in the resolved list, so it is fully satisfied.
+  {
+    const auto& response = result.responses[1];
+    ASSERT_EQ(response.slices.size(), 1);
+    EXPECT_EQ(readEmbeddedRowRange(response.slices[0]).numRows(), 100);
+    EXPECT_FALSE(response.resumeKey.has_value());
+  }
+
+  // The resume key must name stripe 3's start plus the 100 rows already
+  // returned -- key 400 -- not the start of the stripe that shares request 0's
+  // resolved stripe index. Resuming returns the remaining 150 rows.
+  auto resumed = createProjector(subfields);
+  NimbleIndexProjector::Request resumeRequest;
+  resumeRequest.keyBounds = {velox::serializer::EncodedKeyBounds{
+      .lowerKey = capped.resumeKey.value(), .upperKey = bounds0.upperKey}};
+  auto resumeResult = resumed->project(resumeRequest, {});
+
+  ASSERT_EQ(resumeResult.responses.size(), 1);
+  uint64_t resumedRows = 0;
+  for (const auto& slice : resumeResult.responses[0].slices) {
+    resumedRows += readEmbeddedRowRange(slice).numRows();
+  }
+  EXPECT_EQ(resumedRows, 150);
+}
+
+TEST_P(NimbleIndexProjectorTest, truncationResumeKeyWithStripeGap) {
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  // 10 stripes x 100 rows; stripe s holds keys [s*100, s*100+100).
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+
+  // Request 0 covers stripe 0, request 1 covers stripes 5-8, so the resolved
+  // stripe list is {0, 5, 6, 7, 8}. Truncation stops on stripe 5, whose
+  // successor stripe 6 sits at resolved stripe index 2 -- far from the tablet
+  // stripe index the pre-compaction layout would have used.
+  auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
+  auto bounds1 = makeRangeLookup(rowType, {"key"}, 500, 900);
+
+  auto projector = createProjector(subfields);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds0, bounds1};
+  NimbleIndexProjector::Options options;
+  // Soft limit: stripe 0 (100 rows) is under it, stripe 5 crosses it.
+  options.maxRows = 150;
+  options.needResumeKey = true;
+  auto result = projector->project(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_EQ(projector->stats().numReadStripes, 2);
+
+  // Request 0 ends inside stripe 0, so truncation leaves it complete.
+  {
+    const auto& response = result.responses[0];
+    ASSERT_EQ(response.slices.size(), 1);
+    EXPECT_EQ(readEmbeddedRowRange(response.slices[0]).numRows(), 100);
+    EXPECT_FALSE(response.resumeKey.has_value());
+  }
+
+  // Request 1 was cut at stripe 5 and still holds stripes 6-8, so it resumes.
+  const auto& truncated = result.responses[1];
+  ASSERT_EQ(truncated.slices.size(), 1);
+  EXPECT_EQ(readEmbeddedRowRange(truncated.slices[0]).numRows(), 100);
+  ASSERT_TRUE(truncated.resumeKey.has_value());
+  EXPECT_EQ(readEmbeddedResumeKey(truncated.slices[0]), truncated.resumeKey);
+
+  // Resuming from that key returns exactly the rows the gap-aware lookup said
+  // were left: stripes 6-8, keys 600-899.
+  auto resumed = createProjector(subfields);
+  NimbleIndexProjector::Request resumeRequest;
+  resumeRequest.keyBounds = {velox::serializer::EncodedKeyBounds{
+      .lowerKey = truncated.resumeKey.value(), .upperKey = bounds1.upperKey}};
+  NimbleIndexProjector::Options resumeOptions;
+  resumeOptions.needResumeKey = true;
+  auto resumeResult = resumed->project(resumeRequest, resumeOptions);
+
+  ASSERT_EQ(resumeResult.responses.size(), 1);
+  uint64_t resumedRows = 0;
+  for (const auto& slice : resumeResult.responses[0].slices) {
+    resumedRows += readEmbeddedRowRange(slice).numRows();
+  }
+  EXPECT_EQ(resumedRows, 300);
+  EXPECT_FALSE(resumeResult.responses[0].resumeKey.has_value());
+}
+
 TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   // 10 stripes x 100 rows.
