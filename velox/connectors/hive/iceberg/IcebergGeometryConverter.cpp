@@ -240,15 +240,32 @@ VectorPtr convertIcebergGeometry(
       if (loaded->isNullAt(0)) {
         return BaseVector::createNullConstant(targetType, loaded->size(), pool);
       }
-      // A non-null constant geometry does not arise from a scan (a geometry
-      // column can be neither a partition column nor a non-null initial default
-      // per the Iceberg spec), so flatten instead of special-casing scalar and
-      // complex constants. The flattened vector is FLAT, so the recursive call
-      // lands in the leaf/complex handling below.
-      auto flattened = BaseVector::create(loaded->type(), loaded->size(), pool);
-      flattened->copy(loaded.get(), 0, 0, loaded->size());
-      return convertIcebergGeometry(
-          flattened, targetType, rows, pool, columnPath);
+      // No live position, so the constant's single value is unreachable and
+      // must not be parsed.
+      if (!rows.hasSelections()) {
+        return BaseVector::createNullConstant(targetType, loaded->size(), pool);
+      }
+      // Every live row of a constant reads the same value, so parse it exactly
+      // once and re-wrap, rather than materializing and re-parsing it per row.
+      // Copying position 0 into a one-row vector keeps this agnostic to whether
+      // the constant is scalar or complex: the recursive call lands in the leaf
+      // or in the ROW/ARRAY/MAP handling below exactly as a flat input would.
+      //
+      // A non-null constant geometry does not arise from a scan today (per the
+      // Iceberg spec a geometry column can be neither a partition source nor a
+      // non-null initial default), but preserving the encoding keeps this
+      // correct and O(1) if a scan later emits CONSTANT for a uniform-value
+      // column.
+      auto base = BaseVector::create(loaded->type(), 1, pool);
+      base->copy(loaded.get(), 0, 0, 1);
+      SelectivityVector singleRow(1);
+      auto converted =
+          convertIcebergGeometry(base, targetType, singleRow, pool, columnPath);
+      // The re-encoded value outlives this call either way: for a scalar
+      // geometry ConstantVector copies the string into its own buffer and drops
+      // the base, and for a complex type it retains the one-row base vector.
+      return BaseVector::wrapInConstant(
+          loaded->size(), 0, std::move(converted));
     }
 
     case VectorEncoding::Simple::DICTIONARY: {

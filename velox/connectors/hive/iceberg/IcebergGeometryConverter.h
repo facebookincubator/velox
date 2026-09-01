@@ -86,6 +86,11 @@ inline bool containsGeometry(const TypePtr& type) {
 ///                  indices/nulls are re-wrapped, so a repeated value is parsed
 ///                  once per dictionary entry, not once per row.
 ///   * CONSTANT  -> a converted constant, or a null constant of 'targetType'.
+///                  The single value is parsed once rather than once per row,
+///                  and is not parsed at all when 'rows' selects nothing, which
+///                  yields a null constant. Because the result is a constant,
+///                  positions outside 'rows' carry the converted value rather
+///                  than a null.
 ///   * ROW/ARRAY/MAP -> only the children that contain geometry are rebuilt;
 ///   offsets, sizes and
 ///                  nulls are shared with the input.

@@ -240,6 +240,106 @@ TEST_F(IcebergGeometryReadTest, nullConstantVector) {
   }
 }
 
+// A non-null constant keeps its encoding: the value is parsed once and
+// re-wrapped, rather than flattened and re-parsed per row. Such a vector does
+// not arise from a scan today, but preserving the encoding keeps the converter
+// correct and O(1) if a scan later emits CONSTANT for a uniform-value column.
+TEST_F(IcebergGeometryReadTest, nonNullConstantVectorPreservesEncoding) {
+  const std::string wkt = "POINT (10 20)";
+  auto value = makeVarbinaryVector({toWkb(wkt)});
+  auto input = BaseVector::wrapInConstant(5, 0, value);
+  ASSERT_EQ(input->encoding(), VectorEncoding::Simple::CONSTANT);
+
+  auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+
+  EXPECT_EQ(converted->encoding(), VectorEncoding::Simple::CONSTANT);
+  EXPECT_TRUE(isGeometryType(converted->type()));
+  ASSERT_EQ(converted->size(), 5);
+  // Constant encoding is itself the "parsed once" guarantee: the vector stores
+  // a single value and every position resolves to it. For a scalar geometry,
+  // ConstantVector copies that value into its own buffer, so there is no
+  // backing vector left to inspect.
+  for (vector_size_t i = 0; i < 5; ++i) {
+    EXPECT_EQ(converted->wrappedIndex(i), 0);
+  }
+
+  velox::test::assertEqualVectors(
+      BaseVector::wrapInConstant(
+          5, 0, makeGeometryVector({toVeloxGeometry(wkt)})),
+      converted);
+}
+
+// The converter must not parse a value that no selected row can reach.
+TEST_F(IcebergGeometryReadTest, constantVectorWithEmptySelectionIsNotParsed) {
+  // Deliberately invalid WKB: if the value were parsed, this would throw.
+  auto value = makeVarbinaryVector({std::string("\x01\x02\x03", 3)});
+  auto input = BaseVector::wrapInConstant(4, 0, value);
+
+  SelectivityVector noRows(4, false);
+  auto converted =
+      convertIcebergGeometry(input, GEOMETRY(), noRows, pool(), "geom");
+
+  EXPECT_TRUE(isGeometryType(converted->type()));
+  ASSERT_EQ(converted->size(), 4);
+  for (vector_size_t i = 0; i < 4; ++i) {
+    EXPECT_TRUE(converted->isNullAt(i));
+  }
+}
+
+// A partially selected constant still converts its single value once; the
+// constant result carries that value at every position, which is what CONSTANT
+// encoding means.
+TEST_F(IcebergGeometryReadTest, constantVectorWithPartialSelection) {
+  const std::string wkt = "LINESTRING (0 0, 10 10, 20 20)";
+  auto value = makeVarbinaryVector({toWkb(wkt)});
+  auto input = BaseVector::wrapInConstant(4, 0, value);
+
+  SelectivityVector someRows(4, false);
+  someRows.setValid(1, true);
+  someRows.setValid(2, true);
+  someRows.updateBounds();
+  auto converted =
+      convertIcebergGeometry(input, GEOMETRY(), someRows, pool(), "geom");
+
+  EXPECT_EQ(converted->encoding(), VectorEncoding::Simple::CONSTANT);
+  EXPECT_TRUE(isGeometryType(converted->type()));
+  EXPECT_EQ(converted->wrappedIndex(3), 0);
+  velox::test::assertEqualVectors(
+      BaseVector::wrapInConstant(
+          4, 0, makeGeometryVector({toVeloxGeometry(wkt)})),
+      converted);
+}
+
+// A constant complex value goes through the same ROW recursion as a flat one,
+// so the geometry leaf is converted and the outer CONSTANT encoding is
+// preserved.
+TEST_F(IcebergGeometryReadTest, constantRowWithGeometryField) {
+  const std::string wkt = "POINT (3 4)";
+  auto row = makeRowVector(
+      {"id", "geom"},
+      {makeFlatVector<int64_t>({7}), makeVarbinaryVector({toWkb(wkt)})});
+  auto input = BaseVector::wrapInConstant(3, 0, row);
+  auto targetType = ROW({"id", "geom"}, {BIGINT(), GEOMETRY()});
+
+  auto converted = convertIcebergGeometry(input, targetType, pool(), "nested");
+
+  EXPECT_EQ(converted->encoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_TRUE(converted->type()->equivalent(*targetType));
+  ASSERT_EQ(converted->size(), 3);
+  // A complex constant retains its one-row base, so the single conversion is
+  // directly observable here.
+  ASSERT_EQ(converted->valueVector()->size(), 1);
+  velox::test::assertEqualVectors(
+      BaseVector::wrapInConstant(
+          3,
+          0,
+          makeRowVector(
+              {"id", "geom"},
+              {makeFlatVector<int64_t>({7}),
+               makeGeometryVector({toVeloxGeometry(wkt)})})),
+      converted);
+}
+
 TEST_F(IcebergGeometryReadTest, invalidWkbErrorNamesColumnPath) {
   auto shortValue = makeVarbinaryVector({std::string("\x01\x02\x03", 3)});
   VELOX_ASSERT_THROW(
