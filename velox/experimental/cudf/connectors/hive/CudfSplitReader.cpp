@@ -32,6 +32,8 @@
 #endif
 
 #include <cudf/column/column.hpp>
+#include <cudf/concatenate.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
@@ -346,6 +348,7 @@ void CudfSplitReader::resetSplit() {
   decodedColumnCacheMetadata_.reset();
   decodedColumnCacheRowGroups_.clear();
   decodedColumnCacheRowOffsets_.clear();
+  decodedColumnCacheRowGroupRuns_.clear();
   decodedColumnCacheRowGroupIndex_ = 0;
 }
 
@@ -460,13 +463,14 @@ void CudfSplitReader::setupReaderOptions() {
       dataSource_,
       "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
   readerOptions_ = makeReaderOptions(
-      cudf::io::source_info{dataSource_.get()}, readColumnNames_, true);
+      cudf::io::source_info{dataSource_.get()}, readColumnNames_, true, true);
 }
 
 cudf::io::parquet_reader_options CudfSplitReader::makeReaderOptions(
     cudf::io::source_info sourceInfo,
     const std::vector<std::string>& columnNames,
-    bool applySplitByteRange) const {
+    bool applySplitByteRange,
+    bool applyFilter) const {
   auto options =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
           .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
@@ -485,8 +489,10 @@ cudf::io::parquet_reader_options CudfSplitReader::makeReaderOptions(
     }
   }
 
-  if (auto* filter = pushdownFilter(); filter != nullptr) {
-    options.set_filter(*filter);
+  if (applyFilter) {
+    if (auto* filter = pushdownFilter(); filter != nullptr) {
+      options.set_filter(*filter);
+    }
   }
 
   if (not columnNames.empty()) {
@@ -506,13 +512,13 @@ bool CudfSplitReader::shouldUseDecodedColumnCache() const {
     return false;
   }
 
-  // The prototype only handles the hybrid reader's unfiltered, top-level
-  // column materialization path. Immutable files make path + absolute row
-  // range a stable identity; zero chunk limits allow one materialization for
-  // all selected row groups in a file split.
+  // Immutable files make path + absolute row range a stable identity. The
+  // cache stores unfiltered top-level columns and applies any subfield filter
+  // after restoration. Zero chunk limits allow one materialization for all
+  // selected row groups in a file split.
   return cudfHiveConfig_->immutableFiles() and useExperimentalCudfReader_ and
-      supportsDecodedColumnCache() and pushdownFilter() == nullptr and
-      not readColumnNames_.empty() and not prependRowIndex_ and
+      supportsDecodedColumnCache() and not readColumnNames_.empty() and
+      not prependRowIndex_ and
       cudfHiveConfig_->maxChunkReadLimitSession(
           connectorQueryCtx_->sessionProperties()) == 0 and
       cudfHiveConfig_->maxPassReadLimitSession(
@@ -542,7 +548,7 @@ void CudfSplitReader::prepareDecodedColumnCache() {
   }
 
   readerOptions_ = makeReaderOptions(
-      cudf::io::source_info{split_->filePath}, readColumnNames_, true);
+      cudf::io::source_info{split_->filePath}, readColumnNames_, true, true);
   exptSplitReader_ = std::make_unique<CudfHybridScanReader>(
       *decodedColumnCacheMetadata_, readerOptions_);
 
@@ -564,17 +570,45 @@ void CudfSplitReader::prepareDecodedColumnCache() {
             decodedColumnCacheRowGroups_, readerOptions_);
   }
 
-  isFullyDecodedColumnCacheHit_ = metadataHit;
+  if (readerOptions_.get_filter().has_value()) {
+    decodedColumnCacheRowGroups_ =
+        exptSplitReader_->filter_row_groups_with_stats(
+            decodedColumnCacheRowGroups_, readerOptions_, stream_);
+  }
+
+  int64_t outputRow = 0;
+  std::optional<cudf::size_type> previousRowGroup;
   for (const auto rowGroupIndex : decodedColumnCacheRowGroups_) {
     const auto [firstRow, lastRow] = decodedColumnRowRange(rowGroupIndex);
-    if (firstRow == lastRow) {
-      isFullyDecodedColumnCacheHit_ = false;
-      return;
+    VELOX_CHECK_LE(firstRow, lastRow);
+    const auto outputLastRow = outputRow + (lastRow - firstRow);
+    if (firstRow != lastRow) {
+      if (previousRowGroup.has_value() and
+          rowGroupIndex == previousRowGroup.value() + 1 and
+          not decodedColumnCacheRowGroupRuns_.empty()) {
+        auto& run = decodedColumnCacheRowGroupRuns_.back();
+        run.lastRow = lastRow;
+        run.outputLastRow = outputLastRow;
+      } else {
+        decodedColumnCacheRowGroupRuns_.push_back(
+            {.firstRow = firstRow,
+             .lastRow = lastRow,
+             .outputFirstRow = outputRow,
+             .outputLastRow = outputLastRow});
+      }
     }
+    outputRow = outputLastRow;
+    previousRowGroup = rowGroupIndex;
+  }
+
+  isFullyDecodedColumnCacheHit_ = metadataHit;
+  for (const auto& run : decodedColumnCacheRowGroupRuns_) {
     for (const auto& columnName : readColumnNames_) {
       const auto type = readColumnType(columnName);
       if (not cache.containsColumnRange(
-              makeDecodedColumnCacheKey(columnName, type), firstRow, lastRow)) {
+              makeDecodedColumnCacheKey(columnName, type),
+              run.firstRow,
+              run.lastRow)) {
         isFullyDecodedColumnCacheHit_ = false;
         return;
       }
@@ -584,23 +618,11 @@ void CudfSplitReader::prepareDecodedColumnCache() {
 
 std::optional<std::unique_ptr<cudf::table>>
 CudfSplitReader::readNextDecodedColumnCacheFileRange() {
-  if (decodedColumnCacheRowGroupIndex_ >= decodedColumnCacheRowGroups_.size()) {
+  if (decodedColumnCacheRowGroupIndex_ >= decodedColumnCacheRowGroups_.size() or
+      decodedColumnCacheRowGroupRuns_.empty()) {
+    decodedColumnCacheRowGroupIndex_ = decodedColumnCacheRowGroups_.size();
     return std::nullopt;
   }
-
-  const auto firstRowGroupIndex =
-      decodedColumnCacheRowGroups_[decodedColumnCacheRowGroupIndex_];
-  const auto lastRowGroupIndex = decodedColumnCacheRowGroups_.back();
-  for (size_t i = decodedColumnCacheRowGroupIndex_ + 1;
-       i < decodedColumnCacheRowGroups_.size();
-       ++i) {
-    VELOX_CHECK_EQ(
-        decodedColumnCacheRowGroups_[i],
-        decodedColumnCacheRowGroups_[i - 1] + 1,
-        "Decoded cache split row groups must be contiguous");
-  }
-  const auto firstRow = decodedColumnRowRange(firstRowGroupIndex).first;
-  const auto lastRow = decodedColumnRowRange(lastRowGroupIndex).second;
 
   struct ColumnState {
     std::string name;
@@ -608,7 +630,6 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
     std::unique_ptr<cudf::column> output;
   };
 
-  auto& cache = CudfDecodedColumnCache::instance();
   std::vector<ColumnState> columnStates;
   std::vector<size_t> missingColumnIndices;
   std::vector<std::string> missingColumnNames;
@@ -617,13 +638,7 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
   for (const auto& columnName : readColumnNames_) {
     const auto veloxType = readColumnType(columnName);
     auto key = makeDecodedColumnCacheKey(columnName, veloxType);
-    auto output = cache.materializeColumnRange(
-        key,
-        firstRow,
-        lastRow,
-        stream_,
-        determineCudfMemoryResource(),
-        get_temp_mr());
+    auto output = materializeDecodedColumnCacheRuns(key);
     if (output) {
       ++decodedColumnCacheHits_;
     } else {
@@ -657,6 +672,42 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
   return std::make_unique<cudf::table>(std::move(outputColumns));
 }
 
+std::unique_ptr<cudf::column>
+CudfSplitReader::materializeDecodedColumnCacheRuns(
+    const CudfDecodedColumnCache::ColumnKey& key) const {
+  auto& cache = CudfDecodedColumnCache::instance();
+  std::vector<std::unique_ptr<cudf::column>> pieces;
+  pieces.reserve(decodedColumnCacheRowGroupRuns_.size());
+  for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+    auto piece = cache.materializeColumnRange(
+        key,
+        run.firstRow,
+        run.lastRow,
+        stream_,
+        decodedColumnCacheRowGroupRuns_.size() == 1
+            ? determineCudfMemoryResource()
+            : get_temp_mr(),
+        get_temp_mr());
+    if (not piece) {
+      return nullptr;
+    }
+    pieces.push_back(std::move(piece));
+  }
+
+  if (pieces.empty()) {
+    return nullptr;
+  }
+  if (pieces.size() == 1) {
+    return std::move(pieces.front());
+  }
+  std::vector<cudf::column_view> pieceViews;
+  pieceViews.reserve(pieces.size());
+  for (const auto& piece : pieces) {
+    pieceViews.push_back(piece->view());
+  }
+  return cudf::concatenate(pieceViews, stream_, determineCudfMemoryResource());
+}
+
 std::vector<std::unique_ptr<cudf::column>>
 CudfSplitReader::decodeAndCacheFileColumns(
     const std::vector<cudf::size_type>& rowGroupIndices,
@@ -665,12 +716,10 @@ CudfSplitReader::decodeAndCacheFileColumns(
   VELOX_CHECK_EQ(columnNames.size(), veloxTypes.size());
   VELOX_CHECK(not columnNames.empty());
   VELOX_CHECK(not rowGroupIndices.empty());
-  const auto firstRow = decodedColumnRowRange(rowGroupIndices.front()).first;
-  const auto lastRow = decodedColumnRowRange(rowGroupIndices.back()).second;
   setupCudfDataSource();
 
   auto columnOptions = makeReaderOptions(
-      cudf::io::source_info{split_->filePath}, columnNames, false);
+      cudf::io::source_info{split_->filePath}, columnNames, false, false);
   exptSplitReader_->reset_column_selection();
   const auto columnChunkByteRanges =
       exptSplitReader_->all_column_chunks_byte_ranges(
@@ -718,12 +767,22 @@ CudfSplitReader::decodeAndCacheFileColumns(
         veloxTypes[requestedIndex],
         stream_,
         get_output_mr());
-    if (firstRow < lastRow) {
+    for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+      VELOX_CHECK_GE(run.outputFirstRow, 0);
+      VELOX_CHECK_LE(
+          run.outputLastRow,
+          static_cast<int64_t>(std::numeric_limits<cudf::size_type>::max()));
+      const auto slices = cudf::slice(
+          column->view(),
+          {static_cast<cudf::size_type>(run.outputFirstRow),
+           static_cast<cudf::size_type>(run.outputLastRow)},
+          stream_);
+      VELOX_CHECK_EQ(slices.size(), 1);
       cache.insertColumnRangeIfAbsent(
           makeDecodedColumnCacheKey(columnName, veloxTypes[requestedIndex]),
-          firstRow,
-          lastRow,
-          column->view(),
+          run.firstRow,
+          run.lastRow,
+          slices.front(),
           stream_,
           get_temp_mr());
     }

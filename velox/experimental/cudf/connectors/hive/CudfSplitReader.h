@@ -111,6 +111,12 @@ class CudfSplitReader : public NvtxHelper {
     return isFullyDecodedColumnCacheHit_;
   }
 
+  /// Cached columns contain unfiltered source rows. The data source must apply
+  /// its subfield filter after reading from this path.
+  bool shouldApplySubfieldFilterAfterRead() const {
+    return useDecodedColumnCache_ and subfieldFilterExpr_ != nullptr;
+  }
+
  protected:
   // Performs split-specific setup after base reader state is reset.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
@@ -177,7 +183,8 @@ class CudfSplitReader : public NvtxHelper {
   cudf::io::parquet_reader_options makeReaderOptions(
       cudf::io::source_info sourceInfo,
       const std::vector<std::string>& columnNames,
-      bool applySplitByteRange) const;
+      bool applySplitByteRange,
+      bool applyFilter) const;
 
   // Create the chunked parquet reader.
   void createCudfReader();
@@ -193,6 +200,8 @@ class CudfSplitReader : public NvtxHelper {
       const std::vector<cudf::size_type>& rowGroupIndices,
       const std::vector<std::string>& columnNames,
       const std::vector<TypePtr>& veloxTypes);
+  std::unique_ptr<cudf::column> materializeDecodedColumnCacheRuns(
+      const CudfDecodedColumnCache::ColumnKey& key) const;
   CudfDecodedColumnCache::ColumnKey makeDecodedColumnCacheKey(
       const std::string& columnName,
       const TypePtr& veloxType) const;
@@ -220,6 +229,13 @@ class CudfSplitReader : public NvtxHelper {
       decodedColumnCacheMetadata_;
   std::vector<cudf::size_type> decodedColumnCacheRowGroups_;
   std::vector<int64_t> decodedColumnCacheRowOffsets_;
+  struct DecodedColumnCacheRowGroupRun {
+    int64_t firstRow;
+    int64_t lastRow;
+    int64_t outputFirstRow;
+    int64_t outputLastRow;
+  };
+  std::vector<DecodedColumnCacheRowGroupRun> decodedColumnCacheRowGroupRuns_;
   size_t decodedColumnCacheRowGroupIndex_{0};
   uint64_t decodedColumnCacheHits_{0};
   uint64_t decodedColumnCacheMisses_{0};

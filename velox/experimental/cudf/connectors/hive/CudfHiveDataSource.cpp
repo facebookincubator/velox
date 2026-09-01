@@ -36,6 +36,7 @@
 #include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/stream_compaction.hpp>
+#include <cudf/transform.hpp>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -265,6 +266,14 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   }
   auto cudfTable = std::move(chunkOpt.value());
   auto stream = cudfSplitReader_->stream();
+
+  if (cudfSplitReader_->shouldApplySubfieldFilterAfterRead()) {
+    VELOX_CHECK_NOT_NULL(subfieldFilterExpr_);
+    auto predicate = cudf::compute_column(
+        cudfTable->view(), *subfieldFilterExpr_, stream, get_temp_mr());
+    cudfTable = cudf::apply_boolean_mask(
+        *cudfTable, predicate->view(), stream, get_output_mr());
+  }
 
   uint64_t filterTimeUs{0};
   if (optimizedRemainingFilter_) {
