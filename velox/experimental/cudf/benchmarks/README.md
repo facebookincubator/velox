@@ -42,6 +42,14 @@ Generate TPC-H parquet data using the [velox-testing](https://github.com/rapidsa
 
 # GPU (CuDF) - all queries
 ./velox_cudf_tpch_benchmark --data_path=/path/to/tpch/sf100 --data_format=parquet
+
+# GPU (CuDF) - one query, two separately labeled NVTX iterations
+./velox_cudf_tpch_benchmark \
+  --data_path=/path/to/tpch/sf100 \
+  --data_format=parquet \
+  --run_query_verbose=4 \
+  --num_repeats=2 \
+  --cudf_benchmark_nvtx_query_ranges=true
 ```
 
 ---
@@ -139,6 +147,9 @@ These flags apply to `velox_cudf_tpch_benchmark` and `velox_cudf_tpcds_benchmark
 | `--cudf_pass_read_limit` | `0` | Pass read limit for cuDF parquet reader |
 | `--cudf_gpu_batch_size_rows` | `100000` | GPU batch size in rows |
 | `--velox_cudf_table_scan` | `true` | Use CuDF table scan |
+| `--cudf_hive_use_buffered_input` | `true` | Use Velox BufferedInput for cuDF Hive reads |
+| `--cudf_hive_use_experimental_reader` | `false` | Use the cuDF experimental hybrid Parquet reader |
+| `--cudf_hive_use_decoded_column_cache` | `false` | Use the process-lifetime decoded range cache backed by a 70 GiB-capped CCCL pinned-host pool and treat benchmark files as immutable |
 | `--cudf_properties` | `""` | Path to a CudfConfig properties file (key=value per line). See `CudfConfig.h` for available keys |
 
 ---

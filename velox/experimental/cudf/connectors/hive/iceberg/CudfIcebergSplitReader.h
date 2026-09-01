@@ -81,6 +81,12 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Override to apply Iceberg deletes after reading a cudf table chunk.
   std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
 
+  // This prototype cache does not key Iceberg deletes, partition/info column
+  // injection, or schema evolution state.
+  bool supportsDecodedColumnCache() const override {
+    return false;
+  }
+
  private:
   // Clear delete readers and column injection
   void resetSplit();

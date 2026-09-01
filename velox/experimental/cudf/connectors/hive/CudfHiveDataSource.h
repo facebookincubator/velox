@@ -42,6 +42,13 @@ using namespace facebook::velox::connector;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
+  static constexpr std::string_view kDecodedColumnCacheHits =
+      "decodedColumnCacheHits";
+  static constexpr std::string_view kDecodedColumnCacheMisses =
+      "decodedColumnCacheMisses";
+  static constexpr std::string_view kDecodedColumnCacheDecodeCalls =
+      "decodedColumnCacheDecodeCalls";
+
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -124,6 +131,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   dwio::common::RuntimeStats runtimeStats_;
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
+
+  uint64_t decodedColumnCacheHits_{0};
+  uint64_t decodedColumnCacheMisses_{0};
+  uint64_t decodedColumnCacheDecodeCalls_{0};
 
   // Optimized remaining-filter expression, or null when there is no remaining
   // filter. Gates remaining-filter evaluation in next().
