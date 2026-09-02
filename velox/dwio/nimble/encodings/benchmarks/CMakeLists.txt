@@ -165,6 +165,90 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
     velox_memory
   )
+
+  # A/B benchmark: count-based vs size-based (exponent, factor) selection
+  # for ALP encoding. Not a folly-benchmark; runs once and prints a comparison
+  # table.
+  add_executable(nimble_alp_selection_ab_benchmark ALPSelectionABBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_selection_ab_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
+  # End-to-end write/read benchmark: encodes each dataset with count-based and
+  # size-based (exponent, factor) selection, round-trips through materialize(),
+  # reports encoded bytes / compression ratio / wall / CPU / RSS delta /
+  # correctness.
+  add_executable(nimble_alp_e2e_benchmark ALPWriteReadE2EBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_e2e_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
+  # Micro-benchmark comparing scalar `scalarTransformOne` vs vectorized
+  # `batchTransform` on identical fixed-(e, f) input. Verifies the SIMD win
+  # of the xsimd-vectorized ALP encode path across exception-rate regimes.
+  add_executable(nimble_alp_batch_transform_benchmark ALPBatchTransformBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_batch_transform_benchmark
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
+  # A/B benchmark comparing legacy strided-singleton sampling to the current
+  # chunked-stride sampler. Verifies that the chunked layout is much cheaper
+  # on the gather stage while picking the same (e, f).
+  add_executable(nimble_alp_sampling_benchmark ALPSamplingBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_sampling_benchmark
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
+
+  # Mini-benchmark for Dictionary+ALP / RLE+ALP nested selection paths.
+  # Drives the real EncodingFactory with allowNestedAlpSelection={off,on} over
+  # dict-friendly and RLE-friendly float/double columns and reports encoded
+  # bytes, encode/decode wall/cpu, RSS delta, and correctness.
+  add_executable(nimble_alp_nested_benchmark ALPNestedBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_nested_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    nimble_tools_common
+    velox_memory
+    Folly::folly
+  )
+
+  # Profiles ALP encode/decode over a dataset catalog and reports compressed
+  # size, CPU time, wall time, and peak pool memory per dataset and dtype.
+  add_executable(nimble_alp_profile_benchmark ALPProfileBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_profile_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    velox_memory
+    Folly::folly
+  )
 endif()
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)

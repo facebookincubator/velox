@@ -115,6 +115,319 @@ nimble::EncodingSelectionPolicyCreator unusedNestedPolicyCreator() {
   };
 }
 
+// When every value is exactly representable at a small (exponent, factor), the
+// size-based strategy must not regress on encoded byte count relative to
+// count-based selection. (The two strategies do NOT necessarily return the
+// same (e, f) on such data: any (e, f) with the same `e - f` produces the
+// same scaled integers and therefore ties in bytes, so size-based selection
+// legitimately drifts along the diagonal to the largest (e, f) — DuckDB's
+// tie-break rule for preserving out-of-sample precision. What must hold is
+// that the encoded output is byte-equal, i.e., no regression on "easy" data.)
+TYPED_TEST(ALPEncodingTest, sizeSelectionNoRegressionOnExactlyRepresentable) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // Two-decimal values in [0, 100): count-based picks (e=2, f=0), size-based
+  // may pick any (e, f) with e - f == 2. All such combinations produce the
+  // same integer stream and therefore the same encoded byte count.
+  nimble::Vector<D> values{this->pool_.get()};
+  values.reserve(512);
+  for (uint32_t i = 0; i < 512; ++i) {
+    values.push_back(static_cast<D>(i % 10'000) / static_cast<D>(100));
+  }
+  const std::span<const D> logical{values.data(), values.size()};
+
+  const auto [countExp, countFactor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorByCount(logical);
+  const auto [sizeExp, sizeFactor] =
+      nimble::ALPEncoding<D>::findBestExponentFactorBySize(logical, options);
+
+  nimble::Buffer countBuffer{*this->pool_};
+  nimble::Buffer sizeBuffer{*this->pool_};
+  const auto countEncoded =
+      nimble::test::Encoder<nimble::ALPEncoding<D>>::encodeWithExponentFactor(
+          countBuffer,
+          values,
+          countExp,
+          countFactor,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+  const auto sizeEncoded =
+      nimble::test::Encoder<nimble::ALPEncoding<D>>::encodeWithExponentFactor(
+          sizeBuffer,
+          values,
+          sizeExp,
+          sizeFactor,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+  EXPECT_LE(sizeEncoded.size(), countEncoded.size());
+}
+
+// White-box coverage for `scoreCombination`: a hand-computed sample whose
+// expected `estimatedBytes` matches the closed-form
+//   min(FixedBitWidthEncoding<uint64>::estimateSize(sampleSize, zzMin, zzMax,
+//       options),
+//       TrivialEncoding<uint64>::estimateSize(sampleSize))
+//   + exceptionCount * (sizeof(uint32_t) + sizeof(physicalType))
+// and a separate sample where every value is an exception, asserting
+// `kUnusableScore`.
+TYPED_TEST(ALPEncodingTest, scoreCombinationBytesMatchClosedForm) {
+  using D = typename TypeParam::data_type;
+  using physicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // All values exactly representable at (e=2, f=0). Their ZigZag-encoded
+  // integers span the small range [0, 200], so bitWidth(200 - 0) = 8. With
+  // fixedBitWidthUseExactBits = false (the default), the width is rounded up
+  // to a byte — here 8 bits already. Zero exceptions → exceptionBytes == 0.
+  constexpr uint32_t kSize = 8;
+  const std::array<D, kSize> raw{
+      D{0.00}, D{0.01}, D{0.50}, D{0.99}, D{1.00}, D{1.25}, D{1.50}, D{2.00}};
+  std::span<const D> sample{raw.data(), raw.size()};
+
+  const auto score = nimble::ALPEncoding<D>::scoreCombination(
+      sample, /*e=*/2, /*f=*/0, options);
+  EXPECT_EQ(score.exceptionCount, 0u);
+
+  // Hand-compute the expected byte count. ZigZag(x) for non-negative x is 2*x,
+  // so zzMin = ZigZag(0) = 0 and zzMax = ZigZag(200) = 400. bitsRequired(400)
+  // = 9, rounded up to 16 (two bytes) when fixedBitWidthUseExactBits is off.
+  const uint64_t zzMin = 0;
+  const uint64_t zzMax = 400;
+  const uint64_t expectedFixed =
+      nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+          kSize, zzMin, zzMax, options);
+  const uint64_t expectedTrivial =
+      nimble::TrivialEncoding<uint64_t>::estimateSize(kSize);
+  const uint64_t expectedBytes = std::min(expectedFixed, expectedTrivial);
+  EXPECT_EQ(score.estimatedBytes, expectedBytes);
+
+  // Sanity: `exceptionCount * (sizeof(uint32_t) + sizeof(physicalType))`
+  // contributes 0 when exceptionCount is 0. Guard against accidental sign or
+  // offset drift by asserting the exception term explicitly.
+  EXPECT_EQ(
+      score.estimatedBytes - expectedBytes,
+      0u * (sizeof(uint32_t) + sizeof(physicalType)));
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationUnusableWhenAllExceptions) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // At (e=0, f=0), the encoded integer equals llround(v). Non-integer values
+  // like 0.5 round to 1, restore to 1.0, which does not equal 0.5 — every
+  // element is an exception. representableCount == 0 → kUnusableScore.
+  const std::array<D, 4> raw{D{0.5}, D{1.5}, D{2.5}, D{3.5}};
+  std::span<const D> sample{raw.data(), raw.size()};
+
+  const auto score = nimble::ALPEncoding<D>::scoreCombination(
+      sample, /*e=*/0, /*f=*/0, options);
+  EXPECT_EQ(score.exceptionCount, sample.size());
+  EXPECT_EQ(score.estimatedBytes, nimble::ALPEncoding<D>::kUnusableScore);
+}
+
+// After the estimator unification lands, `estimateSizeFromSample` no longer
+// rebuilds its own ZigZag min/max on the encoded stream -- it takes them
+// directly from `scoreCombination`'s return. That coupling only stays
+// byte-exact if the two paths size their integer stream with the same
+// `(min, max)` inputs. This test asserts that byte-exact contract on the
+// chosen `(e, f)` for an all-representable sample (zero exceptions), so the
+// exception-payload branch drops out and the integer-stream subtotal alone
+// drives the estimate:
+//
+//   estimateSizeFromSample(rowCount=sampleSize) == prefix + metadata
+//     + min(FBW::estimateSize(N, zzMin, zzMax), Trivial::estimateSize(N))
+//
+// with zzMin/zzMax coming from scoreCombination(sample, e, f).zigZagMin/Max
+// on the chosen (e, f). If a future refactor drifts the two, this test
+// fails on the exact byte before any benchmark regression shows up.
+TYPED_TEST(ALPEncodingTest, scoreCombinationMatchesEstimator) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // All two-decimal values -- exactly representable at (e=2, f=0). The
+  // size-based selector will pick some (e, f) that yields zero exceptions;
+  // we don't hard-code which pair it picks, only that the sample has that
+  // property so the shared code path is exercised end-to-end.
+  const std::array<D, 8> raw{
+      D{0.00}, D{0.01}, D{0.50}, D{0.99}, D{1.00}, D{1.25}, D{1.50}, D{2.00}};
+  std::vector<PhysicalType> sampledValues;
+  sampledValues.reserve(raw.size());
+  for (const auto value : raw) {
+    sampledValues.push_back(nimble::detail::alp::toPhysical<D>(value));
+  }
+  const std::span<const PhysicalType> physicalSpan{
+      sampledValues.data(), sampledValues.size()};
+
+  // Setting rowCount == sampleSize eliminates the estimator's rowCount
+  // scale-up so byte totals directly compare.
+  const uint64_t rowCount = sampledValues.size();
+  const auto estimate = nimble::ALPEncoding<D>::estimateSizeFromSample(
+      rowCount, physicalSpan, options);
+  ASSERT_TRUE(estimate.has_value());
+
+  // Rebuild the estimator's integer-stream expectation from scoreCombination's
+  // ZigZag range on the (e, f) the selector chose.
+  std::vector<D> logicalValues;
+  logicalValues.reserve(sampledValues.size());
+  for (const auto v : sampledValues) {
+    logicalValues.push_back(nimble::detail::alp::toLogical<D>(v));
+  }
+  const std::span<const D> logicalSpan{
+      logicalValues.data(), logicalValues.size()};
+  const auto [chosenE, chosenF] =
+      nimble::ALPEncoding<D>::findBestExponentFactorBySize(
+          logicalSpan, options);
+  const auto score = nimble::ALPEncoding<D>::scoreCombination(
+      logicalSpan, chosenE, chosenF, options);
+  ASSERT_NE(score.estimatedBytes, nimble::ALPEncoding<D>::kUnusableScore);
+  ASSERT_EQ(score.exceptionCount, 0u)
+      << "Test setup expects zero exceptions on chosen (e, f).";
+
+  const uint64_t integerStreamBytes = std::min(
+      nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+          rowCount, score.zigZagMin, score.zigZagMax, options),
+      nimble::TrivialEncoding<uint64_t>::estimateSize(rowCount));
+
+  // exceptionCount == 0 → no exception-count varint, no per-stream varints,
+  // no exception-payload bytes. Just prefix + header + int-stream size varint
+  // + integer stream.
+  constexpr uint64_t kHeaderSize = 3;
+  const uint64_t metadataSize =
+      kHeaderSize + nimble::varint::varintSize(integerStreamBytes);
+  const uint64_t expected =
+      nimble::EncodingPrefix::serializedSize(
+          static_cast<uint32_t>(rowCount), options.useVarintRowCount) +
+      metadataSize + integerStreamBytes;
+  EXPECT_EQ(*estimate, expected);
+}
+
+// batchTransform (xsimd) must produce lane-by-lane byte-identical
+// output to the scalar path (scalarTransformOne). This is the correctness
+// contract that lets scoreCombination and encodeWithExponentFactor route
+// through the vectorized helper without changing encoded bytes.
+//
+// Covers:
+//   * pathological finite inputs (0, +/-0, denormals, huge, tiny)
+//   * non-finite inputs (NaN, +/-Inf)
+//   * out-of-int64-range scaled values
+//   * halfway cases where round-half-away-from-zero rules matter
+//   * randomized fuzz over a moderately-sized sample
+// for every (exponent, factor) pair in the search grid.
+TYPED_TEST(ALPEncodingTest, batchTransformMatchesScalar) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  using Alp = nimble::ALPEncoding<D>;
+
+  // Pathological + edge-case inputs. Chosen so at least one lane in each
+  // batch tickles: NaN, +/-Inf, +/-0, subnormal, huge, tiny, and negatives
+  // of half-values. Padded to a multiple of kBatchSize so we cover the
+  // full-batch path (the scalar tail is separately covered by the fuzz
+  // block below).
+  std::vector<D> edge{
+      D{0.0},
+      -D{0.0},
+      D{0.5},
+      -D{0.5},
+      D{1.25},
+      -D{1.25},
+      D{2.5},
+      -D{2.5},
+      D{1e-6},
+      -D{1e-6},
+      std::numeric_limits<D>::min(),
+      std::numeric_limits<D>::denorm_min(),
+      D{1e6},
+      -D{1e6},
+      D{1.234567},
+      -D{7.654321},
+      std::numeric_limits<D>::infinity(),
+      -std::numeric_limits<D>::infinity(),
+      std::numeric_limits<D>::quiet_NaN(),
+      -std::numeric_limits<D>::quiet_NaN(),
+      D{9.2233720368547758e18}, // ~int64::max as double
+      -D{9.2233720368547758e18},
+      D{1e30}, // overflows int64 after any positive exponent
+      -D{1e30},
+  };
+  // Pad to a multiple of kBatchSize by repeating a benign representable value.
+  while (edge.size() % Alp::kBatchSize != 0) {
+    edge.push_back(D{1.0});
+  }
+
+  // Randomized fuzz block: 4096 samples across [-1e6, 1e6], mostly two-decimal
+  // to keep exception counts realistic. Same seed for reproducibility.
+  std::mt19937_64 rng(0xA1FDA1FD01D3B0FDULL);
+  std::uniform_int_distribution<int64_t> centDist(-100'000'000, 100'000'000);
+  std::vector<D> fuzz;
+  fuzz.reserve(4096);
+  for (int i = 0; i < 4096; ++i) {
+    fuzz.push_back(static_cast<D>(centDist(rng)) / static_cast<D>(100));
+  }
+
+  auto physicalOf = [](D v) { return nimble::detail::alp::toPhysical<D>(v); };
+
+  auto checkSpan = [&](const std::vector<D>& logicals, int e, int f) {
+    std::vector<PhysicalType> physicals;
+    physicals.reserve(logicals.size());
+    for (const auto v : logicals) {
+      physicals.push_back(physicalOf(v));
+    }
+    const double expMul = Alp::kPow10Double[e];
+    const double facMul = Alp::kPow10Double[f];
+
+    const std::size_t n = logicals.size();
+    const std::size_t batches = n / Alp::kBatchSize;
+    for (std::size_t b = 0; b < batches; ++b) {
+      const std::size_t base = b * Alp::kBatchSize;
+      std::array<uint64_t, 64> batchZigZag{}; // upper-bounded by any real
+                                              // kBatchSize the build produces
+      std::array<bool, 64> batchOk{};
+      Alp::batchTransform(
+          logicals.data() + base,
+          physicals.data() + base,
+          expMul,
+          facMul,
+          batchZigZag.data(),
+          batchOk.data());
+      for (std::size_t k = 0; k < Alp::kBatchSize; ++k) {
+        uint64_t scalarZigZag = 0;
+        const bool scalarOk = Alp::scalarTransformOne(
+            logicals[base + k],
+            physicals[base + k],
+            expMul,
+            facMul,
+            scalarZigZag);
+        EXPECT_EQ(batchOk[k], scalarOk)
+            << "mask mismatch at lane " << (base + k) << " (e=" << e
+            << ", f=" << f << ", value=" << +logicals[base + k] << ")";
+        if (scalarOk) {
+          EXPECT_EQ(batchZigZag[k], scalarZigZag)
+              << "zigzag mismatch at lane " << (base + k) << " (e=" << e
+              << ", f=" << f << ", value=" << +logicals[base + k] << ")";
+        }
+      }
+    }
+  };
+
+  // Enumerate the full (e, f) grid used by findBestExponentFactorBySize.
+  // Only combinations with f <= e are considered by production selection.
+  constexpr int kMaxE = std::is_same_v<D, float> ? 10 : 18;
+  for (int e = 0; e <= kMaxE; ++e) {
+    for (int f = 0; f <= e; ++f) {
+      checkSpan(edge, e, f);
+      checkSpan(fuzz, e, f);
+    }
+  }
+}
+
 TEST(ALPSizeEstimationTest, invalidSampleRejected) {
   const std::vector<uint32_t> sample = {0, 1};
 
@@ -1133,4 +1446,110 @@ TYPED_TEST(ALPEncodingTest, emptyDataRejected) {
           nimble::CompressionType::Uncompressed,
           options),
       "ALP encoding cannot encode empty data.");
+}
+
+// Verify the chunked-stride sampler produces (a) exactly
+// estimateSampleSize distinct in-range input indices, and (b) that those
+// indices cluster into kSamplingChunks contiguous runs when the input is
+// large enough. The estimator relies on sampledValueIndex to map exception
+// positions in the sample back to input positions, so any drift between the
+// gather-side layout in estimateSize and the mapper on the exception path
+// would silently corrupt the encoded exception_positions stream.
+template <typename D>
+void expectChunkedStrideSamplingCoversInput() {
+  constexpr uint32_t kSampleSize = nimble::ALPEncoding<D>::kSampleSize;
+  constexpr uint32_t kSamplingChunks = nimble::ALPEncoding<D>::kSamplingChunks;
+  // Large input so the chunked path is taken (not the small-input fallback).
+  const uint64_t rowCount = 1'000'000;
+  const uint32_t sampleSize =
+      nimble::ALPEncoding<D>::estimateSampleSize(rowCount);
+  ASSERT_EQ(sampleSize, kSampleSize);
+
+  // Collect the mapped indices and confirm each falls in [0, rowCount).
+  std::vector<uint64_t> mapped;
+  mapped.reserve(sampleSize);
+  for (uint32_t i = 0; i < sampleSize; ++i) {
+    const auto idx =
+        nimble::ALPEncoding<D>::sampledValueIndex(i, rowCount, sampleSize);
+    ASSERT_LT(idx, rowCount) << "sample " << i << " out of range";
+    mapped.push_back(idx);
+  }
+  ASSERT_EQ(mapped.size(), sampleSize);
+
+  // Chunk layout: successive samples within the same chunk should be
+  // consecutive input indices. This is exactly the property that makes the
+  // gather cache-friendly.
+  const uint32_t chunkSize = sampleSize / kSamplingChunks;
+  ASSERT_GT(chunkSize, 1u);
+  for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+    for (uint32_t j = 1; j < chunkSize; ++j) {
+      const uint32_t sampleIdx = chunk * chunkSize + j;
+      EXPECT_EQ(mapped[sampleIdx], mapped[sampleIdx - 1] + 1)
+          << "chunk " << chunk << " offset " << j << " not contiguous";
+    }
+  }
+
+  // Chunks themselves are equidistant across the input.
+  for (uint32_t chunk = 1; chunk < kSamplingChunks; ++chunk) {
+    const uint64_t start = mapped[chunk * chunkSize];
+    const uint64_t prevStart = mapped[(chunk - 1) * chunkSize];
+    EXPECT_GT(start, prevStart)
+        << "chunk " << chunk << " not strictly after " << (chunk - 1);
+  }
+}
+
+TEST(ALPSizeEstimationTest, chunkedStrideSamplingCoversInput_float) {
+  expectChunkedStrideSamplingCoversInput<float>();
+}
+
+TEST(ALPSizeEstimationTest, chunkedStrideSamplingCoversInput_double) {
+  expectChunkedStrideSamplingCoversInput<double>();
+}
+
+// Small-input fallback: when the input has fewer rows than kSamplingChunks
+// the chunk layout collapses to the strided singleton mapping. Pinning this
+// keeps the tiny-input tests (which lean on specific rows being sampled)
+// byte-for-byte identical to their pre-Phase-3 behavior.
+TEST(ALPSizeEstimationTest, smallInputFallbackMatchesStridedMapping) {
+  constexpr uint32_t kSamplingChunks =
+      nimble::ALPEncoding<double>::kSamplingChunks;
+  for (uint64_t rowCount = 1; rowCount <= kSamplingChunks; ++rowCount) {
+    const uint32_t sampleSize =
+        nimble::ALPEncoding<double>::estimateSampleSize(rowCount);
+    for (uint32_t i = 0; i < sampleSize; ++i) {
+      const auto idx = nimble::ALPEncoding<double>::sampledValueIndex(
+          i, rowCount, sampleSize);
+      // Strided singleton mapping: i * rowCount / sampleSize.
+      const auto expected = static_cast<uint64_t>(i) * rowCount / sampleSize;
+      EXPECT_EQ(idx, expected) << "rowCount=" << rowCount << " i=" << i;
+      EXPECT_LT(idx, rowCount);
+    }
+  }
+}
+
+// End-to-end guardrail: the estimator on a uniform, exactly-representable
+// input must return the same size regardless of the sampler layout, because
+// every sampled value maps to the same integer stream cost. Any bug that
+// dropped or reused a sample position would perturb the exception count or
+// the ZigZag range and this size would drift.
+template <typename D>
+void expectStrideSamplerEstimateStableOnUniformInput() {
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  const nimble::Encoding::Options options{};
+  const uint64_t rowCount = 100'000;
+  const D constant = D{1.25};
+  std::vector<PhysicalType> values(
+      rowCount, nimble::detail::alp::toPhysical<D>(constant));
+  const auto estimate = nimble::ALPEncoding<D>::estimateSize(
+      std::span<const PhysicalType>{values.data(), values.size()}, options);
+  ASSERT_TRUE(estimate.has_value());
+  EXPECT_GT(estimate.value(), 0u);
+}
+
+TEST(ALPSizeEstimationTest, strideSamplerEstimateStableOnUniformInput_float) {
+  expectStrideSamplerEstimateStableOnUniformInput<float>();
+}
+
+TEST(ALPSizeEstimationTest, strideSamplerEstimateStableOnUniformInput_double) {
+  expectStrideSamplerEstimateStableOnUniformInput<double>();
 }

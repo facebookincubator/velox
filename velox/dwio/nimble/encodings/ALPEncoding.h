@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/CPortability.h>
+#include <xsimd/xsimd.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -234,34 +236,112 @@ class ALPEncoding final
       NIMBLE_INCOMPATIBLE_ENCODING("ALP encoding cannot encode empty data.");
     }
 
-    const uint32_t rowCount = values.size();
     auto* pool = &buffer.getMemoryPool();
 
-    ScopedVector<cppDataType> logicalValues{rowCount, pool, options.bufferPool};
-    for (uint32_t i = 0; i < rowCount; ++i) {
+    ScopedVector<cppDataType> logicalValues{
+        values.size(), pool, options.bufferPool};
+    for (uint32_t i = 0; i < values.size(); ++i) {
       logicalValues[i] = detail::alp::toLogical<cppDataType>(values[i]);
     }
+
+    const auto [exponent, factor] = findBestExponentFactorByCount(
+        std::span<const cppDataType>{
+            logicalValues.data(), logicalValues.size()});
+
+    return encodeWithExponentFactor(
+        selection,
+        values,
+        std::span<const cppDataType>{
+            logicalValues.data(), logicalValues.size()},
+        exponent,
+        factor,
+        buffer,
+        options);
+  }
+
+  // Encodes with a caller-supplied (exponent, factor). Split out from encode()
+  // so tests can drive an arbitrary combination end-to-end (e.g. to compare the
+  // actual encoded size of count-based vs size-based selection).
+  static std::string_view encodeWithExponentFactor(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      std::span<const cppDataType> logicalValues,
+      uint8_t exponent,
+      uint8_t factor,
+      Buffer& buffer,
+      const Encoding::Options& options = {}) {
+    const uint32_t rowCount = values.size();
+    auto* pool = &buffer.getMemoryPool();
 
     ScopedVector<uint64_t> encodedValues{rowCount, pool, options.bufferPool};
     ScopedVector<uint32_t> exceptionPositions{
         /*size=*/0, pool, options.bufferPool};
     ScopedVector<physicalType> exceptionValues{
         /*size=*/0, pool, options.bufferPool};
-    const auto [exponent, factor] = findBestExponentFactor(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
 
-    for (uint32_t i = 0; i < rowCount; ++i) {
-      if (!canRepresentExactly(logicalValues[i], values[i], exponent, factor)) {
-        encodedValues[i] = 0;
+    // Track the first exactly-representable value's ZigZag encoding so that
+    // exception slots can be back-filled with it rather than 0. Writing 0 into
+    // exception slots would pollute the frame-of-reference min (and thus the
+    // bit-width) of the nested integer encoding, making the real encoded size
+    // diverge from the sample-based estimate (see estimateSizeFromSample) and
+    // regressing selection quality. This mirrors DuckDB's ALP, which patches
+    // exception positions with the first non-exception value. The placeholder
+    // is always overwritten by the true value on decode, so correctness is
+    // unaffected regardless of which representable value is chosen.
+    bool hasPlaceholder = false;
+    uint64_t placeholder = 0;
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    uint32_t i = 0;
+    for (; i + kBatchSize <= rowCount; i += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + i,
+          values.data() + i,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        const uint32_t pos = i + static_cast<uint32_t>(k);
+        if (!okLanes[k]) {
+          exceptionPositions.push_back(pos);
+          exceptionValues.push_back(values[pos]);
+          continue;
+        }
+        encodedValues[pos] = zigZagLanes[k];
+        if (!hasPlaceholder) {
+          placeholder = encodedValues[pos];
+          hasPlaceholder = true;
+        }
+      }
+    }
+    for (; i < rowCount; ++i) {
+      uint64_t zz = 0;
+      if (!scalarTransformOne(
+              logicalValues[i],
+              values[i],
+              exponentMultiplier,
+              factorMultiplier,
+              zz)) {
         exceptionPositions.push_back(i);
         exceptionValues.push_back(values[i]);
         continue;
       }
+      encodedValues[i] = zz;
+      if (!hasPlaceholder) {
+        placeholder = encodedValues[i];
+        hasPlaceholder = true;
+      }
+    }
 
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues[i] = velox::ZigZag::encode(encoded);
+    // Back-fill exception slots with the placeholder. When every value is an
+    // exception (no representable value exists) the placeholder stays 0, which
+    // is fine: the nested stream is uniform and the exception path dominates.
+    for (const uint32_t position : exceptionPositions) {
+      encodedValues[position] = placeholder;
     }
 
     const uint32_t exceptionCount = exceptionPositions.size();
@@ -433,10 +513,41 @@ class ALPEncoding final
 
     std::vector<physicalType> sampledValues;
     sampledValues.reserve(sampleSize);
-    // Select evenly spaced input positions without accumulating rounding error.
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
-      sampledValues.push_back(values[inputIndex]);
+    // Chunked-stride sampling: draw kSamplingChunks equidistant contiguous
+    // runs from the input, each of length chunkSize. Contiguous reads let
+    // the prefetcher keep up (~32 cache-line pulls instead of ~1024 spread
+    // singletons for the default kSampleSize=1024).
+    if (rowCount <= kSamplingChunks || sampleSize <= kSamplingChunks) {
+      // Fallback for tiny inputs: fall back to strided singleton mapping so
+      // small-sample tests keep the exact same rows they did before.
+      for (uint32_t i = 0; i < sampleSize; ++i) {
+        const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
+        sampledValues.push_back(values[inputIndex]);
+      }
+    } else {
+      const uint32_t chunkSize = sampleSize / kSamplingChunks;
+      for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+        const uint64_t chunkStart =
+            static_cast<uint64_t>(chunk) * rowCount / kSamplingChunks;
+        // Trim the final chunk if it would run past the end of the input;
+        // sampledValueIndex clamps the same way when mapping back for
+        // exception positions.
+        const uint64_t chunkLen =
+            std::min<uint64_t>(chunkSize, rowCount - chunkStart);
+        const physicalType* p = values.data() + chunkStart;
+        for (uint64_t j = 0; j < chunkLen; ++j) {
+          sampledValues.push_back(p[j]);
+        }
+      }
+      // If integer division dropped a few slots (sampleSize %
+      // kSamplingChunks != 0) top the sample up from the last chunk end so
+      // downstream code that assumes sampledValues.size() == sampleSize
+      // keeps holding.
+      while (sampledValues.size() < sampleSize) {
+        const auto inputIndex = sampledValueIndex(
+            static_cast<uint32_t>(sampledValues.size()), rowCount, sampleSize);
+        sampledValues.push_back(values[inputIndex]);
+      }
     }
 
     return estimateSizeFromSample(rowCount, sampledValues, options);
@@ -461,44 +572,60 @@ class ALPEncoding final
     for (const auto value : sampledValues) {
       logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
     }
+    const std::span<const cppDataType> logicalSpan{
+        logicalValues.data(), logicalValues.size()};
 
-    const auto [exponent, factor] = findBestExponentFactor(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
+    // Pick (exponent, factor) with the shared selector, then re-score the
+    // winner over the same sample to recover its ZigZag min/max and exception
+    // count.  Re-scoring costs one extra pass out of the O(kMaxE * kMaxF) grid
+    // the selector already visited -- negligible -- and guarantees the
+    // integer-stream cost model here is byte-identical to what the selector
+    // saw when it chose (exponent, factor).  This eliminates the earlier
+    // duplicate "encodedValues + Statistics<uint64_t>" scan that was subtly
+    // inconsistent with the selector's min/max view.
+    const auto [exponent, factor] = findBestExponentFactorByCount(logicalSpan);
+    const uint32_t scoreSampleSize =
+        std::min<uint32_t>(static_cast<uint32_t>(sampleSize), kSampleSize);
+    const auto winnerScore = scoreCombination(
+        logicalSpan.subspan(0, scoreSampleSize), exponent, factor, options);
 
-    std::vector<uint64_t> encodedValues;
-    encodedValues.reserve(sampleSize);
+    // Collect exception positions/values so their per-stream FBW/Trivial cost
+    // is exact.  Sized to the known exception count from scoreCombination --
+    // no over-reservation -- but iterating the sample once is unavoidable
+    // because the exception *values* and their *input positions* (via
+    // sampledValueIndex) are what those two nested streams encode.
     std::vector<uint32_t> exceptionPositions;
-    exceptionPositions.reserve(sampleSize);
     std::vector<physicalType> exceptionValues;
-    exceptionValues.reserve(sampleSize);
+    exceptionPositions.reserve(winnerScore.exceptionCount);
+    exceptionValues.reserve(winnerScore.exceptionCount);
     uint64_t sampleExceptionCount{0};
-    for (auto i = 0; i < sampleSize; ++i) {
+    for (uint64_t i = 0; i < sampleSize; ++i) {
       if (!canRepresentExactly(
               logicalValues[i],
               sampledValues[static_cast<size_t>(i)],
               exponent,
               factor)) {
-        encodedValues.push_back(0);
         exceptionPositions.push_back(
-            sampledValueIndex(i, rowCount, sampleSize));
+            static_cast<uint32_t>(sampledValueIndex(
+                static_cast<uint32_t>(i),
+                rowCount,
+                static_cast<uint32_t>(sampleSize))));
         exceptionValues.push_back(sampledValues[static_cast<size_t>(i)]);
         ++sampleExceptionCount;
-        continue;
       }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues.push_back(velox::ZigZag::encode(encoded));
     }
 
-    const auto encodedStats = Statistics<uint64_t>::create(
-        std::span<const uint64_t>{encodedValues.data(), encodedValues.size()});
-    // Model the inexpensive scalar candidates without recursively estimating
-    // complex nested encodings.
+    // Integer stream: use the selector's ZigZag range directly.  Because
+    // encodeWithExponentFactor back-fills exception slots with the first
+    // representable value's ZigZag encoding (never 0), the min/max over the
+    // full encoded stream equal the min/max over the representable subset --
+    // exactly what scoreCombination computed above.  When every sampled value
+    // is an exception, winnerScore.estimatedBytes == kUnusableScore and both
+    // min/max come back as 0, producing a zero-range integer stream sized to
+    // rowCount -- same behavior as the pre-unification code path.
     const uint64_t nestedEncodedValuesSize = std::min(
         FixedBitWidthEncoding<uint64_t>::estimateSize(
-            rowCount, encodedStats, options),
+            rowCount, winnerScore.zigZagMin, winnerScore.zigZagMax, options),
         TrivialEncoding<uint64_t>::estimateSize(rowCount));
     const uint64_t exceptionCount =
         (sampleExceptionCount * rowCount + sampleSize - 1) / sampleSize;
@@ -537,12 +664,39 @@ class ALPEncoding final
     return std::min(static_cast<uint32_t>(rowCount), kSampleSize);
   }
 
-  /// Maps a dense sample ordinal to an evenly spaced input row.
+  /// Maps a dense sample ordinal (0..sampleSize-1) to an input row using a
+  /// chunked-stride layout: the sample is split into kSamplingChunks
+  /// equidistant contiguous chunks that together cover the input span. This
+  /// is cheaper than picking sampleSize far-apart singletons because each
+  /// chunk touches only a handful of cache lines. When the input is smaller
+  /// than kSamplingChunks the layout collapses to a single dense chunk
+  /// (rowCount rows, chunkSize == sampleSize == rowCount), matching the old
+  /// behavior for small inputs so unit tests that pin (e, f) on tiny samples
+  /// stay stable.
   static uint64_t sampledValueIndex(
       uint32_t sampleIndex,
       uint64_t rowCount,
       uint32_t sampleSize) {
-    return sampleIndex * rowCount / sampleSize;
+    if (sampleSize == 0) {
+      return 0;
+    }
+    // A single dense chunk when the input is too small to split.
+    if (rowCount <= kSamplingChunks || sampleSize <= kSamplingChunks) {
+      return static_cast<uint64_t>(sampleIndex) * rowCount / sampleSize;
+    }
+    const uint32_t chunkSize = sampleSize / kSamplingChunks;
+    const uint32_t chunkIdx = sampleIndex / chunkSize;
+    const uint32_t offsetInChunk = sampleIndex % chunkSize;
+    // Chunk starting positions are evenly spaced across [0, rowCount);
+    // rounding is toward 0 so the final chunk still fits when
+    // rowCount is not an exact multiple of kSamplingChunks.
+    const uint64_t chunkStart =
+        static_cast<uint64_t>(chunkIdx) * rowCount / kSamplingChunks;
+    // Clamp: the last chunk may abut rowCount if chunkSize > residual;
+    // clamping to (rowCount - 1) preserves the invariant that every
+    // returned index is in-range.
+    const uint64_t idx = chunkStart + offsetInChunk;
+    return idx < rowCount ? idx : rowCount - 1;
   }
 
  private:
@@ -645,14 +799,24 @@ class ALPEncoding final
       1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
       1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23};
 
+  // Sample up to this many values to find the best (exponent, factor) pair.
+  static constexpr uint32_t kSampleSize{1024};
+  // Number of equidistant chunks the sample is drawn from. Each chunk is a
+  // contiguous run of kSampleSize / kSamplingChunks values from the input.
+  // Total distinct sample count is still kSampleSize; the difference vs.
+  // strided single-value sampling is that we take 32 short contiguous runs
+  // rather than 1024 far-apart singletons -- ~32 cache-line pulls instead of
+  // ~1024, which is cheaper on the estimate hot path and still covers the
+  // input evenly. DuckDB uses the same layout (SAMPLES_PER_VECTOR=32) for the
+  // same reason.
+  static constexpr uint32_t kSamplingChunks{32};
+
  private:
   // Largest exponent and factor values backed by kPow10Double.
   static constexpr int kMaxExponent{23};
   static constexpr int kMaxFactor{23};
   // ALP-specific control word following the standard Encoding prefix.
   static constexpr uint32_t kHeaderSize{3};
-  // Sample up to this many values to find the best (exponent, factor) pair.
-  static constexpr uint32_t kSampleSize{1024};
 
   // Checks whether the selected ALP transform can encode the value without an
   // exception.
@@ -680,27 +844,380 @@ class ALPEncoding final
                static_cast<cppDataType>(restored)) == physicalValue;
   }
 
+ public:
+  // Scalar version of the per-row ALP transform. Merges canRepresentExactly
+  // and encodeValue into a single pass so scaled/factored/restored are each
+  // computed once. Writes the ZigZag-encoded uint64 to `zigZagOut` and returns
+  // true iff the value is exactly representable under (exponent, factor).
+  // Byte-identical to `canRepresentExactly` + `encodeValue` + `ZigZag::encode`
+  // when the return value is true.
+  static bool scalarTransformOne(
+      cppDataType logical,
+      physicalType physical,
+      double exponentMultiplier,
+      double factorMultiplier,
+      uint64_t& zigZagOut) {
+    const double scaled = static_cast<double>(logical) * exponentMultiplier;
+    if (!std::isfinite(scaled)) {
+      return false;
+    }
+    if (scaled < static_cast<double>(std::numeric_limits<int64_t>::min()) ||
+        scaled > static_cast<double>(std::numeric_limits<int64_t>::max())) {
+      return false;
+    }
+    const int64_t factored =
+        static_cast<int64_t>(std::llround(scaled / factorMultiplier));
+    const double restored =
+        static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
+    if (detail::alp::toPhysical<cppDataType>(
+            static_cast<cppDataType>(restored)) != physical) {
+      return false;
+    }
+    zigZagOut = velox::ZigZag::encode(factored);
+    return true;
+  }
+
+  // Vectorized version of `scalarTransformOne` over a contiguous block. For
+  // each lane, computes multiply/round/inverse-transform in xsimd, then falls
+  // back to per-lane scalar for the physical-byte equality check (which is a
+  // cheap 32- or 64-bit compare on values that are already in registers).
+  //
+  // The rounding path uses xsimd::trunc(x + copysign(0.5, x)), which is the
+  // vectorizable equivalent of std::llround's round-half-away-from-zero rule.
+  // A per-lane byte-agreement UT (batchTransformMatchesScalar) locks this in.
+  //
+  // Writes count lanes starting at `outZigZag` and sets outMask[i]=true iff
+  // lane i is exactly representable. Undefined lanes in outZigZag when the
+  // corresponding mask is false. `count` must be exactly the SIMD batch size
+  // (`kBatchSize`); scalar tails are handled by callers via scalarTransformOne.
+  static constexpr std::size_t kBatchSize = xsimd::batch<double>::size;
+  using BatchD = xsimd::batch<double>;
+
+  static void batchTransform(
+      const cppDataType* logicals,
+      const physicalType* physicals,
+      double exponentMultiplier,
+      double factorMultiplier,
+      uint64_t* outZigZag,
+      bool* outMask) {
+    // Widen to double for float inputs so all lanes share the same rounding
+    // domain as std::llround(double).
+    alignas(64) double lanes[kBatchSize];
+    for (std::size_t i = 0; i < kBatchSize; ++i) {
+      lanes[i] = static_cast<double>(logicals[i]);
+    }
+    const auto x = BatchD::load_aligned(lanes);
+    const auto scaled = x * BatchD(exponentMultiplier);
+    // Range gate: !isfinite(scaled) OR scaled out of int64 domain -> exception.
+    // Building the mask as an integer bit-mask keeps the branch out of the
+    // hot lane; the tail scalar path re-computes the same expression.
+    const auto finiteMask = xsimd::isfinite(scaled);
+    const auto lowBound =
+        BatchD(static_cast<double>(std::numeric_limits<int64_t>::min()));
+    const auto highBound =
+        BatchD(static_cast<double>(std::numeric_limits<int64_t>::max()));
+    const auto inRangeMask = (scaled >= lowBound) & (scaled <= highBound);
+    const auto safeMask = finiteMask & inRangeMask;
+
+    // Round-half-away-from-zero. `xsimd::round` matches `std::round` (and
+    // therefore `std::llround` for finite in-range values). We avoid the
+    // `trunc(x + copysign(0.5, x))` emulation because at magnitudes near
+    // 2^52..2^53 double ULP == 1.0, so the added 0.5 rounds in FP and
+    // diverges from `std::llround` — the byte-agreement UT catches this.
+    const auto div = scaled / BatchD(factorMultiplier);
+    const auto rounded = xsimd::round(div);
+    // Convert back to int64 lane-by-lane for the equality check and ZigZag.
+    // Undefined lanes (mask=false) are still safe to convert because their
+    // final result is discarded via outMask.
+    alignas(64) double roundedLanes[kBatchSize];
+    rounded.store_aligned(roundedLanes);
+
+    // Materialize the range/finite mask as per-lane 1.0/0.0 doubles so we
+    // can read it back cheaply lane-by-lane. Direct storage of
+    // `xsimd::batch_bool<double>` varies by architecture; going through
+    // select-to-double keeps the code portable across AVX-2, AVX-512, and
+    // NEON.
+    alignas(64) double safeLanes[kBatchSize];
+    xsimd::select(safeMask, BatchD(1.0), BatchD(0.0)).store_aligned(safeLanes);
+    for (std::size_t i = 0; i < kBatchSize; ++i) {
+      if (safeLanes[i] == 0.0) {
+        outMask[i] = false;
+        continue;
+      }
+      // Restore path must go through int64 -> double, matching scalar exactly.
+      // A pure FP-domain restore would preserve -0.0 and any near-boundary
+      // rounding artifacts that scalar's int64 cast collapses; the byte-
+      // agreement UT catches that divergence, so we mirror scalar here.
+      const int64_t factored = static_cast<int64_t>(roundedLanes[i]);
+      const double restoredD =
+          static_cast<double>(factored) * factorMultiplier / exponentMultiplier;
+      const cppDataType restored = static_cast<cppDataType>(restoredD);
+      if (detail::alp::toPhysical<cppDataType>(restored) != physicals[i]) {
+        outMask[i] = false;
+        continue;
+      }
+      outMask[i] = true;
+      outZigZag[i] = velox::ZigZag::encode(factored);
+    }
+  }
+
+  // Estimated encoded footprint of a single (exponent, factor) candidate over
+  // representable values -- lets selection weigh the FOR/bit-packing cost of a
+  // larger integer domain against a lower exception rate, matching the ALP
+  // paper and DuckDB. This is the single source of truth shared by size-based
+  // selection and estimateSizeFromSample.
+ public:
+  struct CombinationScore {
+    // Estimated total bytes for the integer stream plus exception payload.
+    // kUnusable when the candidate produces no representable values.
+    uint64_t estimatedBytes;
+    uint32_t exceptionCount;
+    // ZigZag range over the representable-value stream. Undefined when the
+    // combination is unusable (representableCount == 0). Reusing these in
+    // estimateSizeFromSample avoids a second scan of the sample and keeps the
+    // selector's byte estimate byte-identical to the estimator's integer
+    // stream sizing.
+    uint64_t zigZagMin;
+    uint64_t zigZagMax;
+  };
+
+  static constexpr uint64_t kUnusableScore =
+      std::numeric_limits<uint64_t>::max();
+
+  // Kept out of line on purpose. Every caller invokes it once per estimate, so
+  // inlining saves nothing, but its body is large enough that inlining it into
+  // estimateSizeFromSample degrades the register allocation and code layout of
+  // the (exponent, factor) search loop that shares that function. On a sample
+  // that never short-circuits the search -- all values unrepresentable, so the
+  // loop runs the full grid -- that penalty is paid ~300K times and costs 17%
+  // of encode wall time.
+  FOLLY_NOINLINE static CombinationScore scoreCombination(
+      std::span<const cppDataType> logicalValues,
+      int exponent,
+      int factor,
+      const Encoding::Options& options) {
+    const uint64_t sampleSize = logicalValues.size();
+    uint64_t zigZagMin = std::numeric_limits<uint64_t>::max();
+    uint64_t zigZagMax = 0;
+    uint32_t exceptionCount = 0;
+    uint32_t representableCount = 0;
+
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+
+    // Vectorized main loop: process kBatchSize lanes at a time through
+    // batchTransform, then handle the tail with scalarTransformOne. The batch
+    // path is byte-identical to the scalar path (locked in by
+    // batchTransformMatchesScalar UT), so this only changes throughput, not
+    // the ZigZag range or exception count observed by size-based selection.
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+    alignas(64) physicalType physLanes[kBatchSize];
+
+    uint64_t i = 0;
+    for (; i + kBatchSize <= sampleSize; i += kBatchSize) {
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        physLanes[k] =
+            detail::alp::toPhysical<cppDataType>(logicalValues[i + k]);
+      }
+      batchTransform(
+          logicalValues.data() + i,
+          physLanes,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        if (!okLanes[k]) {
+          ++exceptionCount;
+          continue;
+        }
+        const uint64_t zz = zigZagLanes[k];
+        zigZagMin = std::min(zigZagMin, zz);
+        zigZagMax = std::max(zigZagMax, zz);
+        ++representableCount;
+      }
+    }
+    for (; i < sampleSize; ++i) {
+      const auto logical = logicalValues[i];
+      uint64_t zz = 0;
+      if (!scalarTransformOne(
+              logical,
+              detail::alp::toPhysical<cppDataType>(logical),
+              exponentMultiplier,
+              factorMultiplier,
+              zz)) {
+        ++exceptionCount;
+        continue;
+      }
+      zigZagMin = std::min(zigZagMin, zz);
+      zigZagMax = std::max(zigZagMax, zz);
+      ++representableCount;
+    }
+
+    if (representableCount == 0) {
+      // Every sampled value is an exception; this combination cannot be used.
+      return {kUnusableScore, exceptionCount, 0, 0};
+    }
+
+    // Bit-packing operates on the ZigZag-encoded integers, so the FOR bit width
+    // must be derived from their min/max (mirrors estimateSizeFromSample).
+    const uint64_t integerStreamBytes = std::min(
+        FixedBitWidthEncoding<uint64_t>::estimateSize(
+            sampleSize, zigZagMin, zigZagMax, options),
+        TrivialEncoding<uint64_t>::estimateSize(sampleSize));
+    const uint64_t exceptionBytes = static_cast<uint64_t>(exceptionCount) *
+        (sizeof(uint32_t) + sizeof(physicalType));
+    return {
+        integerStreamBytes + exceptionBytes,
+        exceptionCount,
+        zigZagMin,
+        zigZagMax};
+  }
+
+ private:
+  // Draws the grid-search sample from `values` using the same chunked-stride
+  // layout as estimateSize, so encode() and estimateSize() pick (exponent,
+  // factor) from the same rows. estimateSize hands the selector a sample it
+  // already drew, while encode hands it the whole column; without this the
+  // latter would score only the leading kSampleSize rows.
+  //
+  // Inputs at or below kSampleSize are scored whole and `buffer` is left
+  // untouched. Larger inputs are materialized into `buffer` once, so the grid
+  // loop scans a contiguous 8KB block instead of recomputing a strided index
+  // per value per candidate.
+  static std::span<const cppDataType> selectionSample(
+      std::span<const cppDataType> values,
+      std::array<cppDataType, kSampleSize>& buffer) {
+    if (values.size() <= kSampleSize) {
+      return values;
+    }
+    const uint64_t rowCount = values.size();
+    const uint32_t chunkSize = kSampleSize / kSamplingChunks;
+    uint32_t written = 0;
+    for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+      const uint64_t chunkStart =
+          static_cast<uint64_t>(chunk) * rowCount / kSamplingChunks;
+      const uint64_t chunkLen =
+          std::min<uint64_t>(chunkSize, rowCount - chunkStart);
+      const cppDataType* chunkData = values.data() + chunkStart;
+      for (uint64_t j = 0; j < chunkLen; ++j) {
+        buffer[written++] = chunkData[j];
+      }
+    }
+    // Unreachable while kSampleSize divides evenly by kSamplingChunks, but
+    // mirrors estimateSize's top-up so the two stay in step if either
+    // constant changes.
+    while (written < kSampleSize) {
+      buffer[written] =
+          values[sampledValueIndex(written, rowCount, kSampleSize)];
+      ++written;
+    }
+    return {buffer.data(), kSampleSize};
+  }
+
+  // Counts the values exactly representable under (exponent, factor), routing
+  // through the same vectorized transform scoreCombination uses with a scalar
+  // tail. Out of line for the same reason as scoreCombination: the grid loop
+  // calls it ~300 times, so one shared body keeps the caller small.
+  FOLLY_NOINLINE static uint32_t countRepresentable(
+      std::span<const cppDataType> logicalValues,
+      const physicalType* physicals,
+      int exponent,
+      int factor) {
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    const uint64_t sampleSize = logicalValues.size();
+    uint32_t representableCount = 0;
+
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    uint64_t i = 0;
+    for (; i + kBatchSize <= sampleSize; i += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + i,
+          physicals + i,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (std::size_t k = 0; k < kBatchSize; ++k) {
+        representableCount += okLanes[k] ? 1 : 0;
+      }
+    }
+    for (; i < sampleSize; ++i) {
+      uint64_t zigZag = 0;
+      if (scalarTransformOne(
+              logicalValues[i],
+              physicals[i],
+              exponentMultiplier,
+              factorMultiplier,
+              zigZag)) {
+        ++representableCount;
+      }
+    }
+    return representableCount;
+  }
+
+ public:
+  // Selects the (exponent, factor) pair with the smallest estimated encoded
+  // footprint. Ties prefer the larger exponent, then the larger factor
+  // (DuckDB's tie-break rule). Retained for tests, benchmarks, and A/B
+  // exploration; production paths use findBestExponentFactorByCount, which is
+  // cheaper and matches this on all datasets except sparse-exception ones.
+  static std::pair<uint8_t, uint8_t> findBestExponentFactorBySize(
+      std::span<const cppDataType> values,
+      const Encoding::Options& options) {
+    std::array<cppDataType, kSampleSize> sampleBuffer;
+    const auto sample = selectionSample(values, sampleBuffer);
+
+    uint8_t bestExponent = 0;
+    uint8_t bestFactor = 0;
+    uint64_t bestBytes = kUnusableScore;
+
+    for (int e = 0; e <= kMaxExponent; ++e) {
+      for (int f = 0; f <= std::min(e, kMaxFactor); ++f) {
+        const auto score = scoreCombination(sample, e, f, options);
+        if (score.estimatedBytes == kUnusableScore) {
+          continue;
+        }
+        // Strictly smaller wins outright; iterating exponent and factor in
+        // ascending order with <= lets the largest (exponent, factor) among
+        // equal-cost candidates win, matching DuckDB's tie-break rule (keep
+        // more decimal precision so out-of-sample values stay representable).
+        if (score.estimatedBytes <= bestBytes) {
+          bestBytes = score.estimatedBytes;
+          bestExponent = static_cast<uint8_t>(e);
+          bestFactor = static_cast<uint8_t>(f);
+        }
+      }
+    }
+    return {bestExponent, bestFactor};
+  }
+
   // Selects the sampled (exponent, factor) pair that preserves the most values.
-  static std::pair<uint8_t, uint8_t> findBestExponentFactor(
+  // Ties break toward the smaller pair, and iteration short-circuits when every
+  // sampled value is representable -- clean data (all integers, uniform 2dp)
+  // exits on the first candidate.
+  static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
       std::span<const cppDataType> values) {
-    const uint32_t sampleSize =
-        std::min(static_cast<uint32_t>(values.size()), kSampleSize);
+    std::array<cppDataType, kSampleSize> sampleBuffer;
+    const auto sample = selectionSample(values, sampleBuffer);
+    const uint32_t sampleSize = static_cast<uint32_t>(sample.size());
+    // Free: physicalType is the same width as cppDataType and the cast is
+    // exactly what toPhysical does per value.
+    const physicalType* physicals =
+        EncodingPhysicalType<cppDataType>::asEncodingPhysicalTypeSpan(sample)
+            .data();
 
     uint8_t bestExponent = 0;
     uint8_t bestFactor = 0;
     uint32_t bestRepresentableCount = 0;
 
     for (int e = 0; e <= kMaxExponent; ++e) {
-      uint32_t countNoFactor = 0;
-      for (uint32_t i = 0; i < sampleSize; ++i) {
-        if (canRepresentExactly(
-                values[i],
-                detail::alp::toPhysical<cppDataType>(values[i]),
-                e,
-                /*factor=*/0)) {
-          ++countNoFactor;
-        }
-      }
+      const uint32_t countNoFactor =
+          countRepresentable(sample, physicals, e, /*factor=*/0);
       if (countNoFactor > bestRepresentableCount) {
         bestRepresentableCount = countNoFactor;
         bestExponent = static_cast<uint8_t>(e);
@@ -711,16 +1228,8 @@ class ALPEncoding final
       }
 
       for (int f = 1; f <= std::min(e, kMaxFactor); ++f) {
-        uint32_t countWithFactor = 0;
-        for (uint32_t i = 0; i < sampleSize; ++i) {
-          if (canRepresentExactly(
-                  values[i],
-                  detail::alp::toPhysical<cppDataType>(values[i]),
-                  e,
-                  f)) {
-            ++countWithFactor;
-          }
-        }
+        const uint32_t countWithFactor =
+            countRepresentable(sample, physicals, e, f);
         if (countWithFactor > bestRepresentableCount) {
           bestRepresentableCount = countWithFactor;
           bestExponent = static_cast<uint8_t>(e);
@@ -737,6 +1246,7 @@ class ALPEncoding final
     return {bestExponent, bestFactor};
   }
 
+ private:
   // Converts a floating-point value to the integer stored by ALP.
   static int64_t encodeValue(double value, int exponent, int factor) {
     const double scaled = value * kPow10Double[exponent];
