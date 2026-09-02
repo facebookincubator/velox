@@ -264,7 +264,7 @@ TEST_F(UcxOutputQueueManagerTest, implementsOutputBufferManager) {
   const int numDestinations = 2;
   // A capacity small enough that a handful of pages crosses the
   // over-utilization threshold, so isOverutilized() is seen in both states.
-  const uint64_t maxOutputBufferSize = 4096;
+  const uint64_t maxOutputBufferSize{4'096};
   auto task = initializeTask(
       taskId,
       numDestinations,
