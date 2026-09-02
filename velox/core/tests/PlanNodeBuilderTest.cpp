@@ -499,17 +499,21 @@ TEST_F(PlanNodeBuilderTest, exchangeNode) {
   const PlanNodeId id = "exchange_node_id";
   const RowTypePtr type = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const auto transportKind = std::string{TransportKind::kUcx};
 
   const auto verify = [&](const std::shared_ptr<const ExchangeNode>& node) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->outputType(), type);
     EXPECT_EQ(node->serdeKind(), serdeKind);
+    EXPECT_EQ(node->transportKind(), transportKind);
+    EXPECT_EQ(node->serialize()["transportKind"], transportKind);
   };
 
   const auto node = ExchangeNode::Builder()
                         .id(id)
                         .outputType(type)
                         .serdeKind(serdeKind)
+                        .transportKind(transportKind)
                         .build();
   verify(node);
 
@@ -521,6 +525,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
   const PlanNodeId id = "merge_exchange_node_id";
   const RowTypePtr type = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const auto transportKind = std::string{TransportKind::kUcx};
   const std::vector<FieldAccessTypedExprPtr> sortingKeys = {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c1")};
   const std::vector<SortOrder> sortingOrders = {SortOrder(true, false)};
@@ -532,6 +537,8 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
         EXPECT_EQ(node->sortingKeys(), sortingKeys);
         EXPECT_EQ(node->sortingOrders(), sortingOrders);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportKind(), transportKind);
+        EXPECT_EQ(node->serialize()["transportKind"], transportKind);
       };
 
   const auto node = MergeExchangeNode::Builder()
@@ -540,6 +547,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
                         .sortingKeys(sortingKeys)
                         .sortingOrders(sortingOrders)
                         .serdeKind(serdeKind)
+                        .transportKind(transportKind)
                         .build();
   verify(node);
 
