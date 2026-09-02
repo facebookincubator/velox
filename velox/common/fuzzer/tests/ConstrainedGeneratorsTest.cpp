@@ -19,6 +19,8 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/functions/lib/QuantileDigest.h"
+#include "velox/functions/lib/TDigest.h"
 #include "velox/functions/prestosql/json/JsonExtractor.h"
 #include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/QDigestType.h"
@@ -421,8 +423,21 @@ TEST_F(ConstrainedGeneratorsTest, jsonPath) {
 TEST_F(ConstrainedGeneratorsTest, tdigest) {
   std::unique_ptr<TDigestInputGenerator> generator =
       std::make_unique<TDigestInputGenerator>(0, TDIGEST(DOUBLE()), 0.4);
-  auto value = generator->generate();
-  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+
+  bool hasNonNull = false;
+  for (size_t i = 0; i < 100; ++i) {
+    auto value = generator->generate();
+    if (value.isNull()) {
+      continue;
+    }
+    hasNonNull = true;
+    EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+    // Deserializing throws unless the bytes are a well-formed digest.
+    auto digest = functions::TDigest<>::fromSerialized(
+        value.value<TypeKind::VARBINARY>().data());
+    EXPECT_GE(digest.compression(), 10);
+  }
+  EXPECT_TRUE(hasNonNull);
 }
 
 TEST_F(ConstrainedGeneratorsTest, setdigest) {
@@ -433,21 +448,30 @@ TEST_F(ConstrainedGeneratorsTest, setdigest) {
 }
 
 TEST_F(ConstrainedGeneratorsTest, qdigest) {
-  std::unique_ptr<QDigestInputGenerator> generator =
-      std::make_unique<QDigestInputGenerator>(
-          0, QDIGEST(DOUBLE()), 0.4, DOUBLE());
-  auto value = generator->generate();
-  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+  const auto checkInnerType = [](const TypePtr& innerType, auto typeTag) {
+    using T = decltype(typeTag);
+    QDigestInputGenerator generator(0, QDIGEST(innerType), 0.4, innerType);
 
-  generator =
-      std::make_unique<QDigestInputGenerator>(0, QDIGEST(REAL()), 0.4, REAL());
-  value = generator->generate();
-  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+    bool hasNonNull = false;
+    for (size_t i = 0; i < 100; ++i) {
+      auto value = generator.generate();
+      if (value.isNull()) {
+        continue;
+      }
+      hasNonNull = true;
+      EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+      // Deserializing throws unless the bytes are a well-formed digest.
+      std::allocator<T> allocator;
+      functions::qdigest::QuantileDigest<T, std::allocator<T>> digest(
+          allocator, value.value<TypeKind::VARBINARY>().data());
+      EXPECT_GT(digest.serializedByteSize(), 0);
+    }
+    EXPECT_TRUE(hasNonNull);
+  };
 
-  generator = std::make_unique<QDigestInputGenerator>(
-      0, QDIGEST(BIGINT()), 0.4, BIGINT());
-  value = generator->generate();
-  EXPECT_EQ(value.kind(), TypeKind::VARBINARY);
+  checkInnerType(DOUBLE(), double{});
+  checkInnerType(REAL(), float{});
+  checkInnerType(BIGINT(), int64_t{});
 }
 
 } // namespace facebook::velox::fuzzer::test
