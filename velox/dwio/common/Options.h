@@ -256,6 +256,13 @@ class FormatSpecificOptions {
     VELOX_UNSUPPORTED(
         "Merging format-specific options is not supported for these options.");
   }
+
+  /// Returns a copy of this object. Callers that need to mutate format options
+  /// derived from a shared, caller-provided object must clone it first.
+  virtual std::shared_ptr<FormatSpecificOptions> clone() const {
+    VELOX_UNSUPPORTED(
+        "Cloning format-specific options is not supported for these options.");
+  }
 };
 
 /// Options for creating a RowReader.
@@ -1097,7 +1104,22 @@ struct WriterOptions {
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) {}
 
+  /// Returns a deep copy, including 'formatSpecificOptions'.
+  ///
+  /// A WriterOptions object supplied through an insert table handle lives on
+  /// the plan node and is shared by every data sink in the query, so a sink
+  /// must clone it before applying its own per-writer values. Subclasses must
+  /// override this. Calling the base implementation on a subclass throws.
+  virtual std::shared_ptr<WriterOptions> clone() const;
+
   virtual ~WriterOptions() = default;
+
+ protected:
+  /// Completes 'copy', a shallow copy of this object, by copying the members
+  /// that must not remain shared with it. Subclass clone() implementations
+  /// must pass their shallow copy through this.
+  std::shared_ptr<WriterOptions> deepCopyInto(
+      std::shared_ptr<WriterOptions> copy) const;
 };
 
 // Options for creating a column reader.
