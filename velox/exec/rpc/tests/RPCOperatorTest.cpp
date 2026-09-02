@@ -27,7 +27,7 @@
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
-#include "velox/exec/rpc/tests/DemoRPCFunction.h"
+#include "velox/exec/rpc/tests/EchoRPCFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -50,7 +50,7 @@ class RPCOperatorTest : public OperatorTestBase {
     OperatorTestBase::SetUpTestCase();
     registerRPCPlanNodeTranslator();
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_rpc", []() { return std::make_shared<DemoAsyncRPCFunction>(); });
+        "echo_rpc", []() { return std::make_shared<EchoAsyncRPCFunction>(); });
     AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc", []() {
       return std::make_shared<DemoBatchRPCFunction>();
     });
@@ -157,7 +157,7 @@ class RPCOperatorTest : public OperatorTestBase {
               sourceType->findChild(colName), colName));
     }
     auto call = std::make_shared<core::CallTypedExpr>(
-        VARCHAR(), std::move(callInputs), "demo_rpc");
+        VARCHAR(), std::move(callInputs), "echo_rpc");
 
     // Output type = all source columns + RPC result column.
     auto outputNames = sourceType->names();
@@ -194,9 +194,9 @@ TEST_F(RPCOperatorTest, basicPerRow) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["hello world"], "Response for: hello world");
-  EXPECT_EQ(rows["test prompt"], "Response for: test prompt");
-  EXPECT_EQ(rows["third row"], "Response for: third row");
+  EXPECT_EQ(rows["hello world"], "echo: hello world");
+  EXPECT_EQ(rows["test prompt"], "echo: test prompt");
+  EXPECT_EQ(rows["third row"], "echo: third row");
 }
 
 // kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
@@ -242,7 +242,7 @@ TEST_F(RPCOperatorTest, nullInput) {
     } else {
       EXPECT_EQ(prompts->valueAt(i).str(), "valid prompt");
       EXPECT_FALSE(results->isNullAt(i));
-      EXPECT_EQ(results->valueAt(i).str(), "Response for: valid prompt");
+      EXPECT_EQ(results->valueAt(i).str(), "echo: valid prompt");
     }
   }
 }
@@ -277,12 +277,12 @@ TEST_F(RPCOperatorTest, multipleColumns) {
   auto i1 = rowIndex["question one"];
   EXPECT_EQ(ids->valueAt(i1), 100);
   EXPECT_EQ(extras->valueAt(i1), 1.5);
-  EXPECT_EQ(results->valueAt(i1).str(), "Response for: question one");
+  EXPECT_EQ(results->valueAt(i1).str(), "echo: question one");
 
   auto i2 = rowIndex["question two"];
   EXPECT_EQ(ids->valueAt(i2), 200);
   EXPECT_EQ(extras->valueAt(i2), 2.5);
-  EXPECT_EQ(results->valueAt(i2).str(), "Response for: question two");
+  EXPECT_EQ(results->valueAt(i2).str(), "echo: question two");
 }
 
 // ============================================================
@@ -557,6 +557,12 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes = {
+            RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch}};
+  }
+
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(const SelectivityVector&, const std::vector<VectorPtr>&)
       override {
@@ -584,7 +590,7 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     for (int32_t i = 0; i < n; ++i) {
       RPCResponse response;
       response.rowId = i;
-      response.result = "ok";
+      response.payload = makeTextPayload("ok");
       responses.push_back(std::move(response));
     }
     // Complete after `latency_` on the transport executor (NOT the driver
@@ -607,6 +613,11 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
   const std::chrono::milliseconds latency_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   int32_t pending_{0};
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
 };
 
 } // namespace
@@ -676,7 +687,7 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {
-  // DemoAsyncRPCFunction::evaluateCongestion returns kError when a response
+  // EchoAsyncRPCFunction::evaluateCongestion returns kError when a response
   // result contains "OVERLOAD" (the mock echoes the prompt into the result).
   auto input = makeRowVector(
       {"prompt"},
@@ -696,9 +707,9 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["OVERLOAD one"], "Response for: OVERLOAD one");
-  EXPECT_EQ(rows["OVERLOAD two"], "Response for: OVERLOAD two");
-  EXPECT_EQ(rows["normal three"], "Response for: normal three");
+  EXPECT_EQ(rows["OVERLOAD one"], "echo: OVERLOAD one");
+  EXPECT_EQ(rows["OVERLOAD two"], "echo: OVERLOAD two");
+  EXPECT_EQ(rows["normal three"], "echo: normal three");
 }
 
 } // namespace facebook::velox::exec::rpc

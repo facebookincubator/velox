@@ -60,7 +60,7 @@ namespace facebook::velox::exec::rpc {
 ///      RPCNode → RPCOperator → AsyncRPCFunction.
 ///
 /// Usage (in function's .cpp file):
-///   // For a complete example, see velox/exec/rpc/tests/DemoRPCFunction*.
+///   // For a complete example, see velox/exec/rpc/tests/EchoRPCFunction*.
 ///
 ///   #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 ///   VELOX_REGISTER_RPC_FUNCTION(my_function, MyAsyncRPCFunction);
@@ -97,7 +97,7 @@ class AsyncRPCFunctionRegistry {
   ///
   /// For each registered function with signatures, registers a stub using
   /// the given namespace prefix: namespacePrefix + functionName
-  /// e.g., "presto.default.fb_llm_inference"
+  /// e.g., "presto.default.my_rpc_function"
   ///
   /// @param namespacePrefix The catalog.schema with trailing dot (e.g.,
   /// "presto.default.")
