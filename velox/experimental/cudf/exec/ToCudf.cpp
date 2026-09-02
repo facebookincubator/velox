@@ -309,16 +309,17 @@ void registerCudf() {
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
-  const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
-      mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr);
+  const auto& config = CudfConfig::getInstance();
+  const std::string mrMode = config.memoryResource;
+  auto mr = cudf_velox::createMemoryResource(mrMode, config.memoryPercent);
+  cudf::set_current_device_resource(
+      cudf_velox::createThreadLocalTemporaryMemoryResource(mr));
   mr_ = std::move(mr);
 
-  const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
+  const auto& outputMrMode = config.outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
-        outputMrMode, CudfConfig::getInstance().memoryPercent);
+    output_mr_ =
+        cudf_velox::createMemoryResource(outputMrMode, config.memoryPercent);
   } else {
     output_mr_ = mr_;
   }
@@ -343,6 +344,12 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  if (!tryResetCudfExchangeMemoryResource()) {
+    LOG(WARNING)
+        << "Retaining active or in-use cuDF UCX exchange memory resources; "
+           "they become reclaimable after their queries and packed buffers "
+           "are released";
+  }
   output_mr_.reset();
   mr_.reset();
   exec::DriverFactory::adapters.erase(
