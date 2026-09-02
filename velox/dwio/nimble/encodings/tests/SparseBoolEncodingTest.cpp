@@ -25,6 +25,8 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
+#include <algorithm>
+#include <array>
 #include <vector>
 
 using namespace facebook;
@@ -303,6 +305,276 @@ TYPED_TEST(SparseBoolEncodingTest, slice) {
   }
 }
 
+TYPED_TEST(SparseBoolEncodingTest, sliceAndCount) {
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  struct TestCase {
+    const char* name;
+    nimble::Vector<bool> values;
+  };
+  struct Range {
+    uint32_t offset;
+    uint32_t length;
+  };
+
+  const std::vector<TestCase> testCases{
+      {
+          .name = "allFalse",
+          .values = this->toVector(
+              {false,
+               false,
+               false,
+               false,
+               false,
+               false,
+               false,
+               false,
+               false,
+               false}),
+      },
+      {
+          .name = "allTrue",
+          .values = this->toVector(
+              {true, true, true, true, true, true, true, true, true, true}),
+      },
+      {
+          .name = "sparseTrue",
+          .values = this->toVector(
+              {false,
+               false,
+               true,
+               false,
+               true,
+               false,
+               false,
+               true,
+               false,
+               false}),
+      },
+      {
+          .name = "sparseFalse",
+          .values = this->toVector(
+              {true, true, false, true, false, true, true, false, true, true}),
+      },
+      {
+          .name = "alternating",
+          .values = this->toVector(
+              {true,
+               false,
+               true,
+               false,
+               true,
+               false,
+               true,
+               false,
+               true,
+               false}),
+      },
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    const auto& values = testCase.values;
+    const auto encoded =
+        nimble::test::Encoder<nimble::SparseBoolEncoding>::encode(
+            *this->buffer_,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+
+    for (const auto range :
+         {Range{/*offset=*/0, /*length=*/1},
+          Range{/*offset=*/0, /*length=*/10},
+          Range{/*offset=*/1, /*length=*/3},
+          Range{/*offset=*/2, /*length=*/1},
+          Range{/*offset=*/5, /*length=*/2},
+          Range{/*offset=*/9, /*length=*/1}}) {
+      SCOPED_TRACE(
+          testing::Message()
+          << "offset=" << range.offset << ", length=" << range.length);
+      const auto expectedBefore = static_cast<uint32_t>(
+          std::count(values.begin(), values.begin() + range.offset, true));
+      const auto expected = static_cast<uint32_t>(std::count(
+          values.begin() + range.offset,
+          values.begin() + range.offset + range.length,
+          true));
+
+      nimble::Buffer sliceBuffer{*this->pool_};
+      const auto sliceResult = nimble::SparseBoolEncoding::sliceAndCount(
+          encoded, range.offset, range.length, sliceBuffer, options);
+      EXPECT_EQ(sliceResult.counts.numTrueBeforeRange, expectedBefore);
+      EXPECT_EQ(sliceResult.counts.numTrueInRange, expected);
+
+      nimble::SparseBoolEncoding slicedEncoding{
+          *this->pool_,
+          sliceResult.sliced,
+          [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+          options};
+      EXPECT_EQ(slicedEncoding.rowCount(), range.length);
+      nimble::Vector<bool> result(this->pool_.get(), range.length);
+      slicedEncoding.materialize(range.length, result.data());
+      for (uint32_t i = 0; i < range.length; ++i) {
+        EXPECT_EQ(result[i], values[range.offset + i]) << "index " << i;
+      }
+    }
+  }
+}
+
+TYPED_TEST(SparseBoolEncodingTest, countTrue) {
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  for (const auto& values :
+       {this->toVector(
+            {false,
+             false,
+             true,
+             false,
+             true,
+             false,
+             false,
+             true,
+             false,
+             false}),
+        this->toVector(
+            {true, true, false, true, false, true, true, false, true, true})}) {
+    const auto encoded =
+        nimble::test::Encoder<nimble::SparseBoolEncoding>::encode(
+            *this->buffer_,
+            values,
+            nimble::CompressionType::Uncompressed,
+            options);
+
+    struct Range {
+      uint32_t offset;
+      uint32_t length;
+    };
+    for (const auto range :
+         {Range{/*offset=*/0, /*length=*/4},
+          Range{/*offset=*/2, /*length=*/6},
+          Range{/*offset=*/5, /*length=*/2},
+          Range{/*offset=*/7, /*length=*/3}}) {
+      SCOPED_TRACE(
+          testing::Message()
+          << "offset=" << range.offset << ", length=" << range.length);
+      const auto expected = static_cast<uint32_t>(std::count(
+          values.begin() + range.offset,
+          values.begin() + range.offset + range.length,
+          true));
+      const auto expectedBefore = static_cast<uint32_t>(
+          std::count(values.begin(), values.begin() + range.offset, true));
+      EXPECT_EQ(
+          nimble::SparseBoolEncoding::countTrue(
+              encoded, range.offset, range.length, this->pool_.get(), options),
+          expected);
+      nimble::SparseBoolEncoding::RangeCounts counts;
+      nimble::SparseBoolEncoding::countTrue(
+          encoded,
+          range.offset,
+          range.length,
+          this->pool_.get(),
+          counts,
+          options);
+      EXPECT_EQ(counts.numTrueBeforeRange, expectedBefore);
+      EXPECT_EQ(counts.numTrueInRange, expected);
+    }
+  }
+}
+
+TYPED_TEST(SparseBoolEncodingTest, estimateSize) {
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const std::array<bool, 10> sparseTrueValues{
+      false, false, true, false, true, false, false, true, false, false};
+  const auto sparseTrueStats =
+      nimble::Statistics<bool>::create(sparseTrueValues);
+  EXPECT_EQ(
+      nimble::SparseBoolEncoding::estimateSize(
+          sparseTrueValues.size(), sparseTrueStats, options),
+      nimble::SparseBoolEncoding::estimateSize(
+          sparseTrueValues.size(), /*exceptionCount=*/3, options));
+
+  const std::array<bool, 10> sparseFalseValues{
+      true, true, false, true, false, true, true, false, true, true};
+  const auto sparseFalseStats =
+      nimble::Statistics<bool>::create(sparseFalseValues);
+  EXPECT_EQ(
+      nimble::SparseBoolEncoding::estimateSize(
+          sparseFalseValues.size(), sparseFalseStats, options),
+      nimble::SparseBoolEncoding::estimateSize(
+          sparseFalseValues.size(), /*exceptionCount=*/3, options));
+}
+
+TYPED_TEST(SparseBoolEncodingTest, invalidCountTrueRange) {
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const auto values = this->toVector(
+      {false, false, true, false, true, false, false, true, false, false});
+  const auto encoded =
+      nimble::test::Encoder<nimble::SparseBoolEncoding>::encode(
+          *this->buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options);
+
+  auto expectZeroLengthRange = [&](uint32_t offset) {
+    SCOPED_TRACE(testing::Message() << "offset=" << offset);
+    NIMBLE_ASSERT_THROW(
+        nimble::SparseBoolEncoding::countTrue(
+            encoded,
+            offset,
+            /*length=*/0,
+            this->pool_.get(),
+            options),
+        "Cannot count zero rows.");
+    nimble::SparseBoolEncoding::RangeCounts counts;
+    NIMBLE_ASSERT_THROW(
+        nimble::SparseBoolEncoding::countTrue(
+            encoded,
+            offset,
+            /*length=*/0,
+            this->pool_.get(),
+            counts,
+            options),
+        "Cannot count zero rows.");
+  };
+  expectZeroLengthRange(/*offset=*/0);
+  expectZeroLengthRange(/*offset=*/4);
+
+  auto expectInvalidRange = [&](uint32_t offset, uint32_t length) {
+    SCOPED_TRACE(
+        testing::Message() << "offset=" << offset << ", length=" << length);
+    NIMBLE_ASSERT_THROW(
+        nimble::SparseBoolEncoding::countTrue(
+            encoded, offset, length, this->pool_.get(), options),
+        "");
+    nimble::SparseBoolEncoding::RangeCounts counts;
+    NIMBLE_ASSERT_THROW(
+        nimble::SparseBoolEncoding::countTrue(
+            encoded, offset, length, this->pool_.get(), counts, options),
+        "");
+  };
+  expectInvalidRange(/*offset=*/11, /*length=*/0);
+  expectInvalidRange(/*offset=*/9, /*length=*/2);
+
+  NIMBLE_ASSERT_THROW(
+      nimble::SparseBoolEncoding::countTrue(
+          encoded,
+          /*offset=*/0,
+          /*length=*/1,
+          /*pool=*/nullptr,
+          options),
+      "Memory pool cannot be null");
+  nimble::SparseBoolEncoding::RangeCounts counts;
+  NIMBLE_ASSERT_THROW(
+      nimble::SparseBoolEncoding::countTrue(
+          encoded,
+          /*offset=*/0,
+          /*length=*/1,
+          /*pool=*/nullptr,
+          counts,
+          options),
+      "Memory pool cannot be null");
+}
+
 TYPED_TEST(SparseBoolEncodingTest, invalidSliceRange) {
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -325,6 +597,14 @@ TYPED_TEST(SparseBoolEncodingTest, invalidSliceRange) {
           options),
       "");
   NIMBLE_ASSERT_THROW(
+      nimble::SparseBoolEncoding::sliceAndCount(
+          encoded,
+          /*offset=*/0,
+          /*length=*/0,
+          invalidSliceBuffer,
+          options),
+      "Cannot slice zero rows.");
+  NIMBLE_ASSERT_THROW(
       nimble::SparseBoolEncoding::slice(
           encoded,
           /*offset=*/11,
@@ -333,7 +613,23 @@ TYPED_TEST(SparseBoolEncodingTest, invalidSliceRange) {
           options),
       "");
   NIMBLE_ASSERT_THROW(
+      nimble::SparseBoolEncoding::sliceAndCount(
+          encoded,
+          /*offset=*/11,
+          /*length=*/0,
+          invalidSliceBuffer,
+          options),
+      "");
+  NIMBLE_ASSERT_THROW(
       nimble::SparseBoolEncoding::slice(
+          encoded,
+          /*offset=*/9,
+          /*length=*/2,
+          invalidSliceBuffer,
+          options),
+      "");
+  NIMBLE_ASSERT_THROW(
+      nimble::SparseBoolEncoding::sliceAndCount(
           encoded,
           /*offset=*/9,
           /*length=*/2,

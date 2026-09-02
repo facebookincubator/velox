@@ -365,11 +365,13 @@ struct WriterOptions {
   /// until all KeepAlive references are destructed.
   folly::Executor::KeepAlive<> encodingExecutor{};
 
-  /// When maxEncodeParallelism > 0 and encodingExecutor is set,
-  /// FieldWriter::write() operations will be parallelized using coroutines
-  /// scheduled on encodingExecutor.
+  /// Caps concurrent stream-encoding tasks. Callers should not set this above
+  /// the executor's available thread count.
   uint32_t maxEncodeParallelism{0};
-  uint32_t minStreamsPerEncodeUnit{1};
+
+  /// Targets at least this many streams per parallel encoding task. Zero is
+  /// treated as one.
+  uint32_t minStreamsPerEncodingTask{1};
 
   bool enableChunking{true};
 
