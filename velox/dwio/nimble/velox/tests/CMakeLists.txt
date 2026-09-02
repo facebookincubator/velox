@@ -37,7 +37,7 @@ target_link_libraries(
 add_library(nimble_writer_test_utils WriterTestUtils.cpp WriterTestUtils.h)
 target_link_libraries(
   nimble_writer_test_utils
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_schema_reader
   nimble_common
   nimble_encodings_tests_utils
@@ -85,12 +85,12 @@ add_executable(
   StreamDataTest.cpp
   StreamLabelsTest.cpp
   TypeTest.cpp
-  VeloxReaderTest.cpp
+  BatchReaderTest.cpp
   WriterTest.cpp
   FieldWriterStatsTest.cpp
   TestUtils.h
 )
-# VeloxReaderTest accounts for almost all of this binary's runtime: its cases are
+# BatchReaderTest accounts for almost all of this binary's runtime: its cases are
 # parameterized over sixteen combinations, and the whole suite runs well past
 # ctest's default fifteen hundred second limit as a single test. Register it as
 # four gtest shards instead so ctest schedules them concurrently, and give each
@@ -113,7 +113,7 @@ target_link_libraries(
   nimble_velox_schema_utils
   nimble_shared_dictionary_test_utils
   nimble_writer_test_utils
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_shared_dictionary_config
   nimble_writer
   nimble_velox_layout_planner
@@ -142,7 +142,7 @@ add_test(nimble_writer_chunking_fuzz_tests nimble_writer_chunking_fuzz_tests)
 target_link_libraries(
   nimble_writer_chunking_fuzz_tests
   nimble_writer_test_utils
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   nimble_common
   velox_memory
@@ -159,7 +159,7 @@ add_test(nimble_writer_fuzz_tests nimble_writer_fuzz_tests)
 target_link_libraries(
   nimble_writer_fuzz_tests
   nimble_writer_test_utils
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   nimble_velox_schema_reader
   nimble_common
