@@ -17,10 +17,10 @@
 #include "velox/functions/sparksql/specialforms/SparkCastHooks.h"
 
 #include <cmath>
+#include <cstdint>
 #include <exception>
 
 #include "velox/common/base/VeloxException.h"
-#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
@@ -153,6 +153,60 @@ bool SparkCastHooks::decimalToFloatHighPrecisionCastEnabled() const {
   return SparkQueryConfig{config_}.decimalToFloatHighPrecisionCastEnabled();
 }
 
+namespace {
+
+// Spark UTF8String.trimAll trims boundary bytes 0x00..0x20 and 0x7F.
+bool isUtf8StringTrimAllByte(char value) {
+  const auto byte = static_cast<uint8_t>(value);
+  return byte <= 0x20 || byte == 0x7F;
+}
+
+// Java String.trim trims boundary characters <= U+0020.
+bool isJavaStringTrimByte(char value) {
+  return static_cast<uint8_t>(value) <= 0x20;
+}
+
+template <typename TShouldTrim>
+StringView trimBytes(const StringView& view, TShouldTrim shouldTrim) {
+  const auto* data = view.data();
+  size_t start{0};
+  size_t end{view.size()};
+
+  while (start < end && shouldTrim(data[start])) {
+    ++start;
+  }
+
+  while (end > start && shouldTrim(data[end - 1])) {
+    --end;
+  }
+
+  return StringView(data + start, end - start);
+}
+
+StringView trimUtf8StringAll(const StringView& view) {
+  return trimBytes(view, isUtf8StringTrimAllByte);
+}
+
+StringView trimJavaString(const StringView& view) {
+  return trimBytes(view, isJavaStringTrimByte);
+}
+
+// Type::isDecimal() runs a dynamic_cast for BIGINT and HUGEINT types, which is
+// too costly to call for every row. Plain BIGINT and HUGEINT types are
+// singletons, so check their identity first. Decimal types are final, so a
+// typeid comparison identifies them exactly.
+bool isDecimalType(const Type& type) {
+  if (&type == BigintType::create().get() ||
+      &type == HugeintType::create().get()) {
+    return false;
+  }
+  const auto& typeId = typeid(type);
+  return typeId == typeid(ShortDecimalType) ||
+      typeId == typeid(LongDecimalType);
+}
+
+} // namespace
+
 Expected<int32_t> SparkCastHooks::castStringToDate(
     const StringView& dateString) const {
   // Allows all patterns supported by Spark:
@@ -167,7 +221,7 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
   //   "1970-01-01 123"
   //   "1970-01-01 (BC)"
   return util::fromDateString(
-      removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
+      trimUtf8StringAll(dateString), util::ParseMode::kSparkCast);
 }
 
 Expected<int64_t> SparkCastHooks::castStringToTime(
@@ -192,11 +246,24 @@ Expected<double> SparkCastHooks::castStringToDouble(
   return util::Converter<TypeKind::DOUBLE>::tryCast(data);
 }
 
-StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
-  StringView output;
-  stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
-      output, view);
-  return output;
+// Keep these target-type-specific rules in sync with Spark. Spark currently
+// uses UTF8String-style trimming for most casts but Java String.trim for
+// floating point and decimal casts. See
+// https://issues.apache.org/jira/browse/SPARK-59182.
+StringView SparkCastHooks::removeWhiteSpaces(
+    const StringView& view,
+    const Type& toType) const {
+  switch (toType.kind()) {
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+      return trimJavaString(view);
+    case TypeKind::BIGINT:
+    case TypeKind::HUGEINT:
+      return isDecimalType(toType) ? trimJavaString(view)
+                                   : trimUtf8StringAll(view);
+    default:
+      return trimUtf8StringAll(view);
+  }
 }
 
 void SparkCastHooks::castDateTimestampToGMT(
