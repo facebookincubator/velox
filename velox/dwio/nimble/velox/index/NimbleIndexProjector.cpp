@@ -244,7 +244,7 @@ NimbleIndexProjector::Result NimbleIndexProjector::project(
 
 void NimbleIndexProjector::setResumeKey(
     uint32_t requestIndex,
-    uint32_t stripeOffset,
+    uint32_t resolvedStripeIndex,
     uint32_t readEndRow,
     bool partialRead) {
   if (ctx_.resumeKeys[requestIndex].has_value()) {
@@ -254,9 +254,17 @@ void NimbleIndexProjector::setResumeKey(
   // the next stripe. A request occupies one contiguous stripe span, so
   // "continues" can only mean the immediately-next stripe -- no scan needed.
   bool hasMore = partialRead;
-  const uint32_t nextStripe = stripeOffset + 1;
-  if (!hasMore && nextStripe < ctx_.stripeRanges.numStripes) {
-    const auto ranges = ctx_.stripeRanges.getRanges(nextStripe);
+  const auto& resolvedStripes = ctx_.stripeRanges.resolvedStripes;
+  const uint32_t nextResolvedStripeIndex = resolvedStripeIndex + 1;
+  // Only the immediately-next stripe can continue the request, so skip the
+  // scan when the next resolved stripe is not adjacent. Requests cover one
+  // contiguous stripe run, so a non-adjacent successor could never hold this
+  // request anyway -- the adjacency test just avoids scanning its ranges to
+  // find that out.
+  if (!hasMore && nextResolvedStripeIndex < resolvedStripes.size() &&
+      resolvedStripes[nextResolvedStripeIndex] ==
+          resolvedStripes[resolvedStripeIndex] + 1) {
+    const auto ranges = ctx_.stripeRanges.getRanges(nextResolvedStripeIndex);
     hasMore = std::any_of(ranges.begin(), ranges.end(), [&](const auto& range) {
       return range.requestIndex == requestIndex;
     });
@@ -265,7 +273,7 @@ void NimbleIndexProjector::setResumeKey(
   // the clip point for a mid-stripe cut, or this stripe's end (== the next
   // stripe's start) for a boundary cap.
   if (hasMore) {
-    const uint32_t stripeIndex = ctx_.stripeRanges.startStripe + stripeOffset;
+    const uint32_t stripeIndex = resolvedStripes[resolvedStripeIndex];
     const auto stripeStartRow =
         static_cast<uint32_t>(tablet_->stripeStartRow(stripeIndex));
     ctx_.resumeKeys[requestIndex] =
@@ -283,21 +291,29 @@ void NimbleIndexProjector::prepareStripes() {
   rowsPerRequest.assign(ctx_.numRequests, 0);
   ctx_.hasStripeRanges.assign(ctx_.numRequests, false);
   ctx_.resumeKeys.assign(ctx_.numRequests, std::nullopt);
-  ctx_.plan.stripeIndices.reserve(ctx_.stripeRanges.numStripes);
-  ctx_.plan.numRows.reserve(ctx_.stripeRanges.numStripes);
-  ctx_.plan.requiresNullBarriers.reserve(ctx_.stripeRanges.numStripes);
-  ctx_.plan.numStreams.reserve(ctx_.stripeRanges.numStripes);
-  ctx_.plan.projectedBytes.reserve(ctx_.stripeRanges.numStripes);
-  ctx_.plan.stripeFileOffsets.reserve(ctx_.stripeRanges.numStripes);
-  ctx_.plan.stripeRangeOffsets.reserve(ctx_.stripeRanges.numStripes + 1);
+  // Reserve against the number of stripes that carry ranges, not the min..max
+  // span: the CSR is now indexed by position in resolvedStripes, so the span
+  // is an over-estimate whenever the requested stripes are sparse.
+  const auto numResolvedStripes =
+      static_cast<uint32_t>(ctx_.stripeRanges.resolvedStripes.size());
+  ctx_.plan.stripeIndices.reserve(numResolvedStripes);
+  ctx_.plan.numRows.reserve(numResolvedStripes);
+  ctx_.plan.requiresNullBarriers.reserve(numResolvedStripes);
+  ctx_.plan.numStreams.reserve(numResolvedStripes);
+  ctx_.plan.projectedBytes.reserve(numResolvedStripes);
+  ctx_.plan.stripeFileOffsets.reserve(numResolvedStripes);
+  ctx_.plan.stripeRangeOffsets.reserve(numResolvedStripes + 1);
   ctx_.plan.projectedStreams.reserve(
-      static_cast<size_t>(ctx_.stripeRanges.numStripes) *
+      static_cast<size_t>(numResolvedStripes) *
       projection_->streamOffsets.size());
   ctx_.plan.stripeRanges.reserve(ctx_.stripeRanges.ranges.size());
 
-  for (uint32_t offset = 0; offset < ctx_.stripeRanges.numStripes; ++offset) {
-    auto spanRanges = ctx_.stripeRanges.getRanges(offset);
-    const uint32_t stripeIndex = ctx_.stripeRanges.startStripe + offset;
+  for (uint32_t resolvedStripeIndex = 0;
+       resolvedStripeIndex < numResolvedStripes;
+       ++resolvedStripeIndex) {
+    auto spanRanges = ctx_.stripeRanges.getRanges(resolvedStripeIndex);
+    const uint32_t stripeIndex =
+        ctx_.stripeRanges.resolvedStripes[resolvedStripeIndex];
 
     const auto rangeOffset = ctx_.plan.stripeRanges.size();
     uint32_t numStripeRanges{0};
@@ -337,7 +353,10 @@ void NimbleIndexProjector::prepareStripes() {
       // exactly on this stripe's end), record where it resumes.
       if (needResumeKey && rowsPerRequest[requestIndex] >= maxRowsPerRequest) {
         setResumeKey(
-            requestIndex, offset, stripeRange.rowRange.endRow, partialRead);
+            requestIndex,
+            resolvedStripeIndex,
+            stripeRange.rowRange.endRow,
+            partialRead);
       }
       ctx_.hasStripeRanges[requestIndex] = true;
       ctx_.plan.stripeRanges.push_back(stripeRange);
@@ -398,6 +417,7 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.packedStripes.clear();
   ctx_.stripePackRanges.clear();
   ctx_.rowsPerRequest.clear();
+  ctx_.resolvedStripesScratch.clear();
   ctx_.sliceCounts.clear();
   ctx_.emittedSlices.clear();
   ctx_.sliceOutputBuffer.reset();
@@ -434,8 +454,6 @@ void NimbleIndexProjector::lookupStripes() {
     RowRange rowRange;
   };
 
-  uint32_t minStripe = numStripes_;
-  uint32_t maxStripe = 0;
   std::vector<ResolvedRequest> resolvedRequests;
   resolvedRequests.reserve(ctx_.numRequests);
   for (uint32_t requestIndex = 0; requestIndex < ctx_.numRequests;
@@ -454,41 +472,58 @@ void NimbleIndexProjector::lookupStripes() {
     NIMBLE_CHECK_LT(startStripe, endStripe);
 
     resolvedRequests.push_back({requestIndex, startStripe, endStripe, range});
-    minStripe = std::min(minStripe, startStripe);
-    maxStripe = std::max(maxStripe, endStripe);
   }
 
   if (resolvedRequests.empty()) {
     return;
   }
 
-  ctx_.stripeRanges.startStripe = minStripe;
-  ctx_.stripeRanges.numStripes = maxStripe - minStripe;
-
-  // Build CSR layout with write-cursor pattern: count entries per stripe,
-  // prefix-sum into offsets, then fill entries by index.
-  ctx_.stripeRanges.offsets.assign(ctx_.stripeRanges.numStripes + 1, 0);
+  // Collect one entry per (request, stripe) pair, then group. Everything here
+  // is O(entries) -- a few hundred -- where a span-indexed CSR would zero-fill
+  // and prefix-sum the whole min..max stripe span, which for scattered probes
+  // is three orders of magnitude larger than the number of stripes with
+  // ranges.
+  auto& scratch = ctx_.resolvedStripesScratch;
+  scratch.clear();
   for (const auto& request : resolvedRequests) {
     for (uint32_t stripe = request.startStripe; stripe < request.endStripe;
          ++stripe) {
-      ++ctx_.stripeRanges.offsets[stripe - minStripe + 1];
+      scratch.push_back(
+          {stripe,
+           StripeRange{
+               request.requestIndex,
+               stripeRowRange(stripe, request.rowRange)}});
     }
   }
-  for (uint32_t i = 1; i <= ctx_.stripeRanges.numStripes; ++i) {
-    ctx_.stripeRanges.offsets[i] += ctx_.stripeRanges.offsets[i - 1];
-  }
+  // Ordering on (stripe, request) is a total order, so an unstable sort still
+  // leaves the ranges within a stripe in request order, matching the
+  // write-cursor fill this replaces.
+  std::sort(
+      scratch.begin(), scratch.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.tabletStripeIndex != rhs.tabletStripeIndex) {
+          return lhs.tabletStripeIndex < rhs.tabletStripeIndex;
+        }
+        return lhs.range.requestIndex < rhs.range.requestIndex;
+      });
 
-  const auto numRanges = ctx_.stripeRanges.offsets.back();
-  ctx_.stripeRanges.ranges.resize(numRanges);
-  auto writeCursors = ctx_.stripeRanges.offsets;
-  for (const auto& request : resolvedRequests) {
-    for (uint32_t stripe = request.startStripe; stripe < request.endStripe;
-         ++stripe) {
-      const auto stripeOffset = stripe - minStripe;
-      ctx_.stripeRanges.ranges[writeCursors[stripeOffset]++] = StripeRange{
-          request.requestIndex, stripeRowRange(stripe, request.rowRange)};
+  auto& stripeRanges = ctx_.stripeRanges;
+  stripeRanges.ranges.reserve(scratch.size());
+  stripeRanges.offsets.push_back(0);
+  for (size_t i = 0; i < scratch.size(); ++i) {
+    if (i == 0) {
+      stripeRanges.resolvedStripes.push_back(scratch[i].tabletStripeIndex);
+    } else if (
+        scratch[i].tabletStripeIndex != scratch[i - 1].tabletStripeIndex) {
+      stripeRanges.offsets.push_back(static_cast<uint32_t>(i));
+      stripeRanges.resolvedStripes.push_back(scratch[i].tabletStripeIndex);
     }
+    stripeRanges.ranges.push_back(scratch[i].range);
   }
+  stripeRanges.offsets.push_back(static_cast<uint32_t>(scratch.size()));
+  NIMBLE_CHECK_EQ(
+      stripeRanges.offsets.size(),
+      stripeRanges.resolvedStripes.size() + 1,
+      "Stripe range offsets must have one entry per resolved stripe plus one");
 }
 
 void NimbleIndexProjector::loadStripes() {
@@ -981,9 +1016,13 @@ void NimbleIndexProjector::setResumeKeys(Result& result) {
   const auto stripeRanges = plannedStripeRanges(lastStripeOffset);
 
   // No next stripe in the range map — all mapped requests end at this stripe.
+  // resolvedStripes is ascending, so the successor is found by binary search;
+  // a miss means the next stripe carries no ranges and nothing continues.
   const auto nextStripe = stripeIndex + 1;
-  if (nextStripe >=
-      ctx_.stripeRanges.startStripe + ctx_.stripeRanges.numStripes) {
+  const auto& resolvedStripes = ctx_.stripeRanges.resolvedStripes;
+  const auto nextStripeIt = std::lower_bound(
+      resolvedStripes.begin(), resolvedStripes.end(), nextStripe);
+  if (nextStripeIt == resolvedStripes.end() || *nextStripeIt != nextStripe) {
     return;
   }
 
@@ -996,8 +1035,8 @@ void NimbleIndexProjector::setResumeKeys(Result& result) {
   }
 
   auto resumeKey = clusterIndex_->keyAtRow(nextStripeStartRow);
-  const auto nextRanges =
-      ctx_.stripeRanges.getRanges(nextStripe - ctx_.stripeRanges.startStripe);
+  const auto nextRanges = ctx_.stripeRanges.getRanges(
+      static_cast<uint32_t>(nextStripeIt - resolvedStripes.begin()));
 
   for (const auto& request : stripeRanges) {
     auto& response = result.responses[request.requestIndex];

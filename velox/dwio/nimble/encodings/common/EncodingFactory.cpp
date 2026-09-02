@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
@@ -128,6 +129,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::MainlyConstant: {
       RETURN_ENCODING_BY_NON_BOOL_TYPE(MainlyConstantEncoding, dataType);
+    }
+    case EncodingType::Slice: {
+      RETURN_ENCODING_BY_DATA_TYPE(SliceEncoding, dataType);
     }
     case EncodingType::Prefix: {
       NIMBLE_CHECK_EQ(
