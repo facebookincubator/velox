@@ -16,6 +16,10 @@
 
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
 
+#include <thread>
+
+#include <folly/futures/Future.h>
+
 #include <algorithm>
 
 namespace facebook::velox::exec::rpc {
@@ -138,7 +142,28 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
     responses.pop_back();
   }
 
-  return folly::makeSemiFuture(std::move(responses));
+  if (!holdFlushes_) {
+    return folly::makeSemiFuture(std::move(responses));
+  }
+
+  // Hold the flush open so it is genuinely outstanding while the operator
+  // decides whether to dispatch the next one. Completing inline releases the
+  // token first, so nothing ever overlaps and admission gating is invisible.
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  holdExecutor_->add([hold = holdMs_,
+                      p = std::move(promise),
+                      r = std::move(responses)]() mutable {
+    std::this_thread::sleep_for(std::chrono::milliseconds(hold));
+    p.setValue(std::move(r));
+  });
+  return std::move(future);
+}
+
+void DemoBatchRPCFunction::testingHoldFlushes(int32_t holdMs, int32_t threads) {
+  holdExecutor_ = std::make_shared<folly::CPUThreadPoolExecutor>(threads);
+  holdMs_ = holdMs;
+  holdFlushes_ = true;
 }
 
 int32_t DemoBatchRPCFunction::pendingBatchSize() const {
