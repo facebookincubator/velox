@@ -34,6 +34,10 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
+using velox::rpc::RpcCapability;
+using velox::rpc::RpcCapabilityMode;
+using velox::rpc::RpcCapabilityModeSet;
+using velox::rpc::RpcEffectiveBounds;
 using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
@@ -43,7 +47,7 @@ using velox::rpc::RPCStreamingMode;
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
 /// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// (RPCRequest, RPCResponse) live in velox/common/rpc/.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -95,6 +99,18 @@ class AsyncRPCFunction {
   /// Empty string means "no tier configured — uses global default limit."
   virtual std::string tierKey() const {
     return "";
+  }
+
+  /// Dispatch modes this function supports on its resolved backend. Always
+  /// includes kPerRow. A function whose backend is not yet pinned returns the
+  /// conservative per-row-only set.
+  virtual RpcCapability capabilities() const = 0;
+
+  /// The backend's hard limits for a dispatch mode. Returns zeroed bounds when
+  /// the mode is unbounded or unsupported.
+  virtual velox::rpc::RpcEffectiveBounds transportBounds(
+      velox::rpc::RpcCapabilityMode /*mode*/) const {
+    return {};
   }
 
   // ── PER_ROW mode ──────────────────────────────────────────────
@@ -197,7 +213,15 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed for reasons the backend is not responsible for, such as a
+    /// malformed request or a bad key. Retrying more slowly does not help, so
+    /// neither controller reacts. Today that makes kError observationally
+    /// identical to kNone at the operator; it is kept separate because "failed,
+    /// but not the backend's fault" and "nothing to evaluate" are different
+    /// facts, and only the former should ever gain an error counter.
     kError,
     /// No congestion evaluation — skip window adjustment.
     kNone,

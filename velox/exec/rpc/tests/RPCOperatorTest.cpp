@@ -194,9 +194,10 @@ TEST_F(RPCOperatorTest, basicPerRow) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["hello world"], "Response for: hello world");
-  EXPECT_EQ(rows["test prompt"], "Response for: test prompt");
-  EXPECT_EQ(rows["third row"], "Response for: third row");
+  // MockTransport is correlation-only (rowId echo) — typed TypedRequest path.
+  EXPECT_EQ(rows["hello world"], "Response for row 0");
+  EXPECT_EQ(rows["test prompt"], "Response for row 1");
+  EXPECT_EQ(rows["third row"], "Response for row 2");
 }
 
 // kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
@@ -242,7 +243,7 @@ TEST_F(RPCOperatorTest, nullInput) {
     } else {
       EXPECT_EQ(prompts->valueAt(i).str(), "valid prompt");
       EXPECT_FALSE(results->isNullAt(i));
-      EXPECT_EQ(results->valueAt(i).str(), "Response for: valid prompt");
+      EXPECT_EQ(results->valueAt(i).str(), "Response for row 0");
     }
   }
 }
@@ -277,12 +278,12 @@ TEST_F(RPCOperatorTest, multipleColumns) {
   auto i1 = rowIndex["question one"];
   EXPECT_EQ(ids->valueAt(i1), 100);
   EXPECT_EQ(extras->valueAt(i1), 1.5);
-  EXPECT_EQ(results->valueAt(i1).str(), "Response for: question one");
+  EXPECT_EQ(results->valueAt(i1).str(), "Response for row 0");
 
   auto i2 = rowIndex["question two"];
   EXPECT_EQ(ids->valueAt(i2), 200);
   EXPECT_EQ(extras->valueAt(i2), 2.5);
-  EXPECT_EQ(results->valueAt(i2).str(), "Response for: question two");
+  EXPECT_EQ(results->valueAt(i2).str(), "Response for row 1");
 }
 
 // ============================================================
@@ -557,6 +558,12 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  RpcCapability capabilities() const override {
+    return {
+        .supportedModes = {
+            RpcCapabilityMode::kPerRow, RpcCapabilityMode::kNativeBatch}};
+  }
+
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(const SelectivityVector&, const std::vector<VectorPtr>&)
       override {
@@ -668,7 +675,7 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
-/// (evaluateCongestion -> kError) both AIMD controllers back off: the
+/// (evaluateCongestion -> kOverloaded) both AIMD controllers back off: the
 /// per-driver window (onUnitError) and the process-global rate limiter
 /// (onRateLimited); on kSuccess the window's latency gradient is fed. Verifies
 /// the query still completes correctly through that path. The controllers'
@@ -676,8 +683,9 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
 /// guard the operator-level materialization + signal plumbing against
 /// crashes/regressions.
 TEST_F(RPCOperatorTest, perRowCongestionPath) {
-  // DemoAsyncRPCFunction::evaluateCongestion returns kError when a response
-  // result contains "OVERLOAD" (the mock echoes the prompt into the result).
+  // DemoAsyncRPCFunction::evaluateCongestion returns kOverloaded when a
+  // response result contains "OVERLOAD" (the mock echoes the prompt into the
+  // result).
   auto input = makeRowVector(
       {"prompt"},
       {makeFlatVector<StringView>(
@@ -696,9 +704,9 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["OVERLOAD one"], "Response for: OVERLOAD one");
-  EXPECT_EQ(rows["OVERLOAD two"], "Response for: OVERLOAD two");
-  EXPECT_EQ(rows["normal three"], "Response for: normal three");
+  EXPECT_EQ(rows["OVERLOAD one"], "Response for row 0");
+  EXPECT_EQ(rows["OVERLOAD two"], "Response for row 1");
+  EXPECT_EQ(rows["normal three"], "Response for row 2");
 }
 
 } // namespace facebook::velox::exec::rpc
