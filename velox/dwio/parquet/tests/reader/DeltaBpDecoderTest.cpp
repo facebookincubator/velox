@@ -319,24 +319,10 @@ void testDecodeAgainstPaddingLimit(uint32_t bitWidth) {
   EXPECT_EQ(decoder.bufferStart(), start + page.size());
 }
 
-// Pins the trailing-padding contract the SIMD decode path depends on. The
-// bitWidth > 16 path builds its 128-bit window from loads at 'byteOff' and
-// 'byteOff + 8', so it touches up to 16 - ceil(bitWidth / 4) bytes past the
-// miniblock -- 11 at bit widths 17 through 20, the widest over-read the
-// decoder performs. Running every SIMD-eligible width against a guard page
-// placed exactly kRequiredTrailingPadding bytes out fails if that bound ever
-// grows, or if the constant is lowered to match it.
-//
-// Note that this covers the padding half of the contract only. The path also
-// requires unaligned loads, and reading an unaligned address through a
-// 'uint64_t*' is undefined behavior that x86-64 and ARM64 both execute
-// correctly, so only -fsanitize=alignment observes it. That check does run in
-// the ASAN/UBSAN build: the -fno-sanitize=alignment added for issue #15811
-// sits on CMAKE_EXE_LINKER_FLAGS, and UBSan instruments at compile time, so
-// the flag does not suppress it. It reports and recovers rather than
-// aborting, which is why a misaligned load shows up as a diagnostic without
-// failing the job. This test drives unaligned payload offsets so a regression
-// surfaces there.
+// Verifies that no SIMD-eligible bit width reads beyond
+// kRequiredTrailingPadding bytes past the page. The widest over-read is
+// 16 - ceil(bitWidth / 4) bytes, from the bitWidth > 16 path's loads at
+// 'byteOff' and 'byteOff + 8', peaking at 11 for widths 17 through 20.
 TEST(DeltaBpDecoderTest, decodeAgainstPaddingLimit) {
   for (uint32_t bitWidth = 1; bitWidth <= 32; ++bitWidth) {
     testDecodeAgainstPaddingLimit(bitWidth);
