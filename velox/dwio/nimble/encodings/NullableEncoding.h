@@ -385,7 +385,7 @@ void NullableEncoding<T>::readIndicesWithVisitor(
   NIMBLE_CHECK(
       !V::kHasHook, "readIndicesWithVisitor does not support value hooks");
   materializeNullsForVisitor(visitor, params);
-  callReadIndicesWithVisitor(*nonNullValues_, visitor, params);
+  callReadIndicesWithVisitor<physicalType>(*nonNullValues_, visitor, params);
 }
 
 template <typename T>

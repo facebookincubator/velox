@@ -331,7 +331,9 @@ class ChunkedDecoder {
   // reading stopped early at a chunk boundary (the callback returned false);
   // in that case it advances the reader's readOffset_ to the boundary so the
   // flat encoding fallback resumes the decode there.
-  template <typename DictionaryVisitor>
+  // T is the encoding's logical value type, needed to cast the encoding to its
+  // concrete type. It cannot be deduced from the visitor, which reads indices.
+  template <typename T, typename DictionaryVisitor>
   bool readDictionaryIndices(
       DictionaryVisitor& visitor,
       const ChunkBoundaryCallback& onChunkBoundary) {
@@ -385,7 +387,7 @@ class ChunkedDecoder {
           return nulls->template asMutable<uint64_t>();
         };
       }
-      return readDictionaryIndicesImpl<true>(
+      return readDictionaryIndicesImpl<T, true>(
           visitor, nulls->template as<uint64_t>(), onChunkBoundary, params);
     } else {
       const auto numRows = visitor.numRows();
@@ -404,7 +406,7 @@ class ChunkedDecoder {
             .nullsInReadRange()
             ->template asMutable<uint64_t>();
       };
-      return readDictionaryIndicesImpl<false>(
+      return readDictionaryIndicesImpl<T, false>(
           visitor, /*nulls=*/nullptr, onChunkBoundary, params);
     }
   }
@@ -420,7 +422,7 @@ class ChunkedDecoder {
   // readWithVisitorImpl, this handles chunk transitions explicitly at the
   // top of the loop (for both kHasNulls and !kHasNulls paths) instead of
   // relying on testNulls which counts non-nulls across chunk boundaries.
-  template <bool kHasNulls, typename V>
+  template <typename T, bool kHasNulls, typename V>
   bool readDictionaryIndicesImpl(
       V& visitor,
       const uint64_t* nulls,
@@ -521,7 +523,7 @@ class ChunkedDecoder {
       if (visitor.rowIndex() < endRowIndex) {
         visitor.setRows(velox::RowSet(visitor.rows(), endRowIndex));
         if (numNonNulls > 0) {
-          callReadIndicesWithVisitor(*encoding_, visitor, params);
+          callReadIndicesWithVisitor<T>(*encoding_, visitor, params);
         } else if (!visitor.allowNulls()) {
           visitor.setRowIndex(endRowIndex);
         } else {
