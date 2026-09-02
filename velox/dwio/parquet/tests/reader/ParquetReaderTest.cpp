@@ -1328,6 +1328,22 @@ TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
       << "ParquetStatsContext(parquet-mr 1.8.2) should not ignore string stats";
 }
 
+TEST_F(ParquetReaderTest, parseSemanticVersion) {
+  auto version = SemanticVersion::parse("parquet-mr version 1.8.2");
+
+  ASSERT_TRUE(version.has_value());
+  EXPECT_EQ(version->toString(), "1.8.2");
+}
+
+TEST_F(ParquetReaderTest, parseOutOfRangeSemanticVersion) {
+  for (const auto& input :
+       {"parquet-mr version 999999999999999999999999.1.0",
+        "parquet-mr version 1.999999999999999999999999.0",
+        "parquet-mr version 1.0.999999999999999999999999"}) {
+    EXPECT_NO_THROW({ EXPECT_FALSE(SemanticVersion::parse(input)); });
+  }
+}
+
 // This test is to verify filterRowGroups() doesn't fail if offset is 0
 TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
   auto rowType = ROW("IDX", INTEGER());

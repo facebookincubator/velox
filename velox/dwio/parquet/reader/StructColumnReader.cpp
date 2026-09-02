@@ -115,7 +115,7 @@ void StructColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* /*incomingNulls*/) {
-  ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
+  prepareRepDefsAndOffset(*this, offset, rows);
   SelectiveStructColumnReader::read(offset, rows, nullptr);
 }
 

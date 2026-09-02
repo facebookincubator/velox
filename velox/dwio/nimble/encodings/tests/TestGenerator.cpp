@@ -230,6 +230,52 @@ void writeFileSmallNumbers(
       "small-numbers");
 }
 
+// Writes a sliced fixture whose first block is shorter than blockSize and which
+// spans several blocks. A plain encode cannot produce that shape: it sets
+// firstBlockRows to min(blockSize, rowCount), so a partial first block implies
+// a single block. Only slicing at a non-zero offset separates the two.
+template <typename E, typename RNG>
+void writeFileSliced(
+    RNG&& rng,
+    const std::string& path,
+    uint32_t rowCount,
+    uint32_t offset,
+    uint32_t length) {
+  auto identifier = fmt::format(
+      "{}_{}_{}_sliced",
+      nimble::test::Encoder<E>::encodingType(),
+      toString(nimble::TypeTraits<typename E::cppDataType>::dataType),
+      length);
+
+  LOG(INFO) << "Writing " << identifier;
+
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  auto data = generateRandomData<typename E::cppDataType>(
+      std::forward<RNG>(rng), buffer, rowCount);
+
+  // The expected values are the sliced range, not the whole stream.
+  {
+    std::ofstream file{
+        fmt::format("{}/{}.data", path, identifier),
+        std::ios::out | std::ios::binary | std::ios::trunc};
+    for (uint32_t i = offset; i < offset + length; ++i) {
+      file.write(
+          reinterpret_cast<const char*>(&data[i]),
+          sizeof(typename E::cppDataType));
+    }
+  }
+
+  const auto encoded = nimble::test::Encoder<E>::encode(
+      buffer, data, nimble::CompressionType::Uncompressed);
+  const auto sliced = E::slice(encoded, offset, length, buffer, {});
+
+  std::ofstream file{
+      fmt::format("{}/{}_Uncompressed.encoding", path, identifier),
+      std::ios::out | std::ios::binary | std::ios::trunc};
+  file << sliced;
+}
+
 template <typename E, typename RNG>
 void writeFileConstant(RNG&& rng, const std::string& path, uint32_t rowCount) {
   writeFile<E, RNG>(
@@ -437,8 +483,18 @@ int main(int argc, char* argv[]) {
     if (match("FixedBitWidth")) {
       WRITE_NUMERIC_FILES(FixedBitWidthEncoding, rowCount);
     }
-    if (match("BlockBitPacking")) {
+    // BlockBitPacking rejects empty streams: its header encodes numBlocks and
+    // firstBlockRows, both of which parseHeader requires to be greater than
+    // zero.
+    if (match("BlockBitPacking") && rowCount != 0) {
       WRITE_NUMERIC_FILES(BlockBitPackingEncoding, rowCount);
+      // 4096 rows over the 1024-row default block size, sliced from row 100, so
+      // the first block holds 924 rows and the stream spans four blocks. This
+      // is the only shape that exercises the firstBlockRows boundary.
+      writeFileSliced<nimble::BlockBitPackingEncoding<int32_t>>(
+          rng, FLAGS_output_dir, 4096, 100, 3000);
+      writeFileSliced<nimble::BlockBitPackingEncoding<int64_t>>(
+          rng, FLAGS_output_dir, 4096, 100, 3000);
     }
     if (match("SparseBool")) {
       writeFile<nimble::SparseBoolEncoding>(rng, FLAGS_output_dir, rowCount);

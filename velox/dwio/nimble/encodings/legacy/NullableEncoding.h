@@ -201,6 +201,17 @@ uint32_t NullableEncoding<T>::materializeNullable(
 
   const auto scatterSize =
       scatterOutputBitmap ? scatterOutputBitmap->size() - offset : rowCount;
+
+  // A column that is entirely null over this batch would still walk every
+  // position in the scatter loop below to set nothing. Short-circuit to the
+  // cleared bitmap.
+  if (nonNullCount == 0 && scatterSize != 0) {
+    velox::bits::BitmapBuilder nullBits{getOutputNulls(), offset + scatterSize};
+    nullBits.clear(offset, offset + scatterSize);
+    row_ += rowCount;
+    return 0;
+  }
+
   if (nonNullCount != scatterSize) {
     void* nullBitmap = getOutputNulls();
     velox::bits::BitmapBuilder nullBits{nullBitmap, offset + scatterSize};

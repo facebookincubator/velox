@@ -158,9 +158,12 @@ class IoStatistics {
   // or for an in-progress read-ahead to finish.
   IoCounter queryThreadIoLatencyUs_;
 
-  // Breakdown of queryThreadIoLatencyUs_ by I/O type:
+  // IO latency by type. Does not add up to queryThreadIoLatencyUs_ - a read
+  // issued by the prefetch thread is included in the metrics below but does not
+  // block the query thread and thus does not contribute to
+  // queryThreadIoLatencyUs_.
 
-  // Time spent waiting for remote storage reads (S3, HDFS, etc.)
+  // Time spent reading from remote storage (S3, HDFS, etc.)
   IoCounter storageReadLatencyUs_;
 
   // Time spent waiting for SSD cache reads

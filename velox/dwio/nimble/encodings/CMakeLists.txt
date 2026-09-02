@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-if(VELOX_ENABLE_BENCHMARKS)
+# The ml_id_compression drivers under benchmarks/ are gated on the experimental
+# encodings they exercise, not on Velox's benchmark switch, so this directory is
+# entered for either. benchmarks/CMakeLists.txt guards its Folly-benchmark
+# targets on VELOX_ENABLE_BENCHMARKS separately.
+if(VELOX_ENABLE_BENCHMARKS OR NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
   add_subdirectory(benchmarks)
 endif()
 if(NIMBLE_BUILD_TESTING)
@@ -82,6 +86,7 @@ add_library(
   SubIntSplitCostModels.h
   SubIntSplitConfig.h
   SparseBoolEncoding.h
+  SliceEncoding.h
   SimdForBitpackEncoding.h
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
