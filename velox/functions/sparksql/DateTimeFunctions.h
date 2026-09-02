@@ -155,13 +155,14 @@ struct UnixTimestampParseFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/) {
+    const SparkQueryConfig sparkConfig{config};
     auto formatter = detail::getDateTimeFormatter(
         kDefaultFormat_,
-        SparkQueryConfig{config}.legacyDateFormatter()
-            ? DateTimeFormatterType::STRICT_SIMPLE
-            : DateTimeFormatterType::JODA);
+        sparkConfig.legacyDateFormatter() ? DateTimeFormatterType::STRICT_SIMPLE
+                                          : DateTimeFormatterType::JODA);
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
+    ansiEnabled_ = sparkConfig.ansiEnabled();
     setTimezone(config);
   }
 
@@ -169,8 +170,13 @@ struct UnixTimestampParseFunction {
       int64_t& result,
       const arg_type<Varchar>& input) {
     auto dateTimeResult = format_->parse(std::string_view(input));
-    // Return null if could not parse.
+    // Could not parse the input. Under ANSI mode Spark fails on invalid input;
+    // otherwise the result is null.
     if (dateTimeResult.hasError()) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "Could not parse '{}' to unix timestamp.", std::string_view(input));
+      }
       return false;
     }
     toGMTWithGapCorrection(
@@ -196,6 +202,10 @@ struct UnixTimestampParseFunction {
   constexpr static std::string_view kDefaultFormat_{"yyyy-MM-dd HH:mm:ss"};
   std::shared_ptr<DateTimeFormatter> format_;
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // fallback to GMT.
+  // Whether ANSI-compliant behavior is enabled. When true, parse failures
+  // raise a user error instead of returning null, matching Spark's
+  // failOnError behavior.
+  bool ansiEnabled_{false};
 };
 
 template <typename T>
@@ -210,7 +220,9 @@ struct UnixTimestampParseWithFormatFunction
       const core::QueryConfig& config,
       const arg_type<Varchar>* /*input*/,
       const arg_type<Varchar>* format) {
-    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
+    const SparkQueryConfig sparkConfig{config};
+    legacyFormatter_ = sparkConfig.legacyDateFormatter();
+    this->ansiEnabled_ = sparkConfig.ansiEnabled();
     if (format != nullptr) {
       auto formatter = detail::getDateTimeFormatter(
           std::string_view(format->data(), format->size()),
@@ -230,6 +242,7 @@ struct UnixTimestampParseWithFormatFunction
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
       const arg_type<Date>* /*input*/) {
+    this->ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
     this->setTimezone(config);
   }
 
@@ -254,8 +267,14 @@ struct UnixTimestampParseWithFormatFunction
     }
     auto dateTimeResult =
         this->format_->parse(std::string_view(input.data(), input.size()));
-    // parsing error returns null
+    // Could not parse the input. Under ANSI mode Spark fails on invalid input;
+    // otherwise the result is null.
     if (dateTimeResult.hasError()) {
+      if (this->ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "Could not parse '{}' to unix timestamp.",
+            std::string_view(input.data(), input.size()));
+      }
       return false;
     }
     toGMTWithGapCorrection(

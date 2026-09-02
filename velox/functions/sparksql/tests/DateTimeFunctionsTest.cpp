@@ -59,6 +59,12 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
     });
   }
 
+  void enableAnsi() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+    });
+  }
+
   template <typename TOutput, typename TValue>
   std::optional<TOutput> evaluateDateFuncOnce(
       const std::string& expr,
@@ -374,6 +380,67 @@ TEST_F(DateTimeFunctionsTest, toUnixTimestamp) {
 
   // to_unix_timestamp does not provide an overoaded without any parameters.
   EXPECT_THROW(evaluateOnce<int64_t>("to_unix_timestamp()"), VeloxUserError);
+}
+
+// When ANSI mode is enabled, unix_timestamp/to_unix_timestamp fail on invalid
+// input instead of returning null, matching Spark's failOnError behavior.
+TEST_F(DateTimeFunctionsTest, unixTimestampAnsi) {
+  const auto unixTimestamp = [&](std::optional<StringView> dateStr) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", dateStr);
+  };
+  const auto unixTimestampWithFormat =
+      [&](std::optional<StringView> dateStr,
+          std::optional<StringView> formatStr) {
+        return evaluateOnce<int64_t>(
+            "unix_timestamp(c0, c1)", dateStr, formatStr);
+      };
+  const auto toUnixTimestamp = [&](std::optional<StringView> dateStr) {
+    return evaluateOnce<int64_t>("to_unix_timestamp(c0)", dateStr);
+  };
+
+  enableAnsi();
+
+  // Valid input still parses successfully.
+  EXPECT_EQ(0, unixTimestamp("1970-01-01 00:00:00"));
+  EXPECT_EQ(0, unixTimestampWithFormat("1970-01-01", "yyyy-MM-dd"));
+  EXPECT_EQ(0, toUnixTimestamp("1970-01-01 00:00:00"));
+
+  // Null input is still propagated as null (not an error).
+  EXPECT_EQ(std::nullopt, unixTimestamp(std::nullopt));
+
+  // Invalid input fails under ANSI mode.
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp("1970-01-01"),
+      "Could not parse '1970-01-01' to unix timestamp.");
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp("malformed input"),
+      "Could not parse 'malformed input' to unix timestamp.");
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp(""), "Could not parse '' to unix timestamp.");
+  VELOX_ASSERT_USER_THROW(
+      unixTimestampWithFormat("malformed input", "yyyy-MM-dd"),
+      "Could not parse 'malformed input' to unix timestamp.");
+  VELOX_ASSERT_USER_THROW(
+      toUnixTimestamp("malformed input"),
+      "Could not parse 'malformed input' to unix timestamp.");
+
+  // Invalid format still returns null (not gated by ANSI, matching the
+  // existing non-ANSI behavior).
+  EXPECT_EQ(
+      std::nullopt,
+      unixTimestampWithFormat(
+          "2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
+
+  // Same behavior with the legacy formatter (set both configs together since
+  // overriding replaces the whole config map).
+  queryCtx_->testingOverrideConfigUnsafe({
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyDateFormatter),
+       "true"},
+  });
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp("malformed input"),
+      "Could not parse 'malformed input' to unix timestamp.");
 }
 
 TEST_F(DateTimeFunctionsTest, makeDate) {
