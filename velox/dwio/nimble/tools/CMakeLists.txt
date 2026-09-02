@@ -29,10 +29,7 @@ target_include_directories(
   nimble_external_dictionary_fb
   INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
 )
-add_dependencies(
-  nimble_external_dictionary_fb
-  nimble_external_dictionary_schema_fb
-)
+add_dependencies(nimble_external_dictionary_fb nimble_external_dictionary_schema_fb)
 
 add_library(nimble_dump_lib NimbleDumpLib.cpp NimbleDumpLib.h)
 target_link_libraries(
@@ -42,7 +39,7 @@ target_link_libraries(
   nimble_encodings
   nimble_tablet_common
   nimble_tablet_reader
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   nimble_velox_stats_fb
   velox_file
@@ -66,14 +63,18 @@ target_link_libraries(
   nimble_tools_common
   nimble_common
   nimble_tablet_reader
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_schema_reader
   nimble_column_stats
   velox_file
   velox_memory
 )
 
-add_library(nimble_external_dictionary_builder ExternalDictionaryBuilder.cpp)
+add_library(
+  nimble_external_dictionary_builder
+  ExternalDictionaryBuilder.cpp
+  ExternalDictionaryBuilder.h
+)
 target_link_libraries(
   nimble_external_dictionary_builder
   nimble_external_dictionary_fb
@@ -88,6 +89,8 @@ target_link_libraries(
 # NimbleDsl.cpp) and the EncodingBench and EncodingSelectionLogger
 # instrumentation include Meta-internal headers that are not part of the OSS
 # export, so they have no OSS build.
+
+add_subdirectory(encoding)
 
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)

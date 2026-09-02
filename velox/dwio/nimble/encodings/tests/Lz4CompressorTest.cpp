@@ -66,12 +66,12 @@ class RejectingLz4CompressionPolicy : public CompressionPolicy {
 
 } // namespace
 
-TEST(Lz4CompressorTest, CompressionType) {
+TEST(Lz4CompressorTest, compressionType) {
   Lz4Compressor compressor;
   EXPECT_EQ(CompressionType::Lz4, compressor.compressionType());
 }
 
-TEST(Lz4CompressorTest, RoundTrip) {
+TEST(Lz4CompressorTest, roundTrip) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   Lz4Compressor compressor;
   TestLz4CompressionPolicy policy;
@@ -96,7 +96,7 @@ TEST(Lz4CompressorTest, RoundTrip) {
       std::memcmp(original.data(), decompressed->as<char>(), original.size()));
 }
 
-TEST(Lz4CompressorTest, UncompressedSize) {
+TEST(Lz4CompressorTest, uncompressedSize) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   Lz4Compressor compressor;
   TestLz4CompressionPolicy policy;
@@ -117,7 +117,7 @@ TEST(Lz4CompressorTest, UncompressedSize) {
   EXPECT_EQ(original.size(), size.value());
 }
 
-TEST(Lz4CompressorTest, IncompressibleData) {
+TEST(Lz4CompressorTest, incompressibleData) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   Lz4Compressor compressor;
   TestLz4CompressionPolicy policy;
@@ -135,7 +135,7 @@ TEST(Lz4CompressorTest, IncompressibleData) {
   EXPECT_FALSE(result.buffer.has_value());
 }
 
-TEST(Lz4CompressorTest, DeclinedByPolicy) {
+TEST(Lz4CompressorTest, declinedByPolicy) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   Lz4Compressor compressor;
   RejectingLz4CompressionPolicy policy;
@@ -153,7 +153,7 @@ TEST(Lz4CompressorTest, DeclinedByPolicy) {
   EXPECT_FALSE(result.buffer.has_value());
 }
 
-TEST(Lz4CompressorTest, RoundTripVariousDataTypes) {
+TEST(Lz4CompressorTest, roundTripVariousDataTypes) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   Lz4Compressor compressor;
   TestLz4CompressionPolicy policy;
@@ -175,7 +175,7 @@ TEST(Lz4CompressorTest, RoundTripVariousDataTypes) {
       0, std::memcmp(input.data(), decompressed->as<char>(), input.size()));
 }
 
-TEST(Lz4CompressorTest, MinCompressionSizeSkipsSmallData) {
+TEST(Lz4CompressorTest, minCompressionSizeSkipsSmallData) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   Lz4Compressor compressor;
 

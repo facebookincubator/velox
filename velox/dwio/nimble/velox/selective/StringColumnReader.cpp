@@ -255,8 +255,14 @@ void StringColumnReader::filterDictionaryIndices(
         outputRows);
     outputRows_.resize(numValues_);
     checkWritableResultNulls(readCount);
-    velox::bits::fillBits(
-        rawResultNulls_, 0, numValues_, velox::bits::kNotNull);
+    // Clear through readCount, not numValues_: filterByCache compacted the
+    // output, and the vacated tail [numValues_, readCount) still holds null
+    // bits from the pre-compaction layout. On the dict->flat abandon path the
+    // continuation appends over that tail with addValue(), which writes the
+    // value but not the null bit, and ChunkedDecoder::readWithVisitor skips
+    // prepareNulls() (and its buffer-wide clear) once the prefix has set
+    // anyNulls_ — so nothing else would ever clear them.
+    velox::bits::fillBits(rawResultNulls_, 0, readCount, velox::bits::kNotNull);
     return;
   }
 
@@ -289,6 +295,11 @@ void StringColumnReader::filterDictionaryIndices(
       indices,
       outputRows);
   outputRows_.resize(numValues_);
+  // The merge wrote [0, numValues_) but compacted away the rest of
+  // [0, readCount); clear the vacated tail for the same reason as the
+  // reject-nulls branch above.
+  velox::bits::fillBits(
+      rawResultNulls_, numValues_, readCount, velox::bits::kNotNull);
 }
 
 velox::vector_size_t StringColumnReader::processNullAndPassingRows(

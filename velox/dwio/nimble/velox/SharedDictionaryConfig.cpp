@@ -29,26 +29,19 @@
 namespace facebook::nimble {
 namespace {
 
-velox::common::Subfield parseFieldPath(
-    const std::string& fieldPath,
-    std::string_view configType) {
+velox::common::Subfield parseFieldPath(const std::string& fieldPath) {
   NIMBLE_USER_CHECK(
-      !fieldPath.empty(),
-      "Shared dictionary {} path must not be empty.",
-      configType);
+      !fieldPath.empty(), "Shared dictionary path must not be empty.");
   velox::common::Subfield subfield;
   try {
     subfield = velox::common::Subfield{fieldPath};
   } catch (const velox::VeloxException&) {
     NIMBLE_USER_FAIL(
-        "Shared dictionary {} path '{}' must start with a field name.",
-        configType,
-        fieldPath);
+        "Shared dictionary path '{}' must start with a field name.", fieldPath);
   }
   NIMBLE_USER_CHECK(
       subfield.valid(),
-      "Shared dictionary {} path '{}' must start with a field name.",
-      configType,
+      "Shared dictionary path '{}' must start with a field name.",
       fieldPath);
   return subfield;
 }
@@ -56,7 +49,7 @@ velox::common::Subfield parseFieldPath(
 void validateValueStreamPath(
     const std::string& fieldPath,
     std::string_view configType) {
-  const auto subfield = parseFieldPath(fieldPath, configType);
+  const auto subfield = parseFieldPath(fieldPath);
   for (const auto& pathElement : subfield.path()) {
     NIMBLE_USER_CHECK(
         pathElement->is(velox::common::SubfieldKind::kNestedField) ||
@@ -70,7 +63,7 @@ void validateValueStreamPath(
 
 velox::common::Subfield validateFlatMapColumnPath(
     const std::string& fieldPath) {
-  auto subfield = parseFieldPath(fieldPath, "flat-map column");
+  auto subfield = parseFieldPath(fieldPath);
   NIMBLE_USER_CHECK_EQ(
       subfield.path().size(),
       1,
@@ -84,8 +77,7 @@ void validateValueSubfield(const std::string& valueSubfield) {
   if (valueSubfield.empty()) {
     return;
   }
-  const auto subfield =
-      parseFieldPath(valueSubfield, "flat-map value subfield");
+  const auto subfield = parseFieldPath(valueSubfield);
   for (const auto& pathElement : subfield.path()) {
     NIMBLE_USER_CHECK(
         pathElement->is(velox::common::SubfieldKind::kNestedField) ||
@@ -145,13 +137,13 @@ SharedDictionaryConfigBuilder::addFlatmapValueDictionary(
   validateValueSubfield(valueSubfield);
 
   auto column = std::find_if(
-      config_.flatMapColumns.begin(),
-      config_.flatMapColumns.end(),
+      config_.flatMaps.begin(),
+      config_.flatMaps.end(),
       [&](const auto& candidate) { return candidate.fieldPath == fieldPath; });
-  if (column == config_.flatMapColumns.end()) {
-    config_.flatMapColumns.push_back(
+  if (column == config_.flatMaps.end()) {
+    config_.flatMaps.push_back(
         FlatmapColumnDictionary{.fieldPath = fieldPath, .keys = {}});
-    column = std::prev(config_.flatMapColumns.end());
+    column = std::prev(config_.flatMaps.end());
   }
 
   const auto duplicate = std::any_of(

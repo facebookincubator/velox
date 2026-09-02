@@ -211,15 +211,44 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     return fieldIds;
   }
 
+  // Equality-delete columns absent from the user's projection have no
+  // IcebergColumnHandle and would otherwise get a sentinel field ID. Collect
+  // their real Iceberg field IDs via resolveEqualityColumns() — the single
+  // authoritative path for field-ID→name resolution — so the Parquet reader
+  // can locate those columns physically. This is purely additive: it only
+  // fills slots where handleByName has no entry.
+  std::unordered_map<std::string, int32_t> equalityFieldIdByName;
+  for (const auto& deleteFile : icebergSplit_->deleteFiles) {
+    if (deleteFile.content != FileContent::kEqualityDeletes ||
+        deleteFile.recordCount == 0 || deleteFile.equalityFieldIds.empty()) {
+      continue;
+    }
+    if (shouldSkipBySequenceNumber(
+            deleteFile.dataSequenceNumber,
+            icebergSplit_->dataSequenceNumber,
+            /*isEqualityDelete=*/true)) {
+      continue;
+    }
+
+    auto [names, types] = resolveEqualityColumns(deleteFile);
+    for (size_t i = 0; i < names.size(); ++i) {
+      equalityFieldIdByName.emplace(names[i], deleteFile.equalityFieldIds[i]);
+    }
+  }
+
   fieldIds.reserve(dataColumns->size());
   int32_t sentinelFieldId = -1;
   for (size_t i = 0; i < dataColumns->size(); ++i) {
-    auto it = handleByName.find(dataColumns->nameOf(static_cast<uint32_t>(i)));
+    const auto& colName = dataColumns->nameOf(static_cast<uint32_t>(i));
+    auto it = handleByName.find(colName);
     if (it != handleByName.end()) {
       fieldIds.push_back(it->second->field());
     } else if (dataColumnFieldIds != nullptr && !dataColumnFieldIds->empty()) {
       fieldIds.push_back(
           dwio::common::ParquetFieldId{dataColumnFieldIds->at(i), {}});
+    } else if (auto eqIt = equalityFieldIdByName.find(colName);
+               eqIt != equalityFieldIdByName.end()) {
+      fieldIds.push_back(dwio::common::ParquetFieldId{eqIt->second, {}});
     } else {
       fieldIds.push_back(dwio::common::ParquetFieldId{sentinelFieldId--, {}});
     }
@@ -695,7 +724,7 @@ IcebergSplitReader::resolveEqualityColumns(
   VELOX_CHECK(
       dataColumns != nullptr,
       "Iceberg equality delete file '{}' cannot be processed because "
-      "table data columns are not available in HiveTableHandle.",
+      "table data columns are not available in IcebergTableHandle.",
       deleteFile.filePath);
   std::unordered_map<int32_t, uint32_t> columnIndexByFieldId;
   if (const auto* hiveTableHandle =

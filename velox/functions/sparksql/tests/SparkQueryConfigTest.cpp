@@ -38,6 +38,32 @@ TEST(SparkQueryConfigTest, roundTrip) {
     });
     EXPECT_FALSE(SparkQueryConfig{queryConfig}.ansiEnabled());
   }
+
+  {
+    core::QueryConfig queryConfig({
+        {SparkQueryConfig::qualify(
+             SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+         "true"},
+    });
+    EXPECT_TRUE(
+        SparkQueryConfig{queryConfig}.decimalToFloatHighPrecisionCastEnabled());
+  }
+
+  {
+    core::QueryConfig queryConfig({
+        {SparkQueryConfig::qualify(
+             SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+         "false"},
+    });
+    EXPECT_FALSE(
+        SparkQueryConfig{queryConfig}.decimalToFloatHighPrecisionCastEnabled());
+  }
+}
+
+TEST(SparkQueryConfigTest, defaultValues) {
+  core::QueryConfig queryConfig({});
+  EXPECT_FALSE(
+      SparkQueryConfig{queryConfig}.decimalToFloatHighPrecisionCastEnabled());
 }
 
 // Verifies SparkConfigProvider::normalize rejects out-of-range partition_id.

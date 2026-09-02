@@ -42,6 +42,7 @@ SharedDictionaryAlphabet::SharedDictionaryAlphabet(
     std::shared_ptr<const void> encodedAlphabetOwner,
     velox::memory::MemoryPool* pool)
     : encodedAlphabetOwner_{std::move(encodedAlphabetOwner)},
+      encodedAlphabet_{encoded},
       dataType_{EncodingPrefix::dataType(encoded)},
       encodingType_{EncodingPrefix::encodingType(encoded)},
       entryPayload_{*velox::checkedNotNull(pool)},

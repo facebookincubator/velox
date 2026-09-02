@@ -87,6 +87,9 @@ struct LaunchMeta {
   int64_t gatherUs{0};
   int64_t gridUs{0};
   int64_t allocUs{0};
+  // The part of allocUs spent inside the allocator itself. allocUs minus this
+  // is shape arithmetic and building the views over what was allocated.
+  int64_t allocCallUs{0};
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
@@ -103,6 +106,11 @@ struct LaunchMeta {
   int64_t refCheckUs{0};
   // Bytes of copying the clone-elision pass saved, charged to this step.
   int64_t elidedCloneBytes{0};
+  // Allocation groups carved at this step, and the outputs they covered. Zero
+  // outside the allocation-group mode, and also for a step of it whose outputs
+  // all escape the invocation.
+  int32_t allocGroups{0};
+  int32_t allocGroupTensors{0};
   // Device-measured spans from this step's events (kTiming only). kernelUs and
   // standaloneUs above are host wall times around issuing the work; these are
   // what the GPU actually spent on it.
@@ -316,6 +324,9 @@ struct StepVectors {
   int64_t gatherUs{0};
   int64_t gridUs{0};
   int64_t allocUs{0};
+  // The part of allocUs spent inside the allocator itself. allocUs minus this
+  // is shape arithmetic and building the views over what was allocated.
+  int64_t allocCallUs{0};
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
@@ -337,6 +348,13 @@ struct StepVectors {
   // numel * element size * the number of clones elided for it. Filled only
   // when the kTiming trace bit is on.
   int64_t elidedCloneBytes{0};
+
+  // Allocation groups carved at this step and the number of outputs they
+  // covered, i.e. the allocator calls the grouping replaced with one call each.
+  // Always maintained, not just under kTiming: they are counts already to hand
+  // where the groups are materialized, not a measurement.
+  int32_t allocGroups{0};
+  int32_t allocGroupTensors{0};
 
   // Device-measured spans from this step's events, and the device idle that
   // preceded it (kTiming only). See LaunchMeta for what each one means.
@@ -843,6 +861,12 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   std::vector<c10::IValue> executeWithPrefilledFrame(
       nativert::ExecutionFrame& frame) override;
+
+  /// Runs the graph on positional 'inputs' (in graph user-input order) using a
+  /// pooled device frame and returns the user outputs. Convenience wrapper over
+  /// getFrame()/fillUserInputs()/executeWithPrefilledFrame()/returnFrame() for
+  /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
+  std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
 
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();

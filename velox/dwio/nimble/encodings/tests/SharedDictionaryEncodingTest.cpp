@@ -24,6 +24,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,13 +38,16 @@
 #include "velox/dwio/nimble/common/NimbleException.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 
 namespace facebook::nimble {
 namespace {
@@ -81,15 +85,23 @@ class SharedDictionaryEncodingTest : public ::testing::Test {
   }
 
   std::vector<int32_t> materialize(std::string_view encoded) {
-    auto encoding = createEncoding(encoded);
+    return materialize(encoded, Encoding::Options{});
+  }
+
+  std::vector<int32_t> materialize(
+      std::string_view encoded,
+      const Encoding::Options& options) {
+    auto encoding = createEncoding(encoded, options);
     Vector<int32_t> output{pool_.get(), encoding->rowCount()};
     encoding->materialize(encoding->rowCount(), output.data());
     return {output.begin(), output.end()};
   }
 
-  std::string encodeShared(const std::vector<uint32_t>& indices) {
+  std::string encodeShared(
+      const std::vector<uint32_t>& indices,
+      const Encoding::Options& options = {}) {
     const auto encoded = SharedDictionaryEncoding<int32_t>::encode(
-        indices, createNestedPolicy, *buffer_, Encoding::Options{});
+        indices, createNestedPolicy, *buffer_, options);
     return std::string{encoded};
   }
 
@@ -114,6 +126,12 @@ class SharedDictionaryEncodingTest : public ::testing::Test {
         EncodingPrefix::prefixSize(encoded, /*useVarint=*/false);
     const uint32_t alphabetBytes = encoding::readUint32(pos);
     pos += alphabetBytes;
+    return {pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
+  }
+
+  std::string_view sharedDictionaryIndices(std::string_view encoded) const {
+    const char* pos = encoded.data() +
+        EncodingPrefix::prefixSize(encoded, /*useVarint=*/false);
     return {pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
   }
 
@@ -160,6 +178,236 @@ template <typename T>
 std::span<const T> valueSpan(const std::vector<T>& values) {
   return {values.data(), values.size()};
 }
+
+using TestSharedDictionaryWriter = TypedSharedDictionaryWriter<int32_t>;
+using EncodingReadFactors = std::vector<std::pair<EncodingType, float>>;
+
+EncodingReadFactors dictionaryValueEncoding() {
+  return {{EncodingType::Dictionary, 1.0}};
+}
+
+EncodingReadFactors trivialPreferredValueEncoding() {
+  return {{EncodingType::Trivial, 0.01}, {EncodingType::Dictionary, 1000.0}};
+}
+
+EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator(
+    EncodingReadFactors valueEncodingReadFactors = dictionaryValueEncoding()) {
+  return
+      [valueEncodingReadFactors = std::move(valueEncodingReadFactors)](
+          DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        EncodingReadFactors encodingReadFactors;
+        switch (dataType) {
+          case DataType::Int32:
+            encodingReadFactors = valueEncodingReadFactors;
+            break;
+          case DataType::Uint32:
+            encodingReadFactors = {{EncodingType::FixedBitWidth, 1.0}};
+            break;
+          case DataType::Undefined:
+          case DataType::Int8:
+          case DataType::Uint8:
+          case DataType::Int16:
+          case DataType::Uint16:
+          case DataType::Int64:
+          case DataType::Uint64:
+          case DataType::Float:
+          case DataType::Double:
+          case DataType::Bool:
+          case DataType::String:
+            encodingReadFactors = {{EncodingType::Trivial, 1.0}};
+            break;
+        }
+        ManualEncodingSelectionPolicyFactory factory{
+            std::move(encodingReadFactors), std::nullopt};
+        return factory.createPolicy(dataType);
+      };
+}
+
+class TestDictionaryResolver final : public ExternalDictionaryResolver {
+ public:
+  TestDictionaryResolver(
+      uint32_t dictionaryId,
+      std::span<const int32_t> values,
+      velox::memory::MemoryPool* pool)
+      : dictionaryId_{dictionaryId},
+        alphabet_{test::createSharedDictionaryAlphabet<int32_t>(
+            values,
+            std::span<const EncodingType>{},
+            pool)} {}
+
+  std::shared_ptr<const SharedDictionaryAlphabet> resolve(
+      uint32_t dictionaryId,
+      DataType dataType) const final {
+    if (dictionaryId != dictionaryId_ || dataType != DataType::Int32) {
+      return nullptr;
+    }
+    return alphabet_;
+  }
+
+  std::shared_ptr<const SharedDictionaryAlphabet> alphabet() const {
+    return alphabet_;
+  }
+
+ private:
+  const uint32_t dictionaryId_;
+  const std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
+};
+
+struct GeneratedEncodingBatch {
+  bool nullable{};
+  std::vector<int32_t> values;
+  std::unique_ptr<bool[]> notNulls;
+  size_t rowCount{};
+  std::vector<int32_t> expected;
+  std::string encoded;
+
+  std::span<const bool> notNullsSpan() const {
+    return {notNulls.get(), rowCount};
+  }
+};
+
+std::vector<int32_t> sharedDictionaryValueUniverse() {
+  constexpr int32_t kValueCount{256};
+  std::vector<int32_t> values;
+  values.reserve(kValueCount);
+  for (int32_t i{0}; i < kValueCount; ++i) {
+    values.push_back(i * 13 - 57);
+  }
+  return values;
+}
+
+int32_t randomValue(std::mt19937& rng, std::span<const int32_t> valueUniverse) {
+  std::uniform_int_distribution<size_t> valueIndex{0, valueUniverse.size() - 1};
+  return valueUniverse[valueIndex(rng)];
+}
+
+GeneratedEncodingBatch generateBatch(
+    std::mt19937& rng,
+    std::span<const int32_t> valueUniverse,
+    bool requireNonNullValue) {
+  GeneratedEncodingBatch batch;
+  std::uniform_int_distribution<size_t> rowCount{1, 64};
+  batch.rowCount = rowCount(rng);
+  batch.nullable = std::uniform_int_distribution<int>{0, 2}(rng) != 0;
+  batch.expected.reserve(batch.rowCount);
+
+  if (!batch.nullable) {
+    batch.values.reserve(batch.rowCount);
+    for (size_t i{0}; i < batch.rowCount; ++i) {
+      const auto value = randomValue(rng, valueUniverse);
+      batch.values.push_back(value);
+      batch.expected.push_back(value);
+    }
+    return batch;
+  }
+
+  batch.notNulls = std::make_unique<bool[]>(batch.rowCount);
+  const bool allNull = !requireNonNullValue &&
+      std::uniform_int_distribution<int>{0, 5}(rng) == 0;
+  for (size_t i{0}; i < batch.rowCount; ++i) {
+    const bool forcedNonNull = requireNonNullValue && i == 0;
+    const bool randomlyNonNull =
+        std::uniform_int_distribution<int>{0, 3}(rng) != 0;
+    const bool notNull = !allNull && (forcedNonNull || randomlyNonNull);
+    batch.notNulls[i] = notNull;
+    if (notNull) {
+      const auto value = randomValue(rng, valueUniverse);
+      batch.values.push_back(value);
+      batch.expected.push_back(value);
+      continue;
+    }
+    batch.expected.push_back(0);
+  }
+  return batch;
+}
+
+TestSharedDictionaryWriter::Options writerOptions(
+    SharedDictionaryScope scope,
+    uint32_t dictionaryId,
+    std::shared_ptr<const ExternalDictionaryResolver> resolver = nullptr,
+    EncodingReadFactors valueEncodingReadFactors = dictionaryValueEncoding()) {
+  return TestSharedDictionaryWriter::Options{
+      .scope = scope,
+      .dictionaryId = dictionaryId,
+      .useExternalAlphabet = false,
+      .alphabetEncodings = {},
+      .encodingSelectionPolicyCreator = testEncodingSelectionPolicyCreator(
+          std::move(valueEncodingReadFactors)),
+      .encodingOptions = Encoding::Options{},
+      .resolver = std::move(resolver)};
+}
+
+class SharedDictionaryWriterPolicyEncodingTest
+    : public SharedDictionaryEncodingTest,
+      public ::testing::WithParamInterface<SharedDictionaryScope> {
+ protected:
+  static constexpr uint32_t kDictionaryId{7};
+
+  TestSharedDictionaryWriter createWriter(
+      std::span<const int32_t> externalAlphabetValues,
+      EncodingReadFactors valueEncodingReadFactors =
+          dictionaryValueEncoding()) {
+    auto resolver = GetParam() == SharedDictionaryScope::External
+        ? std::make_shared<TestDictionaryResolver>(
+              kDictionaryId, externalAlphabetValues, pool_.get())
+        : nullptr;
+    externalResolver_ = resolver;
+    return TestSharedDictionaryWriter{
+        pool_.get(),
+        writerOptions(
+            GetParam(),
+            kDictionaryId,
+            std::move(resolver),
+            std::move(valueEncodingReadFactors))};
+  }
+
+  void encodeBatch(
+      TestSharedDictionaryWriter& writer,
+      size_t stripeIndex,
+      GeneratedEncodingBatch& batch) {
+    if (batch.nullable) {
+      batch.encoded = std::string{EncodingFactory::encodeNullable<int32_t>(
+          writer.createEncodingPolicy(stripeIndex),
+          batch.values,
+          batch.notNullsSpan(),
+          *buffer_,
+          Encoding::Options{})};
+      return;
+    }
+    batch.encoded = std::string{EncodingFactory::encode<int32_t>(
+        writer.createEncodingPolicy(stripeIndex),
+        batch.values,
+        *buffer_,
+        Encoding::Options{})};
+  }
+
+  void expectRoundTrip(
+      const GeneratedEncodingBatch& batch,
+      const Encoding::Options& options) {
+    EXPECT_EQ(materialize(batch.encoded, options), batch.expected);
+  }
+
+  Encoding::Options decodingOptions(TestSharedDictionaryWriter& writer) {
+    Encoding::Options options;
+    if (GetParam() == SharedDictionaryScope::External) {
+      NIMBLE_CHECK_NOT_NULL(externalResolver_);
+      options.sharedDictionaryAlphabet = externalResolver_->alphabet();
+      return options;
+    }
+
+    const auto alphabet = writer.encodeAlphabet(*buffer_);
+    NIMBLE_CHECK(alphabet.has_value(), "Expected shared dictionary alphabet.");
+    auto encodedAlphabetOwner =
+        std::make_shared<const std::string>(alphabet->content.front());
+    const std::string_view encodedAlphabet{*encodedAlphabetOwner};
+    options.sharedDictionaryAlphabet = SharedDictionaryAlphabet::create(
+        encodedAlphabet, std::move(encodedAlphabetOwner), pool_.get());
+    return options;
+  }
+
+ private:
+  std::shared_ptr<TestDictionaryResolver> externalResolver_;
+};
 
 TEST(SharedDictionaryScopeTest, scopeName) {
   struct Case {
@@ -242,6 +490,220 @@ TEST_F(
       "SharedDictionary encoding requires writer-provided dictionary indices.");
 }
 
+TEST_P(
+    SharedDictionaryWriterPolicyEncodingTest,
+    factoryEncodesSelectionWithWriterPolicy) {
+  const std::vector<int32_t> values{30, 10, 20, 30};
+  const std::vector<int32_t> alphabetValues{30, 10, 20};
+  const std::vector<uint32_t> indices{0, 1, 2, 0};
+  auto writer = createWriter(alphabetValues);
+
+  const auto encoded = EncodingFactory::encode<int32_t>(
+      writer.createEncodingPolicy(/*stripeIndex=*/0),
+      values,
+      *buffer_,
+      Encoding::Options{});
+
+  EXPECT_EQ(
+      EncodingPrefix::encodingType(encoded), EncodingType::SharedDictionary);
+  EXPECT_EQ(EncodingPrefix::dataType(encoded), DataType::Int32);
+  EXPECT_EQ(
+      EncodingPrefix::readRowCount(encoded, /*useVarint=*/false),
+      values.size());
+
+  const auto encodedIndices = sharedDictionaryIndices(encoded);
+  auto indicesEncoding = createEncoding(encodedIndices);
+  EXPECT_EQ(indicesEncoding->encodingType(), EncodingType::FixedBitWidth);
+  EXPECT_EQ(indicesEncoding->dataType(), DataType::Uint32);
+
+  Vector<uint32_t> materializedIndices{pool_.get(), indices.size()};
+  indicesEncoding->materialize(
+      static_cast<uint32_t>(indices.size()), materializedIndices.data());
+  EXPECT_EQ(
+      std::vector<uint32_t>(
+          materializedIndices.begin(), materializedIndices.end()),
+      indices);
+
+  EXPECT_TRUE(writer.usesDictionary());
+  EXPECT_TRUE(writer.hasUsedDictionary());
+  EXPECT_EQ(materialize(encoded, decodingOptions(writer)), values);
+}
+
+TEST_P(
+    SharedDictionaryWriterPolicyEncodingTest,
+    factoryEncodesNullableSelectionWithWriterPolicy) {
+  const std::vector<int32_t> values{30, 10, 20};
+  const std::vector<int32_t> alphabetValues{30, 10, 20};
+  const std::array<bool, 4> notNulls{true, false, true, true};
+  auto writer = createWriter(alphabetValues);
+
+  const auto encoded = EncodingFactory::encodeNullable<int32_t>(
+      writer.createEncodingPolicy(/*stripeIndex=*/0),
+      values,
+      notNulls,
+      *buffer_,
+      Encoding::Options{});
+
+  EXPECT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Nullable);
+  EXPECT_EQ(EncodingPrefix::dataType(encoded), DataType::Int32);
+  EXPECT_EQ(
+      EncodingPrefix::readRowCount(encoded, /*useVarint=*/false),
+      notNulls.size());
+
+  auto options = decodingOptions(writer);
+  auto encoding = createEncoding(encoded, options);
+  const auto* nullableEncoding =
+      dynamic_cast<const NullableEncoding<int32_t>*>(encoding.get());
+  ASSERT_NE(nullableEncoding, nullptr);
+  ASSERT_NE(nullableEncoding->nonNulls(), nullptr);
+  EXPECT_EQ(
+      nullableEncoding->nonNulls()->encodingType(),
+      EncodingType::SharedDictionary);
+
+  Vector<int32_t> output{pool_.get(), notNulls.size()};
+  encoding->materialize(notNulls.size(), output.data());
+
+  const std::vector<int32_t> expected{30, 0, 10, 20};
+  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
+}
+
+TEST_P(
+    SharedDictionaryWriterPolicyEncodingTest,
+    factoryEncodesAllNullNullableWithWriterPolicy) {
+  const std::array<int32_t, 1> alphabetValues{0};
+  const std::array<int32_t, 0> values{};
+  const std::array<bool, 3> notNulls{false, false, false};
+  auto writer = createWriter(alphabetValues);
+
+  const auto encoded = EncodingFactory::encodeNullable<int32_t>(
+      writer.createEncodingPolicy(/*stripeIndex=*/0),
+      values,
+      notNulls,
+      *buffer_,
+      Encoding::Options{});
+
+  EXPECT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Nullable);
+  EXPECT_FALSE(writer.usesDictionary());
+  EXPECT_FALSE(writer.hasUsedDictionary());
+  if (GetParam() != SharedDictionaryScope::External) {
+    EXPECT_FALSE(writer.encodeAlphabet(*buffer_).has_value());
+  } else {
+    NIMBLE_ASSERT_THROW(
+        writer.encodeAlphabet(*buffer_),
+        "External shared dictionary 7 cannot encode an alphabet; its resolver "
+        "owns the alphabet.");
+  }
+
+  auto encoding = createEncoding(encoded);
+  const auto* nullableEncoding =
+      dynamic_cast<const NullableEncoding<int32_t>*>(encoding.get());
+  ASSERT_NE(nullableEncoding, nullptr);
+  ASSERT_NE(nullableEncoding->nonNulls(), nullptr);
+  EXPECT_NE(
+      nullableEncoding->nonNulls()->encodingType(),
+      EncodingType::SharedDictionary);
+  EXPECT_EQ(nullableEncoding->nonNulls()->rowCount(), 0);
+}
+
+TEST_P(
+    SharedDictionaryWriterPolicyEncodingTest,
+    generatedBatchesAcrossStripesRoundTrip) {
+  constexpr uint32_t kSeed{0x9E3779B9};
+  std::mt19937 rng{
+      kSeed + static_cast<uint32_t>(static_cast<uint8_t>(GetParam()))};
+  const auto valueUniverse = sharedDictionaryValueUniverse();
+  auto writer = createWriter(valueUniverse);
+  std::vector<GeneratedEncodingBatch> pendingBatches;
+
+  SCOPED_TRACE(
+      fmt::format(
+          "scope={}, seed={}",
+          SharedDictionaryScopeName::toName(GetParam()),
+          kSeed));
+
+  for (size_t stripeIndex{0}; stripeIndex < 12; ++stripeIndex) {
+    SCOPED_TRACE(fmt::format("stripe={}", stripeIndex));
+    std::uniform_int_distribution<size_t> batchCount{1, 3};
+    const auto batchesInStripe = batchCount(rng);
+
+    for (size_t batchIndex{0}; batchIndex < batchesInStripe; ++batchIndex) {
+      SCOPED_TRACE(fmt::format("batch={}", batchIndex));
+      auto batch = generateBatch(
+          rng,
+          valueUniverse,
+          /*requireNonNullValue=*/batchIndex == 0);
+      encodeBatch(writer, stripeIndex, batch);
+      pendingBatches.push_back(std::move(batch));
+    }
+
+    if (GetParam() == SharedDictionaryScope::Stripe) {
+      const auto options = decodingOptions(writer);
+      for (const auto& batch : pendingBatches) {
+        expectRoundTrip(batch, options);
+      }
+      pendingBatches.clear();
+    }
+  }
+
+  if (GetParam() != SharedDictionaryScope::Stripe) {
+    const auto options = decodingOptions(writer);
+    for (const auto& batch : pendingBatches) {
+      expectRoundTrip(batch, options);
+    }
+  }
+}
+
+TEST_F(
+    SharedDictionaryEncodingTest,
+    factoryEncodesRegularNullableWhenStripePolicyDoesNotSelectDictionary) {
+  auto writer = TestSharedDictionaryWriter{
+      pool_.get(),
+      writerOptions(
+          SharedDictionaryScope::Stripe,
+          /*dictionaryId=*/7,
+          nullptr,
+          trivialPreferredValueEncoding())};
+  const std::vector<int32_t> values{1, 2, 3, 4, 5};
+  const std::array<bool, 6> notNulls{true, true, false, true, true, true};
+
+  const auto encoded = EncodingFactory::encodeNullable<int32_t>(
+      writer.createEncodingPolicy(/*stripeIndex=*/0),
+      values,
+      notNulls,
+      *buffer_,
+      Encoding::Options{});
+
+  EXPECT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Nullable);
+  EXPECT_FALSE(writer.usesDictionary());
+  EXPECT_FALSE(writer.hasUsedDictionary());
+  EXPECT_FALSE(writer.encodeAlphabet(*buffer_).has_value());
+
+  auto encoding = createEncoding(encoded);
+  const auto* nullableEncoding =
+      dynamic_cast<const NullableEncoding<int32_t>*>(encoding.get());
+  ASSERT_NE(nullableEncoding, nullptr);
+  ASSERT_NE(nullableEncoding->nonNulls(), nullptr);
+  EXPECT_NE(
+      nullableEncoding->nonNulls()->encodingType(),
+      EncodingType::SharedDictionary);
+
+  Vector<int32_t> output{pool_.get(), notNulls.size()};
+  encoding->materialize(notNulls.size(), output.data());
+  const std::vector<int32_t> expected{1, 2, 0, 3, 4, 5};
+  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Scopes,
+    SharedDictionaryWriterPolicyEncodingTest,
+    ::testing::Values(
+        SharedDictionaryScope::Stripe,
+        SharedDictionaryScope::File,
+        SharedDictionaryScope::External),
+    [](const ::testing::TestParamInfo<SharedDictionaryScope>& testInfo) {
+      return std::string{SharedDictionaryScopeName::toName(testInfo.param)};
+    });
+
 TEST_F(SharedDictionaryEncodingTest, alphabetOwnerKeepsViewBytesAlive) {
   std::shared_ptr<const SharedDictionaryAlphabet> alphabet;
   {
@@ -267,6 +729,7 @@ TEST_F(SharedDictionaryEncodingTest, retainsEncodedAlphabetOwner) {
   auto encodedAlphabetOwner = std::make_shared<const std::string>(
       SharedDictionaryAlphabet::encode<int32_t>(
           values, std::array{EncodingType::FixedBitWidth}, *buffer_));
+  const auto expectedEncodedAlphabet = *encodedAlphabetOwner;
   std::weak_ptr<const std::string> weakOwner = encodedAlphabetOwner;
 
   auto alphabet = SharedDictionaryAlphabet::create(
@@ -274,6 +737,7 @@ TEST_F(SharedDictionaryEncodingTest, retainsEncodedAlphabetOwner) {
   encodedAlphabetOwner.reset();
 
   EXPECT_FALSE(weakOwner.expired());
+  EXPECT_EQ(std::string{alphabet->encodedAlphabet()}, expectedEncodedAlphabet);
   EXPECT_EQ(alphabet->physicalValueAt<int32_t>(1), 20);
   alphabet.reset();
   EXPECT_TRUE(weakOwner.expired());
@@ -426,6 +890,51 @@ TEST_F(SharedDictionaryEncodingTest, alphabetRoundTripsWithAndWithoutView) {
         std::vector<int32_t>(materializedAll.begin(), materializedAll.end()),
         expectedAll);
   }
+}
+
+DEBUG_ONLY_TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetRejectsOutOfRangeBatchIndicesWithAndWithoutView) {
+  struct TestCase {
+    std::string testName;
+    EncodingType encodingType;
+  };
+
+  const std::vector<TestCase> testCases{
+      {"view", EncodingType::FixedBitWidth},
+      {"decoded entries", EncodingType::Varint},
+  };
+  const std::vector<int32_t> values{10, 20, 30};
+  const std::vector<uint32_t> indices{0, static_cast<uint32_t>(values.size())};
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.testName);
+    const auto alphabet = test::createSharedDictionaryAlphabet<int32_t>(
+        values, std::array{testCase.encodingType}, pool_.get());
+    std::vector<TypeTraits<int32_t>::physicalType> output(indices.size());
+
+    NIMBLE_ASSERT_THROW(
+        alphabet->materialize<int32_t>(indices, output.data()),
+        "Shared dictionary index exceeds alphabet size.");
+  }
+}
+
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetMaterializesBlockBitPackingIndexedRuns) {
+  const auto values = sequentialAlphabet(/*size=*/2'051);
+  const auto alphabet = test::createSharedDictionaryAlphabet<int32_t>(
+      values, std::array{EncodingType::BlockBitPacking}, pool_.get());
+  EXPECT_EQ(alphabet->encodingType(), EncodingType::BlockBitPacking);
+
+  const std::vector<uint32_t> indices{
+      3, 3, 4, 5, 1'023, 1'024, 1'025, 2'050, 1};
+  std::vector<TypeTraits<int32_t>::physicalType> materialized(indices.size());
+  alphabet->materialize<int32_t>(indices, materialized.data());
+
+  const std::vector<TypeTraits<int32_t>::physicalType> expected{
+      3, 3, 4, 5, 1'023, 1'024, 1'025, 2'050, 1};
+  EXPECT_EQ(materialized, expected);
 }
 
 TEST_F(SharedDictionaryEncodingTest, materializeAllIntegerTypes) {
