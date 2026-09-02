@@ -22,6 +22,7 @@
 #include <vector>
 #include "fmt/core.h"
 #include "folly/container/F14Map.h"
+#include "folly/coro/BlockingWait.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/OnDemandUnitLoader.h"
 #include "velox/dwio/common/UnitLoader.h"
@@ -526,7 +527,7 @@ bool BatchReader::next(uint64_t rowCount, velox::VectorPtr& result) {
   }
   unitLoader_->onRead(
       getUnitIndex(loadedStripe_.value()), getCurrentRowInStripe(), rowsToRead);
-  rootReader_->next(rowsToRead, result);
+  folly::coro::blockingWait(rootReader_->co_next(rowsToRead, result));
   if (barrier_) {
     // Wait for all reader tasks to complete.
     barrier_->waitAll();
@@ -654,7 +655,7 @@ void BatchReader::skipInCurrentStripe(uint64_t rowsToSkip) {
   rowsRemainingInStripe_ -= rowsToSkip;
   unitLoader_->onSeek(
       getUnitIndex(loadedStripe_.value()), getCurrentRowInStripe());
-  rootReader_->skip(rowsToSkip);
+  folly::coro::blockingWait(rootReader_->co_skip(rowsToSkip));
 }
 
 BatchReader::~BatchReader() = default;
