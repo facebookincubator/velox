@@ -223,6 +223,8 @@ class CudfSplitReader : public NvtxHelper {
   // State used only by the opt-in decoded-column cache path.
   bool useDecodedColumnCache_{false};
   bool isFullyDecodedColumnCacheHit_{false};
+  CudfDecodedColumnCache::CompressionMode decodedColumnCacheCompression_{
+      CudfDecodedColumnCache::CompressionMode::kNone};
   int cudaDeviceId_{0};
   CudfDecodedColumnCache::FileKey decodedColumnCacheFileKey_;
   std::shared_ptr<const cudf::io::parquet::FileMetaData>

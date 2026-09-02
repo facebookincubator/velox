@@ -96,6 +96,15 @@ class CudfHiveConfig {
   static constexpr const char* kExperimentalDecodedColumnCacheEnabledSession =
       "cudf.hive.experimental_decoded_column_cache_enabled";
 
+  // Storage codec for decoded cache ranges: none, column, or
+  // column-advanced. The latter enables all codecs imported from the adaptive
+  // UCX exchange compression experiment.
+  static constexpr const char* kExperimentalDecodedColumnCacheCompression =
+      "cudf.hive.experimental-decoded-column-cache-compression";
+  static constexpr const char*
+      kExperimentalDecodedColumnCacheCompressionSession =
+          "cudf.hive.experimental_decoded_column_cache_compression";
+
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -169,6 +178,10 @@ class CudfHiveConfig {
 
   bool experimentalDecodedColumnCacheEnabled() const;
   bool experimentalDecodedColumnCacheEnabledSession(
+      const config::ConfigBase* session) const;
+
+  std::string experimentalDecodedColumnCacheCompression() const;
+  std::string experimentalDecodedColumnCacheCompressionSession(
       const config::ConfigBase* session) const;
 
   bool immutableFiles() const;

@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/benchmarks/CudfTpchBenchmark.h"
+#include "velox/experimental/cudf/connectors/hive/CudfDecodedColumnCache.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
@@ -80,6 +81,11 @@ DEFINE_bool(
     "Use the experimental process-lifetime decoded Parquet column cache. "
     "This also marks benchmark input files immutable.");
 
+DEFINE_string(
+    cudf_hive_decoded_column_cache_compression,
+    "none",
+    "Decoded column cache storage codec: none, column, or column-advanced.");
+
 DEFINE_bool(
     cudf_benchmark_nvtx_query_ranges,
     false,
@@ -141,6 +147,10 @@ void CudfTpchBenchmark::initialize() {
                                     kExperimentalDecodedColumnCacheEnabled] =
         std::to_string(FLAGS_cudf_hive_use_decoded_column_cache);
     cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::
+             kExperimentalDecodedColumnCacheCompression] =
+            FLAGS_cudf_hive_decoded_column_cache_compression;
+    cudfHiveConfigurationValues
         [cudf_velox::connector::hive::CudfHiveConfig::kImmutableFiles] =
             std::to_string(FLAGS_cudf_hive_use_decoded_column_cache);
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
@@ -198,7 +208,41 @@ void CudfTpchBenchmark::runMain(
         label, color, nvtx3::payload{iteration}};
     const nvtx3::scoped_range_in<facebook::velox::cudf_velox::VeloxDomain>
         range{attributes};
+    const auto before =
+        cudf_velox::connector::hive::CudfDecodedColumnCache::instance().stats();
     TpchBenchmark::runMain(out, runStats);
+    if (FLAGS_cudf_hive_use_decoded_column_cache) {
+      const auto after =
+          cudf_velox::connector::hive::CudfDecodedColumnCache::instance()
+              .stats();
+      const auto insertedUncompressed =
+          after.insertedUncompressedBytes - before.insertedUncompressedBytes;
+      const auto insertedStored =
+          after.insertedStoredBytes - before.insertedStoredBytes;
+      out << fmt::format(
+          "decoded-cache iteration={} compression={} pinned_bytes={} "
+          "inserted_uncompressed_bytes={} inserted_stored_bytes={} "
+          "compressed_ranges={} raw_ranges={} compression_attempts={} "
+          "encode_ms={:.3f} restore_calls={} restored_stored_bytes={} "
+          "restored_uncompressed_bytes={} decompress_ms={:.3f}\n",
+          iteration,
+          FLAGS_cudf_hive_decoded_column_cache_compression,
+          after.pinnedBytes,
+          insertedUncompressed,
+          insertedStored,
+          after.insertedCompressedRanges - before.insertedCompressedRanges,
+          after.insertedRawRanges - before.insertedRawRanges,
+          after.compressionAttempts - before.compressionAttempts,
+          static_cast<double>(
+              after.compressionEncodeNanos - before.compressionEncodeNanos) /
+              1'000'000.0,
+          after.restoreCalls - before.restoreCalls,
+          after.restoredStoredBytes - before.restoredStoredBytes,
+          after.restoredUncompressedBytes - before.restoredUncompressedBytes,
+          static_cast<double>(
+              after.decompressionNanos - before.decompressionNanos) /
+              1'000'000.0);
+    }
   }
 }
 
@@ -224,6 +268,9 @@ CudfTpchBenchmark::makeConnectorProperties() {
   cfg->set(
       CudfHiveCfg::kExperimentalDecodedColumnCacheEnabled,
       std::to_string(FLAGS_cudf_hive_use_decoded_column_cache));
+  cfg->set(
+      CudfHiveCfg::kExperimentalDecodedColumnCacheCompression,
+      FLAGS_cudf_hive_decoded_column_cache_compression);
   cfg->set(
       CudfHiveCfg::kImmutableFiles,
       std::to_string(FLAGS_cudf_hive_use_decoded_column_cache));

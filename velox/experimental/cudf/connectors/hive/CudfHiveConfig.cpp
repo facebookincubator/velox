@@ -154,6 +154,18 @@ bool CudfHiveConfig::experimentalDecodedColumnCacheEnabledSession(
       config_->get<bool>(kExperimentalDecodedColumnCacheEnabled, false));
 }
 
+std::string CudfHiveConfig::experimentalDecodedColumnCacheCompression() const {
+  return config_->get<std::string>(
+      kExperimentalDecodedColumnCacheCompression, "none");
+}
+
+std::string CudfHiveConfig::experimentalDecodedColumnCacheCompressionSession(
+    const config::ConfigBase* session) const {
+  return session->get<std::string>(
+      kExperimentalDecodedColumnCacheCompressionSession,
+      experimentalDecodedColumnCacheCompression());
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

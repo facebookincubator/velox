@@ -27,7 +27,10 @@ add_library(
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_dwio_common velox_hive_connector
+  PRIVATE
+    velox_cudf_packed_codec
+    velox_dwio_common
+    velox_hive_connector
   PUBLIC cudf::cudf nvtx3::nvtx3-cpp velox_cudf_expression
 )
 

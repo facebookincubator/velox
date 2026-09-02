@@ -180,9 +180,21 @@ TEST_F(CudfSplitReaderTest, pinnedRangeCacheAssemblesOverlaps) {
   EXPECT_EQ(cache.pinnedBytes(), 0);
   EXPECT_EQ(CudfDecodedColumnCache::kMaxPinnedBytes, 70ULL << 30);
   ASSERT_TRUE(cache.insertColumnRangeIfAbsent(
-      key, 0, 50, ranges[0].column(0), stream, mr));
+      key,
+      0,
+      50,
+      ranges[0].column(0),
+      stream,
+      mr,
+      CudfDecodedColumnCache::CompressionMode::kNone));
   ASSERT_TRUE(cache.insertColumnRangeIfAbsent(
-      key, 50, 100, ranges[1].column(0), stream, mr));
+      key,
+      50,
+      100,
+      ranges[1].column(0),
+      stream,
+      mr,
+      CudfDecodedColumnCache::CompressionMode::kNone));
   EXPECT_GT(cache.pinnedBytes(), 0);
   EXPECT_LE(cache.pinnedBytes(), CudfDecodedColumnCache::kMaxPinnedBytes);
 
@@ -219,8 +231,78 @@ TEST_F(CudfSplitReaderTest, pinnedRangeCacheAssemblesOverlaps) {
       cache.materializeColumnRange(key, 25, 125, stream, mr, mr), nullptr);
   const auto pinnedBytes = cache.pinnedBytes();
   EXPECT_FALSE(cache.insertColumnRangeIfAbsent(
-      key, 0, 50, ranges[0].column(0), stream, mr));
+      key,
+      0,
+      50,
+      ranges[0].column(0),
+      stream,
+      mr,
+      CudfDecodedColumnCache::CompressionMode::kNone));
   EXPECT_EQ(cache.pinnedBytes(), pinnedBytes);
+}
+
+TEST_F(CudfSplitReaderTest, compressedPinnedRangeCacheRoundTrip) {
+  constexpr vector_size_t kRows = 1 << 16;
+  auto input =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kRows, [](auto row) {
+                      return static_cast<int64_t>(row);
+                    })});
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto cudfTable = with_arrow::toCudfTable(input, input->pool(), stream, mr);
+
+  int deviceId = 0;
+  CUDF_CUDA_TRY(cudaGetDevice(&deviceId));
+  CudfDecodedColumnCache::ColumnKey key{
+      .file = {.connectorId = "test", .filePath = "compressed-range"},
+      .deviceId = deviceId,
+      .columnName = "c0",
+      .veloxType = BIGINT()->toString(),
+      .timestampType = cudf::type_id::TIMESTAMP_MILLISECONDS,
+      .usePandasMetadata = true,
+      .useArrowSchema = true,
+      .allowMismatchedSchemas = false,
+  };
+
+  auto& cache = CudfDecodedColumnCache::instance();
+  ASSERT_TRUE(cache.insertColumnRangeIfAbsent(
+      key,
+      0,
+      kRows,
+      cudfTable->view().column(0),
+      stream,
+      mr,
+      CudfDecodedColumnCache::CompressionMode::kColumnAdvanced));
+
+  const auto afterInsert = cache.stats();
+  EXPECT_EQ(afterInsert.insertedCompressedRanges, 1);
+  EXPECT_EQ(afterInsert.insertedRawRanges, 0);
+  EXPECT_EQ(afterInsert.compressionAttempts, 1);
+  EXPECT_LT(
+      afterInsert.insertedStoredBytes, afterInsert.insertedUncompressedBytes);
+
+  auto restored = cache.materializeColumnRange(key, 0, kRows, stream, mr, mr);
+  ASSERT_NE(restored, nullptr);
+  ASSERT_EQ(restored->size(), kRows);
+  std::vector<int64_t> actual(kRows);
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      actual.data(),
+      restored->view().data<int64_t>(),
+      actual.size() * sizeof(int64_t),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+  stream.synchronize();
+  for (vector_size_t i = 0; i < kRows; ++i) {
+    EXPECT_EQ(actual[i], i);
+  }
+
+  const auto afterRestore = cache.stats();
+  EXPECT_EQ(afterRestore.restoreCalls, 1);
+  EXPECT_EQ(afterRestore.restoredStoredBytes, afterInsert.insertedStoredBytes);
+  EXPECT_EQ(
+      afterRestore.restoredUncompressedBytes,
+      afterInsert.insertedUncompressedBytes);
+  EXPECT_GT(afterRestore.decompressionNanos, 0);
 }
 
 TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {

@@ -150,6 +150,7 @@ These flags apply to `velox_cudf_tpch_benchmark` and `velox_cudf_tpcds_benchmark
 | `--cudf_hive_use_buffered_input` | `true` | Use Velox BufferedInput for cuDF Hive reads |
 | `--cudf_hive_use_experimental_reader` | `false` | Use the cuDF experimental hybrid Parquet reader |
 | `--cudf_hive_use_decoded_column_cache` | `false` | Use the process-lifetime decoded range cache backed by a 70 GiB-capped CCCL pinned-host pool and treat benchmark files as immutable |
+| `--cudf_hive_decoded_column_cache_compression` | `none` | Cache storage codec: `none`, `column`, or `column-advanced` (all modes remain experimental) |
 | `--cudf_properties` | `""` | Path to a CudfConfig properties file (key=value per line). See `CudfConfig.h` for available keys |
 
 ---

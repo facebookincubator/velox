@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#include <mutex>
-#include <unordered_map>
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
@@ -42,8 +40,13 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+
+#include <mutex>
+#include <unordered_map>
+#if defined(VELOX_CUDF_HAS_UCX)
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
+#endif
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
@@ -1151,6 +1154,7 @@ class GroupIdAdapter : public OperatorAdapter {
   }
 };
 
+#if defined(VELOX_CUDF_HAS_UCX)
 using TaskPipelineKey = std::string;
 using UcxExchangeClientMap = std::unordered_map<
     TaskPipelineKey,
@@ -1343,6 +1347,7 @@ class UcxPartitionedOutputAdapter : public OperatorAdapter {
     return true;
   }
 };
+#endif
 
 /// InMemoryPartitionedOutputAdapter - Preserves the built-in CPU result sink.
 ///
@@ -1394,14 +1399,13 @@ void registerAllOperatorAdapters() {
   // Clear any existing adapters
   registry.clear();
 
+#if defined(VELOX_CUDF_HAS_UCX)
   // Register the UCX manager and matching output operator as one transport
   // entry. Current Velox resolves this entry from PartitionedOutputNode.
   if (CudfConfig::getInstance().exchange) {
-    auto manager =
-        ucx_exchange::UcxOutputQueueManager::getInstanceRef();
+    auto manager = ucx_exchange::UcxOutputQueueManager::getInstanceRef();
     auto entry =
-        exec::OutputTransportEntry::make<
-            ucx_exchange::UcxOutputQueueManager>(
+        exec::OutputTransportEntry::make<ucx_exchange::UcxOutputQueueManager>(
             manager,
             [](int32_t operatorId,
                exec::DriverCtx* ctx,
@@ -1410,8 +1414,7 @@ void registerAllOperatorAdapters() {
                const std::shared_ptr<
                    ucx_exchange::UcxOutputQueueManager>& /*boundManager*/)
                 -> std::unique_ptr<exec::Operator> {
-              return std::make_unique<
-                  ucx_exchange::UcxPartitionedOutput>(
+              return std::make_unique<ucx_exchange::UcxPartitionedOutput>(
                   operatorId, ctx, node, eagerFlush);
             });
     exec::OutputTransportRegistry::global().insert(
@@ -1419,6 +1422,7 @@ void registerAllOperatorAdapters() {
         std::move(entry),
         /*overwrite=*/true);
   }
+#endif
 
   // Register all adapters
   registry.registerAdapter(std::make_unique<TableScanAdapter>());
@@ -1441,9 +1445,11 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
   registry.registerAdapter(std::make_unique<WindowAdapter>());
+#if defined(VELOX_CUDF_HAS_UCX)
   registry.registerAdapter(std::make_unique<ExchangeAdapter>());
   registry.registerAdapter(std::make_unique<MergeExchangeAdapter>());
   registry.registerAdapter(std::make_unique<UcxPartitionedOutputAdapter>());
+#endif
   registry.registerAdapter(
       std::make_unique<InMemoryPartitionedOutputAdapter>());
 }

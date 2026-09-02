@@ -345,6 +345,8 @@ void CudfSplitReader::resetSplit() {
   hasSplitSpecificPushdownFilter_ = false;
   useDecodedColumnCache_ = false;
   isFullyDecodedColumnCacheHit_ = false;
+  decodedColumnCacheCompression_ =
+      CudfDecodedColumnCache::CompressionMode::kNone;
   decodedColumnCacheMetadata_.reset();
   decodedColumnCacheRowGroups_.clear();
   decodedColumnCacheRowOffsets_.clear();
@@ -527,6 +529,10 @@ bool CudfSplitReader::shouldUseDecodedColumnCache() const {
 
 void CudfSplitReader::prepareDecodedColumnCache() {
   CUDF_CUDA_TRY(cudaGetDevice(&cudaDeviceId_));
+  decodedColumnCacheCompression_ =
+      CudfDecodedColumnCache::compressionModeFromString(
+          cudfHiveConfig_->experimentalDecodedColumnCacheCompressionSession(
+              connectorQueryCtx_->sessionProperties()));
   decodedColumnCacheFileKey_ = {
       .connectorId = split_->connectorId, .filePath = split_->filePath};
 
@@ -784,7 +790,8 @@ CudfSplitReader::decodeAndCacheFileColumns(
           run.lastRow,
           slices.front(),
           stream_,
-          get_temp_mr());
+          get_temp_mr(),
+          decodedColumnCacheCompression_);
     }
     result.push_back(std::move(column));
   }

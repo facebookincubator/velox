@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfDecodedColumnCache.h"
+#include "velox/experimental/ucx-exchange/UcxColumnCodec.h"
 
 #include "velox/common/base/Exceptions.h"
 
@@ -35,6 +36,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <limits>
 #include <mutex>
@@ -92,6 +94,21 @@ int currentNumaNode() {
 }
 
 } // namespace
+
+class PackedColumnCompression {
+ public:
+  PackedColumnCompression(
+      std::vector<ucx_exchange::EncodedRegion> regions,
+      size_t uncompressedBytes)
+      : regions_(std::move(regions)), uncompressedBytes_(uncompressedBytes) {}
+
+ private:
+  friend class CudfDecodedColumnCache;
+  friend class PinnedColumnChunk;
+
+  std::vector<ucx_exchange::EncodedRegion> regions_;
+  size_t uncompressedBytes_;
+};
 
 class PinnedHostAllocation {
  public:
@@ -196,6 +213,16 @@ struct CudfDecodedColumnCache::Impl {
   mutable std::mutex mutex;
   cuda::pinned_memory_pool pinnedPool;
   std::atomic<uint64_t> allocatedBytes{0};
+  std::atomic<uint64_t> insertedUncompressedBytes{0};
+  std::atomic<uint64_t> insertedStoredBytes{0};
+  std::atomic<uint64_t> insertedCompressedRanges{0};
+  std::atomic<uint64_t> insertedRawRanges{0};
+  std::atomic<uint64_t> compressionAttempts{0};
+  std::atomic<uint64_t> compressionEncodeNanos{0};
+  std::atomic<uint64_t> restoreCalls{0};
+  std::atomic<uint64_t> restoredStoredBytes{0};
+  std::atomic<uint64_t> restoredUncompressedBytes{0};
+  std::atomic<uint64_t> decompressionNanos{0};
   std::unordered_map<FileKey, MetadataPtr, FileKeyHash> metadata;
   std::unordered_map<ColumnKey, std::vector<ColumnRangePtr>, ColumnKeyHash>
       columns;
@@ -203,6 +230,14 @@ struct CudfDecodedColumnCache::Impl {
 
 size_t PinnedColumnChunk::packedSize() const {
   return data_->size();
+}
+
+size_t PinnedColumnChunk::uncompressedPackedSize() const {
+  return compression_ ? compression_->uncompressedBytes_ : packedSize();
+}
+
+bool PinnedColumnChunk::compressed() const {
+  return compression_ != nullptr;
 }
 
 const void* PinnedColumnChunk::pinnedData() const {
@@ -219,6 +254,22 @@ CudfDecodedColumnCache& CudfDecodedColumnCache::instance() {
   // teardown and implements the prototype's non-evicting lifetime.
   static auto* cache = new CudfDecodedColumnCache();
   return *cache;
+}
+
+CudfDecodedColumnCache::CompressionMode
+CudfDecodedColumnCache::compressionModeFromString(std::string_view value) {
+  if (value == "none") {
+    return CompressionMode::kNone;
+  }
+  if (value == "column") {
+    return CompressionMode::kColumn;
+  }
+  VELOX_USER_CHECK_EQ(
+      value,
+      "column-advanced",
+      "Unsupported decoded column cache compression '{}'. Expected none, column, or column-advanced",
+      value);
+  return CompressionMode::kColumnAdvanced;
 }
 
 CudfDecodedColumnCache::MetadataPtr CudfDecodedColumnCache::findMetadata(
@@ -260,7 +311,8 @@ bool CudfDecodedColumnCache::insertColumnRangeIfAbsent(
     int64_t lastRow,
     cudf::column_view column,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref tempMr) {
+    rmm::device_async_resource_ref tempMr,
+    CompressionMode compressionMode) {
   VELOX_CHECK_LT(firstRow, lastRow, "Decoded cache range must be non-empty");
   VELOX_CHECK_EQ(
       lastRow - firstRow,
@@ -272,44 +324,121 @@ bool CudfDecodedColumnCache::insertColumnRangeIfAbsent(
 
   const std::vector<cudf::column_view> columns{column};
   const auto table = cudf::table_view{columns};
-  auto packer =
-      cudf::chunked_pack::create(table, kPackStagingBytes, stream, tempMr);
-  const auto packedSize = packer->get_total_contiguous_size();
-  auto pinnedData = impl_->allocate(packedSize);
-  if (not pinnedData) {
-    return false;
-  }
+  std::vector<uint8_t> metadata;
+  std::shared_ptr<const PinnedHostAllocation> pinnedData;
+  std::shared_ptr<const PackedColumnCompression> compression;
+  size_t uncompressedPackedSize{0};
+  uint64_t compressionEncodeNanos{0};
+  bool compressionAttempted{false};
 
-  rmm::device_buffer staging(kPackStagingBytes, stream, tempMr);
-  auto* destination =
-      const_cast<uint8_t*>(static_cast<const uint8_t*>(pinnedData->data()));
-  size_t offset = 0;
-  while (packer->has_next()) {
-    const auto bytes = packer->next(
-        cudf::device_span<uint8_t>{
-            static_cast<uint8_t*>(staging.data()), staging.size()});
-    CUDF_CUDA_TRY(cudaMemcpyAsync(
-        destination + offset,
-        staging.data(),
-        bytes,
-        cudaMemcpyDeviceToHost,
-        stream.value()));
-    offset += bytes;
+  const auto packRawChunked = [&]() -> bool {
+    auto packer =
+        cudf::chunked_pack::create(table, kPackStagingBytes, stream, tempMr);
+    uncompressedPackedSize = packer->get_total_contiguous_size();
+    pinnedData = impl_->allocate(uncompressedPackedSize);
+    if (not pinnedData) {
+      return false;
+    }
+
+    rmm::device_buffer staging(kPackStagingBytes, stream, tempMr);
+    auto* destination =
+        const_cast<uint8_t*>(static_cast<const uint8_t*>(pinnedData->data()));
+    size_t offset = 0;
+    while (packer->has_next()) {
+      const auto bytes = packer->next(
+          cudf::device_span<uint8_t>{
+              static_cast<uint8_t*>(staging.data()), staging.size()});
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          destination + offset,
+          staging.data(),
+          bytes,
+          cudaMemcpyDeviceToHost,
+          stream.value()));
+      offset += bytes;
+    }
+    VELOX_CHECK_EQ(offset, uncompressedPackedSize);
+    metadata = std::move(*packer->build_metadata());
+    stream.synchronize();
+    return true;
+  };
+
+  if (compressionMode == CompressionMode::kNone) {
+    if (not packRawChunked()) {
+      return false;
+    }
+  } else {
+    try {
+      auto packed = cudf::pack(table, stream, tempMr);
+      uncompressedPackedSize = packed.gpu_data->size();
+      compressionAttempted = uncompressedPackedSize > 0;
+
+      ucx_exchange::PackedCompressResult compressed;
+      if (compressionAttempted) {
+        const auto start = std::chrono::steady_clock::now();
+        compressed = ucx_exchange::compressPacked(
+            packed.metadata->data(),
+            packed.gpu_data->data(),
+            packed.gpu_data->size(),
+            stream,
+            0.02,
+            compressionMode == CompressionMode::kColumnAdvanced,
+            0);
+        compressionEncodeNanos =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start)
+                .count();
+      }
+
+      const auto* storedData =
+          compressed.used ? compressed.data.data() : packed.gpu_data->data();
+      const auto storedSize =
+          compressed.used ? compressed.data.size() : packed.gpu_data->size();
+      pinnedData = impl_->allocate(storedSize);
+      if (not pinnedData) {
+        return false;
+      }
+      if (storedSize > 0) {
+        CUDF_CUDA_TRY(cudaMemcpyAsync(
+            const_cast<void*>(pinnedData->data()),
+            storedData,
+            storedSize,
+            cudaMemcpyDeviceToHost,
+            stream.value()));
+      }
+      metadata = std::move(*packed.metadata);
+      if (compressed.used) {
+        compression = std::make_shared<const PackedColumnCompression>(
+            std::move(compressed.regions), uncompressedPackedSize);
+      }
+      stream.synchronize();
+    } catch (const std::exception& error) {
+      LOG(WARNING)
+          << "Decoded column cache compression failed; storing the range raw: "
+          << error.what();
+      compressionAttempted = true;
+      compression.reset();
+      pinnedData.reset();
+      metadata.clear();
+      uncompressedPackedSize = 0;
+      if (not packRawChunked()) {
+        return false;
+      }
+    }
   }
-  VELOX_CHECK_EQ(offset, packedSize);
-  auto metadata = packer->build_metadata();
-  stream.synchronize();
 
   auto candidate = std::make_shared<PinnedColumnChunk>();
   candidate->firstRow_ = firstRow;
   candidate->lastRow_ = lastRow;
-  candidate->metadata_ = std::move(*metadata);
+  candidate->metadata_ = std::move(metadata);
   candidate->data_ = std::move(pinnedData);
+  candidate->compression_ = std::move(compression);
 
   std::lock_guard<std::mutex> lock(impl_->mutex);
   if (impl_->findColumnRangesLocked(key, firstRow, lastRow).has_value()) {
     return false;
   }
+  const auto storedSize = candidate->packedSize();
+  const auto isCompressed = candidate->compressed();
   auto& chunks = impl_->columns[std::move(key)];
   chunks.push_back(std::move(candidate));
   std::sort(
@@ -317,6 +446,16 @@ bool CudfDecodedColumnCache::insertColumnRangeIfAbsent(
         return std::tie(left->firstRow_, left->lastRow_) <
             std::tie(right->firstRow_, right->lastRow_);
       });
+  impl_->insertedUncompressedBytes.fetch_add(
+      uncompressedPackedSize, std::memory_order_relaxed);
+  impl_->insertedStoredBytes.fetch_add(storedSize, std::memory_order_relaxed);
+  (isCompressed ? impl_->insertedCompressedRanges : impl_->insertedRawRanges)
+      .fetch_add(1, std::memory_order_relaxed);
+  if (compressionAttempted) {
+    impl_->compressionAttempts.fetch_add(1, std::memory_order_relaxed);
+    impl_->compressionEncodeNanos.fetch_add(
+        compressionEncodeNanos, std::memory_order_relaxed);
+  }
   return true;
 }
 
@@ -336,18 +475,37 @@ std::unique_ptr<cudf::column> CudfDecodedColumnCache::materializeColumnRange(
   pieces.reserve(coverage->size());
   for (const auto& range : *coverage) {
     const auto& chunk = range.chunk;
-    rmm::device_buffer packedData(chunk->packedSize(), stream, tempMr);
+    rmm::device_buffer storedData(chunk->packedSize(), stream, tempMr);
     if (chunk->packedSize() > 0) {
       CUDF_CUDA_TRY(cudaMemcpyAsync(
-          packedData.data(),
+          storedData.data(),
           chunk->pinnedData(),
           chunk->packedSize(),
           cudaMemcpyHostToDevice,
           stream.value()));
     }
-    const auto unpacked = cudf::unpack(
-        chunk->metadata_.data(),
-        static_cast<const uint8_t*>(packedData.data()));
+    rmm::device_buffer decompressedData;
+    const uint8_t* packedData = static_cast<const uint8_t*>(storedData.data());
+    if (chunk->compressed()) {
+      const auto start = std::chrono::steady_clock::now();
+      decompressedData = ucx_exchange::decompressPacked(
+          storedData.data(),
+          chunk->compression_->regions_,
+          chunk->compression_->uncompressedBytes_,
+          stream);
+      impl_->decompressionNanos.fetch_add(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - start)
+              .count(),
+          std::memory_order_relaxed);
+      packedData = static_cast<const uint8_t*>(decompressedData.data());
+    }
+    impl_->restoreCalls.fetch_add(1, std::memory_order_relaxed);
+    impl_->restoredStoredBytes.fetch_add(
+        chunk->packedSize(), std::memory_order_relaxed);
+    impl_->restoredUncompressedBytes.fetch_add(
+        chunk->uncompressedPackedSize(), std::memory_order_relaxed);
+    const auto unpacked = cudf::unpack(chunk->metadata_.data(), packedData);
     VELOX_CHECK_EQ(unpacked.num_columns(), 1);
 
     const auto relativeFirst = range.firstRow - chunk->firstRow();
@@ -382,10 +540,45 @@ uint64_t CudfDecodedColumnCache::pinnedBytes() const {
   return impl_->allocatedBytes.load(std::memory_order_relaxed);
 }
 
+CudfDecodedColumnCache::Stats CudfDecodedColumnCache::stats() const {
+  return {
+      .pinnedBytes = impl_->allocatedBytes.load(std::memory_order_relaxed),
+      .insertedUncompressedBytes =
+          impl_->insertedUncompressedBytes.load(std::memory_order_relaxed),
+      .insertedStoredBytes =
+          impl_->insertedStoredBytes.load(std::memory_order_relaxed),
+      .insertedCompressedRanges =
+          impl_->insertedCompressedRanges.load(std::memory_order_relaxed),
+      .insertedRawRanges =
+          impl_->insertedRawRanges.load(std::memory_order_relaxed),
+      .compressionAttempts =
+          impl_->compressionAttempts.load(std::memory_order_relaxed),
+      .compressionEncodeNanos =
+          impl_->compressionEncodeNanos.load(std::memory_order_relaxed),
+      .restoreCalls = impl_->restoreCalls.load(std::memory_order_relaxed),
+      .restoredStoredBytes =
+          impl_->restoredStoredBytes.load(std::memory_order_relaxed),
+      .restoredUncompressedBytes =
+          impl_->restoredUncompressedBytes.load(std::memory_order_relaxed),
+      .decompressionNanos =
+          impl_->decompressionNanos.load(std::memory_order_relaxed),
+  };
+}
+
 void CudfDecodedColumnCache::clearForTesting() {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->columns.clear();
   impl_->metadata.clear();
+  impl_->insertedUncompressedBytes.store(0, std::memory_order_relaxed);
+  impl_->insertedStoredBytes.store(0, std::memory_order_relaxed);
+  impl_->insertedCompressedRanges.store(0, std::memory_order_relaxed);
+  impl_->insertedRawRanges.store(0, std::memory_order_relaxed);
+  impl_->compressionAttempts.store(0, std::memory_order_relaxed);
+  impl_->compressionEncodeNanos.store(0, std::memory_order_relaxed);
+  impl_->restoreCalls.store(0, std::memory_order_relaxed);
+  impl_->restoredStoredBytes.store(0, std::memory_order_relaxed);
+  impl_->restoredUncompressedBytes.store(0, std::memory_order_relaxed);
+  impl_->decompressionNanos.store(0, std::memory_order_relaxed);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

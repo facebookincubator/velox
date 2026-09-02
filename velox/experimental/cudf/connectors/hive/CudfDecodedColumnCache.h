@@ -27,11 +27,13 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 class PinnedHostAllocation;
+class PackedColumnCompression;
 
 /// An immutable decoded column range serialized into CUDA-pinned host memory.
 class PinnedColumnChunk {
@@ -45,6 +47,8 @@ class PinnedColumnChunk {
   }
 
   size_t packedSize() const;
+  size_t uncompressedPackedSize() const;
+  bool compressed() const;
   const void* pinnedData() const;
 
  private:
@@ -54,6 +58,7 @@ class PinnedColumnChunk {
   int64_t lastRow_;
   std::vector<uint8_t> metadata_;
   std::shared_ptr<const PinnedHostAllocation> data_;
+  std::shared_ptr<const PackedColumnCompression> compression_;
 };
 
 struct CoveredColumnRange {
@@ -70,6 +75,26 @@ struct CoveredColumnRange {
 class CudfDecodedColumnCache {
  public:
   static constexpr uint64_t kMaxPinnedBytes = 70ULL << 30;
+
+  enum class CompressionMode {
+    kNone,
+    kColumn,
+    kColumnAdvanced,
+  };
+
+  struct Stats {
+    uint64_t pinnedBytes{0};
+    uint64_t insertedUncompressedBytes{0};
+    uint64_t insertedStoredBytes{0};
+    uint64_t insertedCompressedRanges{0};
+    uint64_t insertedRawRanges{0};
+    uint64_t compressionAttempts{0};
+    uint64_t compressionEncodeNanos{0};
+    uint64_t restoreCalls{0};
+    uint64_t restoredStoredBytes{0};
+    uint64_t restoredUncompressedBytes{0};
+    uint64_t decompressionNanos{0};
+  };
 
   struct FileKey {
     std::string connectorId;
@@ -98,6 +123,8 @@ class CudfDecodedColumnCache {
 
   static CudfDecodedColumnCache& instance();
 
+  static CompressionMode compressionModeFromString(std::string_view value);
+
   MetadataPtr findMetadata(const FileKey& key) const;
   MetadataPtr insertMetadataIfAbsent(FileKey key, MetadataPtr metadata);
 
@@ -121,7 +148,8 @@ class CudfDecodedColumnCache {
       int64_t lastRow,
       cudf::column_view column,
       rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref tempMr);
+      rmm::device_async_resource_ref tempMr,
+      CompressionMode compressionMode);
 
   /// Restores and concatenates [firstRow, lastRow) on the requested stream.
   /// Returns nullptr if the cache has a gap in the requested range.
@@ -134,6 +162,7 @@ class CudfDecodedColumnCache {
       rmm::device_async_resource_ref tempMr) const;
 
   uint64_t pinnedBytes() const;
+  Stats stats() const;
 
   /// Clears all entries for test isolation. Production code never calls this.
   void clearForTesting();
