@@ -16,7 +16,6 @@
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -47,7 +46,6 @@ void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
-  registerSize(prefix + "size");
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
