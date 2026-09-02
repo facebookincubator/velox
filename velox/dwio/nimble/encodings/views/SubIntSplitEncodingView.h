@@ -29,11 +29,17 @@ namespace facebook::nimble {
 
 namespace detail {
 
-/// Serves an encoding by index after decoding it once into an owned array.
-///
-/// The fallback for a stream createTypedEncodingView() cannot wrap: a
-/// compressed one, or an encoding with no view. Construction is not cheap and
-/// the decoded array costs rowCount * sizeof(physicalType).
+/// Serves indexed reads over a stream that has no EncodingView of its own —
+/// e.g. a SubIntSplit section whose sub-stream is Zstd-compressed. Nimble
+/// decompresses eagerly inside the Encoding constructor and has no
+/// self-describing compressed-stream format for a view to attach to, so
+/// there is nothing to wrap. This class instead decodes the stream once,
+/// into an owned physicalType[rowCount] array, and serves each indexed read
+/// from that array directly. Construction is not cheap and the array costs
+/// rowCount * sizeof(physicalType), so it is the fallback path, not the
+/// common one: of the eight encodings in the default nested inventory only
+/// Varint has no view, so on an uncompressed column this class is rarely
+/// built.
 ///
 /// Nothing here is SubIntSplit-specific. SharedDictionaryAlphabet hand-rolls
 /// the same fallback and could be simplified by this class; move it to views/
@@ -78,6 +84,32 @@ class MaterializedEncodingView final : public TypedEncodingView<T> {
 
   Vector<physicalType> values_;
 };
+
+// Prefers a view over a stream, decoding once when it cannot have one.
+//
+// Attempting construction is the only available test. A predicate cannot
+// replace it: compression nests, so an RLE stream reports viewable while its
+// run values are compressed a level down, and views signal both that and an
+// incompatible type by throwing. See the
+// compressionNestsBelowTheOuterEncoding test.
+//
+// Not specific to SubIntSplit sections: any caller assembling indexed
+// accessors over sub-streams of unknown viewability can reuse this.
+template <typename SectionT>
+std::unique_ptr<EncodingView> makeSectionView(
+    std::string_view stream,
+    velox::memory::MemoryPool* pool,
+    const Encoding::Options& options) {
+  if (supportsEncodingView(EncodingPrefix::encodingType(stream))) {
+    try {
+      return createTypedEncodingView<SectionT>(stream, pool, options);
+    } catch (const NimbleException&) {
+      // Fall through to the materialized fallback below.
+    }
+  }
+  return std::make_unique<MaterializedEncodingView<SectionT>>(
+      stream, pool, options);
+}
 
 } // namespace detail
 
@@ -162,37 +194,13 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
       const detail::SubIntSplitSection& meta,
       velox::memory::MemoryPool* pool,
       const Encoding::Options& options) {
-    Section section;
-    section.bitStart = meta.bitStart;
-    section.mask = meta.mask;
-    section.storageBytes = meta.storageBytes;
-    section.view = makeSectionView<SectionT>(meta.stream, pool, options);
-    section.valueAt = &readValueAt<SectionT>;
-    return section;
-  }
-
-  // Prefers a view over the section's sub-stream, decoding once when it cannot
-  // have one.
-  //
-  // Attempting construction is the only available test. A predicate cannot
-  // replace it: compression nests, so an RLE stream reports viewable while its
-  // run values are compressed a level down, and views signal both that and an
-  // incompatible type by throwing. See the
-  // compressionNestsBelowTheOuterEncoding test.
-  template <typename SectionT>
-  static std::unique_ptr<EncodingView> makeSectionView(
-      std::string_view stream,
-      velox::memory::MemoryPool* pool,
-      const Encoding::Options& options) {
-    if (supportsEncodingView(EncodingPrefix::encodingType(stream))) {
-      try {
-        return detail::createTypedEncodingView<SectionT>(stream, pool, options);
-      } catch (const NimbleException&) {
-        // Fall through to the materialized fallback below.
-      }
-    }
-    return std::make_unique<detail::MaterializedEncodingView<SectionT>>(
-        stream, pool, options);
+    return Section{
+        .bitStart = meta.bitStart,
+        .mask = meta.mask,
+        .storageBytes = meta.storageBytes,
+        .view = detail::makeSectionView<SectionT>(meta.stream, pool, options),
+        .valueAt = &readValueAt<SectionT>,
+    };
   }
 
   // readAt() writes exactly the section's storage width, so the value is read
@@ -202,7 +210,7 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
   static uint64_t readValueAt(const EncodingView& view, uint32_t index) {
     SectionT value;
     view.readAt(index, &value);
-    return value;
+    return static_cast<uint64_t>(value);
   }
 
   template <typename SectionT>
