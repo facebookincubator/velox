@@ -464,9 +464,7 @@ add_test(
 )
 target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
 
-add_executable(
-  velox_exchange_transport_registry_test ExchangeTransportRegistryTest.cpp
-)
+add_executable(velox_exchange_transport_registry_test ExchangeTransportRegistryTest.cpp)
 add_test(
   NAME velox_exchange_transport_registry_test
   COMMAND velox_exchange_transport_registry_test
