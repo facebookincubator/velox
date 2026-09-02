@@ -277,6 +277,34 @@ TEST_F(ColumnStatisticsTests, stringStatisticsDefaultConstructor) {
   }
 }
 
+TEST_F(ColumnStatisticsTests, clonePreservesScalarStatistics) {
+  IntegralStatistics integralStat(100, 10, 1000, 500, -50, 150);
+  auto integralClone = integralStat.clone();
+  auto* clonedIntegralStat = integralClone->as<IntegralStatistics>();
+  ASSERT_NE(clonedIntegralStat, nullptr);
+  EXPECT_EQ(clonedIntegralStat->getValueCount(), 100);
+  EXPECT_EQ(clonedIntegralStat->getNullCount(), 10);
+  EXPECT_EQ(clonedIntegralStat->getLogicalSize(), 1000);
+  EXPECT_EQ(clonedIntegralStat->getPhysicalSize(), 500);
+  EXPECT_EQ(clonedIntegralStat->getMin(), -50);
+  EXPECT_EQ(clonedIntegralStat->getMax(), 150);
+
+  FloatingPointStatistics floatingPointStat(20, 2, 200, 80, -1.5, 9.5);
+  auto floatingPointClone = floatingPointStat.clone();
+  auto* clonedFloatingPointStat =
+      floatingPointClone->as<FloatingPointStatistics>();
+  ASSERT_NE(clonedFloatingPointStat, nullptr);
+  EXPECT_EQ(clonedFloatingPointStat->getMin(), -1.5);
+  EXPECT_EQ(clonedFloatingPointStat->getMax(), 9.5);
+
+  StringStatistics stringStat(3, 0, 12, 8, "apple", "pear");
+  auto stringClone = stringStat.clone();
+  auto* clonedStringStat = stringClone->as<StringStatistics>();
+  ASSERT_NE(clonedStringStat, nullptr);
+  EXPECT_EQ(clonedStringStat->getMin(), "apple");
+  EXPECT_EQ(clonedStringStat->getMax(), "pear");
+}
+
 TEST_F(ColumnStatisticsTests, deduplicatedColumnStatistics) {
   {
     DeduplicatedColumnStatistics stat;
@@ -537,6 +565,27 @@ TEST_F(StatisticsCollectorTests, mergeDefaultStatisticsCollectors) {
   EXPECT_EQ(collector1.getNullCount(), 30);
   EXPECT_EQ(collector1.getLogicalSize(), 3000);
   EXPECT_EQ(collector1.getPhysicalSize(), 1500);
+}
+
+TEST_F(StatisticsCollectorTests, resetClearsScalarStatistics) {
+  IntegralStatisticsCollector collector;
+  collector.addCounts(4, 1);
+  std::vector<int64_t> values = {3, 7, -1};
+  collector.addValues(std::span<int64_t>(values));
+  ASSERT_NE(
+      collector.getStatsView()->as<IntegralStatistics>()->getMin(),
+      std::nullopt);
+
+  collector.reset();
+
+  auto* stats = collector.getStatsView()->as<IntegralStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getValueCount(), 0);
+  EXPECT_EQ(stats->getNullCount(), 0);
+  EXPECT_EQ(stats->getLogicalSize(), 0);
+  EXPECT_EQ(stats->getPhysicalSize(), 0);
+  EXPECT_EQ(stats->getMin(), std::nullopt);
+  EXPECT_EQ(stats->getMax(), std::nullopt);
 }
 
 TEST_F(StatisticsCollectorTests, integralStatisticsCollectorCtor) {
