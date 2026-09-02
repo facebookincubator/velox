@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+
+#include <array>
+
+#include <glog/logging.h>
+
 #include "velox/experimental/ucx-exchange/Communicator.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -76,6 +81,48 @@ void EndpointRef::closeAndDrainCommunicators() {
     }
   }
   // localCopy is destroyed here, releasing all weak_ptrs.
+}
+
+std::optional<bool> EndpointRef::usesTransport(
+    std::string_view transportName) const {
+  const bool cacheCudaIpc = transportName == "cuda_ipc";
+  std::unique_lock<std::mutex> cacheLock(transportMutex_, std::defer_lock);
+  if (cacheCudaIpc) {
+    cacheLock.lock();
+    if (cudaIpcTransport_) {
+      return cudaIpcTransport_;
+    }
+  }
+
+  constexpr std::size_t kMaxTransports = 32;
+  std::array<ucp_transport_entry_t, kMaxTransports> transports{};
+  ucp_ep_attr_t attributes{};
+  attributes.field_mask = UCP_EP_ATTR_FIELD_TRANSPORTS;
+  attributes.transports.entries = transports.data();
+  attributes.transports.num_entries = transports.size();
+  attributes.transports.entry_size = sizeof(ucp_transport_entry_t);
+
+  const auto status = ucp_ep_query(endpoint_->getHandle(), &attributes);
+  if (status != UCS_OK) {
+    VLOG(1) << "Unable to query UCP endpoint transports: "
+            << ucs_status_string(status);
+    return std::nullopt;
+  }
+
+  bool found = false;
+  for (unsigned i = 0; i < attributes.transports.num_entries; ++i) {
+    const auto* name = attributes.transports.entries[i].transport_name;
+    if (name != nullptr && transportName == name) {
+      found = true;
+      break;
+    }
+  }
+  if (cacheCudaIpc) {
+    cudaIpcTransport_ = found;
+  }
+  VLOG(1) << "[UCX-ENDPOINT-TRANSPORT] transport=" << transportName
+          << " present=" << found;
+  return found;
 }
 
 bool EndpointRef::operator<(EndpointRef const& other) {

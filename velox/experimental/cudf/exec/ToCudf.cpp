@@ -176,7 +176,7 @@ bool CompileState::compile(bool allowCpuFallback) {
     bool isPureCpuOperator = true;
 
     if (adapter) {
-      keepOperator = adapter->keepOperator();
+      keepOperator = adapter->keepOperator(oper, planNode, ctx);
       if (keepOperator == 0) {
         if (planNode && thisOpProps.canRunOnGPU) {
           auto replacements =
@@ -412,6 +412,64 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
+  }
+  if (config.find(kUcxExchange) != config.end()) {
+    exchange = folly::to<bool>(config[kUcxExchange]);
+  }
+  if (config.find(kUcxxErrorHandling) != config.end()) {
+    ucxxErrorHandling = folly::to<bool>(config[kUcxxErrorHandling]);
+  }
+  if (config.find(kUcxIntraNodeExchange) != config.end()) {
+    intraNodeExchange = folly::to<bool>(config[kUcxIntraNodeExchange]);
+  }
+  if (config.find(kUcxxBlockingPolling) != config.end()) {
+    ucxxBlockingPolling = folly::to<bool>(config[kUcxxBlockingPolling]);
+  }
+  if (config.find(kUcxExchangeLogLevel) != config.end()) {
+    exchangeLogLevel = folly::to<int32_t>(config[kUcxExchangeLogLevel]);
+  }
+  if (config.find(kUcxPartitionedOutputBatchRows) != config.end()) {
+    partitionedOutputBatchRows =
+        folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
+    VELOX_USER_CHECK_GE(
+        partitionedOutputBatchRows,
+        0,
+        "{} must not be negative",
+        kUcxPartitionedOutputBatchRows);
+  }
+  if (config.find(kUcxExchangeCompression) != config.end()) {
+    exchangeCompression = config[kUcxExchangeCompression];
+  }
+  if (config.find(kUcxExchangeCompressionPipeline) != config.end()) {
+    exchangeCompressionPipeline =
+        folly::to<bool>(config[kUcxExchangeCompressionPipeline]);
+  }
+  if (config.find(kUcxExchangeCompressionPipelineThreads) != config.end()) {
+    exchangeCompressionPipelineThreads =
+        folly::to<int32_t>(config[kUcxExchangeCompressionPipelineThreads]);
+    VELOX_USER_CHECK_GT(
+        exchangeCompressionPipelineThreads,
+        0,
+        "{} must be greater than zero",
+        kUcxExchangeCompressionPipelineThreads);
+  }
+  if (config.find(kUcxExchangeCompressionMinBytes) != config.end()) {
+    exchangeCompressionMinBytes =
+        folly::to<int64_t>(config[kUcxExchangeCompressionMinBytes]);
+    VELOX_USER_CHECK_GE(
+        exchangeCompressionMinBytes,
+        0,
+        "{} must not be negative",
+        kUcxExchangeCompressionMinBytes);
+  }
+  if (config.find(kUcxExchangeCompressionSafetyMargin) != config.end()) {
+    exchangeCompressionSafetyMargin =
+        folly::to<double>(config[kUcxExchangeCompressionSafetyMargin]);
+    VELOX_USER_CHECK_GE(
+        exchangeCompressionSafetyMargin,
+        1.0,
+        "{} must be at least one",
+        kUcxExchangeCompressionSafetyMargin);
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);

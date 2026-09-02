@@ -40,6 +40,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -56,6 +57,8 @@
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -151,6 +154,7 @@ bool isNumericCompatible(EncodingType encodingType) {
       return true;
     // Gated on isIntegralType<physicalType>(), which holds for float and
     // double as well since their physical types are uint32_t and uint64_t.
+    case EncodingType::PFOR:
     case EncodingType::SimdForBitpack:
     case EncodingType::Huffman:
       return true;
@@ -919,6 +923,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
 }
@@ -986,6 +991,10 @@ std::string NimbleWriterFuzzer::writeFile(
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
   verifyChunkStatsMetadata(file, chunkStatsEnabled);
+  auto schema =
+      std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
+  verifyColumnStatistics(file, schema, batches);
+  verifySchemaAndStripeGroupConsistency(file, schema);
   return file;
 }
 
@@ -1216,6 +1225,432 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
     }
   }
   chunkStatsCoverage_.numStripeGroups += stripeGroups.size();
+}
+
+namespace {
+
+/// Accumulated expected stats per schema node, built across all batches.
+/// Converts to dwio::common format so the comparison exercises the same
+/// conversion path that the filtering logic consumes.
+struct ExpectedNodeStats {
+  uint64_t valueCount{0};
+  uint64_t nullCount{0};
+  std::optional<int64_t> integralMin;
+  std::optional<int64_t> integralMax;
+  std::optional<double> floatingMin;
+  std::optional<double> floatingMax;
+  std::optional<std::string> stringMin;
+  std::optional<std::string> stringMax;
+
+  std::unique_ptr<velox::dwio::common::ColumnStatistics> toCommonStatistics()
+      const {
+    bool hasNull = nullCount > 0;
+    if (integralMin.has_value()) {
+      return std::make_unique<velox::dwio::common::IntegerColumnStatistics>(
+          valueCount,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          integralMin,
+          integralMax,
+          std::nullopt);
+    }
+    if (floatingMin.has_value()) {
+      return std::make_unique<velox::dwio::common::DoubleColumnStatistics>(
+          valueCount,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          floatingMin,
+          floatingMax,
+          std::nullopt);
+    }
+    if (stringMin.has_value()) {
+      return std::make_unique<velox::dwio::common::StringColumnStatistics>(
+          valueCount,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          stringMin,
+          stringMax,
+          std::nullopt);
+    }
+    return std::make_unique<velox::dwio::common::ColumnStatistics>(
+        valueCount, hasNull, std::nullopt, std::nullopt);
+  }
+};
+
+/// Accumulates expected stats for one batch into the per-node vector.
+/// 'validRows' are row indices where all ancestors are non-null.
+void accumulateNodeStats(
+    const VectorPtr& vector,
+    const std::vector<velox::vector_size_t>& validRows,
+    std::vector<ExpectedNodeStats>& nodeStats,
+    uint32_t& nodeId) {
+  if (nodeId >= nodeStats.size()) {
+    return;
+  }
+  auto& stats = nodeStats[nodeId];
+  ++nodeId;
+
+  std::vector<velox::vector_size_t> nonNullRows;
+  nonNullRows.reserve(validRows.size());
+  for (const auto row : validRows) {
+    if (vector->isNullAt(row)) {
+      ++stats.nullCount;
+    } else {
+      nonNullRows.push_back(row);
+    }
+  }
+  stats.valueCount += nonNullRows.size();
+
+  if (vector->typeKind() == velox::TypeKind::ROW) {
+    auto rowVector = vector->as<velox::RowVector>();
+    for (velox::column_index_t col = 0; col < rowVector->childrenSize();
+         ++col) {
+      accumulateNodeStats(
+          rowVector->childAt(col), nonNullRows, nodeStats, nodeId);
+    }
+    return;
+  }
+
+  if (vector->typeKind() == velox::TypeKind::ARRAY) {
+    auto arrayVector = vector->as<velox::ArrayVector>();
+    std::vector<velox::vector_size_t> elementRows;
+    for (const auto row : nonNullRows) {
+      auto offset = arrayVector->offsetAt(row);
+      auto size = arrayVector->sizeAt(row);
+      for (velox::vector_size_t i = 0; i < size; ++i) {
+        elementRows.push_back(offset + i);
+      }
+    }
+    accumulateNodeStats(
+        arrayVector->elements(), elementRows, nodeStats, nodeId);
+    return;
+  }
+
+  if (vector->typeKind() == velox::TypeKind::MAP) {
+    auto mapVector = vector->as<velox::MapVector>();
+    std::vector<velox::vector_size_t> entryRows;
+    for (const auto row : nonNullRows) {
+      auto offset = mapVector->offsetAt(row);
+      auto size = mapVector->sizeAt(row);
+      for (velox::vector_size_t i = 0; i < size; ++i) {
+        entryRows.push_back(offset + i);
+      }
+    }
+    accumulateNodeStats(mapVector->mapKeys(), entryRows, nodeStats, nodeId);
+    accumulateNodeStats(mapVector->mapValues(), entryRows, nodeStats, nodeId);
+    return;
+  }
+
+  if (!vector->type()->isPrimitiveType()) {
+    return;
+  }
+
+  for (const auto row : nonNullRows) {
+    switch (vector->typeKind()) {
+      case velox::TypeKind::BOOLEAN:
+      case velox::TypeKind::TINYINT:
+      case velox::TypeKind::SMALLINT:
+      case velox::TypeKind::INTEGER:
+      case velox::TypeKind::BIGINT:
+      case velox::TypeKind::TIMESTAMP: {
+        int64_t value;
+        switch (vector->typeKind()) {
+          case velox::TypeKind::BOOLEAN:
+            value =
+                vector->as<velox::SimpleVector<bool>>()->valueAt(row) ? 1 : 0;
+            break;
+          case velox::TypeKind::TINYINT:
+            value = vector->as<velox::SimpleVector<int8_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::SMALLINT:
+            value = vector->as<velox::SimpleVector<int16_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::INTEGER:
+            value = vector->as<velox::SimpleVector<int32_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::BIGINT:
+            value = vector->as<velox::SimpleVector<int64_t>>()->valueAt(row);
+            break;
+          case velox::TypeKind::TIMESTAMP:
+            value = vector->as<velox::SimpleVector<velox::Timestamp>>()
+                        ->valueAt(row)
+                        .toMicros();
+            break;
+          default:
+            NIMBLE_UNREACHABLE("Unexpected integral type.");
+        }
+        stats.integralMin = stats.integralMin.has_value()
+            ? std::min(*stats.integralMin, value)
+            : value;
+        stats.integralMax = stats.integralMax.has_value()
+            ? std::max(*stats.integralMax, value)
+            : value;
+        break;
+      }
+      case velox::TypeKind::REAL: {
+        double value = static_cast<double>(
+            vector->as<velox::SimpleVector<float>>()->valueAt(row));
+        stats.floatingMin = stats.floatingMin.has_value()
+            ? std::min(*stats.floatingMin, value)
+            : value;
+        stats.floatingMax = stats.floatingMax.has_value()
+            ? std::max(*stats.floatingMax, value)
+            : value;
+        break;
+      }
+      case velox::TypeKind::DOUBLE: {
+        double value = vector->as<velox::SimpleVector<double>>()->valueAt(row);
+        stats.floatingMin = stats.floatingMin.has_value()
+            ? std::min(*stats.floatingMin, value)
+            : value;
+        stats.floatingMax = stats.floatingMax.has_value()
+            ? std::max(*stats.floatingMax, value)
+            : value;
+        break;
+      }
+      case velox::TypeKind::VARCHAR:
+      case velox::TypeKind::VARBINARY: {
+        auto sv =
+            vector->as<velox::SimpleVector<velox::StringView>>()->valueAt(row);
+        std::string value(sv.data(), sv.size());
+        stats.stringMin = stats.stringMin.has_value()
+            ? std::min(*stats.stringMin, value)
+            : value;
+        stats.stringMax = stats.stringMax.has_value()
+            ? std::max(*stats.stringMax, value)
+            : value;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
+} // namespace
+
+void NimbleWriterFuzzer::verifyColumnStatistics(
+    const std::string& file,
+    const RowTypePtr& schema,
+    const std::vector<VectorPtr>& batches) {
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = TabletReader::create(
+      readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
+
+  auto statsSection =
+      tablet->loadOptionalSection(std::string(kVectorizedStatsSection));
+  if (!statsSection.has_value()) {
+    return;
+  }
+
+  auto vectorizedStats =
+      VectorizedFileStats::deserialize(statsSection->content(), *leafPool_);
+
+  auto schemaSection = tablet->loadOptionalSection(std::string(kSchemaSection));
+  NIMBLE_CHECK(schemaSection.has_value(), "Schema not found.");
+  auto nimbleSchema = SchemaDeserializer::deserialize(schemaSection->content());
+
+  auto columnStats = vectorizedStats->toColumnStatistics(schema, nimbleSchema);
+
+  NIMBLE_CHECK_GT(
+      columnStats.size(),
+      0,
+      "Column stats vector is empty (seed {}).",
+      options_.seed);
+
+  std::vector<ExpectedNodeStats> expected(columnStats.size());
+  for (const auto& batch : batches) {
+    std::vector<velox::vector_size_t> allRows(batch->size());
+    std::iota(allRows.begin(), allRows.end(), 0);
+    uint32_t nodeId = 0;
+    accumulateNodeStats(batch, allRows, expected, nodeId);
+  }
+
+  for (uint32_t node = 0; node < columnStats.size(); ++node) {
+    const auto& nimbleActual = columnStats[node];
+    if (nimbleActual == nullptr) {
+      continue;
+    }
+    auto actual = nimbleActual->toCommonStatistics();
+    auto expectedCommon = expected[node].toCommonStatistics();
+
+    NIMBLE_CHECK_EQ(
+        actual->getNumberOfValues().value_or(0),
+        expectedCommon->getNumberOfValues().value_or(0),
+        "Node {} value count mismatch (seed {}).",
+        node,
+        options_.seed);
+    NIMBLE_CHECK_EQ(
+        actual->hasNull().value_or(false),
+        expectedCommon->hasNull().value_or(false),
+        "Node {} hasNull mismatch (seed {}).",
+        node,
+        options_.seed);
+
+    auto* actualInt =
+        dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(
+            actual.get());
+    auto* expectedInt =
+        dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(
+            expectedCommon.get());
+    if (actualInt != nullptr && expectedInt != nullptr &&
+        expectedInt->getMinimum().has_value()) {
+      NIMBLE_CHECK_EQ(
+          *actualInt->getMinimum(),
+          *expectedInt->getMinimum(),
+          "Node {} integer min mismatch (seed {}).",
+          node,
+          options_.seed);
+      NIMBLE_CHECK_EQ(
+          *actualInt->getMaximum(),
+          *expectedInt->getMaximum(),
+          "Node {} integer max mismatch (seed {}).",
+          node,
+          options_.seed);
+    }
+
+    auto* actualDbl =
+        dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
+            actual.get());
+    auto* expectedDbl =
+        dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
+            expectedCommon.get());
+    if (actualDbl != nullptr && expectedDbl != nullptr &&
+        expectedDbl->getMinimum().has_value()) {
+      NIMBLE_CHECK_EQ(
+          *actualDbl->getMinimum(),
+          *expectedDbl->getMinimum(),
+          "Node {} double min mismatch (seed {}).",
+          node,
+          options_.seed);
+      NIMBLE_CHECK_EQ(
+          *actualDbl->getMaximum(),
+          *expectedDbl->getMaximum(),
+          "Node {} double max mismatch (seed {}).",
+          node,
+          options_.seed);
+    }
+
+    auto* actualStr =
+        dynamic_cast<velox::dwio::common::StringColumnStatistics*>(
+            actual.get());
+    auto* expectedStr =
+        dynamic_cast<velox::dwio::common::StringColumnStatistics*>(
+            expectedCommon.get());
+    if (actualStr != nullptr && expectedStr != nullptr &&
+        expectedStr->getMinimum().has_value()) {
+      NIMBLE_CHECK_EQ(
+          *actualStr->getMinimum(),
+          *expectedStr->getMinimum(),
+          "Node {} string min mismatch (seed {}).",
+          node,
+          options_.seed);
+      NIMBLE_CHECK_EQ(
+          *actualStr->getMaximum(),
+          *expectedStr->getMaximum(),
+          "Node {} string max mismatch (seed {}).",
+          node,
+          options_.seed);
+    }
+  }
+}
+
+void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
+    const std::string& file,
+    const RowTypePtr& schema) {
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = TabletReader::create(
+      readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
+
+  // Schema roundtrip: the Velox type reconstructed from the file must match
+  // the type that was written.
+  VeloxReader reader(
+      std::make_shared<velox::InMemoryReadFile>(file), *leafPool_);
+  NIMBLE_CHECK(
+      schema->equivalent(*reader.type()),
+      "Schema roundtrip mismatch (seed {}): written {} but read {}.",
+      options_.seed,
+      schema->toString(),
+      reader.type()->toString());
+
+  // StripeGroup consistency: per-stream byte ranges must not overlap and must
+  // end before the next stripe or the end of the file.
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    const auto stripeIdentifier = tablet->stripeIdentifier(stripe);
+    const uint32_t streamCount = tablet->streamCount(stripeIdentifier);
+    if (streamCount == 0) {
+      continue;
+    }
+
+    std::vector<TabletReader::StreamLocation> locations(streamCount);
+    tablet->streamLocations(stripeIdentifier, locations);
+    const uint64_t stripeOffset = tablet->stripeOffset(stripe);
+    const uint64_t stripeEnd = stripe + 1 < tablet->stripeCount()
+        ? tablet->stripeOffset(stripe + 1)
+        : tablet->fileSize();
+    NIMBLE_CHECK_LE(
+        stripeOffset,
+        stripeEnd,
+        "Stripe {} has invalid bounds (seed {}).",
+        stripe,
+        options_.seed);
+
+    // Collect non-empty stream ranges and sort by offset.
+    struct StreamRange {
+      uint32_t streamId;
+      uint32_t offset;
+      uint32_t size;
+    };
+    std::vector<StreamRange> ranges;
+    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+      const auto& location = locations[streamId];
+      if (location.size > 0) {
+        NIMBLE_CHECK_LE(
+            uint64_t{location.offset} + location.size,
+            stripeEnd - stripeOffset,
+            "Stream {} extends past stripe {} bounds (seed {}).",
+            streamId,
+            stripe,
+            options_.seed);
+        ranges.push_back({streamId, location.offset, location.size});
+      }
+    }
+    std::sort(
+        ranges.begin(), ranges.end(), [](const auto& lhs, const auto& rhs) {
+          return lhs.offset < rhs.offset;
+        });
+
+    // Verify no overlaps, allowing dedup aliases with identical ranges.
+    for (size_t i = 1; i < ranges.size(); ++i) {
+      const auto& prev = ranges[i - 1];
+      const auto& curr = ranges[i];
+      if (prev.offset == curr.offset && prev.size == curr.size) {
+        continue;
+      }
+      NIMBLE_CHECK_LE(
+          uint64_t{prev.offset} + prev.size,
+          curr.offset,
+          "Streams {} and {} overlap in stripe {} (seed {}).",
+          prev.streamId,
+          curr.streamId,
+          stripe,
+          options_.seed);
+    }
+  }
+
+  // Stripe row counts must sum to the tablet's total row count.
+  uint64_t totalRows = 0;
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    totalRows += tablet->stripeRowCount(stripe);
+  }
+  NIMBLE_CHECK_EQ(
+      totalRows,
+      tablet->tabletRowCount(),
+      "Stripe row count sum mismatch (seed {}).",
+      options_.seed);
 }
 
 void NimbleWriterFuzzer::readAndVerify(

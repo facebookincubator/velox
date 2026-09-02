@@ -15,6 +15,9 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/OperatorAdapters.h"
+#include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
+#include "velox/exec/OutputTransportRegistry.h"
 
 #include <gtest/gtest.h>
 
@@ -27,7 +30,18 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfMemoryResource, "arena"},
       {CudfConfig::kCudfMemoryPercent, "25"},
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
-      {CudfConfig::kCudfAllowCpuFallback, "false"}};
+      {CudfConfig::kCudfAllowCpuFallback, "false"},
+      {CudfConfig::kUcxExchange, "true"},
+      {CudfConfig::kUcxxErrorHandling, "false"},
+      {CudfConfig::kUcxIntraNodeExchange, "true"},
+      {CudfConfig::kUcxxBlockingPolling, "false"},
+      {CudfConfig::kUcxExchangeLogLevel, "2"},
+      {CudfConfig::kUcxPartitionedOutputBatchRows, "100000"},
+      {CudfConfig::kUcxExchangeCompression, "column-adaptive-freq-pfor-min128"},
+      {CudfConfig::kUcxExchangeCompressionPipeline, "true"},
+      {CudfConfig::kUcxExchangeCompressionPipelineThreads, "2"},
+      {CudfConfig::kUcxExchangeCompressionMinBytes, "268435456"},
+      {CudfConfig::kUcxExchangeCompressionSafetyMargin, "1.5"}};
 
   CudfConfig config;
   config.initialize(std::move(options));
@@ -37,5 +51,36 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.memoryPercent, 25);
   ASSERT_EQ(config.functionNamePrefix, "presto");
   ASSERT_EQ(config.allowCpuFallback, false);
+  ASSERT_TRUE(config.exchange);
+  ASSERT_FALSE(config.ucxxErrorHandling);
+  ASSERT_TRUE(config.intraNodeExchange);
+  ASSERT_FALSE(config.ucxxBlockingPolling);
+  ASSERT_EQ(config.exchangeLogLevel, 2);
+  ASSERT_EQ(config.partitionedOutputBatchRows, 100000);
+  ASSERT_EQ(config.exchangeCompression, "column-adaptive-freq-pfor-min128");
+  ASSERT_TRUE(config.exchangeCompressionPipeline);
+  ASSERT_EQ(config.exchangeCompressionPipelineThreads, 2);
+  ASSERT_EQ(config.exchangeCompressionMinBytes, 268435456);
+  ASSERT_DOUBLE_EQ(config.exchangeCompressionSafetyMargin, 1.5);
+}
+
+TEST(ConfigTest, ucxTransportRegistration) {
+  auto& config = CudfConfig::getInstance();
+  std::unordered_map<std::string, std::string> options = {
+      {CudfConfig::kCudfEnabled, "true"},
+      {CudfConfig::kUcxExchange, "true"}};
+  config.initialize(std::move(options));
+
+  exec::OutputTransportRegistry::unregisterAll();
+  registerAllOperatorAdapters();
+
+  auto entry = exec::OutputTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(entry, nullptr);
+  EXPECT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxOutputQueueManager>(
+          entry->manager),
+      nullptr);
+  exec::OutputTransportRegistry::unregisterAll();
 }
 } // namespace facebook::velox::cudf_velox::test

@@ -342,6 +342,19 @@ class NimbleWriterFuzzer {
       const std::string& file,
       bool chunkStatsEnabled);
 
+  // Verifies file-level column statistics (value count, null count, min, max)
+  // against the data that was actually written.
+  void verifyColumnStatistics(
+      const std::string& file,
+      const velox::RowTypePtr& schema,
+      const std::vector<velox::VectorPtr>& batches);
+
+  // Verifies the serialized schema round-trips back to the written Velox type,
+  // and that per-stream byte ranges within each stripe are non-overlapping.
+  void verifySchemaAndStripeGroupConsistency(
+      const std::string& file,
+      const velox::RowTypePtr& schema);
+
   // Reads 'file' through 'readerPath' and compares every row against
   // 'batches'. Throws on the first difference.
   void readAndVerify(
