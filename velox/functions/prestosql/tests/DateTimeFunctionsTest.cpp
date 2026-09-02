@@ -6330,6 +6330,147 @@ TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
   EXPECT_EQ(at_timezone(std::nullopt, "Pacific/Fiji"), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, atTimezoneV2Test) {
+  const auto toTimestamp = [&](std::optional<int64_t> timestampWithTimezone,
+                               std::optional<std::string> targetTimezone) {
+    return evaluateOnce<Timestamp>(
+        "at_timezone_v2(c0, c1)",
+        {TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()},
+        timestampWithTimezone,
+        std::move(targetTimezone));
+  };
+
+  const auto toTimestampWithTimezone =
+      [&](std::optional<Timestamp> timestamp,
+          std::optional<std::string> targetTimezone) {
+        return evaluateOnce<int64_t>(
+            "at_timezone_v2(c0, c1)",
+            {TIMESTAMP(), VARCHAR()},
+            timestamp,
+            std::move(targetTimezone));
+      };
+
+  // 2024-01-01 08:00 UTC is 2024-01-01 00:00 in Los Angeles (PST, -08:00).
+  const auto winterInstant = parseTimestamp("2024-01-01 08:00:00").toMillis();
+  EXPECT_EQ(
+      toTimestamp(
+          pack(winterInstant, tz::getTimeZoneID("UTC")), "America/Los_Angeles"),
+      parseTimestamp("2024-01-01 00:00:00"));
+  // The source zone tagged on the input is ignored; only the UTC instant
+  // matters.
+  EXPECT_EQ(
+      toTimestamp(
+          pack(winterInstant, tz::getTimeZoneID("America/New_York")),
+          "America/Los_Angeles"),
+      parseTimestamp("2024-01-01 00:00:00"));
+
+  EXPECT_EQ(
+      toTimestampWithTimezone(
+          parseTimestamp("2024-01-01 00:00:00"), "America/Los_Angeles"),
+      pack(winterInstant, tz::getTimeZoneID("America/Los_Angeles")));
+
+  const auto original = parseTimestamp("2024-06-15 12:34:56");
+  EXPECT_EQ(
+      toTimestamp(
+          toTimestampWithTimezone(original, "America/Los_Angeles").value(),
+          "America/Los_Angeles"),
+      original);
+
+  // Daylight saving shifts the Los Angeles offset to -07:00 in summer, so
+  // 2024-07-01 08:00 UTC is 2024-07-01 01:00 local.
+  EXPECT_EQ(
+      toTimestamp(
+          pack(
+              parseTimestamp("2024-07-01 08:00:00").toMillis(),
+              tz::getTimeZoneID("UTC")),
+          "America/Los_Angeles"),
+      parseTimestamp("2024-07-01 01:00:00"));
+
+  // The reverse overload also honors summer DST: 2024-07-01 01:00 local in Los
+  // Angeles (PDT, -07:00) is 2024-07-01 08:00 UTC.
+  EXPECT_EQ(
+      toTimestampWithTimezone(
+          parseTimestamp("2024-07-01 01:00:00"), "America/Los_Angeles"),
+      pack(
+          parseTimestamp("2024-07-01 08:00:00").toMillis(),
+          tz::getTimeZoneID("America/Los_Angeles")));
+
+  // A null timestamp or null zone propagates as null in both overloads.
+  EXPECT_EQ(toTimestamp(std::nullopt, "America/Los_Angeles"), std::nullopt);
+  EXPECT_EQ(
+      toTimestamp(pack(winterInstant, tz::getTimeZoneID("UTC")), std::nullopt),
+      std::nullopt);
+  EXPECT_EQ(
+      toTimestampWithTimezone(std::nullopt, "America/Los_Angeles"),
+      std::nullopt);
+  EXPECT_EQ(
+      toTimestampWithTimezone(
+          parseTimestamp("2024-01-01 00:00:00"), std::nullopt),
+      std::nullopt);
+
+  // A non-constant zone column exercises the per-row zone lookup: the same UTC
+  // instant maps to 00:00 in Los Angeles (PST, -08:00) and 03:00 in New York
+  // (EST, -05:00).
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(winterInstant, tz::getTimeZoneID("UTC")),
+           pack(winterInstant, tz::getTimeZoneID("UTC"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<std::string>({"America/Los_Angeles", "America/New_York"}),
+  });
+  auto result = evaluate("at_timezone_v2(c0, c1)", data);
+  auto expected = makeFlatVector<Timestamp>({
+      parseTimestamp("2024-01-01 00:00:00"),
+      parseTimestamp("2024-01-01 03:00:00"),
+  });
+  assertEqualVectors(expected, result);
+
+  // A wall clock that falls in the spring-forward gap does not exist in the
+  // zone, so the conversion fails. 2024-03-10 02:30 is skipped in Los Angeles.
+  VELOX_ASSERT_THROW(
+      toTimestampWithTimezone(
+          parseTimestamp("2024-03-10 02:30:00"), "America/Los_Angeles"),
+      "is in a gap between");
+
+  // A wall clock in the fall-back overlap is ambiguous; Velox resolves it to
+  // the earliest instant (PDT, -07:00), so 2024-11-03 01:30 local is
+  // 2024-11-03 08:30 UTC.
+  EXPECT_EQ(
+      toTimestampWithTimezone(
+          parseTimestamp("2024-11-03 01:30:00"), "America/Los_Angeles"),
+      pack(
+          parseTimestamp("2024-11-03 08:30:00").toMillis(),
+          tz::getTimeZoneID("America/Los_Angeles")));
+
+  // An unrecognized target zone throws on both the constant and per-row paths.
+  VELOX_ASSERT_THROW(
+      toTimestamp(pack(winterInstant, tz::getTimeZoneID("UTC")), "Not/AZone"),
+      "Unknown time zone");
+  auto invalidZoneData = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(winterInstant, tz::getTimeZoneID("UTC"))},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<std::string>({"Not/AZone"}),
+  });
+  VELOX_ASSERT_THROW(
+      evaluate("at_timezone_v2(c0, c1)", invalidZoneData), "Unknown time zone");
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneV2TimeWithTimezoneTest) {
+  // TIME WITH TIME ZONE shares at_timezone's implementation, so this guards the
+  // registration under the v2 name rather than the conversion itself.
+  const auto makeTimeWithTz = [](const std::string& time) -> int64_t {
+    return util::fromTimeWithTimezoneString(time.data(), time.size()).value();
+  };
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "at_timezone_v2(c0, c1)",
+          {TIME_WITH_TIME_ZONE(), VARCHAR()},
+          std::optional<int64_t>(makeTimeWithTz("10:30:00+05:30")),
+          std::optional<std::string>("+08:00")),
+      makeTimeWithTz("13:00:00+08:00"));
+}
+
 TEST_F(DateTimeFunctionsTest, atTimezoneTimeWithTimezoneTest) {
   using namespace facebook::velox::util;
 
