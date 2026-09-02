@@ -24,10 +24,7 @@ target_link_libraries(
   gtest_main
 )
 
-add_executable(
-  external_dictionary_builder_tests
-  ExternalDictionaryBuilderTest.cpp
-)
+add_executable(external_dictionary_builder_tests ExternalDictionaryBuilderTest.cpp)
 add_test(external_dictionary_builder_tests external_dictionary_builder_tests)
 target_link_libraries(
   external_dictionary_builder_tests

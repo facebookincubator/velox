@@ -18,6 +18,11 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
+#include <optional>
+#include <random>
+#include <set>
+#include <span>
 
 #include <fmt/format.h>
 
@@ -34,16 +39,21 @@
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/TypeUtils.h"
+#include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
+#include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -53,6 +63,13 @@ namespace facebook::nimble {
 namespace {
 
 using namespace facebook::velox;
+
+using test::makeSharedDictionaryInput;
+using test::SharedDictionarySource;
+using test::SharedDictionaryTestResolver;
+using test::sharedDictionaryValueUniverse;
+using test::sharedDictionaryWriterOptions;
+using test::writeWithRandomStripes;
 
 struct NullableArrayData {
   std::optional<std::vector<std::optional<int64_t>>> value;
@@ -184,7 +201,9 @@ class SelectiveNimbleReaderTest
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       bool stringDecoderZeroCopy,
       bool preserveFlatMapsInMemory = false,
-      bool lazyColumnIo = false) {
+      bool lazyColumnIo = false,
+      std::shared_ptr<const ExternalDictionaryResolver>
+          externalDictionaryResolver = nullptr) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -195,6 +214,12 @@ class SelectiveNimbleReaderTest
     options.setPinMetadata(GetParam().pinMetadata);
     options.setCacheMetadata(GetParam().enableCache);
     options.setFilePreloadThreshold(0);
+    if (externalDictionaryResolver != nullptr) {
+      auto nimbleOptions = std::make_shared<NimbleReaderOptions>();
+      nimbleOptions->externalDictionaryResolver =
+          std::move(externalDictionaryResolver);
+      options.setFormatSpecificOptions(std::move(nimbleOptions));
+    }
     std::unique_ptr<dwio::common::BufferedInput> input;
     auto& ids = fileIds();
     const auto readerId = readerIdCounter_++;
@@ -775,6 +800,162 @@ TEST_P(SelectiveNimbleReaderTest, denseWithNulls) {
   auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
   auto result = BaseVector::create(input->type(), 0, pool());
   validate(*input, *readers.rowReader, 7, [](auto) { return true; });
+}
+
+TEST_P(SelectiveNimbleReaderTest, sharedDictionary) {
+  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
+  const auto valueUniverse = sharedDictionaryValueUniverse();
+
+  for (const bool nullableData : {false, true}) {
+    for (const auto scope :
+         {SharedDictionaryScope::Stripe,
+          SharedDictionaryScope::File,
+          SharedDictionaryScope::External}) {
+      const uint32_t dictionaryId =
+          scope == SharedDictionaryScope::Stripe ? 0 : 17;
+      std::shared_ptr<const ExternalDictionaryResolver> resolver;
+      if (scope == SharedDictionaryScope::External) {
+        resolver = std::make_shared<SharedDictionaryTestResolver>(
+            std::vector<std::pair<uint32_t, std::vector<int32_t>>>{
+                {dictionaryId, valueUniverse}},
+            pool());
+      }
+
+      const std::vector<SharedDictionarySource> sources{{
+          .columnName = "c0",
+          .dictionaryKey = 10,
+          .scope = scope,
+          .dictionaryId = dictionaryId,
+      }};
+      auto input = makeSharedDictionaryInput(
+          pool(),
+          /*rowCount=*/2'000,
+          sources,
+          valueUniverse,
+          nullableData);
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      const auto file = test::createNimbleFile(
+          *rootPool(),
+          input,
+          sharedDictionaryWriterOptions(
+              sources, {.externalDictionaryResolver = resolver}));
+
+      for (const bool lazyColumnIo : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "scope={}, nullableData={}, lazyColumnIo={}",
+                scope,
+                nullableData,
+                lazyColumnIo));
+        auto readers = makeReaders(
+            input,
+            file,
+            scanSpec,
+            stringDecoderZeroCopy,
+            /*preserveFlatMapsInMemory=*/false,
+            lazyColumnIo,
+            resolver);
+        if (!stringDecoderZeroCopy) {
+          NIMBLE_ASSERT_THROW(
+              validate(
+                  *input,
+                  *readers.rowReader,
+                  /*batchSize=*/127,
+                  [](auto /*row*/) { return true; }),
+              "Shared dictionary encoding requires non-legacy encoding "
+              "dispatch.");
+          continue;
+        }
+        validate(
+            *input,
+            *readers.rowReader,
+            /*batchSize=*/127,
+            [](auto /*row*/) { return true; });
+      }
+    }
+  }
+}
+
+TEST_P(SelectiveNimbleReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
+  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
+  constexpr uint32_t kSeed{0x51A9D1C7};
+  SCOPED_TRACE(fmt::format("seed={}", kSeed));
+
+  const auto valueUniverse = sharedDictionaryValueUniverse();
+  const std::vector<SharedDictionarySource> sources{
+      {
+          .columnName = "stripe",
+          .dictionaryKey = 10,
+          .scope = SharedDictionaryScope::Stripe,
+          .dictionaryId = 0,
+      },
+      {
+          .columnName = "file",
+          .dictionaryKey = 20,
+          .scope = SharedDictionaryScope::File,
+          .dictionaryId = 7,
+      },
+      {
+          .columnName = "external",
+          .dictionaryKey = 30,
+          .scope = SharedDictionaryScope::External,
+          .dictionaryId = 17,
+      },
+  };
+  auto resolver = std::make_shared<SharedDictionaryTestResolver>(
+      std::vector<std::pair<uint32_t, std::vector<int32_t>>>{
+          {sources.back().dictionaryId, valueUniverse}},
+      pool());
+  auto input = makeSharedDictionaryInput(
+      pool(),
+      /*rowCount=*/1'024,
+      sources,
+      valueUniverse,
+      /*nullableData=*/true);
+  const auto file = writeWithRandomStripes(
+      rootPool(),
+      input,
+      sharedDictionaryWriterOptions(
+          sources, {.externalDictionaryResolver = resolver}),
+      kSeed);
+
+  {
+    auto readFile = std::make_shared<InMemoryReadFile>(file);
+    auto tabletOptions = test::makeTestTabletOptions(pool());
+    tabletOptions.externalDictionaryResolver = resolver;
+    auto tablet = TabletReader::create(readFile, pool(), tabletOptions);
+    EXPECT_GT(tablet->stripeCount(), 1);
+  }
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  for (const bool lazyColumnIo : {false, true}) {
+    SCOPED_TRACE(fmt::format("lazyColumnIo={}", lazyColumnIo));
+    auto readers = makeReaders(
+        input,
+        file,
+        scanSpec,
+        stringDecoderZeroCopy,
+        /*preserveFlatMapsInMemory=*/false,
+        lazyColumnIo,
+        resolver);
+    if (!stringDecoderZeroCopy) {
+      NIMBLE_ASSERT_THROW(
+          validate(
+              *input,
+              *readers.rowReader,
+              /*batchSize=*/89,
+              [](auto /*row*/) { return true; }),
+          "Shared dictionary encoding requires non-legacy encoding dispatch.");
+      continue;
+    }
+    validate(
+        *input,
+        *readers.rowReader,
+        /*batchSize=*/89,
+        [](auto /*row*/) { return true; });
+  }
 }
 
 TEST_P(SelectiveNimbleReaderTest, denseMostlyNulls) {
@@ -2978,7 +3159,7 @@ TEST_P(SelectiveNimbleReaderTest, pinMetadata) {
   }
 }
 
-// Verifies that within the same TabletReader, the second VeloxReader pass
+// Verifies that within the same TabletReader, the second BatchReader pass
 // does not re-read metadata. The weak-pointer cache retains entries while the
 // tablet is alive, so metadata is always reused regardless of pinMetadata,
 // cacheMetadata, or whether cache infrastructure is provided.
@@ -3054,11 +3235,11 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseWithSameReader) {
 
     auto tablet = TabletReader::create(trackingFile, pool(), tabletOptions);
 
-    nimble::VeloxReadParams readParams;
+    nimble::BatchReadParams readParams;
     readParams.decodingExecutor =
         std::make_shared<folly::CPUThreadPoolExecutor>(1);
 
-    auto reader1 = std::make_unique<nimble::VeloxReader>(
+    auto reader1 = std::make_unique<nimble::BatchReader>(
         tablet, *pool(), selector, readParams);
     VectorPtr result;
     ASSERT_TRUE(reader1->next(100, result));
@@ -3074,10 +3255,10 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseWithSameReader) {
 
     const auto ramHitsAfterFirstPass = metadataIoStats_->ramHit().count();
 
-    // Second pass: new VeloxReader on the same TabletReader. Metadata is
+    // Second pass: new BatchReader on the same TabletReader. Metadata is
     // always reused within the same tablet regardless of settings.
     trackingFile->resetMaxReadOffset();
-    auto reader2 = std::make_unique<nimble::VeloxReader>(
+    auto reader2 = std::make_unique<nimble::BatchReader>(
         tablet, *pool(), selector, readParams);
     ASSERT_TRUE(reader2->next(100, result));
     ASSERT_EQ(result->size(), 100);
@@ -3189,10 +3370,10 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
     ASSERT_EQ(stripeGroupsMeta.size(), 1);
     const auto metadataBoundary = stripeGroupsMeta[0].offset();
 
-    nimble::VeloxReadParams readParams;
+    nimble::BatchReadParams readParams;
     readParams.decodingExecutor =
         std::make_shared<folly::CPUThreadPoolExecutor>(1);
-    auto reader1 = std::make_unique<nimble::VeloxReader>(
+    auto reader1 = std::make_unique<nimble::BatchReader>(
         tablet1, *pool(), selector, readParams);
     VectorPtr result;
     ASSERT_TRUE(reader1->next(100, result));
@@ -3213,7 +3394,7 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
     auto metadataIoStats2 = std::make_shared<io::IoStatistics>();
     std::unique_ptr<FileHandle> fh2;
     auto tablet2 = makeTablet(metadataIoStats2, fh2);
-    auto reader3 = std::make_unique<nimble::VeloxReader>(
+    auto reader3 = std::make_unique<nimble::BatchReader>(
         tablet2, *pool(), selector, readParams);
     ASSERT_TRUE(reader3->next(100, result));
     ASSERT_EQ(result->size(), 100);

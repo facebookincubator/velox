@@ -141,6 +141,17 @@ __device__ void __concatCopy(
   const int64_t start = block.blockInOp * blockDim.x + threadIdx.x;
   const int64_t stride = block.numBlocksInOp * blockDim.x;
   auto* dst = storage<DstT>(dest) + offset * dest->strides[dim];
+  // The operand already IS its slice of the result: the host handed its
+  // producer a view of exactly this region (a concat allocation group), so the
+  // data was written in place and there is nothing to move. The copy would be
+  // an element-for-element rewrite of the same addresses -- harmless, but the
+  // whole point of placing the operand there was not to pay for it. The
+  // addresses coincide only when the host built the view from 'dest', which
+  // also fixes the strides, so a match is proof and not a coincidence.
+  if (static_cast<const void*>(source->storage) ==
+      static_cast<const void*>(dst)) {
+    return;
+  }
   // Joining on the outermost dimension leaves the slice contiguous in a
   // contiguous output, so the source's row-major order maps straight onto it.
   if (dim == 0 && source->contiguous && dest->contiguous) {

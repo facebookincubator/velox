@@ -1176,9 +1176,13 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     if (thisContext == Context::kFused && producer &&
         producer->target() == "prim.ListPack") {
       const bool hostShapes = concatNeedsHostShapes(node, types_);
+      const bool parallelFill = concatFillsInParallel(node, types_);
       for (const auto& listInput : producer->inputs()) {
         if (hostShapes) {
           breakDeviceSizedProducers(listInput.value);
+        }
+        if (parallelFill) {
+          breakConcatOperandIntoOwnKernel(listInput.value, node->outputs()[0]);
         }
         placeInput(listInput.value, isScalarSize);
       }
@@ -1193,6 +1197,15 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     pushdownStandalone(node);
     return thisContext;
+  }
+  // A concat whose operands fill it from ops of their own ends its kernel. The
+  // operands write the result in the previous step, so a reader of the result
+  // has to be in a later kernel; keeping it fused would instead need an
+  // opBarrier on top of every operand's op, which the fusion path has no way to
+  // express.
+  if (concatFillsInParallel(node, types_)) {
+    pushdownFused(node);
+    return Context::kFusedBreak;
   }
   if (meta->isKernelBreak(
           isSingleBlock_,
@@ -1307,6 +1320,24 @@ void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
   }
   if (setsSizeOnDevice(producer)) {
     breakProducerIntoOwnKernel(producer);
+  }
+}
+
+void CompileCtx::breakConcatOperandIntoOwnKernel(
+    ValueCP operand,
+    ValueCP concatOutput) {
+  auto* producer = operand->producer();
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    // Nothing of this operand is computed here: it is a graph input or a value
+    // an earlier step already materialized, so there is no producing expression
+    // to push down. The concat still copies it in.
+    return;
+  }
+  const size_t before = kernelOpStorage_.size();
+  breakProducerIntoOwnKernel(producer);
+  for (size_t i = before; i < kernelOpStorage_.size(); ++i) {
+    kernelOpStorage_[i]->addOrderingOutput(concatOutput->id());
   }
 }
 
@@ -1783,6 +1814,19 @@ std::string cudaAttrType(const nativert::Constant& c) {
 
 namespace {
 
+// A C++ type spelling reduced to something usable inside an identifier, so a
+// shared declaration's variable can be made unique per type. Anything that is
+// not alphanumeric becomes an underscore, which keeps distinct types distinct
+// without needing to understand the spelling.
+std::string identifierSuffix(std::string_view type) {
+  std::string out;
+  out.reserve(type.size());
+  for (char c : type) {
+    out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+  }
+  return out;
+}
+
 void declareAttributesImpl(
     NodeCP node,
     const KernelOperation& op,
@@ -2047,16 +2091,30 @@ std::string CompileCtx::makeCall(
     }
   }
 
-  // Shared declarations: declare in the kernel and pass as arguments.
+  // Shared declarations: declare in the kernel and pass as arguments. The name
+  // is suffixed by the type, as the dynamic form below already does, because
+  // two ops fused into one kernel can ask for the same name at different
+  // types: masked_select_jagged wants a uint32_t 'counter' and
+  // group_length_guard_head an int64_t one. Emitting both unsuffixed put two
+  // conflicting declarations of 'counter' in one scope. nvcc calls that a
+  // redeclaration; NVRTC segfaults inside nvrtcCompileProgram, before the
+  // program log is readable, so it surfaces as a broken promise for the
+  // compiled module rather than as a compile error.
+  //
+  // Deduplication cannot fix this on its own: addSharedDeclaration matches on
+  // the whole declaration string, and even matching on the name would be wrong,
+  // since the two ops need storage of different types rather than one shared
+  // variable.
   for (const auto& [type, name] : meta->sharedDecls) {
+    auto varName = name + "_" + identifierSuffix(type);
     std::string decl = "  __shared__ ";
     decl += type;
     decl += " ";
-    decl += name;
+    decl += varName;
     decl += ";\n";
     op.addSharedDeclaration(decl);
     comma();
-    ss << name;
+    ss << varName;
   }
 
   // Dynamic shared declarations: type from input dtype, name suffixed by type.

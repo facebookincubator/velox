@@ -35,13 +35,13 @@
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
-// The VeloxReader reads (a projection from) a file into a velox VectorPtr.
+// The BatchReader reads (a projection from) a file into a velox VectorPtr.
 // The current implementation only uses FlatVector rather than any of the
 // fancier vectors (dictionary, etc), and only supports the types needed for ML.
 
 namespace facebook::nimble {
 
-struct VeloxReadParams : public FieldReaderParams {
+struct BatchReadParams : public FieldReaderParams {
   uint64_t fileRangeStartOffset = 0;
   uint64_t fileRangeEndOffset = std::numeric_limits<uint64_t>::max();
 
@@ -68,47 +68,54 @@ struct VeloxReadParams : public FieldReaderParams {
   // If nullptr we'll use the default one, that doesn't pre-load stripes.
   std::shared_ptr<velox::dwio::common::UnitLoaderFactory> unitLoaderFactory{};
 
+  /// Resolves External shared integer dictionaries referenced by the file.
+  std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+
+  /// Creates an encoding for one serialized stream chunk.
+  using StreamEncodingFactory = std::function<std::unique_ptr<Encoding>(
+      velox::memory::MemoryPool&,
+      std::string_view,
+      std::function<void*(uint32_t)>)>;
+
   // Used strictly for backward compatible migrations where the Encoding
   // implementations might have different read implementations, but
   // identical/backward compatible write behavior.
-  std::function<std::unique_ptr<Encoding>(
-      velox::memory::MemoryPool&,
-      std::string_view,
-      std::function<void*(uint32_t)>)>
-      encodingFactory = [](velox::memory::MemoryPool& pool,
-                           std::string_view data,
-                           std::function<void*(uint32_t)> stringBufferFactory)
+  StreamEncodingFactory encodingFactory =
+      [](velox::memory::MemoryPool& pool,
+         std::string_view data,
+         const std::function<void*(uint32_t)>& stringBufferFactory)
       -> std::unique_ptr<Encoding> {
-    return legacy::EncodingFactory().create(pool, data, stringBufferFactory);
+    return legacy::EncodingFactory().create(
+        pool, data, stringBufferFactory, Encoding::Options{});
   };
 };
 
-class VeloxReader {
+class BatchReader {
  public:
   static constexpr uint64_t kConservativeEstimatedRowSize = 1L << 20; // 1MB
 
-  VeloxReader(
+  BatchReader(
       velox::ReadFile* file,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      VeloxReadParams params = {});
+      const BatchReadParams& params = {});
 
-  VeloxReader(
+  BatchReader(
       std::shared_ptr<velox::ReadFile> file,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      VeloxReadParams params = {});
+      const BatchReadParams& params = {});
 
-  VeloxReader(
+  BatchReader(
       std::shared_ptr<const TabletReader> tabletReader,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      VeloxReadParams params = {});
+      BatchReadParams params = {});
 
-  ~VeloxReader();
+  ~BatchReader();
 
   // Returns the estimated row size from the current stripe in bytes.
   uint64_t estimatedRowSize();
@@ -159,6 +166,11 @@ class VeloxReader {
   // Loads the next stripe's streams.
   void loadNextStripe();
 
+  // Returns the base encoding factory unless the stream has an alphabet.
+  BatchReadParams::StreamEncodingFactory createStreamEncodingFactory(
+      uint32_t valueStreamId,
+      std::unique_ptr<StreamLoader> dictionaryStream) const;
+
   // True if the file contain zero rows.
   bool isEmptyFile() const {
     return ((lastRow_ - firstRow_) == 0);
@@ -184,7 +196,7 @@ class VeloxReader {
   velox::memory::MemoryPool& pool_;
   std::shared_ptr<const TabletReader> tabletReader_;
   std::optional<StripeIdentifier> stripeIdentifier_;
-  const VeloxReadParams parameters_;
+  const BatchReadParams parameters_;
   std::shared_ptr<const Type> schema_;
   std::shared_ptr<const velox::RowType> type_;
   std::vector<uint32_t> offsets_;
@@ -218,7 +230,7 @@ class VeloxReader {
 
   std::unique_ptr<velox::dwio::common::UnitLoader> unitLoader_;
 
-  friend class VeloxReaderHelper;
+  friend class BatchReaderHelper;
 };
 
 } // namespace facebook::nimble

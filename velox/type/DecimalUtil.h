@@ -612,6 +612,18 @@ class DecimalUtil {
 
   static constexpr __uint128_t kOverflowMultiplier = ((__uint128_t)1 << 127);
 
+  // Returns the abs value of input value.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
+  FOLLY_ALWAYS_INLINE static uint64_t absValue(int64_t a) {
+    return a < 0 ? static_cast<uint64_t>(-a) : static_cast<uint64_t>(a);
+  }
+
+  // Returns the abs value of input value.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
+  FOLLY_ALWAYS_INLINE static uint128_t absValue(int128_t a) {
+    return a < 0 ? static_cast<uint128_t>(-a) : static_cast<uint128_t>(a);
+  }
+
  private:
   // Parses the string view to decimal components, which contains the
   // unscaled value, precision, and scale. The parsed precision and scale are

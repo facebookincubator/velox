@@ -59,6 +59,11 @@ class FixedBitArray {
   FixedBitArray(std::string_view buffer, int bitWidth)
       : FixedBitArray(const_cast<char*>(buffer.data()), bitWidth) {}
 
+  /// Convenience constructor for reading read-only data. Calling non-const
+  /// methods on instances constructed from this is undefined behavior.
+  FixedBitArray(const char* buffer, int bitWidth)
+      : FixedBitArray(const_cast<char*>(buffer), bitWidth) {}
+
   /// Sets the |index|'th slot to the given |value|. If value
   /// is >= 2^|bitWidth| behavior is undefined.
   ///

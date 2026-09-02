@@ -289,11 +289,9 @@ TEST_F(
   options.randomizeWriterConfig = false;
   NimbleWriterFuzzer fuzzer(options, *rootPool_);
 
-  // PFOR is integral-only but is also read-only, so it is rejected by the
-  // writer config parser before dispatch is reached.
-  // `TypesTest.ReadOnlyEncoding` covers that property.
   for (const auto encodingType :
        {EncodingType::DeltaBlock,
+        EncodingType::PFOR,
         EncodingType::SimdForBitpack,
         EncodingType::Huffman}) {
     SCOPED_TRACE(toString(encodingType));
@@ -316,6 +314,7 @@ TEST_F(
   fuzzer.run();
 
   EXPECT_EQ(fuzzer.numUnfilteredFilesWritten(), kNumUnfilteredRounds);
+  EXPECT_FALSE(fuzzer.coverage().contains(EncodingType::Huffman));
   for (const auto encodingType : allCandidateEncodings()) {
     SCOPED_TRACE(toString(encodingType));
     const auto entry = fuzzer.coverage().find(encodingType);

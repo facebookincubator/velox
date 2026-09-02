@@ -20,16 +20,22 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/MetricsLogger.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 
+#include <memory>
+#include <optional>
 #include <set>
+#include <unordered_map>
+#include <vector>
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/type/Type.h"
@@ -58,6 +64,12 @@ struct WriterOptions {
   /// Property bag for storing user metadata in the file.
   std::unordered_map<std::string, std::string> metadata =
       detail::defaultMetadata();
+
+  /// Shared dictionary encoding settings.
+  /// EXPERIMENTAL: Shared dictionary encoding is not production-ready. Do not
+  /// enable for production tables without consulting the Nimble team (oncall:
+  /// dwios).
+  SharedDictionaryEncodingConfig experimentalSharedDictionaryEncoding{};
 
   /// Enable column statistics collection. When false, the writer skips
   /// collecting per-column statistics, reducing write CPU cost.
@@ -353,11 +365,13 @@ struct WriterOptions {
   /// until all KeepAlive references are destructed.
   folly::Executor::KeepAlive<> encodingExecutor{};
 
-  /// When maxEncodeParallelism > 0 and encodingExecutor is set,
-  /// FieldWriter::write() operations will be parallelized using coroutines
-  /// scheduled on encodingExecutor.
+  /// Caps concurrent stream-encoding tasks. Callers should not set this above
+  /// the executor's available thread count.
   uint32_t maxEncodeParallelism{0};
-  uint32_t minStreamsPerEncodeUnit{1};
+
+  /// Targets at least this many streams per parallel encoding task. Zero is
+  /// treated as one.
+  uint32_t minStreamsPerEncodingTask{1};
 
   bool enableChunking{true};
 

@@ -15,9 +15,16 @@
  */
 #include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
+#include <random>
+#include <set>
+#include <span>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #include "folly/FileUtil.h"
 #include "folly/Random.h"
@@ -37,11 +44,15 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
+#include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
@@ -66,6 +77,12 @@ DEFINE_uint32(
     "If provided, this seed will be used when executing tests. "
     "Otherwise, a random seed will be used.");
 
+using nimble::test::makeSharedDictionaryInput;
+using nimble::test::SharedDictionarySource;
+using nimble::test::SharedDictionaryTestResolver;
+using nimble::test::sharedDictionaryValueUniverse;
+using nimble::test::sharedDictionaryWriterOptions;
+using nimble::test::writeWithRandomStripes;
 using nimble::testing::TrackingReadFile;
 
 namespace {
@@ -394,13 +411,14 @@ size_t streamsReadCount(
       makeTestTabletOptions(&pool));
   NIMBLE_CHECK_GE(tablet->stripeCount(), 1);
   auto stripeIdentifier = tablet->stripeIdentifier(0);
-  std::vector<uint32_t> offsets(tablet->streamCount(stripeIdentifier));
-  tablet->streamOffsets(stripeIdentifier, offsets);
+  std::vector<nimble::TabletReader::StreamLocation> locations(
+      tablet->streamCount(stripeIdentifier));
+  tablet->streamLocations(stripeIdentifier, locations);
   std::unordered_set<uint32_t> streamOffsets;
-  LOG(INFO) << "Number of streams: " << offsets.size();
-  for (auto offset : offsets) {
-    LOG(INFO) << "Stream offset: " << offset;
-    streamOffsets.insert(offset);
+  LOG(INFO) << "Number of streams: " << locations.size();
+  for (const auto& location : locations) {
+    LOG(INFO) << "Stream offset: " << location.offset;
+    streamOffsets.insert(location.offset);
   }
   size_t readCount = 0;
   auto fileSize = readFile->size();
@@ -429,11 +447,12 @@ std::unordered_set<nimble::offset_size> existingStreamOffsets(
   NIMBLE_CHECK_LT(stripeIndex, tablet->stripeCount(), "Stripe out of range");
   auto stripeId = tablet->stripeIdentifier(stripeIndex);
   const auto streamCount = tablet->streamCount(stripeId);
-  std::vector<uint32_t> streamSizes(streamCount);
-  tablet->streamSizes(stripeId, streamSizes);
+  std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+      streamCount);
+  tablet->streamLocations(stripeId, streamLocations);
   std::unordered_set<nimble::offset_size> result;
   for (nimble::offset_size i = 0; i < streamCount; ++i) {
-    if (streamSizes[i] > 0) {
+    if (streamLocations[i].size > 0) {
       result.insert(i);
     }
   }
@@ -458,7 +477,7 @@ struct TestParam {
   }
 };
 
-class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
+class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
  public:
   static std::vector<TestParam> getTestParams() {
     std::vector<TestParam> params;
@@ -550,10 +569,14 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
   // Creates a TabletReader with cache options applied.
   std::shared_ptr<nimble::TabletReader> createTablet(
       std::shared_ptr<velox::ReadFile> readFile,
-      velox::memory::MemoryPool* pool) {
+      velox::memory::MemoryPool* pool,
+      std::shared_ptr<const nimble::ExternalDictionaryResolver>
+          externalDictionaryResolver = nullptr) {
     nimble::TabletReader::Options tabletOptions;
     tabletOptions.pinMetadata = pinMetadata();
     tabletOptions.cacheMetadata = enableCache();
+    tabletOptions.externalDictionaryResolver =
+        std::move(externalDictionaryResolver);
     ioReaderOptions_ = std::make_unique<velox::io::ReaderOptions>(pool);
     ioReaderOptions_->setDataIoStats(dataIoStats_);
     ioReaderOptions_->setMetadataIoStats(metadataIoStats_);
@@ -572,20 +595,21 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     return nimble::TabletReader::create(readFile, pool, tabletOptions);
   }
 
-  // Creates a VeloxReader with cache support when enabled.
-  std::unique_ptr<nimble::VeloxReader> createVeloxReader(
+  // Creates a BatchReader with cache support when enabled.
+  std::unique_ptr<nimble::BatchReader> createBatchReader(
       std::shared_ptr<velox::ReadFile> readFile,
       velox::memory::MemoryPool& pool,
       std::shared_ptr<const velox::dwio::common::ColumnSelector> selector =
           nullptr,
-      nimble::VeloxReadParams params = {}) {
+      nimble::BatchReadParams params = {}) {
     params = configureWithTestParam(std::move(params));
     if (enableCache() || pinMetadata()) {
-      auto tablet = createTablet(readFile, &pool);
-      return std::make_unique<nimble::VeloxReader>(
+      auto tablet =
+          createTablet(readFile, &pool, params.externalDictionaryResolver);
+      return std::make_unique<nimble::BatchReader>(
           std::move(tablet), pool, std::move(selector), std::move(params));
     }
-    return std::make_unique<nimble::VeloxReader>(
+    return std::make_unique<nimble::BatchReader>(
         readFile.get(), pool, std::move(selector), std::move(params));
   }
 
@@ -596,8 +620,8 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     return options;
   }
 
-  nimble::VeloxReadParams configureWithTestParam(
-      nimble::VeloxReadParams params) const {
+  nimble::BatchReadParams configureWithTestParam(
+      nimble::BatchReadParams params) const {
     params.optimizeStringBufferHandling = optimizeStringBufferHandling();
     if (params.optimizeStringBufferHandling) {
       params.encodingFactory =
@@ -606,7 +630,10 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
              std::function<void*(uint32_t)> stringBufferFactory)
           -> std::unique_ptr<nimble::Encoding> {
         return nimble::EncodingFactory().create(
-            pool, data, std::move(stringBufferFactory));
+            pool,
+            data,
+            std::move(stringBufferFactory),
+            nimble::Encoding::Options{});
       };
     } else {
       params.encodingFactory =
@@ -615,14 +642,17 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
              std::function<void*(uint32_t)> stringBufferFactory)
           -> std::unique_ptr<nimble::Encoding> {
         return nimble::legacy::EncodingFactory().create(
-            pool, data, std::move(stringBufferFactory));
+            pool,
+            data,
+            std::move(stringBufferFactory),
+            nimble::Encoding::Options{});
       };
     }
     return params;
   }
 
-  nimble::VeloxReadParams createReadParams() const {
-    nimble::VeloxReadParams params;
+  nimble::BatchReadParams createReadParams() const {
+    nimble::BatchReadParams params;
     return configureWithTestParam(std::move(params));
   }
 
@@ -633,9 +663,59 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     return expected->equalValueAt(actual.get(), index, index);
   }
 
+  void validateSharedDictionaryRead(
+      const velox::RowVectorPtr& expected,
+      const std::string& file,
+      std::shared_ptr<const nimble::ExternalDictionaryResolver>
+          externalDictionaryResolver,
+      std::span<const uint32_t> readSizes) {
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
+        std::dynamic_pointer_cast<const velox::RowType>(expected->type()));
+    nimble::BatchReadParams readParams;
+    readParams.externalDictionaryResolver =
+        std::move(externalDictionaryResolver);
+    auto reader = createBatchReader(readFile, *leafPool_, selector, readParams);
+
+    velox::VectorPtr result;
+    velox::vector_size_t rowOffset{0};
+    size_t readIndex{0};
+    while (rowOffset < expected->size()) {
+      const auto readSize = std::min<velox::vector_size_t>(
+          static_cast<velox::vector_size_t>(
+              readSizes[readIndex++ % readSizes.size()]),
+          expected->size() - rowOffset);
+      ASSERT_TRUE(reader->next(readSize, result));
+      ASSERT_LE(result->size(), readSize);
+      for (auto row = 0; row < result->size(); ++row) {
+        const auto expectedRow = rowOffset + row;
+        ASSERT_TRUE(expected->equalValueAt(result.get(), expectedRow, row))
+            << "Content mismatch at row " << expectedRow
+            << "\nReference: " << expected->toString(expectedRow)
+            << "\nResult: " << result->toString(row);
+      }
+      rowOffset += result->size();
+    }
+    ASSERT_FALSE(reader->next(1, result));
+
+    auto skipReader =
+        createBatchReader(readFile, *leafPool_, selector, readParams);
+    const auto skipOffset = expected->size() / 3;
+    ASSERT_EQ(skipReader->skipRows(skipOffset), skipOffset);
+    ASSERT_TRUE(skipReader->next(/*rowCount=*/32, result));
+    ASSERT_EQ(result->size(), 32);
+    for (auto row = 0; row < result->size(); ++row) {
+      const auto expectedRow = skipOffset + row;
+      ASSERT_TRUE(expected->equalValueAt(result.get(), expectedRow, row))
+          << "Content mismatch after skip at row " << expectedRow
+          << "\nReference: " << expected->toString(expectedRow)
+          << "\nResult: " << result->toString(row);
+    }
+  }
+
   void verifyReadersEqual(
-      std::unique_ptr<nimble::VeloxReader> lhs,
-      std::unique_ptr<nimble::VeloxReader> rhs,
+      std::unique_ptr<nimble::BatchReader> lhs,
+      std::unique_ptr<nimble::BatchReader> rhs,
       int32_t expectedNumTotalArrays,
       int32_t expectedNumUniqueArrays) {
     velox::VectorPtr leftResult;
@@ -696,11 +776,11 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
         nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
     auto inMemFile = velox::InMemoryReadFile(file);
 
-    nimble::VeloxReader veloxReader(
+    nimble::BatchReader batchReader(
         &inMemFile,
         memoryPool,
         std::make_shared<velox::dwio::common::ColumnSelector>(veloxRowType));
-    const auto& veloxTypeResult = convertToVeloxType(*veloxReader.schema());
+    const auto& veloxTypeResult = convertToVeloxType(*batchReader.schema());
 
     EXPECT_EQ(*veloxRowType, *veloxTypeResult)
         << "Expected: " << veloxRowType->toString()
@@ -755,10 +835,10 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     writer.write(vector);
     writer.close();
 
-    nimble::VeloxReadParams readParams = createReadParams();
+    nimble::BatchReadParams readParams = createReadParams();
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), readParams);
 
     velox::VectorPtr output;
@@ -833,7 +913,7 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
           velox::vector_size_t)> validator,
       size_t batchCount,
       nimble::WriterOptions writerOptions = {},
-      nimble::VeloxReadParams readParams = {},
+      nimble::BatchReadParams readParams = {},
       std::function<bool(std::string&)> isKeyPresent = nullptr,
       std::function<void(const velox::VectorPtr&)> comparator = nullptr,
       bool multiSkip = false,
@@ -859,7 +939,7 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     auto readerPool = leakDetectPool->addLeafChild("reader_pool");
 
     auto reader =
-        createVeloxReader(readFile, *readerPool, selector, readParams);
+        createBatchReader(readFile, *readerPool, selector, readParams);
     if (folly::Random::oneIn(2, rng)) {
       LOG(INFO) << "using executor";
       readParams.decodingExecutor =
@@ -893,8 +973,8 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
 
       // validate skip
       if (i % 2 == 0) {
-        auto reader1 = createVeloxReader(readFile, pool, selector, readParams);
-        auto reader2 = createVeloxReader(readFile, pool, selector, readParams);
+        auto reader1 = createBatchReader(readFile, pool, selector, readParams);
+        auto reader2 = createBatchReader(readFile, pool, selector, readParams);
         auto rowCount = expected.at(0)->size();
         velox::vector_size_t remaining = rowCount;
         uint32_t skipCount = 0;
@@ -940,12 +1020,12 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     }
   }
 
-  std::unique_ptr<nimble::VeloxReader> getReaderForLifeCycleTest(
+  std::unique_ptr<nimble::BatchReader> getReaderForLifeCycleTest(
       const std::shared_ptr<const velox::RowType> schema,
       size_t batchSize,
       std::mt19937& rng,
       nimble::WriterOptions writerOptions = {},
-      nimble::VeloxReadParams readParams = {}) {
+      nimble::BatchReadParams readParams = {}) {
     // Merge the base parameter (optimizeStringBufferHandling)
     readParams = configureWithTestParam(std::move(readParams));
 
@@ -963,13 +1043,13 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
         readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
     auto selector =
         std::make_shared<velox::dwio::common::ColumnSelector>(schema);
-    std::unique_ptr<nimble::VeloxReader> reader =
-        std::make_unique<nimble::VeloxReader>(
+    std::unique_ptr<nimble::BatchReader> reader =
+        std::make_unique<nimble::BatchReader>(
             tablet, *leafPool_, std::move(selector), readParams);
     return reader;
   }
 
-  std::unique_ptr<nimble::VeloxReader> getReaderForWrite(
+  std::unique_ptr<nimble::BatchReader> getReaderForWrite(
       velox::memory::MemoryPool& pool,
       const velox::RowTypePtr& type,
       std::vector<std::function<velox::VectorPtr(const velox::RowTypePtr&)>>
@@ -982,7 +1062,7 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
         pool, type, generators, decodeCounterUnused);
   }
 
-  std::unique_ptr<nimble::VeloxReader> getReaderForWriteWithDecodeCounter(
+  std::unique_ptr<nimble::BatchReader> getReaderForWriteWithDecodeCounter(
       velox::memory::MemoryPool& pool,
       const velox::RowTypePtr& type,
       std::vector<std::function<velox::VectorPtr(const velox::RowTypePtr&)>>
@@ -990,7 +1070,7 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
       int& decodeCounter) {
     nimble::WriterOptions writerOptions;
     // Merge the base parameter (optimizeStringBufferHandling)
-    nimble::VeloxReadParams readParams = createReadParams();
+    nimble::BatchReadParams readParams = createReadParams();
 
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -1018,7 +1098,7 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     auto readFile = std::make_unique<velox::InMemoryReadFile>(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
 
-    return std::make_unique<nimble::VeloxReader>(
+    return std::make_unique<nimble::BatchReader>(
         std::move(readFile),
         *leafPool_,
         std::move(selector),
@@ -1324,7 +1404,7 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
     VeloxMapGenerator generator(leafPool_.get(), generatorConfig);
     velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
-    nimble::VeloxReadParams params = createReadParams();
+    nimble::BatchReadParams params = createReadParams();
     params.readFlatMapFieldAsStruct.insert("id_list_features");
     for (int i = 0; i < features.size(); ++i) {
       params.flatMapFeatureSelector["id_list_features"].features.push_back(
@@ -1392,15 +1472,15 @@ class VeloxReaderTest : public ::testing::TestWithParam<TestParam> {
       std::make_shared<velox::io::IoStatistics>()};
   std::shared_ptr<velox::cache::ScanTracker> scanTracker_;
   std::unique_ptr<folly::CPUThreadPoolExecutor> ioExecutor_;
-  // Held alive for the duration of createTablet/createVeloxReader.
+  // Held alive for the duration of createTablet/createBatchReader.
   std::unique_ptr<velox::FileHandle> fileHandle_;
   std::unique_ptr<velox::io::ReaderOptions> ioReaderOptions_;
   uint64_t nextFileId_{0};
 };
 
-class FsstStringBatchReaderTest : public VeloxReaderTest {};
+class FsstStringBatchReaderTest : public BatchReaderTest {};
 
-class MetadataReuseTest : public VeloxReaderTest {};
+class MetadataReuseTest : public BatchReaderTest {};
 
 nimble::EncodingLayout makeFsstEncodingLayout() {
   return nimble::EncodingLayout{
@@ -1414,9 +1494,9 @@ nimble::EncodingLayout makeFsstEncodingLayout() {
 }
 
 // Exercises read-path stream-selection across every StripeGroup metadata
-// format. Parameterized on the format alone (independent of VeloxReaderTest's
+// format. Parameterized on the format alone (independent of BatchReaderTest's
 // cache/pin matrix) because these tests only assert which streams are read.
-class VeloxReaderStripeGroupFormatTest
+class BatchReaderStripeGroupFormatTest
     : public ::testing::TestWithParam<nimble::StripeGroup::EncodingLayout> {
  protected:
   static void SetUpTestCase() {
@@ -1433,7 +1513,7 @@ class VeloxReaderStripeGroupFormatTest
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
+TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
   auto type = velox::ROW({
       {"tinyint_val", velox::TINYINT()},
       {"smallint_val", velox::SMALLINT()},
@@ -1466,8 +1546,8 @@ TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
         std::dynamic_pointer_cast<const velox::RowType>(vector->type()),
         selectedColumnNames);
-    nimble::VeloxReader reader(
-        &readFile, *leafPool_, std::move(selector), nimble::VeloxReadParams{});
+    nimble::BatchReader reader(
+        &readFile, *leafPool_, std::move(selector), nimble::BatchReadParams{});
 
     velox::VectorPtr result;
     reader.next(readSize, result);
@@ -1484,7 +1564,7 @@ TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnselectedColumnsFromFile) {
   }
 }
 
-TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
+TEST_P(BatchReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
   auto type = velox::ROW({
       {"float_features", velox::MAP(velox::INTEGER(), velox::REAL())},
   });
@@ -1521,7 +1601,7 @@ TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
         std::dynamic_pointer_cast<const velox::RowType>(vector->type()));
 
-    nimble::VeloxReadParams params;
+    nimble::BatchReadParams params;
     params.readFlatMapFieldAsStruct.insert("float_features");
     auto& selectedFeatures =
         params.flatMapFeatureSelector["float_features"].features;
@@ -1540,7 +1620,7 @@ TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
     LOG(INFO) << "Selected features (" << selectedFeatures.size()
               << ") :" << folly::join(", ", selectedFeatures);
 
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), params);
 
     uint32_t readSize = 1000;
@@ -1597,8 +1677,8 @@ TEST_P(VeloxReaderStripeGroupFormatTest, dontReadUnprojectedFeaturesFromFile) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    VeloxReaderStripeGroupFormatTestSuite,
-    VeloxReaderStripeGroupFormatTest,
+    BatchReaderStripeGroupFormatTestSuite,
+    BatchReaderStripeGroupFormatTest,
     ::testing::Values(
         nimble::StripeGroup::EncodingLayout::kRaw,
         nimble::StripeGroup::EncodingLayout::kStreamMajor),
@@ -1613,7 +1693,117 @@ INSTANTIATE_TEST_SUITE_P(
       return "Unknown";
     });
 
-TEST_P(VeloxReaderTest, readComplexData) {
+TEST_P(BatchReaderTest, sharedDictionary) {
+  const auto valueUniverse = sharedDictionaryValueUniverse();
+  const std::array<nimble::SharedDictionaryScope, 3> scopes{
+      nimble::SharedDictionaryScope::Stripe,
+      nimble::SharedDictionaryScope::File,
+      nimble::SharedDictionaryScope::External};
+  const std::array<uint32_t, 3> readSizes{127, 64, 251};
+
+  for (const bool nullableData : {false, true}) {
+    for (const auto scope : scopes) {
+      SCOPED_TRACE(
+          fmt::format("scope={}, nullableData={}", scope, nullableData));
+      const uint32_t dictionaryId =
+          scope == nimble::SharedDictionaryScope::Stripe ? 0 : 17;
+      std::shared_ptr<const nimble::ExternalDictionaryResolver> resolver;
+      if (scope == nimble::SharedDictionaryScope::External) {
+        resolver = std::make_shared<SharedDictionaryTestResolver>(
+            std::vector<std::pair<uint32_t, std::vector<int32_t>>>{
+                {dictionaryId, valueUniverse}},
+            leafPool_.get());
+      }
+
+      const std::vector<SharedDictionarySource> sources{{
+          .columnName = "shared",
+          .dictionaryKey = 10,
+          .scope = scope,
+          .dictionaryId = dictionaryId,
+      }};
+      auto input = makeSharedDictionaryInput(
+          leafPool_.get(),
+          /*rowCount=*/2'000,
+          sources,
+          valueUniverse,
+          nullableData);
+      const auto file = writeWithRandomStripes(
+          rootPool_.get(),
+          input,
+          sharedDictionaryWriterOptions(
+              sources,
+              {.skipConstantFlatMapInMapStreams =
+                   skipConstantFlatMapInMapStreams(),
+               .externalDictionaryResolver = resolver}),
+          /*seed=*/0xB1170000u + dictionaryId + nullableData);
+
+      if (!FLAGS_output_test_file_path.empty()) {
+        folly::writeFile(file, FLAGS_output_test_file_path.c_str());
+      }
+
+      validateSharedDictionaryRead(input, file, resolver, readSizes);
+    }
+  }
+}
+
+TEST_P(BatchReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
+  constexpr uint32_t kSeed{0xB117D1C7};
+  SCOPED_TRACE(fmt::format("seed={}", kSeed));
+
+  const auto valueUniverse = sharedDictionaryValueUniverse();
+  const std::vector<SharedDictionarySource> sources{
+      {
+          .columnName = "stripe",
+          .dictionaryKey = 10,
+          .scope = nimble::SharedDictionaryScope::Stripe,
+          .dictionaryId = 0,
+      },
+      {
+          .columnName = "file",
+          .dictionaryKey = 20,
+          .scope = nimble::SharedDictionaryScope::File,
+          .dictionaryId = 7,
+      },
+      {
+          .columnName = "external",
+          .dictionaryKey = 30,
+          .scope = nimble::SharedDictionaryScope::External,
+          .dictionaryId = 17,
+      },
+  };
+  auto resolver = std::make_shared<SharedDictionaryTestResolver>(
+      std::vector<std::pair<uint32_t, std::vector<int32_t>>>{
+          {sources.back().dictionaryId, valueUniverse}},
+      leafPool_.get());
+  auto input = makeSharedDictionaryInput(
+      leafPool_.get(),
+      /*rowCount=*/1'024,
+      sources,
+      valueUniverse,
+      /*nullableData=*/true);
+  const auto file = writeWithRandomStripes(
+      rootPool_.get(),
+      input,
+      sharedDictionaryWriterOptions(
+          sources,
+          {.skipConstantFlatMapInMapStreams = skipConstantFlatMapInMapStreams(),
+           .externalDictionaryResolver = resolver}),
+      kSeed);
+
+  {
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto tabletOptions = makeTestTabletOptions(leafPool_.get());
+    tabletOptions.externalDictionaryResolver = resolver;
+    auto tablet =
+        nimble::TabletReader::create(readFile, leafPool_.get(), tabletOptions);
+    EXPECT_GT(tablet->stripeCount(), 1);
+  }
+
+  const std::array<uint32_t, 4> readSizes{89, 17, 233, 5};
+  validateSharedDictionaryRead(input, file, resolver, readSizes);
+}
+
+TEST_P(BatchReaderTest, readComplexData) {
   auto type = velox::ROW({
       {"tinyint_val", velox::TINYINT()},
       {"smallint_val", velox::SMALLINT()},
@@ -1677,7 +1867,7 @@ TEST_P(VeloxReaderTest, readComplexData) {
         auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
             std::dynamic_pointer_cast<const velox::RowType>(
                 upcast ? typeUpcast : vector->type()));
-        nimble::VeloxReader reader(
+        nimble::BatchReader reader(
             &readFile, *leafPool_, std::move(selector), createReadParams());
 
         velox::vector_size_t rowIndex = 0;
@@ -1738,7 +1928,7 @@ TEST_P(VeloxReaderTest, readComplexData) {
   }
 }
 
-TEST_P(VeloxReaderTest, lifetime) {
+TEST_P(BatchReaderTest, lifetime) {
   velox::StringView s{"012345678901234567890123456789"};
   std::vector<velox::StringView> strings{s, s, s, s, s};
   std::vector<std::vector<velox::StringView>> stringsOfStrings{
@@ -1766,7 +1956,7 @@ TEST_P(VeloxReaderTest, lifetime) {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
         std::dynamic_pointer_cast<const velox::RowType>(vector->type()));
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
 
     ASSERT_TRUE(reader.next(vector->size(), result));
@@ -1817,7 +2007,7 @@ TEST_P(FsstStringBatchReaderTest, fsstStringBatchReader) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(vector->type()));
-  auto reader = createVeloxReader(readFile, *leafPool_, std::move(selector));
+  auto reader = createBatchReader(readFile, *leafPool_, std::move(selector));
 
   velox::VectorPtr result;
   int32_t offset = 0;
@@ -1832,7 +2022,7 @@ TEST_P(FsstStringBatchReaderTest, fsstStringBatchReader) {
   ASSERT_FALSE(reader->next(1, result));
 }
 
-TEST_P(VeloxReaderTest, allValuesNulls) {
+TEST_P(BatchReaderTest, allValuesNulls) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vector = vectorMaker.rowVector(
       {vectorMaker.flatVectorNullable<int32_t>(
@@ -1860,12 +2050,12 @@ TEST_P(VeloxReaderTest, allValuesNulls) {
     options.dictionaryArrayColumns.insert("c4");
     auto file = nimble::test::createNimbleFile(*rootPool_, vector, options);
     velox::InMemoryReadFile readFile(file);
-    nimble::VeloxReadParams params = createReadParams();
+    nimble::BatchReadParams params = createReadParams();
     params.readFlatMapFieldAsStruct.insert("c3");
     params.flatMapFeatureSelector.insert({"c3", {{"1"}}});
     auto selector =
         std::make_shared<velox::dwio::common::ColumnSelector>(projectedType);
-    nimble::VeloxReader reader(&readFile, *leafPool_, selector, params);
+    nimble::BatchReader reader(&readFile, *leafPool_, selector, params);
 
     ASSERT_TRUE(reader.next(vector->size(), result));
     ASSERT_FALSE(reader.next(vector->size(), result));
@@ -1889,7 +2079,7 @@ TEST_P(VeloxReaderTest, allValuesNulls) {
   }
 }
 
-TEST_P(VeloxReaderTest, stringBuffers) {
+TEST_P(BatchReaderTest, stringBuffers) {
   // Creating a string column with 10 identical strings.
   // We will perform 2 reads of 5 rows each, and compare the string buffers
   // generated.
@@ -1905,7 +2095,7 @@ TEST_P(VeloxReaderTest, stringBuffers) {
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(vector->type()));
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
 
   ASSERT_TRUE(reader.next(5, result));
@@ -1955,7 +2145,7 @@ TEST_P(VeloxReaderTest, stringBuffers) {
   EXPECT_EQ(bufferSizeFirst, bufferSizeSecond);
 }
 
-TEST_P(VeloxReaderTest, nullVectors) {
+TEST_P(BatchReaderTest, nullVectors) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   // In the following table, the first 5 rows contain nulls and the last 5
@@ -1996,7 +2186,7 @@ TEST_P(VeloxReaderTest, nullVectors) {
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(vector->type()));
 
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
 
   velox::VectorPtr result;
@@ -2044,7 +2234,7 @@ TEST_P(VeloxReaderTest, nullVectors) {
   ASSERT_FALSE(reader.next(1, result));
 }
 
-TEST_P(VeloxReaderTest, slidingWindowMapSizeOne) {
+TEST_P(BatchReaderTest, slidingWindowMapSizeOne) {
   verifySlidingWindowMap(
       /* deduplicatedMapCount */ 1,
       /* keys */ {1, 2},
@@ -2060,7 +2250,7 @@ TEST_P(VeloxReaderTest, slidingWindowMapSizeOne) {
       /* nulls */ {1});
 }
 
-TEST_P(VeloxReaderTest, slidingWindowMapSizeTwo) {
+TEST_P(BatchReaderTest, slidingWindowMapSizeTwo) {
   verifySlidingWindowMap(
       /* deduplicatedMapCount */ 1,
       /* keys */ {1, 2, 1, 2},
@@ -2076,7 +2266,7 @@ TEST_P(VeloxReaderTest, slidingWindowMapSizeTwo) {
       /* nulls */ {1});
 }
 
-TEST_P(VeloxReaderTest, slidingWindowMapEmpty) {
+TEST_P(BatchReaderTest, slidingWindowMapEmpty) {
   verifySlidingWindowMap(
       /* deduplicatedMapCount */ 1,
       /* keys */ {},
@@ -2098,7 +2288,7 @@ TEST_P(VeloxReaderTest, slidingWindowMapEmpty) {
       /* nulls */ {1});
 }
 
-TEST_P(VeloxReaderTest, slidingWindowMapMixedEmptyLength) {
+TEST_P(BatchReaderTest, slidingWindowMapMixedEmptyLength) {
   verifySlidingWindowMap(
       /* deduplicatedMapCount */ 5,
       /* keys */ {1, 2, 2, 1, 1, 2, 4, 4},
@@ -2114,7 +2304,7 @@ TEST_P(VeloxReaderTest, slidingWindowMapMixedEmptyLength) {
       /* nulls */ {9});
 }
 
-TEST_P(VeloxReaderTest, arrayWithOffsetsCaching) {
+TEST_P(BatchReaderTest, arrayWithOffsetsCaching) {
   auto type = velox::ROW({
       {"dictionaryArray", velox::ARRAY(velox::INTEGER())},
   });
@@ -2380,7 +2570,7 @@ TEST_P(VeloxReaderTest, arrayWithOffsetsCaching) {
       expectedUniqueArrays);
 }
 
-TEST_P(VeloxReaderTest, dictionaryEncodedPassthrough) {
+TEST_P(BatchReaderTest, dictionaryEncodedPassthrough) {
   // test duplicate in first index
   auto offsets = std::vector<std::optional<velox::vector_size_t>>{0, 0, 1, 2};
   auto dictionaryValues =
@@ -2492,7 +2682,7 @@ TEST_P(VeloxReaderTest, dictionaryEncodedPassthrough) {
       offsets, dictionaryValues, fullArrayVectorNullable);
 }
 
-TEST_P(VeloxReaderTest, dictionaryEncodedPassthroughDecoding) {
+TEST_P(BatchReaderTest, dictionaryEncodedPassthroughDecoding) {
   auto offsets = std::vector<std::optional<velox::vector_size_t>>{0, 0, 1, 2};
   auto dictionaryValues =
       std::vector<std::vector<int32_t>>{{10, 15, 20}, {30, 40, 50}, {3, 4, 5}};
@@ -2523,7 +2713,7 @@ TEST_P(VeloxReaderTest, dictionaryEncodedPassthroughDecoding) {
   ASSERT_EQ(decodeDictionaryCount, 1);
 }
 
-TEST_P(VeloxReaderTest, dictionaryEncodingPassthroughCaching) {
+TEST_P(BatchReaderTest, dictionaryEncodingPassthroughCaching) {
   auto firstWriteOffsets =
       std::vector<std::optional<velox::vector_size_t>>{0, 0, 1, 2};
   auto firstWriteDictValues =
@@ -2729,7 +2919,7 @@ TEST_P(VeloxReaderTest, dictionaryEncodingPassthroughCaching) {
   ASSERT_TRUE(true);
 }
 
-TEST_P(VeloxReaderTest, fuzzSimple) {
+TEST_P(BatchReaderTest, fuzzSimple) {
   auto type = velox::ROW({
       {"bool_val", velox::BOOLEAN()},
       {"byte_val", velox::TINYINT()},
@@ -2811,7 +3001,7 @@ TEST_P(VeloxReaderTest, fuzzSimple) {
   }
 }
 
-TEST_P(VeloxReaderTest, fuzzComplex) {
+TEST_P(BatchReaderTest, fuzzComplex) {
   auto type = velox::ROW(
       {{"array", velox::ARRAY(velox::REAL())},
        {"dict_array", velox::ARRAY(velox::REAL())},
@@ -2938,7 +3128,7 @@ TEST_P(VeloxReaderTest, fuzzComplex) {
 // string-keyed maps, and a bigint-keyed boolean-valued map. fuzzComplex covers
 // INTEGER-keyed maps and REAL arrays but none of these key/value combos, so
 // this pins the round-trip for them, with and without nulls.
-TEST_P(VeloxReaderTest, fuzzMigrationComplexTypes) {
+TEST_P(BatchReaderTest, fuzzMigrationComplexTypes) {
   auto type = velox::ROW({
       {"array_bigint", velox::ARRAY(velox::BIGINT())},
       {"array_varchar", velox::ARRAY(velox::VARCHAR())},
@@ -2996,7 +3186,7 @@ TEST_P(VeloxReaderTest, fuzzMigrationComplexTypes) {
   }
 }
 
-TEST_P(VeloxReaderTest, arrayWithOffsets) {
+TEST_P(BatchReaderTest, arrayWithOffsets) {
   auto type = velox::ROW({
       {"dictionaryArray", velox::ARRAY(velox::INTEGER())},
   });
@@ -3255,7 +3445,7 @@ TEST_P(VeloxReaderTest, arrayWithOffsets) {
   }
 }
 
-TEST_P(VeloxReaderTest, arrayWithOffsetsNullable) {
+TEST_P(BatchReaderTest, arrayWithOffsetsNullable) {
   auto type = velox::ROW({
       {"dictionaryArray", velox::ARRAY(velox::INTEGER())},
   });
@@ -3466,7 +3656,7 @@ TEST_P(VeloxReaderTest, arrayWithOffsetsNullable) {
   }
 }
 
-TEST_P(VeloxReaderTest, arrayWithOffsetsMultiskips) {
+TEST_P(BatchReaderTest, arrayWithOffsetsMultiskips) {
   auto type = velox::ROW({
       {"dictionaryArray", velox::ARRAY(velox::INTEGER())},
   });
@@ -3629,7 +3819,7 @@ bool compareMapToFlatMap(
   return true;
 }
 
-TEST_P(VeloxReaderTest, flatMapDictionaryWrappedFlatMapVector) {
+TEST_P(BatchReaderTest, flatMapDictionaryWrappedFlatMapVector) {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
 
@@ -3693,7 +3883,7 @@ TEST_P(VeloxReaderTest, flatMapDictionaryWrappedFlatMapVector) {
 
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
   velox::VectorPtr output;
   uint64_t rowCount = numRows;
@@ -3704,7 +3894,7 @@ TEST_P(VeloxReaderTest, flatMapDictionaryWrappedFlatMapVector) {
   }
 }
 
-TEST_P(VeloxReaderTest, flatMapMigrationTypes) {
+TEST_P(BatchReaderTest, flatMapMigrationTypes) {
   auto type = velox::ROW({
       {"map_bigint_boolean", velox::MAP(velox::BIGINT(), velox::BOOLEAN())},
       {"map_varchar_double", velox::MAP(velox::VARCHAR(), velox::DOUBLE())},
@@ -3740,7 +3930,7 @@ TEST_P(VeloxReaderTest, flatMapMigrationTypes) {
 
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
   velox::VectorPtr output;
   uint64_t rowCount = numRows;
@@ -3751,7 +3941,7 @@ TEST_P(VeloxReaderTest, flatMapMigrationTypes) {
   }
 }
 
-TEST_P(VeloxReaderTest, flatMapNullValues) {
+TEST_P(BatchReaderTest, flatMapNullValues) {
   testFlatMapNullValues<int8_t>();
   testFlatMapNullValues<int16_t>();
   testFlatMapNullValues<int32_t>();
@@ -3763,7 +3953,7 @@ TEST_P(VeloxReaderTest, flatMapNullValues) {
 
 // Verify that the writer skips encoding all-true in-map streams and the reader
 // correctly handles missing in-map streams as "all rows are in-map".
-TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStream) {
+TEST_P(BatchReaderTest, flatMapSkipAllTrueInMapStream) {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
 
@@ -3795,7 +3985,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStream) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
     auto offsets = existingStreamOffsets(*leafPool_, &readFile, 0);
@@ -3817,7 +4007,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStream) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     velox::VectorPtr output;
     uint64_t rowCount = 4;
@@ -3832,10 +4022,10 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStream) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReadParams readParams = createReadParams();
+    nimble::BatchReadParams readParams = createReadParams();
     readParams.readFlatMapFieldAsStruct.insert("flat_map");
     readParams.flatMapFeatureSelector["flat_map"].features = {"1", "2", "3"};
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), readParams);
     velox::VectorPtr output;
     uint64_t rowCount = 4;
@@ -3856,9 +4046,56 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStream) {
   }
 }
 
+TEST_P(BatchReaderTest, DISABLED_flatMapAllTrueInMapWithAllNullValues) {
+  auto type =
+      velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  auto keys = vectorMaker.flatVector<int32_t>({1, 1, 1, 1});
+  auto values = vectorMaker.flatVectorNullable<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  auto vector = vectorMaker.rowVector(
+      {"flat_map"}, {vectorMaker.mapVector({0, 1, 2, 3}, keys, values)});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.enableChunking = true;
+  writerOptions.flatMapColumns["flat_map"];
+  nimble::Writer writer(
+      type, std::move(writeFile), *rootPool_, std::move(writerOptions));
+  writer.write(vector);
+  writer.close();
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
+    nimble::BatchReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
+    ASSERT_EQ(flatMap.childrenCount(), 1);
+    EXPECT_TRUE(existingStreamOffsets(*leafPool_, &readFile, 0)
+                    .count(flatMap.inMapDescriptorAt(0).offset()));
+  }
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
+    nimble::BatchReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    velox::VectorPtr output;
+    uint64_t rowCount = 4;
+    ASSERT_TRUE(reader.next(rowCount, output));
+    ASSERT_EQ(output->size(), 4);
+    for (auto i = 0; i < 4; ++i) {
+      EXPECT_TRUE(vectorEquals(vector, output, i)) << "Mismatch at row " << i;
+    }
+  }
+}
+
 // Verify mixed in-map streams: some keys present in all rows (all-true,
 // skipped), some keys present in only some rows (not all-true, written).
-TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
+TEST_P(BatchReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
 
@@ -3889,7 +4126,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
     auto offsets = existingStreamOffsets(*leafPool_, &readFile, 0);
@@ -3913,7 +4150,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     velox::VectorPtr output;
     uint64_t rowCount = 4;
@@ -3928,10 +4165,10 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReadParams readParams = createReadParams();
+    nimble::BatchReadParams readParams = createReadParams();
     readParams.readFlatMapFieldAsStruct.insert("flat_map");
     readParams.flatMapFeatureSelector["flat_map"].features = {"1", "2", "3"};
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), readParams);
     velox::VectorPtr output;
     uint64_t rowCount = 4;
@@ -3959,7 +4196,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
 // Verify that the writer skips encoding all-false in-map streams (key absent
 // from all rows in a stripe) and the reader correctly handles this by skipping
 // the key. Uses multi-stripe write where key 3 appears only in stripe 2.
-TEST_P(VeloxReaderTest, flatMapSkipAllFalseInMapStream) {
+TEST_P(BatchReaderTest, flatMapSkipAllFalseInMapStream) {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
 
@@ -3996,7 +4233,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllFalseInMapStream) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
     ASSERT_EQ(flatMap.childrenCount(), 3);
@@ -4040,7 +4277,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllFalseInMapStream) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     velox::VectorPtr output;
     uint64_t rowCount = 2;
@@ -4062,10 +4299,10 @@ TEST_P(VeloxReaderTest, flatMapSkipAllFalseInMapStream) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReadParams readParams = createReadParams();
+    nimble::BatchReadParams readParams = createReadParams();
     readParams.readFlatMapFieldAsStruct.insert("flat_map");
     readParams.flatMapFeatureSelector["flat_map"].features = {"1", "2", "3"};
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), readParams);
     velox::VectorPtr output;
     uint64_t rowCount = 2;
@@ -4095,7 +4332,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllFalseInMapStream) {
 }
 
 // Verify roundtrip with null map rows alongside all-true in-map streams.
-TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamWithNulls) {
+TEST_P(BatchReaderTest, flatMapSkipAllTrueInMapStreamWithNulls) {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
 
@@ -4144,7 +4381,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamWithNulls) {
   {
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
     velox::VectorPtr output;
     uint64_t rowCount = 4;
@@ -4156,7 +4393,7 @@ TEST_P(VeloxReaderTest, flatMapSkipAllTrueInMapStreamWithNulls) {
   }
 }
 
-TEST_P(VeloxReaderTest, slidingWindowMapNestedInFlatMap) {
+TEST_P(BatchReaderTest, slidingWindowMapNestedInFlatMap) {
   auto type = velox::ROW({
       {"nested_map",
        velox::MAP(
@@ -4184,7 +4421,7 @@ TEST_P(VeloxReaderTest, slidingWindowMapNestedInFlatMap) {
 
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["nested_map"];
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   params.readFlatMapFieldAsStruct.insert("nested_map");
   params.flatMapFeatureSelector.insert({"nested_map", {{"1"}}});
   writerOptions.deduplicatedMapColumns.insert("nested_map");
@@ -4221,7 +4458,7 @@ TEST_P(VeloxReaderTest, slidingWindowMapNestedInFlatMap) {
   }
 }
 
-TEST_P(VeloxReaderTest, flatmapPassthroughBasicTest) {
+TEST_P(BatchReaderTest, flatmapPassthroughBasicTest) {
   // normal flatmap
   auto features = std::vector<std::string>{"123", "234", "345", "456"};
   auto valueArrays = std::vector<
@@ -4268,7 +4505,7 @@ TEST_P(VeloxReaderTest, flatmapPassthroughBasicTest) {
   verifyFlatMapPassthrough(features, valueArrays);
 }
 
-TEST_P(VeloxReaderTest, flatMapPassthroughFuzzer) {
+TEST_P(BatchReaderTest, flatMapPassthroughFuzzer) {
   auto type = velox::ROW(
       {{"id_list_features",
         velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()))}});
@@ -4289,7 +4526,7 @@ TEST_P(VeloxReaderTest, flatMapPassthroughFuzzer) {
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["id_list_features"];
 
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   params.readFlatMapFieldAsStruct.insert("id_list_features");
   for (auto i = 0; i < 5; ++i) {
     params.flatMapFeatureSelector["id_list_features"].features.push_back(
@@ -4357,7 +4594,7 @@ TEST_P(VeloxReaderTest, flatMapPassthroughFuzzer) {
   }
 }
 
-TEST_P(VeloxReaderTest, mapToFlatMapAndPassthrough) {
+TEST_P(BatchReaderTest, mapToFlatMapAndPassthrough) {
   auto mapType = velox::ROW(
       {{"id_list_features",
         velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()))}});
@@ -4398,14 +4635,14 @@ TEST_P(VeloxReaderTest, mapToFlatMapAndPassthrough) {
           "memory_leak_detect");
   auto readerPool = leakDetectPool->addLeafChild("reader_pool");
 
-  nimble::VeloxReadParams readParams = createReadParams();
+  nimble::BatchReadParams readParams = createReadParams();
   readParams.readFlatMapFieldAsStruct.insert("id_list_features");
   for (auto i = 0; i < numFeatures; ++i) {
     readParams.flatMapFeatureSelector["id_list_features"].features.push_back(
         folly::to<std::string>(i));
   }
 
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *readerPool.get(), selector, readParams);
 
   auto rootTypeFromSchema = convertToVeloxType(*reader.schema());
@@ -4444,7 +4681,7 @@ TEST_P(VeloxReaderTest, mapToFlatMapAndPassthrough) {
   EXPECT_EQ(nextExpected.size(), fullReadResult.size());
 
   velox::InMemoryReadFile flatMapReadFile(newFile);
-  nimble::VeloxReader flatReader(
+  nimble::BatchReader flatReader(
       &flatMapReadFile, *readerPool.get(), selector, readParams);
 
   auto flatRootTypeFromSchema = convertToVeloxType(*flatReader.schema());
@@ -4466,7 +4703,7 @@ TEST_P(VeloxReaderTest, mapToFlatMapAndPassthrough) {
   ASSERT_FALSE(flatReader.next(1, lastFlatResult));
 }
 
-TEST_P(VeloxReaderTest, flatMapToStruct) {
+TEST_P(BatchReaderTest, flatMapToStruct) {
   auto floatFeatures = velox::MAP(velox::INTEGER(), velox::REAL());
   auto idListFeatures =
       velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()));
@@ -4496,7 +4733,7 @@ TEST_P(VeloxReaderTest, flatMapToStruct) {
   writerOptions.flatMapColumns["id_score_list_features"];
   writerOptions.flatMapColumns["row_column"];
 
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   params.readFlatMapFieldAsStruct.insert("float_features");
   params.readFlatMapFieldAsStruct.insert("id_list_features");
   params.readFlatMapFieldAsStruct.insert("id_score_list_features");
@@ -4527,7 +4764,7 @@ TEST_P(VeloxReaderTest, flatMapToStruct) {
   }
 }
 
-TEST_P(VeloxReaderTest, flatMapToStructForComplexType) {
+TEST_P(BatchReaderTest, flatMapToStructForComplexType) {
   auto rowColumn = velox::MAP(
       velox::INTEGER(),
       velox::ROW(
@@ -4548,7 +4785,7 @@ TEST_P(VeloxReaderTest, flatMapToStructForComplexType) {
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["row_column"];
 
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   params.readFlatMapFieldAsStruct.insert("row_column");
   for (auto i = 0; i < 10; ++i) {
     params.flatMapFeatureSelector["row_column"].features.push_back(
@@ -4570,7 +4807,7 @@ TEST_P(VeloxReaderTest, flatMapToStructForComplexType) {
   }
 }
 
-TEST_P(VeloxReaderTest, stringKeyFlatMapAsStruct) {
+TEST_P(BatchReaderTest, stringKeyFlatMapAsStruct) {
   auto stringKeyFeatures = velox::MAP(velox::VARCHAR(), velox::REAL());
   auto type = velox::ROW({
       {"string_key_feature", stringKeyFeatures},
@@ -4588,7 +4825,7 @@ TEST_P(VeloxReaderTest, stringKeyFlatMapAsStruct) {
   };
   VeloxMapGenerator generator(leafPool_.get(), generatorConfig);
 
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   params.readFlatMapFieldAsStruct.emplace("string_key_feature");
   for (auto i = 0; i < 10; ++i) {
     params.flatMapFeatureSelector["string_key_feature"].features.push_back(
@@ -4624,7 +4861,7 @@ TEST_P(VeloxReaderTest, stringKeyFlatMapAsStruct) {
   }
 }
 
-TEST_P(VeloxReaderTest, flatMapAsMapEncoding) {
+TEST_P(BatchReaderTest, flatMapAsMapEncoding) {
   auto floatFeatures = velox::MAP(velox::INTEGER(), velox::REAL());
   auto idListFeatures =
       velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()));
@@ -4659,7 +4896,7 @@ TEST_P(VeloxReaderTest, flatMapAsMapEncoding) {
   writerOptions.dictionaryArrayColumns.emplace("deduplicated_id_list_features");
   // Verify the flatmap read without feature selection they are read as
   // MapEncoding
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   auto iterations = 10;
   auto batches = 10;
   for (auto i = 0; i < iterations; ++i) {
@@ -4827,7 +5064,7 @@ TEST_P(VeloxReaderTest, flatMapAsMapEncoding) {
   }
 }
 
-TEST_P(VeloxReaderTest, stringKeyFlatMapAsMapEncoding) {
+TEST_P(BatchReaderTest, stringKeyFlatMapAsMapEncoding) {
   auto stringKeyFeatures = velox::MAP(velox::VARCHAR(), velox::REAL());
   auto type = velox::ROW({
       {"string_key_feature", stringKeyFeatures},
@@ -4844,7 +5081,7 @@ TEST_P(VeloxReaderTest, stringKeyFlatMapAsMapEncoding) {
   nimble::WriterOptions writerOptions;
   writerOptions.flatMapColumns["string_key_feature"];
 
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   // Selecting only keys with even index to it
   for (auto i = 0; i < 10; ++i) {
     if (i % 2 == 0) {
@@ -4908,10 +5145,10 @@ class TestNimbleReaderFactory {
             vectors[0]->type())},
         pool_{&leafPool} {}
 
-  nimble::VeloxReader createReader(nimble::VeloxReadParams params = {}) {
+  nimble::BatchReader createReader(const nimble::BatchReadParams& params = {}) {
     auto selector =
         std::make_shared<velox::dwio::common::ColumnSelector>(type_);
-    return nimble::VeloxReader(
+    return nimble::BatchReader(
         file_.get(), *this->pool_, std::move(selector), params);
   }
 
@@ -4971,7 +5208,7 @@ std::vector<velox::VectorPtr> createSkipSeekVectors(
 }
 
 void readAndVerifyContent(
-    nimble::VeloxReader& reader,
+    nimble::BatchReader& reader,
     std::vector<velox::VectorPtr> expectedVectors,
     uint32_t rowsToRead,
     uint32_t expectedNumberOfRows,
@@ -5000,7 +5237,7 @@ void readAndVerifyContent(
   }
 }
 
-TEST_P(VeloxReaderTest, readerSeekTest) {
+TEST_P(BatchReaderTest, readerSeekTest) {
   // Generate an Nimble file with 3 stripes and 10 rows each
   auto vectors = createSkipSeekVectors(*leafPool_, {10, 10, 10});
   nimble::WriterOptions writerOptions;
@@ -5099,7 +5336,7 @@ TEST_P(VeloxReaderTest, readerSeekTest) {
   }
 }
 
-TEST_P(VeloxReaderTest, readerSkipTest) {
+TEST_P(BatchReaderTest, readerSkipTest) {
   // Generate an Nimble file with 3 stripes and 10 rows each
   auto vectors = createSkipSeekVectors(*leafPool_, {10, 10, 10});
   nimble::WriterOptions writerOptions;
@@ -5322,7 +5559,7 @@ TEST_P(VeloxReaderTest, readerSkipTest) {
   }
 }
 
-TEST_P(VeloxReaderTest, readerSkipSingleStripeTest) {
+TEST_P(BatchReaderTest, readerSkipSingleStripeTest) {
   // Generate an Nimble file with 1 stripe and 12 rows
   auto vectors = createSkipSeekVectors(*leafPool_, {12});
   nimble::WriterOptions writerOptions;
@@ -5375,7 +5612,7 @@ TEST_P(VeloxReaderTest, readerSkipSingleStripeTest) {
   }
 }
 
-TEST_P(VeloxReaderTest, readerSeekSingleStripeTest) {
+TEST_P(BatchReaderTest, readerSeekSingleStripeTest) {
   // Generate an Nimble file with 1 stripes and 11 rows
   auto vectors = createSkipSeekVectors(*leafPool_, {11});
   nimble::WriterOptions writerOptions;
@@ -5409,7 +5646,7 @@ TEST_P(VeloxReaderTest, readerSeekSingleStripeTest) {
   }
 }
 
-TEST_P(VeloxReaderTest, readerSkipUnevenStripesTest) {
+TEST_P(BatchReaderTest, readerSkipUnevenStripesTest) {
   // Generate an Nimble file with 4 stripes
   auto vectors = createSkipSeekVectors(*leafPool_, {12, 15, 25, 18});
   nimble::WriterOptions writerOptions;
@@ -5445,7 +5682,7 @@ TEST_P(VeloxReaderTest, readerSkipUnevenStripesTest) {
 // initialize the value for optimized builds. T() we have used a bit in the
 // code to zero out the result. This is a dummy test to fail fast if it is not
 // zero initialized for primitive types
-TEST_P(VeloxReaderTest, testPrimitiveFieldDefaultValue) {
+TEST_P(BatchReaderTest, testPrimitiveFieldDefaultValue) {
   verifyDefaultValue<velox::vector_size_t>(2, 0, 10);
   verifyDefaultValue<int8_t>(2, 0, 30);
   verifyDefaultValue<uint8_t>(2, 0, 30);
@@ -5477,7 +5714,7 @@ struct RangeTestParams {
   std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> expectedSkips;
 };
 
-TEST_P(VeloxReaderTest, rangeReads) {
+TEST_P(BatchReaderTest, rangeReads) {
   // Generate an Nimble file with 4 stripes
   auto vectors = createSkipSeekVectors(*leafPool_, {10, 15, 25, 9});
   nimble::WriterOptions writerOptions;
@@ -5487,7 +5724,7 @@ TEST_P(VeloxReaderTest, rangeReads) {
       *leafPool_, *rootPool_, vectors, writerOptions);
 
   auto test = [&readerFactory, &vectors](RangeTestParams params) {
-    nimble::VeloxReadParams readParams;
+    nimble::BatchReadParams readParams;
     readParams.fileRangeStartOffset = params.rangeStart;
     readParams.fileRangeEndOffset = params.rangeEnd;
     auto reader = readerFactory.createReader(readParams);
@@ -5815,7 +6052,7 @@ TEST_P(VeloxReaderTest, rangeReads) {
   });
 }
 
-TEST_P(VeloxReaderTest, DISABLED_testScalarFieldLifeCycle) {
+TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
   const auto testScalarFieldLifeCycle =
       [&](const std::shared_ptr<const velox::RowType> schema,
           int32_t batchSize,
@@ -5881,7 +6118,7 @@ TEST_P(VeloxReaderTest, DISABLED_testScalarFieldLifeCycle) {
   }
 }
 
-TEST_P(VeloxReaderTest, testArrayFieldLifeCycle) {
+TEST_P(BatchReaderTest, testArrayFieldLifeCycle) {
   const uint32_t seed = FLAGS_reader_tests_seed > 0 ? FLAGS_reader_tests_seed
                                                     : folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
@@ -5927,7 +6164,7 @@ TEST_P(VeloxReaderTest, testArrayFieldLifeCycle) {
   }
 }
 
-TEST_P(VeloxReaderTest, testMapFieldLifeCycle) {
+TEST_P(BatchReaderTest, testMapFieldLifeCycle) {
   const auto testMapFieldLifeCycle =
       [&](const std::shared_ptr<const velox::RowType> type,
           int32_t batchSize,
@@ -5980,7 +6217,7 @@ TEST_P(VeloxReaderTest, testMapFieldLifeCycle) {
   }
 }
 
-TEST_P(VeloxReaderTest, testFlatMapAsMapFieldLifeCycle) {
+TEST_P(BatchReaderTest, testFlatMapAsMapFieldLifeCycle) {
   const auto testFlatMapFieldLifeCycle =
       [&](const std::shared_ptr<const velox::RowType> type,
           int32_t batchSize,
@@ -6028,7 +6265,7 @@ TEST_P(VeloxReaderTest, testFlatMapAsMapFieldLifeCycle) {
   }
 }
 
-TEST_P(VeloxReaderTest, testRowFieldLifeCycle) {
+TEST_P(BatchReaderTest, testRowFieldLifeCycle) {
   const auto testRowFieldLifeCycle =
       [&](const std::shared_ptr<const velox::RowType> type,
           int32_t batchSize,
@@ -6079,7 +6316,7 @@ TEST_P(VeloxReaderTest, testRowFieldLifeCycle) {
   }
 }
 
-TEST_P(VeloxReaderTest, veloxTypeFromNimbleSchema) {
+TEST_P(BatchReaderTest, veloxTypeFromNimbleSchema) {
   auto type = velox::ROW({
       {"tinyint_val", velox::TINYINT()},
       {"smallint_val", velox::SMALLINT()},
@@ -6116,7 +6353,7 @@ TEST_P(VeloxReaderTest, veloxTypeFromNimbleSchema) {
   testVeloxTypeFromNimbleSchema(*leafPool_, writerOptions, vector);
 }
 
-TEST_P(VeloxReaderTest, veloxTypeFromNimbleSchemaEmptyFlatMap) {
+TEST_P(BatchReaderTest, veloxTypeFromNimbleSchemaEmptyFlatMap) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   uint32_t numRows = 5;
   auto vector = vectorMaker.rowVector(
@@ -6144,7 +6381,7 @@ TEST_P(VeloxReaderTest, veloxTypeFromNimbleSchemaEmptyFlatMap) {
   testVeloxTypeFromNimbleSchema(*leafPool_, writerOptions, vector);
 }
 
-TEST_P(VeloxReaderTest, missingMetadata) {
+TEST_P(BatchReaderTest, missingMetadata) {
   if (nimble::detail::defaultMetadata().empty()) {
     GTEST_SKIP() << "This build injects no default metadata "
                     "(WriterDefaultMetadataOSS.cpp returns an empty map), so a "
@@ -6161,7 +6398,7 @@ TEST_P(VeloxReaderTest, missingMetadata) {
     nimble::testing::InMemoryTrackableReadFile readFile(
         file, useChainedBuffers);
 
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, nullptr, createReadParams());
     {
       readFile.resetChunks();
@@ -6182,7 +6419,7 @@ TEST_P(VeloxReaderTest, missingMetadata) {
   }
 }
 
-TEST_P(VeloxReaderTest, withMetadata) {
+TEST_P(BatchReaderTest, withMetadata) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vector =
       vectorMaker.rowVector({vectorMaker.flatVector<int32_t>({1, 2, 3})});
@@ -6195,7 +6432,7 @@ TEST_P(VeloxReaderTest, withMetadata) {
     nimble::testing::InMemoryTrackableReadFile readFile(
         file, useChainedBuffers);
 
-    nimble::VeloxReader reader(&readFile, *leafPool_);
+    nimble::BatchReader reader(&readFile, *leafPool_);
 
     {
       readFile.resetChunks();
@@ -6225,7 +6462,7 @@ TEST_P(VeloxReaderTest, withMetadata) {
   }
 }
 
-TEST_P(VeloxReaderTest, inaccurateSchemaWithSelection) {
+TEST_P(BatchReaderTest, inaccurateSchemaWithSelection) {
   // Some compute engines (e.g. Presto) sometimes don't have the full schema
   // to pass into the reader (if column projection is used). The reader needs
   // the schema in order to correctly construct the output vector. However,
@@ -6274,7 +6511,7 @@ TEST_P(VeloxReaderTest, inaccurateSchemaWithSelection) {
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
         inaccurateType,
         std::vector<uint64_t>{projected.begin(), projected.end()});
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), createReadParams());
 
     ASSERT_TRUE(reader.next(vector->size(), result));
@@ -6296,7 +6533,7 @@ TEST_P(VeloxReaderTest, inaccurateSchemaWithSelection) {
   }
 }
 
-TEST_P(VeloxReaderTest, chunkStreamsWithNulls) {
+TEST_P(BatchReaderTest, chunkStreamsWithNulls) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   std::vector<facebook::velox::VectorPtr> vectors{
       vectorMaker.rowVector({
@@ -6337,7 +6574,7 @@ TEST_P(VeloxReaderTest, chunkStreamsWithNulls) {
     auto file = nimble::test::createNimbleFile(
         *rootPool_, vectors, options, /* flushAfterWrite */ false);
     velox::InMemoryReadFile readFile(file);
-    nimble::VeloxReader reader(
+    nimble::BatchReader reader(
         &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
     velox::VectorPtr result;
@@ -6359,7 +6596,7 @@ TEST_P(VeloxReaderTest, chunkStreamsWithNulls) {
     // minStreamChunkRawSize=0 fix, small writes would be merged into one
     // chunk.
     if (enableChunking) {
-      nimble::VeloxReader chunkReader(
+      nimble::BatchReader chunkReader(
           &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
       const auto& tablet = chunkReader.tabletReader();
       const auto stripeId = tablet.stripeIdentifier(0);
@@ -6390,7 +6627,7 @@ TEST_P(VeloxReaderTest, chunkStreamsWithNulls) {
   }
 }
 
-TEST_P(VeloxReaderTest, estimatedRowSizeSimple) {
+TEST_P(BatchReaderTest, estimatedRowSizeSimple) {
   const uint32_t rowCount = 100;
   const double kMaxErrorRate = 0.2;
   auto testPrimitive = [&, rootPool = rootPool_, leafPool = leafPool_](
@@ -6405,11 +6642,11 @@ TEST_P(VeloxReaderTest, estimatedRowSizeSimple) {
       auto vector = fuzzer.fuzzInputFlatRow(velox::ROW({{"simple_col", type}}));
       auto file = nimble::test::createNimbleFile(*rootPool, vector);
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, nullptr, createReadParams());
       velox::VectorPtr result;
       ASSERT_EQ(
-          nimble::VeloxReader::kConservativeEstimatedRowSize,
+          nimble::BatchReader::kConservativeEstimatedRowSize,
           reader.estimatedRowSize());
       reader.next(1, result);
       if (type->isFixedWidth()) {
@@ -6462,7 +6699,7 @@ TEST_P(VeloxReaderTest, estimatedRowSizeSimple) {
 // boost the reported retained size (without actually allocating more memory).
 // This is ok for velox compute engines because they don't use the c++ Nimble
 // batch readers.
-TEST_P(VeloxReaderTest, estimatedRowSizeComplex) {
+TEST_P(BatchReaderTest, estimatedRowSizeComplex) {
   // For string cases and with null cases, it is really hard to get an even
   // close estimation as velox always over provision memory for vectors. Loose
   // or very loose error rate is applied to the test verification as there is no
@@ -6504,11 +6741,11 @@ TEST_P(VeloxReaderTest, estimatedRowSizeComplex) {
       auto file = nimble::test::createNimbleFile(*rootPool_, vector);
 
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, nullptr, createReadParams());
       velox::VectorPtr result;
       ASSERT_EQ(
-          nimble::VeloxReader::kConservativeEstimatedRowSize,
+          nimble::BatchReader::kConservativeEstimatedRowSize,
           reader.estimatedRowSize());
       // Read 1 less row so that it does not reach stripe boundary.
       reader.next(numRows - 1, result);
@@ -6585,7 +6822,7 @@ TEST_P(VeloxReaderTest, estimatedRowSizeComplex) {
       auto file =
           nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
 
-      nimble::VeloxReadParams readParams = createReadParams();
+      nimble::BatchReadParams readParams = createReadParams();
       if (readFlatMapFieldAsStruct) {
         readParams.readFlatMapFieldAsStruct.insert("flat_map_col");
         for (auto i = 0; i < numFeatures; ++i) {
@@ -6602,10 +6839,10 @@ TEST_P(VeloxReaderTest, estimatedRowSizeComplex) {
       }
 
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(&readFile, *leafPool_, nullptr, readParams);
+      nimble::BatchReader reader(&readFile, *leafPool_, nullptr, readParams);
       velox::VectorPtr result;
       ASSERT_EQ(
-          nimble::VeloxReader::kConservativeEstimatedRowSize,
+          nimble::BatchReader::kConservativeEstimatedRowSize,
           reader.estimatedRowSize());
       // Read 1 less row so that it does not reach stripe boundary.
       reader.next(rowCount - 1, result);
@@ -6686,7 +6923,7 @@ TEST_P(VeloxReaderTest, estimatedRowSizeComplex) {
       /* maxErrorRateString= */ kMaxErrorRateLoose);
 }
 
-TEST_P(VeloxReaderTest, estimatedRowSizeMix) {
+TEST_P(BatchReaderTest, estimatedRowSizeMix) {
   const double kMaxErrorRate = 0.2;
   const double kMaxErrorRateLoose = 0.4;
 
@@ -6735,11 +6972,11 @@ TEST_P(VeloxReaderTest, estimatedRowSizeMix) {
           nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
 
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, nullptr, createReadParams());
       velox::VectorPtr result;
       ASSERT_EQ(
-          nimble::VeloxReader::kConservativeEstimatedRowSize,
+          nimble::BatchReader::kConservativeEstimatedRowSize,
           reader.estimatedRowSize());
       reader.next(numRows - 1, result);
       int64_t estimateBasedOnRetainedSize = result->retainedSize() / numRows;
@@ -6803,7 +7040,7 @@ TEST_P(VeloxReaderTest, estimatedRowSizeMix) {
       /* maxErrorRateString= */ kMaxErrorRateLoose);
 }
 
-TEST_P(VeloxReaderTest, readNonExistingFlatMapFeature) {
+TEST_P(BatchReaderTest, readNonExistingFlatMapFeature) {
   auto testFlatMap = [&](uint32_t rowCount,
                          uint32_t numFeatures,
                          bool readFlatMapFieldAsStruct,
@@ -6853,7 +7090,7 @@ TEST_P(VeloxReaderTest, readNonExistingFlatMapFeature) {
     auto file =
         nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
 
-    nimble::VeloxReadParams readParams = createReadParams();
+    nimble::BatchReadParams readParams = createReadParams();
     if (readFlatMapFieldAsStruct) {
       readParams.readFlatMapFieldAsStruct.insert("flat_map_col");
     }
@@ -6862,10 +7099,10 @@ TEST_P(VeloxReaderTest, readNonExistingFlatMapFeature) {
         folly::to<std::string>(-1));
 
     velox::InMemoryReadFile readFile(file);
-    nimble::VeloxReader reader(&readFile, *leafPool_, nullptr, readParams);
+    nimble::BatchReader reader(&readFile, *leafPool_, nullptr, readParams);
     velox::VectorPtr result;
     ASSERT_EQ(
-        nimble::VeloxReader::kConservativeEstimatedRowSize,
+        nimble::BatchReader::kConservativeEstimatedRowSize,
         reader.estimatedRowSize());
     const uint64_t numReadRows = rowCount / 2;
     reader.next(numReadRows, result);
@@ -6946,7 +7183,7 @@ TEST_P(VeloxReaderTest, readNonExistingFlatMapFeature) {
       /* hasNulls= */ true);
 }
 
-TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
+TEST_P(BatchReaderTest, vectorVectorResetWithBufferReuse) {
   {
     velox::test::VectorMaker vectorMaker{leafPool_.get()};
     std::vector<facebook::velox::VectorPtr> vectors{
@@ -6961,7 +7198,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -6977,7 +7214,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7006,7 +7243,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7022,7 +7259,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7041,7 +7278,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7074,7 +7311,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7090,7 +7327,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7109,7 +7346,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7142,7 +7379,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
     {
       auto file = nimble::test::createNimbleFile(*rootPool_, vectors, {});
       velox::InMemoryReadFile readFile(file);
-      nimble::VeloxReader reader(
+      nimble::BatchReader reader(
           &readFile, *leafPool_, /* selector */ nullptr, createReadParams());
 
       velox::VectorPtr result;
@@ -7158,7 +7395,7 @@ TEST_P(VeloxReaderTest, vectorVectorResetWithBufferReuse) {
 }
 
 // Timestamp tests that might not be covered by fuzzer
-TEST_P(VeloxReaderTest, timestampAllNulls) {
+TEST_P(BatchReaderTest, timestampAllNulls) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   auto vector = vectorMaker.rowVector(
@@ -7170,7 +7407,7 @@ TEST_P(VeloxReaderTest, timestampAllNulls) {
 
   auto file = nimble::test::createNimbleFile(*rootPool_, vector, {});
   velox::InMemoryReadFile readFile(file);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, nullptr, createReadParams());
 
   velox::VectorPtr result;
@@ -7183,7 +7420,7 @@ TEST_P(VeloxReaderTest, timestampAllNulls) {
 }
 
 // Test that all-null top-level row vector short-circuits correctly
-TEST_P(VeloxReaderTest, rowVectorAllNulls) {
+TEST_P(BatchReaderTest, rowVectorAllNulls) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   // Create a row vector with a child column, where ALL top-level rows are null
@@ -7209,7 +7446,7 @@ TEST_P(VeloxReaderTest, rowVectorAllNulls) {
 
   auto file = nimble::test::createNimbleFile(*rootPool_, vector, {});
   velox::InMemoryReadFile readFile(file);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, nullptr, createReadParams());
 
   velox::VectorPtr result;
@@ -7222,7 +7459,7 @@ TEST_P(VeloxReaderTest, rowVectorAllNulls) {
   EXPECT_EQ(result->getNullCount().value(), rowCount);
 }
 
-TEST_P(VeloxReaderTest, timestampLargeRowCount) {
+TEST_P(BatchReaderTest, timestampLargeRowCount) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
   const velox::vector_size_t rowCount = 10'000'000;
@@ -7235,7 +7472,7 @@ TEST_P(VeloxReaderTest, timestampLargeRowCount) {
 
   auto file = nimble::test::createNimbleFile(*rootPool_, vector, {});
   velox::InMemoryReadFile readFile(file);
-  nimble::VeloxReader reader(&readFile, *leafPool_);
+  nimble::BatchReader reader(&readFile, *leafPool_);
 
   velox::VectorPtr result;
   velox::vector_size_t totalReads = 0;
@@ -7257,7 +7494,7 @@ TEST_P(VeloxReaderTest, timestampLargeRowCount) {
   ASSERT_EQ(totalReads, rowCount);
 }
 
-// Verifies that within the same TabletReader, the second VeloxReader pass
+// Verifies that within the same TabletReader, the second BatchReader pass
 // does not re-read metadata. The weak-pointer cache retains entries while the
 // tablet is alive, so metadata is always reused regardless of pinMetadata,
 // cacheMetadata, or whether cache infrastructure is provided.
@@ -7330,7 +7567,7 @@ TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
         trackingFile, leafPool_.get(), tabletOptions);
     auto readParams = createReadParams();
 
-    auto reader1 = std::make_unique<nimble::VeloxReader>(
+    auto reader1 = std::make_unique<nimble::BatchReader>(
         tablet, *leafPool_, selector, readParams);
     velox::VectorPtr result;
     ASSERT_TRUE(reader1->next(100, result));
@@ -7346,10 +7583,10 @@ TEST_P(MetadataReuseTest, metadataReuseWithSameReader) {
 
     const auto ramHitsAfterFirstPass = metadataIoStats_->ramHit().count();
 
-    // Second pass: new VeloxReader on the same TabletReader. Metadata is
+    // Second pass: new BatchReader on the same TabletReader. Metadata is
     // always reused within the same tablet regardless of settings.
     trackingFile->resetMaxReadOffset();
-    auto reader2 = std::make_unique<nimble::VeloxReader>(
+    auto reader2 = std::make_unique<nimble::BatchReader>(
         tablet, *leafPool_, selector, readParams);
     ASSERT_TRUE(reader2->next(100, result));
     ASSERT_EQ(result->size(), 100);
@@ -7458,7 +7695,7 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
     const auto metadataBoundary = stripeGroupsMeta[0].offset();
 
     auto readParams = createReadParams();
-    auto reader1 = std::make_unique<nimble::VeloxReader>(
+    auto reader1 = std::make_unique<nimble::BatchReader>(
         tablet1, *leafPool_, selector, readParams);
     velox::VectorPtr result;
     ASSERT_TRUE(reader1->next(100, result));
@@ -7479,7 +7716,7 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
     auto metadataIoStats2 = std::make_shared<velox::io::IoStatistics>();
     std::unique_ptr<velox::FileHandle> fh2;
     auto tablet2 = makeTablet(metadataIoStats2, fh2);
-    auto reader3 = std::make_unique<nimble::VeloxReader>(
+    auto reader3 = std::make_unique<nimble::BatchReader>(
         tablet2, *leafPool_, selector, readParams);
     ASSERT_TRUE(reader3->next(100, result));
     ASSERT_EQ(result->size(), 100);
@@ -7515,7 +7752,60 @@ TEST_P(MetadataReuseTest, metadataReuseCrossReaders) {
 // the input vector) is freed before a rehash, the map keys become dangling.
 // This test reproduces the issue by writing many batches with distinct string
 // keys, where each batch vector is destroyed before the next write.
-TEST_P(VeloxReaderTest, flatMapStringKeyOwnership) {
+// A flat map's key vector holds one entry per map entry, but it used to be
+// sized from the row count, which shrinks its values buffer. The resize back up
+// to the entry count is skipped whenever FlatVector::resize is handed the size
+// the vector already has, so two consecutive batches carrying the same number
+// of map entries left the key vector claiming more entries than its buffer
+// held. A plain read never noticed, because only wrapping a vector in a
+// dictionary validates it; a filtered read that drops rows aborted in
+// FlatVector::validate with "values_->size() >= byteSize".
+TEST_P(BatchReaderTest, flatMapKeyBufferSurvivesEqualEntryCountBatches) {
+  constexpr velox::vector_size_t kRowCount = 40;
+  constexpr velox::vector_size_t kBatchSize = 10;
+  constexpr velox::vector_size_t kEntriesPerRow = 3;
+
+  auto type =
+      velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  // Every row carries the same three keys, so every batch reports an identical
+  // total entry count and the second batch is the one that hits the skipped
+  // resize. Entries per row must exceed kBatchSize for the undersized buffer to
+  // be observable.
+  auto vector = vectorMaker.rowVector(
+      {"flat_map"},
+      {vectorMaker.mapVector<int32_t, int64_t>(
+          kRowCount,
+          [](velox::vector_size_t /*row*/) { return kEntriesPerRow; },
+          [](velox::vector_size_t idx) { return idx % kEntriesPerRow; },
+          [](velox::vector_size_t idx) { return idx; })});
+
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.flatMapColumns["flat_map"];
+  auto file = nimble::test::createNimbleFile(*rootPool_, vector, writerOptions);
+
+  velox::InMemoryReadFile readFile(file);
+  auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, selector, createReadParams());
+
+  velox::VectorPtr result;
+  velox::vector_size_t rowsRead = 0;
+  while (reader.next(kBatchSize, result)) {
+    // The assertion that fails without the fix: a vector's key buffer has to
+    // cover the number of entries it claims. Velox only runs this from
+    // DictionaryVector, so assert it directly rather than relying on a
+    // filtered read to trip it.
+    ASSERT_NO_THROW(result->validate({}))
+        << "invalid vector after reading rows [" << rowsRead << ", "
+        << rowsRead + result->size() << ")";
+    rowsRead += result->size();
+  }
+  EXPECT_EQ(rowsRead, kRowCount);
+}
+
+TEST_P(BatchReaderTest, flatMapStringKeyOwnership) {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::VARCHAR(), velox::BIGINT())}});
 
@@ -7571,7 +7861,7 @@ TEST_P(VeloxReaderTest, flatMapStringKeyOwnership) {
   // Read back and verify all rows are present.
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
   velox::VectorPtr output;
   uint64_t totalRows = kBatches;
@@ -7579,7 +7869,7 @@ TEST_P(VeloxReaderTest, flatMapStringKeyOwnership) {
   ASSERT_EQ(output->size(), kBatches);
 }
 
-TEST_P(VeloxReaderTest, openZLCompressionRoundTrip) {
+TEST_P(BatchReaderTest, openZLCompressionRoundTrip) {
   // E2E: write numeric columns (covering every width OpenZL has a numeric graph
   // for) plus double/string columns that exercise the zstd-fallback path, with
   // the OpenZL codec forced. Verify the data round-trips across all reader
@@ -7662,11 +7952,11 @@ TEST_P(VeloxReaderTest, openZLCompressionRoundTrip) {
 // End-to-end attributes propagation through the writer/reader pipeline.
 //
 // Validates WriterOptions::schemaAttributes round-trips through the
-// writer pipeline, the schema flatbuffer, and back through VeloxReader to
+// writer pipeline, the schema flatbuffer, and back through BatchReader to
 // the deserialized Type tree exposed by reader.schema(). Node ids are pre-order
 // (TypeWithId::id()); ids with no matching node must be ignored.
 // ---------------------------------------------------------------------------
-TEST_P(VeloxReaderTest, attributesByColumnRoundTrip) {
+TEST_P(BatchReaderTest, attributesByColumnRoundTrip) {
   facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
 
   // ROW{id BIGINT, user ROW{name VARCHAR, age INTEGER}}
@@ -7710,7 +8000,7 @@ TEST_P(VeloxReaderTest, attributesByColumnRoundTrip) {
   // Read back and inspect the deserialized Type tree's attributes().
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
   const auto& root = reader.schema();
   ASSERT_EQ(nimble::Kind::Row, root->kind());
@@ -7765,7 +8055,7 @@ TEST_P(VeloxReaderTest, attributesByColumnRoundTrip) {
 // Validates that the list element and map key/value nodes (pre-order ids)
 // round-trip their attributes. Ids with no matching node must be ignored.
 // ---------------------------------------------------------------------------
-TEST_P(VeloxReaderTest, attributesByColumnRoundTripCollections) {
+TEST_P(BatchReaderTest, attributesByColumnRoundTripCollections) {
   facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
 
   // ROW{tags ARRAY<INTEGER>, props MAP<INTEGER, BIGINT>}
@@ -7801,7 +8091,7 @@ TEST_P(VeloxReaderTest, attributesByColumnRoundTripCollections) {
 
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
   const auto& root = reader.schema();
   const auto& rowSchema = root->asRow();
@@ -7837,7 +8127,7 @@ TEST_P(VeloxReaderTest, attributesByColumnRoundTripCollections) {
 // produce a NIMBLE file whose deserialized Type tree exposes empty
 // attributes on every node. Pins the no-op upgrade path for every
 // existing NIMBLE writer.
-TEST_P(VeloxReaderTest, attributesByColumnEmptyByDefault) {
+TEST_P(BatchReaderTest, attributesByColumnEmptyByDefault) {
   facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
 
   auto type = velox::ROW({"a", "b"}, {velox::BIGINT(), velox::VARCHAR()});
@@ -7856,7 +8146,7 @@ TEST_P(VeloxReaderTest, attributesByColumnEmptyByDefault) {
 
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), createReadParams());
   const auto& root = reader.schema();
   ASSERT_EQ(nimble::Kind::Row, root->kind());
@@ -7870,7 +8160,7 @@ TEST_P(VeloxReaderTest, attributesByColumnEmptyByDefault) {
 INSTANTIATE_TEST_SUITE_P(
     FsstStringBatchReaderTestSuite,
     FsstStringBatchReaderTest,
-    ::testing::ValuesIn(VeloxReaderTest::getFsstTestParams()),
+    ::testing::ValuesIn(BatchReaderTest::getFsstTestParams()),
     [](const ::testing::TestParamInfo<TestParam>& info) {
       return info.param.debugString();
     });
@@ -7878,15 +8168,15 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     MetadataReuseTestSuite,
     MetadataReuseTest,
-    ::testing::ValuesIn(VeloxReaderTest::getMetadataReuseTestParams()),
+    ::testing::ValuesIn(BatchReaderTest::getMetadataReuseTestParams()),
     [](const ::testing::TestParamInfo<TestParam>& info) {
       return info.param.debugString();
     });
 
 INSTANTIATE_TEST_SUITE_P(
-    VeloxReaderTestSuite,
-    VeloxReaderTest,
-    ::testing::ValuesIn(VeloxReaderTest::getTestParams()),
+    BatchReaderTestSuite,
+    BatchReaderTest,
+    ::testing::ValuesIn(BatchReaderTest::getTestParams()),
     [](const ::testing::TestParamInfo<TestParam>& info) {
       return info.param.debugString();
     });
