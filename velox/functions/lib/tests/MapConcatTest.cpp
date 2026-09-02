@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/MapConcat.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -316,6 +317,44 @@ TEST_F(MapConcatTest, nullEntry) {
   auto result = evaluate<MapVector>("map_concat_empty_nulls(c0, c1)", rows);
   ASSERT_EQ(result->size(), 1);
   EXPECT_EQ(result->sizeAt(0), 0);
+}
+
+TEST_F(MapConcatTest, flatMapInputs) {
+  auto map1 = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{1, 11}},
+  });
+  auto map2 = makeFlatMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{2, 21}},
+  });
+
+  auto result = evaluate<FlatMapVector>(
+      "map_concat(c0, c1)", makeRowVector({map1, map2}));
+
+  auto expected = VectorTestBase::makeMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}, {2, 21}},
+  });
+  ASSERT_EQ(result->size(), expected->size());
+  for (vector_size_t i = 0; i < expected->size(); ++i) {
+    ASSERT_TRUE(expected->equalValueAt(result.get(), i, i))
+        << "at " << i << ": expected " << expected->toString(i) << ", got "
+        << result->toString(i);
+  }
+}
+
+TEST_F(MapConcatTest, mixedMapAndFlatMapInputs) {
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+  });
+  auto map = VectorTestBase::makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+  });
+
+  VELOX_ASSERT_THROW(
+      evaluate("map_concat(c0, c1)", makeRowVector({flatMap, map})),
+      "mix of MapVector and FlatMapVector");
 }
 
 TEST_F(MapConcatTest, unknownType) {
