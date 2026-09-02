@@ -91,7 +91,16 @@ inline const T* addBytes(const T* ptr, int bytes) {
 }
 
 void prefetchToDevice(void* ptr, size_t size) {
+#if CUDART_VERSION >= 13000
+  // CUDA 13 replaced the device ordinal argument with a cudaMemLocation.
+  cudaMemLocation location;
+  location.type = cudaMemLocationTypeDevice;
+  location.id = FLAGS_device_id;
+  CUDA_CHECK_FATAL(cudaMemPrefetchAsync(
+      ptr, size, location, /*flags=*/0, /*stream=*/nullptr));
+#else
   CUDA_CHECK_FATAL(cudaMemPrefetchAsync(ptr, size, FLAGS_device_id, nullptr));
+#endif
 }
 
 template <typename T>
