@@ -1460,14 +1460,14 @@ class QueryConfig {
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
 
-  /// Enables the adaptive per-tier RPC rate limiter (RPCRateLimiter).
+  /// Enables adaptive per-backend RPC admission control (BackendAdmission).
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
       rpcRateLimiterAdaptiveEnabled,
       "rpc.ratelimiter.adaptive_enabled",
       bool,
       true,
-      "When true (default), the process-global per-tier RPC rate limiter adapts "
+      "When true (default), per-backend RPC admission control adapts "
       "its max-pending cap via AIMD driven by the backend overload signal "
       "(rate-limit/timeout): multiplicative-decrease on an overload-classified "
       "drain, additive-increase on a clean drain. On by default because it is "
@@ -1476,30 +1476,30 @@ class QueryConfig {
       "coordinates all drivers on the worker and reacts to the rate-limit signal "
       "directly, not to RTT.")
 
-  /// Floor for the adaptive per-tier RPC rate limiter's max-pending cap.
+  /// Floor for adaptive per-backend RPC admission capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMinLimit,
       rpcRateLimiterMinLimit,
       "rpc.ratelimiter.min_limit",
       int64_t,
       50,
-      "Floor the adaptive RPC rate limiter's per-tier max-pending cap may "
+      "Floor that adaptive per-backend RPC admission capacity may "
       "shrink to under sustained overload. Default 50 (a floor of 1 can stall a "
       "workload under sustained throttling). Only used when "
       "rpc.ratelimiter.adaptive_enabled is true.")
 
-  /// Multiplicative-decrease factor for the adaptive RPC rate limiter.
+  /// Multiplicative-decrease factor for adaptive RPC admission capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterDecreaseFactor,
       rpcRateLimiterDecreaseFactor,
       "rpc.ratelimiter.decrease_factor",
       double,
       0.5,
-      "Factor applied to the adaptive RPC rate limiter's per-tier max-pending "
+      "Factor applied to adaptive per-backend RPC admission "
       "cap on each overload-classified drain. Default 0.5 (halve). Clamped to "
       "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true.")
 
-  /// Ceiling for the per-tier RPC rate-limiter max-pending cap.
+  /// Ceiling for per-backend RPC admission capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMaxLimit,
       rpcRateLimiterMaxLimit,
@@ -1507,7 +1507,7 @@ class QueryConfig {
       int64_t,
       200,
       "Ceiling (and, with adaptive enabled, the starting value) for the "
-      "process-global per-tier RPC rate-limiter max-pending cap. Default 200 "
+      "per-backend RPC admission capacity, shared across drivers. Default 200 "
       "(validated for LLM-inference backends); 0 falls back to the built-in 20. "
       "With admission-controlled dispatch this cap actually bounds process-wide "
       "in-flight rows per tier; the adaptive limiter shrinks from here toward "

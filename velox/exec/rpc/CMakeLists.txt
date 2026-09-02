@@ -36,16 +36,16 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
+velox_add_library(velox_backend_admission BackendAdmission.cpp HEADERS BackendAdmission.h)
 
-velox_link_libraries(velox_rpc_rate_limiter velox_future)
+velox_link_libraries(velox_backend_admission velox_future)
 
 velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(
   velox_rpc_operator
   velox_rpc_state
-  velox_rpc_rate_limiter
+  velox_backend_admission
   velox_async_rpc_function
   velox_async_rpc_function_registry
   velox_exec
@@ -70,7 +70,7 @@ if(${VELOX_BUILD_TESTING})
 
   velox_link_libraries(
     velox_demo_rpc_function
-    velox_mock_rpc_client
+    velox_mock_transport
     velox_expression_functions
     velox_async_rpc_function
   )
