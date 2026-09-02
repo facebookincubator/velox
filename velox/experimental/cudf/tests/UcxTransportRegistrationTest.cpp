@@ -73,9 +73,10 @@ class UcxTransportRegistrationTest : public OperatorTestBase {
   // Returns the plan fragment for an Exchange node reading over 'transport'.
   core::PlanFragment makeExchangePlan(std::string_view transport) {
     return PlanBuilder()
-        .exchange(rowType_,
-                  VectorSerde::kindName(VectorSerde::Kind::kPresto),
-                  std::string{transport})
+        .exchange(
+            rowType_,
+            VectorSerde::kindName(VectorSerde::Kind::kPresto),
+            std::string{transport})
         .planFragment();
   }
 
@@ -85,21 +86,24 @@ class UcxTransportRegistrationTest : public OperatorTestBase {
     auto vectors = makeRowVector(rowType_, 1);
     return PlanBuilder()
         .values({vectors})
-        .partitionedOutput({"c0"},
-                           4,
-                           /*outputLayout=*/{},
-                           /*serdeKind=*/"Presto",
-                           std::string{transport})
+        .partitionedOutput(
+            {"c0"},
+            4,
+            /*outputLayout=*/{},
+            /*serdeKind=*/"Presto",
+            std::string{transport})
         .planFragment();
   }
 
-  std::shared_ptr<Task> makeTask(const std::string& taskId,
-                                 core::PlanFragment fragment) {
-    return Task::create(taskId,
-                        std::move(fragment),
-                        0,
-                        core::QueryCtx::create(),
-                        Task::ExecutionMode::kParallel);
+  std::shared_ptr<Task> makeTask(
+      const std::string& taskId,
+      core::PlanFragment fragment) {
+    return Task::create(
+        taskId,
+        std::move(fragment),
+        0,
+        core::QueryCtx::create(),
+        Task::ExecutionMode::kParallel);
   }
 
   // Returns a DriverCtx for driver 0 of 'task'.
@@ -136,9 +140,10 @@ TEST_F(UcxTransportRegistrationTest, exchangeEnabledRegistersUcxTransport) {
   auto outputEntry = OutputTransportRegistry::tryGet(ucx);
   ASSERT_NE(outputEntry, nullptr);
   EXPECT_TRUE(static_cast<bool>(outputEntry->makeOutputOperator));
-  EXPECT_NE(std::dynamic_pointer_cast<ucx_exchange::UcxOutputQueueManager>(
-                outputEntry->manager),
-            nullptr);
+  EXPECT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxOutputQueueManager>(
+          outputEntry->manager),
+      nullptr);
 }
 
 TEST_F(UcxTransportRegistrationTest, inMemoryTransportIsUnaffected) {
@@ -152,9 +157,10 @@ TEST_F(UcxTransportRegistrationTest, inMemoryTransportIsUnaffected) {
 
   auto outputEntry = OutputTransportRegistry::tryGet(inMemory);
   ASSERT_NE(outputEntry, nullptr);
-  EXPECT_NE(std::dynamic_pointer_cast<DefaultOutputBufferManager>(
-                outputEntry->manager),
-            nullptr);
+  EXPECT_NE(
+      std::dynamic_pointer_cast<DefaultOutputBufferManager>(
+          outputEntry->manager),
+      nullptr);
 }
 
 TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
@@ -167,21 +173,23 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
   auto task = makeTask("test-ucx-exchange-task", std::move(plan));
   auto driverCtx = makeDriverCtx(task);
 
-  auto entry = ExchangeTransportRegistry::tryGet(*task->queryCtx(),
-                                                 exchangeNode->transportKind());
+  auto entry = ExchangeTransportRegistry::tryGet(
+      *task->queryCtx(), exchangeNode->transportKind());
   ASSERT_NE(entry, nullptr);
 
-  auto client = entry->makeClient(ExchangeClientContext{
-      .taskId = task->taskId(),
-      .destination = task->destination(),
-      .numberOfConsumers = 1,
-      .maxExchangeBufferSize = 1 << 20,
-      .minExchangeOutputBatchBytes = 0,
-      .pool = pool(),
-      .executor = executor_.get(),
-      .queryConfig = task->queryCtx()->queryConfig()});
-  ASSERT_NE(std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client),
-            nullptr);
+  auto client = entry->makeClient(
+      ExchangeClientContext{
+          .taskId = task->taskId(),
+          .destination = task->destination(),
+          .numberOfConsumers = 1,
+          .maxExchangeBufferSize = 1 << 20,
+          .minExchangeOutputBatchBytes = 0,
+          .pool = pool(),
+          .executor = executor_.get(),
+          .queryConfig = task->queryCtx()->queryConfig()});
+  ASSERT_NE(
+      std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client),
+      nullptr);
 
   auto exchangeOperator =
       entry->makeExchangeOperator(0, driverCtx.get(), exchangeNode, client);
@@ -217,8 +225,8 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxPartitionedOutput) {
   auto task = makeTask("test-ucx-partitioned-output-task", std::move(plan));
   auto driverCtx = makeDriverCtx(task);
 
-  auto entry = OutputTransportRegistry::tryGet(*task->queryCtx(),
-                                               outputNode->transportKind());
+  auto entry = OutputTransportRegistry::tryGet(
+      *task->queryCtx(), outputNode->transportKind());
   ASSERT_NE(entry, nullptr);
 
   auto outputOperator = entry->makeOutputOperator(
@@ -259,15 +267,16 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
 
   // A client from another transport must not be accepted: the entry pairs the
   // operator with the client its own factory produces.
-  auto foreignClient = inMemoryEntry->makeClient(ExchangeClientContext{
-      .taskId = task->taskId(),
-      .destination = task->destination(),
-      .numberOfConsumers = 1,
-      .maxExchangeBufferSize = 1 << 20,
-      .minExchangeOutputBatchBytes = 0,
-      .pool = pool(),
-      .executor = executor_.get(),
-      .queryConfig = task->queryCtx()->queryConfig()});
+  auto foreignClient = inMemoryEntry->makeClient(
+      ExchangeClientContext{
+          .taskId = task->taskId(),
+          .destination = task->destination(),
+          .numberOfConsumers = 1,
+          .maxExchangeBufferSize = 1 << 20,
+          .minExchangeOutputBatchBytes = 0,
+          .pool = pool(),
+          .executor = executor_.get(),
+          .queryConfig = task->queryCtx()->queryConfig()});
   ASSERT_NE(foreignClient, nullptr);
   VELOX_ASSERT_THROW(
       ucxEntry->makeExchangeOperator(

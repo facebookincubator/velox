@@ -300,11 +300,7 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
   velox_add_cudf_test(
     NAME velox_cudf_ucx_transport_registration_test
     SOURCES Main.cpp UcxTransportRegistrationTest.cpp
-    LIBS
-      ${CUDF_TEST_DEFAULT_LIBS}
-      velox_ucx_exchange
-      velox_exec_test_lib
-      velox_test_util
+    LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_ucx_exchange velox_exec_test_lib velox_test_util
     TIMEOUT 3000
   )
 endif()
