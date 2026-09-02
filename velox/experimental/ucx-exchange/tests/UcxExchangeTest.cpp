@@ -1948,9 +1948,9 @@ TEST_P(UcxExchangeTest, taskShuffleOverUcx) {
   // The batches stay on the host. UcxPartitionedOutput requires CudfVector
   // input, but UcxPartitionedOutputAdapter declares acceptsGpuInput(), so
   // CompileState splices a CudfFromVelox between Values and it. Staging the
-  // batches on the device first makes that conversion operator call childAt() on
-  // a childless CudfVector and the producer task dies with
-  // "Trying to access non-existing child in RowVector".
+  // batches on the device first makes that conversion operator call childAt()
+  // on a childless CudfVector and the producer task dies with "Trying to access
+  // non-existing child in RowVector".
   const auto expected = makeTaskShuffleBatches(pool_.get());
 
   core::PlanNodeId exchangeNodeId;
@@ -1978,10 +1978,10 @@ TEST_P(UcxExchangeTest, taskShuffleOverUcx) {
 
 // A fragment whose output layout is empty ships rows that carry no columns --
 // the build side of a cross join that projects nothing, for instance. A cuDF
-// table derives num_rows() from its columns, so once such a payload is packed it
-// can no longer report its own cardinality: the count only survives if it
-// travels beside the data, in MetadataMsg on the remote path and in the registry
-// entry on the intra-node one.
+// table derives num_rows() from its columns, so once such a payload is packed
+// it can no longer report its own cardinality: the count only survives if it
+// travels beside the data, in MetadataMsg on the remote path and in the
+// registry entry on the intra-node one.
 //
 // The row count is the entire observable result here, which is the point. With
 // the count derived from the packed table instead, UcxExchange rebuilt a 0-row
@@ -2024,14 +2024,13 @@ TEST_P(UcxExchangeTest, zeroColumnPayloadKeepsItsRowCount) {
   }
 
   core::PlanNodeId exchangeNodeId;
-  auto consumerPlan =
-      exec::test::PlanBuilder()
-          .exchange(
-              zeroColumnRowType,
-              taskShuffleSerdeKind(),
-              std::string{core::TransportKind::kUcx})
-          .capturePlanNodeId(exchangeNodeId)
-          .planFragment();
+  auto consumerPlan = exec::test::PlanBuilder()
+                          .exchange(
+                              zeroColumnRowType,
+                              taskShuffleSerdeKind(),
+                              std::string{core::TransportKind::kUcx})
+                          .capturePlanNodeId(exchangeNodeId)
+                          .planFragment();
 
   const auto producerTaskId = taskPrefix + "zeroColumnProducer";
   auto producerTasks = startTaskShuffleProducers(
@@ -2062,8 +2061,8 @@ TEST_P(UcxExchangeTest, zeroColumnPayloadKeepsItsRowCount) {
     EXPECT_EQ(batch->type()->size(), 0) << "expected a column-less batch";
     receivedRows += batch->size();
   }
-  // Drop the consumer's vectors before the Tasks go out of scope, for the reason
-  // given in runTaskShuffle().
+  // Drop the consumer's vectors before the Tasks go out of scope, for the
+  // reason given in runTaskShuffle().
   results.clear();
 
   EXPECT_EQ(receivedRows, kExpectedRows);

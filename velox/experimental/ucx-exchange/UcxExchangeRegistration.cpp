@@ -35,8 +35,8 @@ void registerUcxTransports() {
              exec::DriverCtx* ctx,
              const std::shared_ptr<const core::PartitionedOutputNode>& node,
              bool /*eagerFlush*/,
-             const std::shared_ptr<UcxOutputQueueManager>&
-                 manager) -> std::unique_ptr<exec::Operator> {
+             const std::shared_ptr<UcxOutputQueueManager>& manager)
+              -> std::unique_ptr<exec::Operator> {
             // 'eagerFlush' is not honored: UcxPartitionedOutput batches by row
             // count (CudfConfig::kUcxPartitionedOutputBatchRows) because a
             // packed GPU table is the unit of transfer.
@@ -58,17 +58,14 @@ void registerUcxTransports() {
             // UcxExchangeClient bounds its queue by the number of packed
             // tables instead.
             return std::make_shared<UcxExchangeClient>(
-                context.taskId,
-                context.destination,
-                context.numberOfConsumers);
+                context.taskId, context.destination, context.numberOfConsumers);
           },
           [](int32_t operatorId,
              exec::DriverCtx* ctx,
              const std::shared_ptr<const core::ExchangeNode>& node,
              const std::shared_ptr<UcxExchangeClient>& client)
               -> std::unique_ptr<exec::Operator> {
-            return std::make_unique<UcxExchange>(
-                operatorId, ctx, node, client);
+            return std::make_unique<UcxExchange>(operatorId, ctx, node, client);
           },
           // A merge exchange receives over UCX exactly like a plain one: this
           // slot is non-null only to say that the transport can carry a merge
@@ -90,8 +87,7 @@ void registerUcxTransports() {
                 std::dynamic_pointer_cast<const core::MergeExchangeNode>(node),
                 "Expected a MergeExchangeNode, plan node: {}",
                 node->id());
-            return std::make_unique<UcxExchange>(
-                operatorId, ctx, node, client);
+            return std::make_unique<UcxExchange>(operatorId, ctx, node, client);
           }),
       /*overwrite=*/true);
 }
