@@ -18,6 +18,7 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/NullsBuilder.h"
 
 namespace facebook::velox {
 namespace {
@@ -122,6 +123,22 @@ std::string duplicateKeyMessage(
   return keys.base()->toString(keys.index(entryIndex));
 }
 
+BufferPtr concatNulls(
+    memory::MemoryPool* pool,
+    std::span<DecodedVector* const> inputs,
+    const SelectivityVector& rows,
+    const MapConcatConfig& config) {
+  if (config.emptyForNull) {
+    return nullptr;
+  }
+
+  NullsBuilder nullsBuilder(rows.end(), pool);
+  for (auto* input : inputs) {
+    nullsBuilder.addNulls(input->nulls(&rows));
+  }
+  return nullsBuilder.build();
+}
+
 template <TypeKind kKeyTypeKind>
 MapVectorPtr mapConcatImpl(
     memory::MemoryPool* pool,
@@ -133,22 +150,7 @@ MapVectorPtr mapConcatImpl(
   const auto numRows = rows.end();
 
   // Step 1: Compute output nulls.
-  BufferPtr newNulls;
-  if (!config.emptyForNull) {
-    for (size_t inputIdx = 0; inputIdx < numInputs; ++inputIdx) {
-      auto* nulls = inputs[inputIdx]->nulls(&rows);
-      if (!nulls) {
-        continue;
-      }
-      if (!newNulls) {
-        newNulls = allocateNulls(numRows, pool);
-        auto* raw = newNulls->asMutable<uint64_t>();
-        bits::copyBits(nulls, 0, raw, 0, numRows);
-      } else {
-        bits::andBits(newNulls->asMutable<uint64_t>(), nulls, 0, numRows);
-      }
-    }
-  }
+  BufferPtr newNulls = concatNulls(pool, inputs, rows, config);
 
   // Step 2: Decode keys for all inputs.
   const auto& expectedKeyType = outputType->asMap().keyType();
