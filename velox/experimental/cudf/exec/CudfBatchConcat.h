@@ -22,6 +22,8 @@
 
 #include "velox/exec/Operator.h"
 
+#include <cstdint>
+#include <optional>
 #include <queue>
 
 namespace facebook::velox::cudf_velox {
@@ -34,8 +36,7 @@ class CudfBatchConcat : public CudfOperatorBase {
       std::shared_ptr<const core::PlanNode> planNode);
 
   bool needsInput() const override {
-    return !noMoreInput_ && outputQueue_.empty() &&
-        currentNumRows_ < targetRows_;
+    return !noMoreInput_ && outputQueue_.empty() && !targetReached();
   }
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
@@ -50,10 +51,34 @@ class CudfBatchConcat : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  exec::DriverCtx* const driverCtx_;
+  // Returns true when buffering is measured in logical rows, which happens
+  // when no byte target is configured or the output has no GPU columns.
+  bool usesRowFallback() const {
+    return !targetBytes_.has_value();
+  }
+
+  // Returns true when the active byte or row target is met.
+  bool targetReached() const {
+    return usesRowFallback() ? currentNumRows_ >= targetRows_
+                             : currentBytes_ >= targetBytes_.value();
+  }
+
+  // Input vectors awaiting concatenation.
   std::vector<CudfVectorPtr> buffer_;
+
+  // Concatenated vectors ready for downstream consumption.
   std::queue<CudfVectorPtr> outputQueue_;
+
+  // Estimated GPU bytes currently held in buffer_.
+  uint64_t currentBytes_{0};
+
+  // Logical rows currently buffered while the row fallback is active.
   size_t currentNumRows_{0};
+
+  // Estimated GPU byte target. Empty while usesRowFallback() applies.
+  const std::optional<uint64_t> targetBytes_;
+
+  // Logical row target used while the row fallback is active.
   const size_t targetRows_{0};
 };
 
