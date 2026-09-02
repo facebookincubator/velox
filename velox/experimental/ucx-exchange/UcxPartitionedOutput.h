@@ -142,7 +142,7 @@ class UcxPartitionedOutput : public exec::Operator,
   const int pipelineId_;
   const int driverId_;
 
-  exec::BlockingReason blockingReason_;
+  exec::BlockingReason blockingReason_{exec::BlockingReason::kNotBlocked};
   ContinueFuture future_;
 
   bool finished_{false};
