@@ -176,6 +176,7 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
       decodeBuf_{&pool} {
   const auto parsed =
       detail::parseSubIntSplitSections(data, this->dataOffset());
+  NIMBLE_CHECK(!parsed.empty(), "SubIntSplit stream has no sections.");
 
   sections_.resize(parsed.size());
   for (size_t s = 0; s < parsed.size(); ++s) {
