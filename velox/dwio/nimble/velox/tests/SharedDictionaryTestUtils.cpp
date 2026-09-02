@@ -37,7 +37,7 @@ std::unique_ptr<EncodingSelectionPolicyBase> sharedDictionarySelectionPolicy(
     SharedDictionarySelectionPolicyOptions selectionOptions) {
   std::vector<std::pair<EncodingType, float>> readFactors;
   if (isSharedDictionaryType(dataType)) {
-    if (selectionOptions.forceDictionaryForSharedTypes) {
+    if (selectionOptions.forceDictionaryForEligibleTypes) {
       readFactors = {{EncodingType::Dictionary, 1.0}};
     } else {
       readFactors = {

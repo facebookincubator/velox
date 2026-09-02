@@ -705,7 +705,9 @@ bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
       scalarKind == ScalarKind::Binary;
 }
 
-bool isSharedDictionaryVeloxType(const velox::Type& type) {
+bool isSharedDictionaryLogicalType(const velox::Type& type) {
+  // Enumerated exhaustively rather than defaulted, so adding a TypeKind is a
+  // compile-time decision about shared-dictionary eligibility.
   switch (type.kind()) {
     case velox::TypeKind::TINYINT:
     case velox::TypeKind::SMALLINT:
@@ -714,9 +716,23 @@ bool isSharedDictionaryVeloxType(const velox::Type& type) {
     case velox::TypeKind::VARCHAR:
     case velox::TypeKind::VARBINARY:
       return true;
-    default:
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
       return false;
   }
+  NIMBLE_UNREACHABLE(
+      fmt::format(
+          "Unknown Velox type kind: {}.", static_cast<int>(type.kind())));
 }
 
 template <typename T>
@@ -1402,7 +1418,7 @@ DictionaryConfigs collectDictionaryConfigs(
         "node {}.",
         valueNodeId);
     NIMBLE_USER_CHECK(
-        isSharedDictionaryVeloxType(*valueType.type()),
+        isSharedDictionaryLogicalType(*valueType.type()),
         "Shared dictionary column '{}' must resolve to an integer or string "
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
