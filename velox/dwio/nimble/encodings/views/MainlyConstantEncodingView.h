@@ -54,7 +54,8 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
     pos += otherValuesSize;
 
     commonValue_ = encoding::read<physicalType>(pos);
-    NIMBLE_CHECK_EQ(pos, data.end(), "Unexpected MainlyConstant view end.");
+    NIMBLE_CHECK_EQ(
+        pos, data.data() + data.size(), "Unexpected MainlyConstant view end.");
 
     uint32_t otherValueCount = 0;
     otherValueIndices_.resize(this->rowCount_);

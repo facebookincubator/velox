@@ -53,7 +53,9 @@ class RLEEncodingView final : public TypedEncodingView<T> {
 
     pos += runLengthsSize;
     values_ = detail::createTypedEncodingView<T>(
-        {pos, static_cast<size_t>(data.end() - pos)}, this->pool_, options);
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+        this->pool_,
+        options);
     NIMBLE_CHECK_NOT_NULL(values_);
   }
 
@@ -121,7 +123,7 @@ class RLEEncodingView<bool> final : public TypedEncodingView<bool> {
     NIMBLE_CHECK_EQ(end, this->rowCount_);
 
     pos += runLengthsSize;
-    NIMBLE_CHECK_EQ(pos + sizeof(bool), data.end());
+    NIMBLE_CHECK_EQ(pos + sizeof(bool), data.data() + data.size());
     initialValue_ = *reinterpret_cast<const bool*>(pos);
   }
 

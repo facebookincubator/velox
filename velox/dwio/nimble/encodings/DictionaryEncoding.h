@@ -208,7 +208,7 @@ DictionaryEncoding<T>::DictionaryEncoding(
   pos += alphabetSize;
   indicesEncoding_ = EncodingFactory().create(
       *this->pool_,
-      {pos, static_cast<size_t>(data.end() - pos)},
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
       stringBufferFactory,
       options);
 }
@@ -507,7 +507,8 @@ std::string_view DictionaryEncoding<T>::slice(
   const uint32_t alphabetSize = encoding::readUint32(pos);
   const std::string_view alphabet{pos, alphabetSize};
   pos += alphabetSize;
-  const std::string_view indices{pos, static_cast<size_t>(encoded.end() - pos)};
+  const std::string_view indices{
+      pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};

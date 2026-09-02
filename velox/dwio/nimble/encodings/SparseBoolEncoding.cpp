@@ -271,7 +271,7 @@ std::string_view SparseBoolEncoding::encodeWithSlicedIndices(
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
   const auto sparseValue = encoding::readChar(readPos);
   const std::string_view encodedIndices{
-      readPos, static_cast<size_t>(encoded.end() - readPos)};
+      readPos, static_cast<size_t>(encoded.data() + encoded.size() - readPos)};
 
   const auto serializedIndices =
       EncodingFactory::encodeWithCapturedLayout<uint32_t>(
