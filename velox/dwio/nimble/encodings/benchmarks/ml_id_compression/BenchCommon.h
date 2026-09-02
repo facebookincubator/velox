@@ -921,7 +921,9 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
 
   // Read-path variants. Each encodes byte-for-byte identically to the entry it
   // shadows and differs only in reading by index rather than by cursor, so the
-  // pair isolates what indexed access is worth.
+  // pair isolates what indexed access is worth. Pairs SubIntSplitEncodingView's
+  // point-lookup number against other whitebox encodings' own view-vs-no-view
+  // speedup, not just against OpenZL.
   {
     EncoderEntry<T> entry;
     entry.name = "RLE/view";
@@ -936,6 +938,77 @@ std::vector<EncoderEntry<T>> buildDefaultEncoders() {
       return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
     };
     encoders.push_back(std::move(entry));
+  }
+
+  {
+    EncoderEntry<T> entry;
+    entry.name = "FixedBitWidth/view";
+    entry.family = "Baseline";
+    entry.variant = "fbw_view";
+    entry.isSequential = false;
+    entry.fastSkip = true;
+    entry.randomAccess = true;
+    entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
+      auto impl = std::make_unique<
+          NimbleViewBenchTargetImpl<FixedBitWidthEncoding<T>>>();
+      impl->encode(data, opts);
+      return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+    };
+    encoders.push_back(std::move(entry));
+  }
+
+  {
+    EncoderEntry<T> entry;
+    entry.name = "Dictionary/view";
+    entry.family = "Baseline";
+    entry.variant = "dict_view";
+    entry.isSequential = false;
+    entry.fastSkip = true;
+    entry.randomAccess = true;
+    entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
+      auto impl =
+          std::make_unique<NimbleViewBenchTargetImpl<DictionaryEncoding<T>>>();
+      impl->encode(data, opts);
+      return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+    };
+    encoders.push_back(std::move(entry));
+  }
+
+  // PFOR and SimdForBitpack are integral-only encodings.
+  if constexpr (std::is_integral_v<T>) {
+    {
+      EncoderEntry<T> entry;
+      entry.name = "PFOR/view";
+      entry.family = "Baseline";
+      entry.variant = "pfor_view";
+      entry.isSequential = false;
+      entry.fastSkip = true;
+      entry.randomAccess = true;
+      entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
+        auto impl =
+            std::make_unique<NimbleViewBenchTargetImpl<PFOREncoding<T>>>();
+        impl->encode(data, opts);
+        return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+      };
+      encoders.push_back(std::move(entry));
+    }
+
+    {
+      EncoderEntry<T> entry;
+      entry.name = "SimdForBitpack/view";
+      entry.family = "Baseline";
+      entry.variant = "simdfor_view";
+      entry.isSequential = false;
+      entry.fastSkip = true;
+      entry.randomAccess = true;
+      entry.factory = [](const Vector<T>& data, const Encoding::Options& opts) {
+        auto impl = std::make_unique<
+            NimbleViewBenchTargetImpl<SimdForBitpackEncoding<T>>>();
+        impl->encode(data, opts);
+        return std::unique_ptr<NimbleBenchTargetBase<T>>(std::move(impl));
+      };
+      encoders.push_back(std::move(entry));
+    }
   }
 
   const std::array<std::string, 4> fpeNames = {
