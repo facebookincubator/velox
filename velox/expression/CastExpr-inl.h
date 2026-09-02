@@ -233,7 +233,8 @@ void CastExpr::applyCastKernel(
       if constexpr (
           TypeTraits<ToKind>::isPrimitiveType &&
           TypeTraits<ToKind>::isFixedWidth) {
-        inputRowValue = hooks_->removeWhiteSpaces(inputRowValue);
+        inputRowValue =
+            hooks_->removeWhiteSpaces(inputRowValue, *result->type());
         if (inputRowValue.size() == 0) {
           setError("Empty string");
           return;
@@ -410,7 +411,7 @@ void CastExpr::applyVarcharToDecimalCastKernel(
   rows.applyToSelected([&](auto row) {
     T decimalValue;
     const auto status = DecimalUtil::castFromString<T>(
-        hooks_->removeWhiteSpaces(sourceVector->valueAt(row)),
+        hooks_->removeWhiteSpaces(sourceVector->valueAt(row), *toType),
         toPrecisionScale.first,
         toPrecisionScale.second,
         decimalValue);

@@ -514,7 +514,7 @@ VectorPtr CastExpr::castToTime(
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
         bool wrapException = true;
         const auto inputString =
-            hooks_->removeWhiteSpaces(inputVector->valueAt(row));
+            hooks_->removeWhiteSpaces(inputVector->valueAt(row), *toType);
         const auto result =
             hooks_->castStringToTime(inputString, timeZone, sessionStartTimeMs);
         setResultOrError(
