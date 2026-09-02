@@ -122,6 +122,16 @@ class FileConfig {
       "allocated, never which bytes are read.")
 
   VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleCompactDictionaryAcrossChunksSession,
+      kNimbleCompactDictionaryAcrossChunks,
+      nimbleCompactDictionaryAcrossChunks,
+      "nimble_compact_dictionary_across_chunks",
+      "nimble.compact-dictionary-across-chunks",
+      bool,
+      false,
+      "Deduplicate dictionary entries when merging alphabets across chunks.")
+
+  VELOX_HIVE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
       nimbleLazyColumnIo,
