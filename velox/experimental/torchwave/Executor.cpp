@@ -692,7 +692,7 @@ WaveGraphExecutor::WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext)
     std::unique_ptr<nativert::OpKernel> kernel;
     if (nativert::PrimKernelRegistry()->Has(target)) {
       kernel = nativert::PrimKernelRegistry()->Create(target, node);
-    } else if (c10::starts_with(target, "torch.ops")) {
+    } else if (target.starts_with("torch.ops")) {
       kernel = std::make_unique<nativert::C10Kernel>(node);
     } else if (isScalarBinaryOp(target)) {
       kernel = std::make_unique<nativert::ScalarBinaryOpKernel>(node);
