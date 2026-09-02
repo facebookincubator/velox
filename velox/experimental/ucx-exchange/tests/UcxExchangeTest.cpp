@@ -246,6 +246,61 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(generateTestParams()),
     ExchangeTestParamsPrinter());
 
+// size() and empty() read a counter maintained under the queue's mutex rather
+// than the deque, so that the Communicator progress thread can poll the depth
+// lock-free. Covers that the counter stays in step with every mutation.
+TEST(UcxExchangeQueueTest, sizeTracksQueuedTables) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(queue.mutex());
+    queue.addSourceLocked();
+    EXPECT_EQ(queue.size(), 0);
+    EXPECT_TRUE(queue.empty());
+
+    for (int32_t expected = 1; expected <= 3; ++expected) {
+      queue.enqueueLocked(std::make_unique<PackedTableWithStream>(), promises);
+      EXPECT_EQ(queue.size(), expected);
+    }
+    EXPECT_FALSE(queue.empty());
+
+    bool atEnd{false};
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ContinuePromise stalePromise = ContinuePromise::makeEmpty();
+    EXPECT_NE(queue.dequeueLocked(0, &atEnd, &future, &stalePromise), nullptr);
+    EXPECT_FALSE(atEnd);
+    EXPECT_EQ(queue.size(), 2);
+
+    // The end-of-stream marker counts a source as completed instead of being
+    // queued, so the depth must not move.
+    queue.enqueueLocked(nullptr, promises);
+    EXPECT_EQ(queue.size(), 2);
+  }
+
+  // setError() discards the queued tables, because an errored queue is never
+  // consumed from.
+  queue.setError("Producer failed");
+  EXPECT_EQ(queue.size(), 0);
+  EXPECT_TRUE(queue.empty());
+}
+
+TEST(UcxExchangeQueueTest, closeResetsSize) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(queue.mutex());
+    queue.addSourceLocked();
+    queue.enqueueLocked(std::make_unique<PackedTableWithStream>(), promises);
+    queue.enqueueLocked(std::make_unique<PackedTableWithStream>(), promises);
+    EXPECT_EQ(queue.size(), 2);
+  }
+
+  // close() discards whatever is still queued.
+  queue.close();
+  EXPECT_EQ(queue.size(), 0);
+  EXPECT_TRUE(queue.empty());
+}
+
 TEST_P(UcxExchangeTest, basicTest) {
   VLOG(3) << "+ UcxExchangeTest::basicTest";
   ExchangeTestParams p = GetParam();

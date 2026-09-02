@@ -17,6 +17,7 @@
 
 #include <cudf/contiguous_split.hpp>
 #include <rmm/cuda_stream_view.hpp>
+#include <atomic>
 #include <cinttypes>
 #include <memory>
 #include "velox/common/base/Exceptions.h"
@@ -69,8 +70,10 @@ class UcxExchangeQueue {
     return mutex_;
   }
 
+  /// Returns true if no packed table is queued. Safe to call without
+  /// 'mutex_'.
   bool empty() const {
-    return queue_.empty();
+    return size_.load(std::memory_order_relaxed) == 0;
   }
 
   /// Enqueues 'data' to the queue. One random promise(top of promise queue)
@@ -105,8 +108,10 @@ class UcxExchangeQueue {
       ContinueFuture* future,
       ContinuePromise* stalePromise);
 
+  /// Returns the number of queued packed tables. Safe to call without
+  /// 'mutex_'.
   int32_t size() const {
-    return queue_.size();
+    return size_.load(std::memory_order_relaxed);
   }
 
   /// Returns the total bytes held by packed tables in 'this'.
@@ -140,8 +145,15 @@ class UcxExchangeQueue {
   void close();
 
  private:
+  // Publishes the depth of 'queue_' to 'size_'. Call with 'mutex_' held after
+  // every mutation of 'queue_'.
+  void publishSizeLocked() {
+    size_.store(static_cast<int32_t>(queue_.size()), std::memory_order_relaxed);
+  }
+
   std::vector<ContinuePromise> closeLocked() {
     queue_.clear();
+    publishSizeLocked();
     return clearAllPromisesLocked();
   }
 
@@ -194,6 +206,14 @@ class UcxExchangeQueue {
 
   std::mutex mutex_;
   std::deque<PackedTableWithStreamPtr> queue_;
+  // Depth of 'queue_', maintained under 'mutex_' so that size() and empty() can
+  // be read without it. The Communicator progress thread polls the depth on
+  // every UcxExchangeSource::process() call to decide backpressure, and taking
+  // 'mutex_' there would contend with dequeueLocked() on the driver threads.
+  // Reading queue_.size() unlocked is not an option: std::deque computes it by
+  // subtracting iterators over the node map, so a concurrent push_back or
+  // pop_front that crosses a node boundary can yield an arbitrary value.
+  std::atomic<int32_t> size_{0};
   // The map from consumer id to the waiting promise
   folly::F14FastMap<int, ContinuePromise> promises_;
 
