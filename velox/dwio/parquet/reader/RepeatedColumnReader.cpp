@@ -97,15 +97,28 @@ void enqueueChildren(
 }
 } // namespace
 
-void ensureRepDefs(
+void prepareRepDefsAndOffset(
     dwio::common::SelectiveColumnReader& reader,
-    int32_t numTop) {
-  auto& fileType =
-      *reinterpret_cast<const ParquetTypeWithId*>(&reader.fileType());
-  // Check that this is a direct child of the root struct.
-  if (fileType.parent() && !fileType.parent()->parent()) {
+    int64_t offset,
+    const RowSet& rows) {
+  const auto previousOffset = reader.readOffset();
+  const auto* parent = reader.fileType().parent();
+  // Only a direct child of the root struct owns the repdefs for its subtree.
+  if (parent && !parent->parent()) {
+    const int32_t numTop =
+        static_cast<int32_t>(offset + rows.back() + 1 - previousOffset);
     skipUnreadLengthsAndNulls(reader);
     readLeafRepDefs(&reader, numTop, true);
+
+    if (offset > previousOffset) {
+      // There is no page reader on this level so cannot call skipNullsOnly on
+      // it.
+      reader.skip(offset - previousOffset);
+    }
+  }
+
+  if (offset > previousOffset) {
+    reader.setReadOffset(offset);
   }
 }
 
@@ -193,15 +206,7 @@ void MapColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  // The topmost list reader reads the repdefs for the left subtree.
-  ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
-  if (offset > readOffset_) {
-    // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent() && !fileType().parent()->parent()) {
-      skip(offset - readOffset_);
-    }
-    readOffset_ = offset;
-  }
+  prepareRepDefsAndOffset(*this, offset, rows);
   SelectiveMapColumnReader::read(offset, rows, incomingNulls);
 
   // The child should be at the end of the range provided to this
@@ -301,15 +306,7 @@ void ListColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  // The topmost list reader reads the repdefs for the left subtree.
-  ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
-  if (offset > readOffset_) {
-    // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent() && !fileType().parent()->parent()) {
-      skip(offset - readOffset_);
-    }
-    readOffset_ = offset;
-  }
+  prepareRepDefsAndOffset(*this, offset, rows);
   SelectiveListColumnReader::read(offset, rows, incomingNulls);
 
   // The child should be at the end of the range provided to this

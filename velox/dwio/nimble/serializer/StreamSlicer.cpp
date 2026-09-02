@@ -23,6 +23,8 @@
 #include "folly/ScopeGuard.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -174,17 +176,15 @@ uint32_t streamCount(const std::shared_ptr<const Type>& schema) {
   return maxStreamOffset(*schema) + 1;
 }
 
-using OwnedBufferChunks = std::vector<velox::BufferPtr>;
+using BufferChunks = std::vector<velox::BufferPtr>;
 
-void freeOwnedBufferChunks(void* /* buf */, void* userData) {
-  delete static_cast<std::shared_ptr<OwnedBufferChunks>*>(userData);
+void freeIOBufOwner(void* /* buf */, void* userData) {
+  delete static_cast<std::shared_ptr<const void>*>(userData);
 }
 
 // transferBuffers() transfers allocation ownership only, so capacity is the
 // valid ownership range for stream views.
-bool isBackedByChunks(
-    std::string_view stream,
-    const OwnedBufferChunks& chunks) {
+bool isBackedByChunks(std::string_view stream, const BufferChunks& chunks) {
   const auto streamBegin = reinterpret_cast<uintptr_t>(stream.data());
   const auto streamEnd = streamBegin + stream.size();
   for (const auto& chunk : chunks) {
@@ -199,7 +199,7 @@ bool isBackedByChunks(
 
 void checkStreamsBackedByChunks(
     const std::vector<std::string_view>& streams,
-    const OwnedBufferChunks& chunks) {
+    const BufferChunks& chunks) {
   for (const auto stream : streams) {
     if (stream.empty()) {
       continue;
@@ -212,9 +212,8 @@ void checkStreamsBackedByChunks(
 
 folly::IOBuf takeOwnershipAsIOBuf(
     const std::vector<std::string_view>& streams,
-    Buffer& buffer) {
-  auto chunks = std::make_shared<OwnedBufferChunks>(buffer.transferBuffers());
-  checkStreamsBackedByChunks(streams, *chunks);
+    std::shared_ptr<const void> owner) {
+  NIMBLE_CHECK_NOT_NULL(owner, "Stream owner must be initialized");
 
   std::unique_ptr<folly::IOBuf> chain;
   const char* runData{nullptr};
@@ -227,8 +226,8 @@ folly::IOBuf takeOwnershipAsIOBuf(
         const_cast<char*>(runData),
         runLength,
         runLength,
-        freeOwnedBufferChunks,
-        new std::shared_ptr<OwnedBufferChunks>(chunks));
+        freeIOBufOwner,
+        new std::shared_ptr<const void>(owner));
     if (chain == nullptr) {
       chain = std::move(node);
     } else {
@@ -281,6 +280,22 @@ StreamSlicer::StreamSlicer(
   NIMBLE_CHECK_NOT_NULL(pool_, "Memory pool cannot be null");
 }
 
+folly::IOBuf StreamSlicer::takeOwnershipAsIOBuf(
+    const std::vector<std::string_view>& streams,
+    Buffer& buffer) {
+  auto chunks = std::make_shared<BufferChunks>(buffer.transferBuffers());
+  checkStreamsBackedByChunks(streams, *chunks);
+  return takeOwnershipAsIOBuf(
+      streams, std::shared_ptr<const void>{std::move(chunks)});
+}
+
+folly::IOBuf StreamSlicer::takeOwnershipAsIOBuf(
+    const std::vector<std::string_view>& streams,
+    std::shared_ptr<const void> owner) {
+  return ::facebook::nimble::serde::takeOwnershipAsIOBuf(
+      streams, std::move(owner));
+}
+
 folly::IOBuf StreamSlicer::slice(
     std::string_view input,
     uint32_t offset,
@@ -299,19 +314,16 @@ folly::IOBuf StreamSlicer::slice(
 
   inputStreams_.clear();
   inputStreams_.reserve(streamCount_);
-  size_t inputBodyBytes{0};
   parser.iterateStreams([&](uint32_t streamId, std::string_view streamData) {
     if (streamId >= inputStreams_.size()) {
       inputStreams_.resize(streamId + 1);
     }
     inputStreams_[streamId] = streamData;
-    inputBodyBytes += streamData.size();
   });
-  Buffer outputBuffer{*pool_, inputBodyBytes};
   auto slicedStreams = sliceStreams(
       inputStreams_,
       {.offset = offset, .length = length},
-      outputBuffer,
+      /*outputBuffer=*/nullptr,
       streamEncodingOptions(
           parser.streamEncodingUsesVarintRowCount(),
           &bufferPool_,
@@ -349,23 +361,21 @@ folly::IOBuf StreamSlicer::slice(
 StreamSlicer::SlicedStreams StreamSlicer::slice(
     const std::vector<std::string_view>& inputStreams,
     uint32_t offset,
-    uint32_t length) const {
+    uint32_t length,
+    Buffer* outputBuffer) const {
   NIMBLE_CHECK_GT(length, 0, "Slice length must be positive");
   NIMBLE_CHECK(
       !options_.streamHasChunkHeader || isTabletVersion(options_.streamVersion),
       "Chunk headers are only supported for kTablet streams");
+  const auto encodingOptions = streamEncodingOptions(
+      options_.streamVersion,
+      options_.streamsUseVarintRowCount,
+      &bufferPool_,
+      &encodingBufferPool_);
+  const Range range{.offset = offset, .length = length};
 
   if (!options_.streamHasChunkHeader) {
-    Buffer outputBuffer{*pool_, totalBytes(inputStreams)};
-    return sliceStreams(
-        inputStreams,
-        {.offset = offset, .length = length},
-        outputBuffer,
-        streamEncodingOptions(
-            options_.streamVersion,
-            options_.streamsUseVarintRowCount,
-            &bufferPool_,
-            &encodingBufferPool_));
+    return sliceStreams(inputStreams, range, outputBuffer, encodingOptions);
   }
 
   ScopedEncodingBuffer strippedStreamBuffer{pool_, &strippedStreamBufferPool_};
@@ -377,27 +387,30 @@ StreamSlicer::SlicedStreams StreamSlicer::slice(
       strippedStreamBuffer.get(),
       inputStreams_,
       strippedStreamCache_);
-  Buffer outputBuffer{*pool_, totalBytes(inputStreams_)};
-  return sliceStreams(
-      inputStreams_,
-      {.offset = offset, .length = length},
-      outputBuffer,
-      streamEncodingOptions(
-          options_.streamVersion,
-          options_.streamsUseVarintRowCount,
-          &bufferPool_,
-          &encodingBufferPool_));
+  return sliceStreams(inputStreams_, range, outputBuffer, encodingOptions);
 }
 
 StreamSlicer::SlicedStreams StreamSlicer::sliceStreams(
     const std::vector<std::string_view>& inputStreams,
     Range range,
-    Buffer& outputBuffer,
+    Buffer* outputBuffer,
     const Encoding::Options& encodingOptions) const {
   SlicedStreams result;
+  if (outputBuffer != nullptr) {
+    sliceType(
+        *schema_, range, inputStreams, result, *outputBuffer, encodingOptions);
+    return result;
+  }
+
+  Buffer ownedOutputBuffer{*pool_, totalBytes(inputStreams)};
   sliceType(
-      *schema_, range, inputStreams, result, outputBuffer, encodingOptions);
-  result.data = takeOwnershipAsIOBuf(result.streams, outputBuffer);
+      *schema_,
+      range,
+      inputStreams,
+      result,
+      ownedOutputBuffer,
+      encodingOptions);
+  result.data = takeOwnershipAsIOBuf(result.streams, ownedOutputBuffer);
   return result;
 }
 
@@ -438,6 +451,7 @@ void StreamSlicer::sliceType(
         nanosRange = nonNullRange(
             inputStreams[timestamp.microsDescriptor().offset()],
             range,
+            outputBuffer,
             encodingOptions);
       }
       sliceDescriptor(
@@ -465,6 +479,7 @@ void StreamSlicer::sliceType(
         childRange = trueRange(
             inputStreams[row.nullsDescriptor().offset()],
             range,
+            outputBuffer,
             encodingOptions);
       }
       for (size_t i = 0; i < row.childrenCount(); ++i) {
@@ -556,6 +571,7 @@ void StreamSlicer::sliceType(
         mapRange = trueRange(
             inputStreams[flatMap.nullsDescriptor().offset()],
             range,
+            outputBuffer,
             encodingOptions);
       }
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
@@ -579,6 +595,7 @@ void StreamSlicer::sliceType(
           valueRange = trueRange(
               inputStreams[inMapDescriptor.offset()],
               mapRange,
+              outputBuffer,
               encodingOptions);
         }
         sliceType(
@@ -623,8 +640,10 @@ void StreamSlicer::sliceDescriptor(
     NIMBLE_CHECK(!sliced.empty(), "Sliced null stream must not be empty");
     outputStreams.requiresNullBarrier |=
         countTrue(
-            sliced, {.offset = 0, .length = range.length}, encodingOptions) <
-        range.length;
+            sliced,
+            {.offset = 0, .length = range.length},
+            outputBuffer,
+            encodingOptions) < range.length;
   }
 }
 
@@ -676,22 +695,79 @@ void StreamSlicer::stripChunkHeaders(
 StreamSlicer::Range StreamSlicer::nonNullRange(
     std::string_view encoded,
     Range range,
+    Buffer& outputBuffer,
     const Encoding::Options& encodingOptions) const {
   return {
       .offset = countNonNull(
-          encoded, {.offset = 0, .length = range.offset}, encodingOptions),
-      .length = countNonNull(encoded, range, encodingOptions),
+          encoded,
+          {.offset = 0, .length = range.offset},
+          outputBuffer,
+          encodingOptions),
+      .length = countNonNull(encoded, range, outputBuffer, encodingOptions),
   };
 }
 
 StreamSlicer::Range StreamSlicer::trueRange(
     std::string_view encoded,
     Range range,
+    Buffer& outputBuffer,
     const Encoding::Options& encodingOptions) const {
+  if (range.length == 0) {
+    return {};
+  }
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::dataType(encoded),
+      DataType::Bool,
+      "Expected a bool stream");
+  const auto rowCount =
+      EncodingPrefix::readRowCount(encoded, encodingOptions.useVarintRowCount);
+  NIMBLE_CHECK_LE(range.offset, rowCount);
+  NIMBLE_CHECK_LE(range.length, rowCount - range.offset);
+  const auto encodingType = EncodingPrefix::encodingType(encoded);
+  switch (encodingType) {
+    case EncodingType::Constant: {
+      const char* pos = encoded.data() +
+          EncodingPrefix::prefixSize(
+                            encoded, encodingOptions.useVarintRowCount);
+      const bool value = encoding::read<bool>(pos);
+      return {
+          .offset = value ? range.offset : 0,
+          .length = value ? range.length : 0,
+      };
+    }
+    case EncodingType::RLE: {
+      RLEEncoding<bool>::RangeCounts counts;
+      RLEEncoding<bool>::countTrue(
+          encoded,
+          range.offset,
+          range.length,
+          outputBuffer,
+          counts,
+          encodingOptions);
+      return {
+          .offset = counts.numTrueBeforeRange,
+          .length = counts.numTrueInRange,
+      };
+    }
+    case EncodingType::SparseBool: {
+      SparseBoolEncoding::RangeCounts counts;
+      SparseBoolEncoding::countTrue(
+          encoded, range.offset, range.length, pool_, counts, encodingOptions);
+      return {
+          .offset = counts.numTrueBeforeRange,
+          .length = counts.numTrueInRange,
+      };
+    }
+    default:
+      break;
+  }
   return {
       .offset = countTrue(
-          encoded, {.offset = 0, .length = range.offset}, encodingOptions),
-      .length = countTrue(encoded, range, encodingOptions),
+          encoded,
+          {.offset = 0, .length = range.offset},
+          outputBuffer,
+          encodingOptions),
+      .length = countTrue(encoded, range, outputBuffer, encodingOptions),
   };
 }
 
@@ -722,6 +798,7 @@ StreamSlicer::Range StreamSlicer::offsetsRange(
 uint32_t StreamSlicer::countNonNull(
     std::string_view encoded,
     Range range,
+    Buffer& outputBuffer,
     const Encoding::Options& encodingOptions) const {
   if (range.length == 0) {
     return 0;
@@ -734,12 +811,16 @@ uint32_t StreamSlicer::countNonNull(
     return range.length;
   }
   return countTrue(
-      nullableNullsStream(encoded, encodingOptions), range, encodingOptions);
+      nullableNullsStream(encoded, encodingOptions),
+      range,
+      outputBuffer,
+      encodingOptions);
 }
 
 uint32_t StreamSlicer::countTrue(
     std::string_view encoded,
     Range range,
+    Buffer& outputBuffer,
     const Encoding::Options& encodingOptions) const {
   if (range.length == 0) {
     return 0;
@@ -748,10 +829,29 @@ uint32_t StreamSlicer::countTrue(
       EncodingPrefix::dataType(encoded),
       DataType::Bool,
       "Expected a bool stream");
+  const auto rowCount =
+      EncodingPrefix::readRowCount(encoded, encodingOptions.useVarintRowCount);
+  NIMBLE_CHECK_LE(range.offset, rowCount);
+  NIMBLE_CHECK_LE(range.length, rowCount - range.offset);
+  const auto encodingType = EncodingPrefix::encodingType(encoded);
+  switch (encodingType) {
+    case EncodingType::Constant: {
+      const char* pos = encoded.data() +
+          EncodingPrefix::prefixSize(
+                            encoded, encodingOptions.useVarintRowCount);
+      return encoding::read<bool>(pos) ? range.length : 0;
+    }
+    case EncodingType::RLE:
+      return RLEEncoding<bool>::countTrue(
+          encoded, range.offset, range.length, outputBuffer, encodingOptions);
+    case EncodingType::SparseBool:
+      return SparseBoolEncoding::countTrue(
+          encoded, range.offset, range.length, pool_, encodingOptions);
+    default:
+      break;
+  }
 
   auto encoding = createEncoding(encoded, pool_, encodingOptions);
-  NIMBLE_CHECK_LE(range.offset, encoding->rowCount());
-  NIMBLE_CHECK_LE(range.length, encoding->rowCount() - range.offset);
   encoding->skip(range.offset);
   ScopedVector<uint64_t> bits{
       velox::bits::nwords(range.length), pool_, encodingOptions.bufferPool};
