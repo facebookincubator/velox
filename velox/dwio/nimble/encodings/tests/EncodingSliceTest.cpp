@@ -270,6 +270,18 @@ class EncodingSliceTest : public ::testing::Test {
         expectedEncodingType = nimble::EncodingType::Constant;
       }
     }
+    if constexpr (std::is_same_v<EncodingType, nimble::RLEEncoding<T>>) {
+      // A range that starts or ends inside a run keeps the boundary runs whole
+      // and comes back wrapped.
+      const auto end = offset + length;
+      const bool startsMidRun =
+          offset > 0 && values[offset] == values[offset - 1];
+      const bool endsMidRun =
+          end < values.size() && values[end] == values[end - 1];
+      if (startsMidRun || endsMidRun) {
+        expectedEncodingType = nimble::EncodingType::Slice;
+      }
+    }
 
     EXPECT_EQ(encoding->encodingType(), expectedEncodingType);
     EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
@@ -533,12 +545,15 @@ TEST_F(EncodingSliceTest, materializesConstantRangeWithoutWrapper) {
 }
 
 TEST_F(EncodingSliceTest, materializesRleRangeWithoutWrapper) {
+  // Runs are [0,2) [2,5) [5,7); rows [2,7) are run-aligned, so the run lengths
+  // need no trimming and the slice stays a plain RLE. The mid-run case, which
+  // does come back wrapped, is covered by the deferred RLE tests.
   const auto values = makeVector<int32_t>({10, 10, 11, 11, 11, 12, 12});
   const auto encoded =
       nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
           *buffer_, values);
 
-  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/5);
+  const auto sliced = slice(encoded, /*offset=*/2, /*length=*/5);
   EXPECT_NE(sliced.data(), encoded.data());
 
   auto encoding = createEncoding(sliced);
@@ -550,7 +565,7 @@ TEST_F(EncodingSliceTest, materializesRleRangeWithoutWrapper) {
   nimble::Vector<int32_t> output{pool_.get(), 5};
   encoding->materialize(5, output.data());
 
-  const std::vector<int32_t> expected{10, 11, 11, 11, 12};
+  const std::vector<int32_t> expected{11, 11, 11, 12, 12};
   EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
 }
 

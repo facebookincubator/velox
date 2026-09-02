@@ -59,6 +59,12 @@ class SliceEncodingTest : public ::testing::Test {
         });
   }
 
+  std::string_view
+  slice(std::string_view encoded, uint32_t offset, uint32_t length) {
+    return nimble::EncodingFactory::slice(
+        encoded, offset, length, *buffer_, nimble::Encoding::Options{});
+  }
+
   template <typename T>
   std::vector<T> materialize(nimble::Encoding& encoding, uint32_t rowCount) {
     nimble::Vector<T> output{pool_.get(), rowCount};
@@ -166,6 +172,106 @@ TEST_F(SliceEncodingTest, wrapsBoolRle) {
   EXPECT_TRUE(velox::bits::isBitSet(&bits, 1));
   EXPECT_TRUE(velox::bits::isBitSet(&bits, 2));
   EXPECT_FALSE(velox::bits::isBitSet(&bits, 3));
+}
+
+// --- Deferred RLE run slicing ---------------------------------------------
+//
+// A slice that starts or ends mid-run keeps the boundary runs whole and wraps
+// the result, instead of trimming the two boundary lengths and re-encoding.
+
+TEST_F(SliceEncodingTest, deferredRleMatchesSourceRows) {
+  // 5 runs: 10x3, 11x2, 12x4, 13x1, 14x3 over 13 rows. Sweep every non-empty
+  // range so aligned, mid-run, single-run and full-range cases are all covered
+  // and each must reproduce the source rows exactly.
+  const auto values =
+      makeVector<int32_t>({10, 10, 10, 11, 11, 12, 12, 12, 12, 13, 14, 14, 14});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+
+      auto encoding = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(encoding->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> output{pool_.get(), length};
+      encoding->materialize(length, output.data());
+      ASSERT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredRleWrapsOnlyWhenMidRun) {
+  // Runs: 10x3 [0,3), 11x2 [3,5), 12x4 [5,9), 13x1 [9,10). The length-1 run
+  // covers the aligned single-run edge case; the 10x3 run covers the mid-run
+  // subcases (front only, back only, both boundaries in the same run).
+  const auto values =
+      makeVector<int32_t>({10, 10, 10, 11, 11, 12, 12, 12, 12, 13});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  struct Case {
+    const char* name;
+    uint32_t offset;
+    uint32_t length;
+    nimble::EncodingType expectedType;
+  };
+  for (const auto& testCase : {
+           Case{"alignedSingleRun", 3, 2, nimble::EncodingType::RLE},
+           Case{"alignedMultiRun", 3, 6, nimble::EncodingType::RLE},
+           Case{"alignedSingleRowRun", 9, 1, nimble::EncodingType::RLE},
+           Case{"alignedFullRange", 0, 10, nimble::EncodingType::RLE},
+           Case{"midRunAcrossRuns", 4, 3, nimble::EncodingType::Slice},
+           Case{
+               "midRunInsideSingleRunFrontAndBack",
+               1,
+               1,
+               nimble::EncodingType::Slice},
+           Case{
+               "midRunInsideSingleRunBackOnly",
+               0,
+               2,
+               nimble::EncodingType::Slice},
+           Case{
+               "midRunInsideSingleRunFrontOnly",
+               1,
+               2,
+               nimble::EncodingType::Slice},
+       }) {
+    SCOPED_TRACE(testCase.name);
+    auto encoding =
+        createEncoding(slice(encoded, testCase.offset, testCase.length));
+    EXPECT_EQ(encoding->encodingType(), testCase.expectedType);
+    EXPECT_EQ(encoding->rowCount(), testCase.length);
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredRleHandlesBool) {
+  // Bool RLE is the FlatMap in-map and null-stream case, and the one the
+  // MainlyConstant isCommon child hits.
+  const auto values =
+      makeVector<bool>({false, false, true, true, true, false, true, true});
+  const auto encoded = nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+      *buffer_, values);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      auto encoding = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(encoding->rowCount(), length);
+
+      uint64_t bits{0};
+      encoding->materializeBoolsAsBits(length, &bits, /*begin=*/0);
+      for (uint32_t i = 0; i < length; ++i) {
+        ASSERT_EQ(velox::bits::isBitSet(&bits, i), values[offset + i])
+            << "offset=" << offset << " length=" << length << " row=" << i;
+      }
+    }
+  }
 }
 
 TEST_F(SliceEncodingTest, boolSkipIsRelativeToSlice) {
