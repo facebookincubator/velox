@@ -45,12 +45,10 @@
 
 // Disable missing-field-initializers for Clang and GCC
 #ifdef __clang__
-#if defined(__has_warning) && \
-    __has_warning("-Wmissing-designated-field-initializers")
+#if defined(__has_warning) && __has_warning("-Wmissing-field-initializers")
 #define VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING \
   _Pragma("clang diagnostic push");                                  \
-  _Pragma(                                                           \
-      "clang diagnostic ignored \"-Wmissing-designated-field-initializers\"")
+  _Pragma("clang diagnostic ignored \"-Wmissing-field-initializers\"")
 #define VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING \
   _Pragma("clang diagnostic pop");
 #else
