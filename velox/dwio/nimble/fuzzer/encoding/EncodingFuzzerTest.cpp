@@ -67,6 +67,18 @@ DEFINE_uint32(fuzzer_iterations, 50, "Number of fuzzer iterations per test");
 DEFINE_uint32(fuzzer_max_rows, 5000, "Maximum rows per fuzzer iteration");
 DEFINE_uint32(fuzzer_seed, 42, "Fuzzer seed (0 = random each run)");
 DEFINE_bool(fuzzer_compression, true, "Test with compression enabled");
+DEFINE_uint32(
+    fuzzer_duration_sec,
+    0,
+    "Wall-clock budget for the whole binary, across every typed test. Zero "
+    "means the iteration counts are the only bound. Prefer setting this in "
+    "automation: an iteration count cannot self-limit, so overshoot shows up "
+    "as the job being killed rather than a short run.");
+
+static ::testing::Environment* const kFuzzerBudget =
+    ::testing::AddGlobalTestEnvironment(
+        new facebook::nimble::test::FuzzerBudgetEnvironment(
+            [] { return FLAGS_fuzzer_duration_sec; }));
 
 using namespace facebook;
 using namespace facebook::nimble;
