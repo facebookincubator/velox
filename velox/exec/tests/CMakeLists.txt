@@ -151,6 +151,7 @@ set(
   FilterProjectTest.cpp
   AsyncConnectorTest.cpp
   VectorWindowPartitionTest.cpp
+  SkewResilientRadixPartitionerTest.cpp
 )
 
 set(
