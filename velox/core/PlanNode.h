@@ -242,6 +242,13 @@ class PlanNode : public ISerializable {
     return false;
   }
 
+  /// Classifies how an operator contributes to this plan node's input and
+  /// output totals when the node maps to multiple operators:
+  /// kBoth - counts for both input and output (default).
+  /// kInput - counts for the node's input only.
+  /// kOutput - counts for the node's output only.
+  enum class Boundary { kBoth, kInput, kOutput };
+
   /// Returns a set of leaf plan node IDs.
   std::unordered_set<core::PlanNodeId> leafPlanNodeIds() const;
 
