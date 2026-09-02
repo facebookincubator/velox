@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 
@@ -75,6 +76,10 @@ class AsyncRPCFunctionRegistry {
   /// Signature list type for stub registration.
   using Signatures = std::vector<std::shared_ptr<exec::FunctionSignature>>;
 
+  /// Declaration attached to the stub. Read by the sidecar, not by any
+  /// executor: RPC functions run in RPCOperator and never reach the stub.
+  using Metadata = exec::VectorFunctionMetadata;
+
   /// Registers an AsyncRPCFunction factory for the given function name.
   /// Thread-safe. Safe to call during static initialization.
   ///
@@ -91,6 +96,16 @@ class AsyncRPCFunctionRegistry {
       const std::string& name,
       Factory factory,
       Signatures signatures);
+
+  /// Registers a factory, its signatures, and the metadata the stub is declared
+  /// with. Use this when the default declaration is wrong for the function --
+  /// most importantly when a NULL in one argument does not mean a NULL result,
+  /// which the default 'defaultNullBehavior{true}' asserts.
+  static bool registerFunction(
+      const std::string& name,
+      Factory factory,
+      Signatures signatures,
+      Metadata metadata);
 
   /// Registers stub Velox functions for all functions that provided signatures.
   /// Must be called during server startup (after config is available).
@@ -132,12 +147,14 @@ class AsyncRPCFunctionRegistry {
   static std::mutex& mutex();
   static std::unordered_map<std::string, Factory>& factories();
   static std::unordered_map<std::string, Signatures>& signatureStore();
+  static std::unordered_map<std::string, Metadata>& metadataStore();
 
   /// Registers an entry under the lock. Caller must hold mutex().
   static bool registerEntryLocked(
       const std::string& name,
       Factory factory,
-      Signatures signatures);
+      Signatures signatures,
+      Metadata metadata);
 };
 
 /// Helper class for static registration of AsyncRPCFunction implementations.
@@ -159,6 +176,15 @@ class AsyncRPCFunctionRegistrar {
       AsyncRPCFunctionRegistry::Signatures signatures) {
     AsyncRPCFunctionRegistry::registerFunction(
         name, std::move(factory), std::move(signatures));
+  }
+
+  AsyncRPCFunctionRegistrar(
+      const std::string& name,
+      AsyncRPCFunctionRegistry::Factory factory,
+      AsyncRPCFunctionRegistry::Signatures signatures,
+      AsyncRPCFunctionRegistry::Metadata metadata) {
+    AsyncRPCFunctionRegistry::registerFunction(
+        name, std::move(factory), std::move(signatures), std::move(metadata));
   }
 };
 
@@ -197,5 +223,15 @@ class AsyncRPCFunctionRegistrar {
 #define VELOX_REGISTER_RPC_FUNCTION_CUSTOM_FACTORY(name, factory, sigs) \
   static ::facebook::velox::exec::rpc::AsyncRPCFunctionRegistrar        \
   _VELOX_RPC_REGISTRAR_VAR2(name, __LINE__)(#name, (factory), (sigs))
+
+/// Register an RPC function with a custom factory, explicit signatures, and an
+/// explicit stub declaration. Needed when the defaults are wrong for the
+/// function -- see AsyncRPCFunctionRegistry::Metadata.
+/// Usage: VELOX_REGISTER_RPC_FUNCTION_WITH_METADATA(
+///            my_rpc, myFactoryFn, MyClass::signatures(), myMetadata());
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+#define VELOX_REGISTER_RPC_FUNCTION_WITH_METADATA(name, factory, sigs, meta) \
+  static ::facebook::velox::exec::rpc::AsyncRPCFunctionRegistrar             \
+  _VELOX_RPC_REGISTRAR_VAR2(name, __LINE__)(#name, (factory), (sigs), (meta))
 
 } // namespace facebook::velox::exec::rpc
