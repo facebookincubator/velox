@@ -30,6 +30,9 @@
 #include <cuda/memory_pool>
 #include <cuda_runtime_api.h>
 
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <atomic>
 #include <functional>
@@ -78,6 +81,16 @@ cuda::memory_pool_properties pinnedPoolProperties() {
   return properties;
 }
 
+int currentNumaNode() {
+  unsigned cpu = 0;
+  unsigned node = 0;
+  VELOX_CHECK_EQ(
+      ::syscall(SYS_getcpu, &cpu, &node, nullptr),
+      0,
+      "Failed to determine the NUMA node for the decoded column cache");
+  return static_cast<int>(node);
+}
+
 } // namespace
 
 class PinnedHostAllocation {
@@ -115,7 +128,7 @@ class PinnedHostAllocation {
 };
 
 struct CudfDecodedColumnCache::Impl {
-  Impl() : pinnedPool(0, pinnedPoolProperties()) {}
+  Impl() : pinnedPool(currentNumaNode(), pinnedPoolProperties()) {}
 
   std::shared_ptr<const PinnedHostAllocation> allocate(size_t size) {
     if (size == 0) {
