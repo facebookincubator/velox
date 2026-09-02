@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
@@ -302,6 +303,109 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
 
   ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
+}
+
+TEST_F(IcebergInsertTest, rejectNestedUnknown) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  // UNKNOWN nested inside ARRAY, MAP key, MAP value, or an all-UNKNOWN ROW
+  // is rejected.
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"id", "arr"}, {BIGINT(), ARRAY(UNKNOWN())}),
+          outputDirectory->getPath()),
+      "Writing to a column with UNKNOWN type nested inside a complex type is not supported: column arr, type ARRAY<UNKNOWN>");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"id", "m"}, {BIGINT(), MAP(VARCHAR(), UNKNOWN())}),
+          outputDirectory->getPath()),
+      "Writing to a column with UNKNOWN type nested inside a complex type is not supported: column m, type MAP<VARCHAR,UNKNOWN>");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"id", "m"}, {BIGINT(), MAP(UNKNOWN(), VARCHAR())}),
+          outputDirectory->getPath()),
+      "Writing to a column with UNKNOWN type nested inside a complex type is not supported: column m, type MAP<UNKNOWN,VARCHAR>");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          ROW({"id", "r"}, {BIGINT(), ROW({"x"}, {UNKNOWN()})}),
+          outputDirectory->getPath()),
+      "Writing to a column with UNKNOWN type nested inside a complex type is not supported: column r, type ROW<x:UNKNOWN>");
+  // Top-level UNKNOWN column is allowed (always null, never stored).
+  ASSERT_NO_THROW(createDataSink(
+      ROW({"id", "u"}, {BIGINT(), UNKNOWN()}), outputDirectory->getPath()));
+  // Mixed-field ROW where only some fields are UNKNOWN is also allowed: the
+  // UNKNOWN fields are written as Parquet INT32 with null logical type and
+  // always read as null.
+  ASSERT_NO_THROW(createDataSink(
+      ROW({"id", "mixed"}, {BIGINT(), ROW({"x", "u"}, {INTEGER(), UNKNOWN()})}),
+      outputDirectory->getPath()));
+}
+
+// Verifies that a table whose only column is UNKNOWN round-trips correctly.
+// Velox writes UNKNOWN as Parquet INT32 with null logical type (via the Arrow
+// bridge), so the resulting file is not zero-column.
+TEST_F(IcebergInsertTest, allUnknownColumns) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto rowType = ROW({"u"}, {UNKNOWN()});
+  constexpr int32_t kNumBatches = 3;
+  constexpr int32_t kRowsPerBatch = 10;
+
+  std::vector<RowVectorPtr> vectors;
+  for (auto i = 0; i < kNumBatches; ++i) {
+    vectors.push_back(makeRowVector(
+        rowType->names(),
+        {BaseVector::createNullConstant(UNKNOWN(), kRowsPerBatch, pool())}));
+  }
+
+  const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
+  dataSink->close();
+
+  auto splits = createSplitsForDirectory(dataPath);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+}
+
+// Verifies that a struct with a mix of regular and UNKNOWN fields round-trips
+// correctly. The UNKNOWN field is written as Parquet INT32 with null logical
+// type (via the Arrow bridge) and reads back as null.
+TEST_F(IcebergInsertTest, mixedUnknownStruct) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto rowType =
+      ROW({"id", "mixed"}, {BIGINT(), ROW({"x", "u"}, {INTEGER(), UNKNOWN()})});
+  constexpr int32_t kNumBatches = 3;
+  constexpr int32_t kRowsPerBatch = 10;
+
+  std::vector<RowVectorPtr> vectors;
+  for (auto i = 0; i < kNumBatches; ++i) {
+    auto nested = makeRowVector(
+        {"x", "u"},
+        {makeFlatVector<int32_t>(kRowsPerBatch, [](auto row) { return row; }),
+         BaseVector::createNullConstant(UNKNOWN(), kRowsPerBatch, pool())});
+    vectors.push_back(makeRowVector(
+        rowType->names(),
+        {makeFlatVector<int64_t>(
+             kRowsPerBatch,
+             [i](auto row) {
+               return static_cast<int64_t>(i) * kRowsPerBatch + row;
+             }),
+         nested}));
+  }
+
+  const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
+  dataSink->close();
+
+  auto splits = createSplitsForDirectory(dataPath);
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 }
 
 #endif

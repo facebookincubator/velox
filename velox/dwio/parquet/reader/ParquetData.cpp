@@ -88,9 +88,7 @@ bool ParquetData::rowGroupMatches(
   auto column = type_->column();
   auto type = type_->type();
   auto rowGroup = fileMetaDataPtr_.rowGroup(rowGroupId);
-  assert(rowGroup.numColumns() != 0);
-
-  if (!filter) {
+  if (!filter || rowGroup.numColumns() == 0) {
     return true;
   }
 
@@ -152,7 +150,11 @@ std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
     uint32_t index) const {
   auto rowGroup = fileMetaDataPtr_.rowGroup(index);
 
-  VELOX_CHECK_GT(rowGroup.numColumns(), 0);
+  if (rowGroup.numColumns() == 0) {
+    // Zero-column row group from an Iceberg V3 all-UNKNOWN table: no column
+    // data pages exist, so no byte region needs to be buffered.
+    return {0, 0};
+  }
   auto fileOffset = (rowGroup.hasFileOffset() && rowGroup.fileOffset() != 0)
       ? rowGroup.fileOffset()
       : rowGroup.columnChunk(0).hasDictionaryPageOffset()
