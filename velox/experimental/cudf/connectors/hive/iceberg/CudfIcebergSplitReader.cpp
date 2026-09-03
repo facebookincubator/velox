@@ -720,17 +720,13 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
                 // Insert column name into readColumnSet if not already present
                 if (readColumnSet.insert(columnName).second) {
                   extraEqualityColumns_.push_back(columnName);
+                  readColumnNames_.push_back(columnName);
+                  readColumnTypes_.push_back(
+                      dataColumns->findChild(columnName));
                 }
               }
             });
       });
-
-  // Append extra columns to readColumnNames_ so the Parquet reader fetches
-  // them.
-  readColumnNames_.insert(
-      readColumnNames_.end(),
-      extraEqualityColumns_.begin(),
-      extraEqualityColumns_.end());
 }
 
 void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
@@ -795,51 +791,53 @@ void CudfIcebergSplitReader::adaptColumns() {
       readColumnNames_.size(),
       extraEqualityColumns_.size(),
       "Column projection must at least include the equality delete keys");
+  VELOX_CHECK_EQ(
+      readColumnNames_.size(),
+      readColumnTypes_.size(),
+      "Read column names and types must remain aligned");
   const size_t schemaSize =
       readColumnNames_.size() - extraEqualityColumns_.size();
 
   std::unordered_set<std::string> injectedNames;
   for (size_t i = 0; i < schemaSize; ++i) {
     const auto& fieldName = readColumnNames_[i];
-    const TypePtr veloxType = [&]() -> TypePtr {
-      if (i < outputType_->size()) {
-        VELOX_DCHECK_EQ(fieldName, outputType_->nameOf(i));
-        return outputType_->childAt(i);
-      }
-      // Filter-only column beyond the output projection.
-      const auto& dataColumns = tableHandle_->dataColumns();
-      VELOX_CHECK(
-          dataColumns and dataColumns->containsChild(fieldName),
-          "Filter-only column missing from table schema: {}",
-          fieldName);
-      return dataColumns->findChild(fieldName);
-    }();
+    const auto& veloxType = readColumnTypes_[i];
 
     if (auto iter = split_->infoColumns.find(fieldName);
         iter != split_->infoColumns.end()) {
       injectedColumns_.push_back({i, fieldName, iter->second, veloxType});
       injectedNames.insert(fieldName);
-    } else if (auto it = icebergSplit_->partitionKeys.find(fieldName);
-               it != icebergSplit_->partitionKeys.end()) {
-      // Partition columns: Hive migrated table. In Hive-written data
-      // files, partition column values are stored in partition metadata
-      // rather than in the data file itself, following Hive's
-      // partitioning convention.
-      injectedColumns_.push_back({i, fieldName, it->second, veloxType});
-      injectedNames.insert(fieldName);
     } else if (not fileColumnNames_.contains(fieldName)) {
-      // Schema evolution: Column was added after the data file was written
-      // and doesn't exist in older data files.
-      injectedColumns_.push_back({i, fieldName, std::nullopt, veloxType});
+      // Partition columns from Hive-migrated tables are absent from data
+      // files. A name-keyed partition value cannot replace a physical Iceberg
+      // source column because transformed partition field names may collide.
+      const auto partition = icebergSplit_->partitionKeys.find(fieldName);
+      injectedColumns_.push_back(
+          {i,
+           fieldName,
+           partition == icebergSplit_->partitionKeys.end() ? std::nullopt
+                                                           : partition->second,
+           veloxType});
       injectedNames.insert(fieldName);
     }
   }
 
-  // Remove all injected columns from readColumnNames_
+  // Remove all injected columns while keeping names and types aligned.
   if (not injectedColumns_.empty()) {
-    std::erase_if(readColumnNames_, [&injectedNames](const auto& name) {
-      return injectedNames.contains(name);
-    });
+    size_t outputIndex = 0;
+    for (size_t inputIndex = 0; inputIndex < readColumnNames_.size();
+         ++inputIndex) {
+      if (injectedNames.contains(readColumnNames_[inputIndex])) {
+        continue;
+      }
+      if (outputIndex != inputIndex) {
+        readColumnNames_[outputIndex] = std::move(readColumnNames_[inputIndex]);
+        readColumnTypes_[outputIndex] = std::move(readColumnTypes_[inputIndex]);
+      }
+      ++outputIndex;
+    }
+    readColumnNames_.resize(outputIndex);
+    readColumnTypes_.resize(outputIndex);
     // Sort injected columns by assembled-table index once here
     std::sort(
         injectedColumns_.begin(),
