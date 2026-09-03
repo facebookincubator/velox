@@ -1137,6 +1137,16 @@ Parquet Options (prefix ``hive.parquet.``)
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.page-row-limit``
+     - integer
+     - 0 (no limit)
+     - Data page row-count limit used when writing into Parquet through the Arrow bridge. The writer
+       flushes a data page once it buffers this many rows, even before the byte-size page limit is
+       reached. A non-zero limit also makes data pages of columns nested inside an ARRAY or MAP
+       (Parquet repeated columns) end on row boundaries, which V1 pages written without the page
+       index do not otherwise guarantee, because rows cannot be counted across a page that splits
+       one. Zero means no limit.
+       Session: ``hive.parquet.writer.page_row_limit``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

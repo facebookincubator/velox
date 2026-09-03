@@ -124,6 +124,18 @@ class ParquetConfig {
       "1024",
       "Write batch size for the Parquet writer.")
   VELOX_FORMAT_CONFIG_PROPERTY(
+      kWriterPageRowLimitSession,
+      kWriterPageRowLimit,
+      "writer_page_row_limit",
+      "writer.page-row-limit",
+      int64_t,
+      0,
+      "Data page row-count limit for the Parquet writer. The writer flushes a "
+      "data page once it buffers this many rows, even before the byte-size "
+      "page limit is reached. A non-zero limit also makes data pages of "
+      "repeated columns end on record boundaries. Zero (default) means no "
+      "limit.")
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterEnablePageIndexSession,
       kWriterEnablePageIndex,
       "writer_enable_page_index",
@@ -193,6 +205,13 @@ class ParquetConfig {
         kWriterBatchSizeSession, connectorConfig, kWriterBatchSize);
   }
 
+  static std::optional<std::string> writerPageRowLimit(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterPageRowLimitSession, connectorConfig, kWriterPageRowLimit);
+  }
+
   static std::optional<std::string> writerEnablePageIndex(
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) {
@@ -243,6 +262,8 @@ class ParquetConfig {
         properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<kWriterBatchSizeSessionProperty>(
         properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kWriterPageRowLimitSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kWriterEnablePageIndexSessionProperty>(properties, sessionPrefix);
   }
