@@ -109,7 +109,7 @@ RUN /bin/bash -c 'source /setup-centos9.sh && \
       install_velox_deps_from_dnf && \
       dnf clean all'
 
-RUN ln -sf "$(which python3)" /usr/bin/python
+RUN ln -s $(which python3) /usr/bin/python
 
 COPY --from=base-build /deps /usr/local
 
@@ -155,10 +155,6 @@ COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-centos-adapters.sh /
-
-# Use Google's Maven Central mirror for the two Hadoop test jars. Direct
-# Maven Central requests are rate-limited in some build environments.
-RUN sed -i 's|https://repo1.maven.org/maven2/|https://maven-central.storage-download.googleapis.com/maven2/|g' /setup-common.sh
 
 ARG ARM_BUILD_TARGET=local
 ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
