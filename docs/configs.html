@@ -1366,12 +1366,10 @@ closes the current file and starts writing to a new file. Accepts human-readable
 “1GB”. Zero means no limit (default). File rotation is not supported for bucketed tables or
 sorted writes.</p>
 <p>Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_max_target_file_size</span></code>.</p>
-<p>Row-group sizing is independent of this setting and is not user-configurable: a row group is
-flushed at a 128MB byte target or 1,048,576 rows, whichever comes first. The byte target is
-soft - a row group may slightly exceed it, since the writer flushes only after buffered bytes
-reach the target; the row count is a hard cap. When <code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code> is set,
-the writer may flush the current row group early so the accumulated file size is visible and
-rotation can occur.</p>
+<p>Row-group sizing is independent of this setting. The soft byte target is configured by
+<code class="docutils literal notranslate"><span class="pre">writer.row-group-size</span></code>, while the row count is capped at 1,048,576. When
+<code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code> is set, the writer may flush the current row group early so
+the accumulated file size is visible and rotation can occur.</p>
 </td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-dictionary</span></code></p></td>
@@ -1409,19 +1407,26 @@ Valid values are “V1” and “V2”. Session: <code class="docutils literal n
 <td><p>1024</p></td>
 <td><p>Batch size used when writing into Parquet through Arrow bridge. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.batch_size</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.row-group-size</span></code></p></td>
+<td><p>string</p></td>
+<td><p>128MB</p></td>
+<td><p>Soft target for the serialized row group size. The estimate includes compressed bytes for
+encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
+row group may slightly exceed the target. Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_row_group_size</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
 <td><p>string</p></td>
 <td><p>parquet-cpp-velox version 0.0.0</p></td>
 <td><p>Created-by value used when writing to Parquet.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
 When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_store_decimal_as_integer</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to write the Parquet page index (column index and offset index) when writing into
