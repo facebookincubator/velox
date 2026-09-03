@@ -23,6 +23,18 @@ These functions support TIMESTAMP and DATE input types.
         SELECT add_months('2015-01-30', -2); -- '2014-11-30'
         SELECT add_months('2015-03-31', -1); -- '2015-02-28'
 
+.. spark:function:: convert_timezone([sourceTz, ]targetTz, sourceTs) -> timestamp_utc
+
+    Converts ``sourceTs`` from the ``sourceTz`` time zone to ``targetTz``. If
+    ``sourceTz`` is omitted, the session time zone is used as the source time
+    zone. ::
+
+        SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', TIMESTAMP_NTZ '2021-12-06 00:00:00'); -- 2021-12-05 15:00:00
+
+    Under session timezone ``America/Los_Angeles``: ::
+
+        SELECT convert_timezone('Europe/Brussels', TIMESTAMP_NTZ '2021-12-05 15:00:00'); -- 2021-12-06 00:00:00
+
 .. spark:function:: date_add(start_date, num_days) -> date
 
     Returns the date that is ``num_days`` after ``start_date``. According to the inputs,
