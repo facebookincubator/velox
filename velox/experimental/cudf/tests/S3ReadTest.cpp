@@ -55,7 +55,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
         factory;
     auto hiveConnector = factory.newConnector(
-        kCudfHiveConnectorId, minioServer_->hiveConfig(), ioExecutor_.get());
+        kCudfHiveConnectorId, minioServer_->s3Config(), ioExecutor_.get());
     facebook::velox::connector::ConnectorRegistry::global().insert(
         hiveConnector->connectorId(), hiveConnector);
   }

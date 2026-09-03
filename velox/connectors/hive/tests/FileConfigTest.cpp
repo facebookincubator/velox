@@ -56,6 +56,7 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
+  EXPECT_FALSE(config.directBufferedInputSharedAllocation(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
@@ -79,6 +80,7 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
       {FileConfig::kNimbleLazyColumnIo, "true"},
+      {FileConfig::kDirectBufferedInputSharedAllocation, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)), "hive.");
@@ -105,6 +107,10 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
+  // The catalog key is the only way this gate can be enabled in production: the
+  // session key contains a dot, so the Presto CLI cannot parse it, and there is
+  // no HiveSessionProperties.java entry for it.
+  EXPECT_TRUE(config.directBufferedInputSharedAllocation(emptySession.get()));
 }
 
 TEST(FileConfigTest, connectorScopedReaderOptions) {
@@ -144,6 +150,7 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
       {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
       {FileConfig::kNimbleLazyColumnIoSession, "true"},
+      {FileConfig::kDirectBufferedInputSharedAllocationSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -165,6 +172,7 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(session.get()));
+  EXPECT_TRUE(config.directBufferedInputSharedAllocation(session.get()));
 }
 
 TEST(FileConfigTest, nullConfig) {

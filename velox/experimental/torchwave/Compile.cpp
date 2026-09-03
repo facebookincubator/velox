@@ -943,18 +943,89 @@ static bool setsSizeOnDevice(NodeCP producer) {
   return false;
 }
 
+// True when a node other than 'reader' overwrites 'value' in place (it is that
+// node's mutatesArg "self"). Such a write is invisible to a producer walk: the
+// writer's own output is a different value, so 'value' still names whoever
+// created the storage -- an earlier kernel, or nothing at all for a graph
+// input.
+static bool isWrittenInPlace(ValueCP value, NodeCP reader) {
+  if (!value) {
+    return false;
+  }
+  for (auto* user : value->users()) {
+    if (user == reader) {
+      continue;
+    }
+    const auto* meta = nodeMeta(user);
+    if (!meta || !meta->mutatesArg.has_value()) {
+      continue;
+    }
+    auto ordinal = static_cast<size_t>(*meta->mutatesArg);
+    const auto& userInputs = user->inputs();
+    if (ordinal < userInputs.size() && userInputs[ordinal].value == value) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Follows 'value' back through view producers to the value whose storage it
+// aliases. A view writes nothing of its own -- what a consumer reading through
+// it actually reads is the base -- so both ordering questions below ("does this
+// come from memory written in this kernel" and "has that write been
+// synchronized") have to be asked about the base rather than about the view.
+//
+// The walk stops short of a base that something overwrites in place. Looking
+// through to such a base answers the wrong question: its producer is whoever
+// created the storage, which says nothing about the in-place write that may be
+// landing in this very kernel. Stopping leaves the view itself as the answer,
+// which keeps the conservative pre-view behaviour for that edge.
+static ValueCP viewBase(ValueCP value) {
+  // Deeper than any real view chain; a bound rather than trusting the graph to
+  // be acyclic here.
+  constexpr int32_t kMaxViewDepth = 16;
+  for (int32_t depth = 0; value != nullptr && depth < kMaxViewDepth; ++depth) {
+    auto* producer = value->producer();
+    if (!producer) {
+      return value;
+    }
+    const auto* meta = nodeMeta(producer);
+    if (!meta || !meta->isView()) {
+      return value;
+    }
+    auto ordinal = static_cast<size_t>(*meta->viewOfArg);
+    if (ordinal >= producer->inputs().size()) {
+      return value;
+    }
+    auto* base = producer->inputs()[ordinal].value;
+    if (isWrittenInPlace(base, producer)) {
+      return value;
+    }
+    value = base;
+  }
+  return value;
+}
+
 // True when the consumer described by 'consumerMeta' reads its input
-// 'inputIdx' from the memory output of an elementwise 'producer' that would
-// fuse into the consumer's kernel. Codegen orders
-// such an edge with an intra-kernel opBarrier (see callNeedsBarrier), which in
-// multi-kernel mode forces a cooperative, whole-grid-resident launch; ending
-// the producer's kernel avoids it. The read goes through memory when the input
-// is a whole tensor (argumentMeta wholeTensor) or the producer returns a
-// non-register (materialized) result. Only elementwise producers qualify:
-// non-elementwise ops already run standalone, and producers carrying
-// multiBlockReturnBarrier already end their own kernel via isKernelBreak.
+// 'inputIdx' from the memory output of a 'producer' that would fuse into the
+// consumer's kernel. Any such edge needs a barrier: the producer's writes come
+// from every block, so a consumer block reading them without one can see a
+// partially written tensor. Codegen orders the edge with an intra-kernel
+// opBarrier (see callNeedsBarrier), which in multi-kernel mode forces a
+// cooperative, whole-grid-resident launch; ending the producer's kernel avoids
+// that. What decides it is how the value reaches the consumer, not what kind of
+// op produced it: through memory when the input is a whole tensor
+// (argumentMeta wholeTensor) or when the producer's output for this value is
+// not a register. A value handed over in a register never leaves the block and
+// needs no barrier. Producers that already run standalone, or that carry
+// multiBlockReturnBarrier and so end their own kernel via isKernelBreak, are
+// ordered by their own launch boundary. 'inputValue'/'producer' must already be
+// resolved through any views (see viewBase): a view of a value written before
+// this kernel needs no ordering at all, and a view of one written inside it has
+// to end the kernel at the writer, not at the view, which materializes nothing.
 static bool readsFusedElementwiseProducerFromMemory(
     int32_t inputIdx,
+    NodeCP consumer,
     const Metadata* consumerMeta,
     ValueCP inputValue,
     NodeCP producer,
@@ -964,13 +1035,13 @@ static bool readsFusedElementwiseProducerFromMemory(
     return false;
   }
   const auto* producerMeta = nodeMeta(producer);
-  if (!producerMeta || !producerMeta->elementwise ||
-      producerMeta->isStandalone(producer, types) || allStandalone) {
+  if (!producerMeta || producerMeta->isStandalone(producer, types) ||
+      allStandalone) {
     return false;
   }
-  const bool wholeTensorArg = consumerMeta &&
-      static_cast<size_t>(inputIdx) < consumerMeta->argumentMeta.size() &&
-      consumerMeta->argumentMeta[inputIdx].wholeTensor;
+  const auto* argMeta =
+      argMetaForInput(consumerMeta, consumer, static_cast<size_t>(inputIdx));
+  const bool wholeTensorArg = argMeta && argMeta->wholeTensor;
   // Ask about the output the consumer actually reads, not the producer's
   // first one. A producer with several outputs can pass some in registers and
   // materialize others, so keying on returnMeta[0] would break the producer's
@@ -985,8 +1056,11 @@ static bool readsFusedElementwiseProducerFromMemory(
       break;
     }
   }
+  // Only an explicit isRegister says the value reaches the consumer without
+  // going through memory. An op that declares no returnMeta for this output
+  // materializes it, so default to memory rather than to the register case.
   const bool nonRegisterProducer =
-      outputIdx < producerMeta->returnMeta.size() &&
+      outputIdx >= producerMeta->returnMeta.size() ||
       !producerMeta->returnMeta[outputIdx].isRegister;
   return wholeTensorArg || nonRegisterProducer;
 }
@@ -1070,15 +1144,28 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     auto* inputValue = node->inputs()[i].value;
     auto* producer = inputValue->producer();
-    // In multi-kernel mode, a fused elementwise producer whose output this op
-    // reads from memory would be ordered by an intra-kernel opBarrier, which
-    // forces a cooperative (whole-grid-resident) launch. End the producer's
-    // kernel instead so its output is materialized by a prior stream-ordered
-    // launch; the launch boundary is the barrier. cg and single-block keep the
+    // In multi-kernel mode, a fused producer whose output this op reads from
+    // memory would be ordered by an intra-kernel opBarrier, which forces a
+    // cooperative (whole-grid-resident) launch. End the producer's kernel
+    // instead so its output is materialized by a prior stream-ordered launch;
+    // the launch boundary is the barrier. cg and single-block keep the
     // in-kernel barrier on purpose.
+    //
+    // The decision is about the base of any view chain, since a view writes
+    // nothing of its own: reading through a view of a value this kernel does
+    // not write needs no ordering at all. The break itself still ends the
+    // kernel at the direct producer -- for a view that pulls the base's writer
+    // into the earlier kernel, which is what the launch boundary then orders.
+    auto* dataValue = viewBase(inputValue);
     if (thisContext == Context::kFused && !isCgGrid_ && !isSingleBlock_ &&
         readsFusedElementwiseProducerFromMemory(
-            i, meta, inputValue, producer, types_, allStandalone_)) {
+            i,
+            node,
+            meta,
+            dataValue,
+            dataValue ? dataValue->producer() : nullptr,
+            types_,
+            allStandalone_)) {
       breakProducerIntoOwnKernel(producer);
       continue;
     }
@@ -1089,9 +1176,13 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     if (thisContext == Context::kFused && producer &&
         producer->target() == "prim.ListPack") {
       const bool hostShapes = concatNeedsHostShapes(node, types_);
+      const bool parallelFill = concatFillsInParallel(node, types_);
       for (const auto& listInput : producer->inputs()) {
         if (hostShapes) {
           breakDeviceSizedProducers(listInput.value);
+        }
+        if (parallelFill) {
+          breakConcatOperandIntoOwnKernel(listInput.value, node->outputs()[0]);
         }
         placeInput(listInput.value, isScalarSize);
       }
@@ -1106,6 +1197,15 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     }
     pushdownStandalone(node);
     return thisContext;
+  }
+  // A concat whose operands fill it from ops of their own ends its kernel. The
+  // operands write the result in the previous step, so a reader of the result
+  // has to be in a later kernel; keeping it fused would instead need an
+  // opBarrier on top of every operand's op, which the fusion path has no way to
+  // express.
+  if (concatFillsInParallel(node, types_)) {
+    pushdownFused(node);
+    return Context::kFusedBreak;
   }
   if (meta->isKernelBreak(
           isSingleBlock_,
@@ -1223,6 +1323,24 @@ void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
   }
 }
 
+void CompileCtx::breakConcatOperandIntoOwnKernel(
+    ValueCP operand,
+    ValueCP concatOutput) {
+  auto* producer = operand->producer();
+  if (!producer || placed_.count(producer) ||
+      (inputs_ && inputs_->count(producer))) {
+    // Nothing of this operand is computed here: it is a graph input or a value
+    // an earlier step already materialized, so there is no producing expression
+    // to push down. The concat still copies it in.
+    return;
+  }
+  const size_t before = kernelOpStorage_.size();
+  breakProducerIntoOwnKernel(producer);
+  for (size_t i = before; i < kernelOpStorage_.size(); ++i) {
+    kernelOpStorage_[i]->addOrderingOutput(concatOutput->id());
+  }
+}
+
 void CompileCtx::breakProducerIntoOwnKernel(NodeCP producer) {
   if (!producer || placed_.count(producer) ||
       (inputs_ && inputs_->count(producer))) {
@@ -1332,10 +1450,7 @@ void CompileCtx::generateElementwiseBorderImpl(
   auto* consumerMeta = nodeMeta(node);
 
   auto getArgMeta = [&](size_t idx) -> const ArgumentMeta* {
-    if (consumerMeta && idx < consumerMeta->argumentMeta.size()) {
-      return &consumerMeta->argumentMeta[idx];
-    }
-    return nullptr;
+    return argMetaForInput(consumerMeta, node, idx);
   };
 
   auto shouldSkip = [&](ValueCP value, NodeCP producer) {
@@ -1575,7 +1690,8 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   // Has register inputs - check if all inputs are backed by memory.
   bool allInMemory = true;
   for (size_t i = 0; i < inputs.size(); ++i) {
-    if (i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister) {
+    const auto* am = argMetaForInput(meta, node, i);
+    if (am && am->isRegister) {
       if (!memOutputs.count(inputs[i].value)) {
         allInMemory = false;
         break;
@@ -1611,8 +1727,8 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
 
   for (size_t i = 0; i < inputs.size(); ++i) {
     auto* value = inputs[i].value;
-    bool isReg =
-        i < meta->argumentMeta.size() && meta->argumentMeta[i].isRegister;
+    const auto* am = argMetaForInput(meta, node, i);
+    bool isReg = am && am->isRegister;
     if (isReg && !memOutputs.count(value)) {
       auto tempName = declareTemp(value);
       ResultSpec ewRs;
@@ -1697,6 +1813,19 @@ std::string cudaAttrType(const nativert::Constant& c) {
 }
 
 namespace {
+
+// A C++ type spelling reduced to something usable inside an identifier, so a
+// shared declaration's variable can be made unique per type. Anything that is
+// not alphanumeric becomes an underscore, which keeps distinct types distinct
+// without needing to understand the spelling.
+std::string identifierSuffix(std::string_view type) {
+  std::string out;
+  out.reserve(type.size());
+  for (char c : type) {
+    out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+  }
+  return out;
+}
 
 void declareAttributesImpl(
     NodeCP node,
@@ -1962,16 +2091,30 @@ std::string CompileCtx::makeCall(
     }
   }
 
-  // Shared declarations: declare in the kernel and pass as arguments.
+  // Shared declarations: declare in the kernel and pass as arguments. The name
+  // is suffixed by the type, as the dynamic form below already does, because
+  // two ops fused into one kernel can ask for the same name at different
+  // types: masked_select_jagged wants a uint32_t 'counter' and
+  // group_length_guard_head an int64_t one. Emitting both unsuffixed put two
+  // conflicting declarations of 'counter' in one scope. nvcc calls that a
+  // redeclaration; NVRTC segfaults inside nvrtcCompileProgram, before the
+  // program log is readable, so it surfaces as a broken promise for the
+  // compiled module rather than as a compile error.
+  //
+  // Deduplication cannot fix this on its own: addSharedDeclaration matches on
+  // the whole declaration string, and even matching on the name would be wrong,
+  // since the two ops need storage of different types rather than one shared
+  // variable.
   for (const auto& [type, name] : meta->sharedDecls) {
+    auto varName = name + "_" + identifierSuffix(type);
     std::string decl = "  __shared__ ";
     decl += type;
     decl += " ";
-    decl += name;
+    decl += varName;
     decl += ";\n";
     op.addSharedDeclaration(decl);
     comma();
-    ss << name;
+    ss << varName;
   }
 
   // Dynamic shared declarations: type from input dtype, name suffixed by type.
@@ -2099,13 +2242,47 @@ bool CompileCtx::callNeedsBarrier(NodeCP node) {
   // same kernel with no barrier since, that producer's writes from other blocks
   // may not yet be visible. Barrier for any such unsynchronized intra-kernel
   // producer, regardless of whether the input is flagged random access -- a
-  // sequential read of an in-flight tensor is just as unsafe.
+  // sequential read of an in-flight tensor is just as unsafe. An input read
+  // through a view is the base's storage: a view of something this kernel fills
+  // still needs the barrier, a view of anything else does not, and the view
+  // node itself never writes and so never justifies one.
   for (const auto& input : node->inputs()) {
-    auto* value = input.value;
+    auto* value = viewBase(input.value);
+    if (!value) {
+      continue;
+    }
     auto* producer = value->producer();
     if (producer && generatingOp_->allNodes().count(producer) &&
         !preBarrierValues_.count(value)) {
       return true;
+    }
+    // An in-place writer is not the value's producer -- the storage was created
+    // elsewhere, often in an earlier kernel -- so the producer test above
+    // cannot see it. Ask the users instead: a writer running unsynchronized in
+    // this kernel is the same hazard as a producer running in it.
+    for (auto* user : value->users()) {
+      if (user == node || !generatingOp_->allNodes().count(user)) {
+        continue;
+      }
+      const auto* userMeta = nodeMeta(user);
+      if (!userMeta || !userMeta->mutatesArg.has_value()) {
+        continue;
+      }
+      auto ordinal = static_cast<size_t>(*userMeta->mutatesArg);
+      const auto& userInputs = user->inputs();
+      if (ordinal >= userInputs.size() || userInputs[ordinal].value != value) {
+        continue;
+      }
+      bool synchronized = true;
+      for (auto* output : user->outputs()) {
+        if (!preBarrierValues_.count(output)) {
+          synchronized = false;
+          break;
+        }
+      }
+      if (!synchronized) {
+        return true;
+      }
     }
   }
   return false;
@@ -2249,6 +2426,47 @@ void addDuplicateExtraBindings(
   }
 }
 
+// Returns every actual frame value 'op' may read, over all of its grid
+// variants. Used to decide at which step a last-use value can be released, so
+// this has to err on the side of listing too much: a reader missed here is a
+// buffer freed while a later step still reads it. orderingInputs is the right
+// source for a kernel launch -- it is the set the scheduler orders the launch
+// against, and so already includes the host-side view operands that are inputs
+// of no fused node. The subgraph leaves cover an op whose grid is empty.
+std::unordered_set<nativert::ValueId> opReadSet(const OpInvocation& op) {
+  const auto& bindings = op.bindings();
+  auto toActual = [&](nativert::ValueId formalId) {
+    auto it = bindings.find(formalId);
+    return it != bindings.end() ? it->second : formalId;
+  };
+  std::unordered_set<nativert::ValueId> ids;
+  auto* projectOp = op.projectOp();
+  for (const auto* grid :
+       {&projectOp->grid(),
+        &projectOp->singleBlockGrid(),
+        &projectOp->cgGrid()}) {
+    for (const auto& step : *grid) {
+      for (const auto& launch : step) {
+        if (launch.op != nullptr) {
+          for (auto id : launch.op->orderingInputs()) {
+            ids.insert(toActual(id));
+          }
+        } else if (launch.standalone != nullptr) {
+          for (const auto& input : launch.standalone->inputs()) {
+            if (input.value != nullptr) {
+              ids.insert(toActual(input.value->id()));
+            }
+          }
+        }
+      }
+    }
+  }
+  for (const auto* input : projectOp->subgraph().inputs) {
+    ids.insert(toActual(input->id()));
+  }
+  return ids;
+}
+
 bool isAllViews(
     NodeCP node,
     const std::unordered_set<NodeCP>& placed,
@@ -2386,8 +2604,31 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   // WaveConfig::freeIntermediates releases their frame tensors after execute().
   std::vector<nativert::ValueId> lastUseIds;
   lastUseIds.reserve(project.lastUse.size());
+  // For each of them, the ops_ indices that read it, which is what lets the
+  // executor release the value after the last step those ops occupy instead of
+  // after the node's last step. Left empty -- meaning "release at the node's
+  // last step" -- for a value produced inside this node: its producer writes
+  // the frame slot at a step this reader-based bound knows nothing about.
+  std::vector<std::vector<int32_t>> lastUseReaderOps;
+  lastUseReaderOps.reserve(project.lastUse.size());
+  std::vector<std::unordered_set<nativert::ValueId>> readSets;
+  readSets.reserve(ops_.size());
+  for (const auto& op : ops_) {
+    readSets.push_back(opReadSet(op));
+  }
+  const std::unordered_set<NodeCP> layerNodes(nodes.begin(), nodes.end());
   for (auto* value : project.lastUse) {
     lastUseIds.push_back(value->id());
+    std::vector<int32_t> readers;
+    const auto* producer = value->producer();
+    if (producer == nullptr || layerNodes.count(producer) == 0) {
+      for (size_t i = 0; i < readSets.size(); ++i) {
+        if (readSets[i].count(value->id()) != 0) {
+          readers.push_back(static_cast<int32_t>(i));
+        }
+      }
+    }
+    lastUseReaderOps.push_back(std::move(readers));
   }
   // Values whose buffer an elementwise op may reuse in place for its output:
   // reusable last-use boundary inputs and expr-local overwritable temps. Only
@@ -2443,6 +2684,7 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       std::move(ivalueStorage_),
       waveGraph_.nextCompositeInvocationId(),
       std::move(lastUseIds),
+      std::move(lastUseReaderOps),
       std::move(reusableIds),
       std::vector<Launch>{},
       std::move(elidedCloneInputs));

@@ -677,7 +677,7 @@ TEST_P(MemoryPoolTest, releasableMemory) {
   }
 }
 
-TEST_P(MemoryPoolTest, ReallocTestSameSize) {
+TEST_P(MemoryPoolTest, reallocTestSameSize) {
   auto manager = getMemoryManager();
   auto root = manager->addRootPool();
 
@@ -699,7 +699,7 @@ TEST_P(MemoryPoolTest, ReallocTestSameSize) {
   ASSERT_EQ(2 * kChunkSize, pool->stats().peakBytes);
 }
 
-TEST_P(MemoryPoolTest, ReallocTestHigher) {
+TEST_P(MemoryPoolTest, reallocTestHigher) {
   auto manager = getMemoryManager();
   auto root = manager->addRootPool();
 
@@ -720,7 +720,7 @@ TEST_P(MemoryPoolTest, ReallocTestHigher) {
   EXPECT_EQ(4 * kChunkSize, pool->stats().peakBytes);
 }
 
-TEST_P(MemoryPoolTest, ReallocTestLower) {
+TEST_P(MemoryPoolTest, reallocTestLower) {
   auto manager = getMemoryManager();
   auto root = manager->addRootPool();
   auto pool = root->addLeafChild("elastic_quota", isLeafThreadSafe_);
@@ -905,7 +905,7 @@ TEST_P(MemoryPoolTest, memoryCapExceptions) {
   }
 }
 
-TEST(MemoryPoolTest, GetAlignment) {
+TEST(MemoryPoolTest, getAlignment) {
   {
     MemoryManager::Options options;
     options.allocatorCapacity = kMaxMemory;
@@ -972,7 +972,7 @@ TEST(MemoryPoolTest, allocateAlignedTracksUsage) {
   EXPECT_GT(pool->stats().numFrees, statsBefore.numFrees);
 }
 
-TEST_P(MemoryPoolTest, MemoryManagerGlobalCap) {
+TEST_P(MemoryPoolTest, memoryManagerGlobalCap) {
   MemoryManager::Options options;
   options.allocatorCapacity = 32L * MB;
   options.arbitratorCapacity = 32L * MB;

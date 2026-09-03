@@ -22,6 +22,7 @@
 
 namespace facebook::velox::filesystems {
 namespace {
+
 TEST(S3ConfigTest, defaultConfig) {
   auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
@@ -48,7 +49,7 @@ TEST(S3ConfigTest, overrideConfig) {
       {S3Config::baseConfigKey(S3Config::Keys::kSSLEnabled), "false"},
       {S3Config::baseConfigKey(S3Config::Keys::kUseInstanceCredentials),
        "true"},
-      {"hive.s3.payload-signing-policy", "RequestDependent"},
+      {S3Config::kS3PayloadSigningPolicy, "RequestDependent"},
       {S3Config::baseConfigKey(S3Config::Keys::kEndpoint), "endpoint"},
       {S3Config::baseConfigKey(S3Config::Keys::kEndpointRegion), "region"},
       {S3Config::baseConfigKey(S3Config::Keys::kAccessKey), "access"},
@@ -93,7 +94,7 @@ TEST(S3ConfigTest, overrideBucketConfig) {
       {S3Config::baseConfigKey(S3Config::Keys::kAccessKey), "access"},
       {S3Config::bucketConfigKey(S3Config::Keys::kAccessKey, bucket),
        "bucket-access"},
-      {"hive.s3.payload-signing-policy", "Always"},
+      {S3Config::kS3PayloadSigningPolicy, "Always"},
       {S3Config::baseConfigKey(S3Config::Keys::kSecretKey), "secret"},
       {S3Config::bucketConfigKey(S3Config::Keys::kSecretKey, bucket),
        "bucket-secret"},
@@ -126,6 +127,54 @@ TEST(S3ConfigTest, overrideBucketConfig) {
   ASSERT_EQ(s3Config.credentialsProvider(), "override-credentials-provider");
   ASSERT_EQ(s3Config.useIMDS(), false);
   ASSERT_EQ(s3Config.minPartSize(), 20971520);
+}
+
+TEST(S3ConfigTest, deprecatedPrefixFallback) {
+  std::string_view bucket = "bucket";
+  // Configure entirely through the deprecated "hive.s3." prefix.
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {"hive.s3.endpoint", "endpoint"},
+      {"hive.s3.aws-access-key", "access"},
+      {"hive.s3.aws-secret-key", "secret"},
+      {"hive.s3.bucket.bucket.aws-access-key", "bucket-access"},
+      {"hive.s3.payload-signing-policy", "Always"},
+      {"hive.s3.log-level", "Info"},
+      {"hive.s3.log-location", "/tmp/logs"},
+  };
+  auto configBase =
+      std::make_shared<config::ConfigBase>(std::move(configFromFile));
+  auto s3Config = S3Config(bucket, configBase);
+  ASSERT_EQ(s3Config.endpoint(), std::optional("endpoint"));
+  ASSERT_EQ(s3Config.accessKey(), std::optional("bucket-access"));
+  ASSERT_EQ(s3Config.secretKey(), std::optional("secret"));
+  ASSERT_EQ(s3Config.payloadSigningPolicy(), "Always");
+  // cacheKey also honors the deprecated endpoint key.
+  ASSERT_EQ(s3Config.cacheKey(bucket, configBase), "endpoint-bucket");
+  // The log settings that RegisterS3FileSystem reads honor the fallback too.
+  ASSERT_EQ(
+      S3Config::configValue(*configBase, S3Config::kS3LogLevel),
+      std::optional("Info"));
+  ASSERT_EQ(
+      S3Config::configValue(*configBase, S3Config::kS3LogLocation),
+      std::optional("/tmp/logs"));
+}
+
+TEST(S3ConfigTest, canonicalPrefixWins) {
+  // When both prefixes are set, the canonical "s3." value takes precedence.
+  std::unordered_map<std::string, std::string> configFromFile = {
+      {S3Config::baseConfigKey(S3Config::Keys::kEndpoint), "canonical"},
+      {"hive.s3.endpoint", "deprecated"},
+  };
+  auto configBase =
+      std::make_shared<config::ConfigBase>(std::move(configFromFile));
+  auto s3Config = S3Config("bucket", configBase);
+  ASSERT_EQ(s3Config.endpoint(), std::optional("canonical"));
+  ASSERT_EQ(s3Config.cacheKey("bucket", configBase), "canonical-bucket");
+
+  ASSERT_EQ(
+      S3Config::configValue(
+          *configBase, S3Config::baseConfigKey(S3Config::Keys::kEndpoint)),
+      std::optional("canonical"));
 }
 
 TEST(S3ConfigTest, minPartSizeValidation) {

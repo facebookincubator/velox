@@ -127,6 +127,8 @@ class PlanBuilder {
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
   static constexpr const std::string_view kTpcdsDefaultConnectorId{
       "test-tpcds"};
+  static constexpr const std::string_view kIcebergDefaultConnectorId{
+      "test-iceberg"};
 
   ///
   /// TableScan
@@ -348,6 +350,16 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param dataColumnFieldIds Iceberg field IDs aligned positionally to
+    /// dataColumns(). An empty vector means field IDs are unavailable. When
+    /// set, these are forwarded into the HiveTableHandle so Iceberg readers
+    /// can resolve columns by Iceberg field ID rather than by ordinal position.
+    TableScanBuilder& dataColumnFieldIds(
+        std::vector<int32_t> dataColumnFieldIds) {
+      dataColumnFieldIds_ = std::move(dataColumnFieldIds);
+      return *this;
+    }
+
     /// Stop the TableScanBuilder.
     PlanBuilder& endTableScan() {
       planBuilder_.planNode_ = build(planBuilder_.nextPlanNodeId());
@@ -366,6 +378,7 @@ class PlanBuilder {
     double sampleRate_{1.0};
     RowTypePtr dataColumns_;
     std::vector<std::string> indexColumns_;
+    std::vector<int32_t> dataColumnFieldIds_;
     std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
@@ -504,11 +517,11 @@ class PlanBuilder {
    public:
     explicit TableWriterBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
 
-    /// @param outputType The schema that will be written to the output file. It
-    /// may reference a subset or change the order of columns from the input
-    /// (upstream operator output).
-    TableWriterBuilder& outputType(RowTypePtr outputType) {
-      outputType_ = std::move(outputType);
+    /// @param targetColumns The target table's columns, in the order they are
+    /// written to the output file. It may reference a subset or change the
+    /// order of columns from the input (upstream operator output).
+    TableWriterBuilder& targetColumns(RowTypePtr targetColumns) {
+      targetColumns_ = std::move(targetColumns);
       return *this;
     }
 
@@ -581,6 +594,15 @@ class PlanBuilder {
       return *this;
     }
 
+    /// @param storageParameters Physical storage properties of the written
+    /// objects, as opposed to the byte layout inside them. Consumed by the
+    /// file sink rather than the format writer.
+    TableWriterBuilder& storageParameters(
+        std::unordered_map<std::string, std::string> storageParameters) {
+      storageParameters_ = std::move(storageParameters);
+      return *this;
+    }
+
     /// @param Option objects passed to the writer.
     TableWriterBuilder& options(
         std::shared_ptr<dwio::common::WriterOptions> options) {
@@ -629,7 +651,7 @@ class PlanBuilder {
     core::PlanNodePtr build(core::PlanNodeId id);
 
     PlanBuilder& planBuilder_;
-    RowTypePtr outputType_;
+    RowTypePtr targetColumns_;
     std::string outputDirectoryPath_;
     std::string outputFileName_;
     std::string connectorId_{kHiveDefaultConnectorId};
@@ -643,6 +665,7 @@ class PlanBuilder {
         sortBy_;
 
     std::unordered_map<std::string, std::string> serdeParameters_;
+    std::unordered_map<std::string, std::string> storageParameters_;
     std::shared_ptr<dwio::common::WriterOptions> options_;
 
     dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
@@ -882,6 +905,9 @@ class PlanBuilder {
   /// to a table through a connector. If not specified, tableWrite will build
   /// a HiveInsertTableHandle with columnHandles, bucketProperty and
   /// locationHandle.
+  /// @param storageParameters Physical storage properties of the written
+  /// objects, as opposed to the byte layout inside them. Consumed by the file
+  /// sink rather than the format writer.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
@@ -901,7 +927,9 @@ class PlanBuilder {
       const bool ensureFiles = false,
       const connector::CommitStrategy commitStrategy =
           connector::CommitStrategy::kNoCommit,
-      std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr);
+      std::shared_ptr<core::InsertTableHandle> insertTableHandle = nullptr,
+      const std::unordered_map<std::string, std::string>& storageParameters =
+          {});
 
   /// Add a TableWriteMergeNode. Derives the ColumnStatsSpec from the
   /// TableWriteNode in the plan tree and applies the given step.
