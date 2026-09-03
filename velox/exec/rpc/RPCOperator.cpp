@@ -20,12 +20,20 @@
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/rpc/BackendErrorSummary.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 
 #define RPC_OP_LOG(severity) LOG(severity) << "[RPC_OP] "
 #define RPC_OP_VLOG(level) VLOG(level) << "[RPC_OP] "
 
 namespace facebook::velox::exec::rpc {
+
+namespace {
+
+// Identifies the operator-level batch fan-out as the source of a row's error.
+constexpr std::string_view kBatchErrorPrefix = "[RPC_BATCH] batch error: ";
+
+} // namespace
 
 RPCOperator::RPCOperator(
     int32_t operatorId,
@@ -412,13 +420,14 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
             RPC_OP_LOG(ERROR)
                 << "RPC batch failed, " << rowIds.size()
                 << " rows will carry a per-row error: " << ew.what();
-            std::vector<RPCResponse> errResponses(rowIds.size());
-            for (size_t i = 0; i < rowIds.size(); ++i) {
+            // Summarize the backend text once, here, rather than copying a
+            // server-side stack trace into every row (see
+            // summarizeBackendError). The untruncated text stays in the log
+            // line above.
+            auto errResponses = makeBatchErrorResponses(
+                rowIds.size(), kBatchErrorPrefix, ew.what().toStdString());
+            for (size_t i = 0; i < errResponses.size(); ++i) {
               errResponses[i].rowId = static_cast<int64_t>(i);
-              errResponses[i].error = std::string("[RPC_BATCH] batch error: ") +
-                  ew.what().toStdString();
-              errResponses[i].errorKind =
-                  velox::rpc::RPCErrorKind::kBackendError;
             }
             return errResponses;
           })
