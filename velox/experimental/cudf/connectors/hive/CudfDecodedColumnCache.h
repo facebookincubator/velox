@@ -83,6 +83,7 @@ class CudfDecodedColumnCache {
   };
 
   struct Stats {
+    uint64_t maxPinnedBytes{0};
     uint64_t pinnedBytes{0};
     uint64_t insertedUncompressedBytes{0};
     uint64_t insertedStoredBytes{0};
@@ -123,6 +124,10 @@ class CudfDecodedColumnCache {
 
   static CudfDecodedColumnCache& instance();
 
+  /// Overrides the process-lifetime pinned pool limit before instance() is
+  /// first called. The experimental cache retains a 70 GiB default.
+  static void configureMaxPinnedBytes(uint64_t maxPinnedBytes);
+
   static CompressionMode compressionModeFromString(std::string_view value);
 
   MetadataPtr findMetadata(const FileKey& key) const;
@@ -140,8 +145,9 @@ class CudfDecodedColumnCache {
       int64_t lastRow) const;
 
   /// Packs and inserts [firstRow, lastRow). Returns false when the range is
-  /// already covered or when admitting it would exceed the 70 GiB pinned pool
-  /// limit. Allocation failure is treated as non-admission, not query failure.
+  /// already covered or when admitting it would exceed the configured pinned
+  /// pool limit. Allocation failure is treated as non-admission, not query
+  /// failure.
   bool insertColumnRangeIfAbsent(
       ColumnKey key,
       int64_t firstRow,
@@ -162,6 +168,7 @@ class CudfDecodedColumnCache {
       rmm::device_async_resource_ref tempMr) const;
 
   uint64_t pinnedBytes() const;
+  uint64_t maxPinnedBytes() const;
   Stats stats() const;
 
   /// Clears all entries for test isolation. Production code never calls this.

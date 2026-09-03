@@ -86,6 +86,12 @@ DEFINE_string(
     "none",
     "Decoded column cache storage codec: none, column, or column-advanced.");
 
+DEFINE_uint64(
+    cudf_hive_decoded_column_cache_max_pinned_bytes,
+    cudf_velox::connector::hive::CudfDecodedColumnCache::kMaxPinnedBytes,
+    "Maximum bytes in the experimental decoded column cache pinned pool. The "
+    "default remains 70 GiB.");
+
 DEFINE_bool(
     cudf_benchmark_nvtx_query_ranges,
     false,
@@ -115,6 +121,10 @@ class RepeatFlagRestorer {
 } // namespace
 
 void CudfTpchBenchmark::initialize() {
+  cudf_velox::connector::hive::CudfDecodedColumnCache::
+      configureMaxPinnedBytes(
+          FLAGS_cudf_hive_decoded_column_cache_max_pinned_bytes);
+
   if (!FLAGS_cudf_properties.empty()) {
     cudf_velox::CudfConfig::getInstance().initialize(
         cudf_velox::loadPropertiesFile(FLAGS_cudf_properties));
@@ -220,13 +230,15 @@ void CudfTpchBenchmark::runMain(
       const auto insertedStored =
           after.insertedStoredBytes - before.insertedStoredBytes;
       out << fmt::format(
-          "decoded-cache iteration={} compression={} pinned_bytes={} "
+          "decoded-cache iteration={} compression={} max_pinned_bytes={} "
+          "pinned_bytes={} "
           "inserted_uncompressed_bytes={} inserted_stored_bytes={} "
           "compressed_ranges={} raw_ranges={} compression_attempts={} "
           "encode_ms={:.3f} restore_calls={} restored_stored_bytes={} "
           "restored_uncompressed_bytes={} decompress_ms={:.3f}\n",
           iteration,
           FLAGS_cudf_hive_decoded_column_cache_compression,
+          after.maxPinnedBytes,
           after.pinnedBytes,
           insertedUncompressed,
           insertedStored,

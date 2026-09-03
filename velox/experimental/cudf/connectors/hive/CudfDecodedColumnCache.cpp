@@ -76,11 +76,29 @@ struct ColumnKeyHash {
   }
 };
 
-cuda::memory_pool_properties pinnedPoolProperties() {
+cuda::memory_pool_properties pinnedPoolProperties(uint64_t maxPinnedBytes) {
   cuda::memory_pool_properties properties;
-  properties.release_threshold = CudfDecodedColumnCache::kMaxPinnedBytes;
-  properties.max_pool_size = CudfDecodedColumnCache::kMaxPinnedBytes;
+  properties.release_threshold = maxPinnedBytes;
+  properties.max_pool_size = maxPinnedBytes;
   return properties;
+}
+
+struct CacheConfiguration {
+  std::mutex mutex;
+  uint64_t maxPinnedBytes{CudfDecodedColumnCache::kMaxPinnedBytes};
+  bool initialized{false};
+};
+
+CacheConfiguration& cacheConfiguration() {
+  static auto* configuration = new CacheConfiguration();
+  return *configuration;
+}
+
+uint64_t takeConfiguredMaxPinnedBytes() {
+  auto& configuration = cacheConfiguration();
+  std::lock_guard<std::mutex> lock(configuration.mutex);
+  configuration.initialized = true;
+  return configuration.maxPinnedBytes;
 }
 
 int currentNumaNode() {
@@ -145,7 +163,9 @@ class PinnedHostAllocation {
 };
 
 struct CudfDecodedColumnCache::Impl {
-  Impl() : pinnedPool(currentNumaNode(), pinnedPoolProperties()) {}
+  explicit Impl(uint64_t maxPinnedBytes)
+      : maxPinnedBytes(maxPinnedBytes),
+        pinnedPool(currentNumaNode(), pinnedPoolProperties(maxPinnedBytes)) {}
 
   std::shared_ptr<const PinnedHostAllocation> allocate(size_t size) {
     if (size == 0) {
@@ -155,7 +175,7 @@ struct CudfDecodedColumnCache::Impl {
 
     auto current = allocatedBytes.load(std::memory_order_relaxed);
     do {
-      if (size > kMaxPinnedBytes - current) {
+      if (size > maxPinnedBytes - current) {
         return nullptr;
       }
     } while (not allocatedBytes.compare_exchange_weak(
@@ -211,6 +231,7 @@ struct CudfDecodedColumnCache::Impl {
   }
 
   mutable std::mutex mutex;
+  const uint64_t maxPinnedBytes;
   cuda::pinned_memory_pool pinnedPool;
   std::atomic<uint64_t> allocatedBytes{0};
   std::atomic<uint64_t> insertedUncompressedBytes{0};
@@ -245,7 +266,7 @@ const void* PinnedColumnChunk::pinnedData() const {
 }
 
 CudfDecodedColumnCache::CudfDecodedColumnCache()
-    : impl_(std::make_unique<Impl>()) {}
+    : impl_(std::make_unique<Impl>(takeConfiguredMaxPinnedBytes())) {}
 
 CudfDecodedColumnCache::~CudfDecodedColumnCache() = default;
 
@@ -254,6 +275,18 @@ CudfDecodedColumnCache& CudfDecodedColumnCache::instance() {
   // teardown and implements the prototype's non-evicting lifetime.
   static auto* cache = new CudfDecodedColumnCache();
   return *cache;
+}
+
+void CudfDecodedColumnCache::configureMaxPinnedBytes(
+    uint64_t maxPinnedBytes) {
+  VELOX_USER_CHECK_GT(
+      maxPinnedBytes, 0, "Decoded column cache limit must be positive");
+  auto& configuration = cacheConfiguration();
+  std::lock_guard<std::mutex> lock(configuration.mutex);
+  VELOX_USER_CHECK(
+      not configuration.initialized,
+      "Decoded column cache limit must be configured before first use");
+  configuration.maxPinnedBytes = maxPinnedBytes;
 }
 
 CudfDecodedColumnCache::CompressionMode
@@ -540,8 +573,13 @@ uint64_t CudfDecodedColumnCache::pinnedBytes() const {
   return impl_->allocatedBytes.load(std::memory_order_relaxed);
 }
 
+uint64_t CudfDecodedColumnCache::maxPinnedBytes() const {
+  return impl_->maxPinnedBytes;
+}
+
 CudfDecodedColumnCache::Stats CudfDecodedColumnCache::stats() const {
   return {
+      .maxPinnedBytes = impl_->maxPinnedBytes,
       .pinnedBytes = impl_->allocatedBytes.load(std::memory_order_relaxed),
       .insertedUncompressedBytes =
           impl_->insertedUncompressedBytes.load(std::memory_order_relaxed),

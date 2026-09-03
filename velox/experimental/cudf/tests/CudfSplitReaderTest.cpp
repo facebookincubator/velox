@@ -179,6 +179,7 @@ TEST_F(CudfSplitReaderTest, pinnedRangeCacheAssemblesOverlaps) {
   auto& cache = CudfDecodedColumnCache::instance();
   EXPECT_EQ(cache.pinnedBytes(), 0);
   EXPECT_EQ(CudfDecodedColumnCache::kMaxPinnedBytes, 70ULL << 30);
+  EXPECT_EQ(cache.maxPinnedBytes(), CudfDecodedColumnCache::kMaxPinnedBytes);
   ASSERT_TRUE(cache.insertColumnRangeIfAbsent(
       key,
       0,
@@ -196,7 +197,7 @@ TEST_F(CudfSplitReaderTest, pinnedRangeCacheAssemblesOverlaps) {
       mr,
       CudfDecodedColumnCache::CompressionMode::kNone));
   EXPECT_GT(cache.pinnedBytes(), 0);
-  EXPECT_LE(cache.pinnedBytes(), CudfDecodedColumnCache::kMaxPinnedBytes);
+  EXPECT_LE(cache.pinnedBytes(), cache.maxPinnedBytes());
 
   auto coverage = cache.findColumnRanges(key, 25, 75);
   ASSERT_TRUE(coverage.has_value());
