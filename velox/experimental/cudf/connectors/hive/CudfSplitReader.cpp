@@ -32,6 +32,8 @@
 #endif
 
 #include <cudf/column/column.hpp>
+#include <cudf/concatenate.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
 #include <cudf/io/parquet.hpp>
@@ -42,6 +44,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
@@ -215,8 +218,13 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
 
-  // Perform split-specific setup.
-  prepareSplitInternal(runtimeStats);
+  useDecodedColumnCache_ = shouldUseDecodedColumnCache();
+  if (useDecodedColumnCache_) {
+    prepareDecodedColumnCache();
+  } else {
+    // Perform split-specific setup.
+    prepareSplitInternal(runtimeStats);
+  }
 
   // Update runtime stats
   runtimeStats.processedSplits++;
@@ -245,6 +253,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
+  if (useDecodedColumnCache_) {
+    return readNextDecodedColumnCacheFileRange();
+  }
+
   auto output_mr = determineCudfMemoryResource();
 
   if (!useExperimentalCudfReader_) {
@@ -331,6 +343,13 @@ void CudfSplitReader::resetSplit() {
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterExpr_;
   hasSplitSpecificPushdownFilter_ = false;
+  useDecodedColumnCache_ = false;
+  isFullyDecodedColumnCacheHit_ = false;
+  decodedColumnCacheMetadata_.reset();
+  decodedColumnCacheRowGroups_.clear();
+  decodedColumnCacheRowOffsets_.clear();
+  decodedColumnCacheRowGroupRuns_.clear();
+  decodedColumnCacheRowGroupIndex_ = 0;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -443,10 +462,16 @@ void CudfSplitReader::setupReaderOptions() {
   VELOX_CHECK_NOT_NULL(
       dataSource_,
       "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
-  auto sourceInfo = cudf::io::source_info{dataSource_.get()};
+  readerOptions_ = makeReaderOptions(
+      cudf::io::source_info{dataSource_.get()}, readColumnNames_, true, true);
+}
 
-  // Reader options
-  readerOptions_ =
+cudf::io::parquet_reader_options CudfSplitReader::makeReaderOptions(
+    cudf::io::source_info sourceInfo,
+    const std::vector<std::string>& columnNames,
+    bool applySplitByteRange,
+    bool applyFilter) const {
+  auto options =
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
           .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
@@ -455,26 +480,355 @@ void CudfSplitReader::setupReaderOptions() {
           .timestamp_type(cudfHiveConfig_->timestampType())
           .build();
 
-  // Set skip_bytes and num_bytes if available
-  if (split_->start != 0) {
-    readerOptions_.set_skip_bytes(split_->start);
-  }
-  if (split_->size() != std::numeric_limits<uint64_t>::max()) {
-    readerOptions_.set_num_bytes(split_->size());
-  }
-
-  if (auto* filter = pushdownFilter(); filter != nullptr) {
-    readerOptions_.set_filter(*filter);
+  if (applySplitByteRange) {
+    if (split_->start != 0) {
+      options.set_skip_bytes(split_->start);
+    }
+    if (split_->size() != std::numeric_limits<uint64_t>::max()) {
+      options.set_num_bytes(split_->size());
+    }
   }
 
-  // Set column projection if needed
-  if (readColumnNames_.size()) {
-    readerOptions_.set_column_names(readColumnNames_);
+  if (applyFilter) {
+    if (auto* filter = pushdownFilter(); filter != nullptr) {
+      options.set_filter(*filter);
+    }
+  }
+
+  if (not columnNames.empty()) {
+    options.set_column_names(columnNames);
   }
 
   if (prependRowIndex_) {
-    readerOptions_.enable_prepend_row_index_column(true);
+    options.enable_prepend_row_index_column(true);
   }
+
+  return options;
+}
+
+bool CudfSplitReader::shouldUseDecodedColumnCache() const {
+  if (not cudfHiveConfig_->experimentalDecodedColumnCacheEnabledSession(
+          connectorQueryCtx_->sessionProperties())) {
+    return false;
+  }
+
+  // Immutable files make path + absolute row range a stable identity. The
+  // cache stores unfiltered top-level columns and applies any subfield filter
+  // after restoration. Zero chunk limits allow one materialization for all
+  // selected row groups in a file split.
+  return cudfHiveConfig_->immutableFiles() and useExperimentalCudfReader_ and
+      supportsDecodedColumnCache() and not readColumnNames_.empty() and
+      not prependRowIndex_ and
+      cudfHiveConfig_->maxChunkReadLimitSession(
+          connectorQueryCtx_->sessionProperties()) == 0 and
+      cudfHiveConfig_->maxPassReadLimitSession(
+          connectorQueryCtx_->sessionProperties()) == 0;
+}
+
+void CudfSplitReader::prepareDecodedColumnCache() {
+  CUDF_CUDA_TRY(cudaGetDevice(&cudaDeviceId_));
+  decodedColumnCacheFileKey_ = {
+      .connectorId = split_->connectorId, .filePath = split_->filePath};
+
+  auto& cache = CudfDecodedColumnCache::instance();
+  const bool metadataHit =
+      cache.findMetadata(decodedColumnCacheFileKey_) != nullptr;
+  decodedColumnCacheMetadata_ = cache.findMetadata(decodedColumnCacheFileKey_);
+  if (not decodedColumnCacheMetadata_) {
+    fileMetaDatas();
+    VELOX_CHECK_EQ(
+        fileMetaData_.size(),
+        1,
+        "Decoded column cache requires exactly one Parquet metadata");
+    auto metadata = std::make_shared<const cudf::io::parquet::FileMetaData>(
+        std::move(fileMetaData_.front()));
+    fileMetaData_.clear();
+    decodedColumnCacheMetadata_ = cache.insertMetadataIfAbsent(
+        decodedColumnCacheFileKey_, std::move(metadata));
+  }
+
+  readerOptions_ = makeReaderOptions(
+      cudf::io::source_info{split_->filePath}, readColumnNames_, true, true);
+  exptSplitReader_ = std::make_unique<CudfHybridScanReader>(
+      *decodedColumnCacheMetadata_, readerOptions_);
+
+  decodedColumnCacheRowOffsets_.reserve(
+      decodedColumnCacheMetadata_->row_groups.size() + 1);
+  decodedColumnCacheRowOffsets_.push_back(0);
+  for (const auto& rowGroup : decodedColumnCacheMetadata_->row_groups) {
+    VELOX_CHECK_GE(rowGroup.num_rows, 0);
+    decodedColumnCacheRowOffsets_.push_back(
+        decodedColumnCacheRowOffsets_.back() + rowGroup.num_rows);
+  }
+
+  decodedColumnCacheRowGroups_ =
+      exptSplitReader_->all_row_groups(readerOptions_);
+  if (readerOptions_.get_skip_bytes() > 0 or
+      readerOptions_.get_num_bytes().has_value()) {
+    decodedColumnCacheRowGroups_ =
+        exptSplitReader_->filter_row_groups_with_byte_range(
+            decodedColumnCacheRowGroups_, readerOptions_);
+  }
+
+  if (readerOptions_.get_filter().has_value()) {
+    decodedColumnCacheRowGroups_ =
+        exptSplitReader_->filter_row_groups_with_stats(
+            decodedColumnCacheRowGroups_, readerOptions_, stream_);
+  }
+
+  int64_t outputRow = 0;
+  std::optional<cudf::size_type> previousRowGroup;
+  for (const auto rowGroupIndex : decodedColumnCacheRowGroups_) {
+    const auto [firstRow, lastRow] = decodedColumnRowRange(rowGroupIndex);
+    VELOX_CHECK_LE(firstRow, lastRow);
+    const auto outputLastRow = outputRow + (lastRow - firstRow);
+    if (firstRow != lastRow) {
+      if (previousRowGroup.has_value() and
+          rowGroupIndex == previousRowGroup.value() + 1 and
+          not decodedColumnCacheRowGroupRuns_.empty()) {
+        auto& run = decodedColumnCacheRowGroupRuns_.back();
+        run.lastRow = lastRow;
+        run.outputLastRow = outputLastRow;
+      } else {
+        decodedColumnCacheRowGroupRuns_.push_back(
+            {.firstRow = firstRow,
+             .lastRow = lastRow,
+             .outputFirstRow = outputRow,
+             .outputLastRow = outputLastRow});
+      }
+    }
+    outputRow = outputLastRow;
+    previousRowGroup = rowGroupIndex;
+  }
+
+  isFullyDecodedColumnCacheHit_ = metadataHit;
+  for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+    for (const auto& columnName : readColumnNames_) {
+      const auto type = readColumnType(columnName);
+      if (not cache.containsColumnRange(
+              makeDecodedColumnCacheKey(columnName, type),
+              run.firstRow,
+              run.lastRow)) {
+        isFullyDecodedColumnCacheHit_ = false;
+        return;
+      }
+    }
+  }
+}
+
+std::optional<std::unique_ptr<cudf::table>>
+CudfSplitReader::readNextDecodedColumnCacheFileRange() {
+  if (decodedColumnCacheRowGroupIndex_ >= decodedColumnCacheRowGroups_.size() or
+      decodedColumnCacheRowGroupRuns_.empty()) {
+    decodedColumnCacheRowGroupIndex_ = decodedColumnCacheRowGroups_.size();
+    return std::nullopt;
+  }
+
+  struct ColumnState {
+    std::string name;
+    TypePtr veloxType;
+    std::unique_ptr<cudf::column> output;
+  };
+
+  std::vector<ColumnState> columnStates;
+  std::vector<size_t> missingColumnIndices;
+  std::vector<std::string> missingColumnNames;
+  std::vector<TypePtr> missingColumnTypes;
+  columnStates.reserve(readColumnNames_.size());
+  for (const auto& columnName : readColumnNames_) {
+    const auto veloxType = readColumnType(columnName);
+    auto key = makeDecodedColumnCacheKey(columnName, veloxType);
+    auto output = materializeDecodedColumnCacheRuns(key);
+    if (output) {
+      ++decodedColumnCacheHits_;
+    } else {
+      ++decodedColumnCacheMisses_;
+      missingColumnIndices.push_back(columnStates.size());
+      missingColumnNames.push_back(columnName);
+      missingColumnTypes.push_back(veloxType);
+    }
+    columnStates.push_back(
+        ColumnState{columnName, std::move(veloxType), std::move(output)});
+  }
+
+  if (not missingColumnNames.empty()) {
+    auto decodedColumns = decodeAndCacheFileColumns(
+        decodedColumnCacheRowGroups_, missingColumnNames, missingColumnTypes);
+    VELOX_CHECK_EQ(decodedColumns.size(), missingColumnIndices.size());
+    for (size_t missingIndex = 0; missingIndex < missingColumnIndices.size();
+         ++missingIndex) {
+      columnStates[missingColumnIndices[missingIndex]].output =
+          std::move(decodedColumns[missingIndex]);
+    }
+  }
+
+  std::vector<std::unique_ptr<cudf::column>> outputColumns;
+  outputColumns.reserve(columnStates.size());
+  for (auto& state : columnStates) {
+    VELOX_CHECK_NOT_NULL(state.output);
+    outputColumns.push_back(std::move(state.output));
+  }
+  decodedColumnCacheRowGroupIndex_ = decodedColumnCacheRowGroups_.size();
+  return std::make_unique<cudf::table>(std::move(outputColumns));
+}
+
+std::unique_ptr<cudf::column>
+CudfSplitReader::materializeDecodedColumnCacheRuns(
+    const CudfDecodedColumnCache::ColumnKey& key) const {
+  auto& cache = CudfDecodedColumnCache::instance();
+  std::vector<std::unique_ptr<cudf::column>> pieces;
+  pieces.reserve(decodedColumnCacheRowGroupRuns_.size());
+  for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+    auto piece = cache.materializeColumnRange(
+        key,
+        run.firstRow,
+        run.lastRow,
+        stream_,
+        decodedColumnCacheRowGroupRuns_.size() == 1
+            ? determineCudfMemoryResource()
+            : get_temp_mr(),
+        get_temp_mr());
+    if (not piece) {
+      return nullptr;
+    }
+    pieces.push_back(std::move(piece));
+  }
+
+  if (pieces.empty()) {
+    return nullptr;
+  }
+  if (pieces.size() == 1) {
+    return std::move(pieces.front());
+  }
+  std::vector<cudf::column_view> pieceViews;
+  pieceViews.reserve(pieces.size());
+  for (const auto& piece : pieces) {
+    pieceViews.push_back(piece->view());
+  }
+  return cudf::concatenate(pieceViews, stream_, determineCudfMemoryResource());
+}
+
+std::vector<std::unique_ptr<cudf::column>>
+CudfSplitReader::decodeAndCacheFileColumns(
+    const std::vector<cudf::size_type>& rowGroupIndices,
+    const std::vector<std::string>& columnNames,
+    const std::vector<TypePtr>& veloxTypes) {
+  VELOX_CHECK_EQ(columnNames.size(), veloxTypes.size());
+  VELOX_CHECK(not columnNames.empty());
+  VELOX_CHECK(not rowGroupIndices.empty());
+  setupCudfDataSource();
+
+  auto columnOptions = makeReaderOptions(
+      cudf::io::source_info{split_->filePath}, columnNames, false, false);
+  exptSplitReader_->reset_column_selection();
+  const auto columnChunkByteRanges =
+      exptSplitReader_->all_column_chunks_byte_ranges(
+          rowGroupIndices, columnOptions);
+  auto ioData = fetchByteRangesAsync(
+      dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
+  std::get<2>(ioData).wait();
+
+  auto tableWithMetadata = exptSplitReader_->materialize_all_columns(
+      rowGroupIndices,
+      std::get<1>(ioData),
+      columnOptions,
+      stream_,
+      get_output_mr());
+  ++decodedColumnCacheDecodeCalls_;
+  VELOX_CHECK_NOT_NULL(tableWithMetadata.tbl);
+  VELOX_CHECK_EQ(
+      tableWithMetadata.tbl->num_columns(),
+      columnNames.size(),
+      "Expected {} decoded columns across {} row groups",
+      columnNames.size(),
+      rowGroupIndices.size());
+
+  auto columns = tableWithMetadata.tbl->release();
+  VELOX_CHECK_EQ(tableWithMetadata.metadata.schema_info.size(), columns.size());
+  std::vector<std::unique_ptr<cudf::column>> result;
+  result.reserve(columnNames.size());
+  auto& cache = CudfDecodedColumnCache::instance();
+  for (size_t requestedIndex = 0; requestedIndex < columnNames.size();
+       ++requestedIndex) {
+    const auto& columnName = columnNames[requestedIndex];
+    const auto metadataIt = std::find_if(
+        tableWithMetadata.metadata.schema_info.begin(),
+        tableWithMetadata.metadata.schema_info.end(),
+        [&](const auto& info) { return info.name == columnName; });
+    VELOX_CHECK(
+        metadataIt != tableWithMetadata.metadata.schema_info.end(),
+        "Decoded table metadata is missing column '{}'",
+        columnName);
+    const auto decodedIndex = static_cast<size_t>(std::distance(
+        tableWithMetadata.metadata.schema_info.begin(), metadataIt));
+    VELOX_CHECK_NOT_NULL(columns[decodedIndex]);
+    auto column = castDecimalColumns(
+        std::move(columns[decodedIndex]),
+        veloxTypes[requestedIndex],
+        stream_,
+        get_output_mr());
+    for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+      VELOX_CHECK_GE(run.outputFirstRow, 0);
+      VELOX_CHECK_LE(
+          run.outputLastRow,
+          static_cast<int64_t>(std::numeric_limits<cudf::size_type>::max()));
+      const auto slices = cudf::slice(
+          column->view(),
+          {static_cast<cudf::size_type>(run.outputFirstRow),
+           static_cast<cudf::size_type>(run.outputLastRow)},
+          stream_);
+      VELOX_CHECK_EQ(slices.size(), 1);
+      cache.insertColumnRangeIfAbsent(
+          makeDecodedColumnCacheKey(columnName, veloxTypes[requestedIndex]),
+          run.firstRow,
+          run.lastRow,
+          slices.front(),
+          stream_,
+          get_temp_mr());
+    }
+    result.push_back(std::move(column));
+  }
+
+  stream_.synchronize();
+  return result;
+}
+
+CudfDecodedColumnCache::ColumnKey CudfSplitReader::makeDecodedColumnCacheKey(
+    const std::string& columnName,
+    const TypePtr& veloxType) const {
+  return {
+      .file = decodedColumnCacheFileKey_,
+      .deviceId = cudaDeviceId_,
+      .columnName = columnName,
+      .veloxType = veloxType->toString(),
+      .timestampType = cudfHiveConfig_->timestampType().id(),
+      .usePandasMetadata = cudfHiveConfig_->isUsePandasMetadata(),
+      .useArrowSchema = cudfHiveConfig_->isUseArrowSchema(),
+      .allowMismatchedSchemas =
+          cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas(),
+  };
+}
+
+std::pair<int64_t, int64_t> CudfSplitReader::decodedColumnRowRange(
+    cudf::size_type rowGroupIndex) const {
+  VELOX_CHECK_GE(rowGroupIndex, 0);
+  const auto index = static_cast<size_t>(rowGroupIndex);
+  VELOX_CHECK_LT(index + 1, decodedColumnCacheRowOffsets_.size());
+  return {
+      decodedColumnCacheRowOffsets_[index],
+      decodedColumnCacheRowOffsets_[index + 1]};
+}
+
+TypePtr CudfSplitReader::readColumnType(const std::string& columnName) const {
+  if (tableHandle_->dataColumns() and
+      tableHandle_->dataColumns()->containsChild(columnName)) {
+    return tableHandle_->dataColumns()->findChild(columnName);
+  }
+  VELOX_CHECK(
+      outputType_->containsChild(columnName),
+      "No Velox type available for decoded cached column '{}'",
+      columnName);
+  return outputType_->findChild(columnName);
 }
 
 rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()

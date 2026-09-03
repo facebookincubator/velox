@@ -50,6 +50,8 @@
 
 #include <fmt/ranges.h>
 
+#include <filesystem>
+
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::connector;
@@ -551,6 +553,60 @@ TEST_F(TableScanTest, filterPushdown) {
       filePaths,
       "SELECT count(*) FROM tmp");
 #endif
+}
+
+TEST_F(TableScanTest, filteredDecodedCacheHitNeedsNoFile) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto vector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>(
+           100, folly::identity, [](auto row) { return row % 11 == 0; }),
+       makeFlatVector<int64_t>(100, [](auto row) { return 1'000 + row; })});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  auto config = std::unordered_map<std::string, std::string>{
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseExperimentalCudfReader,
+       "true"},
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kExperimentalDecodedColumnCacheEnabled,
+       "true"},
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kImmutableFiles,
+       "true"},
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kUseBufferedInput,
+       "true"}};
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(std::move(config)));
+
+  auto subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add("c0", std::make_unique<common::BigintRange>(25, 74, false))
+          .build();
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
+  auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(ROW({"c1"}, {BIGINT()}))
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+  const auto sql = "SELECT c1 FROM tmp WHERE c0 BETWEEN 25 AND 74";
+
+  assertQuery(plan, {filePath}, sql);
+
+  // A filtered hot hit must restore the unfiltered decoded columns, apply the
+  // subfield filter, and project away the filter-only column without reopening
+  // the Parquet file.
+  ASSERT_TRUE(std::filesystem::remove(filePath->getPath()));
+  assertQuery(plan, {filePath}, sql);
 }
 
 // Disable this test and the one below for now, pending a CUDF fix.

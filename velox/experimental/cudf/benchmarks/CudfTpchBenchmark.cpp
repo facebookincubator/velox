@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
@@ -31,7 +32,9 @@
 
 DECLARE_int64(max_coalesced_bytes);
 DECLARE_string(max_coalesced_distance_bytes);
+DECLARE_int32(num_repeats);
 DECLARE_int32(parquet_prefetch_rowgroups);
+DECLARE_int32(run_query_verbose);
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -61,11 +64,49 @@ DEFINE_uint64(
 
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
+DEFINE_bool(
+    cudf_hive_use_buffered_input,
+    true,
+    "Use Velox BufferedInput for cuDF Hive reads.");
+
+DEFINE_bool(
+    cudf_hive_use_experimental_reader,
+    false,
+    "Use the cuDF experimental hybrid Parquet reader.");
+
+DEFINE_bool(
+    cudf_hive_use_decoded_column_cache,
+    false,
+    "Use the experimental process-lifetime decoded Parquet column cache. "
+    "This also marks benchmark input files immutable.");
+
+DEFINE_bool(
+    cudf_benchmark_nvtx_query_ranges,
+    false,
+    "Wrap each verbose TPC-H query iteration in an NVTX range containing the "
+    "query and iteration numbers.");
+
 DEFINE_string(
     cudf_properties,
     "",
     "Path to a properties file for CudfConfig. Each line should be key=value "
     "(e.g. cudf.memory_resource=async). See CudfConfig for available keys.");
+
+namespace {
+
+class RepeatFlagRestorer {
+ public:
+  explicit RepeatFlagRestorer(int32_t value) : value_(value) {}
+
+  ~RepeatFlagRestorer() {
+    FLAGS_num_repeats = value_;
+  }
+
+ private:
+  int32_t value_;
+};
+
+} // namespace
 
 void CudfTpchBenchmark::initialize() {
   if (!FLAGS_cudf_properties.empty()) {
@@ -90,6 +131,18 @@ void CudfTpchBenchmark::initialize() {
     cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
                                     kAllowMismatchedCudfHiveSchemas] =
         std::to_string(true);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput] =
+            std::to_string(FLAGS_cudf_hive_use_buffered_input);
+    cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
+                                    kUseExperimentalCudfReader] =
+        std::to_string(FLAGS_cudf_hive_use_experimental_reader);
+    cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
+                                    kExperimentalDecodedColumnCacheEnabled] =
+        std::to_string(FLAGS_cudf_hive_use_decoded_column_cache);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kImmutableFiles] =
+            std::to_string(FLAGS_cudf_hive_use_decoded_column_cache);
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
         std::move(cudfHiveConfigurationValues));
 
@@ -112,6 +165,43 @@ void CudfTpchBenchmark::initialize() {
       std::to_string(FLAGS_cudf_local_exchange_buffer_size);
 }
 
+void CudfTpchBenchmark::runMain(
+    std::ostream& out,
+    facebook::velox::RunStats& runStats) {
+  if (not FLAGS_cudf_benchmark_nvtx_query_ranges) {
+    TpchBenchmark::runMain(out, runStats);
+    return;
+  }
+
+  VELOX_USER_CHECK_GT(
+      FLAGS_run_query_verbose,
+      0,
+      "NVTX query iteration ranges require --run_query_verbose=<query>");
+  VELOX_USER_CHECK_GT(
+      FLAGS_num_repeats,
+      0,
+      "NVTX query iteration ranges require --num_repeats > 0");
+
+  const auto numRepeats = FLAGS_num_repeats;
+  RepeatFlagRestorer restoreRepeats{numRepeats};
+  FLAGS_num_repeats = 1;
+  for (int32_t iteration = 1; iteration <= numRepeats; ++iteration) {
+    const auto label = fmt::format(
+        "TPC-H Q{:02d} iteration {}/{} ({})",
+        FLAGS_run_query_verbose,
+        iteration,
+        numRepeats,
+        iteration == 1 ? "cold" : "hot");
+    const auto color =
+        iteration == 1 ? nvtx3::rgb{65, 105, 225} : nvtx3::rgb{34, 139, 34};
+    const nvtx3::event_attributes attributes{
+        label, color, nvtx3::payload{iteration}};
+    const nvtx3::scoped_range_in<facebook::velox::cudf_velox::VeloxDomain>
+        range{attributes};
+    TpchBenchmark::runMain(out, runStats);
+  }
+}
+
 std::shared_ptr<config::ConfigBase>
 CudfTpchBenchmark::makeConnectorProperties() {
   auto cfg = TpchBenchmark::makeConnectorProperties();
@@ -125,6 +215,18 @@ CudfTpchBenchmark::makeConnectorProperties() {
       CudfHiveCfg::kMaxPassReadLimit,
       std::to_string(FLAGS_cudf_pass_read_limit));
   cfg->set(CudfHiveCfg::kAllowMismatchedCudfHiveSchemas, "true");
+  cfg->set(
+      CudfHiveCfg::kUseBufferedInput,
+      std::to_string(FLAGS_cudf_hive_use_buffered_input));
+  cfg->set(
+      CudfHiveCfg::kUseExperimentalCudfReader,
+      std::to_string(FLAGS_cudf_hive_use_experimental_reader));
+  cfg->set(
+      CudfHiveCfg::kExperimentalDecodedColumnCacheEnabled,
+      std::to_string(FLAGS_cudf_hive_use_decoded_column_cache));
+  cfg->set(
+      CudfHiveCfg::kImmutableFiles,
+      std::to_string(FLAGS_cudf_hive_use_decoded_column_cache));
 
   return cfg;
 }

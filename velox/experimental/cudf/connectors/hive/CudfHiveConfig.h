@@ -88,6 +88,14 @@ class CudfHiveConfig {
   static constexpr const char* kUseExperimentalCudfReaderSession =
       "cudf.hive.use_experimental_reader";
 
+  // Experimental, non-evicting process-lifetime cache for decoded Parquet
+  // row-group column chunks. This is only used with the experimental reader
+  // and immutable files.
+  static constexpr const char* kExperimentalDecodedColumnCacheEnabled =
+      "cudf.hive.experimental-decoded-column-cache-enabled";
+  static constexpr const char* kExperimentalDecodedColumnCacheEnabledSession =
+      "cudf.hive.experimental_decoded_column_cache_enabled";
+
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -157,6 +165,10 @@ class CudfHiveConfig {
 
   bool useExperimentalCudfReader() const;
   bool useExperimentalCudfReaderSession(
+      const config::ConfigBase* session) const;
+
+  bool experimentalDecodedColumnCacheEnabled() const;
+  bool experimentalDecodedColumnCacheEnabledSession(
       const config::ConfigBase* session) const;
 
   bool immutableFiles() const;

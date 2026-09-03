@@ -143,6 +143,17 @@ bool CudfHiveConfig::useExperimentalCudfReaderSession(
       config_->get<bool>(kUseExperimentalCudfReader, false));
 }
 
+bool CudfHiveConfig::experimentalDecodedColumnCacheEnabled() const {
+  return config_->get<bool>(kExperimentalDecodedColumnCacheEnabled, false);
+}
+
+bool CudfHiveConfig::experimentalDecodedColumnCacheEnabledSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kExperimentalDecodedColumnCacheEnabledSession,
+      config_->get<bool>(kExperimentalDecodedColumnCacheEnabled, false));
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

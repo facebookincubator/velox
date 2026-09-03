@@ -14,6 +14,7 @@
 
 add_library(
   velox_cudf_hive_connector
+  CudfDecodedColumnCache.cpp
   CudfHiveConfig.cpp
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp
