@@ -39,6 +39,45 @@ uint32_t floatBits(float value) {
   return std::bit_cast<uint32_t>(value);
 }
 
+// Returns 'column' as a FlatMapVector, failing if it is not flat-map encoded.
+// Value comparison via equalValueAt cannot distinguish a FlatMapVector from a
+// MapVector, so tests of the preserving path must assert the encoding.
+FlatMapVector* asFlatMapColumn(const VectorPtr& column) {
+  auto* flatMap = column->loadedVector()->as<FlatMapVector>();
+  EXPECT_NE(flatMap, nullptr) << "Column is not flat-map encoded";
+  return flatMap;
+}
+
+// Returns the keys projected into a FlatMapVector. Pruned keys must be absent
+// from the distinct keys, not merely empty in every row.
+template <typename TKey>
+std::set<TKey> distinctKeysOf(const FlatMapVector& flatMap) {
+  std::set<TKey> keys;
+  auto* distinctKeys =
+      flatMap.distinctKeys()->template as<SimpleVector<TKey>>();
+  EXPECT_NE(distinctKeys, nullptr);
+  if (distinctKeys != nullptr) {
+    for (vector_size_t i = 0; i < distinctKeys->size(); ++i) {
+      keys.insert(distinctKeys->valueAt(i));
+    }
+  }
+  return keys;
+}
+
+// Builds a scan spec over 'rowType' carrying a map-key filter on 'column',
+// the shape a query engine produces for subfield (map key) pruning.
+std::shared_ptr<common::ScanSpec> makeKeyFilterScanSpec(
+    const TypePtr& rowType,
+    std::unique_ptr<common::Filter> keyFilter,
+    const std::string& column = "c0") {
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName(column)
+      ->childByName(common::ScanSpec::kMapKeysFieldName)
+      ->setFilter(std::move(keyFilter));
+  return scanSpec;
+}
+
 // Tests for FlatMapAsStructColumnReader, FlatMapAsMapColumnReader, and
 // FlatMapColumnReader (native).
 class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
@@ -64,7 +103,7 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
   };
 
   std::string writeFlatMapFile(
-      const RowVectorPtr& input,
+      const VectorPtr& input,
       const std::string& flatMapColumn = "c0") {
     WriterOptions writerOptions;
     writerOptions.flatMapColumns = {{flatMapColumn, {}}};
@@ -123,6 +162,42 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
     }
     ASSERT_EQ(numScanned, expected.size());
     ASSERT_EQ(0, rowReader.next(1, result));
+  }
+
+  // Writes one stripe per vector, so later stripes can hold key sets that
+  // differ from the first.
+  std::string writeMultiStripeFlatMapFile(
+      const std::vector<VectorPtr>& stripes,
+      const std::string& flatMapColumn = "c0") {
+    WriterOptions writerOptions;
+    writerOptions.flatMapColumns = {{flatMapColumn, {}}};
+    writerOptions.skipConstantFlatMapInMapStreams = GetParam();
+    return test::createNimbleFile(
+        *rootPool(), stripes, writerOptions, /*flushAfterWrite=*/true);
+  }
+
+  // Reads every row through the flat-map preserving path in a single batch,
+  // asserting the column is flat-map encoded, projects exactly 'expectedKeys',
+  // and matches 'expected'. Checking the distinct keys is what makes pruning
+  // observable: a key that is present but empty in every row compares equal to
+  // a pruned key under value-only comparison.
+  template <typename TKey>
+  void verifyPrunedFlatMapRead(
+      const RowVectorPtr& expected,
+      const std::string& file,
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      const std::set<TKey>& expectedKeys) {
+    auto readers = makeReaders(
+        expected, file, scanSpec, /*preserveFlatMapsInMemory=*/true);
+    auto result = BaseVector::create(asRowType(expected->type()), 0, pool());
+    ASSERT_EQ(
+        readers.rowReader->next(expected->size(), result), expected->size());
+    result->validate();
+    auto* flatMap =
+        asFlatMapColumn(result->asUnchecked<RowVector>()->childAt(0));
+    ASSERT_NE(flatMap, nullptr);
+    EXPECT_EQ(distinctKeysOf<TKey>(*flatMap), expectedKeys);
+    velox::test::assertEqualVectors(expected, result);
   }
 
   const std::shared_ptr<io::IoStatistics> dataIoStats_{
@@ -457,11 +532,8 @@ TEST_P(FlatMapColumnReaderTest, asMapKeyFilter) {
       }),
   });
   auto file = writeFlatMapFile(input);
-  auto scanSpec = std::make_shared<common::ScanSpec>("root");
-  scanSpec->addAllChildFields(*input->type());
-  scanSpec->childByName("c0")
-      ->childByName(common::ScanSpec::kMapKeysFieldName)
-      ->setFilter(std::make_unique<common::BigintRange>(5, 10, false));
+  auto scanSpec = makeKeyFilterScanSpec(
+      input->type(), std::make_unique<common::BigintRange>(5, 10, false));
   auto expected = makeRowVector({
       makeMapVector<int64_t, int64_t>({
           {{5, 500}, {10, 1000}},
@@ -510,10 +582,7 @@ TEST_P(FlatMapColumnReaderTest, nativeMultiBatch) {
   }
   auto flatMap = makeFlatMapVector<int32_t, int64_t>(data);
   auto input = makeRowVector({flatMap, flatMap->toMapVector()});
-  WriterOptions writerOptions;
-  writerOptions.flatMapColumns = {{"c0", {}}};
-  writerOptions.skipConstantFlatMapInMapStreams = GetParam();
-  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto file = writeFlatMapFile(input);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   auto readers =
@@ -533,10 +602,7 @@ TEST_P(FlatMapColumnReaderTest, nativeWithNulls) {
       {{{2, 40}, {3, 50}}},
   });
   auto input = makeRowVector({flatMap, flatMap->toMapVector()});
-  WriterOptions writerOptions;
-  writerOptions.flatMapColumns = {{"c0", {}}};
-  writerOptions.skipConstantFlatMapInMapStreams = GetParam();
-  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto file = writeFlatMapFile(input);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   auto readers =
@@ -562,10 +628,7 @@ TEST_P(FlatMapColumnReaderTest, nativeFloatMixedSignedZeroPreservesBits) {
 
   auto flatMap = makeFlatMapVector<int32_t, float>(data);
   auto input = makeRowVector({flatMap});
-  WriterOptions writerOptions;
-  writerOptions.flatMapColumns = {{"c0", {}}};
-  writerOptions.skipConstantFlatMapInMapStreams = GetParam();
-  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto file = writeFlatMapFile(input);
 
   // Read c0 back as a native FlatMapVector (preserveFlatMapsInMemory).
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -577,7 +640,7 @@ TEST_P(FlatMapColumnReaderTest, nativeFloatMixedSignedZeroPreservesBits) {
   roundTripped->validate();
 
   // Write the read-back FlatMapVector out again and re-read it as a MapVector.
-  auto file2 = test::createNimbleFile(*rootPool(), roundTripped, writerOptions);
+  auto file2 = writeFlatMapFile(roundTripped);
   auto secondScanSpec = std::make_shared<common::ScanSpec>("root");
   secondScanSpec->addAllChildFields(*input->type());
   auto secondReaders = makeReaders(input, file2, secondScanSpec);
@@ -600,6 +663,142 @@ TEST_P(FlatMapColumnReaderTest, nativeFloatMixedSignedZeroPreservesBits) {
         floatBits(*data[i][0].second))
         << "row " << i;
   }
+}
+
+// Key pruning on the preserving path: only the requested keys may be projected
+// into the output FlatMapVector.
+TEST_P(FlatMapColumnReaderTest, nativeKeyFilter) {
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 100}, {2, 200}, {3, 300}, {4, 400}},
+      {{1, 500}, {2, 600}, {3, 700}, {4, 800}},
+      {{2, 900}, {4, 1000}},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto file = writeFlatMapFile(input);
+  auto scanSpec = makeKeyFilterScanSpec(
+      input->type(), std::make_unique<common::BigintRange>(2, 3, false));
+
+  auto expected = makeRowVector({makeMapVector<int64_t, int64_t>({
+      {{2, 200}, {3, 300}},
+      {{2, 600}, {3, 700}},
+      {{2, 900}},
+  })});
+
+  verifyPrunedFlatMapRead<int64_t>(expected, file, scanSpec, {2, 3});
+}
+
+TEST_P(FlatMapColumnReaderTest, nativeKeyFilterStringKeys) {
+  auto flatMap = makeFlatMapVector<StringView, int64_t>({
+      {{"a", 1}, {"b", 2}, {"c", 3}},
+      {{"a", 4}, {"b", 5}, {"c", 6}},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto file = writeFlatMapFile(input);
+  auto scanSpec = makeKeyFilterScanSpec(
+      input->type(),
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"a", "c"}, false));
+
+  auto expected = makeRowVector({makeMapVector<StringView, int64_t>({
+      {{"a", 1}, {"c", 3}},
+      {{"a", 4}, {"c", 6}},
+  })});
+
+  verifyPrunedFlatMapRead<StringView>(
+      expected, file, scanSpec, {StringView("a"), StringView("c")});
+}
+
+TEST_P(FlatMapColumnReaderTest, nativeKeyFilterExcludesAllKeys) {
+  // A filter matching no key in the file yields empty maps, not zero rows.
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 100}, {2, 200}},
+      {{1, 300}, {2, 400}},
+      {{2, 500}},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto file = writeFlatMapFile(input);
+  auto scanSpec = makeKeyFilterScanSpec(
+      input->type(), std::make_unique<common::BigintRange>(99, 100, false));
+
+  auto expected =
+      makeRowVector({makeMapVector<int64_t, int64_t>({{}, {}, {}})});
+
+  verifyPrunedFlatMapRead<int64_t>(expected, file, scanSpec, {});
+}
+
+TEST_P(FlatMapColumnReaderTest, nativeKeyFilterWithNulls) {
+  // Key pruning must compose with null maps: null rows stay null.
+  auto flatMap = makeNullableFlatMapVector<int64_t, int64_t>({
+      {{{1, 10}, {2, 20}, {3, 30}}},
+      std::nullopt,
+      {{{1, 40}, {2, 50}, {3, 60}}},
+      std::nullopt,
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto file = writeFlatMapFile(input);
+  auto scanSpec = makeKeyFilterScanSpec(
+      input->type(), std::make_unique<common::BigintRange>(2, 3, false));
+
+  auto expectedFlatMap = makeNullableFlatMapVector<int64_t, int64_t>({
+      {{{2, 20}, {3, 30}}},
+      std::nullopt,
+      {{{2, 50}, {3, 60}}},
+      std::nullopt,
+  });
+  auto expected = makeRowVector({expectedFlatMap->toMapVector()});
+
+  verifyPrunedFlatMapRead<int64_t>(expected, file, scanSpec, {2, 3});
+}
+
+// The key filter must prune every stripe, not just the first. The ScanSpec is
+// shared across stripes and the reader tree is rebuilt per stripe, so a
+// implementation that consumes or clears the filter would stop pruning after
+// stripe 1. Stripe 2 holds keys absent from stripe 1 to make that visible.
+TEST_P(FlatMapColumnReaderTest, nativeMultiStripeKeyFilter) {
+  auto stripe1 = makeRowVector({makeMapVector<int64_t, int64_t>({
+      {{1, 10}, {2, 20}, {3, 30}, {4, 40}},
+      {{1, 11}, {2, 21}, {3, 31}, {5, 51}},
+  })});
+  auto stripe2 = makeRowVector({makeMapVector<int64_t, int64_t>({
+      {{3, 32}, {4, 42}, {5, 52}},
+      {{4, 43}, {6, 63}},
+      {{3, 33}, {6, 64}},
+  })});
+
+  auto file = writeMultiStripeFlatMapFile({stripe1, stripe2});
+  auto scanSpec = makeKeyFilterScanSpec(
+      stripe1->type(), std::make_unique<common::BigintRange>(2, 3, false));
+
+  auto expected = makeRowVector({makeMapVector<int64_t, int64_t>({
+      {{2, 20}, {3, 30}},
+      {{2, 21}, {3, 31}},
+      {{3, 32}},
+      {},
+      {{3, 33}},
+  })});
+
+  auto readers =
+      makeReaders(expected, file, scanSpec, /*preserveFlatMapsInMemory=*/true);
+  auto result = BaseVector::create(asRowType(expected->type()), 0, pool());
+
+  const std::set<int64_t> requestedKeys{2, 3};
+  vector_size_t offset = 0;
+  while (readers.rowReader->next(100, result) > 0) {
+    result->validate();
+    auto* flatMapResult =
+        asFlatMapColumn(result->asUnchecked<RowVector>()->childAt(0));
+    ASSERT_NE(flatMapResult, nullptr);
+    // Every stripe must be pruned, including keys 4, 5 and 6 which only
+    // appear after the first stripe.
+    for (auto key : distinctKeysOf<int64_t>(*flatMapResult)) {
+      EXPECT_GT(requestedKeys.count(key), 0)
+          << "unpruned key " << key << " at row offset " << offset;
+    }
+    velox::test::assertEqualVectors(
+        expected->slice(offset, result->size()), result);
+    offset += result->size();
+  }
+  EXPECT_EQ(offset, expected->size());
 }
 
 // ----- Lazy I/O tests -----
@@ -965,10 +1164,7 @@ TEST_P(FlatMapColumnReaderTest, lazyIOMixedScalarAndFlatMap) {
       }),
       makeFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5}),
   });
-  WriterOptions writerOptions;
-  writerOptions.flatMapColumns = {{"c2", {}}};
-  writerOptions.skipConstantFlatMapInMapStreams = GetParam();
-  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto file = writeFlatMapFile(input, "c2");
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(
@@ -1062,10 +1258,7 @@ TEST_P(FlatMapColumnReaderTest, lazyIONestedRowWithFilter) {
           {{2, 50}},
       }),
   });
-  WriterOptions writerOptions;
-  writerOptions.flatMapColumns = {{"c2", {}}};
-  writerOptions.skipConstantFlatMapInMapStreams = GetParam();
-  auto file = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto file = writeFlatMapFile(input, "c2");
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   // Filter on nested field c1.a — parent c1 should NOT be lazy.
