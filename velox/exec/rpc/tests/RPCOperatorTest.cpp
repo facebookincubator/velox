@@ -466,6 +466,30 @@ TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheTierIsHeld) {
   runContendedDrain(/*batchMode=*/true);
 }
 
+// close() runs on operators that never initialized. Driver::closeOperators()
+// walks every operator regardless of whether Driver::initializeOperators() ran,
+// so a task that terminates during setup reaches close() with limiter_ still
+// null -- and recordRuntimeStats() dereferenced it unconditionally, taking the
+// worker down with SIGSEGV rather than failing the query.
+//
+// An unregistered function name reaches that state deterministically:
+// initialize() throws at the "Unknown RPC function" check, which runs long
+// before limiter_ is assigned. The query must surface that error; without the
+// guard the process dies instead.
+TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "no_such_rpc_function_registered");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "Unknown RPC function");
+}
+
 TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
   constexpr int64_t kCeiling = 1;
   std::vector<std::string> storage;
