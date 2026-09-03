@@ -90,68 +90,88 @@ FOLLY_ALWAYS_INLINE int64_t fromUnixtime(double unixtime, int16_t timeZoneId) {
 // apply operation, then convert back to UTC).
 FOLLY_ALWAYS_INLINE Timestamp addToTimestamp(
     const Timestamp& timestamp,
-    const DateTimeUnit unit,
-    const int32_t value,
+    DateTimeUnit unit,
+    int32_t value,
     const tz::TimeZone* timeZone) {
   if (timeZone == nullptr) {
     return addToTimestamp(timestamp, unit, value);
-  } else {
-    Timestamp zonedTimestamp = timestamp;
-    zonedTimestamp.toTimezone(*timeZone);
-    auto resultTimestamp = addToTimestamp(zonedTimestamp, unit, value);
-    resultTimestamp.toGMT(*timeZone);
-    return resultTimestamp;
   }
+
+  Timestamp zonedTimestamp = timestamp;
+  zonedTimestamp.toTimezone(*timeZone);
+  auto resultTimestamp = addToTimestamp(zonedTimestamp, unit, value);
+  resultTimestamp.toGMT(*timeZone);
+  return resultTimestamp;
 }
 
+/// Shifts the UTC instant by `millis`, keeping the time zone. A millisecond is
+/// a fixed duration, so this needs none of the local-time round trip that
+/// `addToTimestampWithTimezone` performs for calendar units, whose length
+/// varies across a daylight saving boundary. Takes int64 because a
+/// day-to-second interval does not fit in that function's int32.
+FOLLY_ALWAYS_INLINE int64_t addMillisToTimestampWithTimezone(
+    int64_t timestampWithTimezone,
+    int64_t millis) {
+  return pack(
+      unpackMillisUtc(timestampWithTimezone) + millis,
+      unpackZoneKeyId(timestampWithTimezone));
+}
+
+/// Adds `value` units to a packed TIMESTAMP WITH TIME ZONE, returning the
+/// result packed with the same time zone. Units below a day are fixed
+/// durations and shift the UTC instant, so the local wall clock can move an
+/// extra hour across a daylight saving boundary. A day and above are calendar
+/// units and are applied in local time, where their length varies.
+///
+/// `value` counts units. It is int32, so a caller holding a wider count must
+/// reject what does not fit; a day-to-second interval, whose millisecond count
+/// routinely exceeds int32, goes through `addMillisToTimestampWithTimezone`
+/// instead.
 FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
     int64_t timestampWithTimezone,
-    const DateTimeUnit unit,
-    const int32_t value) {
-  {
-    int64_t finalSysMs;
-    if (unit < DateTimeUnit::kDay) {
-      auto originalTimestamp = unpackTimestampUtc(timestampWithTimezone);
-      finalSysMs =
-          addToTimestamp(originalTimestamp, unit, (int32_t)value).toMillis();
-    } else {
-      // Use local time to handle crossing daylight savings time boundaries.
-      // E.g. the "day" when the clock moves back an hour is 25 hours long, and
-      // the day it moves forward is 23 hours long. Daylight savings time
-      // doesn't affect time units less than a day, and will produce incorrect
-      // results if we use local time.
-      const tz::TimeZone* timeZone =
-          tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
-      auto originalTimestamp = Timestamp::fromMillis(
-          timeZone
-              ->to_local(
-                  std::chrono::milliseconds(
-                      unpackMillisUtc(timestampWithTimezone)))
-              .count());
-      auto updatedTimeStamp =
-          addToTimestamp(originalTimestamp, unit, (int32_t)value);
-      updatedTimeStamp = Timestamp(
-          timeZone
-              ->correct_nonexistent_time(
-                  std::chrono::seconds(updatedTimeStamp.getSeconds()))
-              .count(),
-          updatedTimeStamp.getNanos());
-      finalSysMs =
-          timeZone
-              ->to_sys(
-                  std::chrono::milliseconds(updatedTimeStamp.toMillis()),
-                  tz::TimeZone::TChoose::kEarliest)
-              .count();
-    }
-
-    return pack(finalSysMs, unpackZoneKeyId(timestampWithTimezone));
+    DateTimeUnit unit,
+    int32_t value) {
+  int64_t finalSysMs;
+  if (unit < DateTimeUnit::kDay) {
+    auto originalTimestamp = unpackTimestampUtc(timestampWithTimezone);
+    finalSysMs =
+        addToTimestamp(originalTimestamp, unit, (int32_t)value).toMillis();
+  } else {
+    // Use local time to handle crossing daylight savings time boundaries.
+    // E.g. the "day" when the clock moves back an hour is 25 hours long, and
+    // the day it moves forward is 23 hours long. Daylight savings time
+    // doesn't affect time units less than a day, and will produce incorrect
+    // results if we use local time.
+    const tz::TimeZone* timeZone =
+        tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
+    auto originalTimestamp =
+        Timestamp::fromMillis(timeZone
+                                  ->to_local(
+                                      std::chrono::milliseconds(unpackMillisUtc(
+                                          timestampWithTimezone)))
+                                  .count());
+    auto updatedTimeStamp =
+        addToTimestamp(originalTimestamp, unit, (int32_t)value);
+    updatedTimeStamp = Timestamp(
+        timeZone
+            ->correct_nonexistent_time(
+                std::chrono::seconds(updatedTimeStamp.getSeconds()))
+            .count(),
+        updatedTimeStamp.getNanos());
+    finalSysMs = timeZone
+                     ->to_sys(
+                         std::chrono::milliseconds(updatedTimeStamp.toMillis()),
+                         tz::TimeZone::TChoose::kEarliest)
+                     .count();
   }
+
+  return pack(finalSysMs, unpackZoneKeyId(timestampWithTimezone));
 }
 
 FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
-    const DateTimeUnit unit,
-    const int64_t fromTimestampWithTimeZone,
-    const int64_t toTimestampWithTimeZone) {
+    DateTimeUnit unit,
+    int64_t fromTimestampWithTimeZone,
+    int64_t toTimestampWithTimeZone) {
   auto fromTimeZoneId = unpackZoneKeyId(fromTimestampWithTimeZone);
   auto toTimeZoneId = unpackZoneKeyId(toTimestampWithTimeZone);
   VELOX_CHECK_EQ(
@@ -192,10 +212,7 @@ FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
 // diffDate is defined in velox/functions/lib/DateTimeUtil.h
 
 FOLLY_ALWAYS_INLINE
-int64_t diffTime(
-    const DateTimeUnit unit,
-    const int64_t fromTime,
-    const int64_t toTime) {
+int64_t diffTime(DateTimeUnit unit, int64_t fromTime, int64_t toTime) {
   // Validate time inputs are in valid range [0, 86400000)
   VELOX_USER_CHECK(
       fromTime >= 0 && fromTime < kMillisInDay,
