@@ -839,7 +839,7 @@ output rows with empty unnest values are not produced.</p>
 <td><p>Input columns of type array or map to expand.</p></td>
 </tr>
 <tr class="row-even"><td><p>unnestNames</p></td>
-<td><p>Names to use for expanded columns. One name per array column. Two names per map column.</p></td>
+<td><p>Names to use for expanded columns. One name per array column. Two names per map column. A name may be absent (null) to prune the corresponding expanded column, which is then neither emitted nor materialized.</p></td>
 </tr>
 <tr class="row-odd"><td><p>ordinalityName</p></td>
 <td><p>Optional name for the ordinality column.</p></td>
