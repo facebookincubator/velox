@@ -28,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -95,6 +96,7 @@ class CudfDecodedColumnCache {
     uint64_t restoredStoredBytes{0};
     uint64_t restoredUncompressedBytes{0};
     uint64_t decompressionNanos{0};
+    uint64_t pipelinedRestoreBatches{0};
   };
 
   struct FileKey {
@@ -117,6 +119,14 @@ class CudfDecodedColumnCache {
     bool allowMismatchedSchemas;
 
     bool operator==(const ColumnKey&) const = default;
+  };
+
+  /// All source-row intervals needed to assemble one output column. Keeping
+  /// the intervals together lets cache restoration pipeline chunks across the
+  /// complete file projection instead of materializing one column at a time.
+  struct ColumnRangeRequest {
+    ColumnKey key;
+    std::vector<std::pair<int64_t, int64_t>> ranges;
   };
 
   using MetadataPtr = std::shared_ptr<const cudf::io::parquet::FileMetaData>;
@@ -164,6 +174,18 @@ class CudfDecodedColumnCache {
       int64_t firstRow,
       int64_t lastRow,
       rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref outputMr,
+      rmm::device_async_resource_ref tempMr) const;
+
+  /// Restores all requested columns with a two-slot file-level pipeline.
+  /// H2D copies run on transferStream while the preceding chunk is decoded and
+  /// materialized on stream. Returns nullopt if any requested interval has a
+  /// cache gap; no GPU work is submitted until complete coverage is verified.
+  std::optional<std::vector<std::unique_ptr<cudf::column>>>
+  materializeColumnRanges(
+      const std::vector<ColumnRangeRequest>& requests,
+      rmm::cuda_stream_view stream,
+      rmm::cuda_stream_view transferStream,
       rmm::device_async_resource_ref outputMr,
       rmm::device_async_resource_ref tempMr) const;
 

@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -110,6 +111,33 @@ int currentNumaNode() {
       "Failed to determine the NUMA node for the decoded column cache");
   return static_cast<int>(node);
 }
+
+class CachePipelineEvent {
+ public:
+  CachePipelineEvent() {
+    CUDF_CUDA_TRY(cudaEventCreateWithFlags(&event_, cudaEventDisableTiming));
+  }
+
+  ~CachePipelineEvent() {
+    if (event_ != nullptr) {
+      cudaEventDestroy(event_);
+    }
+  }
+
+  CachePipelineEvent(const CachePipelineEvent&) = delete;
+  CachePipelineEvent& operator=(const CachePipelineEvent&) = delete;
+
+  void record(rmm::cuda_stream_view stream) const {
+    CUDF_CUDA_TRY(cudaEventRecord(event_, stream.value()));
+  }
+
+  void wait(rmm::cuda_stream_view stream) const {
+    CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.value(), event_, 0));
+  }
+
+ private:
+  cudaEvent_t event_{nullptr};
+};
 
 } // namespace
 
@@ -244,6 +272,7 @@ struct CudfDecodedColumnCache::Impl {
   std::atomic<uint64_t> restoredStoredBytes{0};
   std::atomic<uint64_t> restoredUncompressedBytes{0};
   std::atomic<uint64_t> decompressionNanos{0};
+  std::atomic<uint64_t> pipelinedRestoreBatches{0};
   std::unordered_map<FileKey, MetadataPtr, FileKeyHash> metadata;
   std::unordered_map<ColumnKey, std::vector<ColumnRangePtr>, ColumnKeyHash>
       columns;
@@ -569,6 +598,156 @@ std::unique_ptr<cudf::column> CudfDecodedColumnCache::materializeColumnRange(
   return cudf::concatenate(pieceViews, stream, outputMr);
 }
 
+std::optional<std::vector<std::unique_ptr<cudf::column>>>
+CudfDecodedColumnCache::materializeColumnRanges(
+    const std::vector<ColumnRangeRequest>& requests,
+    rmm::cuda_stream_view stream,
+    rmm::cuda_stream_view transferStream,
+    rmm::device_async_resource_ref outputMr,
+    rmm::device_async_resource_ref tempMr) const {
+  struct WorkItem {
+    size_t requestIndex;
+    CoveredColumnRange range;
+  };
+
+  std::vector<WorkItem> work;
+  std::vector<size_t> pieceCounts(requests.size(), 0);
+  for (size_t requestIndex = 0; requestIndex < requests.size();
+       ++requestIndex) {
+    for (const auto& [firstRow, lastRow] : requests[requestIndex].ranges) {
+      auto coverage = findColumnRanges(
+          requests[requestIndex].key, firstRow, lastRow);
+      if (not coverage) {
+        return std::nullopt;
+      }
+      pieceCounts[requestIndex] += coverage->size();
+      for (auto& range : *coverage) {
+        work.push_back({requestIndex, std::move(range)});
+      }
+    }
+  }
+
+  std::vector<std::vector<std::unique_ptr<cudf::column>>> pieces(
+      requests.size());
+  for (size_t requestIndex = 0; requestIndex < requests.size();
+       ++requestIndex) {
+    pieces[requestIndex].reserve(pieceCounts[requestIndex]);
+  }
+  if (work.empty()) {
+    return std::vector<std::unique_ptr<cudf::column>>{};
+  }
+
+  struct TransferSlot {
+    rmm::device_buffer storedData;
+    CachePipelineEvent ready;
+    CachePipelineEvent consumed;
+    bool hasPendingConsumer{false};
+  };
+  std::array<TransferSlot, 2> slots;
+
+  const auto stage = [&](size_t workIndex) {
+    auto& slot = slots[workIndex % slots.size()];
+    if (slot.hasPendingConsumer) {
+      slot.consumed.wait(transferStream);
+    }
+    const auto& chunk = work[workIndex].range.chunk;
+    slot.storedData =
+        rmm::device_buffer(chunk->packedSize(), transferStream, tempMr);
+    if (chunk->packedSize() > 0) {
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          slot.storedData.data(),
+          chunk->pinnedData(),
+          chunk->packedSize(),
+          cudaMemcpyHostToDevice,
+          transferStream.value()));
+    }
+    slot.ready.record(transferStream);
+    slot.hasPendingConsumer = false;
+  };
+
+  stage(0);
+  for (size_t workIndex = 0; workIndex < work.size(); ++workIndex) {
+    if (workIndex + 1 < work.size()) {
+      stage(workIndex + 1);
+    }
+
+    auto& slot = slots[workIndex % slots.size()];
+    const auto& item = work[workIndex];
+    const auto& chunk = item.range.chunk;
+    slot.ready.wait(stream);
+
+    rmm::device_buffer decompressedData;
+    const uint8_t* packedData =
+        static_cast<const uint8_t*>(slot.storedData.data());
+    if (chunk->compressed()) {
+      const auto start = std::chrono::steady_clock::now();
+      decompressedData = ucx_exchange::decompressPacked(
+          slot.storedData.data(),
+          chunk->compression_->regions_,
+          chunk->compression_->uncompressedBytes_,
+          stream);
+      impl_->decompressionNanos.fetch_add(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - start)
+              .count(),
+          std::memory_order_relaxed);
+      packedData = static_cast<const uint8_t*>(decompressedData.data());
+    }
+
+    impl_->restoreCalls.fetch_add(1, std::memory_order_relaxed);
+    impl_->restoredStoredBytes.fetch_add(
+        chunk->packedSize(), std::memory_order_relaxed);
+    impl_->restoredUncompressedBytes.fetch_add(
+        chunk->uncompressedPackedSize(), std::memory_order_relaxed);
+
+    const auto unpacked = cudf::unpack(chunk->metadata_.data(), packedData);
+    VELOX_CHECK_EQ(unpacked.num_columns(), 1);
+    const auto relativeFirst = item.range.firstRow - chunk->firstRow();
+    const auto relativeLast = item.range.lastRow - chunk->firstRow();
+    VELOX_CHECK_LE(
+        relativeLast,
+        static_cast<int64_t>(std::numeric_limits<cudf::size_type>::max()));
+    const auto slice = cudf::slice(
+        unpacked,
+        {static_cast<cudf::size_type>(relativeFirst),
+         static_cast<cudf::size_type>(relativeLast)},
+        stream);
+    auto piece = std::make_unique<cudf::column>(
+        slice.front().column(0),
+        stream,
+        pieceCounts[item.requestIndex] == 1 ? outputMr : tempMr);
+    pieces[item.requestIndex].push_back(std::move(piece));
+    slot.consumed.record(stream);
+    slot.hasPendingConsumer = true;
+  }
+
+  // Order the staging-buffer releases after their final consumers without a
+  // device-wide or host-side synchronization.
+  for (auto& slot : slots) {
+    if (slot.hasPendingConsumer) {
+      slot.consumed.wait(transferStream);
+    }
+  }
+
+  std::vector<std::unique_ptr<cudf::column>> outputs;
+  outputs.reserve(requests.size());
+  for (auto& requestPieces : pieces) {
+    VELOX_CHECK(not requestPieces.empty());
+    if (requestPieces.size() == 1) {
+      outputs.push_back(std::move(requestPieces.front()));
+      continue;
+    }
+    std::vector<cudf::column_view> pieceViews;
+    pieceViews.reserve(requestPieces.size());
+    for (const auto& piece : requestPieces) {
+      pieceViews.push_back(piece->view());
+    }
+    outputs.push_back(cudf::concatenate(pieceViews, stream, outputMr));
+  }
+  impl_->pipelinedRestoreBatches.fetch_add(1, std::memory_order_relaxed);
+  return outputs;
+}
+
 uint64_t CudfDecodedColumnCache::pinnedBytes() const {
   return impl_->allocatedBytes.load(std::memory_order_relaxed);
 }
@@ -600,6 +779,8 @@ CudfDecodedColumnCache::Stats CudfDecodedColumnCache::stats() const {
           impl_->restoredUncompressedBytes.load(std::memory_order_relaxed),
       .decompressionNanos =
           impl_->decompressionNanos.load(std::memory_order_relaxed),
+      .pipelinedRestoreBatches =
+          impl_->pipelinedRestoreBatches.load(std::memory_order_relaxed),
   };
 }
 
@@ -617,6 +798,7 @@ void CudfDecodedColumnCache::clearForTesting() {
   impl_->restoredStoredBytes.store(0, std::memory_order_relaxed);
   impl_->restoredUncompressedBytes.store(0, std::memory_order_relaxed);
   impl_->decompressionNanos.store(0, std::memory_order_relaxed);
+  impl_->pipelinedRestoreBatches.store(0, std::memory_order_relaxed);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

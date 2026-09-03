@@ -392,6 +392,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
     size_t chunks;
     size_t rows;
     bool fullyCached;
+    uint64_t restoreBatches;
   };
   auto read = [&](std::vector<std::string> names,
                   RowTypePtr outputType,
@@ -420,6 +421,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
     dwio::common::RuntimeStats runtimeStats;
     reader.prepareSplit(runtimeStats);
     const auto fullyCached = reader.isFullyDecodedColumnCacheHit();
+    const auto statsBefore = CudfDecodedColumnCache::instance().stats();
     size_t chunks = 0;
     size_t rows = 0;
     while (auto chunk = reader.next(0)) {
@@ -427,13 +429,16 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
       rows += chunk.value()->num_rows();
       reader.stream().synchronize();
     }
+    const auto statsAfter = CudfDecodedColumnCache::instance().stats();
     return ReadResult{
         reader.decodedColumnCacheHits(),
         reader.decodedColumnCacheMisses(),
         reader.decodedColumnCacheDecodeCalls(),
         chunks,
         rows,
-        fullyCached};
+        fullyCached,
+        statsAfter.pipelinedRestoreBatches -
+            statsBefore.pipelinedRestoreBatches};
   };
 
   // Warm c0 and c1 together across all three row groups. The cold read must
@@ -449,6 +454,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
   EXPECT_EQ(first.chunks, 1);
   EXPECT_EQ(first.rows, kRowsPerRowGroup * kNumRowGroups);
   EXPECT_FALSE(first.fullyCached);
+  EXPECT_EQ(first.restoreBatches, 0);
 
   // Select only the middle row group and overlap on c1. c1 hits while c2 is
   // decoded and cached, demonstrating independent column and row-group reuse.
@@ -463,6 +469,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
   EXPECT_EQ(second.chunks, 1);
   EXPECT_EQ(second.rows, kRowsPerRowGroup);
   EXPECT_FALSE(second.fullyCached);
+  EXPECT_EQ(second.restoreBatches, 1);
 
   // A full hit must not open the file for its footer or column data.
   ASSERT_TRUE(std::filesystem::remove(dataFile->getPath()));
@@ -477,6 +484,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
   EXPECT_EQ(third.chunks, 1);
   EXPECT_EQ(third.rows, kRowsPerRowGroup);
   EXPECT_TRUE(third.fullyCached);
+  EXPECT_EQ(third.restoreBatches, 1);
 }
 
 TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {

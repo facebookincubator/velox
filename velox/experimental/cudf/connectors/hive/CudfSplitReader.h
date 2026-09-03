@@ -36,6 +36,8 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
+#include <rmm/cuda_stream.hpp>
+
 #include <functional>
 #include <utility>
 
@@ -200,8 +202,6 @@ class CudfSplitReader : public NvtxHelper {
       const std::vector<cudf::size_type>& rowGroupIndices,
       const std::vector<std::string>& columnNames,
       const std::vector<TypePtr>& veloxTypes);
-  std::unique_ptr<cudf::column> materializeDecodedColumnCacheRuns(
-      const CudfDecodedColumnCache::ColumnKey& key) const;
   CudfDecodedColumnCache::ColumnKey makeDecodedColumnCacheKey(
       const std::string& columnName,
       const TypePtr& veloxType) const;
@@ -225,6 +225,8 @@ class CudfSplitReader : public NvtxHelper {
   bool isFullyDecodedColumnCacheHit_{false};
   CudfDecodedColumnCache::CompressionMode decodedColumnCacheCompression_{
       CudfDecodedColumnCache::CompressionMode::kNone};
+  // Dedicated H2D lane for the bounded decoded-cache restore pipeline.
+  std::unique_ptr<rmm::cuda_stream> decodedColumnCacheTransferStream_;
   int cudaDeviceId_{0};
   CudfDecodedColumnCache::FileKey decodedColumnCacheFileKey_;
   std::shared_ptr<const cudf::io::parquet::FileMetaData>

@@ -235,7 +235,8 @@ void CudfTpchBenchmark::runMain(
           "inserted_uncompressed_bytes={} inserted_stored_bytes={} "
           "compressed_ranges={} raw_ranges={} compression_attempts={} "
           "encode_ms={:.3f} restore_calls={} restored_stored_bytes={} "
-          "restored_uncompressed_bytes={} decompress_ms={:.3f}\n",
+          "restored_uncompressed_bytes={} decompress_ms={:.3f} "
+          "restore_batches={}\n",
           iteration,
           FLAGS_cudf_hive_decoded_column_cache_compression,
           after.maxPinnedBytes,
@@ -253,7 +254,8 @@ void CudfTpchBenchmark::runMain(
           after.restoredUncompressedBytes - before.restoredUncompressedBytes,
           static_cast<double>(
               after.decompressionNanos - before.decompressionNanos) /
-              1'000'000.0);
+              1'000'000.0,
+          after.pipelinedRestoreBatches - before.pipelinedRestoreBatches);
     }
   }
 }

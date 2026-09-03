@@ -637,6 +637,8 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
   };
 
   std::vector<ColumnState> columnStates;
+  std::vector<size_t> cachedColumnIndices;
+  std::vector<CudfDecodedColumnCache::ColumnRangeRequest> cachedColumnRequests;
   std::vector<size_t> missingColumnIndices;
   std::vector<std::string> missingColumnNames;
   std::vector<TypePtr> missingColumnTypes;
@@ -644,9 +646,17 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
   for (const auto& columnName : readColumnNames_) {
     const auto veloxType = readColumnType(columnName);
     auto key = makeDecodedColumnCacheKey(columnName, veloxType);
-    auto output = materializeDecodedColumnCacheRuns(key);
-    if (output) {
-      ++decodedColumnCacheHits_;
+    CudfDecodedColumnCache::ColumnRangeRequest request{std::move(key), {}};
+    request.ranges.reserve(decodedColumnCacheRowGroupRuns_.size());
+    bool cached = true;
+    for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+      request.ranges.emplace_back(run.firstRow, run.lastRow);
+      cached &= CudfDecodedColumnCache::instance().containsColumnRange(
+          request.key, run.firstRow, run.lastRow);
+    }
+    if (cached) {
+      cachedColumnIndices.push_back(columnStates.size());
+      cachedColumnRequests.push_back(std::move(request));
     } else {
       ++decodedColumnCacheMisses_;
       missingColumnIndices.push_back(columnStates.size());
@@ -654,7 +664,30 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
       missingColumnTypes.push_back(veloxType);
     }
     columnStates.push_back(
-        ColumnState{columnName, std::move(veloxType), std::move(output)});
+        ColumnState{columnName, std::move(veloxType), nullptr});
+  }
+
+  if (not cachedColumnRequests.empty()) {
+    if (not decodedColumnCacheTransferStream_) {
+      decodedColumnCacheTransferStream_ =
+          std::make_unique<rmm::cuda_stream>(
+              rmm::cuda_stream::flags::non_blocking);
+    }
+    auto cachedColumns =
+        CudfDecodedColumnCache::instance().materializeColumnRanges(
+            cachedColumnRequests,
+            stream_,
+            decodedColumnCacheTransferStream_->view(),
+            determineCudfMemoryResource(),
+            get_temp_mr());
+    VELOX_CHECK(cachedColumns.has_value());
+    VELOX_CHECK_EQ(cachedColumns->size(), cachedColumnIndices.size());
+    for (size_t cachedIndex = 0; cachedIndex < cachedColumnIndices.size();
+         ++cachedIndex) {
+      columnStates[cachedColumnIndices[cachedIndex]].output =
+          std::move(cachedColumns.value()[cachedIndex]);
+      ++decodedColumnCacheHits_;
+    }
   }
 
   if (not missingColumnNames.empty()) {
@@ -676,42 +709,6 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
   }
   decodedColumnCacheRowGroupIndex_ = decodedColumnCacheRowGroups_.size();
   return std::make_unique<cudf::table>(std::move(outputColumns));
-}
-
-std::unique_ptr<cudf::column>
-CudfSplitReader::materializeDecodedColumnCacheRuns(
-    const CudfDecodedColumnCache::ColumnKey& key) const {
-  auto& cache = CudfDecodedColumnCache::instance();
-  std::vector<std::unique_ptr<cudf::column>> pieces;
-  pieces.reserve(decodedColumnCacheRowGroupRuns_.size());
-  for (const auto& run : decodedColumnCacheRowGroupRuns_) {
-    auto piece = cache.materializeColumnRange(
-        key,
-        run.firstRow,
-        run.lastRow,
-        stream_,
-        decodedColumnCacheRowGroupRuns_.size() == 1
-            ? determineCudfMemoryResource()
-            : get_temp_mr(),
-        get_temp_mr());
-    if (not piece) {
-      return nullptr;
-    }
-    pieces.push_back(std::move(piece));
-  }
-
-  if (pieces.empty()) {
-    return nullptr;
-  }
-  if (pieces.size() == 1) {
-    return std::move(pieces.front());
-  }
-  std::vector<cudf::column_view> pieceViews;
-  pieceViews.reserve(pieces.size());
-  for (const auto& piece : pieces) {
-    pieceViews.push_back(piece->view());
-  }
-  return cudf::concatenate(pieceViews, stream_, determineCudfMemoryResource());
 }
 
 std::vector<std::unique_ptr<cudf::column>>
