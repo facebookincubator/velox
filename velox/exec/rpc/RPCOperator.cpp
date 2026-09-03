@@ -657,11 +657,9 @@ RowVectorPtr RPCOperator::getOutput() {
     }
 
     auto numRows = static_cast<int64_t>(claimedBatch_->responses.size());
-    int64_t batchErrors = 0;
     for (const auto& response : claimedBatch_->responses) {
       if (response.hasError()) {
         numErrors_++;
-        ++batchErrors;
         recordErrorKind(response.errorKind);
       }
     }
@@ -678,10 +676,12 @@ RowVectorPtr RPCOperator::getOutput() {
       // Feed the measured round-trip latency to the gradient window so it
       // learns the in-flight-batch sweet spot without a fixed ceiling.
       state_->onUnitSample(claimedBatch_->rttNs);
-      // Successful rows in this batch drive AIMD recovery of the backend's
-      // shared cap.
-      limiter_->onOutcome(
-          RPCRateLimiter::Outcome::kSuccess, numRows - batchErrors);
+      // One successful batch, credited as one unit, because BATCH reserves one
+      // slot per flushBatch() regardless of row count. onSuccess() steps
+      // capacity by units/capacity, so crediting the row count against a
+      // capacity counted in batches makes recovery accelerate as capacity
+      // shrinks -- the opposite of additive increase.
+      limiter_->onOutcome(RPCRateLimiter::Outcome::kSuccess, /*units=*/1);
     }
 
     auto output = buildOutputFromReadyBatch(*claimedBatch_);
@@ -1121,10 +1121,8 @@ void RPCOperator::recordRuntimeStats() {
       kRpcRateLimiterCap, RuntimeCounter(limiterStats.capacity));
   lockedStats->addRuntimeStat(
       kRpcRateLimiterPeakPending, RuntimeCounter(limiterStats.peakPending));
-  if (limiterStats.lowWaterCapacity > 0) {
-    lockedStats->addRuntimeStat(
-        kRpcRateLimiterMinCap, RuntimeCounter(limiterStats.lowWaterCapacity));
-  }
+  lockedStats->addRuntimeStat(
+      kRpcRateLimiterMinCap, RuntimeCounter(limiterStats.lowWaterCapacity));
 }
 
 RowVectorPtr RPCOperator::buildOutputFromReadyBatch(
