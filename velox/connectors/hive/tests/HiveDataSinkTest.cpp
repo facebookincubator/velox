@@ -2107,6 +2107,124 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
+// Records the writer options handed to each writer, so that tests can assert on
+// the values the writer actually received rather than on the caller's shared
+// object, which the sink must leave untouched.
+class OptionsCapturingHiveDataSink : public HiveDataSink {
+ public:
+  using HiveDataSink::HiveDataSink;
+
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      size_t writerIndex) const override {
+    auto options = HiveDataSink::createWriterOptions(writerIndex);
+    capturedOptions_.push_back(options);
+    return options;
+  }
+
+  const std::vector<std::shared_ptr<dwio::common::WriterOptions>>&
+  capturedOptions() const {
+    return capturedOptions_;
+  }
+
+ private:
+  mutable std::vector<std::shared_ptr<dwio::common::WriterOptions>>
+      capturedOptions_;
+};
+
+// Test to verify that a writer options object supplied through the insert
+// table handle is never mutated, since it lives on the plan node and is shared
+// by every data sink in the query.
+TEST_F(HiveDataSinkTest, sharedWriterOptionsNotMutatedAcrossSinks) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  auto sharedWriterOptions = std::make_shared<dwio::common::WriterOptions>();
+
+  // A single insert table handle shared by every sink, which is what
+  // TableWriteNode hands to each of the 'task_writer_count' TableWriter drivers
+  // in a task.
+  auto insertTableHandle = createHiveInsertTableHandle(
+      rowType_,
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {},
+      nullptr,
+      sharedWriterOptions);
+
+  // Each TableWriter driver has its own connector query context and memory
+  // pools, but they all share the insert table handle above.
+  struct DriverResources {
+    std::shared_ptr<memory::MemoryPool> root;
+    std::shared_ptr<memory::MemoryPool> operatorPool;
+    std::shared_ptr<memory::MemoryPool> connectorPool;
+    std::unique_ptr<ConnectorQueryCtx> queryCtx;
+  };
+  std::vector<std::unique_ptr<DriverResources>> driverResources;
+
+  auto makeDataSink = [&](int32_t driverId) {
+    auto resources = std::make_unique<DriverResources>();
+    resources->root = memory::memoryManager()->addRootPool(
+        fmt::format("driver{}", driverId),
+        1L << 30,
+        exec::MemoryReclaimer::create());
+    resources->operatorPool = resources->root->addLeafChild("operator");
+    resources->connectorPool = resources->root->addAggregateChild(
+        "connector", exec::MemoryReclaimer::create());
+    resources->queryCtx = std::make_unique<ConnectorQueryCtx>(
+        resources->operatorPool.get(),
+        resources->connectorPool.get(),
+        connectorSessionProperties_.get(),
+        nullptr,
+        common::PrefixSortConfig(),
+        nullptr,
+        nullptr,
+        fmt::format("query.driver{}", driverId),
+        fmt::format("task.driver{}", driverId),
+        fmt::format("planNodeId.driver{}", driverId),
+        driverId,
+        // Longer than the small string optimization threshold, so assigning it
+        // allocates a heap buffer.
+        "America/Los_Angeles");
+    auto dataSink = std::make_shared<OptionsCapturingHiveDataSink>(
+        rowType_,
+        insertTableHandle,
+        resources->queryCtx.get(),
+        CommitStrategy::kNoCommit,
+        connectorConfig_);
+    driverResources.push_back(std::move(resources));
+    return dataSink;
+  };
+
+  auto firstDataSink = makeDataSink(0);
+  auto secondDataSink = makeDataSink(1);
+
+  const auto vectors = createVectors(100, 2);
+  firstDataSink->appendData(vectors[0]);
+  auto* memoryPoolAfterFirst = sharedWriterOptions->memoryPool;
+  secondDataSink->appendData(vectors[1]);
+  auto* memoryPoolAfterSecond = sharedWriterOptions->memoryPool;
+
+  ASSERT_EQ(firstDataSink->capturedOptions().size(), 1);
+  ASSERT_EQ(secondDataSink->capturedOptions().size(), 1);
+  EXPECT_NE(
+      firstDataSink->capturedOptions().front(),
+      secondDataSink->capturedOptions().front());
+  EXPECT_NE(
+      firstDataSink->capturedOptions().front()->memoryPool,
+      secondDataSink->capturedOptions().front()->memoryPool);
+
+  // The shared object must be left untouched, otherwise the second driver
+  // stomps on the values the first driver's writer is still using.
+  EXPECT_EQ(memoryPoolAfterFirst, nullptr);
+  EXPECT_EQ(memoryPoolAfterSecond, nullptr);
+  EXPECT_EQ(sharedWriterOptions->schema, nullptr);
+  EXPECT_TRUE(sharedWriterOptions->sessionTimezoneName.empty());
+  EXPECT_EQ(sharedWriterOptions->formatSpecificOptions, nullptr);
+
+  ASSERT_TRUE(firstDataSink->finish());
+  firstDataSink->close();
+  ASSERT_TRUE(secondDataSink->finish());
+  secondDataSink->close();
+}
+
 TEST_F(HiveDataSinkTest, sessionDwrfConfigsMergeIntoProvidedFormatOptions) {
   connectorSessionProperties_->set(
       dwio::common::formatSessionProperty(
@@ -2118,24 +2236,44 @@ TEST_F(HiveDataSinkTest, sessionDwrfConfigsMergeIntoProvidedFormatOptions) {
   auto dwrfOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   dwrfOptions->schemaAttributes[0] = {{"existing", "attribute"}};
   writerOptions->formatSpecificOptions = dwrfOptions;
+  const auto callerConfig = dwrfOptions->config;
 
   const auto outputDirectory = TempDirectoryPath::create();
-  auto dataSink = createDataSink(
+  auto dataSink = std::make_shared<OptionsCapturingHiveDataSink>(
       rowType_,
-      outputDirectory->getPath(),
-      dwio::common::FileFormat::DWRF,
-      {},
-      nullptr,
-      writerOptions);
+      createHiveInsertTableHandle(
+          rowType_,
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {},
+          nullptr,
+          writerOptions),
+      connectorQueryCtx_.get(),
+      CommitStrategy::kNoCommit,
+      connectorConfig_);
 
   dataSink->appendData(createVectors(10, 1).front());
 
-  EXPECT_EQ(dwrfOptions->config->get(dwrf::Config::STRIPE_SIZE), 32UL << 20);
-  ASSERT_EQ(dwrfOptions->schemaAttributes.size(), 1);
+  // The session config reaches the writer through the sink's private copy,
+  // which also preserves the caller-provided fields.
+  ASSERT_FALSE(dataSink->capturedOptions().empty());
+  const auto effectiveOptions =
+      std::dynamic_pointer_cast<dwrf::DwrfWriterOptions>(
+          dataSink->capturedOptions().front()->formatSpecificOptions);
+  ASSERT_NE(effectiveOptions, nullptr);
+  EXPECT_NE(effectiveOptions, dwrfOptions);
   EXPECT_EQ(
-      dwrfOptions->schemaAttributes.at(0),
+      effectiveOptions->config->get(dwrf::Config::STRIPE_SIZE), 32UL << 20);
+  ASSERT_EQ(effectiveOptions->schemaAttributes.size(), 1);
+  EXPECT_EQ(
+      effectiveOptions->schemaAttributes.at(0),
       (std::vector<std::pair<std::string, std::string>>{
           {"existing", "attribute"}}));
+
+  // The caller's object is shared by every sink in the query, so the merge must
+  // not be visible through it.
+  EXPECT_EQ(writerOptions->formatSpecificOptions, dwrfOptions);
+  EXPECT_EQ(dwrfOptions->config, callerConfig);
 }
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -2153,17 +2291,36 @@ TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
   writerOptions->formatSpecificOptions = parquetOptions;
 
   const auto outputDirectory = TempDirectoryPath::create();
-  auto dataSink = createDataSink(
+  auto dataSink = std::make_shared<OptionsCapturingHiveDataSink>(
       rowType_,
-      outputDirectory->getPath(),
-      dwio::common::FileFormat::PARQUET,
-      {},
-      nullptr,
-      writerOptions);
+      createHiveInsertTableHandle(
+          rowType_,
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::PARQUET,
+          {},
+          nullptr,
+          writerOptions),
+      connectorQueryCtx_.get(),
+      CommitStrategy::kNoCommit,
+      connectorConfig_);
 
   dataSink->appendData(createVectors(10, 1).front());
 
-  EXPECT_EQ(parquetOptions->batchSize, 97);
+  // The session config reaches the writer through the sink's private copy,
+  // which also preserves the caller-provided fields.
+  ASSERT_FALSE(dataSink->capturedOptions().empty());
+  const auto effectiveOptions =
+      std::dynamic_pointer_cast<parquet::ParquetWriterOptions>(
+          dataSink->capturedOptions().front()->formatSpecificOptions);
+  ASSERT_NE(effectiveOptions, nullptr);
+  EXPECT_NE(effectiveOptions, parquetOptions);
+  EXPECT_EQ(effectiveOptions->batchSize, 97);
+  EXPECT_EQ(effectiveOptions->bufferGrowRatio, 1.7);
+
+  // The caller's object is shared by every sink in the query, so the merge must
+  // not be visible through it.
+  EXPECT_EQ(writerOptions->formatSpecificOptions, parquetOptions);
+  EXPECT_EQ(parquetOptions->batchSize, 11);
   EXPECT_EQ(parquetOptions->bufferGrowRatio, 1.7);
 }
 #endif

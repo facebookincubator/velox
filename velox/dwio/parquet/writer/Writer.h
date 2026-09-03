@@ -120,6 +120,8 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   /// object while preserving caller-provided non-config fields.
   void merge(const dwio::common::FormatSpecificOptions& overrides) override;
 
+  std::shared_ptr<dwio::common::FormatSpecificOptions> clone() const override;
+
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
