@@ -523,8 +523,7 @@ struct TimestampPlusInterval {
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<IntervalDayTime>& interval) {
-    result = addToTimestampWithTimezone(
-        *timestampWithTimezone, DateTimeUnit::kMillisecond, interval);
+    result = addMillisToTimestampWithTimezone(*timestampWithTimezone, interval);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -710,8 +709,7 @@ struct IntervalPlusTimestamp {
       out_type<TimestampWithTimezone>& result,
       const arg_type<IntervalDayTime>& interval,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone) {
-    result = addToTimestampWithTimezone(
-        *timestampWithTimezone, DateTimeUnit::kMillisecond, interval);
+    result = addMillisToTimestampWithTimezone(*timestampWithTimezone, interval);
   }
 
   FOLLY_ALWAYS_INLINE void call(
@@ -766,8 +764,8 @@ struct TimestampMinusInterval {
       out_type<TimestampWithTimezone>& result,
       const arg_type<TimestampWithTimezone>& timestampWithTimezone,
       const arg_type<IntervalDayTime>& interval) {
-    result = addToTimestampWithTimezone(
-        *timestampWithTimezone, DateTimeUnit::kMillisecond, -interval);
+    result =
+        addMillisToTimestampWithTimezone(*timestampWithTimezone, -interval);
   }
 
   FOLLY_ALWAYS_INLINE void call(
