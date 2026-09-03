@@ -2107,6 +2107,30 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsWithMultipleWriters) {
       outputDirectory->getPath(), static_cast<uint32_t>(partitions.size()));
 }
 
+// Records the writer options handed to each writer, so that tests can assert on
+// the values the writer actually received rather than on the caller's shared
+// object, which the sink must leave untouched.
+class OptionsCapturingHiveDataSink : public HiveDataSink {
+ public:
+  using HiveDataSink::HiveDataSink;
+
+  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
+      size_t writerIndex) const override {
+    auto options = HiveDataSink::createWriterOptions(writerIndex);
+    capturedOptions_.push_back(options);
+    return options;
+  }
+
+  const std::vector<std::shared_ptr<dwio::common::WriterOptions>>&
+  capturedOptions() const {
+    return capturedOptions_;
+  }
+
+ private:
+  mutable std::vector<std::shared_ptr<dwio::common::WriterOptions>>
+      capturedOptions_;
+};
+
 // Test to verify that a writer options object supplied through the insert
 // table handle is never mutated, since it lives on the plan node and is shared
 // by every data sink in the query.
@@ -2159,7 +2183,7 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsNotMutatedAcrossSinks) {
         // Longer than the small string optimization threshold, so assigning it
         // allocates a heap buffer.
         "America/Los_Angeles");
-    auto dataSink = std::make_shared<HiveDataSink>(
+    auto dataSink = std::make_shared<OptionsCapturingHiveDataSink>(
         rowType_,
         insertTableHandle,
         resources->queryCtx.get(),
@@ -2178,6 +2202,15 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsNotMutatedAcrossSinks) {
   secondDataSink->appendData(vectors[1]);
   auto* memoryPoolAfterSecond = sharedWriterOptions->memoryPool;
 
+  ASSERT_EQ(firstDataSink->capturedOptions().size(), 1);
+  ASSERT_EQ(secondDataSink->capturedOptions().size(), 1);
+  EXPECT_NE(
+      firstDataSink->capturedOptions().front(),
+      secondDataSink->capturedOptions().front());
+  EXPECT_NE(
+      firstDataSink->capturedOptions().front()->memoryPool,
+      secondDataSink->capturedOptions().front()->memoryPool);
+
   // The shared object must be left untouched, otherwise the second driver
   // stomps on the values the first driver's writer is still using.
   EXPECT_EQ(memoryPoolAfterFirst, nullptr);
@@ -2191,30 +2224,6 @@ TEST_F(HiveDataSinkTest, sharedWriterOptionsNotMutatedAcrossSinks) {
   ASSERT_TRUE(secondDataSink->finish());
   secondDataSink->close();
 }
-
-// Records the writer options handed to each writer, so that tests can assert on
-// the values the writer actually received rather than on the caller's shared
-// object, which the sink must leave untouched.
-class OptionsCapturingHiveDataSink : public HiveDataSink {
- public:
-  using HiveDataSink::HiveDataSink;
-
-  std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
-      size_t writerIndex) const override {
-    auto options = HiveDataSink::createWriterOptions(writerIndex);
-    capturedOptions_.push_back(options);
-    return options;
-  }
-
-  const std::vector<std::shared_ptr<dwio::common::WriterOptions>>&
-  capturedOptions() const {
-    return capturedOptions_;
-  }
-
- private:
-  mutable std::vector<std::shared_ptr<dwio::common::WriterOptions>>
-      capturedOptions_;
-};
 
 TEST_F(HiveDataSinkTest, sessionDwrfConfigsMergeIntoProvidedFormatOptions) {
   connectorSessionProperties_->set(
