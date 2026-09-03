@@ -40,13 +40,15 @@ void UcxOutputQueueManager::initializeTask(
     int numDrivers,
     const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
+  std::vector<UcxIntraNodeEligibilityCallback> eligibilityCallbacks;
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskId);
     if (it == queues.end()) {
       queues[taskId] = std::make_shared<UcxOutputQueue>(
           std::move(task), numDestinations, numDrivers, kind);
     } else {
-      if (!it->second->initialize(task, numDestinations, numDrivers, kind)) {
+      if (!it->second->initialize(
+              task, numDestinations, numDrivers, kind, &eligibilityCallbacks)) {
         VELOX_FAIL(
             "Registering a cudf output queue for pre-existing taskId {}",
             taskId);
@@ -59,6 +61,12 @@ void UcxOutputQueueManager::initializeTask(
   // Clear any stale "cancelled" state in the intra-node registry so
   // that the cancelledTasks_ set doesn't grow unboundedly across queries.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+
+  const bool canUseIntraNode =
+      kind != core::PartitionedOutputNode::Kind::kBroadcast;
+  for (auto& callback : eligibilityCallbacks) {
+    callback(canUseIntraNode);
+  }
 }
 
 bool UcxOutputQueueManager::updateOutputBuffers(

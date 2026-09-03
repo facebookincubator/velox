@@ -30,6 +30,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
 using namespace facebook::velox::ucx_exchange;
@@ -703,6 +704,37 @@ TEST_F(
 
   ASSERT_TRUE(eligibility.has_value());
   EXPECT_FALSE(*eligibility);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    intraNodeEligibilityClearsStaleCancellationBeforeCallback) {
+  const std::string taskId = "reusedEligibility";
+  queueManager_->removeTask(taskId);
+
+  std::optional<bool> eligibility;
+  std::optional<IntraNodeTransferResult> registryPollResult;
+  queueManager_->notifyOnIntraNodeEligibility(
+      taskId,
+      [&](bool value) {
+        eligibility = value;
+        registryPollResult = IntraNodeTransferRegistry::getInstance()->poll(
+            IntraNodeTransferKey{
+                taskId, /*destination=*/0, /*sequenceNumber=*/0});
+      });
+  EXPECT_FALSE(eligibility.has_value());
+
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/false,
+      core::PartitionedOutputNode::Kind::kPartitioned);
+
+  ASSERT_TRUE(eligibility.has_value());
+  EXPECT_TRUE(*eligibility);
+  EXPECT_FALSE(registryPollResult.has_value());
+  queueManager_->removeTask(taskId);
 }
 
 // --- Broadcast tests ---

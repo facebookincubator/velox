@@ -165,8 +165,9 @@ bool UcxOutputQueue::initialize(
     std::shared_ptr<exec::Task> task,
     uint32_t numDestinations,
     uint32_t numDrivers,
-    core::PartitionedOutputNode::Kind kind) {
-  std::vector<UcxIntraNodeEligibilityCallback> eligibilityCallbacks;
+    core::PartitionedOutputNode::Kind kind,
+    std::vector<UcxIntraNodeEligibilityCallback>* eligibilityCallbacks) {
+  std::vector<UcxIntraNodeEligibilityCallback> localEligibilityCallbacks;
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (task_) {
@@ -187,12 +188,16 @@ bool UcxOutputQueue::initialize(
       // create the destination queues inside the vector using emplace_back.
       queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
     }
-    eligibilityCallbacks = std::move(intraNodeEligibilityCallbacks_);
+    if (eligibilityCallbacks) {
+      *eligibilityCallbacks = std::move(intraNodeEligibilityCallbacks_);
+    } else {
+      localEligibilityCallbacks = std::move(intraNodeEligibilityCallbacks_);
+    }
   }
 
   const bool canUseIntraNode =
       kind != core::PartitionedOutputNode::Kind::kBroadcast;
-  for (auto& callback : eligibilityCallbacks) {
+  for (auto& callback : localEligibilityCallbacks) {
     callback(canUseIntraNode);
   }
   return true;
