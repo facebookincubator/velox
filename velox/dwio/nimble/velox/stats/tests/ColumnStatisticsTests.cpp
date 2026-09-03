@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <random>
 #include <span>
 #include <vector>
 
@@ -785,6 +787,189 @@ TEST_F(StatisticsCollectorTests, stringMinMaxAfterAddCounts) {
   EXPECT_EQ(stats->getMin().value(), "apple");
   ASSERT_TRUE(stats->getMax().has_value());
   EXPECT_EQ(stats->getMax().value(), "cherry");
+}
+
+// The batch scan tracks bounds as views and materializes at most two strings
+// per call, so a caller's buffer must not be aliased after addValues returns
+// and repeated calls must still accumulate a file-wide min/max. Ascending and
+// descending input are the two orders that previously allocated on every value.
+TEST_F(StatisticsCollectorTests, stringMinMaxAcrossBatchesDoesNotAliasInput) {
+  StringStatisticsCollector collector;
+  {
+    // Ascending, then let the source buffer die before the next batch.
+    std::vector<std::string> owned = {"aaa", "bbb", "ccc", "ddd"};
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    collector.addValues(std::span<std::string_view>(views));
+  }
+  {
+    // Descending, disjoint range below the current min.
+    std::vector<std::string> owned = {"a99", "a55", "a11"};
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    collector.addValues(std::span<std::string_view>(views));
+  }
+  {
+    // Entirely inside the current bounds: neither bound may move.
+    std::vector<std::string> owned = {"bzz", "czz"};
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    collector.addValues(std::span<std::string_view>(views));
+  }
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  ASSERT_TRUE(stats->getMin().has_value());
+  ASSERT_TRUE(stats->getMax().has_value());
+  EXPECT_EQ(stats->getMin().value(), "a11");
+  EXPECT_EQ(stats->getMax().value(), "ddd");
+  EXPECT_EQ(
+      dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+      12 + 9 + 6);
+}
+
+// The scan seeds both bounds from the first value and skips the maximum check
+// whenever a value advances the minimum. Cover the orders where that shortcut
+// could drop a bound: the extremes trailing the first value, and each extreme
+// arriving in a separate batch.
+TEST_F(StatisticsCollectorTests, stringMinMaxWhenFirstValueIsNeitherBound) {
+  StringStatisticsCollector collector;
+  std::vector<std::string_view> middleFirst = {"mmm", "aaa", "zzz"};
+  collector.addValues(std::span<std::string_view>(middleFirst));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getMin().value(), "aaa");
+  EXPECT_EQ(stats->getMax().value(), "zzz");
+
+  // A single-value batch that widens only the maximum.
+  std::vector<std::string_view> single = {"zzzz"};
+  collector.addValues(std::span<std::string_view>(single));
+  EXPECT_EQ(stats->getMin().value(), "aaa");
+  EXPECT_EQ(stats->getMax().value(), "zzzz");
+
+  // The empty string sorts below every other value.
+  std::vector<std::string_view> withEmpty = {"qqq", ""};
+  collector.addValues(std::span<std::string_view>(withEmpty));
+  EXPECT_EQ(stats->getMin().value(), "");
+  EXPECT_EQ(stats->getMax().value(), "zzzz");
+
+  EXPECT_EQ(
+      dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+      9 + 4 + 3);
+}
+
+// Pins the batched scan against a trivial reference over randomized input:
+// arbitrary bytes, mixed lengths, duplicates, empty strings, and batch
+// boundaries that fall anywhere relative to the extremes. Any divergence in the
+// bound-tracking shortcut shows up here rather than as a wrong file footer.
+TEST_F(
+    StatisticsCollectorTests,
+    stringMinMaxMatchesReferenceOverRandomBatches) {
+  std::mt19937 rng{20260830};
+  std::uniform_int_distribution<size_t> lengthDist{0, 12};
+  std::uniform_int_distribution<int> byteDist{0, 255};
+  std::uniform_int_distribution<size_t> batchDist{1, 40};
+
+  for (int trial = 0; trial < 200; ++trial) {
+    StringStatisticsCollector collector;
+    std::optional<std::string> expectedMin;
+    std::optional<std::string> expectedMax;
+    uint64_t expectedLogicalSize{0};
+
+    const size_t numBatches = batchDist(rng);
+    for (size_t batch = 0; batch < numBatches; ++batch) {
+      std::vector<std::string> owned;
+      const size_t batchSize = batchDist(rng);
+      owned.reserve(batchSize);
+      for (size_t i = 0; i < batchSize; ++i) {
+        std::string value(lengthDist(rng), '\0');
+        for (auto& byte : value) {
+          byte = static_cast<char>(byteDist(rng));
+        }
+        owned.push_back(std::move(value));
+      }
+
+      for (const auto& value : owned) {
+        expectedLogicalSize += value.size();
+        if (!expectedMin.has_value() || value < *expectedMin) {
+          expectedMin = value;
+        }
+        if (!expectedMax.has_value() || value > *expectedMax) {
+          expectedMax = value;
+        }
+      }
+
+      std::vector<std::string_view> views(owned.begin(), owned.end());
+      collector.addValues(std::span<std::string_view>(views));
+    }
+
+    auto* stats = collector.getStatsView()->as<StringStatistics>();
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getMin(), expectedMin) << "trial " << trial;
+    EXPECT_EQ(stats->getMax(), expectedMax) << "trial " << trial;
+    EXPECT_EQ(
+        dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+        expectedLogicalSize)
+        << "trial " << trial;
+  }
+}
+
+// varchar columns carry arbitrary bytes, so bounds must be ordered and stored
+// by length rather than by NUL termination.
+TEST_F(StatisticsCollectorTests, stringMinMaxHandlesEmbeddedNulBytes) {
+  using namespace std::string_view_literals;
+  StringStatisticsCollector collector;
+
+  // "a\0a" sorts above "a\0" purely on length, and both would collapse to "a"
+  // under NUL-terminated comparison.
+  std::vector<std::string_view> values = {"a\0a"sv, "a\0"sv, "a\0z"sv};
+  collector.addValues(std::span<std::string_view>(values));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getMin().value(), "a\0"sv);
+  EXPECT_EQ(stats->getMax().value(), "a\0z"sv);
+  EXPECT_EQ(stats->getMin().value().size(), 2);
+  EXPECT_EQ(stats->getMax().value().size(), 3);
+  EXPECT_EQ(
+      dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+      3 + 2 + 3);
+}
+
+// An empty batch must leave the accumulator untouched rather than reading
+// values.front().
+TEST_F(StatisticsCollectorTests, stringMinMaxEmptyBatchIsANoOp) {
+  StringStatisticsCollector collector;
+  std::vector<std::string_view> empty;
+  collector.addValues(std::span<std::string_view>(empty));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_FALSE(stats->getMin().has_value());
+  EXPECT_FALSE(stats->getMax().has_value());
+  EXPECT_EQ(dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(), 0);
+
+  std::vector<std::string_view> populated = {"kkk"};
+  collector.addValues(std::span<std::string_view>(populated));
+  collector.addValues(std::span<std::string_view>(empty));
+  EXPECT_EQ(stats->getMin().value(), "kkk");
+  EXPECT_EQ(stats->getMax().value(), "kkk");
+  EXPECT_EQ(dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(), 3);
+}
+
+// A shorter bound assigned over a longer one must not leave the previous
+// contents behind, which is the failure mode of reusing the buffer.
+TEST_F(
+    StatisticsCollectorTests,
+    stringMinMaxShrinkingBoundsDoNotRetainOldBytes) {
+  StringStatisticsCollector collector;
+  std::vector<std::string_view> wide = {"bbbbbbbbbb", "yyyyyyyyyy"};
+  collector.addValues(std::span<std::string_view>(wide));
+
+  std::vector<std::string_view> narrow = {"a", "z"};
+  collector.addValues(std::span<std::string_view>(narrow));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getMin().value(), "a");
+  EXPECT_EQ(stats->getMax().value(), "z");
 }
 
 TEST_F(StatisticsCollectorTests, stringStatisticsCollectorMerge) {
