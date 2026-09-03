@@ -2061,18 +2061,14 @@ struct ParseDurationFunction {
   FOLLY_ALWAYS_INLINE void call(
       out_type<IntervalDayTime>& result,
       const arg_type<Varchar>& amountUnit) {
-    VELOX_SUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
-    static const LazyRE2 kDurationRegex{
-        .pattern_ = R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)",
-    };
-    VELOX_UNSUPPRESS_MISSING_DESIGNATED_FIELD_INITIALIZERS_WARNING
+    static const RE2 kDurationRegex(R"(^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$)");
     // TODO: Remove re2::StringPiece != std::string_view hacks.
     // It's needed because for some systems in CI,
     // re2 and abseil libraries are old.
     re2::StringPiece valueStr;
     re2::StringPiece unitStr;
     re2::StringPiece amountUnitStr{amountUnit.data(), amountUnit.size()};
-    if (!RE2::FullMatch(amountUnitStr, *kDurationRegex, &valueStr, &unitStr)) {
+    if (!RE2::FullMatch(amountUnitStr, kDurationRegex, &valueStr, &unitStr)) {
       VELOX_USER_FAIL(
           "Input duration is not a valid data duration string: {}",
           std::string_view(amountUnitStr.data(), amountUnitStr.size()));
