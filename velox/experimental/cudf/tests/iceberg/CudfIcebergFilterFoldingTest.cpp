@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConstantColumnFilter.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 
 #include "velox/type/TimestampConversion.h"
 
