@@ -68,6 +68,15 @@ struct CoveredColumnRange {
   int64_t lastRow;
 };
 
+/// Immutable Parquet metadata and derived row-group state shared by all cache
+/// readers of one file. Keeping this state in the cache avoids rebuilding and
+/// copying it for full-file, filter-free cache hits.
+struct CachedParquetFileMetadata {
+  std::shared_ptr<const cudf::io::parquet::FileMetaData> parquetMetadata;
+  std::vector<int64_t> rowOffsets;
+  std::vector<cudf::size_type> allRowGroups;
+};
+
 /// Experimental process-lifetime cache for decoded Parquet column ranges.
 ///
 /// Decoded columns are packed into a CCCL CUDA pinned-memory pool. Entries are
@@ -106,6 +115,22 @@ class CudfDecodedColumnCache {
     bool operator==(const FileKey&) const = default;
   };
 
+  /// Identity for row-group selection derived from immutable Parquet metadata.
+  /// filterKey is a deterministic serialization of the logical Velox filters;
+  /// dynamic filters are not supported by the experimental cuDF connector.
+  struct RowGroupSelectionKey {
+    FileKey file;
+    uint64_t splitStart;
+    uint64_t splitSize;
+    std::string filterKey;
+    cudf::type_id timestampType;
+    bool usePandasMetadata;
+    bool useArrowSchema;
+    bool allowMismatchedSchemas;
+
+    bool operator==(const RowGroupSelectionKey&) const = default;
+  };
+
   /// Column identity excluding row range. Row ranges are stored independently
   /// so differently chunked scans can reuse one another.
   struct ColumnKey {
@@ -129,7 +154,11 @@ class CudfDecodedColumnCache {
     std::vector<std::pair<int64_t, int64_t>> ranges;
   };
 
-  using MetadataPtr = std::shared_ptr<const cudf::io::parquet::FileMetaData>;
+  using ParquetMetadataPtr =
+      std::shared_ptr<const cudf::io::parquet::FileMetaData>;
+  using MetadataPtr = std::shared_ptr<const CachedParquetFileMetadata>;
+  using RowGroupSelectionPtr =
+      std::shared_ptr<const std::vector<cudf::size_type>>;
   using ColumnRangePtr = std::shared_ptr<const PinnedColumnChunk>;
 
   static CudfDecodedColumnCache& instance();
@@ -141,7 +170,15 @@ class CudfDecodedColumnCache {
   static CompressionMode compressionModeFromString(std::string_view value);
 
   MetadataPtr findMetadata(const FileKey& key) const;
-  MetadataPtr insertMetadataIfAbsent(FileKey key, MetadataPtr metadata);
+  MetadataPtr insertMetadataIfAbsent(
+      FileKey key,
+      ParquetMetadataPtr metadata);
+
+  RowGroupSelectionPtr findRowGroupSelection(
+      const RowGroupSelectionKey& key) const;
+  RowGroupSelectionPtr insertRowGroupSelectionIfAbsent(
+      RowGroupSelectionKey key,
+      std::vector<cudf::size_type> rowGroups);
 
   /// Returns a gap-free, ordered coverage of [firstRow, lastRow), or nullopt.
   std::optional<std::vector<CoveredColumnRange>> findColumnRanges(

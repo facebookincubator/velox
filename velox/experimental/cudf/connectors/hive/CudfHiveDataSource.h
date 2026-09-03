@@ -156,6 +156,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
   common::SubfieldFilters subfieldFilters_;
+  std::string rowGroupSelectionFilterKey_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive

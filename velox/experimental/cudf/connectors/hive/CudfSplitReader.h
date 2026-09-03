@@ -67,7 +67,8 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
-      cudf::ast::expression const* subfieldFilterExpr);
+      cudf::ast::expression const* subfieldFilterExpr,
+      std::optional<std::string> rowGroupSelectionFilterKey = std::nullopt);
 
   virtual ~CudfSplitReader() = default;
 
@@ -104,6 +105,10 @@ class CudfSplitReader : public NvtxHelper {
 
   uint64_t decodedColumnCacheDecodeCalls() const {
     return decodedColumnCacheDecodeCalls_;
+  }
+
+  bool usedDecodedColumnCacheMetadataFastPath() const {
+    return usedDecodedColumnCacheMetadataFastPath_;
   }
 
   /// True when every column chunk selected by this split was already cached at
@@ -196,6 +201,7 @@ class CudfSplitReader : public NvtxHelper {
 
   bool shouldUseDecodedColumnCache() const;
   void prepareDecodedColumnCache();
+  void ensureDecodedColumnCacheReader();
   std::optional<std::unique_ptr<cudf::table>>
   readNextDecodedColumnCacheFileRange();
   std::vector<std::unique_ptr<cudf::column>> decodeAndCacheFileColumns(
@@ -229,10 +235,10 @@ class CudfSplitReader : public NvtxHelper {
   std::unique_ptr<rmm::cuda_stream> decodedColumnCacheTransferStream_;
   int cudaDeviceId_{0};
   CudfDecodedColumnCache::FileKey decodedColumnCacheFileKey_;
-  std::shared_ptr<const cudf::io::parquet::FileMetaData>
-      decodedColumnCacheMetadata_;
+  CudfDecodedColumnCache::MetadataPtr decodedColumnCacheMetadata_;
   std::vector<cudf::size_type> decodedColumnCacheRowGroups_;
-  std::vector<int64_t> decodedColumnCacheRowOffsets_;
+  bool usedDecodedColumnCacheMetadataFastPath_{false};
+  std::optional<std::string> rowGroupSelectionFilterKey_;
   struct DecodedColumnCacheRowGroupRun {
     int64_t firstRow;
     int64_t lastRow;

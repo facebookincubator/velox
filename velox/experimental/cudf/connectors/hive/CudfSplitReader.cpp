@@ -174,7 +174,8 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
-    cudf::ast::expression const* subfieldFilterExpr)
+    cudf::ast::expression const* subfieldFilterExpr,
+    std::optional<std::string> rowGroupSelectionFilterKey)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
           std::nullopt,
@@ -191,6 +192,7 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
+      rowGroupSelectionFilterKey_(std::move(rowGroupSelectionFilterKey)),
       baseReaderOpts_(pool_),
       subfieldFilterExpr_(subfieldFilterExpr),
       pushdownFilterExpr_(subfieldFilterExpr) {
@@ -349,7 +351,7 @@ void CudfSplitReader::resetSplit() {
       CudfDecodedColumnCache::CompressionMode::kNone;
   decodedColumnCacheMetadata_.reset();
   decodedColumnCacheRowGroups_.clear();
-  decodedColumnCacheRowOffsets_.clear();
+  usedDecodedColumnCacheMetadataFastPath_ = false;
   decodedColumnCacheRowGroupRuns_.clear();
   decodedColumnCacheRowGroupIndex_ = 0;
 }
@@ -528,6 +530,7 @@ bool CudfSplitReader::shouldUseDecodedColumnCache() const {
 }
 
 void CudfSplitReader::prepareDecodedColumnCache() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE("decoded-cache");
   CUDF_CUDA_TRY(cudaGetDevice(&cudaDeviceId_));
   decodedColumnCacheCompression_ =
       CudfDecodedColumnCache::compressionModeFromString(
@@ -537,9 +540,8 @@ void CudfSplitReader::prepareDecodedColumnCache() {
       .connectorId = split_->connectorId, .filePath = split_->filePath};
 
   auto& cache = CudfDecodedColumnCache::instance();
-  const bool metadataHit =
-      cache.findMetadata(decodedColumnCacheFileKey_) != nullptr;
   decodedColumnCacheMetadata_ = cache.findMetadata(decodedColumnCacheFileKey_);
+  const bool metadataHit = decodedColumnCacheMetadata_ != nullptr;
   if (not decodedColumnCacheMetadata_) {
     fileMetaDatas();
     VELOX_CHECK_EQ(
@@ -555,18 +557,98 @@ void CudfSplitReader::prepareDecodedColumnCache() {
 
   readerOptions_ = makeReaderOptions(
       cudf::io::source_info{split_->filePath}, readColumnNames_, true, true);
-  exptSplitReader_ = std::make_unique<CudfHybridScanReader>(
-      *decodedColumnCacheMetadata_, readerOptions_);
 
-  decodedColumnCacheRowOffsets_.reserve(
-      decodedColumnCacheMetadata_->row_groups.size() + 1);
-  decodedColumnCacheRowOffsets_.push_back(0);
-  for (const auto& rowGroup : decodedColumnCacheMetadata_->row_groups) {
-    VELOX_CHECK_GE(rowGroup.num_rows, 0);
-    decodedColumnCacheRowOffsets_.push_back(
-        decodedColumnCacheRowOffsets_.back() + rowGroup.num_rows);
+  const auto buildRowGroupRuns = [&]() {
+    decodedColumnCacheRowGroupRuns_.clear();
+    int64_t outputRow = 0;
+    std::optional<cudf::size_type> previousRowGroup;
+    for (const auto rowGroupIndex : decodedColumnCacheRowGroups_) {
+      const auto [firstRow, lastRow] =
+          decodedColumnRowRange(rowGroupIndex);
+      VELOX_CHECK_LE(firstRow, lastRow);
+      const auto outputLastRow = outputRow + (lastRow - firstRow);
+      if (firstRow != lastRow) {
+        if (previousRowGroup.has_value() and
+            rowGroupIndex == previousRowGroup.value() + 1 and
+            not decodedColumnCacheRowGroupRuns_.empty()) {
+          auto& run = decodedColumnCacheRowGroupRuns_.back();
+          run.lastRow = lastRow;
+          run.outputLastRow = outputLastRow;
+        } else {
+          decodedColumnCacheRowGroupRuns_.push_back(
+              {.firstRow = firstRow,
+               .lastRow = lastRow,
+               .outputFirstRow = outputRow,
+               .outputLastRow = outputLastRow});
+        }
+      }
+      outputRow = outputLastRow;
+      previousRowGroup = rowGroupIndex;
+    }
+  };
+  const auto cacheCoversAllRuns = [&]() {
+    for (const auto& run : decodedColumnCacheRowGroupRuns_) {
+      for (const auto& columnName : readColumnNames_) {
+        const auto type = readColumnType(columnName);
+        if (not cache.containsColumnRange(
+                makeDecodedColumnCacheKey(columnName, type),
+                run.firstRow,
+                run.lastRow)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  std::optional<CudfDecodedColumnCache::RowGroupSelectionKey> selectionKey;
+  if (rowGroupSelectionFilterKey_.has_value()) {
+    selectionKey.emplace(CudfDecodedColumnCache::RowGroupSelectionKey{
+        .file = decodedColumnCacheFileKey_,
+        .splitStart = split_->start,
+        .splitSize = split_->size(),
+        .filterKey = rowGroupSelectionFilterKey_.value(),
+        .timestampType = cudfHiveConfig_->timestampType().id(),
+        .usePandasMetadata = cudfHiveConfig_->isUsePandasMetadata(),
+        .useArrowSchema = cudfHiveConfig_->isUseArrowSchema(),
+        .allowMismatchedSchemas =
+            cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas(),
+    });
+  }
+  if (metadataHit and selectionKey.has_value()) {
+    if (auto selected = cache.findRowGroupSelection(selectionKey.value())) {
+      decodedColumnCacheRowGroups_ = *selected;
+      buildRowGroupRuns();
+      usedDecodedColumnCacheMetadataFastPath_ = true;
+      isFullyDecodedColumnCacheHit_ = cacheCoversAllRuns();
+      return;
+    }
   }
 
+  const bool fullFileSplit =
+      split_->start == 0 and
+      split_->size() == std::numeric_limits<uint64_t>::max();
+  if (fullFileSplit) {
+    decodedColumnCacheRowGroups_ =
+        decodedColumnCacheMetadata_->allRowGroups;
+    buildRowGroupRuns();
+    const bool allRowGroupsCached = metadataHit and cacheCoversAllRuns();
+    if (not readerOptions_.get_filter().has_value() or allRowGroupsCached) {
+      // Cached columns are unfiltered and CudfHiveDataSource reapplies the
+      // predicate after restoration. A filtered full-file split can therefore
+      // skip row-group pruning only when every source row is already cached.
+      usedDecodedColumnCacheMetadataFastPath_ = true;
+      isFullyDecodedColumnCacheHit_ = allRowGroupsCached;
+      if (selectionKey.has_value()) {
+        cache.insertRowGroupSelectionIfAbsent(
+            std::move(selectionKey.value()),
+            decodedColumnCacheRowGroups_);
+      }
+      return;
+    }
+  }
+
+  ensureDecodedColumnCacheReader();
   decodedColumnCacheRowGroups_ =
       exptSplitReader_->all_row_groups(readerOptions_);
   if (readerOptions_.get_skip_bytes() > 0 or
@@ -575,51 +657,27 @@ void CudfSplitReader::prepareDecodedColumnCache() {
         exptSplitReader_->filter_row_groups_with_byte_range(
             decodedColumnCacheRowGroups_, readerOptions_);
   }
-
   if (readerOptions_.get_filter().has_value()) {
     decodedColumnCacheRowGroups_ =
         exptSplitReader_->filter_row_groups_with_stats(
             decodedColumnCacheRowGroups_, readerOptions_, stream_);
   }
-
-  int64_t outputRow = 0;
-  std::optional<cudf::size_type> previousRowGroup;
-  for (const auto rowGroupIndex : decodedColumnCacheRowGroups_) {
-    const auto [firstRow, lastRow] = decodedColumnRowRange(rowGroupIndex);
-    VELOX_CHECK_LE(firstRow, lastRow);
-    const auto outputLastRow = outputRow + (lastRow - firstRow);
-    if (firstRow != lastRow) {
-      if (previousRowGroup.has_value() and
-          rowGroupIndex == previousRowGroup.value() + 1 and
-          not decodedColumnCacheRowGroupRuns_.empty()) {
-        auto& run = decodedColumnCacheRowGroupRuns_.back();
-        run.lastRow = lastRow;
-        run.outputLastRow = outputLastRow;
-      } else {
-        decodedColumnCacheRowGroupRuns_.push_back(
-            {.firstRow = firstRow,
-             .lastRow = lastRow,
-             .outputFirstRow = outputRow,
-             .outputLastRow = outputLastRow});
-      }
-    }
-    outputRow = outputLastRow;
-    previousRowGroup = rowGroupIndex;
+  buildRowGroupRuns();
+  if (selectionKey.has_value()) {
+    cache.insertRowGroupSelectionIfAbsent(
+        std::move(selectionKey.value()), decodedColumnCacheRowGroups_);
   }
+  isFullyDecodedColumnCacheHit_ = metadataHit and cacheCoversAllRuns();
+}
 
-  isFullyDecodedColumnCacheHit_ = metadataHit;
-  for (const auto& run : decodedColumnCacheRowGroupRuns_) {
-    for (const auto& columnName : readColumnNames_) {
-      const auto type = readColumnType(columnName);
-      if (not cache.containsColumnRange(
-              makeDecodedColumnCacheKey(columnName, type),
-              run.firstRow,
-              run.lastRow)) {
-        isFullyDecodedColumnCacheHit_ = false;
-        return;
-      }
-    }
+void CudfSplitReader::ensureDecodedColumnCacheReader() {
+  VELOX_NVTX_OPERATOR_FUNC_RANGE("decoded-cache");
+  if (exptSplitReader_) {
+    return;
   }
+  VELOX_CHECK_NOT_NULL(decodedColumnCacheMetadata_);
+  exptSplitReader_ = std::make_unique<CudfHybridScanReader>(
+      *decodedColumnCacheMetadata_->parquetMetadata, readerOptions_);
 }
 
 std::optional<std::unique_ptr<cudf::table>>
@@ -720,6 +778,7 @@ CudfSplitReader::decodeAndCacheFileColumns(
   VELOX_CHECK(not columnNames.empty());
   VELOX_CHECK(not rowGroupIndices.empty());
   setupCudfDataSource();
+  ensureDecodedColumnCacheReader();
 
   auto columnOptions = makeReaderOptions(
       cudf::io::source_info{split_->filePath}, columnNames, false, false);
@@ -817,10 +876,12 @@ std::pair<int64_t, int64_t> CudfSplitReader::decodedColumnRowRange(
     cudf::size_type rowGroupIndex) const {
   VELOX_CHECK_GE(rowGroupIndex, 0);
   const auto index = static_cast<size_t>(rowGroupIndex);
-  VELOX_CHECK_LT(index + 1, decodedColumnCacheRowOffsets_.size());
+  VELOX_CHECK_NOT_NULL(decodedColumnCacheMetadata_);
+  const auto& rowOffsets = decodedColumnCacheMetadata_->rowOffsets;
+  VELOX_CHECK_LT(index + 1, rowOffsets.size());
   return {
-      decodedColumnCacheRowOffsets_[index],
-      decodedColumnCacheRowOffsets_[index + 1]};
+      rowOffsets[index],
+      rowOffsets[index + 1]};
 }
 
 TypePtr CudfSplitReader::readColumnType(const std::string& columnName) const {

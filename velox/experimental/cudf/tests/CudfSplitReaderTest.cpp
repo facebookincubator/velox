@@ -392,6 +392,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
     size_t chunks;
     size_t rows;
     bool fullyCached;
+    bool metadataFastPath;
     uint64_t restoreBatches;
   };
   auto read = [&](std::vector<std::string> names,
@@ -421,6 +422,8 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
     dwio::common::RuntimeStats runtimeStats;
     reader.prepareSplit(runtimeStats);
     const auto fullyCached = reader.isFullyDecodedColumnCacheHit();
+    const auto metadataFastPath =
+        reader.usedDecodedColumnCacheMetadataFastPath();
     const auto statsBefore = CudfDecodedColumnCache::instance().stats();
     size_t chunks = 0;
     size_t rows = 0;
@@ -437,6 +440,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
         chunks,
         rows,
         fullyCached,
+        metadataFastPath,
         statsAfter.pipelinedRestoreBatches -
             statsBefore.pipelinedRestoreBatches};
   };
@@ -454,6 +458,7 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
   EXPECT_EQ(first.chunks, 1);
   EXPECT_EQ(first.rows, kRowsPerRowGroup * kNumRowGroups);
   EXPECT_FALSE(first.fullyCached);
+  EXPECT_TRUE(first.metadataFastPath);
   EXPECT_EQ(first.restoreBatches, 0);
 
   // Select only the middle row group and overlap on c1. c1 hits while c2 is
@@ -469,22 +474,39 @@ TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {
   EXPECT_EQ(second.chunks, 1);
   EXPECT_EQ(second.rows, kRowsPerRowGroup);
   EXPECT_FALSE(second.fullyCached);
+  EXPECT_FALSE(second.metadataFastPath);
   EXPECT_EQ(second.restoreBatches, 1);
 
   // A full hit must not open the file for its footer or column data.
   ASSERT_TRUE(std::filesystem::remove(dataFile->getPath()));
   auto third = read(
-      {"c1", "c2"},
-      ROW({"c1", "c2"}, {BIGINT(), BIGINT()}),
-      middleRowGroupOffset,
-      1);
+      {"c0", "c1"},
+      ROW({"c0", "c1"}, {BIGINT(), BIGINT()}),
+      0,
+      std::numeric_limits<uint64_t>::max());
   EXPECT_EQ(third.hits, 2);
   EXPECT_EQ(third.misses, 0);
   EXPECT_EQ(third.decodeCalls, 0);
   EXPECT_EQ(third.chunks, 1);
-  EXPECT_EQ(third.rows, kRowsPerRowGroup);
+  EXPECT_EQ(third.rows, kRowsPerRowGroup * kNumRowGroups);
   EXPECT_TRUE(third.fullyCached);
+  EXPECT_TRUE(third.metadataFastPath);
   EXPECT_EQ(third.restoreBatches, 1);
+
+  // A cached byte-range hit retains the hybrid-reader selection path.
+  auto fourth = read(
+      {"c1", "c2"},
+      ROW({"c1", "c2"}, {BIGINT(), BIGINT()}),
+      middleRowGroupOffset,
+      1);
+  EXPECT_EQ(fourth.hits, 2);
+  EXPECT_EQ(fourth.misses, 0);
+  EXPECT_EQ(fourth.decodeCalls, 0);
+  EXPECT_EQ(fourth.chunks, 1);
+  EXPECT_EQ(fourth.rows, kRowsPerRowGroup);
+  EXPECT_TRUE(fourth.fullyCached);
+  EXPECT_FALSE(fourth.metadataFastPath);
+  EXPECT_EQ(fourth.restoreBatches, 1);
 }
 
 TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {
@@ -566,6 +588,7 @@ TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {
     size_t chunks;
     size_t rows;
     bool fullyCached;
+    bool metadataFastPath;
   };
   auto read = [&]() {
     auto split =
@@ -585,10 +608,13 @@ TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {
         std::make_shared<io::IoStatistics>(),
         std::make_shared<IoStats>(),
         true,
-        &filterExpr);
+        &filterExpr,
+        "c0=0..9");
     dwio::common::RuntimeStats runtimeStats;
     reader.prepareSplit(runtimeStats);
     const auto fullyCached = reader.isFullyDecodedColumnCacheHit();
+    const auto metadataFastPath =
+        reader.usedDecodedColumnCacheMetadataFastPath();
     size_t chunks = 0;
     size_t rows = 0;
     while (auto chunk = reader.next(0)) {
@@ -602,7 +628,8 @@ TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {
         reader.decodedColumnCacheDecodeCalls(),
         chunks,
         rows,
-        fullyCached};
+        fullyCached,
+        metadataFastPath};
   };
 
   // Footer statistics prune the middle row group. The two surviving,
@@ -615,6 +642,7 @@ TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {
   EXPECT_EQ(cold.chunks, 1);
   EXPECT_EQ(cold.rows, 8);
   EXPECT_FALSE(cold.fullyCached);
+  EXPECT_FALSE(cold.metadataFastPath);
 
   ASSERT_TRUE(std::filesystem::remove(dataFile->getPath()));
   auto hot = read();
@@ -624,6 +652,7 @@ TEST_F(CudfSplitReaderTest, cachesStatsPrunedNonContiguousRowGroups) {
   EXPECT_EQ(hot.chunks, 1);
   EXPECT_EQ(hot.rows, 8);
   EXPECT_TRUE(hot.fullyCached);
+  EXPECT_TRUE(hot.metadataFastPath);
 }
 
 } // namespace

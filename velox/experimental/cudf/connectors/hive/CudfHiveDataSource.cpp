@@ -38,10 +38,32 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/transform.hpp>
 
+#include <algorithm>
+
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+std::string rowGroupSelectionFilterKey(
+    const common::SubfieldFilters& filters) {
+  std::vector<std::string> entries;
+  entries.reserve(filters.size());
+  for (const auto& [field, filter] : filters) {
+    VELOX_CHECK_NOT_NULL(filter);
+    entries.push_back(fmt::format("{}={}", field.toString(), filter->toString()));
+  }
+  std::sort(entries.begin(), entries.end());
+  std::string result;
+  for (const auto& entry : entries) {
+    result += fmt::format("{}:{}", entry.size(), entry);
+  }
+  return result;
+}
+
+} // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -148,6 +170,8 @@ CudfHiveDataSource::CudfHiveDataSource(
     subfieldFilterExpr_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
+  rowGroupSelectionFilterKey_ =
+      rowGroupSelectionFilterKey(subfieldFilters_);
 
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
 
@@ -174,7 +198,8 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterExpr_,
+      rowGroupSelectionFilterKey_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {

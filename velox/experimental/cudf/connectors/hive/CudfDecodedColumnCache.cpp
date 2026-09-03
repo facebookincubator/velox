@@ -41,6 +41,7 @@
 #include <functional>
 #include <limits>
 #include <mutex>
+#include <numeric>
 #include <tuple>
 #include <unordered_map>
 
@@ -59,6 +60,21 @@ struct FileKeyHash {
     size_t seed = 0;
     hashCombine(seed, key.connectorId);
     hashCombine(seed, key.filePath);
+    return seed;
+  }
+};
+
+struct RowGroupSelectionKeyHash {
+  size_t operator()(
+      const CudfDecodedColumnCache::RowGroupSelectionKey& key) const {
+    size_t seed = FileKeyHash{}(key.file);
+    hashCombine(seed, key.splitStart);
+    hashCombine(seed, key.splitSize);
+    hashCombine(seed, key.filterKey);
+    hashCombine(seed, static_cast<int>(key.timestampType));
+    hashCombine(seed, key.usePandasMetadata);
+    hashCombine(seed, key.useArrowSchema);
+    hashCombine(seed, key.allowMismatchedSchemas);
     return seed;
   }
 };
@@ -274,6 +290,11 @@ struct CudfDecodedColumnCache::Impl {
   std::atomic<uint64_t> decompressionNanos{0};
   std::atomic<uint64_t> pipelinedRestoreBatches{0};
   std::unordered_map<FileKey, MetadataPtr, FileKeyHash> metadata;
+  std::unordered_map<
+      RowGroupSelectionKey,
+      RowGroupSelectionPtr,
+      RowGroupSelectionKeyHash>
+      rowGroupSelections;
   std::unordered_map<ColumnKey, std::vector<ColumnRangePtr>, ColumnKeyHash>
       columns;
 };
@@ -344,9 +365,44 @@ CudfDecodedColumnCache::MetadataPtr CudfDecodedColumnCache::findMetadata(
 CudfDecodedColumnCache::MetadataPtr
 CudfDecodedColumnCache::insertMetadataIfAbsent(
     FileKey key,
-    MetadataPtr metadata) {
+    ParquetMetadataPtr metadata) {
+  VELOX_CHECK_NOT_NULL(metadata);
+  auto candidate = std::make_shared<CachedParquetFileMetadata>();
+  candidate->parquetMetadata = std::move(metadata);
+  const auto numRowGroups = candidate->parquetMetadata->row_groups.size();
+  candidate->rowOffsets.reserve(numRowGroups + 1);
+  candidate->rowOffsets.push_back(0);
+  for (const auto& rowGroup : candidate->parquetMetadata->row_groups) {
+    VELOX_CHECK_GE(rowGroup.num_rows, 0);
+    candidate->rowOffsets.push_back(
+        candidate->rowOffsets.back() + rowGroup.num_rows);
+  }
+  candidate->allRowGroups.resize(numRowGroups);
+  std::iota(
+      candidate->allRowGroups.begin(), candidate->allRowGroups.end(), 0);
+
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->metadata.try_emplace(std::move(key), std::move(metadata))
+  return impl_->metadata.try_emplace(std::move(key), std::move(candidate))
+      .first->second;
+}
+
+CudfDecodedColumnCache::RowGroupSelectionPtr
+CudfDecodedColumnCache::findRowGroupSelection(
+    const RowGroupSelectionKey& key) const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  const auto it = impl_->rowGroupSelections.find(key);
+  return it == impl_->rowGroupSelections.end() ? nullptr : it->second;
+}
+
+CudfDecodedColumnCache::RowGroupSelectionPtr
+CudfDecodedColumnCache::insertRowGroupSelectionIfAbsent(
+    RowGroupSelectionKey key,
+    std::vector<cudf::size_type> rowGroups) {
+  auto candidate = std::make_shared<const std::vector<cudf::size_type>>(
+      std::move(rowGroups));
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return impl_->rowGroupSelections
+      .try_emplace(std::move(key), std::move(candidate))
       .first->second;
 }
 
@@ -788,6 +844,7 @@ void CudfDecodedColumnCache::clearForTesting() {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->columns.clear();
   impl_->metadata.clear();
+  impl_->rowGroupSelections.clear();
   impl_->insertedUncompressedBytes.store(0, std::memory_order_relaxed);
   impl_->insertedStoredBytes.store(0, std::memory_order_relaxed);
   impl_->insertedCompressedRanges.store(0, std::memory_order_relaxed);
