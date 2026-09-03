@@ -24,6 +24,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/rpc/BackendErrorSummary.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
@@ -43,6 +44,57 @@
 namespace facebook::velox::exec::rpc {
 
 using namespace facebook::velox::exec::test;
+
+// The one useful sentence of a measured backend rejection, and the prefix the
+// operator puts in front of it.
+const std::string kBackendSentence =
+    "apache::thrift::TApplicationException: you must supply a metagen key in "
+    "the auth token field of the request";
+const std::string kOperatorErrorPrefix = "[RPC_BATCH] batch error: ";
+
+// Fails the whole batch the way a real backend rejection arrives — one
+// sentence followed by a server-side stack trace — and writes each row's error
+// text into the output column, which is what meta_ai_on_error='error_message'
+// does and where an untruncated trace would land.
+class TraceFailingBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  TraceFailingBatchRPCFunction() : DemoBatchRPCFunction() {}
+
+  static std::string backendMessage() {
+    std::string message = kBackendSentence;
+    for (int frame = 0; frame < 50; ++frame) {
+      message += "\n#" + std::to_string(frame) +
+          " /www/flib/gen_ai/metagen/"
+          "TMetaGenAsyncHandlerBatchDialogCompletion.php(" +
+          std::to_string(100 + frame) + "): batchDialogCompletion()";
+    }
+    return message;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    // Drain through the base so the accumulated rows are consumed and
+    // noMoreInput() terminates, then fail the flush future.
+    DemoBatchRPCFunction::flushBatch(maxRows);
+    return folly::makeSemiFuture<std::vector<RPCResponse>>(
+        std::runtime_error(backendMessage()));
+  }
+
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    auto result = BaseVector::create<FlatVector<StringView>>(
+        VARCHAR(), static_cast<vector_size_t>(responses.size()), pool);
+    for (size_t i = 0; i < responses.size(); ++i) {
+      // set() copies, so a StringView over the response's own storage is safe.
+      const std::string& text = responses[i].error.value_or("");
+      result->set(
+          static_cast<vector_size_t>(i),
+          StringView(text.data(), static_cast<int32_t>(text.size())));
+    }
+    return result;
+  }
+};
 
 class RPCOperatorTest : public OperatorTestBase {
  protected:
@@ -86,6 +138,9 @@ class RPCOperatorTest : public OperatorTestBase {
               /*failWholeBatch=*/true,
               /*failOnError=*/true);
         });
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_whole_fail_trace",
+        []() { return std::make_shared<TraceFailingBatchRPCFunction>(); });
     // Returns fewer responses than rows (function-contract violation): the
     // operator's scatter must hard-fail on the count mismatch.
     AsyncRPCFunctionRegistry::registerFunction(
@@ -590,6 +645,34 @@ TEST_F(RPCOperatorTest, batchWholeBatchFailureDegradesToNull) {
   for (vector_size_t i = 0; i < result->size(); ++i) {
     EXPECT_TRUE(results->isNullAt(i))
         << "row " << i << " should degrade to NULL on whole-batch failure";
+  }
+}
+
+// A whole-batch failure fans one backend message out to every row. The message
+// is the server's sentence followed by its stack trace, so the operator has to
+// summarize it before the fan-out — otherwise every cell carries thousands of
+// characters of trace and the trace is allocated once per row.
+TEST_F(RPCOperatorTest, batchWholeBatchFailureSummarizesBackendError) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_whole_fail_trace");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    const std::string cell = results->valueAt(i).str();
+    EXPECT_NE(cell.find(kBackendSentence), std::string::npos)
+        << "row " << i << " should keep the backend's leading sentence";
+    EXPECT_EQ(cell.find(".php"), std::string::npos)
+        << "row " << i << " should not carry a stack frame";
+    EXPECT_LE(cell.size(), kOperatorErrorPrefix.size() + kMaxBackendErrorBytes)
+        << "row " << i << " exceeds the backend error cap";
   }
 }
 
