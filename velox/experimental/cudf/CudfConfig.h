@@ -78,7 +78,13 @@ struct CudfConfig {
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};
 
-  /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput).
+  /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput). This
+  /// is a capability, not a request: it is read once at registerCudf() to
+  /// decide whether the UCX transports are registered in this process at all.
+  /// Which transport a given edge uses is named per node in the plan, so
+  /// different edges of one plan may differ. Naming a transport nothing
+  /// registered -- kUcx while this is false, or on a worker built without the
+  /// UCX exchange -- is a user error from exec::Task, never a silent fallback.
   bool exchange{false};
 
   /// Whether to enable error handling in UCXX endpoints.
