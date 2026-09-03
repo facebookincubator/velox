@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <numeric>
 #include <optional>
 #include <string_view>
@@ -6322,21 +6323,21 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeRow) {
 
   struct ParallelDecodeParam {
     uint32_t maxDecodeParallelism;
-    uint32_t minStreamsPerDecodeUnit;
+    uint32_t minStreamsPerDecodeTask;
     uint32_t expectedTaskCount;
 
     std::string debugString() const {
       return fmt::format(
           "maxParallel={}, minStreams={}, expectedTasks={}",
           maxDecodeParallelism,
-          minStreamsPerDecodeUnit,
+          minStreamsPerDecodeTask,
           expectedTaskCount);
     }
   };
 
   // 8 children: test different parallelism combinations.
-  // parallelDecodeEnabled requires numChildren >= minStreamsPerDecodeUnit * 2,
-  // so all test cases must satisfy 8 >= minStreams * 2.
+  // Parallel decode requires numChildren >= minStreamsPerDecodeTask * 2, so
+  // all test cases must satisfy 8 >= minStreams * 2.
   const std::vector<ParallelDecodeParam> testCases = {
       {2, 1, 2}, // 2 tasks, 4 children each
       {4, 1, 4}, // 4 tasks, 2 children each
@@ -6354,7 +6355,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeRow) {
     auto opts = deserializerOptions();
     opts.decodeExecutor = &executor;
     opts.maxDecodeParallelism = testCase.maxDecodeParallelism;
-    opts.minStreamsPerDecodeUnit = testCase.minStreamsPerDecodeUnit;
+    opts.minStreamsPerDecodeTask = testCase.minStreamsPerDecodeTask;
 
     Deserializer deserializer{schema, pool_.get(), opts};
 
@@ -6382,6 +6383,94 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeRow) {
       EXPECT_EQ(taskCount, testCase.expectedTaskCount);
     }
   }
+}
+
+DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeNestedRows) {
+  velox::common::testutil::TestValue::enable();
+
+  const auto nestedType = velox::ROW({
+      {"integer", velox::BIGINT()},
+      {"floating_point", velox::DOUBLE()},
+  });
+  const auto type = velox::ROW({
+      {"left", nestedType},
+      {"right", nestedType},
+  });
+  velox::VectorFuzzer fuzzer({.vectorSize = 50, .nullRatio = 0}, pool_.get());
+  const auto input = fuzzer.fuzzInputRow(
+      std::dynamic_pointer_cast<const velox::RowType>(type));
+
+  Serializer serializer{
+      SerializerOptions{.version = version()}, type, pool_.get()};
+  const auto serialized =
+      serializer.serialize(input, OrderedRanges::of(0, input->size()));
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  folly::CPUThreadPoolExecutor executor{2};
+  auto options = deserializerOptions();
+  options.decodeExecutor = &executor;
+  options.maxDecodeParallelism = 2;
+
+  std::atomic_uint32_t parallelDecodeCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::RowFieldReader::co_next",
+      std::function<void(const uint32_t*)>(
+          [&](const uint32_t*) { ++parallelDecodeCount; }));
+
+  Deserializer deserializer{schema, pool_.get(), options};
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, output);
+
+  ASSERT_EQ(output->size(), input->size());
+  for (velox::vector_size_t row = 0; row < output->size(); ++row) {
+    EXPECT_TRUE(output->equalValueAt(input.get(), row, row));
+  }
+  EXPECT_EQ(parallelDecodeCount, 3);
+}
+
+DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeNestedRowsInArrays) {
+  velox::common::testutil::TestValue::enable();
+
+  const auto nestedType = velox::ROW({
+      {"integer", velox::BIGINT()},
+      {"floatingPoint", velox::DOUBLE()},
+  });
+  const auto type = velox::ROW({
+      {"left", velox::ARRAY(nestedType)},
+      {"right", velox::ARRAY(nestedType)},
+  });
+  velox::VectorFuzzer fuzzer({.vectorSize = 50, .nullRatio = 0}, pool_.get());
+  const auto input = fuzzer.fuzzInputRow(
+      std::dynamic_pointer_cast<const velox::RowType>(type));
+
+  Serializer serializer{
+      SerializerOptions{.version = version()}, type, pool_.get()};
+  const auto serialized =
+      serializer.serialize(input, OrderedRanges::of(0, input->size()));
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  folly::CPUThreadPoolExecutor executor{2};
+  auto options = deserializerOptions();
+  options.decodeExecutor = &executor;
+  options.maxDecodeParallelism = 2;
+
+  std::atomic_uint32_t numParallelRowDecodes{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::RowFieldReader::co_next",
+      std::function<void(const uint32_t*)>(
+          [&](const uint32_t*) { ++numParallelRowDecodes; }));
+
+  Deserializer deserializer{schema, pool_.get(), options};
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, output);
+
+  ASSERT_EQ(output->size(), input->size());
+  for (velox::vector_size_t row = 0; row < output->size(); ++row) {
+    EXPECT_TRUE(output->equalValueAt(input.get(), row, row));
+  }
+  EXPECT_EQ(numParallelRowDecodes, 3);
 }
 
 // Verifies that parallel decode is triggered for StructFlatMapFieldReader
@@ -6472,25 +6561,25 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeFlatMapAsStruct) {
 
   struct ParallelDecodeParam {
     uint32_t maxDecodeParallelism;
-    uint32_t minStreamsPerDecodeUnit;
+    uint32_t minStreamsPerDecodeTask;
     // Expected task count for the StructFlatMapFieldReader (8 keys).
     uint32_t expectedFlatMapTaskCount;
     // Whether parallel decode is expected for the Row (2 children: id +
-    // features). Depends on whether 2 >= minStreamsPerDecodeUnit * 2.
+    // features). Depends on whether 2 >= minStreamsPerDecodeTask * 2.
     bool rowParallelExpected;
 
     std::string debugString() const {
       return fmt::format(
           "maxParallel={}, minStreams={}, expectedFlatMapTasks={}, rowParallel={}",
           maxDecodeParallelism,
-          minStreamsPerDecodeUnit,
+          minStreamsPerDecodeTask,
           expectedFlatMapTaskCount,
           rowParallelExpected);
     }
   };
 
   // 8 flatmap keys -> 8 children in StructFlatMapFieldReader.
-  // parallelDecodeEnabled requires numChildren >= minStreamsPerDecodeUnit * 2.
+  // Parallel decode requires numChildren >= minStreamsPerDecodeTask * 2.
   const std::vector<ParallelDecodeParam> testCases = {
       {2, 1, 2, true},
       {4, 1, 4, true},
@@ -6507,7 +6596,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeFlatMapAsStruct) {
     opts.outputType = outputType;
     opts.decodeExecutor = &executor;
     opts.maxDecodeParallelism = testCase.maxDecodeParallelism;
-    opts.minStreamsPerDecodeUnit = testCase.minStreamsPerDecodeUnit;
+    opts.minStreamsPerDecodeTask = testCase.minStreamsPerDecodeTask;
 
     Deserializer deserializer{schema, pool_.get(), opts};
 
@@ -6650,7 +6739,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeSkippedFewKeys) {
   opts.outputType = outputType;
   opts.decodeExecutor = &executor;
   opts.maxDecodeParallelism = 4;
-  opts.minStreamsPerDecodeUnit = 1;
+  opts.minStreamsPerDecodeTask = 1;
 
   Deserializer deserializer{schema, pool_.get(), opts};
 
@@ -6753,7 +6842,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeDisabled) {
     auto opts = deserializerOptions();
     opts.decodeExecutor = testCase.hasExecutor ? &executor : nullptr;
     opts.maxDecodeParallelism = testCase.maxDecodeParallelism;
-    opts.minStreamsPerDecodeUnit = 1;
+    opts.minStreamsPerDecodeTask = 1;
 
     Deserializer deserializer{schema, pool_.get(), opts};
 
@@ -6890,7 +6979,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeDisabledFlatMap) {
     opts.outputType = outputType;
     opts.decodeExecutor = testCase.hasExecutor ? &executor : nullptr;
     opts.maxDecodeParallelism = testCase.maxDecodeParallelism;
-    opts.minStreamsPerDecodeUnit = 1;
+    opts.minStreamsPerDecodeTask = 1;
 
     Deserializer deserializer{schema, pool_.get(), opts};
 
