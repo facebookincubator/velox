@@ -418,7 +418,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
 
   // If insertHandle_ is not specified, build a HiveInsertTableHandle along with
   // columnHandles, bucketProperty and locationHandle.
-  if (!insertHandle_) {
+  if (insertHandle_ == nullptr) {
     // Create column handles.
     std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
         columnHandles;
@@ -449,7 +449,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           targetColumns, bucketCount_, bucketedBy_, sortBy_);
     }
 
-    auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
+    insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
         fileFormat_,
@@ -457,11 +457,14 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
         compressionKind_,
         serdeParameters_,
         options_,
-        ensureFiles_);
-
-    insertHandle_ =
-        std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
+        ensureFiles_,
+        // Repeats the constructor's default so that storageParameters, which
+        // follows it positionally, can be passed.
+        std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
+        storageParameters_);
   }
+  const auto insertTableHandle = std::make_shared<core::InsertTableHandle>(
+      connectorId_, insertHandle_, notNullColumns_);
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
   if (!aggregates_.empty()) {
@@ -485,7 +488,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
       targetColumns,
       targetColumns->names(),
       columnStatsSpec,
-      insertHandle_,
+      insertTableHandle,
       false,
       TableWriteTraits::outputType(columnStatsSpec),
       commitStrategy_,
@@ -806,7 +809,8 @@ PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& schema,
     const bool ensureFiles,
     const connector::CommitStrategy commitStrategy,
-    std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
+    connector::ConnectorInsertTableHandlePtr insertTableHandle,
+    const std::unordered_map<std::string, std::string>& storageParameters) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
@@ -819,6 +823,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .aggregates(aggregates)
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
+      .storageParameters(storageParameters)
       .options(options)
       .compressionKind(compressionKind)
       .ensureFiles(ensureFiles)
@@ -2272,14 +2277,14 @@ PlanBuilder& PlanBuilder::unnest(
     unnestFields.emplace_back(field(name));
   }
 
-  std::vector<std::string> unnestNames;
+  std::vector<std::optional<std::string>> unnestNames;
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
     if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
+      unnestNames.emplace_back(name + "_e");
     } else if (input->isMap()) {
-      unnestNames.push_back(name + "_k");
-      unnestNames.push_back(name + "_v");
+      unnestNames.emplace_back(name + "_k");
+      unnestNames.emplace_back(name + "_v");
     } else {
       VELOX_NYI(
           "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",

@@ -27,9 +27,8 @@
 #include "velox/dwio/nimble/encodings/legacy/TrivialEncoding.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 
-#include <folly/coro/BlockingWait.h>
+#include <folly/Conv.h>
 #include <folly/coro/Collect.h>
-#include <folly/coro/Invoke.h>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/FlatMapHelper.h"
 #include "velox/vector/ComplexVector.h"
@@ -295,14 +294,17 @@ class NullColumnReader final : public FieldReader {
     return std::optional<std::pair<uint32_t, uint64_t>>({0, 0});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
     ensureNullConstant(type_, scatterCount(count, scatterBitmap), output);
+    co_return;
   }
 
-  void skip(uint32_t /* count */) final {}
+  folly::coro::Task<void> co_skip(uint32_t /*count*/) final {
+    co_return;
+  }
 };
 
 class NullFieldReaderFactory final : public FieldReaderFactory {
@@ -451,7 +453,7 @@ class ScalarFieldReader final
         {rowCount, totalBytes / rowCount});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
@@ -545,10 +547,12 @@ class ScalarFieldReader final
         upcastWithNulls();
       }
     }
+    co_return;
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     decoder_->skip(count);
+    co_return;
   }
 };
 
@@ -671,7 +675,7 @@ class StringFieldReader final : public FieldReader {
                                {rowCount, totalBytes / rowCount});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
@@ -709,10 +713,12 @@ class StringFieldReader final : public FieldReader {
     }
     // Use shared ownership of the buffers
     vector->setStringBuffers(std::move(stringBuffers));
+    co_return;
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     decoder_->skip(count);
+    co_return;
   }
 
  private:
@@ -777,7 +783,7 @@ class LegacyStringFieldReader final : public FieldReader {
                                {rowCount, totalBytes / rowCount});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
@@ -798,6 +804,9 @@ class LegacyStringFieldReader final : public FieldReader {
         scatterBitmap);
     size_t totalLength = 0;
     const bool hasNulls = (nonNullCount != rowCount);
+    // A column that is entirely null over this batch would make both passes
+    // over |rowCount| below run only to move nothing.
+    const bool allNull = (nonNullCount == 0);
     if (!hasNulls) {
       vector->resetNulls();
       for (uint32_t i = 0; i < rowCount; ++i) {
@@ -805,9 +814,11 @@ class LegacyStringFieldReader final : public FieldReader {
       }
     } else {
       vector->setNullCount(rowCount - nonNullCount);
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        if (!vector->isNullAt(i)) {
-          totalLength += buffer_[i].length();
+      if (!allNull) {
+        for (uint32_t i = 0; i < rowCount; ++i) {
+          if (!vector->isNullAt(i)) {
+            totalLength += buffer_[i].length();
+          }
         }
       }
     }
@@ -824,7 +835,7 @@ class LegacyStringFieldReader final : public FieldReader {
             velox::StringView(dataPtr + currentOffset, buffer_[i].length());
         currentOffset += buffer_[i].length();
       }
-    } else {
+    } else if (!allNull) {
       for (uint32_t i = 0; i < rowCount; ++i) {
         if (!vector->isNullAt(i)) {
           std::copy(
@@ -836,10 +847,12 @@ class LegacyStringFieldReader final : public FieldReader {
       }
     }
     vector->setStringBuffers({data});
+    co_return;
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     decoder_->skip(count);
+    co_return;
   }
 
  private:
@@ -913,7 +926,7 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
         {rowCount, totalBytes / rowCount});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
@@ -959,9 +972,10 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
         }
       }
     }
+    co_return;
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     std::array<int64_t, kSkipBatchSize> microsBuffer{};
     std::array<char, nullBytes(kSkipBatchSize)> nulls{};
     uint32_t nonNullCount = 0;
@@ -981,6 +995,7 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
     if (nonNullCount > 0) {
       nanosDecoder_->skip(nonNullCount);
     }
+    co_return;
   }
 
   void reset() final {
@@ -1203,26 +1218,25 @@ class ArrayFieldReader final : public MultiValueFieldReader {
     }
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
-    auto childrenRows = this->template loadOffsets<velox::ArrayVector>(
+    const auto childrenRows = this->template loadOffsets<velox::ArrayVector>(
         count, output, scatterBitmap);
 
-    // As the fields are aligned by lengths decoder so no need to pass scatter
-    // to elements
-    elementsReader_->next(
+    co_await elementsReader_->co_next(
         childrenRows,
         static_cast<velox::ArrayVector&>(*output).elements(),
-        /* scatterBitmap */ nullptr);
+        /*scatterBitmap=*/nullptr);
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     auto childrenCount = this->skipLengths(count);
     if (childrenCount > 0) {
-      elementsReader_->skip(childrenCount);
+      co_await elementsReader_->co_skip(childrenCount);
     }
+    co_return;
   }
 
   void reset() final {
@@ -1286,7 +1300,7 @@ class ArrayWithOffsetsFieldReader final : public MultiValueFieldReader {
     return std::nullopt;
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
@@ -1362,20 +1376,20 @@ class ArrayWithOffsetsFieldReader final : public MultiValueFieldReader {
 
     if (cached_ && cachedLazyLoad_) {
       if (cachedLocally) {
-        elementsReader_->next(
+        co_await elementsReader_->co_next(
             cachedLazyChildrenRows_,
             static_cast<velox::ArrayVector&>(*cachedValue_).elements(),
-            /* scatterBitmap */ nullptr);
+            /*scatterBitmap=*/nullptr);
       } else {
-        elementsReader_->skip(cachedLazyChildrenRows_);
+        co_await elementsReader_->co_skip(cachedLazyChildrenRows_);
       }
       cachedLazyLoad_ = false;
     }
 
-    elementsReader_->next(
+    co_await elementsReader_->co_next(
         childrenRows,
         static_cast<velox::ArrayVector&>(*dictionaryValues).elements(),
-        /* scatterBitmap */ nullptr);
+        /*scatterBitmap=*/nullptr);
 
     if (cachedLocally) {
       auto vector = static_cast<velox::ArrayVector*>(dictionaryValues.get());
@@ -1476,9 +1490,10 @@ class ArrayWithOffsetsFieldReader final : public MultiValueFieldReader {
         }
       }
     }
+    co_return;
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     // read the offsets/indices which is one value per rowCount
     // and filter out deduped arrays to be read
     std::array<OffsetType, kSkipBatchSize> indices;
@@ -1511,12 +1526,10 @@ class ArrayWithOffsetsFieldReader final : public MultiValueFieldReader {
             cached_ && cachedLazyLoad_ ? cachedLazyChildrenRows_ : 0;
         childrenRows += this->skipLengths(dedupCount - 1);
         if (childrenRows > 0) {
-          elementsReader_->skip(childrenRows);
+          co_await elementsReader_->co_skip(childrenRows);
         }
 
-        /// cache the last child
-
-        // get the index for this last element which must be non-null
+        // Get the index for the last child, which must be non-null.
         cachedIndex_ =
             indices[findLastBit(batchedRowCount, hasNulls, nullsPtr)];
         cached_ = true;
@@ -1529,6 +1542,7 @@ class ArrayWithOffsetsFieldReader final : public MultiValueFieldReader {
 
       count -= batchedRowCount;
     }
+    co_return;
   }
 
   void reset() final {
@@ -1692,7 +1706,7 @@ class SlidingWindowMapFieldReader final : public FieldReader {
     return std::nullopt;
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) override {
@@ -1758,14 +1772,16 @@ class SlidingWindowMapFieldReader final : public FieldReader {
 
     // Return early if everything is null
     if (nonNullCount == 0) {
-      return;
+      co_return;
     }
 
     bool hasNulls = nonNullCount != rowCount;
     // Read the lengths
-    uint32_t lengthBuffer[nonNullCount];
+    Vector<uint32_t> lengthBuffer{pool_};
+    lengthBuffer.resize(nonNullCount);
     std::vector<velox::BufferPtr> lengthStringBuffers;
-    lengthsDecoder_->next(nonNullCount, lengthBuffer, lengthStringBuffers);
+    lengthsDecoder_->next(
+        nonNullCount, lengthBuffer.data(), lengthStringBuffers);
 
     // Convert the offsets and lengths to a list of unique offsets and lengths
     // and update the indices to be 0-based indices
@@ -1866,14 +1882,14 @@ class SlidingWindowMapFieldReader final : public FieldReader {
     }
 
     if (childrenRows > 0) {
-      keysReader_->next(
+      co_await keysReader_->co_next(
           childrenRows,
           map->mapKeys(),
-          /* scatterBitmap */ nullptr);
-      valuesReader_->next(
+          /*scatterBitmap=*/nullptr);
+      co_await valuesReader_->co_next(
           childrenRows,
           map->mapValues(),
-          /* scatterBitmap */ nullptr);
+          /*scatterBitmap=*/nullptr);
     }
 
     currentOffset_ = endOffset;
@@ -1946,11 +1962,12 @@ class SlidingWindowMapFieldReader final : public FieldReader {
       // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
       cacheOffset_ = deduplicatedOffsets.back();
     }
+    co_return;
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     if (count == 0) {
-      return;
+      co_return;
     }
 
     // @lint-ignore CLANGTIDY cppcoreguidelines-pro-type-member-init
@@ -2060,51 +2077,49 @@ class SlidingWindowMapFieldReader final : public FieldReader {
     }
 
     if (childrenSkip == 0) {
-      return;
+      co_return;
     }
 
     childrenSkip -= lastLength;
 
     if (childrenSkip > 0) {
-      keysReader_->skip(childrenSkip);
-      valuesReader_->skip(childrenSkip);
+      co_await keysReader_->co_skip(childrenSkip);
+      co_await valuesReader_->co_skip(childrenSkip);
     }
 
     if (lastLength == 0) {
-      return;
+      co_return;
     }
 
     auto& cachedMap = static_cast<velox::MapVector&>(*cachedMap_);
     cachedMap_->resize(1);
     cacheOffset_ = lastOffset;
     currentOffset_ += lastLength;
-    keysReader_->next(
-        lastLength,
-        cachedMap.mapKeys(),
-        /* scatterBitmap */ nullptr);
-    valuesReader_->next(
-        lastLength,
-        cachedMap.mapValues(),
-        /* scatterBitmap */ nullptr);
+    co_await keysReader_->co_next(
+        lastLength, cachedMap.mapKeys(), /*scatterBitmap=*/nullptr);
+    co_await valuesReader_->co_next(
+        lastLength, cachedMap.mapValues(), /*scatterBitmap=*/nullptr);
 
     cachedMap.mutableOffsets(1)->template asMutable<uint32_t>()[0] = 0;
     cachedMap.mutableSizes(1)->template asMutable<uint32_t>()[0] = lastLength;
+    co_return;
   }
 
   // Move the cursor of key and value readers to the given offset
-  void seek(uint32_t offset) {
+  folly::coro::Task<void> co_seek(uint32_t offset) {
     if (offset == currentOffset_) {
-      return;
+      co_return;
     } else if (offset < currentOffset_) {
       keysReader_->reset();
       valuesReader_->reset();
-      keysReader_->skip(offset);
-      valuesReader_->skip(offset);
+      co_await keysReader_->co_skip(offset);
+      co_await valuesReader_->co_skip(offset);
     } else {
-      keysReader_->skip(offset - currentOffset_);
-      valuesReader_->skip(offset - currentOffset_);
+      co_await keysReader_->co_skip(offset - currentOffset_);
+      co_await valuesReader_->co_skip(offset - currentOffset_);
     }
     currentOffset_ = offset;
+    co_return;
   }
 
   void reset() final {
@@ -2219,28 +2234,27 @@ class MapFieldReader final : public MultiValueFieldReader {
                                {rowCount, totalBytes / rowCount});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
-    auto childrenRows = this->template loadOffsets<velox::MapVector>(
+    const auto childrenRows = this->template loadOffsets<velox::MapVector>(
         count, output, scatterBitmap);
 
-    // As the field is aligned by lengths decoder then no need to pass
-    // scatterBitmap to keys and values
     auto& mapVector = static_cast<velox::MapVector&>(*output);
-    keysReader_->next(
-        childrenRows, mapVector.mapKeys(), /* scatterBitmap */ nullptr);
-    valuesReader_->next(
-        childrenRows, mapVector.mapValues(), /* scatterBitmap */ nullptr);
+    co_await keysReader_->co_next(
+        childrenRows, mapVector.mapKeys(), /*scatterBitmap=*/nullptr);
+    co_await valuesReader_->co_next(
+        childrenRows, mapVector.mapValues(), /*scatterBitmap=*/nullptr);
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     auto childrenCount = this->skipLengths(count);
     if (childrenCount > 0) {
-      keysReader_->skip(childrenCount);
-      valuesReader_->skip(childrenCount);
+      co_await keysReader_->co_skip(childrenCount);
+      co_await valuesReader_->co_skip(childrenCount);
     }
+    co_return;
   }
 
   void reset() final {
@@ -2412,30 +2426,6 @@ class RowFieldReader final : public FieldReader {
                                {rowCount, totalBytes / rowCount});
   }
 
-  void next(
-      uint32_t count,
-      velox::VectorPtr& output,
-      const velox::bits::Bitmap* scatterBitmap) final {
-    if (parallelDecodeEnabled(childrenReaders_.size())) {
-      folly::coro::blockingWait(co_next(count, output, scatterBitmap));
-      return;
-    }
-    const auto outputContext = prepareOutput(count, output, scatterBitmap);
-    velox::bits::Bitmap bitmap{
-        outputContext.scatterNullBits, outputContext.rowCount};
-    auto* bitmapPtr =
-        outputContext.scatterNullBits != nullptr ? &bitmap : nullptr;
-    for (uint32_t i = 0; i < childrenReaders_.size(); ++i) {
-      auto& reader = childrenReaders_[i];
-      if (reader != nullptr) {
-        reader->next(
-            outputContext.selectedNonNullCount,
-            outputContext.vector->childAt(i),
-            bitmapPtr);
-      }
-    }
-  }
-
   folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
@@ -2455,30 +2445,37 @@ class RowFieldReader final : public FieldReader {
       co_return;
     }
 
-    const uint32_t taskCount =
-        computeParallelDecodeTaskCount(nonNullChildren.size());
-    velox::common::testutil::TestValue::adjust(
-        "facebook::nimble::RowFieldReader::co_next",
-        const_cast<uint32_t*>(&taskCount));
-
-    const uint32_t childrenPerTask = nonNullChildren.size() / taskCount;
-    const uint32_t numRemainderChildren = nonNullChildren.size() % taskCount;
-
-    // Decodes children in [startIdx, endIdx) synchronously.
+    // Decodes children in [startIdx, endIdx).
     auto decodeRange = [this, &outputContext, &nonNullChildren](
-                           uint32_t startIdx, uint32_t endIdx) {
+                           uint32_t startIdx,
+                           uint32_t endIdx) -> folly::coro::Task<void> {
       velox::bits::Bitmap bitmap{
           outputContext.scatterNullBits, outputContext.rowCount};
       auto* bitmapPtr =
           outputContext.scatterNullBits != nullptr ? &bitmap : nullptr;
       for (uint32_t idx = startIdx; idx < endIdx; ++idx) {
         const auto i = nonNullChildren[idx];
-        childrenReaders_[i]->next(
+        co_await childrenReaders_[i]->co_next(
             outputContext.selectedNonNullCount,
             outputContext.vector->childAt(i),
             bitmapPtr);
       }
+      co_return;
     };
+
+    const auto numChildren = folly::to<uint32_t>(nonNullChildren.size());
+    const uint32_t taskCount = decodeTaskCount(numChildren);
+    if (taskCount <= 1) {
+      co_await decodeRange(0, numChildren);
+      co_return;
+    }
+
+    velox::common::testutil::TestValue::adjust(
+        "facebook::nimble::RowFieldReader::co_next",
+        const_cast<uint32_t*>(&taskCount));
+
+    const uint32_t childrenPerTask = numChildren / taskCount;
+    const uint32_t numRemainderChildren = numChildren % taskCount;
 
     // First 'numRemainderChildren' tasks get one extra child each.
     std::vector<folly::coro::TaskWithExecutor<void>> tasks;
@@ -2489,20 +2486,14 @@ class RowFieldReader final : public FieldReader {
           (task < numRemainderChildren ? 1 : 0);
       tasks.emplace_back(
           folly::coro::co_withExecutor(
-              decodeExecutor_,
-              folly::coro::co_invoke(
-                  [&decodeRange, nextChildIdx, endChildIdx]()
-                      -> folly::coro::Task<void> {
-                    decodeRange(nextChildIdx, endChildIdx);
-                    co_return;
-                  })));
+              decodeExecutor_, decodeRange(nextChildIdx, endChildIdx)));
       nextChildIdx = endChildIdx;
     }
 
     co_await folly::coro::collectAllRange(std::move(tasks));
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     uint32_t childRowCount = count;
     if constexpr (hasNull) {
       std::array<bool, kSkipBatchSize> buffer{};
@@ -2517,10 +2508,11 @@ class RowFieldReader final : public FieldReader {
     if (childRowCount > 0) {
       for (auto& reader : childrenReaders_) {
         if (reader) {
-          reader->skip(childRowCount);
+          co_await reader->co_skip(childRowCount);
         }
       }
     }
+    co_return;
   }
 
   void reset() final {
@@ -2626,7 +2618,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
       : FieldReaderFactory{std::move(veloxType), type, pool},
         decodeExecutor_{params.decodeExecutor},
         maxDecodeParallelism_{params.maxDecodeParallelism},
-        minStreamsPerDecodeUnit_{params.minStreamsPerDecodeUnit},
+        minStreamsPerDecodeTask_{params.minStreamsPerDecodeTask},
         children_{std::move(children)},
         boolBuffer_{pool_} {}
 
@@ -2645,7 +2637,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
     }
 
     const FieldReader::Options options{
-        decodeExecutor_, maxDecodeParallelism_, minStreamsPerDecodeUnit_};
+        decodeExecutor_, maxDecodeParallelism_, minStreamsPerDecodeTask_};
     if (!nulls) {
       return std::make_unique<RowFieldReader<false>>(
           veloxType_,
@@ -2668,7 +2660,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
  private:
   folly::Executor* const decodeExecutor_;
   const uint32_t maxDecodeParallelism_;
-  const uint32_t minStreamsPerDecodeUnit_;
+  const uint32_t minStreamsPerDecodeTask_;
   std::vector<std::unique_ptr<FieldReaderFactory>> children_;
   Vector<bool> boolBuffer_;
 };
@@ -2691,7 +2683,7 @@ class FlatMapKeyNode {
 
   ~FlatMapKeyNode() = default;
 
-  void readAsChild(
+  folly::coro::Task<void> co_readAsChild(
       velox::VectorPtr& vector,
       uint32_t numValues,
       uint32_t nonNullValues,
@@ -2703,8 +2695,9 @@ class FlatMapKeyNode {
     const auto nonNullCount =
         mergeNulls(numValues, nonNullValues, mapNulls, *mergedNulls);
     velox::bits::Bitmap bitmap{mergedNulls->data(), numValues};
-    valueReader_->next(nonNullCount, vector, &bitmap);
+    co_await valueReader_->co_next(nonNullCount, vector, &bitmap);
     NIMBLE_DCHECK_EQ(numValues, vector->size(), "Items not loaded");
+    co_return;
   }
 
   uint32_t readInMapData(uint32_t numValues) {
@@ -2720,16 +2713,19 @@ class FlatMapKeyNode {
     return numValues_;
   }
 
-  void loadValues(velox::VectorPtr& values) {
-    valueReader_->next(numValues_, values, /*scatterBitmap=*/nullptr);
+  folly::coro::Task<void> co_loadValues(velox::VectorPtr& values) {
+    co_await valueReader_->co_next(
+        numValues_, values, /*scatterBitmap=*/nullptr);
     NIMBLE_DCHECK_EQ(numValues_, values->size(), "Items not loaded");
+    co_return;
   }
 
-  void skip(uint32_t numValues) {
+  folly::coro::Task<void> co_skip(uint32_t numValues) {
     auto numItems = readInMapData(numValues);
     if (numItems > 0) {
-      valueReader_->skip(numItems);
+      co_await valueReader_->co_skip(numItems);
     }
+    co_return;
   }
 
   const velox::dwio::common::flatmap::KeyValue<T>& key() const {
@@ -2830,7 +2826,7 @@ class FlatMapFieldReaderBase : public FieldReader {
     }
   }
 
-  void skip(uint32_t count) final {
+  folly::coro::Task<void> co_skip(uint32_t count) final {
     uint32_t nonNullCount = count;
 
     if constexpr (hasNull) {
@@ -2846,10 +2842,11 @@ class FlatMapFieldReaderBase : public FieldReader {
     if (nonNullCount > 0) {
       for (auto& node : keyNodes_) {
         if (node) {
-          node->skip(nonNullCount);
+          co_await node->co_skip(nonNullCount);
         }
       }
     }
+    co_return;
   }
 
   void reset() final {
@@ -3052,33 +3049,6 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
                                {rowCount, totalBytes / rowCount});
   }
 
-  void next(
-      uint32_t rowCount,
-      velox::VectorPtr& output,
-      const velox::bits::Bitmap* scatterBitmap) final {
-    NIMBLE_CHECK_NULL(scatterBitmap, "unexpected scatterBitmap");
-    if (this->parallelDecodeEnabled(this->keyNodes_.size())) {
-      folly::coro::blockingWait(co_next(rowCount, output, scatterBitmap));
-      return;
-    }
-    const auto outputContext = prepareOutput(rowCount, output);
-    for (uint32_t i = 0; i < this->keyNodes_.size(); ++i) {
-      if (this->keyNodes_[i] == nullptr) {
-        this->ensureNullConstant(
-            this->type_->childAt(i),
-            rowCount,
-            outputContext.vector->childAt(i));
-      } else {
-        this->keyNodes_[i]->readAsChild(
-            outputContext.vector->childAt(i),
-            rowCount,
-            outputContext.nonNullCount,
-            this->boolBuffer_,
-            &mergedNulls_);
-      }
-    }
-  }
-
   folly::coro::Task<void> co_next(
       uint32_t rowCount,
       velox::VectorPtr& output,
@@ -3105,27 +3075,34 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
       co_return;
     }
 
-    const uint32_t taskCount =
-        this->computeParallelDecodeTaskCount(nonNullChildren.size());
-    velox::common::testutil::TestValue::adjust(
-        "facebook::nimble::StructFlatMapFieldReader::co_next",
-        const_cast<uint32_t*>(&taskCount));
-
-    const uint32_t childrenPerTask = nonNullChildren.size() / taskCount;
-    const uint32_t numRemainderChildren = nonNullChildren.size() % taskCount;
-
     // Decodes children in [startIdx, endIdx).
     auto decodeRange = [this, rowCount, &outputContext, &nonNullChildren](
-                           uint32_t startIdx, uint32_t endIdx) {
+                           uint32_t startIdx,
+                           uint32_t endIdx) -> folly::coro::Task<void> {
       for (uint32_t idx = startIdx; idx < endIdx; ++idx) {
         const auto i = nonNullChildren[idx];
-        this->keyNodes_[i]->readAsChild(
+        co_await this->keyNodes_[i]->co_readAsChild(
             outputContext.vector->childAt(i),
             rowCount,
             outputContext.nonNullCount,
             this->boolBuffer_);
       }
+      co_return;
     };
+
+    const auto numChildren = folly::to<uint32_t>(nonNullChildren.size());
+    const uint32_t taskCount = this->decodeTaskCount(numChildren);
+    if (taskCount <= 1) {
+      co_await decodeRange(0, numChildren);
+      co_return;
+    }
+
+    velox::common::testutil::TestValue::adjust(
+        "facebook::nimble::StructFlatMapFieldReader::co_next",
+        const_cast<uint32_t*>(&taskCount));
+
+    const uint32_t childrenPerTask = numChildren / taskCount;
+    const uint32_t numRemainderChildren = numChildren % taskCount;
 
     // First 'numRemainderChildren' tasks get one extra child each.
     std::vector<folly::coro::TaskWithExecutor<void>> tasks;
@@ -3136,13 +3113,7 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
           (task < numRemainderChildren ? 1 : 0);
       tasks.emplace_back(
           folly::coro::co_withExecutor(
-              this->decodeExecutor_,
-              folly::coro::co_invoke(
-                  [&decodeRange, nextChildIdx, endChildIdx]()
-                      -> folly::coro::Task<void> {
-                    decodeRange(nextChildIdx, endChildIdx);
-                    co_return;
-                  })));
+              this->decodeExecutor_, decodeRange(nextChildIdx, endChildIdx)));
       nextChildIdx = endChildIdx;
     }
 
@@ -3192,7 +3163,7 @@ class StructFlatMapFieldReaderFactory final
             pool),
         decodeExecutor_{params.decodeExecutor},
         maxDecodeParallelism_{params.maxDecodeParallelism},
-        minStreamsPerDecodeUnit_{params.minStreamsPerDecodeUnit},
+        minStreamsPerDecodeTask_{params.minStreamsPerDecodeTask},
         mergedNulls_{this->pool_} {
     NIMBLE_CHECK(this->nimbleType_->isFlatMap(), "Type should be a flat map.");
   }
@@ -3201,7 +3172,7 @@ class StructFlatMapFieldReaderFactory final
       const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>& decoders)
       final {
     const FieldReader::Options options{
-        decodeExecutor_, maxDecodeParallelism_, minStreamsPerDecodeUnit_};
+        decodeExecutor_, maxDecodeParallelism_, minStreamsPerDecodeTask_};
     return this->template createFlatMapReader<ReaderType, true>(
         decoders, mergedNulls_, options);
   }
@@ -3209,7 +3180,7 @@ class StructFlatMapFieldReaderFactory final
  private:
   folly::Executor* const decodeExecutor_;
   const uint32_t maxDecodeParallelism_;
-  const uint32_t minStreamsPerDecodeUnit_;
+  const uint32_t minStreamsPerDecodeTask_;
   Vector<char> mergedNulls_;
 };
 
@@ -3335,7 +3306,7 @@ class MergedFlatMapFieldReader final
                                {rowCount, totalBytes / rowCount});
   }
 
-  void next(
+  folly::coro::Task<void> co_next(
       uint32_t rowCount,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap) final {
@@ -3402,7 +3373,7 @@ class MergedFlatMapFieldReader final
     // values, bypassing copyRangesImpl's incremental resize.
     nodeValues_.resize(nodes_.size());
     for (size_t j = 0; j < nodes_.size(); ++j) {
-      nodes_[j]->loadValues(nodeValues_[j]);
+      co_await nodes_[j]->co_loadValues(nodeValues_[j]);
     }
 
     auto* offsetsPtr = offsets->asMutable<velox::vector_size_t>();
@@ -3459,6 +3430,7 @@ class MergedFlatMapFieldReader final
 
     // Reset the updated value vector to result
     vector->setKeysAndValues(std::move(keysVector), std::move(valuesVector));
+    co_return;
   }
 
  private:
@@ -4163,17 +4135,19 @@ FieldReader::FieldReader(
       decoder_{decoder},
       decodeExecutor_{options.decodeExecutor},
       maxDecodeParallelism_{options.maxDecodeParallelism},
-      minStreamsPerDecodeUnit_{options.minStreamsPerDecodeUnit} {}
+      minStreamsPerDecodeTask_{options.minStreamsPerDecodeTask} {}
 
-uint32_t FieldReader::computeParallelDecodeTaskCount(
-    uint32_t numStreamChildren) const {
-  if (numStreamChildren == 0) {
+uint32_t FieldReader::decodeTaskCount(uint32_t numChildren) const {
+  if (numChildren == 0) {
     return 0;
   }
+  if (decodeExecutor_ == nullptr) {
+    return 1;
+  }
   const uint32_t maxByStreams =
-      numStreamChildren / std::max(1u, minStreamsPerDecodeUnit_);
+      numChildren / std::max(1u, minStreamsPerDecodeTask_);
   return std::clamp(
-      std::min(maxDecodeParallelism_, maxByStreams), 1u, numStreamChildren);
+      std::min(maxDecodeParallelism_, maxByStreams), 1u, numChildren);
 }
 
 void FieldReader::ensureNullConstant(

@@ -95,6 +95,10 @@ class ColumnChunkMetaDataPtr {
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
 
+  /// Number of bytes read for this chunk. Uncompressed chunks use their
+  /// uncompressed size; compressed chunks use their compressed size.
+  uint64_t readSize() const;
+
   /// Returns the estimated total bytes held by this column's thrift
   /// representation: sizeof(thrift::ColumnChunk) plus every dynamically
   /// allocated vector and string reachable through it. The estimate

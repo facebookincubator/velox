@@ -51,6 +51,11 @@ class RPCOperatorTest : public OperatorTestBase {
     registerRPCPlanNodeTranslator();
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_rpc", []() { return std::make_shared<DemoAsyncRPCFunction>(); });
+    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_held", []() {
+      auto fn = std::make_shared<DemoBatchRPCFunction>();
+      fn->testingHoldFlushes();
+      return fn;
+    });
     AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc", []() {
       return std::make_shared<DemoBatchRPCFunction>();
     });
@@ -103,9 +108,13 @@ class RPCOperatorTest : public OperatorTestBase {
   }
 
   void TearDown() override {
-    RPCRateLimiter::testingResetAllState();
+    RPCRateLimiterRegistry::global().testingReset();
     OperatorTestBase::TearDown();
   }
+
+  // Drives a query whose tier is fully held by the test body until a
+  // background thread releases it. Defined below the fixture.
+  void runContendedDrain(bool batchMode);
 
   /// Build a BATCH-mode RPCNode on top of a source plan node.
   core::PlanNodePtr makeBatchRPCNode(
@@ -312,6 +321,176 @@ TEST_F(RPCOperatorTest, batchBasic) {
   EXPECT_EQ(rows["hello"], "Batch response for: hello");
   EXPECT_EQ(rows["world"], "Batch response for: world");
   EXPECT_EQ(rows["batch"], "Batch response for: batch");
+}
+
+// A backend is configured by the first query to reach it, and every query
+// after shares that configuration. The limiter is a controller: its policy has
+// to hold still while it adapts, so a later query cannot move the target
+// mid-flight. Before this, initialize() rewrote the policy on every query --
+// a pipeline that lowered the floor to match a small entitlement had it reset
+// to 50 by the next default query, with nothing logged.
+TEST_F(RPCOperatorTest, backendIsConfiguredByTheFirstQueryOnly) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+
+  // First query: a deliberate policy, as a small-entitlement pipeline sets.
+  limiter.initializeOnce([](RPCRateLimiter::Config& config) {
+    config.adaptive = true;
+    config.floor = 4;
+    config.decreaseFactor = 0.25;
+  });
+
+  // A later query on the same backend, carrying the defaults.
+  auto plan =
+      makeBatchRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 2);
+
+  const auto config = limiter.config();
+  EXPECT_TRUE(config.adaptive);
+  EXPECT_EQ(config.floor, 4) << "a later query reconfigured the backend";
+  EXPECT_DOUBLE_EQ(config.decreaseFactor, 0.25);
+}
+
+// Dispatch must respect the tier's admission cap, not only the per-driver
+// window. Other drivers can exhaust the tier while this driver's window is
+// still open, and an ungated flush loop then pushes pending past the cap.
+// The mock holds each flush open so several are genuinely in flight; the tier
+// ceiling is set below the BATCH window's starting value so the tier is the
+// binding constraint and the two gates are distinguishable.
+// Intake is bounded by accumulator depth, and BATCH flushes from isBlocked()
+// as well as addInput(). Both halves are needed: bounding intake without the
+// flush from isBlocked() lets a full accumulator sit forever once needsInput()
+// stops taking input, because BATCH has no other place to drain from -- the
+// query then hangs rather than fails. Feeds many input vectors so needsInput()
+// is actually consulted mid-stream, against a tier admitting one flush.
+TEST_F(RPCOperatorTest, batchMakesProgressWhenIntakeIsThrottled) {
+  constexpr int64_t kCeiling = 1;
+  constexpr int32_t kVectors = 8;
+  constexpr int32_t kRowsPerVector = 16;
+
+  std::vector<std::string> storage;
+  storage.reserve(kVectors * kRowsPerVector);
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kVectors);
+  for (int v = 0; v < kVectors; ++v) {
+    std::vector<StringView> prompts;
+    prompts.reserve(kRowsPerVector);
+    for (int i = 0; i < kRowsPerVector; ++i) {
+      storage.push_back(fmt::format("throttled-{}-{}", v, i));
+      prompts.push_back(StringView(storage.back()));
+    }
+    inputs.push_back(
+        makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)}));
+  }
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce(
+      [](RPCRateLimiter::Config& config) { config.ceiling = kCeiling; });
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_held",
+      /*dispatchBatchSize=*/4);
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  // Every row comes out: throttling intake never stranded the accumulator.
+  ASSERT_EQ(result->size(), kVectors * kRowsPerVector);
+  EXPECT_LE(limiter.stats().peakPending, kCeiling);
+}
+
+// Contended admission: the tier's slots are held by someone else, so a refused
+// dispatch meets numInFlight() == 0 -- the state the other operator tests never
+// reach, since they run one driver against a tier nothing else holds. The test
+// body holds the ceiling itself and releases from a background thread, which is
+// the only way to produce a refusal this operator cannot resolve alone.
+//
+// Coverage, not a regression guard for one defect: it exercises a state nothing
+// else does, and asserts the query neither hangs nor comes up short. Reverting
+// the end-of-input guards does not fail it, because the Driver only calls
+// noMoreInput() when needsInput() is true and a non-empty buffer already makes
+// that false.
+void RPCOperatorTest::runContendedDrain(bool batchMode) {
+  constexpr int64_t kCeiling = 2;
+  constexpr int32_t kRows = 64;
+
+  std::vector<std::string> storage;
+  std::vector<StringView> prompts;
+  storage.reserve(kRows);
+  prompts.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    storage.push_back(fmt::format("contended-{}", i));
+    prompts.push_back(StringView(storage.back()));
+  }
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce(
+      [](RPCRateLimiter::Config& config) { config.ceiling = kCeiling; });
+
+  // Occupy every slot before the query starts, so the operator's first
+  // dispatch is refused with nothing of its own in flight.
+  std::vector<RPCRateLimiter::Token> held;
+  held.reserve(kCeiling);
+  for (int64_t i = 0; i < kCeiling; ++i) {
+    held.push_back(limiter.acquire());
+  }
+
+  std::thread releaser([&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    held.clear();
+  });
+
+  auto plan = batchMode
+      ? makeBatchRPCNode(
+            PlanBuilder().values({input}).planNode(),
+            {"prompt"},
+            "demo_batch_rpc",
+            /*dispatchBatchSize=*/8)
+      : makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  releaser.join();
+
+  // Nothing dropped while admission held the rows, and nothing hung.
+  ASSERT_EQ(result->size(), kRows);
+}
+
+TEST_F(RPCOperatorTest, perRowDrainCompletesWhileTheTierIsHeld) {
+  runContendedDrain(/*batchMode=*/false);
+}
+
+TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheTierIsHeld) {
+  runContendedDrain(/*batchMode=*/true);
+}
+
+TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
+  constexpr int64_t kCeiling = 1;
+  std::vector<std::string> storage;
+  std::vector<StringView> prompts;
+  storage.reserve(64);
+  prompts.reserve(64);
+  for (int i = 0; i < 64; ++i) {
+    storage.push_back(fmt::format("row-{}", i));
+    prompts.push_back(StringView(storage.back()));
+  }
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce(
+      [](RPCRateLimiter::Config& config) { config.ceiling = kCeiling; });
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_held",
+      /*dispatchBatchSize=*/4);
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 64);
+
+  EXPECT_LE(limiter.stats().peakPending, kCeiling)
+      << "dispatch admitted more than the tier cap";
 }
 
 // Reversed responses: the mock returns results in reverse order.

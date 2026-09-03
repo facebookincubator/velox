@@ -300,14 +300,16 @@ struct DeserializerOptions {
   /// When nullptr (default), child reads are performed sequentially.
   folly::Executor* decodeExecutor{nullptr};
 
-  /// Maximum number of parallel coroutine tasks for child field decoding.
-  /// Children are grouped into this many batches, each decoded sequentially
-  /// within a single coroutine task. 0 disables parallel decoding.
+  /// Maximum number of parallel coroutine tasks scheduled by each field
+  /// reader. Children are grouped into this many batches, each decoded
+  /// sequentially within a single coroutine task. This is a per-reader limit;
+  /// the executor bounds the number of tasks that run concurrently across the
+  /// reader tree. 0 disables parallel decoding.
   uint32_t maxDecodeParallelism{0};
 
   /// Minimum number of child streams per parallel decode task. Ensures each
   /// coroutine task has enough work to amortize threading overhead.
-  uint32_t minStreamsPerDecodeUnit{1};
+  uint32_t minStreamsPerDecodeTask{1};
 };
 
 } // namespace facebook::nimble

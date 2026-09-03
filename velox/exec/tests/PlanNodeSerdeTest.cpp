@@ -780,6 +780,17 @@ TEST_F(PlanNodeSerdeTest, write) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, writeWithNotNullColumns) {
+  auto plan = PlanBuilder(pool_.get())
+                  .values(data_)
+                  .startTableWriter()
+                  .outputDirectoryPath("targetDirectory")
+                  .notNullColumns({"c0", "c2"})
+                  .endTableWriter()
+                  .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, tableWriteMerge) {
   auto rowTypePtr = ROW({"c0", "c1", "c2"}, {BIGINT(), BOOLEAN(), VARBINARY()});
   auto planBuilder =
