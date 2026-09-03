@@ -11,7 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-if(VELOX_ENABLE_BENCHMARKS)
+# The ml_id_compression drivers under benchmarks/ are gated on the experimental
+# encodings they exercise, not on Velox's benchmark switch, so this directory is
+# entered for either. benchmarks/CMakeLists.txt guards its Folly-benchmark
+# targets on VELOX_ENABLE_BENCHMARKS separately.
+if(VELOX_ENABLE_BENCHMARKS OR NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
   add_subdirectory(benchmarks)
 endif()
 if(NIMBLE_BUILD_TESTING)
@@ -31,7 +35,9 @@ add_library(
   MainlyConstantEncoding.cpp
   PrefixEncoding.cpp
   RLEEncoding.cpp
-  SharedDictionaryTypes.cpp
+  SharedDictionaryCatalog.cpp
+  SharedDictionaryCatalog.h
+  SharedDictionaryEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
   common/Encoding.cpp
@@ -80,8 +86,8 @@ add_library(
   SubIntSplitCostModels.h
   SubIntSplitConfig.h
   SparseBoolEncoding.h
+  SliceEncoding.h
   SimdForBitpackEncoding.h
-  SharedDictionaryTypes.h
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
   SentinelEncoding.h
@@ -120,10 +126,27 @@ target_compile_definitions(
     fsst_decompress=nimble_fsst_decompress
 )
 
+build_flatbuffers(
+  "${CMAKE_CURRENT_SOURCE_DIR}/SharedDictionary.fbs"
+  ""
+  nimble_shared_dictionary_schema_fb
+  ""
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  ""
+  ""
+)
+add_library(nimble_shared_dictionary_fb INTERFACE)
+target_include_directories(
+  nimble_shared_dictionary_fb
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
+)
+add_dependencies(nimble_shared_dictionary_fb nimble_shared_dictionary_schema_fb)
+
 target_link_libraries(
   nimble_encodings
   nimble_compression
   nimble_common
+  nimble_shared_dictionary_fb
   velox_common_base
   velox_fastpforlib
   fsst

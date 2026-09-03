@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include <boost/multiprecision/cpp_dec_float.hpp>
 #include <folly/ScopeGuard.h>
+#include <cmath>
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
@@ -575,6 +577,118 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             {"1970-01-01 00:00:00", "2000-01-01 12:21:56"}, VARCHAR()));
   }
 
+  void testDateToTimestampUtc() {
+    // Day 0 = 1970-01-01.
+    testCast(
+        makeFlatVector<int32_t>({0}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP_UTC()));
+    // Day 18262 = 2020-01-01.
+    testCast(
+        makeFlatVector<int32_t>({18262}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
+
+    // Timezone must not affect the result.
+    SCOPE_EXIT {
+      setTimezone("");
+    };
+    setTimezone("America/Los_Angeles");
+    testCast(
+        makeFlatVector<int32_t>({18262}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
+  }
+
+  void testTimestampUtcToDate() {
+    // 2020-01-01 → day 18262.
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({18262}, DATE()));
+    // Epoch → 1970-01-01 (day 0).
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({0}, DATE()));
+
+    // Kolkata (UTC+5:30) would shift -19800s to day 0; UTC gives day -1.
+    SCOPE_EXIT {
+      setTimezone("");
+    };
+    setTimezone("Asia/Kolkata");
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(-19800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({-1}, DATE()));
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({18262}, DATE()));
+  }
+
+  // See CastExpr.cpp's overflow check for the derivation of this bound.
+  static constexpr int64_t kMaxTimestampUtcDays = 106'751'991;
+
+  void testDateToTimestampUtcOverflow() {
+    testCast(
+        makeFlatVector<int32_t>({kMaxTimestampUtcDays}, DATE()),
+        makeFlatVector<Timestamp>(
+            {Timestamp(kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()));
+    testCast(
+        makeFlatVector<int32_t>({-kMaxTimestampUtcDays}, DATE()),
+        makeFlatVector<Timestamp>(
+            {Timestamp(-kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()));
+
+    testThrow<int32_t>(
+        DATE(),
+        TIMESTAMP_UTC(),
+        {kMaxTimestampUtcDays + 1},
+        "is out of range for TIMESTAMP_UTC");
+    testThrow<int32_t>(
+        DATE(),
+        TIMESTAMP_UTC(),
+        {-kMaxTimestampUtcDays - 1},
+        "is out of range for TIMESTAMP_UTC");
+
+    testCast(
+        makeFlatVector<int32_t>({kMaxTimestampUtcDays + 1}, DATE()),
+        makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+        /*isTryCast=*/true);
+    testCast(
+        makeFlatVector<int32_t>({-kMaxTimestampUtcDays - 1}, DATE()),
+        makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+        /*isTryCast=*/true);
+  }
+
+  void testTimestampUtcToDateOverflow() {
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp(kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({kMaxTimestampUtcDays}, DATE()));
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp(-kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({-kMaxTimestampUtcDays}, DATE()));
+
+    testThrow<Timestamp>(
+        TIMESTAMP_UTC(),
+        DATE(),
+        {Timestamp((kMaxTimestampUtcDays + 1) * 86'400, 0)},
+        "is out of range for TIMESTAMP_UTC");
+    testThrow<Timestamp>(
+        TIMESTAMP_UTC(),
+        DATE(),
+        {Timestamp((-kMaxTimestampUtcDays - 1) * 86'400, 0)},
+        "is out of range for TIMESTAMP_UTC");
+
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp((kMaxTimestampUtcDays + 1) * 86'400, 0)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<int32_t>({std::nullopt}, DATE()),
+        /*isTryCast=*/true);
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp((-kMaxTimestampUtcDays - 1) * 86'400, 0)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<int32_t>({std::nullopt}, DATE()),
+        /*isTryCast=*/true);
+  }
+
   void testInvalidDate() {
     testInvalidCast<int8_t>(
         "date", {12}, "Cast from TINYINT to DATE is not supported", TINYINT());
@@ -735,6 +849,20 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             {"\n\f\r\t\n\x1f 2000-01-01 12:21:56\v\x1c\x1d\x1e"}, VARCHAR()),
         makeNullableFlatVector<Timestamp>(
             {Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()));
+
+    // Outer whitespace trimming: trailing/leading spaces, tabs, and newlines
+    // around a date-only string are trimmed by CastExpr before the parser
+    // sees the input. These must remain valid through the full cast path.
+    testCast(
+        makeFlatVector<std::string>(
+            {"2015-03-18 ", "\t2015-03-18\n", "2015-03-18\t", "2015-03-18\n"},
+            VARCHAR()),
+        makeFlatVector<Timestamp>(
+            {Timestamp(1'426'636'800, 0),
+             Timestamp(1'426'636'800, 0),
+             Timestamp(1'426'636'800, 0),
+             Timestamp(1'426'636'800, 0)},
+            TIMESTAMP_UTC()));
   }
 
   void testStringToDate() {
@@ -1556,6 +1684,167 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         makeConstant<float>(std::numeric_limits<float>::min(), 1),
         makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
   }
+
+  // Valid string-to-real/double conversions produce identical results whether
+  // ANSI mode is on or off, so both fixtures share these assertions.
+  void testStringToRealDoubleValidFormats() {
+    // kNan/kInf (float) are inherited from CastBaseTest; the double equivalents
+    // have no base-class constant, so they are defined locally.
+    const auto doubleNan = std::numeric_limits<double>::quiet_NaN();
+    const auto doubleInfinity = std::numeric_limits<double>::infinity();
+
+    // Basic valid values.
+    testCast<std::string, float>("real", {"1.5"}, {1.5f});
+    testCast<std::string, double>("double", {"1.5"}, {1.5});
+
+    // Special literals (case variants).
+    testCast<std::string, float>("real", {"nan"}, {kNan});
+    testCast<std::string, float>("real", {"NaN"}, {kNan});
+    testCast<std::string, float>("real", {"inf"}, {kInf});
+    testCast<std::string, float>("real", {"Inf"}, {kInf});
+    testCast<std::string, float>("real", {"-inf"}, {-kInf});
+    testCast<std::string, float>("real", {"-Inf"}, {-kInf});
+    testCast<std::string, float>("real", {"infinity"}, {kInf});
+    testCast<std::string, float>("real", {"Infinity"}, {kInf});
+    testCast<std::string, float>("real", {"-infinity"}, {-kInf});
+    testCast<std::string, float>("real", {"-Infinity"}, {-kInf});
+    testCast<std::string, double>("double", {"nan"}, {doubleNan});
+    testCast<std::string, double>("double", {"NaN"}, {doubleNan});
+    testCast<std::string, double>("double", {"inf"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"Inf"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"-inf"}, {-doubleInfinity});
+    testCast<std::string, double>("double", {"-Inf"}, {-doubleInfinity});
+    testCast<std::string, double>("double", {"infinity"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"Infinity"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"-infinity"}, {-doubleInfinity});
+    testCast<std::string, double>("double", {"-Infinity"}, {-doubleInfinity});
+
+    // Scientific notation.
+    testCast<std::string, float>("real", {"1.5e2"}, {150.0f});
+    testCast<std::string, float>("real", {"-3.14E-2"}, {-0.0314f});
+    testCast<std::string, double>("double", {"1.5e10"}, {1.5e10});
+    testCast<std::string, double>("double", {"-3.14E-5"}, {-3.14e-5});
+
+    // Signed values.
+    testCast<std::string, float>("real", {"+1.5"}, {1.5f});
+    testCast<std::string, float>("real", {"-1.5"}, {-1.5f});
+    testCast<std::string, double>("double", {"+1.5"}, {1.5});
+
+    // Signed zeros: value equality does not distinguish +0 from -0, so assert
+    // the sign bit explicitly.
+    auto realSignBit = [this](const std::string& value) {
+      auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      return std::signbit(
+          evaluateOnce<float>("cast(c0 as real)", input).value());
+    };
+    auto doubleSignBit = [this](const std::string& value) {
+      auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      return std::signbit(
+          evaluateOnce<double>("cast(c0 as double)", input).value());
+    };
+    EXPECT_FALSE(realSignBit("+0"));
+    EXPECT_TRUE(realSignBit("-0"));
+    EXPECT_FALSE(doubleSignBit("+0"));
+    EXPECT_TRUE(doubleSignBit("-0"));
+
+    // Overflow yields Infinity rather than an error, matching Spark.
+    testCast<std::string, float>("real", {"1e39"}, {kInf});
+    testCast<std::string, float>("real", {"-1e39"}, {-kInf});
+    testCast<std::string, double>("double", {"1e309"}, {doubleInfinity});
+    testCast<std::string, double>("double", {"-1e309"}, {-doubleInfinity});
+  }
+
+  // Malformed string-to-real/double inputs. ANSI mode throws on these; legacy
+  // mode returns NULL. Both fixtures share this input set.
+  static std::vector<std::string> invalidStringToRealDoubleInputs() {
+    return {"abc", "1.2a", "1.2.3", "xyz123"};
+  }
+
+  template <typename T>
+  void testDecimalToFloatCasts() {
+    // short to short, scale up.
+    auto shortFlat = makeNullableFlatVector<int64_t>(
+        {DecimalUtil::kShortDecimalMin,
+         DecimalUtil::kShortDecimalMin,
+         -3,
+         0,
+         55,
+         DecimalUtil::kShortDecimalMax,
+         DecimalUtil::kShortDecimalMax,
+         std::nullopt},
+        DECIMAL(18, 18));
+    testCast(
+        shortFlat,
+        makeNullableFlatVector<T>(
+            {-1,
+             // the same DecimalUtil::kShortDecimalMin conversion, checking
+             // floating point diff works on decimals
+             -0.999999999999999999,
+             -0.000000000000000003,
+             0,
+             0.000000000000000055,
+             // the same DecimalUtil::kShortDecimalMax conversion, checking
+             // floating point diff works on decimals
+             0.999999999999999999,
+             1,
+             std::nullopt}));
+
+    auto longFlat = makeNullableFlatVector<int128_t>(
+        {DecimalUtil::kLongDecimalMin,
+         0,
+         DecimalUtil::kLongDecimalMax,
+         HugeInt::build(0xffff, 0xffffffffffffffff),
+         std::nullopt},
+        DECIMAL(38, 5));
+    testCast(
+        longFlat,
+        makeNullableFlatVector<T>(
+            {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::build(0, 299250000)}, DECIMAL(20, 4)),
+        makeNullableFlatVector<T>({29925.0}));
+
+    for (int scale = 0; scale <= 18; ++scale) {
+      int64_t unscaledValue = 123456789123456789l;
+      const int precision = 18;
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
+      testCast(
+          makeNullableFlatVector<int64_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+
+    for (int scale = 0; scale <= 38; ++scale) {
+      int128_t unscaledValue =
+          HugeInt::parse("12345678912345678912345678912345678912");
+      const int precision = 38;
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+
+    // Small unscaled values with scales 23-38 exercise the boundary of the
+    // exact fast path: the unscaled value fits in a double, but the scale
+    // exceeds the exactly-representable powers of ten, so the cast must fall
+    // back to the general conversion instead of indexing past the power-of-ten
+    // table.
+    for (int scale = 23; scale <= 38; ++scale) {
+      int128_t unscaledValue = 1;
+      const int precision = 38;
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -1631,6 +1920,20 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToString) {
 
 TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
   testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
@@ -1809,14 +2112,40 @@ TEST_F(SparkCastExprTest, tryCastStringToTimestampInvalid) {
   for (auto ansiEnabled : {false, true}) {
     setAnsiSupport(ansiEnabled);
 
-    auto input = makeRowVector(
-        {makeFlatVector<std::string>({"INVALID", "2012-Oct-01"})});
+    auto input = makeRowVector({makeFlatVector<std::string>({
+        "INVALID",
+        "2012-Oct-01",
+        // A trailing 'T' with no time component is invalid.
+        "2015-03-18T",
+        // 'T' followed by whitespace then end of string is invalid.
+        "2015-03-18T ",
+        "2015-03-18T\t",
+        "2015-03-18T\n",
+        // 'T' followed by whitespace then a valid time is still invalid:
+        // Spark requires time digits immediately after the separator.
+        "2015-03-18T 12:00:00",
+        // 'T' followed by a non-digit, non-time character is invalid.
+        "2015-03-18TZ",
+        "2015-03-18T+08:00",
+        // A space separator followed by a non-digit is invalid, matching
+        // Spark's grammar. Outer whitespace is trimmed by CastExpr, so
+        // these inputs reach the parser with the space separator intact.
+        "2015-03-18 Z",
+        "2015-03-18 +08:00",
+        "2015-03-18 UTC",
+        "2015-03-18  12:00:00",
+        "2015-03-18 x",
+    })});
 
     auto result =
         evaluate<SimpleVector<Timestamp>>("try_cast(c0 as timestamp)", input);
 
-    ASSERT_TRUE(result->isNullAt(0));
-    ASSERT_TRUE(result->isNullAt(1));
+    for (int i = 0; i < result->size(); ++i) {
+      ASSERT_TRUE(result->isNullAt(i))
+          << "Expected null at index " << i << " for input \""
+          << input->childAt(0)->as<SimpleVector<StringView>>()->valueAt(i)
+          << "\"";
+    }
   }
 }
 
@@ -1834,6 +2163,24 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTimestampInvalidThrows) {
 
   testInvalidTimestamp("INVALID");
   testInvalidTimestamp("2012-Oct-01");
+  // A trailing 'T' with no time component is invalid.
+  testInvalidTimestamp("2015-03-18T");
+  testInvalidTimestamp("2015-03-18T ");
+  testInvalidTimestamp("2015-03-18T\t");
+  testInvalidTimestamp("2015-03-18T\n");
+  // 'T' followed by whitespace then a valid time is still invalid.
+  testInvalidTimestamp("2015-03-18T 12:00:00");
+  // 'T' followed by a non-digit, non-time character is invalid.
+  testInvalidTimestamp("2015-03-18TZ");
+  testInvalidTimestamp("2015-03-18T+08:00");
+  // A space separator followed by a non-digit is invalid, matching Spark's
+  // grammar. Outer whitespace is trimmed by CastExpr, so these inputs reach
+  // the parser with the space separator intact.
+  testInvalidTimestamp("2015-03-18 Z");
+  testInvalidTimestamp("2015-03-18 +08:00");
+  testInvalidTimestamp("2015-03-18 UTC");
+  testInvalidTimestamp("2015-03-18  12:00:00");
+  testInvalidTimestamp("2015-03-18 x");
 }
 
 TEST_F(SparkCastExprTestAnsiOn, stringToTimestampUtc) {
@@ -1878,6 +2225,72 @@ TEST_F(SparkCastExprTestAnsiOn, stringToTime) {
   testInvalidString("12:30:45.1234567");
   testInvalidString("abc");
   testInvalidString("");
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleInvalidThrows) {
+  const std::vector<TypePtr> types{REAL(), DOUBLE()};
+
+  // Invalid format strings throw in ANSI mode. The message follows the standard
+  // Velox Spark cast convention: "Cannot cast VARCHAR '<v>' to <T>. ...".
+  for (const auto& type : types) {
+    for (const auto& value : invalidStringToRealDoubleInputs()) {
+      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
+      testThrow<std::string>(
+          VARCHAR(),
+          type,
+          {value},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}", value, type->toString()));
+    }
+  }
+
+  // Empty and whitespace-only strings are trimmed to empty before throwing.
+  for (const auto& type : types) {
+    for (const auto& value : {"", "   ", "\t\n"}) {
+      SCOPED_TRACE(fmt::format("cast('{}' as {})", value, type->toString()));
+      testThrow<std::string>(
+          VARCHAR(),
+          type,
+          {value},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}. Empty string",
+              value,
+              type->toString()));
+    }
+  }
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleValidFormats) {
+  testStringToRealDoubleValidFormats();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, stringToRealDoubleMixedRows) {
+  // A vector mixing null, valid, invalid, and special values: CAST throws on
+  // the first invalid value, while TRY_CAST nulls invalid rows and preserves
+  // the rest, both with ANSI on.
+  const std::vector<std::optional<std::string>> values{
+      std::nullopt, "1.5", "abc", "nan"};
+  auto input = makeRowVector({makeNullableFlatVector<std::string>(values)});
+
+  {
+    SCOPED_TRACE("real");
+    testThrow<std::string>(
+        VARCHAR(), REAL(), values, "Cannot cast VARCHAR 'abc' to REAL");
+    auto expected =
+        makeNullableFlatVector<float>({std::nullopt, 1.5f, std::nullopt, kNan});
+    assertEqualVectors(expected, evaluate("try_cast(c0 as real)", input));
+  }
+  {
+    SCOPED_TRACE("double");
+    testThrow<std::string>(
+        VARCHAR(), DOUBLE(), values, "Cannot cast VARCHAR 'abc' to DOUBLE");
+    auto expected = makeNullableFlatVector<double>(
+        {std::nullopt,
+         1.5,
+         std::nullopt,
+         std::numeric_limits<double>::quiet_NaN()});
+    assertEqualVectors(expected, evaluate("try_cast(c0 as double)", input));
+  }
 }
 
 TEST_F(SparkCastExprTestAnsiOn, fromString) {
@@ -2033,6 +2446,20 @@ TEST_F(SparkCastExprTestAnsiOff, decimalToIntegral) {
   testDecimalToIntegral();
 }
 
+TEST_F(SparkCastExprTestAnsiOff, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
+}
+
 TEST_F(SparkCastExprTestAnsiOff, decimalToString) {
   testDecimalToString();
 }
@@ -2167,6 +2594,34 @@ TEST_F(SparkCastExprTestAnsiOff, stringToTimestamp) {
   testStringToTimestamp();
   testCast<std::string, Timestamp>(
       "timestamp", {"INVALID", "2012-Oct-01"}, {std::nullopt, std::nullopt});
+  // In non-ANSI mode, an invalid separator string yields null rather than
+  // throwing. Covers the same set as the ANSI-ON tests.
+  testCast<std::string, Timestamp>(
+      "timestamp",
+      {"2015-03-18T",
+       "2015-03-18T ",
+       "2015-03-18T\t",
+       "2015-03-18T\n",
+       "2015-03-18T 12:00:00",
+       "2015-03-18TZ",
+       "2015-03-18T+08:00",
+       "2015-03-18 Z",
+       "2015-03-18 +08:00",
+       "2015-03-18 UTC",
+       "2015-03-18  12:00:00",
+       "2015-03-18 x"},
+      {std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
 }
 
 TEST_F(SparkCastExprTestAnsiOff, stringToTimestampUtc) {
@@ -2374,6 +2829,38 @@ TEST_F(SparkCastExprTestAnsiOff, overflow) {
 
 TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
   testRecursiveTryCast();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampUtc) {
+  testDateToTimestampUtc();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampUtc) {
+  testDateToTimestampUtc();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToDate) {
+  testTimestampUtcToDate();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToDate) {
+  testTimestampUtcToDate();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampUtcOverflow) {
+  testDateToTimestampUtcOverflow();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampUtcOverflow) {
+  testDateToTimestampUtcOverflow();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToDateOverflow) {
+  testTimestampUtcToDateOverflow();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToDateOverflow) {
+  testTimestampUtcToDateOverflow();
 }
 
 // Verify that casting DATE to TIMESTAMP in a timezone where midnight falls in
@@ -3115,6 +3602,26 @@ TEST_F(SparkCastExprTestAnsiOff, tryCastFloatToIntegralSaturation) {
   // In-range values truncate toward zero.
   testTryCast<float, int8_t>("tinyint", {100.5f}, {100});
   testTryCast<double, int64_t>("bigint", {42.7}, {42});
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToRealDoubleValidFormats) {
+  // Valid inputs parse identically whether ANSI mode is on or off.
+  testStringToRealDoubleValidFormats();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, stringToRealDoubleInvalidReturnsNull) {
+  // Invalid format strings return NULL in legacy (ANSI off) mode. Empty and
+  // whitespace-only strings (trimmed to empty) return NULL as well.
+  for (const auto& value : invalidStringToRealDoubleInputs()) {
+    SCOPED_TRACE(value);
+    testCast<std::string, float>("real", {value}, {std::nullopt});
+    testCast<std::string, double>("double", {value}, {std::nullopt});
+  }
+  for (const auto& value : {"", "   ", "\t\n"}) {
+    SCOPED_TRACE(value);
+    testCast<std::string, float>("real", {value}, {std::nullopt});
+    testCast<std::string, double>("double", {value}, {std::nullopt});
+  }
 }
 } // namespace
 } // namespace facebook::velox::test

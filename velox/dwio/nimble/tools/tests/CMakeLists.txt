@@ -23,3 +23,17 @@ target_link_libraries(
   gtest
   gtest_main
 )
+
+add_executable(external_dictionary_builder_tests ExternalDictionaryBuilderTest.cpp)
+add_test(external_dictionary_builder_tests external_dictionary_builder_tests)
+target_link_libraries(
+  external_dictionary_builder_tests
+  nimble_external_dictionary_builder
+  nimble_encodings
+  nimble_common
+  velox_file
+  velox_memory
+  velox_test_util
+  gtest
+  gtest_main
+)

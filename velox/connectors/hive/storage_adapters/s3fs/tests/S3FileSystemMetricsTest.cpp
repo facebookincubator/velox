@@ -147,8 +147,8 @@ TEST_F(S3FileSystemMetricsTest, metrics) {
   const auto file = "test.txt";
   const auto filename = localPath(bucketName) + "/" + file;
   const auto s3File = s3URI(bucketName, file);
-  auto hiveConfig = minioServer_->hiveConfig();
-  S3FileSystem s3fs(bucketName, hiveConfig);
+  auto s3Config = minioServer_->s3Config();
+  S3FileSystem s3fs(bucketName, s3Config);
   auto pool = memory::memoryManager()->addLeafPool("S3FileSystemMetricsTest");
 
   auto writeFile =

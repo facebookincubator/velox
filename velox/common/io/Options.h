@@ -107,6 +107,13 @@ class ReaderOptions {
     return *this;
   }
 
+  /// Modifies whether a coalesced direct read packs its buffers into one
+  /// shared allocation.
+  ReaderOptions& setDirectBufferedInputSharedAllocation(bool enabled) {
+    directBufferedInputSharedAllocation_ = enabled;
+    return *this;
+  }
+
   /// Modifies the maximum load coalesce distance.
   ReaderOptions& setMaxCoalesceDistance(int32_t distance) {
     maxCoalesceDistance_ = distance;
@@ -140,6 +147,10 @@ class ReaderOptions {
 
   int32_t loadQuantum() const {
     return loadQuantum_;
+  }
+
+  bool directBufferedInputSharedAllocation() const {
+    return directBufferedInputSharedAllocation_;
   }
 
   int32_t maxCoalesceDistance() const {
@@ -197,6 +208,7 @@ class ReaderOptions {
   uint64_t autoPreloadLength_{DEFAULT_AUTO_PRELOAD_SIZE};
   PrefetchMode prefetchMode_{PrefetchMode::PREFETCH};
   int32_t loadQuantum_{kDefaultLoadQuantum};
+  bool directBufferedInputSharedAllocation_{false};
   int32_t maxCoalesceDistance_{kDefaultCoalesceDistance};
   int64_t maxCoalesceBytes_{kDefaultCoalesceBytes};
   int32_t prefetchRowGroups_{kDefaultPrefetchRowGroups};

@@ -49,6 +49,10 @@ struct CudfConfig {
       "cudf.batch_size_max_threshold"};
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
+  static constexpr const char* kCudfStreamingGroupbyEnabled{
+      "cudf.streaming_groupby_enabled"};
+  static constexpr const char* kCudfStreamingGroupbyCapacityMultiplier{
+      "cudf.streaming_groupby_capacity_multiplier"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
@@ -115,6 +119,15 @@ struct CudfConfig {
   /// This batch size is determined by batchSizeMinThreshold and
   /// batchSizeMaxThreshold
   bool concatOptimizationEnabled{false};
+
+  /// Use libcudf's persistent streaming_groupby for eligible final grouped
+  /// aggregations. This is opt-in while it supports only a subset of the
+  /// aggregation combinations supported by the regular cuDF groupby path.
+  bool streamingGroupbyEnabled{false};
+
+  /// Multiplier used to derive streaming_groupby's initial logical capacity
+  /// from the first batch and to grow capacity when it is exhausted.
+  double streamingGroupbyCapacityMultiplier{2.0};
 
   /// Minimum rows to accumulate before GPU-side concatenation in
   /// `CudfBatchConcat` (default 100k).

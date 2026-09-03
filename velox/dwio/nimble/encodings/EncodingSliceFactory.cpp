@@ -74,19 +74,19 @@ std::string_view sliceByMaterializing(
   using physicalType = typename TypeTraits<T>::physicalType;
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-  Vector<physicalType> physicalValues{pool, length};
+  ScopedVector<physicalType> physicalValues{length, pool, options.bufferPool};
 
   auto encoding = EncodingFactory{options}.create(
       *pool, encoded, [&scopedBuffer](uint32_t size) -> void* {
         return scopedBuffer.get().reserve(size);
       });
   encoding->skip(offset);
-  encoding->materialize(length, physicalValues.data());
+  encoding->materialize(length, physicalValues->data());
 
   return encodeValuesWithLayout<T>(
       EncodingLayoutCapture::capture(encoded, options),
-      {reinterpret_cast<const T*>(physicalValues.data()),
-       physicalValues.size()},
+      {reinterpret_cast<const T*>(physicalValues->data()),
+       physicalValues->size()},
       buffer,
       options);
 }
@@ -189,6 +189,24 @@ std::string_view sliceDictionary(
       DictionaryEncoding<T>::slice(encoded, offset, length, buffer, options));
 }
 
+template <typename T>
+std::string_view sliceSharedDictionaryTyped(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options,
+    DataType dataType) {
+  if constexpr (isSharedDictionaryType<T>()) {
+    return SharedDictionaryEncoding<T>::slice(
+        encoded, offset, length, buffer, options);
+  }
+  NIMBLE_INCOMPATIBLE_ENCODING(
+      "Cannot slice SharedDictionary encoding for an incompatible data type "
+      "{}.",
+      dataType);
+}
+
 std::string_view sliceSharedDictionary(
     std::string_view encoded,
     DataType dataType,
@@ -196,11 +214,11 @@ std::string_view sliceSharedDictionary(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+  NIMBLE_RETURN_BY_NON_BOOL_DATA_TYPE(
       dataType,
       T,
-      SharedDictionaryEncoding<T>::slice(
-          encoded, offset, length, buffer, options));
+      sliceSharedDictionaryTyped<T>(
+          encoded, offset, length, buffer, options, dataType));
 }
 
 std::string_view sliceFixedBitWidth(

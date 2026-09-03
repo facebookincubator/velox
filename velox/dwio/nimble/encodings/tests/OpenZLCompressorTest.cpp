@@ -79,12 +79,12 @@ void roundTripNumeric(DataType dataType, const std::vector<T>& values) {
 
 } // namespace
 
-TEST(OpenZLCompressorTest, CompressionType) {
+TEST(OpenZLCompressorTest, compressionType) {
   OpenZLCompressor compressor;
   EXPECT_EQ(CompressionType::OpenZL, compressor.compressionType());
 }
 
-TEST(OpenZLCompressorTest, RoundTripInt8) {
+TEST(OpenZLCompressorTest, roundTripInt8) {
   std::vector<int8_t> values(4096);
   for (size_t i = 0; i < values.size(); ++i) {
     values[i] = static_cast<int8_t>(i % 10);
@@ -92,7 +92,7 @@ TEST(OpenZLCompressorTest, RoundTripInt8) {
   roundTripNumeric(DataType::Int8, values);
 }
 
-TEST(OpenZLCompressorTest, RoundTripInt32) {
+TEST(OpenZLCompressorTest, roundTripInt32) {
   // A narrow, locally-correlated range that exercises range-pack and delta.
   std::vector<int32_t> values(4096);
   for (size_t i = 0; i < values.size(); ++i) {
@@ -101,7 +101,7 @@ TEST(OpenZLCompressorTest, RoundTripInt32) {
   roundTripNumeric(DataType::Int32, values);
 }
 
-TEST(OpenZLCompressorTest, RoundTripInt64) {
+TEST(OpenZLCompressorTest, roundTripInt64) {
   std::vector<int64_t> values(4096);
   for (size_t i = 0; i < values.size(); ++i) {
     values[i] = static_cast<int64_t>(i / 4);
@@ -109,7 +109,7 @@ TEST(OpenZLCompressorTest, RoundTripInt64) {
   roundTripNumeric(DataType::Int64, values);
 }
 
-TEST(OpenZLCompressorTest, RoundTripFloat) {
+TEST(OpenZLCompressorTest, roundTripFloat) {
   std::vector<float> values(4096);
   for (size_t i = 0; i < values.size(); ++i) {
     values[i] = static_cast<float>(i % 16);
@@ -117,7 +117,7 @@ TEST(OpenZLCompressorTest, RoundTripFloat) {
   roundTripNumeric(DataType::Float, values);
 }
 
-TEST(OpenZLCompressorTest, RoundTripSerialInput) {
+TEST(OpenZLCompressorTest, roundTripSerialInput) {
   // Feed raw serial bytes tagged as Int8 (single-byte path -> zstd backend).
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   OpenZLCompressor compressor;
@@ -142,7 +142,7 @@ TEST(OpenZLCompressorTest, RoundTripSerialInput) {
       std::memcmp(original.data(), decompressed->as<char>(), original.size()));
 }
 
-TEST(OpenZLCompressorTest, UncompressedSize) {
+TEST(OpenZLCompressorTest, uncompressedSize) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   OpenZLCompressor compressor;
   TestOpenZLCompressionPolicy policy;
@@ -160,7 +160,7 @@ TEST(OpenZLCompressorTest, UncompressedSize) {
   EXPECT_EQ(input.size(), size.value());
 }
 
-TEST(OpenZLCompressorTest, IncompressibleData) {
+TEST(OpenZLCompressorTest, incompressibleData) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   OpenZLCompressor compressor;
   TestOpenZLCompressionPolicy policy;
@@ -179,7 +179,7 @@ TEST(OpenZLCompressorTest, IncompressibleData) {
   EXPECT_FALSE(result.buffer.has_value());
 }
 
-TEST(OpenZLCompressorTest, MinCompressionSizeSkipsSmallData) {
+TEST(OpenZLCompressorTest, minCompressionSizeSkipsSmallData) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
 
   std::vector<char> data(50, 'a');
@@ -191,7 +191,7 @@ TEST(OpenZLCompressorTest, MinCompressionSizeSkipsSmallData) {
   EXPECT_EQ(CompressionType::Uncompressed, encoder.compressionType());
 }
 
-TEST(OpenZLCompressorTest, UncompressWithBufferPool) {
+TEST(OpenZLCompressorTest, uncompressWithBufferPool) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
   OpenZLCompressor compressor;
   TestOpenZLCompressionPolicy policy;

@@ -34,8 +34,8 @@ std::unique_ptr<KeyEncoding> KeyEncoding::create(
     velox::memory::MemoryPool& pool,
     std::string_view encodedData,
     std::function<void*(uint32_t)> stringBufferFactory) {
-  auto encoding =
-      EncodingFactory().create(pool, encodedData, stringBufferFactory);
+  auto encoding = EncodingFactory().create(
+      pool, encodedData, stringBufferFactory, Encoding::Options{});
   NIMBLE_CHECK_EQ(
       encoding->dataType(),
       DataType::String,

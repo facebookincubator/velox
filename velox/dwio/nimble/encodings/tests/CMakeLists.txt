@@ -39,6 +39,7 @@ add_executable(
   DictionaryEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
+  EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp
@@ -65,7 +66,6 @@ add_executable(
   SentinelEncodingTest.cpp
   SharedDictionaryBuilderTest.cpp
   SharedDictionaryEncodingTest.cpp
-  SharedDictionaryTypesTest.cpp
   SimdForBitpackEncodingViewTest.cpp
   SliceEncodingTest.cpp
   SparseBoolEncodingViewTest.cpp

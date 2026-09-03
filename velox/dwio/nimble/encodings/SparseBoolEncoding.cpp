@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <algorithm>
-
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+
+#include <array>
+#include <utility>
 
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -23,49 +24,6 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 namespace facebook::nimble {
-
-namespace {
-
-std::string_view sliceSparseIndices(
-    std::string_view encodedIndices,
-    uint32_t offset,
-    uint32_t length,
-    Buffer& buffer,
-    const Encoding::Options& options) {
-  auto* pool = &buffer.getMemoryPool();
-  const auto indexCount =
-      EncodingPrefix::readRowCount(encodedIndices, options.useVarintRowCount);
-  Vector<uint32_t> sparseIndices{pool, indexCount};
-  EncodingFactory{options}
-      .create(
-          *pool,
-          encodedIndices,
-          [](uint32_t /* totalLength */) -> void* { return nullptr; })
-      ->materialize(indexCount, sparseIndices.data());
-
-  const auto end = offset + length;
-  Vector<uint32_t> sliceIndices{pool};
-  sliceIndices.reserve(std::min<uint32_t>(length, indexCount));
-  for (uint32_t i = 0; i + 1 < indexCount; ++i) {
-    const auto index = sparseIndices[i];
-    if (index >= end) {
-      break;
-    }
-    if (index >= offset) {
-      sliceIndices.push_back(index - offset);
-    }
-  }
-  sliceIndices.push_back(length);
-
-  return EncodingFactory::encodeWithCapturedLayout<uint32_t>(
-      encodedIndices,
-      std::span<const uint32_t>{sliceIndices.data(), sliceIndices.size()},
-      buffer,
-      options,
-      "Captured SparseBool index layout");
-}
-
-} // namespace
 
 SparseBoolEncoding::SparseBoolEncoding(
     velox::memory::MemoryPool& pool,
@@ -75,11 +33,12 @@ SparseBoolEncoding::SparseBoolEncoding(
     : TypedEncoding<bool, bool>{pool, data, options},
       sparseValue_{static_cast<bool>(data[this->dataOffset()])},
       indicesUncompressed_{&pool},
-      indices_{EncodingFactory(options).create(
+      indices_{EncodingFactory().create(
           pool,
           {data.data() + this->dataOffset() + kPrefixSize,
            data.size() - this->dataOffset() - kPrefixSize},
-          stringBufferFactory)} {
+          stringBufferFactory,
+          options)} {
   reset();
 }
 
@@ -175,6 +134,52 @@ uint32_t SparseBoolEncoding::skipSparseIndices(uint32_t rowCount) {
   return count;
 }
 
+void SparseBoolEncoding::countTrue(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    velox::memory::MemoryPool* pool,
+    RangeCounts& counts,
+    const Encoding::Options& options) {
+  counts = {};
+  NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null");
+  const auto rowCount =
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
+  NIMBLE_CHECK_LE(offset, rowCount);
+  NIMBLE_CHECK_LE(length, rowCount - offset);
+  NIMBLE_CHECK_GT(length, 0, "Cannot count zero rows.");
+
+  SparseBoolEncoding sparseBool{
+      *pool,
+      encoded,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options};
+  const auto numSkippedSparseBeforeRange = sparseBool.skipSparseIndices(offset);
+  const auto numSkippedSparseInRange = sparseBool.skipSparseIndices(length);
+  if (sparseBool.sparseValue()) {
+    counts = {
+        .numTrueBeforeRange = numSkippedSparseBeforeRange,
+        .numTrueInRange = numSkippedSparseInRange,
+    };
+    return;
+  }
+  counts = {
+      .numTrueBeforeRange = offset - numSkippedSparseBeforeRange,
+      .numTrueInRange = length - numSkippedSparseInRange,
+  };
+}
+
+uint32_t SparseBoolEncoding::countTrue(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    velox::memory::MemoryPool* pool,
+    const Encoding::Options& options) {
+  RangeCounts counts;
+  countTrue(encoded, offset, length, pool, counts, options);
+  return counts.numTrueInRange;
+}
+
 std::string_view SparseBoolEncoding::encode(
     EncodingSelection<bool>& selection,
     std::span<const bool> values,
@@ -244,11 +249,23 @@ std::string_view SparseBoolEncoding::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
+  return sliceAndCount(encoded, offset, length, buffer, options).sliced;
+}
+
+std::string_view SparseBoolEncoding::encodeWithSlicedIndices(
+    std::string_view encoded,
+    uint32_t length,
+    std::span<const uint32_t> slicedIndicesWithSentinel,
+    Buffer& buffer,
+    const Encoding::Options& options) {
   NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  NIMBLE_CHECK(
+      !slicedIndicesWithSentinel.empty(),
+      "SparseBool slice indices must include row-count sentinel.");
+  NIMBLE_CHECK_EQ(
+      slicedIndicesWithSentinel.back(),
+      length,
+      "SparseBool slice sentinel must match slice length.");
 
   const char* readPos = encoded.data() +
       EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
@@ -257,7 +274,12 @@ std::string_view SparseBoolEncoding::slice(
       readPos, static_cast<size_t>(encoded.end() - readPos)};
 
   const auto serializedIndices =
-      sliceSparseIndices(encodedIndices, offset, length, buffer, options);
+      EncodingFactory::encodeWithCapturedLayout<uint32_t>(
+          encodedIndices,
+          slicedIndicesWithSentinel,
+          buffer,
+          options,
+          "Captured SparseBool index layout");
 
   const auto prefixSize =
       EncodingPrefix::serializedSize(length, options.useVarintRowCount);
@@ -275,6 +297,76 @@ std::string_view SparseBoolEncoding::slice(
   encoding::writeBytes(serializedIndices, pos);
   NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
   return {reserved, encodingSize};
+}
+
+SparseBoolEncoding::SliceResult SparseBoolEncoding::sliceAndCount(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto* pool = &buffer.getMemoryPool();
+  const auto sourceRowCount =
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
+  NIMBLE_CHECK_LE(offset, sourceRowCount);
+  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
+  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+
+  SparseBoolEncoding source{
+      *pool,
+      encoded,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options};
+  const auto numSkippedSparse = source.skipSparseIndices(offset);
+
+  const auto rowEnd = source.row_ + length;
+  if (source.nextIndex_ >= rowEnd) {
+    const RangeCounts counts = source.sparseValue()
+        ? RangeCounts{
+              .numTrueBeforeRange = numSkippedSparse,
+              .numTrueInRange = 0,
+          }
+        : RangeCounts{
+              .numTrueBeforeRange = offset - numSkippedSparse,
+              .numTrueInRange = length,
+          };
+    const std::array<uint32_t, 1> slicedIndicesWithSentinel{length};
+    return {
+        .sliced = encodeWithSlicedIndices(
+            encoded, length, slicedIndicesWithSentinel, buffer, options),
+        .counts = counts,
+    };
+  }
+
+  const auto maxSlicePositions =
+      std::min<uint32_t>(length, source.indices_.rowCount() - 1);
+  ScopedVector<uint32_t> slicedIndicesWithSentinel{
+      maxSlicePositions + 1, pool, options.bufferPool};
+  slicedIndicesWithSentinel->resize(0);
+  const auto numSparseInSlice =
+      source.materializeSparseIndices(length, *slicedIndicesWithSentinel);
+  slicedIndicesWithSentinel->push_back(length);
+
+  const RangeCounts counts = source.sparseValue()
+      ? RangeCounts{
+            .numTrueBeforeRange = numSkippedSparse,
+            .numTrueInRange = numSparseInSlice,
+        }
+      : RangeCounts{
+            .numTrueBeforeRange = offset - numSkippedSparse,
+            .numTrueInRange = length - numSparseInSlice,
+        };
+  return {
+      .sliced = encodeWithSlicedIndices(
+          encoded,
+          length,
+          std::span<const uint32_t>{
+              slicedIndicesWithSentinel->data(),
+              slicedIndicesWithSentinel->size()},
+          buffer,
+          options),
+      .counts = counts,
+  };
 }
 
 } // namespace facebook::nimble

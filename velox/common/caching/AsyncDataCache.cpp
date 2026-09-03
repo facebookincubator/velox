@@ -864,6 +864,8 @@ void AsyncDataCache::shutdown() {
 }
 
 void CacheShard::shutdown() {
+  std::lock_guard<std::mutex> l(mutex_);
+  entryMap_.clear();
   entries_.clear();
   freeEntries_.clear();
 }

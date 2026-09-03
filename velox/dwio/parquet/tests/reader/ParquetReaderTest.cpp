@@ -18,8 +18,11 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
+#include "velox/dwio/parquet/reader/ParquetColumnReader.h"
+#include "velox/dwio/parquet/reader/ParquetData.h"
 #include "velox/dwio/parquet/reader/ParquetStatsContext.h"
 #include "velox/dwio/parquet/reader/SemanticVersion.h"
+#include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -32,6 +35,41 @@ using namespace facebook::velox::parquet;
 
 class ParquetReaderTest : public ParquetTestBase {
  public:
+  struct RepDefSourceInfo {
+    uint32_t column;
+    TypeKind kind;
+  };
+
+  RepDefSourceInfo syntheticRepDefSourceInfo(
+      ParquetReader& reader,
+      const dwio::common::ReaderOptions& readerOptions,
+      common::ScanSpec& scanSpec) {
+    dwio::common::SplitStats splitStats{FileFormat::PARQUET};
+    ParquetParams params(
+        *leafPool_,
+        splitStats,
+        reader.fileMetaData(),
+        readerOptions.sessionTimezone(),
+        TimestampPrecision::kMilliseconds);
+    auto rootReader = ParquetColumnReader::build(
+        makeColumnReaderOptions(readerOptions),
+        reader.rowType(),
+        reader.typeWithId(),
+        params,
+        scanSpec);
+    auto* rootStruct = dynamic_cast<StructColumnReader*>(rootReader.get());
+    VELOX_CHECK_NOT_NULL(rootStruct);
+    VELOX_CHECK_EQ(rootStruct->children().size(), 1);
+    auto* nestedStruct =
+        dynamic_cast<StructColumnReader*>(rootStruct->children().front());
+    VELOX_CHECK_NOT_NULL(nestedStruct);
+    auto* sourceReader = nestedStruct->repDefSourceReader();
+    VELOX_CHECK_NOT_NULL(sourceReader);
+    return {
+        sourceReader->fileType().column(),
+        sourceReader->fileType().type()->kind()};
+  }
+
   void assertReadWithExpected(
       const std::string& fileName,
       const RowTypePtr& rowType,
@@ -247,6 +285,50 @@ TEST_F(ParquetReaderTest, parquetFieldIdColumnMapping) {
       *projectedReaderBundle.rowReader,
       projectedExpected,
       *leafPool_);
+}
+
+// Regression test for isChildMissing incorrectly using the channel-index
+// guard (channel >= fileType->size) in kParquetFieldId mode.
+//
+// When a new column is inserted before existing ones (e.g. ADD COLUMN z FIRST),
+// the output channel of the trailing columns shifts up.  For a file written
+// with [a(fid=1), b(fid=2)] and read with requested schema
+// [z(fid=3), a(fid=1), b(fid=2)], b lands at output channel 2.  The file has
+// only 2 columns, so channel(b)=2 >= fileSize=2 would incorrectly mark b as
+// missing.  The fix extends the name-based path (containsChild) to cover
+// kParquetFieldId, which correctly identifies z as absent and a/b as present.
+TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
+  // Write [a(fid=1), b(fid=2)] — two rows.
+  auto writeType = ROW({"a", "b"}, {INTEGER(), VARCHAR()});
+  auto data = makeRowVector(
+      writeType->names(),
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{1, {}}, ParquetFieldId{2, {}}};
+  auto* sink = write(data, writerOptions);
+
+  // Read back with output schema [z(fid=3), a(fid=1), b(fid=2)].
+  // z has no matching field id in the file → null-fill.
+  // a and b are present → must carry their original values.
+  const auto outputType =
+      ROW({"z", "a", "b"}, {INTEGER(), INTEGER(), VARCHAR()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds(
+      {ParquetFieldId{3, {}}, ParquetFieldId{1, {}}, ParquetFieldId{2, {}}});
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+       makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<std::string>({"x", "y"})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
 TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
@@ -1284,6 +1366,22 @@ TEST_F(ParquetReaderTest, shouldIgnoreStatsForParquetMRVersions) {
       << "ParquetStatsContext(parquet-mr 1.8.2) should not ignore string stats";
 }
 
+TEST_F(ParquetReaderTest, parseSemanticVersion) {
+  auto version = SemanticVersion::parse("parquet-mr version 1.8.2");
+
+  ASSERT_TRUE(version.has_value());
+  EXPECT_EQ(version->toString(), "1.8.2");
+}
+
+TEST_F(ParquetReaderTest, parseOutOfRangeSemanticVersion) {
+  for (const auto& input :
+       {"parquet-mr version 999999999999999999999999.1.0",
+        "parquet-mr version 1.999999999999999999999999.0",
+        "parquet-mr version 1.0.999999999999999999999999"}) {
+    EXPECT_NO_THROW({ EXPECT_FALSE(SemanticVersion::parse(input)); });
+  }
+}
+
 // This test is to verify filterRowGroups() doesn't fail if offset is 0
 TEST_F(ParquetReaderTest, filterRowGroupsWithZeroOffset) {
   auto rowType = ROW("IDX", INTEGER());
@@ -1687,7 +1785,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   }
 }
 
-TEST_F(ParquetReaderTest, struct_of_array_of_array) {
+TEST_F(ParquetReaderTest, structOfArrayOfArray) {
   //  The Schema is of type
   //  message hive_schema {
   //    optional group test {
@@ -1761,6 +1859,77 @@ TEST_F(ParquetReaderTest, struct_of_array_of_array) {
   constexpr int kBatchSize = 1000;
   while (readerBundle.rowReader->next(kBatchSize, result)) {
   }
+}
+
+TEST_F(ParquetReaderTest, cheapestRepDefSource) {
+  constexpr vector_size_t kNumRows = 100;
+  constexpr vector_size_t kElementsPerRow = 10;
+  std::vector<vector_size_t> detailOffsets(kNumRows);
+  for (auto row = 0; row < kNumRows; ++row) {
+    detailOffsets[row] = row * kElementsPerRow;
+  }
+  const auto details = makeArrayVector(
+      detailOffsets,
+      makeRowVector(
+          {"value"},
+          {makeFlatVector<std::string>(
+              kNumRows * kElementsPerRow, [](auto row) {
+                return std::string(256, 'x') + std::to_string(row);
+              })}));
+  const auto vector = makeRowVector(
+      {"target"},
+      {makeRowVector(
+          {"details", "suffix"},
+          {details, makeFlatVector<std::string>(kNumRows, [](auto row) {
+             return "s" + std::to_string(row);
+           })})});
+  const auto* sink = write(vector, ParquetWriterOptions{});
+
+  auto readerOptions = makeDefaultReaderOptions();
+  auto reader = createReaderInMemory(*sink, readerOptions);
+  const auto fileMetaData = reader->fileMetaData();
+  ASSERT_EQ(fileMetaData.numRowGroups(), 1);
+  const auto rowGroup = fileMetaData.rowGroup(0);
+  ASSERT_LT(
+      rowGroup.columnChunk(1).readSize(), rowGroup.columnChunk(0).readSize());
+
+  auto scanSpec = std::make_shared<ScanSpec>("");
+  auto* targetSpec = scanSpec->getOrCreateChild(Subfield("target"));
+  targetSpec->setFilter(exec::isNotNull());
+  targetSpec->setProjectOut(false);
+  const auto source =
+      syntheticRepDefSourceInfo(*reader, readerOptions, *scanSpec);
+  EXPECT_EQ(source.column, 1);
+  EXPECT_EQ(source.kind, TypeKind::VARCHAR);
+}
+
+// The first physical branch ends in a legacy repeated VARCHAR. Reading the
+// enclosing struct with no logical children must use the cheaper INTEGER leaf.
+TEST_F(ParquetReaderTest, legacyRepDefSource) {
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kName);
+  auto reader = createReader("struct_of_array_of_array.parquet", readerOptions);
+  auto scanSpec = std::make_shared<ScanSpec>("");
+  auto* structSpec = scanSpec->getOrCreateChild(Subfield("test"));
+  structSpec->setFilter(exec::isNotNull());
+  structSpec->setProjectOut(false);
+
+  const auto fileMetaData = reader->fileMetaData();
+  ASSERT_EQ(fileMetaData.numRowGroups(), 1);
+  const auto rowGroup = fileMetaData.rowGroup(0);
+  ASSERT_LT(
+      rowGroup.columnChunk(1).readSize(), rowGroup.columnChunk(0).readSize());
+  const auto source =
+      syntheticRepDefSourceInfo(*reader, readerOptions, *scanSpec);
+  EXPECT_EQ(source.column, 1);
+  EXPECT_EQ(source.kind, TypeKind::INTEGER);
+
+  RowReaderOptions options;
+  options.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(options);
+  auto result = BaseVector::create(ROW({}, {}), 0, leafPool_.get());
+  EXPECT_EQ(rowReader->next(20'000, result), 13'520);
+  EXPECT_EQ(result->size(), 13'520);
 }
 
 TEST_F(ParquetReaderTest, testLzoDataPage) {

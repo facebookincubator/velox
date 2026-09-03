@@ -203,7 +203,7 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   void TearDown() override {
     // The rate limiter is process-global; reset it so its adaptive state does
     // not leak into other tests.
-    RPCRateLimiter::testingResetAllState();
+    RPCRateLimiterRegistry::global().testingReset();
     OperatorTestBase::TearDown();
   }
 

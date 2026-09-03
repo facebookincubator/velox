@@ -125,6 +125,9 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
       // decimal points) instead of returning NULL.
       return true;
     }
+    if (isFloatingPointType(toType)) {
+      return true;
+    }
   }
   if (fromType->isTimestamp() && isIntegralType(toType)) {
     return true;

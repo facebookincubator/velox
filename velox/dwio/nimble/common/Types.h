@@ -161,10 +161,19 @@ enum class EncodingType {
   // external provider. The alphabet is resolved independently from the
   // encoded index stream.
   SharedDictionary = 22,
+  // A slice of another encoding: carries the source encoding verbatim plus
+  // the row offset at which the slice begins, deferring the slice work to
+  // decode time. Produced only by EncodingSliceFactory, never by encoding
+  // selection.
+  Slice = 23,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
 EncodingType toEncodingType(std::string_view name);
+/// Returns true if the encoding is retained only for reading existing data.
+bool isReadOnlyEncoding(EncodingType encodingType);
+/// Returns true if the name identifies a read-only encoding.
+bool isReadOnlyEncoding(std::string_view name);
 std::ostream& operator<<(std::ostream& out, EncodingType encodingType);
 
 enum class DataType : uint8_t {
@@ -393,6 +402,32 @@ constexpr bool isNumericType() {
 template <typename T>
 constexpr bool isStringType() {
   return std::is_same_v<T, std::string_view> || std::is_same_v<T, std::string>;
+}
+
+template <typename T>
+constexpr bool isSharedDictionaryType() {
+  return isIntegralType<T>() || std::is_same_v<T, std::string_view>;
+}
+
+constexpr bool isSharedDictionaryType(DataType dataType) {
+  switch (dataType) {
+    case DataType::Int8:
+    case DataType::Uint8:
+    case DataType::Int16:
+    case DataType::Uint16:
+    case DataType::Int32:
+    case DataType::Uint32:
+    case DataType::Int64:
+    case DataType::Uint64:
+    case DataType::String:
+      return true;
+    case DataType::Undefined:
+    case DataType::Float:
+    case DataType::Double:
+    case DataType::Bool:
+      return false;
+  }
+  return false;
 }
 
 template <typename T>

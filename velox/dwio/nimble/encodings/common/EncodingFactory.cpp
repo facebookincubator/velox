@@ -17,6 +17,7 @@
 
 #include <utility>
 
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -35,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
@@ -57,12 +59,32 @@ std::span<const typename TypeTraits<T>::physicalType> toPhysicalSpan(
       values.size());
 }
 
+template <typename T>
+std::unique_ptr<Encoding> createSharedDictionaryEncoding(
+    velox::memory::MemoryPool& pool,
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory,
+    const Encoding::Options& options,
+    DataType dataType) {
+  if constexpr (isSharedDictionaryType<T>()) {
+    return std::make_unique<SharedDictionaryEncoding<T>>(
+        pool, data, std::move(stringBufferFactory), options);
+  }
+  NIMBLE_INCOMPATIBLE_ENCODING(
+      "Trying to deserialize a SharedDictionary stream for an incompatible "
+      "data type {}.",
+      dataType);
+}
+
 } // namespace
 
 std::unique_ptr<Encoding> EncodingFactory::create(
     velox::memory::MemoryPool& pool,
     std::string_view data,
     std::function<void*(uint32_t)> stringBufferFactory) const {
+  NIMBLE_CHECK_FILE(
+      data.size() >= EncodingPrefix::kRowCountOffset,
+      "Truncated encoding prefix.");
   // Maybe we should have a magic number of encodings too? Hrm.
   const EncodingType encodingType = EncodingPrefix::encodingType(data);
   const DataType dataType = EncodingPrefix::dataType(data);
@@ -79,7 +101,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_NON_BOOL_TYPE(DictionaryEncoding, dataType);
     }
     case EncodingType::SharedDictionary: {
-      RETURN_ENCODING_BY_INTEGER_TYPE(SharedDictionaryEncoding, dataType);
+      NIMBLE_RETURN_BY_NON_BOOL_DATA_TYPE(
+          dataType,
+          T,
+          createSharedDictionaryEncoding<T>(
+              pool, data, stringBufferFactory, options, dataType));
     }
     case EncodingType::FixedBitWidth: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(FixedBitWidthEncoding, dataType);
@@ -103,6 +129,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::MainlyConstant: {
       RETURN_ENCODING_BY_NON_BOOL_TYPE(MainlyConstantEncoding, dataType);
+    }
+    case EncodingType::Slice: {
+      RETURN_ENCODING_BY_DATA_TYPE(SliceEncoding, dataType);
     }
     case EncodingType::Prefix: {
       NIMBLE_CHECK_EQ(
@@ -280,13 +309,36 @@ std::string_view EncodingFactory::encode(
           selection, castedValues, buffer, options);
     }
     case EncodingType::SharedDictionary: {
-      if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+      if constexpr (isSharedDictionaryType<T>()) {
+        const auto& sharedDictionaryInput = selection.sharedDictionaryInput();
+        NIMBLE_CHECK(
+            sharedDictionaryInput.has_value(),
+            "SharedDictionary encoding requires writer-provided dictionary "
+            "indices.");
+        NIMBLE_CHECK_EQ(
+            sharedDictionaryInput->indices.size(),
+            castedValues.size(),
+            "SharedDictionary index count differs from value count.");
+        EncodingSelectionPolicyCreator nestedPolicyCreator =
+            [&selection](DataType nestedDataType)
+            -> std::unique_ptr<EncodingSelectionPolicyBase> {
+          NIMBLE_CHECK_EQ(
+              nestedDataType,
+              DataType::Uint32,
+              "SharedDictionary index stream must use Uint32.");
+          return selection.template createNestedPolicy<uint32_t>(
+              EncodingType::SharedDictionary,
+              EncodingIdentifiers::SharedDictionary::Indices);
+        };
         return SharedDictionaryEncoding<T>::encode(
-            selection, castedValues, buffer, options);
+            sharedDictionaryInput->indices,
+            nestedPolicyCreator,
+            buffer,
+            options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
-          "SharedDictionary encoding only supports non-bool integer data types, got {}.",
-          TypeTraits<T>::dataType);
+          "SharedDictionary encoding only supports integer or string data "
+          "types.");
     }
     case EncodingType::FixedBitWidth: {
       if constexpr (isNumericType<physicalType>()) {
@@ -428,6 +480,15 @@ std::string_view EncodingFactory::encodeNullable(
     case EncodingType::Nullable: {
       return NullableEncoding<T>::encodeNullable(
           selection, physicalValues, nulls, buffer, options);
+    }
+    case EncodingType::SharedDictionary: {
+      if constexpr (isSharedDictionaryType<T>()) {
+        return SharedDictionaryEncoding<T>::encodeNullable(
+            std::move(selection), physicalValues, nulls, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SharedDictionary encoding only supports integer or string data "
+          "types.");
     }
     default: {
       NIMBLE_UNSUPPORTED(

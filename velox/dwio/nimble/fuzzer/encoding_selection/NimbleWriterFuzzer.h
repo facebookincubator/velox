@@ -93,10 +93,10 @@ struct PairCoverage {
 /// repairing both legacy tables by hand (D114295784); covering all four here
 /// turns that class of gap into a fuzzer failure.
 enum class ReaderPath {
-  /// nimble::VeloxReader with the default legacy::EncodingFactory.
+  /// nimble::BatchReader with the default legacy::EncodingFactory.
   kLegacyFactory,
 
-  /// nimble::VeloxReader with the non-legacy EncodingFactory.
+  /// nimble::BatchReader with the non-legacy EncodingFactory.
   kDefaultFactory,
 
   /// Selective reader, legacy::LegacyEncodingTrait visitor dispatch.
@@ -127,25 +127,26 @@ enum class WriteOutcome {
   kNotApplied,
 };
 
-/// Every encoding the fuzzer requests. All of them are accepted by the
-/// 'encodings:' key of nimble.encoding_selection_config, which validates
-/// against ManualEncodingSelectionPolicyFactory::possibleEncodings().
+/// Writable encodings the fuzzer requests. The list is derived from
+/// ManualEncodingSelectionPolicyFactory::possibleEncodings(), which is also the
+/// source of truth for the 'encodings:' key of
+/// nimble.encoding_selection_config.
 std::vector<EncodingType> allCandidateEncodings();
 
 /// Number of unfiltered random-policy files written before coverage repair.
 inline constexpr uint32_t kNumUnfilteredRounds = 10;
 
 /// Whether an encoding may only be requested for a stream that is not REAL or
-/// DOUBLE. PFOR, SimdForBitpack and Huffman can be selected for a
-/// floating-point stream because their write-side gate tests physicalType
-/// (uint32_t/uint64_t, hence integral). DeltaBlock's direct gate tests the
-/// logical type, but a Nullable float's nested policy sees the physical type
-/// and can select it there. Every read-side gate rejects all four for float and
-/// double, producing a file no selective reader can decode. See T283330065.
+/// DOUBLE. SimdForBitpack and Huffman can be selected for a floating-point
+/// stream because their write-side gate tests physicalType (uint32_t/uint64_t,
+/// hence integral). DeltaBlock's direct gate tests the logical type, but a
+/// Nullable float's nested policy sees the physical type and can select it
+/// there. Every read-side gate rejects all three for float and double,
+/// producing a file no selective reader can decode. See T283330065.
 ///
 /// The restriction is per stream, not per schema: a schema holding one REAL
-/// column alongside integer columns still exercises these four on the integer
-/// columns.
+/// column alongside integer columns still exercises these encodings on the
+/// integer columns.
 bool isIntegralOnlyEncoding(EncodingType encodingType);
 
 /// Whether EncodingSizeEstimation's *type* gate admits 'encodingType' for a
@@ -159,12 +160,12 @@ bool isIntegralOnlyEncoding(EncodingType encodingType);
 /// recovers it by mirroring the `if constexpr` gates and the
 /// numeric/bool/string dispatch in EncodingSizeEstimation.
 ///
-/// It mirrors the *write* side only: PFOR, SimdForBitpack and Huffman are
-/// reported compatible with Float and Double because that is what the
-/// write-side gate does -- it tests physicalType, which is integral for floats
-/// -- even though no reader can decode the result (T283330065). Callers that
-/// also care about readability must exclude those separately. Nothing pins
-/// this mirror to EncodingSizeEstimation; it has drifted once (T283801877).
+/// It mirrors the *write* side only: SimdForBitpack and Huffman are reported
+/// compatible with Float and Double because that is what the write-side gate
+/// does -- it tests physicalType, which is integral for floats -- even though
+/// no reader can decode the result (T283330065). Callers that also care about
+/// readability must exclude those separately. Nothing pins this mirror to
+/// EncodingSizeEstimation; it has drifted once (T283801877).
 bool isTypeCompatible(EncodingType encodingType, DataType dataType);
 
 /// Knobs for a fuzzer run. Everything else is derived from the seed so a
@@ -270,6 +271,9 @@ class NimbleWriterFuzzer {
   /// as covered.
   void logPairCoverage() const;
 
+  /// Logs the physical chunk and metadata shapes validated by the run.
+  void logChunkStatsCoverage() const;
+
   /// Candidate encodings that were never applied to a single chunk, either
   /// because no iteration drew a schema they accept or because every stream
   /// fell back to Trivial. A non-empty result means the run verified fewer
@@ -293,7 +297,36 @@ class NimbleWriterFuzzer {
   /// either way.
   std::vector<EncodingPair> unappliedPairs() const;
 
+  /// Names of required chunk-stats metadata shapes not observed by the run.
+  std::vector<std::string_view> uncoveredChunkStatsShapes() const;
+
  private:
+  // Counts physical stream and metadata shapes validated during the run.
+  struct ChunkStatsVerificationCoverage {
+    // Counts files whose chunk stats were enabled or disabled.
+    uint64_t numIndexedFiles{0};
+    uint64_t numUnindexedFiles{0};
+    // Counts indexed groups and stripes.
+    uint64_t numStripeGroups{0};
+    uint64_t numStripes{0};
+    // Counts present scalar-value streams, structural streams emitted for
+    // complex types, and streams split into multiple chunks.
+    uint64_t numScalarStreams{0};
+    uint64_t numStructuralStreams{0};
+    uint64_t numMultiChunkStreams{0};
+    // Counts chunk positions within their streams.
+    uint64_t numFirstChunks{0};
+    uint64_t numMiddleChunks{0};
+    uint64_t numFinalChunks{0};
+    // Counts decoded null distributions.
+    uint64_t numZeroNullChunks{0};
+    uint64_t numPartiallyNullChunks{0};
+    uint64_t numFullyNullChunks{0};
+    // Counts physical chunk-wrapper compression states.
+    uint64_t numCompressedChunks{0};
+    uint64_t numUncompressedChunks{0};
+  };
+
   // Writes 'batches', returning the file bytes. When 'encodingType' is set,
   // that is the only candidate offered to the random policy; otherwise the
   // policy chooses from its full default set. The write type is taken from
@@ -302,6 +335,25 @@ class NimbleWriterFuzzer {
       const std::vector<velox::VectorPtr>& batches,
       std::optional<EncodingType> encodingType,
       uint64_t iterationSeed);
+
+  // Validates the chunk-stats section against independently parsed and decoded
+  // physical chunks, and records which metadata shapes were exercised.
+  void verifyChunkStatsMetadata(
+      const std::string& file,
+      bool chunkStatsEnabled);
+
+  // Verifies file-level column statistics (value count, null count, min, max)
+  // against the data that was actually written.
+  void verifyColumnStatistics(
+      const std::string& file,
+      const velox::RowTypePtr& schema,
+      const std::vector<velox::VectorPtr>& batches);
+
+  // Verifies the serialized schema round-trips back to the written Velox type,
+  // and that per-stream byte ranges within each stripe are non-overlapping.
+  void verifySchemaAndStripeGroupConsistency(
+      const std::string& file,
+      const velox::RowTypePtr& schema);
 
   // Reads 'file' through 'readerPath' and compares every row against
   // 'batches'. Throws on the first difference.
@@ -335,6 +387,7 @@ class NimbleWriterFuzzer {
   std::map<EncodingType, EncodingCoverage> coverage_;
   std::map<EncodingPair, PairCoverage> pairCoverage_;
   uint64_t numUnfilteredFilesWritten_{0};
+  ChunkStatsVerificationCoverage chunkStatsCoverage_;
   // DataTypes some stream actually carried. Bounds what unappliedPairs() may
   // demand, and is deliberately observed rather than derived from the schema:
   // the writer emits Uint32 length streams, Bool null streams and the Uint16

@@ -69,6 +69,7 @@ std::string WaveConfig::toString() const {
   addInt("maxElementwiseVars", &WaveConfig::maxElementwiseVars);
   addInt("outOfLineExprSize", &WaveConfig::outOfLineExprSize);
   addBool("printTiming", &WaveConfig::printTiming);
+  addBool("perOpStandaloneTiming", &WaveConfig::perOpStandaloneTiming);
   addStr("traceValues", &WaveConfig::traceValues);
   addInt("tensorPrintElementLimit", &WaveConfig::tensorPrintElementLimit);
   addBool("reverify", &WaveConfig::reverify);
@@ -85,7 +86,20 @@ std::string WaveConfig::toString() const {
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
   addBool("freeIntermediates", &WaveConfig::freeIntermediates);
   addBool("inputContiguous", &WaveConfig::inputContiguous);
+  addBool("cseCompute", &WaveConfig::cseCompute);
+  addBool("cseViews", &WaveConfig::cseViews);
   addBool("mkSelect", &WaveConfig::mkSelect);
+  addBool("stepLastUse", &WaveConfig::stepLastUse);
+  addBool("syncEachStep", &WaveConfig::syncEachStep);
+  addBool("deferD2h", &WaveConfig::deferD2h);
+  addBool("runAhead", &WaveConfig::runAhead);
+  addInt("maxDelayedFree", &WaveConfig::maxDelayedFree);
+  addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
+  addBool("donateBuffers", &WaveConfig::donateBuffers);
+  addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
+  addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
+  addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
+  addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
 
   if (parts.empty()) {
     return "defaults";

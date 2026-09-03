@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -41,6 +42,7 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -119,6 +121,28 @@ std::vector<uint32_t> clusteredPositions(uint32_t rows) {
   return positions;
 }
 
+std::vector<uint32_t> sharedDictionaryRandomIndices() {
+  std::mt19937 generator{1};
+  std::uniform_int_distribution<uint32_t> distribution{0, kRows - 1};
+  std::vector<uint32_t> indices(kPositions);
+  for (auto& index : indices) {
+    index = distribution(generator);
+  }
+  return indices;
+}
+
+std::vector<uint32_t> sharedDictionarySortedIndices() {
+  auto indices = sharedDictionaryRandomIndices();
+  std::sort(indices.begin(), indices.end());
+  return indices;
+}
+
+std::vector<uint32_t> sharedDictionaryClusteredIndices() {
+  std::vector<uint32_t> indices(kPositions);
+  std::iota(indices.begin(), indices.end(), (kRows - kPositions) / 2);
+  return indices;
+}
+
 template <typename T>
 void readPositionsWithView(
     const EncodingView& view,
@@ -130,6 +154,60 @@ void readPositionsWithView(
       view.readAt(position, &value);
       folly::doNotOptimizeAway(value);
     }
+  }
+}
+
+template <typename T>
+void readPositionsBatchWithView(
+    const EncodingView& view,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+  std::vector<PhysicalType> output(positions.size());
+  while (iters--) {
+    view.readAt(positions, output.data());
+    folly::doNotOptimizeAway(output.data());
+  }
+}
+
+template <typename T>
+std::shared_ptr<const SharedDictionaryAlphabet> createSharedDictionaryAlphabet(
+    const Vector<T>& values) {
+  Buffer buffer{*benchmarkPool()};
+  const auto encoded = SharedDictionaryAlphabet::encode<T>(
+      {values.data(), values.size()},
+      std::array{EncodingType::BlockBitPacking},
+      buffer);
+  auto encodedOwner = std::make_shared<const std::string>(encoded);
+  const std::string_view encodedAlphabet{*encodedOwner};
+  return SharedDictionaryAlphabet::create(
+      encodedAlphabet, std::move(encodedOwner), benchmarkPool().get());
+}
+
+template <typename T>
+void readSharedDictionaryAlphabetScalar(
+    const SharedDictionaryAlphabet& alphabet,
+    const std::vector<uint32_t>& indices,
+    uint32_t iters) {
+  typename TypeTraits<T>::physicalType value;
+  while (iters--) {
+    for (const auto index : indices) {
+      value = alphabet.physicalValueAt<T>(index);
+      folly::doNotOptimizeAway(value);
+    }
+  }
+}
+
+template <typename T>
+void readSharedDictionaryAlphabetBatch(
+    const SharedDictionaryAlphabet& alphabet,
+    const std::vector<uint32_t>& indices,
+    uint32_t iters) {
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+  std::vector<PhysicalType> output(indices.size());
+  while (iters--) {
+    alphabet.materialize<T>(indices, output.data());
+    folly::doNotOptimizeAway(output.data());
   }
 }
 
@@ -242,8 +320,8 @@ class MaterializedOffsetsStringTrivialView {
     const auto lengthsSize = encoding::readUint32(pos);
 
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto lengths = EncodingFactory(options).create(
-        *pool, {pos, lengthsSize}, noStringBufferFactory);
+    auto lengths = EncodingFactory().create(
+        *pool, {pos, lengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(lengths);
     offsets_.resize(rowCount_ + 1);
     offsets_[0] = 0;
@@ -311,8 +389,8 @@ class MaterializedRunEndsRLEView {
     const char* pos = data.data() + dataOffset;
     const auto runLengthsSize = encoding::readUint32(pos);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto runLengths = EncodingFactory(options).create(
-        *pool, {pos, runLengthsSize}, noStringBufferFactory);
+    auto runLengths = EncodingFactory().create(
+        *pool, {pos, runLengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(runLengths);
 
     runEnds_.resize(runLengths->rowCount());
@@ -467,6 +545,31 @@ Vector<std::string_view> dictionaryStringData(
       view = createEncodingView(encoded, benchmarkPool().get()); \
     }                                                            \
     readRangesWithView<Type>(*view, iters);                      \
+  }
+
+#define BATCH_VIEW_BENCHMARK(Name, Type, EncodedExpr, PositionsExpr) \
+  BENCHMARK(Name, iters) {                                           \
+    std::string encoded;                                             \
+    std::vector<uint32_t> positions;                                 \
+    std::unique_ptr<EncodingView> view;                              \
+    BENCHMARK_SUSPEND {                                              \
+      encoded = EncodedExpr;                                         \
+      positions = PositionsExpr;                                     \
+      view = createEncodingView(encoded, benchmarkPool().get());     \
+    }                                                                \
+    readPositionsBatchWithView<Type>(*view, positions, iters);       \
+  }
+
+#define SHARED_DICTIONARY_ALPHABET_BENCHMARK(                      \
+    Name, Type, ValuesExpr, IndicesExpr, ReadFunction)             \
+  BENCHMARK(Name, iters) {                                         \
+    std::shared_ptr<const SharedDictionaryAlphabet> alphabet;      \
+    std::vector<uint32_t> indices;                                 \
+    BENCHMARK_SUSPEND {                                            \
+      alphabet = createSharedDictionaryAlphabet<Type>(ValuesExpr); \
+      indices = IndicesExpr;                                       \
+    }                                                              \
+    ReadFunction<Type>(*alphabet, indices, iters);                 \
   }
 
 #define UNALIGNED_RANGE_VIEW_BENCHMARK(Name, Type, EncodedExpr)  \
@@ -1026,6 +1129,77 @@ VIEW_BENCHMARK(
         EncodingType::BlockBitPacking,
         pforData()),
     randomPositions(kRows))
+VIEW_BENCHMARK(
+    View_BlockBitPackingUint32_Sorted130,
+    uint32_t,
+    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
+        EncodingType::BlockBitPacking,
+        pforData()),
+    sortedRandomPositions(kRows))
+VIEW_BENCHMARK(
+    View_BlockBitPackingUint32_Clustered130,
+    uint32_t,
+    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
+        EncodingType::BlockBitPacking,
+        pforData()),
+    clusteredPositions(kRows))
+BATCH_VIEW_BENCHMARK(
+    BatchView_BlockBitPackingUint32_Random130,
+    uint32_t,
+    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
+        EncodingType::BlockBitPacking,
+        pforData()),
+    randomPositions(kRows))
+BATCH_VIEW_BENCHMARK(
+    BatchView_BlockBitPackingUint32_Sorted130,
+    uint32_t,
+    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
+        EncodingType::BlockBitPacking,
+        pforData()),
+    sortedRandomPositions(kRows))
+BATCH_VIEW_BENCHMARK(
+    BatchView_BlockBitPackingUint32_Clustered130,
+    uint32_t,
+    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
+        EncodingType::BlockBitPacking,
+        pforData()),
+    clusteredPositions(kRows))
+SHARED_DICTIONARY_ALPHABET_BENCHMARK(
+    SharedDictionary_BBP_Uint32_ScalarRandom130,
+    uint32_t,
+    huffmanUniformData(),
+    sharedDictionaryRandomIndices(),
+    readSharedDictionaryAlphabetScalar)
+SHARED_DICTIONARY_ALPHABET_BENCHMARK(
+    SharedDictionary_BBP_Uint32_BatchRandom130,
+    uint32_t,
+    huffmanUniformData(),
+    sharedDictionaryRandomIndices(),
+    readSharedDictionaryAlphabetBatch)
+SHARED_DICTIONARY_ALPHABET_BENCHMARK(
+    SharedDictionary_BBP_Uint32_ScalarSorted130,
+    uint32_t,
+    huffmanUniformData(),
+    sharedDictionarySortedIndices(),
+    readSharedDictionaryAlphabetScalar)
+SHARED_DICTIONARY_ALPHABET_BENCHMARK(
+    SharedDictionary_BBP_Uint32_BatchSorted130,
+    uint32_t,
+    huffmanUniformData(),
+    sharedDictionarySortedIndices(),
+    readSharedDictionaryAlphabetBatch)
+SHARED_DICTIONARY_ALPHABET_BENCHMARK(
+    SharedDictionary_BBP_Uint32_ScalarClustered130,
+    uint32_t,
+    huffmanUniformData(),
+    sharedDictionaryClusteredIndices(),
+    readSharedDictionaryAlphabetScalar)
+SHARED_DICTIONARY_ALPHABET_BENCHMARK(
+    SharedDictionary_BBP_Uint32_BatchClustered130,
+    uint32_t,
+    huffmanUniformData(),
+    sharedDictionaryClusteredIndices(),
+    readSharedDictionaryAlphabetBatch)
 RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint32_Range1024,
     uint32_t,
@@ -1053,6 +1227,8 @@ MATERIALIZE_BENCHMARK(
     randomPositions(kRows))
 
 #undef VIEW_BENCHMARK
+#undef BATCH_VIEW_BENCHMARK
+#undef SHARED_DICTIONARY_ALPHABET_BENCHMARK
 #undef RANGE_VIEW_BENCHMARK
 #undef UNALIGNED_RANGE_VIEW_BENCHMARK
 #undef MATERIALIZE_BENCHMARK

@@ -80,7 +80,7 @@ TEST_F(SplitToMapTest, basic) {
   tryCallFunc(data);
 }
 
-TEST_F(SplitToMapTest, MultiCharKeyValueDelimiter) {
+TEST_F(SplitToMapTest, multiCharKeyValueDelimiter) {
   const auto callFunc = [&](const RowVectorPtr& input) {
     return evaluate("split_to_map(c0, ',', ';=')", input);
   };
@@ -129,7 +129,7 @@ TEST_F(SplitToMapTest, MultiCharKeyValueDelimiter) {
   tryCallFunc(data);
 }
 
-TEST_F(SplitToMapTest, MultiCharEntryDelimiter) {
+TEST_F(SplitToMapTest, multiCharEntryDelimiter) {
   const auto callFunc = [&](const RowVectorPtr& input) {
     return evaluate("split_to_map(c0, ';;', ';')", input);
   };

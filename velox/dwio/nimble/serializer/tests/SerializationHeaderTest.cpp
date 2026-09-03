@@ -39,8 +39,11 @@ void setNullBarrierRequiredFlag(
     size_t flagsOffset,
     bool requiresNullBarrier) {
   NIMBLE_CHECK_LT(flagsOffset, buffer.size(), "Invalid flags byte offset");
-  buffer[flagsOffset] = static_cast<char>(
-      facebook::nimble::serde::detail::makeFlagsByte(requiresNullBarrier));
+  buffer[flagsOffset] =
+      static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
+          requiresNullBarrier,
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*streamHasChunkHeader=*/false));
 }
 
 std::string describeVersion(std::optional<SerializationVersion> version) {
@@ -112,9 +115,10 @@ struct TabletChunkHeaderRoundTripParam {
   std::string name;
   uint32_t rowCount{};
   RowRange rowRange;
-  std::optional<std::string> resumeKey;
+  std::optional<std::string> resumeKey{};
   bool requiresNullBarrier{};
   bool streamEncodingUsesVarintRowCount{};
+  bool streamHasChunkHeader{};
 
   std::string toString() const {
     return "rowCount=" + std::to_string(rowCount) + " rowRange=[" +
@@ -123,6 +127,7 @@ struct TabletChunkHeaderRoundTripParam {
         "] requiresNullBarrier=" + nullBarrierName(requiresNullBarrier) +
         " streamEncodingUsesVarintRowCount=" +
         std::to_string(streamEncodingUsesVarintRowCount) +
+        " streamHasChunkHeader=" + std::to_string(streamHasChunkHeader) +
         " resumeKey=" + (resumeKey.has_value() ? "present" : "absent");
   }
 };
@@ -236,17 +241,22 @@ tabletChunkHeaderRoundTripParams() {
   for (const auto& baseCase : baseCases) {
     for (const bool requiresNullBarrier : {false, true}) {
       for (const bool streamEncodingUsesVarintRowCount : {false, true}) {
-        params.push_back({
-            .name = baseCase.name + "_" + nullBarrierName(requiresNullBarrier) +
-                "_rowCount" +
-                (streamEncodingUsesVarintRowCount ? "Varint" : "Fixed"),
-            .rowCount = baseCase.rowCount,
-            .rowRange = baseCase.rowRange,
-            .resumeKey = baseCase.resumeKey,
-            .requiresNullBarrier = requiresNullBarrier,
-            .streamEncodingUsesVarintRowCount =
-                streamEncodingUsesVarintRowCount,
-        });
+        for (const bool streamHasChunkHeader : {false, true}) {
+          params.push_back({
+              .name = baseCase.name + "_" +
+                  nullBarrierName(requiresNullBarrier) + "_rowCount" +
+                  (streamEncodingUsesVarintRowCount ? "Varint" : "Fixed") +
+                  (streamHasChunkHeader ? "_withChunkHeader"
+                                        : "_withoutChunkHeader"),
+              .rowCount = baseCase.rowCount,
+              .rowRange = baseCase.rowRange,
+              .resumeKey = baseCase.resumeKey,
+              .requiresNullBarrier = requiresNullBarrier,
+              .streamEncodingUsesVarintRowCount =
+                  streamEncodingUsesVarintRowCount,
+              .streamHasChunkHeader = streamHasChunkHeader,
+          });
+        }
       }
     }
   }
@@ -773,7 +783,8 @@ TEST(SerializationHeaderTest, parsesHeaderFlags) {
 
     const auto flagsByte = facebook::nimble::serde::detail::makeFlagsByte(
         testCase.requiresNullBarrier,
-        testCase.streamEncodingUsesVarintRowCount);
+        testCase.streamEncodingUsesVarintRowCount,
+        /*streamHasChunkHeader=*/false);
     EXPECT_EQ(flagsByte, testCase.expectedFlagsByte);
 
     const auto flags =
@@ -782,6 +793,7 @@ TEST(SerializationHeaderTest, parsesHeaderFlags) {
     EXPECT_EQ(
         flags.streamEncodingUsesVarintRowCount,
         testCase.streamEncodingUsesVarintRowCount);
+    EXPECT_FALSE(flags.streamHasChunkHeader);
   }
 }
 
@@ -844,7 +856,7 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
           .version = SerializationVersion::kProjection,
           .requiresNullBarrier = false,
           .streamVarintRowCountFlag = false,
-          .expectedStreamEncodingUsesVarintRowCount = false,
+          .expectedStreamEncodingUsesVarintRowCount = true,
       },
       {
           .version = SerializationVersion::kProjection,
@@ -856,7 +868,7 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
           .version = SerializationVersion::kProjection,
           .requiresNullBarrier = true,
           .streamVarintRowCountFlag = false,
-          .expectedStreamEncodingUsesVarintRowCount = false,
+          .expectedStreamEncodingUsesVarintRowCount = true,
       },
       {
           .version = SerializationVersion::kProjection,
@@ -903,6 +915,7 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
           .rowCount = kRowCount,
           .requiresNullBarrier = testCase.requiresNullBarrier,
           .streamEncodingUsesVarintRowCount = testCase.streamVarintRowCountFlag,
+          .streamHasChunkHeader = true,
           .rowRange = RowRange{0, kRowCount},
       });
       buffer.assign(
@@ -911,9 +924,12 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
     } else {
       const auto flagsOffset =
           writeSerializationHeader(buffer, testCase.version, kRowCount);
-      buffer[flagsOffset] =
-          static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
-              testCase.requiresNullBarrier, testCase.streamVarintRowCountFlag));
+      buffer[flagsOffset] = static_cast<char>(
+          facebook::nimble::serde::detail::makeFlagsByte(
+              testCase.requiresNullBarrier,
+              testCase.streamVarintRowCountFlag,
+              /*streamHasChunkHeader=*/false) |
+          SerializationHeader::kStreamChunkHeaderFlag);
     }
 
     const char* pos = buffer.data();
@@ -925,6 +941,9 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
     EXPECT_EQ(
         header.flags.streamEncodingUsesVarintRowCount,
         testCase.expectedStreamEncodingUsesVarintRowCount);
+    EXPECT_EQ(
+        header.flags.streamHasChunkHeader,
+        testCase.version == SerializationVersion::kTablet);
     EXPECT_EQ(
         header.rowRange.has_value(),
         testCase.version == SerializationVersion::kTablet);
@@ -1028,6 +1047,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readTabletChunkHeaderRoundtrip) {
       .requiresNullBarrier = testCase.requiresNullBarrier,
       .streamEncodingUsesVarintRowCount =
           testCase.streamEncodingUsesVarintRowCount,
+      .streamHasChunkHeader = testCase.streamHasChunkHeader,
       .rowRange = testCase.rowRange,
       .resumeKey = testCase.resumeKey,
   });
@@ -1036,6 +1056,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readTabletChunkHeaderRoundtrip) {
   EXPECT_EQ(
       out.streamEncodingUsesVarintRowCount,
       testCase.streamEncodingUsesVarintRowCount);
+  EXPECT_EQ(out.streamHasChunkHeader, testCase.streamHasChunkHeader);
   EXPECT_EQ(out.rowRange, testCase.rowRange);
   EXPECT_EQ(out.resumeKey, testCase.resumeKey);
 }
@@ -1049,6 +1070,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readSerializationHeaderRoundtrip) {
       .requiresNullBarrier = testCase.requiresNullBarrier,
       .streamEncodingUsesVarintRowCount =
           testCase.streamEncodingUsesVarintRowCount,
+      .streamHasChunkHeader = testCase.streamHasChunkHeader,
       .rowRange = testCase.rowRange,
       .resumeKey = testCase.resumeKey,
   });
@@ -1062,6 +1084,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readSerializationHeaderRoundtrip) {
   EXPECT_EQ(
       header.flags.streamEncodingUsesVarintRowCount,
       testCase.streamEncodingUsesVarintRowCount);
+  EXPECT_EQ(header.flags.streamHasChunkHeader, testCase.streamHasChunkHeader);
   ASSERT_TRUE(header.rowRange.has_value());
   EXPECT_EQ(*header.rowRange, testCase.rowRange);
 }

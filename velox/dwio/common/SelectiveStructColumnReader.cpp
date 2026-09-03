@@ -576,10 +576,16 @@ bool SelectiveStructColumnReaderBase::isChildMissing(
            TypeKind::MAP // If this is the case it means this is a flat map,
                          // so it can't have "missing" fields.
        ) &&
-      // Name-based missing-field check applies only to row types, not flat
-      // maps.
+      // Name-based missing-field check applies to row types when the mapping
+      // mode resolves columns by name or by Parquet field ID.  In field-ID
+      // mode getParquetColumnInfo() renames each file column to match the
+      // requested name, so containsChild() correctly identifies missing ones.
+      // Channel-based detection is only reliable for kPosition mode, where
+      // channel i maps directly to file column i.
       ((fileType_->type()->isRow() &&
-        columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName)
+        (columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName ||
+         columnReaderOptions_.columnMappingMode_ ==
+             ColumnMappingMode::kParquetFieldId))
            ? !asRowType(fileType_->type())->containsChild(childSpec.fieldName())
            : childSpec.channel() >= fileType_->size());
 }
