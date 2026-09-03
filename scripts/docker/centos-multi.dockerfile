@@ -109,7 +109,7 @@ RUN /bin/bash -c 'source /setup-centos9.sh && \
       install_velox_deps_from_dnf && \
       dnf clean all'
 
-RUN ln -s $(which python3) /usr/bin/python
+RUN ln -sf "$(which python3)" /usr/bin/python
 
 COPY --from=base-build /deps /usr/local
 
