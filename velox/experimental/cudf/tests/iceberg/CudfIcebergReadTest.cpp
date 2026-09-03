@@ -710,6 +710,45 @@ TEST_F(CudfIcebergReadTest, columnAliasUsesPhysicalFileName) {
       .assertResults({expected});
 }
 
+/// If a transformed partition field shares its source column's name, use the
+/// physical column unless identity-transform provenance says otherwise.
+TEST_F(CudfIcebergReadTest, transformedPartitionNameCollision) {
+  auto data = makeRowVector(
+      {"part_col", "value"},
+      {
+          makeFlatVector<int64_t>({10, 20, 30}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  const auto rowType = asRowType(data->type());
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .subfieldFilter("part_col = 20")
+                  .endTableScan()
+                  .planNode();
+
+  // Simulate bucket[4](part_col), whose ordinal happens to use the source
+  // column name. Empty identityPartitionKeys means this value cannot replace
+  // physical part_col values.
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionKeys = {{"part_col", "2"}};
+  auto expected = makeRowVector(
+      {"part_col", "value"},
+      {
+          makeFlatVector<int64_t>({20}),
+          makeFlatVector<std::string>({"b"}),
+      });
+
+  AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults({expected});
+}
+
 /// A nonempty data file in a NULL partition must return one NULL partition
 /// value per row
 TEST_F(CudfIcebergReadTest, nullPartitionColumn) {
