@@ -73,7 +73,7 @@ class UcxExchangeQueue {
   /// Returns true if no packed table is queued. Safe to call without
   /// 'mutex_'.
   bool empty() const {
-    return size_.load(std::memory_order_relaxed) == 0;
+    return size() == 0;
   }
 
   /// Enqueues 'data' to the queue. One random promise(top of promise queue)
