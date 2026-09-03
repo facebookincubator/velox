@@ -710,8 +710,8 @@ TEST_F(CudfIcebergReadTest, columnAliasUsesPhysicalFileName) {
       .assertResults({expected});
 }
 
-/// If a transformed partition field shares its source column's name, use the
-/// physical column unless identity-transform provenance says otherwise.
+/// If a partition field shares a physical column's name, read the physical
+/// column instead of substituting the name-keyed partition value.
 TEST_F(CudfIcebergReadTest, transformedPartitionNameCollision) {
   auto data = makeRowVector(
       {"part_col", "value"},
