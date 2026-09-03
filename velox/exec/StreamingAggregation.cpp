@@ -101,12 +101,15 @@ void StreamingAggregation::initialize() {
     }
   }
 
-  if (isRawInput(step_)) {
+  // Retaining a reference to the input instead of copying is only bounded when
+  // no group spans batches, since the reference is dropped once the group's
+  // output is produced. Otherwise leave it off, which is the default.
+  if (isRawInput(step_) && noGroupsSpanBatches_) {
     for (column_index_t i = 0; i < aggregates_.size(); ++i) {
       if (aggregates_[i].sortingKeys.empty() && !aggregates_[i].distinct) {
         // Must be set before we initialize row container, because it could
         // change the type and size of accumulator.
-        aggregates_[i].function->setClusteredInput(true);
+        aggregates_[i].function->setCanRetainInput(true);
       }
     }
   }
