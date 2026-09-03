@@ -36,7 +36,8 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
           fileType,
           params,
           scanSpec,
-          isRoot) {
+          isRoot,
+          params.stripeStreams().rowReaderOptions().lazyColumnIo()) {
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
 

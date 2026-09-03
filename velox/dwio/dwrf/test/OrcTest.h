@@ -118,14 +118,9 @@ class MockStripeStreams : public StripeStreams {
           proto::orc::Stream_Kind,
           bool));
   MOCK_CONST_METHOD0(getStrideIndexProviderProxy, StrideIndexProvider*());
-  MOCK_CONST_METHOD0(getColumnSelectorProxy, dwio::common::ColumnSelector*());
   MOCK_CONST_METHOD0(
       getRowReaderOptionsProxy,
       dwio::common::RowReaderOptions*());
-
-  const dwio::common::ColumnSelector& getColumnSelector() const override {
-    return *getColumnSelectorProxy();
-  }
 
   const tz::TimeZone* sessionTimezone() const override {
     return nullptr;
