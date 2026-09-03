@@ -134,6 +134,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
+  mergeIfSet(compressionKind, parquetOverrides->compressionKind);
 }
 
 struct ArrowContext {
@@ -207,8 +208,11 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   } else {
     properties = properties->disableDictionary();
   }
+  // The base WriterOptions::compressionKind (set from the insert table handle)
+  // takes precedence; the Parquet writer config is only a fallback.
   properties = properties->compression(getArrowParquetCompression(
-      options.compressionKind.value_or(common::CompressionKind_NONE)));
+      options.compressionKind.value_or(parquetOptions.compressionKind.value_or(
+          common::CompressionKind_NONE))));
   for (const auto& columnCompressionValues :
        parquetOptions.columnCompressionsMap) {
     properties->compression(
@@ -402,6 +406,14 @@ std::optional<int64_t> toParquetBatchSize(
   } catch (const std::exception& e) {
     VELOX_USER_FAIL("Invalid parquet writer batch size: {}", e.what());
   }
+}
+
+std::optional<common::CompressionKind> toCompressionKind(
+    std::optional<std::string> codec) {
+  if (!codec || codec->empty()) {
+    return std::nullopt;
+  }
+  return common::stringToCompressionKind(*codec);
 }
 
 } // namespace
@@ -843,6 +855,8 @@ ParquetWriterFactory::createFormatOptions(
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
+  parquetOptions->compressionKind = toCompressionKind(
+      ParquetConfig::writerCompressionCodec(connectorConfig, session));
   return parquetOptions;
 }
 

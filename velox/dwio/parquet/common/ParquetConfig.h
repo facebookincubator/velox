@@ -133,6 +133,16 @@ class ParquetConfig {
       "Write the Parquet page index (column index and offset index) in the "
       "Parquet writer. When enabled, per-page statistics are stored in the "
       "page index instead of the data page headers.")
+  VELOX_FORMAT_CONFIG_PROPERTY(
+      kWriterCompressionCodecSession,
+      kWriterCompressionCodec,
+      "writer_compression_codec",
+      "writer.compression-codec",
+      std::string_view,
+      "",
+      "Compression codec used by the Parquet writer. Supported values are "
+      "none, snappy, zstd, lz4, gzip, and lz4_hadoop. Shared between the "
+      "Hive and Iceberg connectors.")
   static constexpr std::string_view kWriterCreatedBy = "writer.created-by";
 
   // Writer config accessors expect format-scoped configs. Connector prefixes
@@ -205,6 +215,15 @@ class ParquetConfig {
     return connectorConfig.get<std::string>(std::string(kWriterCreatedBy));
   }
 
+  static std::optional<std::string> writerCompressionCodec(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterCompressionCodecSession,
+        connectorConfig,
+        kWriterCompressionCodec);
+  }
+
   /// Serde parameter key for overriding the Parquet writer timestamp unit.
   /// Accepts numeric values 3 (milliseconds), 6 (microseconds), and 9
   /// (nanoseconds).
@@ -245,6 +264,8 @@ class ParquetConfig {
         properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kWriterEnablePageIndexSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kWriterCompressionCodecSessionProperty>(properties, sessionPrefix);
   }
 };
 
