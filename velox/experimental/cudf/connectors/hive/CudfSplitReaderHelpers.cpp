@@ -16,15 +16,19 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/BufferedInput.h"
 
+#include <cudf/column/column.hpp>
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/lists/lists_column_view.hpp>
+#include <cudf/unary.hpp>
 
 #include <cuda/iterator>
 #include <cuda/std/tuple>
@@ -66,6 +70,101 @@ std::future<T> toStdFuture(folly::Future<T> follyFuture) {
 } // namespace
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+namespace {
+
+// Rebuilds a struct/list column in-place after possibly transforming its
+// children.
+template <typename TransformChildrenFn>
+std::unique_ptr<cudf::column> rebuildWithTransformedChildren(
+    std::unique_ptr<cudf::column> column,
+    TransformChildrenFn&& transformFn) {
+  const auto type = column->type();
+  const auto size = column->size();
+  const auto nullCount = column->null_count();
+  auto contents = column->release();
+  transformFn(contents.children);
+  return std::make_unique<cudf::column>(
+      type,
+      size,
+      std::move(*contents.data),
+      std::move(*contents.null_mask),
+      nullCount,
+      std::move(contents.children));
+}
+
+// Recursively casts decimal columns to their expected Velox types.
+std::unique_ptr<cudf::column> castDecimalColumnToVeloxType(
+    std::unique_ptr<cudf::column> column,
+    const TypePtr& veloxType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (veloxType->isDecimal()) {
+    const auto targetType = veloxToCudfDataType(veloxType);
+    return column->type() == targetType
+        ? std::move(column)
+        : cudf::cast(column->view(), targetType, stream, mr);
+  }
+
+  if (veloxType->kind() == TypeKind::ROW) {
+    const auto& rowType = veloxType->asRow();
+    const auto numChildren = static_cast<size_t>(column->num_children());
+    VELOX_CHECK_EQ(
+        numChildren,
+        rowType.size(),
+        "Scanned STRUCT column has {} fields but the expected schema has {}.",
+        numChildren,
+        rowType.size());
+    return rebuildWithTransformedChildren(
+        std::move(column), [&](auto& children) {
+          for (size_t i = 0; i < numChildren; ++i) {
+            children[i] = castDecimalColumnToVeloxType(
+                std::move(children[i]), rowType.childAt(i), stream, mr);
+          }
+        });
+  }
+
+  if (veloxType->kind() == TypeKind::ARRAY) {
+    VELOX_CHECK_EQ(
+        column->num_children(),
+        2,
+        "LIST column must have exactly 2 children: [offsets, child]");
+    return rebuildWithTransformedChildren(
+        std::move(column), [&](auto& children) {
+          const auto childIndex = cudf::lists_column_view::child_column_index;
+          children[childIndex] = castDecimalColumnToVeloxType(
+              std::move(children[childIndex]),
+              veloxType->childAt(0),
+              stream,
+              mr);
+        });
+  }
+
+  return column;
+}
+
+} // namespace
+
+std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
+    std::unique_ptr<cudf::table> table,
+    std::span<const TypePtr> columnTypes,
+    size_t numPrependedColumns,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_LE(
+      numPrependedColumns + columnTypes.size(),
+      table->view().num_columns(),
+      "Type vector extends past the cuDF table width");
+  const auto numColumns = std::min<size_t>(
+      table->view().num_columns() - numPrependedColumns, columnTypes.size());
+  auto columns = table->release();
+  for (size_t i = 0; i < numColumns; ++i) {
+    const auto columnIndex = numPrependedColumns + i;
+    columns[columnIndex] = castDecimalColumnToVeloxType(
+        std::move(columns[columnIndex]), columnTypes[i], stream, mr);
+  }
+  return std::make_unique<cudf::table>(std::move(columns));
+}
 
 BufferedInputDataSource::BufferedInputDataSource(
     std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input)

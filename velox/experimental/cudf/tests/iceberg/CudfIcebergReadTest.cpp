@@ -1198,19 +1198,21 @@ TEST_F(CudfIcebergReadTest, physicalFilterRebasedPastInjectedColumn) {
       .assertResults({deletedExpected});
 }
 
-// A filter-only compact decimal is read after an injected partition column.
-// The pushed filter must use the Parquet DECIMAL32 type, while the deferred
-// logical filter must see the column widened to Velox's DECIMAL64 type.
+// Compact decimal filter and equality-delete key columns are read after an
+// injected partition column. Their logical types must remain aligned with
+// their names as the injected column is removed and the delete key is appended.
 TEST_F(CudfIcebergReadTest, compactDecimalFilterWithInjectedColumn) {
   auto dataFile = TempFilePath::create();
   auto data = makeRowVector(
-      {"id", "price"},
+      {"id", "price", "delete_key"},
       {makeFlatVector<int64_t>({1, 2, 3, 4}),
-       makeFlatVector<int64_t>({100, -500, -700, -500}, DECIMAL(5, 2))});
+       makeFlatVector<int64_t>({100, -500, -700, -500}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({1'000, 2'000, 3'000, 4'000}, DECIMAL(7, 3))});
   writeCompactDecimalParquet(dataFile->getPath(), data);
 
   auto tableType =
-      ROW({"country", "id", "price"}, {VARCHAR(), BIGINT(), DECIMAL(5, 2)});
+      ROW({"country", "id", "price", "delete_key"},
+          {VARCHAR(), BIGINT(), DECIMAL(5, 2), DECIMAL(7, 3)});
   auto outputType = ROW({"country", "id"}, {VARCHAR(), BIGINT()});
   facebook::velox::connector::ColumnHandleMap assignments;
   assignments["country"] = std::make_shared<HiveColumnHandle>(
@@ -1267,15 +1269,33 @@ TEST_F(CudfIcebergReadTest, compactDecimalFilterWithInjectedColumn) {
        makeFlatVector<int64_t>({3})});
   writeDeleteFile(
       DeleteFileFormat::DWRF, deleteFilePath->getPath(), {deleteVector});
-  IcebergDeleteFile deleteFile(
+  IcebergDeleteFile positionalDeleteFile(
       FileContent::kPositionalDeletes,
       deleteFilePath->getPath(),
       dwio::common::FileFormat::DWRF,
       1,
       getFileSize(deleteFilePath->getPath()));
-  auto deletedExpected = makeRowVector(
+  auto positionallyDeletedExpected = makeRowVector(
       {"country", "id"},
       {makeFlatVector<std::string>({"US"}), makeFlatVector<int64_t>({2})});
+
+  auto equalityDeleteFilePath = TempFilePath::create();
+  auto equalityDeleteVector = makeRowVector(
+      {"delete_key"}, {makeFlatVector<int64_t>({2'000}, DECIMAL(7, 3))});
+  writeDeleteFile(
+      DeleteFileFormat::DWRF,
+      equalityDeleteFilePath->getPath(),
+      {equalityDeleteVector});
+  IcebergDeleteFile equalityDeleteFile(
+      FileContent::kEqualityDeletes,
+      equalityDeleteFilePath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(equalityDeleteFilePath->getPath()),
+      /*equalityFieldIds=*/{4});
+  auto equalityDeletedExpected = makeRowVector(
+      {"country", "id"},
+      {makeFlatVector<std::string>({"US"}), makeFlatVector<int64_t>({4})});
 
   for (const bool useExperimentalReader : {false, true}) {
     AssertQueryBuilder(plan)
@@ -1292,9 +1312,18 @@ TEST_F(CudfIcebergReadTest, compactDecimalFilterWithInjectedColumn) {
             cudf_velox::connector::hive::CudfHiveConfig::
                 kUseExperimentalCudfReaderSession,
             useExperimentalReader ? "true" : "false")
-        .splits(
-            makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
-        .assertResults({deletedExpected});
+        .splits(makeIcebergSplits(
+            dataFile->getPath(), {positionalDeleteFile}, partitionKeys))
+        .assertResults({positionallyDeletedExpected});
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::
+                kUseExperimentalCudfReaderSession,
+            useExperimentalReader ? "true" : "false")
+        .splits(makeIcebergSplits(
+            dataFile->getPath(), {equalityDeleteFile}, partitionKeys))
+        .assertResults({equalityDeletedExpected});
   }
 }
 
