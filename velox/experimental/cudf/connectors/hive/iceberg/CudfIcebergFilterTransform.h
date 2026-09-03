@@ -22,42 +22,69 @@
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
+/// Outcome of evaluating a split's filter on an injected column against the
+/// constant value that column holds for the whole split.
+enum class ConstantFilterFold {
+  /// The filter rejects the constant, so it rejects every row of the split.
+  /// A NULL constant the filter rejects folds here too, in which case the
+  /// predicate the fold stands for is NULL rather than false.
+  kAlwaysFalse,
+  /// The filter accepts the constant, so it accepts every row of the split.
+  kAlwaysTrue,
+  /// The filter could not be evaluated on the host.
+  kUnknown,
+};
+
 /// Filter over the columns the parquet reader projects, derived from a filter
 /// over the assembled table.
 ///
-/// Move-only. Owns the expression nodes created while transforming. Those nodes
-/// may also point into the input filter, which must therefore outlive the
-/// transformed result.
+/// Move-only. Owns the expression nodes created while transforming. Both
+/// `pushedExpr` and `deferredExpr` may point into the input filter, which must
+/// therefore outlive the transformed result.
 struct TransformedFilter {
   /// Expression nodes created while transforming.
   cudf::ast::tree nodes;
 
-  /// Root of the transformed filter. Null when the transformed filter is
-  /// always true.
-  const cudf::ast::expression* expr;
+  /// Root of the pushed down filter into the parquet reader, over the columns
+  /// it projects. Null when nothing can be pushed.
+  const cudf::ast::expression* pushedExpr;
 
-  /// Whether the input filter references injected column(s).
-  bool referencesInjectedColumn;
+  /// Root of the deferred filter. Null when `pushedExpr` already enforces the
+  /// input filter exactly and no deferred pass is needed.
+  const cudf::ast::expression* deferredExpr;
 
-  /// Whether the transformed filter retains a decimal literal whose storage
-  /// width must match the split.
+  /// Whether the input filter rejects this split.
+  bool skipSplit;
+
+  /// Whether `pushedExpr` retains a decimal literal whose storage width must
+  /// match the split.
   bool requiresSplitSpecificDecimalTypes;
 };
 
-/// Transforms the input filter into a sub-filter over the columns actually
-/// projected by the parquet reader.
+/// Transforms the input filter into a filter over the columns actually
+/// projected by the parquet reader and a deferred filter for whatever the
+/// reader cannot enforce.
 ///
-/// Transforms the filter by dropping predicates on injected columns and
-/// rebasing remaining column indices past the dropped columns.
+/// Predicates over an injected column are replaced by the fold of that column,
+/// which either folds the predicate away, folds the whole filter to false, or,
+/// when the fold is unknown, moves it into `deferredExpr`. Column indices in
+/// the pushed filter are rebased past the injected columns.
+///
+/// A `kAlwaysFalse` fold means "no row passes". The predicate behind it may be
+/// false or NULL. AND and OR operators accept both, but a negation over a
+/// folded operand must be deferred rather than inverted.
 ///
 /// @param filter The input filter over the assembled table.
 /// @param sortedInjectedColumnIndices Ascending, unique indices into the
 /// assembled table that 'filter' was built against, not indices into the data
 /// file.
+/// @param injectedColumnFolds Fold of the split's filter on each injected
+/// column, parallel to 'sortedInjectedColumnIndices'.
 /// @return The transformed filter over the columns actually projected by the
 /// parquet reader.
 TransformedFilter transformFilterForInjectedColumns(
     const cudf::ast::expression& filter,
-    std::span<const cudf::size_type> sortedInjectedColumnIndices);
+    std::span<const cudf::size_type> sortedInjectedColumnIndices,
+    std::span<const ConstantFilterFold> injectedColumnFolds);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

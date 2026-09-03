@@ -224,7 +224,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // each Parquet footer.
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
-    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
+    subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
 
@@ -253,7 +253,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
