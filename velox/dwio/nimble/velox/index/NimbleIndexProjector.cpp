@@ -220,6 +220,15 @@ NimbleIndexProjector::NimbleIndexProjector(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
   NIMBLE_CHECK_GT(numStripes_, 0, "NimbleIndexProjector requires stripes");
 
+  // Rejects the whole file rather than only the projected streams: no cheap
+  // per-stream binding query exists for file and external scopes, and
+  // resolving an alphabet just to test for one would decode it.
+  if (tablet_->hasStripeDictionaries() ||
+      tablet_->hasFileOrExternalDictionaries()) {
+    NIMBLE_UNSUPPORTED(
+        "NimbleIndexProjector does not support shared dictionary encoding");
+  }
+
   NIMBLE_CHECK_EQ(
       projection_->streamOffsets.size(),
       projection_->rowOrFlatMapNullStreams.size(),
