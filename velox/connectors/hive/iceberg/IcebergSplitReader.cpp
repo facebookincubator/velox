@@ -1134,8 +1134,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                 columnType,
                 it->second->initialDefaultValue().value(),
                 connectorQueryCtx_->memoryPool(),
-                /*isLocalTimestamp=*/false,
-                /*isDaysSinceEpoch=*/false));
+                readTimestampAsLocalTime,
+                false));
           } else {
             // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(

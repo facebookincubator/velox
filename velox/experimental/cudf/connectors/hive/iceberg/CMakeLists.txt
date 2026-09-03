@@ -17,6 +17,7 @@ add_library(
   CudfDeletionVectorReader.cpp
   CudfEqualityDeleteFileReader.cpp
   CudfIcebergConnector.cpp
+  CudfIcebergConstantColumnFilter.cpp
   CudfIcebergDataSource.cpp
   CudfIcebergDeletionHelpers.cu
   CudfIcebergFilterTransform.cpp

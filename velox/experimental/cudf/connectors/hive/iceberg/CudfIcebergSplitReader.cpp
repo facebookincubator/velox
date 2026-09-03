@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConstantColumnFilter.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -95,7 +96,8 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
-    cudf::ast::expression const* subfieldFilterExpr)
+    const cudf::ast::expression* subfieldFilterAst,
+    const common::SubfieldFilters* subfieldFilters)
     : CudfSplitReader(
           std::move(split),
           std::move(tableHandle),
@@ -108,11 +110,17 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           ioStatistics,
           ioStats,
           useExperimentalCudfReader,
-          subfieldFilterExpr),
+          subfieldFilterAst),
       icebergSplit_(std::move(icebergSplit)),
-      hiveConfig_(hiveConfig) {}
+      hiveConfig_(hiveConfig),
+      subfieldFilters_(subfieldFilters) {
+  VELOX_CHECK_NOT_NULL(subfieldFilters_);
+}
 
 void CudfIcebergSplitReader::resetSplit() {
+  positionalDeleteFiles_.clear();
+  equalityDeleteFiles_.clear();
+  deletionVectorFile_ = nullptr;
   deletionVectorReader_.reset();
   positionalDeleteFileReaders_.clear();
   equalityDeleteFileReaders_.clear();
@@ -122,12 +130,17 @@ void CudfIcebergSplitReader::resetSplit() {
   splitRowCount_ = 0;
   noColumnsToRead_ = false;
   syntheticTableProduced_ = false;
-  deferSubfieldFilter_ = false;
+  skipSplit_ = false;
   transformedPushdownFilter_.reset();
+  transformedLogicalFilter_.reset();
   baseReadOffset_ = 0;
   deleteBitmap_ = nullptr;
   deviceBitmap_.reset();
   deleteMask_.reset();
+}
+
+bool CudfIcebergSplitReader::isSplitSkipped() const {
+  return skipSplit_;
 }
 
 void CudfIcebergSplitReader::setupReader() {
@@ -137,14 +150,43 @@ void CudfIcebergSplitReader::setupReader() {
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
-  if (transformedPushdownFilter_) {
-    if (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
-        not hasSplitSpecificPushdownFilter()) {
-      return nullptr;
-    }
-    return transformedPushdownFilter_->expr;
+  // The split is skipped, or everything is deferred, so push nothing.
+  if (skipSplit_ or deferEverything()) {
+    return nullptr;
   }
-  return deferSubfieldFilter_ ? nullptr : CudfSplitReader::pushdownFilter();
+  // Filter couldn't be transformed, push the original filter as is.
+  if (not transformedPushdownFilter_) {
+    return CudfSplitReader::pushdownFilter();
+  }
+  // Push the transformed filter
+  return transformedPushdownFilter_->pushedExpr;
+}
+
+bool CudfIcebergSplitReader::deferEverything() const {
+  // A decimal predicate left in the pushed filter needs the split's physical
+  // types to be pushed at all, so without them the whole filter runs after the
+  // read. Both inputs are settled before either filter is first read.
+  return transformedPushdownFilter_.has_value() and
+      transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
+      not hasSplitSpecificPushdownFilter();
+}
+
+const cudf::ast::expression* CudfIcebergSplitReader::deferredFilter() const {
+  // The split is skipped, so no filter.
+  if (skipSplit_) {
+    return nullptr;
+  }
+  // Nothing was pushed, so the whole filter runs after the read.
+  if (deferEverything()) {
+    return subfieldFilterAst();
+  }
+  // The deferred filter runs over the assembled table, whose decimal columns
+  // hold their Velox logical types, so it must come from the transform of the
+  // logical filter whenever that differs from the pushed one.
+  const auto& transformed = transformedLogicalFilter_.has_value()
+      ? transformedLogicalFilter_
+      : transformedPushdownFilter_;
+  return transformed.has_value() ? transformed->deferredExpr : nullptr;
 }
 
 void CudfIcebergSplitReader::prepareSplitInternal(
@@ -155,30 +197,40 @@ void CudfIcebergSplitReader::prepareSplitInternal(
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
 
-  // Must setup delete file readers before reader construction so that it
-  // can correctly determine the memory resource to construct the cuDF reader.
-  setupDeleteFileReaders(runtimeStats);
-
-  // Include any extra equality delete key columns that are not already in the
-  // output projection.
-  setupEqualityColumnKeys();
-
   // Detect info, (Hive-migrated) partition, and schema-evolution columns;
   // remove them from `readColumnNames_` so the parquet reader skips them, and
   // record them for post-read injection.
   adaptColumns();
 
-  // Determine if there are no columns to read.
+  prepareSubfieldFilter();
+
+  if (skipSplit_) {
+    VLOG(1)
+        << "Split is skipped as the filter rejects the constant value of an "
+           "injected column";
+    return;
+  }
+
+  // Select the delete files that apply to the split. Opens nothing.
+  classifyDeleteFiles();
+
+  // Include any extra equality delete key columns that are not already in the
+  // output projection.
+  setupEqualityColumnKeys();
+
+  // Determine if there are no columns to read. Evaluated after the equality
+  // delete keys are appended, which the parquet reader has to read as well.
   noColumnsToRead_ = readColumnNames_.empty();
 
-  prepareSubfieldFilter();
+  setupDeleteFileReaders(runtimeStats);
 
   // Evaluate after the pushed subfield filter is prepared.
   prependRowIndex_ = needPrependedRowIndex();
 
-  if (deferSubfieldFilter_) {
-    VLOG(1) << "Subfield filter is deferred to post table read due to injected "
-               "columns or unavailable split-specific decimal types.";
+  if (deferredFilter() != nullptr) {
+    VLOG(1)
+        << "Partial subfield filter is deferred to post-table read due to injected "
+           "columns or unavailable split-specific decimal types.";
   }
 
   setupReader();
@@ -187,8 +239,8 @@ void CudfIcebergSplitReader::prepareSplitInternal(
 rmm::device_async_resource_ref
 CudfIcebergSplitReader::determineCudfMemoryResource() const {
   // Use temporary mr when there are filters beyond table read.
-  const auto needsTempMr = deferSubfieldFilter_ or deletionVectorReader_ or
-      positionalDeleteFileReaders_.size() or equalityDeleteFileReaders_.size();
+  const auto needsTempMr = deferredFilter() or deletionVectorFile_ or
+      positionalDeleteFiles_.size() or equalityDeleteFiles_.size();
   return needsTempMr ? get_temp_mr() : get_output_mr();
 }
 
@@ -211,38 +263,69 @@ bool CudfIcebergSplitReader::needPrependedRowIndex() const {
 
 void CudfIcebergSplitReader::prepareSubfieldFilter() {
   auto* originalFilter = CudfSplitReader::pushdownFilter();
-  if (originalFilter == nullptr) {
+
+  // Nothing to transform without a filter or an injected column.
+  if (originalFilter == nullptr or injectedColumns_.empty()) {
     return;
   }
 
-  // Defer the original filter to the very end if there are no columns to read
-  if (noColumnsToRead_) {
-    deferSubfieldFilter_ = true;
-    return;
-  }
-
-  // No injected columns, push the original filter as is
-  if (injectedColumns_.empty()) {
-    return;
-  }
-
-  // Gather injected column indices
+  // Fold the split's filter on each injected column against its constant.
   std::vector<cudf::size_type> injectedColumnIndices;
+  std::vector<ConstantFilterFold> injectedColumnFolds;
   injectedColumnIndices.reserve(injectedColumns_.size());
+  injectedColumnFolds.reserve(injectedColumns_.size());
+
   for (const auto& column : injectedColumns_) {
     injectedColumnIndices.push_back(
         static_cast<cudf::size_type>(column.outputIndex));
+    injectedColumnFolds.push_back(foldInjectedColumn(column));
   }
 
-  // Compute the transformed filter to push
-  transformedPushdownFilter_ =
-      transformFilterForInjectedColumns(*originalFilter, injectedColumnIndices);
+  // Compute the transformed filter to push.
+  transformedPushdownFilter_ = transformFilterForInjectedColumns(
+      *originalFilter, injectedColumnIndices, injectedColumnFolds);
 
-  // Defer the logical filter if it references an injected column, or if a
-  // transformed decimal predicate has no split-specific physical expression.
-  deferSubfieldFilter_ = transformedPushdownFilter_->referencesInjectedColumn or
-      (transformedPushdownFilter_->requiresSplitSpecificDecimalTypes and
-       not hasSplitSpecificPushdownFilter());
+  // Return if the split is skipped.
+  if (transformedPushdownFilter_->skipSplit) {
+    skipSplit_ = true;
+    return;
+  }
+
+  // A `PushdownFilterBuilder` may have rebuilt the pushed filter against the
+  // split's physical decimal types. The deferred filter runs over the assembled
+  // table instead, so it has to come from the logical filter. Both are built
+  // from the same subfield filters, so both fold the same way.
+  auto* logicalFilter = subfieldFilterAst();
+  if (logicalFilter != originalFilter) {
+    transformedLogicalFilter_ = transformFilterForInjectedColumns(
+        *logicalFilter, injectedColumnIndices, injectedColumnFolds);
+    VELOX_CHECK(
+        not transformedLogicalFilter_->skipSplit,
+        "Transformed logical and pushed filters disagree on rejecting the split");
+  }
+}
+
+const common::Filter* CudfIcebergSplitReader::topLevelColumnFilter(
+    std::string_view name) const {
+  // An injected column is constant over the whole split, which says nothing
+  // about a filter over one of its subfields.
+  for (const auto& [subfield, filter] : *subfieldFilters_) {
+    if (filter and subfield.path().size() == 1 and
+        subfield.baseName() == name) {
+      return filter.get();
+    }
+  }
+  return nullptr;
+}
+
+ConstantFilterFold CudfIcebergSplitReader::foldInjectedColumn(
+    const InjectedColumn& col) const {
+  const auto* filter = topLevelColumnFilter(col.name);
+  if (filter == nullptr) {
+    return ConstantFilterFold::kUnknown;
+  }
+  return foldFilterOnConstant(
+      *filter, col.veloxType, col.partitionValue, readTimestampAsLocalTime());
 }
 
 std::unique_ptr<cudf::column> CudfIcebergSplitReader::extractRowIndex(
@@ -309,6 +392,10 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
 
 std::optional<std::unique_ptr<cudf::table>>
 CudfIcebergSplitReader::readNextChunk() {
+  if (skipSplit_) {
+    return std::nullopt;
+  }
+
   std::unique_ptr<cudf::table> cudfTable;
   if (noColumnsToRead_) {
     if (syntheticTableProduced_) {
@@ -408,8 +495,7 @@ CudfIcebergSplitReader::readNextChunk() {
 
     // Apply the delete mask if there are remaining physical columns.
     if (cudfTable->num_columns() > 0) {
-      const auto deleteMr =
-          deferSubfieldFilter_ ? get_temp_mr() : get_output_mr();
+      const auto deleteMr = deferredFilter() ? get_temp_mr() : get_output_mr();
       cudfTable = cudf::apply_deletion_mask(
           cudfTable->view(), deleteMaskView_, stream_, deleteMr);
     }
@@ -434,19 +520,15 @@ CudfIcebergSplitReader::readNextChunk() {
   }
 
   // Build output table by injecting missing columns at appropriate indices
-  const auto injectMr = deferSubfieldFilter_ ? get_temp_mr() : get_output_mr();
+  auto* deferred = deferredFilter();
+  const auto injectMr = deferred ? get_temp_mr() : get_output_mr();
   cudfTable =
       buildOutputTable(std::move(cudfTable), injectMr, rowCountOverride);
 
   // Apply the deferred subfield filter.
-  if (deferSubfieldFilter_) {
-    // The logical filter matches the assembled table above. The pushdown
-    // expression may have been rebuilt against the split's physical decimal
-    // widths, so it must not be used here.
-    auto* filter = subfieldFilter();
-    VELOX_CHECK_NOT_NULL(filter);
+  if (deferred) {
     auto filterMask = cudf::compute_column(
-        cudfTable->view(), *filter, stream_, get_temp_mr());
+        cudfTable->view(), *deferred, stream_, get_temp_mr());
     cudfTable = cudf::apply_boolean_mask(
         cudfTable->view(), filterMask->view(), stream_, get_output_mr());
   }
@@ -457,8 +539,7 @@ CudfIcebergSplitReader::readNextChunk() {
   return cudfTable;
 }
 
-void CudfIcebergSplitReader::setupDeleteFileReaders(
-    dwio::common::RuntimeStats& runtimeStats) {
+void CudfIcebergSplitReader::classifyDeleteFiles() {
   const auto splitOffset = baseReadOffset_;
 
   // Decodes the position bound from an Iceberg bounds map.
@@ -501,21 +582,7 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
         continue;
       }
 
-      // Pass `splitOffset == 0` as `readDeletePositions` now receives absolute
-      // file row positions
-      positionalDeleteFileReaders_.push_back(
-          std::make_unique<velox_iceberg::PositionalDeleteFileReader>(
-              deleteFile,
-              icebergSplit_->filePath,
-              fileHandleFactory_,
-              connectorQueryCtx_,
-              executor_,
-              hiveConfig_,
-              ioStatistics_,
-              ioStats_,
-              runtimeStats,
-              /*splitOffset=*/0,
-              icebergSplit_->connectorId));
+      positionalDeleteFiles_.push_back(&deleteFile);
     } else if (
         deleteFile.content == velox_iceberg::FileContent::kEqualityDeletes) {
       if (deleteFile.recordCount == 0 || deleteFile.equalityFieldIds.empty()) {
@@ -527,43 +594,13 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
               /*isEqualityDelete=*/true)) {
         continue;
       }
-
-      // Resolve equalityFieldIds to column names and types. In Iceberg,
-      // field IDs for top-level columns are assigned sequentially starting
-      // from 1, matching the column order in the table schema.
-      std::vector<std::string> equalityColumnNames;
-      std::vector<TypePtr> equalityColumnTypes;
-
-      const auto& dataColumns = tableHandle_->dataColumns();
-      if (dataColumns) {
-        for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
-          auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
-          VELOX_CHECK_LT(
-              colIdx,
-              dataColumns->size(),
-              "Equality delete field ID out of range: {}",
-              eqFieldId);
-          equalityColumnNames.push_back(dataColumns->nameOf(colIdx));
-          equalityColumnTypes.push_back(dataColumns->childAt(colIdx));
-        }
+      // Without the table schema the equality keys cannot be resolved to
+      // columns, so the file is not applied.
+      if (not tableHandle_->dataColumns()) {
+        continue;
       }
 
-      if (!equalityColumnNames.empty()) {
-        equalityDeleteFileReaders_.push_back(
-            std::make_unique<CudfEqualityDeleteFileReader>(
-                deleteFile,
-                equalityColumnNames,
-                equalityColumnTypes,
-                icebergSplit_->filePath,
-                fileHandleFactory_,
-                connectorQueryCtx_,
-                executor_,
-                hiveConfig_,
-                ioStatistics_,
-                ioStats_,
-                runtimeStats,
-                icebergSplit_->connectorId));
-      }
+      equalityDeleteFiles_.push_back(equalityDeleteKeys(deleteFile));
     } else if (
         deleteFile.content == velox_iceberg::FileContent::kDeletionVector) {
       if (deleteFile.recordCount == 0) {
@@ -592,17 +629,84 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
             << split_->filePath << "'";
       }
 
-      VELOX_USER_CHECK(
-          not deletionVectorReader_,
+      VELOX_USER_CHECK_NULL(
+          deletionVectorFile_,
           "CudfIcebergSplitReader encountered multiple deletion vector files for the split");
-      deletionVectorReader_ =
-          std::make_unique<CudfDeletionVectorReader>(deleteFile);
+      deletionVectorFile_ = &deleteFile;
     } else {
       VELOX_NYI(
           "Unsupported delete file content type: {}",
           static_cast<int>(deleteFile.content));
     }
   }
+}
+
+void CudfIcebergSplitReader::setupDeleteFileReaders(
+    dwio::common::RuntimeStats& runtimeStats) {
+  for (const auto* deleteFile : positionalDeleteFiles_) {
+    // Pass `splitOffset == 0` as `readDeletePositions` now receives absolute
+    // file row positions
+    positionalDeleteFileReaders_.push_back(
+        std::make_unique<velox_iceberg::PositionalDeleteFileReader>(
+            *deleteFile,
+            icebergSplit_->filePath,
+            fileHandleFactory_,
+            connectorQueryCtx_,
+            executor_,
+            hiveConfig_,
+            ioStatistics_,
+            ioStats_,
+            runtimeStats,
+            /*splitOffset=*/0,
+            icebergSplit_->connectorId));
+  }
+
+  for (const auto& [deleteFile, keyNames, keyTypes] : equalityDeleteFiles_) {
+    equalityDeleteFileReaders_.push_back(
+        std::make_unique<CudfEqualityDeleteFileReader>(
+            *deleteFile,
+            keyNames,
+            keyTypes,
+            icebergSplit_->filePath,
+            fileHandleFactory_,
+            connectorQueryCtx_,
+            executor_,
+            hiveConfig_,
+            ioStatistics_,
+            ioStats_,
+            runtimeStats,
+            icebergSplit_->connectorId));
+  }
+
+  if (deletionVectorFile_ != nullptr) {
+    deletionVectorReader_ =
+        std::make_unique<CudfDeletionVectorReader>(*deletionVectorFile_);
+  }
+}
+
+CudfIcebergSplitReader::EqualityDeleteFile
+CudfIcebergSplitReader::equalityDeleteKeys(
+    const velox_iceberg::IcebergDeleteFile& deleteFile) const {
+  // In Iceberg, field IDs for top-level columns are assigned sequentially
+  // starting from 1, matching the column order in the table schema.
+  const auto& dataColumns = tableHandle_->dataColumns();
+  VELOX_CHECK_NOT_NULL(dataColumns);
+
+  std::vector<std::string> names;
+  std::vector<TypePtr> types;
+  names.reserve(deleteFile.equalityFieldIds.size());
+  types.reserve(deleteFile.equalityFieldIds.size());
+  for (const auto& eqFieldId : deleteFile.equalityFieldIds) {
+    const auto colIdx = static_cast<uint32_t>(eqFieldId - 1);
+    VELOX_CHECK_LT(
+        colIdx,
+        dataColumns->size(),
+        "Equality delete field ID out of range: {}",
+        eqFieldId);
+    names.push_back(dataColumns->nameOf(colIdx));
+    types.push_back(dataColumns->childAt(colIdx));
+  }
+  return {&deleteFile, std::move(names), std::move(types)};
 }
 
 void CudfIcebergSplitReader::applyDeletionVector(cudf::column_view rowIndex) {
@@ -684,46 +788,30 @@ void CudfIcebergSplitReader::applyEqualityDeletes(cudf::table_view input) {
 }
 
 void CudfIcebergSplitReader::setupEqualityColumnKeys() {
-  if (equalityDeleteFileReaders_.empty()) {
+  if (equalityDeleteFiles_.empty()) {
     return;
   }
 
   std::unordered_set<std::string> readColumnSet(
       readColumnNames_.begin(), readColumnNames_.end());
-  const auto& dataColumns = tableHandle_->dataColumns();
 
-  // For each equality delete file, find and append any columns that are not
-  // already in the readColumnSet
-  std::for_each(
-      icebergSplit_->deleteFiles.begin(),
-      icebergSplit_->deleteFiles.end(),
-      [&](const auto& deleteFile) {
-        if (deleteFile.content !=
-                velox_iceberg::FileContent::kEqualityDeletes or
-            deleteFile.equalityFieldIds.empty()) {
-          return;
-        }
-        std::for_each(
-            deleteFile.equalityFieldIds.begin(),
-            deleteFile.equalityFieldIds.end(),
-            [&](const auto& equalityFieldId) {
-              const auto columnIdx = static_cast<uint32_t>(equalityFieldId - 1);
-              if (dataColumns and columnIdx < dataColumns->size()) {
-                const auto& columnName = dataColumns->nameOf(columnIdx);
-                if (icebergSplit_->partitionKeys.contains(columnName) or
-                    not fileColumnNames_.contains(columnName)) {
-                  VELOX_NYI(
-                      "Equality deletes on partition columns or columns "
-                      "missing from the data file are not yet supported: {}",
-                      columnName);
-                }
-                // Insert column name into readColumnSet if not already present
-                if (readColumnSet.insert(columnName).second) {
-                  extraEqualityColumns_.push_back(columnName);
-                }
-              }
-            });
-      });
+  // For each applicable equality delete file, find and append any key columns
+  // that are not already in the readColumnSet
+  for (const auto& deleteFile : equalityDeleteFiles_) {
+    for (const auto& columnName : deleteFile.keyNames) {
+      if (icebergSplit_->partitionKeys.contains(columnName) or
+          not fileColumnNames_.contains(columnName)) {
+        VELOX_NYI(
+            "Equality deletes on partition columns or columns "
+            "missing from the data file are not yet supported: {}",
+            columnName);
+      }
+      // Insert column name into readColumnSet if not already present
+      if (readColumnSet.insert(columnName).second) {
+        extraEqualityColumns_.push_back(columnName);
+      }
+    }
+  }
 
   // Append extra columns to readColumnNames_ so the Parquet reader fetches
   // them.
@@ -789,14 +877,12 @@ CudfIcebergSplitReader::computeSplitRowRange() const {
 }
 
 void CudfIcebergSplitReader::adaptColumns() {
-  // Skip trailing equality-delete keys and classify output + filter-only
-  // columns only.
-  VELOX_CHECK_GE(
-      readColumnNames_.size(),
-      extraEqualityColumns_.size(),
-      "Column projection must at least include the equality delete keys");
-  const size_t schemaSize =
-      readColumnNames_.size() - extraEqualityColumns_.size();
+  // Runs before the equality-delete keys are appended, so the projection holds
+  // output and filter-only columns only.
+  VELOX_CHECK(
+      extraEqualityColumns_.empty(),
+      "Columns must be adapted before the equality delete keys are appended");
+  const size_t schemaSize = readColumnNames_.size();
 
   std::unordered_set<std::string> injectedNames;
   for (size_t i = 0; i < schemaSize; ++i) {
@@ -850,25 +936,20 @@ void CudfIcebergSplitReader::adaptColumns() {
   }
 }
 
+bool CudfIcebergSplitReader::readTimestampAsLocalTime() const {
+  return hiveConfig_->readTimestampPartitionValueAsLocalTime(
+      connectorQueryCtx_->sessionProperties());
+}
+
 std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     const InjectedColumn& col) const {
-  const bool readAsLocalTime =
-      hiveConfig_->readTimestampPartitionValueAsLocalTime(
-          connectorQueryCtx_->sessionProperties());
   try {
-    // DATE values arrive in two format-disjoint encodings: Iceberg-native
-    // days-since-epoch integers (e.g. "20244") or Hive-migrated date strings
-    // (e.g. "2025-06-05"). A bare integer is unambiguously days-since-epoch
-    // (date strings contain '-' separators that fail an integer parse).
-    const bool isDaysSinceEpoch = col.veloxType->isDate() and
-        col.partitionValue.has_value() and
-        folly::tryTo<int32_t>(col.partitionValue.value()).hasValue();
     const VectorPtr constant = velox::connector::hive::newConstantFromString(
         col.veloxType,
         col.partitionValue,
         connectorQueryCtx_->memoryPool(),
-        readAsLocalTime,
-        isDaysSinceEpoch);
+        readTimestampAsLocalTime(),
+        isDaysSinceEpoch(col.veloxType, col.partitionValue));
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),

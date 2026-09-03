@@ -171,7 +171,7 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
-    cudf::ast::expression const* subfieldFilterExpr)
+    const cudf::ast::expression* subfieldFilterAst)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
           std::nullopt,
@@ -189,8 +189,8 @@ CudfSplitReader::CudfSplitReader(
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
       baseReaderOpts_(pool_),
-      subfieldFilterExpr_(subfieldFilterExpr),
-      pushdownFilterExpr_(subfieldFilterExpr) {
+      subfieldFilterAst_(subfieldFilterAst),
+      pushdownFilterExpr_(subfieldFilterAst) {
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
@@ -218,8 +218,17 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   // Perform split-specific setup.
   prepareSplitInternal(runtimeStats);
 
-  // Update runtime stats
-  runtimeStats.processedSplits++;
+  // Update runtime stats.
+  if (isSplitSkipped()) {
+    runtimeStats.skippedSplits++;
+    // An unbounded length means the whole file, whose size the split does not
+    // carry, so it contributes no byte count.
+    if (split_->length != std::numeric_limits<uint64_t>::max()) {
+      runtimeStats.skippedSplitBytes += static_cast<int64_t>(split_->length);
+    }
+  } else {
+    runtimeStats.processedSplits++;
+  }
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
@@ -329,7 +338,7 @@ void CudfSplitReader::resetSplit() {
   hybridScanState_.reset();
   dataSource_.reset();
   fileMetaData_.clear();
-  pushdownFilterExpr_ = subfieldFilterExpr_;
+  pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
 }
 
@@ -337,8 +346,12 @@ cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
   return pushdownFilterExpr_;
 }
 
-cudf::ast::expression const* CudfSplitReader::subfieldFilter() const {
-  return subfieldFilterExpr_;
+const cudf::ast::expression* CudfSplitReader::subfieldFilterAst() const {
+  return subfieldFilterAst_;
+}
+
+bool CudfSplitReader::isSplitSkipped() const {
+  return false;
 }
 
 bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {

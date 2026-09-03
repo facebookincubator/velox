@@ -811,7 +811,12 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
             Timestamp(1705314600, 0)})})};
 
   assertDefaultValues(
-      newRowType, newRowType, assignments, dataVectors, expectedVectors);
+      newRowType,
+      newRowType,
+      assignments,
+      dataVectors,
+      expectedVectors,
+      {{HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession, "false"}});
 }
 
 TEST_F(IcebergReadTest, addColumnWithInvalidDefault) {
