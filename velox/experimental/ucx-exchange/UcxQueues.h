@@ -178,7 +178,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       uint32_t numDestinations,
       uint32_t numDrivers,
       core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+          core::PartitionedOutputNode::Kind::kPartitioned,
+      std::vector<UcxIntraNodeEligibilityCallback>* eligibilityCallbacks =
+          nullptr);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
