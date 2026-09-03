@@ -724,7 +724,7 @@ IcebergSplitReader::resolveEqualityColumns(
   VELOX_CHECK(
       dataColumns != nullptr,
       "Iceberg equality delete file '{}' cannot be processed because "
-      "table data columns are not available in HiveTableHandle.",
+      "table data columns are not available in IcebergTableHandle.",
       deleteFile.filePath);
   std::unordered_map<int32_t, uint32_t> columnIndexByFieldId;
   if (const auto* hiveTableHandle =
@@ -1134,8 +1134,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                 columnType,
                 it->second->initialDefaultValue().value(),
                 connectorQueryCtx_->memoryPool(),
-                readTimestampAsLocalTime,
-                false));
+                /*isLocalTimestamp=*/false,
+                /*isDaysSinceEpoch=*/false));
           } else {
             // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(

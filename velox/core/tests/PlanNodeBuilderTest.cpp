@@ -370,8 +370,10 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
       std::vector<std::string>{"sum(c0)"});
   const auto outputType = TableWriteTraits::outputType(statsSpec);
 
-  const auto insertTableHandle =
-      std::make_shared<InsertTableHandle>("connector_id", nullptr);
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id",
+      nullptr,
+      /*notNullColumns=*/folly::F14FastSet<std::string>{});
 
   const auto verify = [&](const std::shared_ptr<const TableWriteNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -400,6 +402,24 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
 
   const auto node2 = TableWriteNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, tableWriteNodeNotNullColumnOutsideSchema) {
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id", nullptr, folly::F14FastSet<std::string>{"c1"});
+
+  VELOX_ASSERT_USER_THROW(
+      TableWriteNode::Builder()
+          .id("test_id")
+          .columns(ROW({"c0"}, {INTEGER()}))
+          .columnNames({"c0"})
+          .insertTableHandle(insertTableHandle)
+          .hasPartitioningScheme(false)
+          .outputType(TableWriteTraits::outputType(std::nullopt))
+          .commitStrategy(connector::CommitStrategy::kNoCommit)
+          .source(source_)
+          .build(),
+      "NOT NULL column is not in the table schema: c1");
 }
 
 TEST_F(PlanNodeBuilderTest, tableWriteMergeNode) {
@@ -1010,7 +1030,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a")};
   std::vector<FieldAccessTypedExprPtr> unnestVariables{
       std::make_shared<FieldAccessTypedExpr>(ARRAY(BIGINT()), "b")};
-  std::vector<std::string> unnestNames{"b"};
+  std::vector<std::optional<std::string>> unnestNames{"b"};
   std::optional<std::string> ordinalityName =
       std::make_optional<std::string>("ord");
   std::optional<bool> splitOutput = false;
@@ -1033,7 +1053,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
       expectedNames.push_back(variable->name());
     }
     for (const auto& name : unnestNames) {
-      expectedNames.push_back(name);
+      expectedNames.push_back(name.value());
     }
     if (ordinalityName.has_value()) {
       expectedNames.push_back(ordinalityName.value());
