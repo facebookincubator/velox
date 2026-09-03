@@ -144,19 +144,19 @@ std::unique_ptr<cudf::column> castDecimalColumns(
 
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
-    const std::vector<TypePtr>& columnTypes,
-    size_t leadingColumns,
+    std::span<TypePtr> columnTypes,
+    size_t numPrependedColumns,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_LE(
-      leadingColumns,
+      numPrependedColumns + columnTypes.size(),
       table->view().num_columns(),
-      "Leading columns exceed the cuDF table width");
+      "Type vector size exceeds the cuDF table width");
   const auto numColumns = std::min<size_t>(
-      table->view().num_columns() - leadingColumns, columnTypes.size());
+      table->view().num_columns() - numPrependedColumns, columnTypes.size());
   auto columns = table->release();
   for (size_t i = 0; i < numColumns; ++i) {
-    const auto columnIndex = leadingColumns + i;
+    const auto columnIndex = numPrependedColumns + i;
     columns[columnIndex] = castDecimalColumns(
         std::move(columns[columnIndex]), columnTypes[i], stream, mr);
   }
@@ -216,6 +216,10 @@ CudfSplitReader::CudfSplitReader(
       readColumnTypes_.push_back(dataColumns->findChild(name));
     }
   }
+  VELOX_DCHECK_EQ(
+      readColumnTypes_.size(),
+      readColumnNames_.size(),
+      "Read column types and names must have the same size");
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }

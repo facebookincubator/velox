@@ -725,13 +725,10 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
             });
       });
 
-  // Append extra columns to readColumnNames_ so the Parquet reader fetches
+  // Append extra columns to readColumn names and types so the Parquet reader fetches
   // them.
-  readColumnNames_.insert(
-      readColumnNames_.end(),
-      extraEqualityColumns_.begin(),
-      extraEqualityColumns_.end());
   for (const auto& name : extraEqualityColumns_) {
+    readColumnNames_.push_back(name);
     readColumnTypes_.push_back(dataColumns->findChild(name));
   }
 }

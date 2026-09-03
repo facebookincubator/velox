@@ -38,6 +38,7 @@
 #include <cudf/stream_compaction.hpp>
 
 #include <limits>
+#include <span>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -99,18 +100,18 @@ cudf::type_id parquetDecimalType(
 }
 
 SubfieldFilterDecimalTypes parquetDecimalTypes(
-    const cudf::io::parquet::FileMetaData& metadata,
+    std::span<const cudf::io::parquet::SchemaElement> metadataSchema,
     const RowTypePtr& readerSchema) {
   VELOX_CHECK(
-      !metadata.schema.empty(), "Cannot build a filter from an empty schema");
+      !metadataSchema.empty(), "Cannot build a filter from an empty schema");
 
   SubfieldFilterDecimalTypes decimalTypes;
-  for (const auto childIndex : metadata.schema.front().children_idx) {
+  for (const auto childIndex : metadataSchema.front().children_idx) {
     VELOX_CHECK_LT(
         childIndex,
-        metadata.schema.size(),
+        metadataSchema.size(),
         "Parquet schema child index out of range");
-    const auto& child = metadata.schema[childIndex];
+    const auto& child = metadataSchema[childIndex];
     if (!readerSchema->containsChild(child.name)) {
       continue;
     }
@@ -311,7 +312,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
           pushdownFilterTree_ = cudf::ast::tree{};
           pushdownFilterScalars_.clear();
           const auto decimalTypes =
-              parquetDecimalTypes(metadata, readerFilterType);
+              parquetDecimalTypes(metadata.schema, readerFilterType);
           return &createAstFromSubfieldFilters(
               subfieldFilters_,
               pushdownFilterTree_,
