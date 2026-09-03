@@ -628,8 +628,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndices) {
           });
   auto trivialEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(trivialPolicy), boolSpan, *buffer_);
-  auto trivialEncoding =
-      nimble::EncodingFactory().create(*pool_, trivialEncoded, nullptr);
+  auto trivialEncoding = nimble::EncodingFactory().create(
+      *pool_, trivialEncoded, nullptr, nimble::Encoding::Options{});
 
   // Encode with BlockBitPacking indices.
   nimble::EncodingLayout cbpLayout{
@@ -652,8 +652,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndices) {
           });
   auto cbpEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(cbpPolicy), boolSpan, cbpBuffer);
-  auto cbpEncoding =
-      nimble::EncodingFactory().create(*pool_, cbpEncoded, nullptr);
+  auto cbpEncoding = nimble::EncodingFactory().create(
+      *pool_, cbpEncoded, nullptr, nimble::Encoding::Options{});
 
   // Compare materializeBoolsAsBits output.
   auto* trivialSB =
@@ -713,8 +713,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndicesLargeIrregular) {
           });
   auto trivialEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(trivialPolicy), boolSpan, *buffer_);
-  auto trivialEncoding =
-      nimble::EncodingFactory().create(*pool_, trivialEncoded, nullptr);
+  auto trivialEncoding = nimble::EncodingFactory().create(
+      *pool_, trivialEncoded, nullptr, nimble::Encoding::Options{});
 
   nimble::EncodingLayout cbpLayout{
       nimble::EncodingType::SparseBool,
@@ -736,8 +736,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndicesLargeIrregular) {
           });
   auto cbpEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(cbpPolicy), boolSpan, cbpBuffer);
-  auto cbpEncoding =
-      nimble::EncodingFactory().create(*pool_, cbpEncoded, nullptr);
+  auto cbpEncoding = nimble::EncodingFactory().create(
+      *pool_, cbpEncoded, nullptr, nimble::Encoding::Options{});
 
   auto* trivialSB =
       dynamic_cast<nimble::SparseBoolEncoding*>(trivialEncoding.get());

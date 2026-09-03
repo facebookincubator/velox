@@ -41,7 +41,6 @@
 #include "velox/dwio/nimble/serializer/Projector.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/StreamSlicer.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
@@ -75,11 +74,13 @@ std::string makeUncompressedChunk(std::string_view data) {
 
 std::string makeZstdChunk(std::string_view data) {
   const auto maxCompressedSize = ZSTD_compressBound(data.size());
-  std::string compressed(maxCompressedSize, '\0');
+  std::string compressed(sizeof(uint32_t) + maxCompressedSize, '\0');
+  auto* compressedData = compressed.data();
+  encoding::writeUint32(data.size(), compressedData);
   const auto compressedSize = ZSTD_compress(
-      compressed.data(), maxCompressedSize, data.data(), data.size(), 1);
+      compressedData, maxCompressedSize, data.data(), data.size(), 1);
   NIMBLE_CHECK(!ZSTD_isError(compressedSize));
-  compressed.resize(compressedSize);
+  compressed.resize(sizeof(uint32_t) + compressedSize);
 
   std::string output(kChunkHeaderSize, '\0');
   auto* pos = output.data();
@@ -144,6 +145,8 @@ enum class RawStreamKind {
   kSerialization,
   kProjection,
   kTablet,
+  kTabletUncompressedChunk,
+  kTabletZstdChunk,
 };
 
 SerializationVersion streamVersion(RawStreamKind kind) {
@@ -153,6 +156,8 @@ SerializationVersion streamVersion(RawStreamKind kind) {
     case RawStreamKind::kProjection:
       return SerializationVersion::kProjection;
     case RawStreamKind::kTablet:
+    case RawStreamKind::kTabletUncompressedChunk:
+    case RawStreamKind::kTabletZstdChunk:
       return SerializationVersion::kTablet;
   }
 }
@@ -165,7 +170,16 @@ std::string toString(RawStreamKind kind) {
       return "Projection";
     case RawStreamKind::kTablet:
       return "Tablet";
+    case RawStreamKind::kTabletUncompressedChunk:
+      return "TabletUncompressedChunk";
+    case RawStreamKind::kTabletZstdChunk:
+      return "TabletZstdChunk";
   }
+}
+
+bool streamHasChunkHeader(RawStreamKind kind) {
+  return kind == RawStreamKind::kTabletUncompressedChunk ||
+      kind == RawStreamKind::kTabletZstdChunk;
 }
 
 class StreamSlicerTest : public ::testing::Test {
@@ -306,6 +320,32 @@ class StreamSlicerTest : public ::testing::Test {
     return std::string(encoded);
   }
 
+  std::string encodeBoolStream(
+      EncodingType encodingType,
+      const std::vector<bool>& values,
+      bool useVarintRowCount) {
+    nimble::Vector<bool> nimbleValues{pool_.get()};
+    nimbleValues.reserve(values.size());
+    for (const bool value : values) {
+      nimbleValues.push_back(value);
+    }
+
+    Buffer buffer{*pool_};
+    ManualEncodingSelectionPolicyFactory factory{
+        {{encodingType, 1.0}}, /*compressionOptions=*/std::nullopt};
+    auto policyBase = factory.createPolicy(DataType::Bool);
+    auto policy = std::unique_ptr<EncodingSelectionPolicy<bool>>(
+        static_cast<EncodingSelectionPolicy<bool>*>(policyBase.release()));
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    const auto encoded = EncodingFactory::encode<bool>(
+        std::move(policy),
+        std::span<const bool>{nimbleValues.data(), nimbleValues.size()},
+        buffer,
+        options);
+    return std::string(encoded);
+  }
+
   std::string makeTabletPayload(
       uint32_t rowCount,
       uint32_t streamId,
@@ -313,6 +353,7 @@ class StreamSlicerTest : public ::testing::Test {
       bool compressStream = false) {
     auto header = createTabletChunkHeader({
         .rowCount = rowCount,
+        .streamHasChunkHeader = true,
         .rowRange = RowRange{0, rowCount},
     });
     std::string output(
@@ -323,35 +364,6 @@ class StreamSlicerTest : public ::testing::Test {
     output.append(chunkedStream);
     std::vector<uint32_t> streamSizes(streamId + 1, 0);
     streamSizes[streamId] = static_cast<uint32_t>(chunkedStream.size());
-    writeTabletTrailer(streamSizes, output);
-    return output;
-  }
-
-  std::string makeTabletPayload(
-      std::string_view serialized,
-      bool compressStreams) {
-    const DeserializerOptions options{.hasHeader = true};
-    StreamDataParser parser{pool_.get(), options};
-    const auto rowCount = parser.initialize(serialized);
-    auto header = createTabletChunkHeader({
-        .rowCount = rowCount,
-        .requiresNullBarrier = parser.requiresNullBarrier(),
-        .streamEncodingUsesVarintRowCount = true,
-        .rowRange = RowRange{0, rowCount},
-    });
-    std::string output(
-        reinterpret_cast<const char*>(header.data()), header.length());
-    std::vector<uint32_t> streamSizes;
-    parser.iterateStreams([&](uint32_t streamId, std::string_view streamData) {
-      if (streamId >= streamSizes.size()) {
-        streamSizes.resize(streamId + 1, 0);
-      }
-      const auto chunkedStream = compressStreams
-          ? makeZstdChunk(streamData)
-          : makeUncompressedChunk(streamData);
-      streamSizes[streamId] = static_cast<uint32_t>(chunkedStream.size());
-      output.append(chunkedStream);
-    });
     writeTabletTrailer(streamSizes, output);
     return output;
   }
@@ -372,34 +384,31 @@ class StreamSlicerTest : public ::testing::Test {
     };
   }
 
-  std::vector<SlicerPayload> makePayloads(
+  SlicerPayload makePayload(
       const std::string& serialized,
       const std::shared_ptr<const nimble::Type>& schema,
-      const std::vector<std::string>& columnNames) {
-    auto [projected, projectedSchema] =
-        projectAllColumns(serialized, schema, columnNames);
-    return {
-        {
-            .kind = SlicerPayloadKind::kSerialization,
+      const std::vector<std::string>& columnNames,
+      SlicerPayloadKind kind) {
+    switch (kind) {
+      case SlicerPayloadKind::kSerialization:
+        return {
+            .kind = kind,
             .data = serialized,
             .schema = schema,
-        },
-        {
-            .kind = SlicerPayloadKind::kProjection,
+        };
+      case SlicerPayloadKind::kProjection: {
+        auto [projected, projectedSchema] =
+            projectAllColumns(serialized, schema, columnNames);
+        return {
+            .kind = kind,
             .data = std::move(projected),
             .schema = std::move(projectedSchema),
-        },
-        {
-            .kind = SlicerPayloadKind::kTabletUncompressed,
-            .data = makeTabletPayload(serialized, /*compressStreams=*/false),
-            .schema = schema,
-        },
-        {
-            .kind = SlicerPayloadKind::kTabletZstd,
-            .data = makeTabletPayload(serialized, /*compressStreams=*/true),
-            .schema = schema,
-        },
-    };
+        };
+      }
+      case SlicerPayloadKind::kTabletUncompressed:
+      case SlicerPayloadKind::kTabletZstd:
+        NIMBLE_FAIL("Unsupported payload kind: {}", toString(kind));
+    }
   }
 
   VectorPtr deserialize(
@@ -435,6 +444,15 @@ class StreamSlicerTest : public ::testing::Test {
     EXPECT_EQ(readColumn<int32_t>(vector), expected);
   }
 
+  static size_t inputStreamBytes(
+      const std::vector<std::string_view>& inputStreams) {
+    size_t bytes{0};
+    for (const auto stream : inputStreams) {
+      bytes += stream.size();
+    }
+    return bytes;
+  }
+
   std::shared_ptr<memory::MemoryPool> rootPool_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };
@@ -442,6 +460,14 @@ class StreamSlicerTest : public ::testing::Test {
 class StreamSlicerPayloadVersionTest
     : public StreamSlicerTest,
       public ::testing::WithParamInterface<SlicerPayloadKind> {};
+
+class StreamSlicerPayloadApiTest
+    : public StreamSlicerTest,
+      public ::testing::WithParamInterface<SlicerPayloadKind> {};
+
+class StreamSlicerRawStreamApiTest
+    : public StreamSlicerTest,
+      public ::testing::WithParamInterface<bool> {};
 
 TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
   const auto payloadKind = GetParam();
@@ -479,6 +505,13 @@ TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
   }
 
   StreamSlicer slicer{sliceSchema, pool_.get(), StreamSlicer::Options{}};
+  if (isTabletPayload) {
+    NIMBLE_ASSERT_THROW(
+        slicer.slice(payload, /*offset=*/1, /*length=*/3),
+        "Unsupported StreamSlicer input version");
+    return;
+  }
+
   auto sliced =
       iobufToString(slicer.slice(payload, /*offset=*/1, /*length=*/3));
   const char* pos = sliced.data();
@@ -486,7 +519,7 @@ TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
       readSerializationHeader(pos, sliced.data() + sliced.size(), true);
   EXPECT_EQ(header.version, SerializationVersion::kProjection);
   EXPECT_EQ(header.rowCount, 3);
-  EXPECT_EQ(header.flags.streamEncodingUsesVarintRowCount, !isTabletPayload);
+  EXPECT_TRUE(header.flags.streamEncodingUsesVarintRowCount);
   EXPECT_FALSE(header.rowRange.has_value());
 
   auto output = deserialize(sliced, sliceSchema);
@@ -504,10 +537,11 @@ INSTANTIATE_TEST_SUITE_P(
         SlicerPayloadKind::kTabletZstd),
     [](const auto& info) { return toString(info.param); });
 
-TEST_F(StreamSlicerTest, fuzzesRandomSchemasAndNullableData) {
+TEST_P(StreamSlicerPayloadApiTest, fuzzesRandomSchemasAndNullableData) {
   constexpr uint32_t kSeed{12345};
   constexpr uint32_t kIterations{32};
   constexpr uint32_t kMinSliceRows{8};
+  const auto payloadKind = GetParam();
   const std::vector<TypePtr> scalarTypes{
       BOOLEAN(), INTEGER(), BIGINT(), REAL(), DOUBLE(), VARCHAR()};
   VectorFuzzer fuzzer(
@@ -581,21 +615,21 @@ TEST_F(StreamSlicerTest, fuzzesRandomSchemasAndNullableData) {
       projectionSubfields.emplace_back(
           fmt::format("flat_map[{}]", flatMap.nameAt(i)));
     }
-    for (const auto& payload :
-         makePayloads(serialized, schema, projectionSubfields)) {
-      SCOPED_TRACE(toString(payload.kind));
-      StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
-      auto sliced = iobufToString(slicer.slice(payload.data, offset, length));
-      auto output = deserialize(sliced, payload.schema);
-      ASSERT_EQ(output->size(), length);
-      for (uint32_t i = 0; i < length; ++i) {
-        EXPECT_TRUE(input->equalValueAt(output.get(), offset + i, i));
-      }
+    auto payload =
+        makePayload(serialized, schema, projectionSubfields, payloadKind);
+    SCOPED_TRACE(toString(payload.kind));
+    StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+    auto sliced = iobufToString(slicer.slice(payload.data, offset, length));
+    auto output = deserialize(sliced, payload.schema);
+    ASSERT_EQ(output->size(), length);
+    for (uint32_t i = 0; i < length; ++i) {
+      EXPECT_TRUE(input->equalValueAt(output.get(), offset + i, i));
     }
   }
 }
 
-TEST_F(StreamSlicerTest, fuzzesRawStreamApi) {
+TEST_P(StreamSlicerRawStreamApiTest, fuzzesRawStreamApi) {
+  const bool useOutputBuffer = GetParam();
   std::mt19937 rng{67890};
   auto type = ROW({{"id", INTEGER()}});
 
@@ -618,16 +652,39 @@ TEST_F(StreamSlicerTest, fuzzesRawStreamApi) {
     for (const auto kind :
          {RawStreamKind::kSerialization,
           RawStreamKind::kProjection,
-          RawStreamKind::kTablet}) {
+          RawStreamKind::kTablet,
+          RawStreamKind::kTabletUncompressedChunk,
+          RawStreamKind::kTabletZstdChunk}) {
       SCOPED_TRACE(toString(kind));
       const auto version = streamVersion(kind);
       const auto useVarintRowCount = !isTabletVersion(version);
       const auto encodedStream = encodeIntStream(values, useVarintRowCount);
+      const auto storedStream = kind == RawStreamKind::kTabletUncompressedChunk
+          ? makeUncompressedChunk(encodedStream)
+          : kind == RawStreamKind::kTabletZstdChunk
+          ? makeZstdChunk(encodedStream)
+          : encodedStream;
       std::vector<std::string_view> inputStreams(streamId + 1);
-      inputStreams[streamId] = encodedStream;
+      inputStreams[streamId] = storedStream;
 
-      StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-      auto sliced = slicer.slice(inputStreams, offset, length, version);
+      const auto options = kind == RawStreamKind::kProjection
+          ? StreamSlicer::Options{}
+          : StreamSlicer::Options{
+                .streamVersion = version,
+                .streamHasChunkHeader = streamHasChunkHeader(kind),
+                .streamsUseVarintRowCount = useVarintRowCount,
+            };
+      StreamSlicer slicer{schema, pool_.get(), options};
+      std::optional<Buffer> outputBuffer;
+      if (useOutputBuffer) {
+        outputBuffer.emplace(*pool_, inputStreamBytes(inputStreams));
+      }
+      auto sliced = slicer.slice(
+          inputStreams,
+          offset,
+          length,
+          outputBuffer.has_value() ? &outputBuffer.value() : nullptr);
+      EXPECT_EQ(sliced.data.computeChainDataLength() == 0, useOutputBuffer);
       ASSERT_LT(streamId, sliced.streams.size());
       ASSERT_FALSE(sliced.streams[streamId].empty());
 
@@ -644,7 +701,197 @@ TEST_F(StreamSlicerTest, fuzzesRawStreamApi) {
   }
 }
 
-TEST_F(StreamSlicerTest, slicesFlatMap) {
+TEST_P(StreamSlicerRawStreamApiTest, slicesFlatMapBoolInMapFastPath) {
+  const bool useOutputBuffer = GetParam();
+  auto type = ROW({{"features", MAP(INTEGER(), INTEGER())}});
+  auto input = makeRowVector(
+      {"features"},
+      {makeMapVector(
+          {1, 1},
+          makeFlatVector<int32_t>({10, 10}),
+          makeFlatVector<int32_t>({1, 2}))});
+  auto [_, schema] = serialize(
+      input,
+      type,
+      /*encodingType=*/std::nullopt,
+      /*compressionOptions=*/std::nullopt,
+      /*flatMapColumns=*/{{"features", {}}});
+
+  const auto& flatMap = schema->asRow().childAt(0)->asFlatMap();
+  const auto keyIndex = flatMap.findChild("10");
+  ASSERT_TRUE(keyIndex.has_value());
+  const auto inMapStreamId =
+      flatMap.inMapDescriptorAt(keyIndex.value()).offset();
+  const auto valueStreamId =
+      flatMap.childAt(keyIndex.value())->asScalar().scalarDescriptor().offset();
+  std::vector<std::string_view> inputStreams(
+      std::max(inMapStreamId, valueStreamId) + 1);
+
+  struct Case {
+    EncodingType encodingType;
+    std::vector<bool> inMap;
+    std::vector<int32_t> values;
+    std::vector<bool> expectedInMap;
+    std::vector<int32_t> expectedValues;
+  };
+  const std::vector<Case> cases{
+      {
+          .encodingType = EncodingType::Constant,
+          .inMap = {true, true, true, true, true, true, true, true},
+          .values = {10, 20, 30, 40, 50, 60, 70, 80},
+          .expectedInMap = {true, true, true, true, true},
+          .expectedValues = {30, 40, 50, 60, 70},
+      },
+      {
+          .encodingType = EncodingType::RLE,
+          .inMap = {true, true, false, false, true, true, true, false},
+          .values = {10, 20, 40, 50, 60},
+          .expectedInMap = {false, false, true, true, true},
+          .expectedValues = {40, 50, 60},
+      },
+      {
+          .encodingType = EncodingType::SparseBool,
+          .inMap = {false, true, false, true, false, false, true, false},
+          .values = {11, 33, 66},
+          .expectedInMap = {false, true, false, false, true},
+          .expectedValues = {33, 66},
+      },
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(toString(testCase.encodingType));
+    const auto encodedInMap = encodeBoolStream(
+        testCase.encodingType, testCase.inMap, /*useVarintRowCount=*/true);
+    const auto encodedValues =
+        encodeIntStream(testCase.values, /*useVarintRowCount=*/true);
+    inputStreams[inMapStreamId] = encodedInMap;
+    inputStreams[valueStreamId] = encodedValues;
+
+    StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
+    std::optional<Buffer> outputBuffer;
+    if (useOutputBuffer) {
+      outputBuffer.emplace(*pool_, inputStreamBytes(inputStreams));
+    }
+    auto sliced = slicer.slice(
+        inputStreams,
+        /*offset=*/2,
+        /*length=*/5,
+        outputBuffer.has_value() ? &outputBuffer.value() : nullptr);
+
+    Encoding::Options encodingOptions;
+    encodingOptions.useVarintRowCount = true;
+    auto inMapEncoding = EncodingFactory{encodingOptions}.create(
+        *pool_, sliced.streams[inMapStreamId], nullptr);
+    nimble::Vector<bool> actualInMap{pool_.get(), 5};
+    inMapEncoding->materialize(5, actualInMap.data());
+    for (size_t i = 0; i < testCase.expectedInMap.size(); ++i) {
+      EXPECT_EQ(actualInMap[i], testCase.expectedInMap[i]);
+    }
+
+    auto valuesEncoding = EncodingFactory{encodingOptions}.create(
+        *pool_, sliced.streams[valueStreamId], nullptr);
+    std::vector<int32_t> actualValues(testCase.expectedValues.size());
+    valuesEncoding->materialize(actualValues.size(), actualValues.data());
+    EXPECT_EQ(actualValues, testCase.expectedValues);
+  }
+}
+
+TEST_F(StreamSlicerTest, ownsSlicedStreamOutputBuffers) {
+  auto writeStreams = [&](Buffer& buffer) {
+    return std::vector<std::string_view>{
+        buffer.writeString("abc"),
+        {},
+        buffer.writeString("def"),
+    };
+  };
+
+  {
+    Buffer buffer{*pool_};
+    const auto streams = writeStreams(buffer);
+    auto body = StreamSlicer::takeOwnershipAsIOBuf(streams, buffer);
+    EXPECT_EQ(iobufToString(body), "abcdef");
+  }
+
+  {
+    Buffer buffer{*pool_};
+    const auto streams = writeStreams(buffer);
+    auto chunks = std::make_shared<std::vector<velox::BufferPtr>>(
+        buffer.transferBuffers());
+    auto body = StreamSlicer::takeOwnershipAsIOBuf(
+        streams, std::shared_ptr<const void>{std::move(chunks)});
+    EXPECT_EQ(iobufToString(body), "abcdef");
+  }
+
+  {
+    Buffer buffer{*pool_};
+    auto body = StreamSlicer::takeOwnershipAsIOBuf(
+        std::vector<std::string_view>{}, buffer);
+    EXPECT_EQ(body.computeChainDataLength(), 0);
+  }
+}
+
+TEST_F(StreamSlicerTest, fuzzesSlicedStreamOutputBufferOwnership) {
+  constexpr uint32_t kSeed{0x136a7329};
+  constexpr uint32_t kIterations{128};
+  std::mt19937 rng{kSeed};
+  std::uniform_int_distribution<size_t> numStreamsDistribution{0, 32};
+  std::uniform_int_distribution<size_t> streamSizeDistribution{0, 256};
+  std::uniform_int_distribution<int> byteDistribution{0, 255};
+
+  auto makeBody = [&](bool useSharedOwner,
+                      std::string& expected) -> folly::IOBuf {
+    Buffer buffer{*pool_, /*initialChunkSize=*/64};
+    std::vector<std::string_view> streams;
+    const auto numStreams = numStreamsDistribution(rng);
+    streams.reserve(numStreams);
+    expected.clear();
+    for (size_t i{0}; i < numStreams; ++i) {
+      const auto streamSize = streamSizeDistribution(rng);
+      if (streamSize == 0) {
+        streams.emplace_back();
+        continue;
+      }
+      std::string payload(streamSize, '\0');
+      for (char& byte : payload) {
+        byte = static_cast<char>(byteDistribution(rng));
+      }
+      streams.emplace_back(buffer.writeString(payload));
+      expected.append(payload);
+    }
+
+    if (useSharedOwner) {
+      auto chunks = std::make_shared<std::vector<velox::BufferPtr>>(
+          buffer.transferBuffers());
+      return StreamSlicer::takeOwnershipAsIOBuf(
+          streams, std::shared_ptr<const void>{std::move(chunks)});
+    }
+    return StreamSlicer::takeOwnershipAsIOBuf(streams, buffer);
+  };
+
+  for (uint32_t iteration{0}; iteration < kIterations; ++iteration) {
+    for (const bool useSharedOwner : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "seed={} iteration={} useSharedOwner={}",
+              kSeed,
+              iteration,
+              useSharedOwner));
+      std::string expected;
+      auto body = makeBody(useSharedOwner, expected);
+      EXPECT_EQ(iobufToString(body), expected);
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OutputStorage,
+    StreamSlicerRawStreamApiTest,
+    ::testing::Bool(),
+    [](const auto& info) {
+      return info.param ? "CallerOutputBuffer" : "OwnedOutputBuffer";
+    });
+
+TEST_P(StreamSlicerPayloadApiTest, slicesFlatMap) {
   auto type = ROW({{"features", MAP(INTEGER(), INTEGER())}});
   auto features = makeMapVector(
       {2, 1, 0, 1, 2},
@@ -663,36 +910,35 @@ TEST_F(StreamSlicerTest, slicesFlatMap) {
   auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
 
-  for (const auto& payload :
-       makePayloads(serialized, schema, {"features[1]", "features[2]"})) {
-    SCOPED_TRACE(toString(payload.kind));
-    StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
-    auto sliced =
-        iobufToString(slicer.slice(payload.data, /*offset=*/1, /*length=*/3));
+  auto payload = makePayload(
+      serialized, schema, {"features[1]", "features[2]"}, GetParam());
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+  auto sliced =
+      iobufToString(slicer.slice(payload.data, /*offset=*/1, /*length=*/3));
 
-    const char* pos = sliced.data();
-    const auto header =
-        readSerializationHeader(pos, sliced.data() + sliced.size(), true);
-    EXPECT_TRUE(header.flags.requiresNullBarrier);
+  const char* pos = sliced.data();
+  const auto header =
+      readSerializationHeader(pos, sliced.data() + sliced.size(), true);
+  EXPECT_TRUE(header.flags.requiresNullBarrier);
 
-    auto output = deserialize(sliced, payload.schema);
-    ASSERT_EQ(output->size(), 3);
-    for (uint32_t i = 0; i < 3; ++i) {
-      EXPECT_TRUE(input->equalValueAt(output.get(), i + 1, i));
-    }
+  auto output = deserialize(sliced, payload.schema);
+  ASSERT_EQ(output->size(), 3);
+  for (uint32_t i = 0; i < 3; ++i) {
+    EXPECT_TRUE(input->equalValueAt(output.get(), i + 1, i));
   }
 }
 
-TEST_F(StreamSlicerTest, slicesEmptyArrayElementRange) {
+TEST_P(StreamSlicerPayloadApiTest, slicesEmptyArrayElementRange) {
   auto type = ROW({{"items", ARRAY(INTEGER())}});
   auto items =
       makeArrayVector({2, 0, 3}, makeFlatVector<int32_t>({10, 11, 20, 21, 22}));
   auto input = makeRowVector({"items"}, {items});
   auto [serialized, schema] = serialize(input, type);
+  auto payload = makePayload(serialized, schema, {"items"}, GetParam());
 
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-  auto sliced = iobufToString(slicer.slice(serialized, /*offset=*/1, 1));
-  auto output = deserialize(sliced, schema);
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+  auto sliced = iobufToString(slicer.slice(payload.data, /*offset=*/1, 1));
+  auto output = deserialize(sliced, payload.schema);
 
   ASSERT_EQ(output->size(), 1);
   auto* row = output->as<RowVector>();
@@ -702,23 +948,24 @@ TEST_F(StreamSlicerTest, slicesEmptyArrayElementRange) {
   EXPECT_EQ(arrays->sizeAt(0), 0);
 }
 
-TEST_F(StreamSlicerTest, returnsInputForFullPayloadSlice) {
+TEST_P(StreamSlicerPayloadApiTest, returnsInputForFullPayloadSlice) {
   auto type = ROW({{"id", INTEGER()}});
   auto input =
       makeRowVector({"id"}, {makeFlatVector<int32_t>({10, 20, 30, 40, 50})});
   auto [serialized, schema] = serialize(input, type);
+  auto payload = makePayload(serialized, schema, {"id"}, GetParam());
 
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
   auto sliced = iobufToString(slicer.slice(
-      serialized, /*offset=*/0, static_cast<uint32_t>(input->size())));
+      payload.data, /*offset=*/0, static_cast<uint32_t>(input->size())));
 
-  EXPECT_EQ(sliced, serialized);
-  auto output = deserialize(sliced, schema);
+  EXPECT_EQ(sliced, payload.data);
+  auto output = deserialize(sliced, payload.schema);
   const std::vector<int32_t> expected{10, 20, 30, 40, 50};
   EXPECT_EQ(readColumn<int32_t>(output), expected);
 }
 
-TEST_F(StreamSlicerTest, slicesForcedIntegerEncodings) {
+TEST_P(StreamSlicerPayloadApiTest, slicesForcedIntegerEncodings) {
   const std::vector<std::pair<EncodingType, std::vector<int32_t>>> cases{
       {EncodingType::RLE, {10, 10, 20, 20, 20, 30, 40}},
       {EncodingType::Dictionary, {10, 20, 10, 30, 20, 40, 10}},
@@ -739,33 +986,35 @@ TEST_F(StreamSlicerTest, slicesForcedIntegerEncodings) {
     auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>(values)});
     auto [serialized, schema] = serialize(
         input, type, encodingType, /*compressionOptions=*/std::nullopt);
+    auto payload = makePayload(serialized, schema, {"id"}, GetParam());
 
-    StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-    auto sliced = iobufToString(slicer.slice(serialized, 2, 3));
-    auto output = deserialize(sliced, schema);
+    StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+    auto sliced = iobufToString(slicer.slice(payload.data, 2, 3));
+    auto output = deserialize(sliced, payload.schema);
 
     const std::vector<int32_t> expected{values.begin() + 2, values.begin() + 5};
     EXPECT_EQ(readColumn<int32_t>(output), expected);
   }
 }
 
-TEST_F(StreamSlicerTest, slicesAlpEncoding) {
+TEST_P(StreamSlicerPayloadApiTest, slicesAlpEncoding) {
   auto type = ROW({{"value", REAL()}});
   const std::vector<float> values{
       1.25f, 1.50f, 1.75f, 2.00f, 2.25f, 2.50f, 2.75f};
   auto input = makeRowVector({"value"}, {makeFlatVector<float>(values)});
   auto [serialized, schema] = serialize(
       input, type, EncodingType::ALP, /*compressionOptions=*/std::nullopt);
+  auto payload = makePayload(serialized, schema, {"value"}, GetParam());
 
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-  auto sliced = iobufToString(slicer.slice(serialized, 2, 3));
-  auto output = deserialize(sliced, schema);
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+  auto sliced = iobufToString(slicer.slice(payload.data, 2, 3));
+  auto output = deserialize(sliced, payload.schema);
 
   const std::vector<float> expected{values.begin() + 2, values.begin() + 5};
   EXPECT_EQ(readColumn<float>(output), expected);
 }
 
-TEST_F(StreamSlicerTest, slicesCompressedTrivialStream) {
+TEST_P(StreamSlicerPayloadApiTest, slicesCompressedTrivialStream) {
   auto type = ROW({{"id", INTEGER()}});
   std::vector<int32_t> values(1024, 7);
   for (size_t i = 0; i < values.size(); i += 128) {
@@ -779,26 +1028,28 @@ TEST_F(StreamSlicerTest, slicesCompressedTrivialStream) {
   };
   auto [serialized, schema] = serialize(
       input, type, EncodingType::Trivial, std::move(compressionOptions));
+  auto payload = makePayload(serialized, schema, {"id"}, GetParam());
 
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-  auto sliced = iobufToString(slicer.slice(serialized, 127, 4));
-  auto output = deserialize(sliced, schema);
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+  auto sliced = iobufToString(slicer.slice(payload.data, 127, 4));
+  auto output = deserialize(sliced, payload.schema);
 
   const std::vector<int32_t> expected{
       values.begin() + 127, values.begin() + 131};
   EXPECT_EQ(readColumn<int32_t>(output), expected);
 }
 
-TEST_F(StreamSlicerTest, slicesArrayChildRange) {
+TEST_P(StreamSlicerPayloadApiTest, slicesArrayChildRange) {
   auto elements = makeFlatVector<int32_t>({10, 11, 20, 21, 22, 30});
   auto arrays = makeArrayVector({2, 0, 3, 1}, elements);
   auto type = ROW({{"items", ARRAY(INTEGER())}});
   auto input = makeRowVector({"items"}, {arrays});
   auto [serialized, schema] = serialize(input, type);
+  auto payload = makePayload(serialized, schema, {"items"}, GetParam());
 
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-  auto sliced = iobufToString(slicer.slice(serialized, 2, 2));
-  auto output = deserialize(sliced, schema);
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+  auto sliced = iobufToString(slicer.slice(payload.data, 2, 2));
+  auto output = deserialize(sliced, payload.schema);
 
   ASSERT_EQ(output->size(), 2);
   auto* row = output->as<RowVector>();
@@ -815,6 +1066,14 @@ TEST_F(StreamSlicerTest, slicesArrayChildRange) {
   EXPECT_EQ(values->valueAt(3), 30);
 }
 
+INSTANTIATE_TEST_SUITE_P(
+    AcceptedPayload,
+    StreamSlicerPayloadApiTest,
+    ::testing::Values(
+        SlicerPayloadKind::kSerialization,
+        SlicerPayloadKind::kProjection),
+    [](const auto& info) { return toString(info.param); });
+
 TEST_F(StreamSlicerTest, rejectsZeroLengthSlice) {
   auto type = ROW({{"id", INTEGER()}});
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1, 2, 3})});
@@ -824,11 +1083,7 @@ TEST_F(StreamSlicerTest, rejectsZeroLengthSlice) {
   NIMBLE_ASSERT_THROW(
       slicer.slice(serialized, 1, 0), "Slice length must be positive");
   NIMBLE_ASSERT_THROW(
-      slicer.slice(
-          std::vector<std::string_view>{},
-          1,
-          0,
-          SerializationVersion::kSerialization),
+      slicer.slice(std::vector<std::string_view>{}, 1, 0),
       "Slice length must be positive");
 }
 
@@ -836,13 +1091,19 @@ TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
   auto type = ROW({{"id", INTEGER()}});
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
   auto [_, schema] = serialize(input, type);
-  StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
-
   for (const auto version :
        {SerializationVersion::kLegacy,
         SerializationVersion::kLegacyCompact,
         SerializationVersion::kLegacySerialization}) {
     SCOPED_TRACE(toString(version));
+    StreamSlicer slicer{
+        schema,
+        pool_.get(),
+        StreamSlicer::Options{
+            .streamVersion = version,
+            .streamHasChunkHeader = false,
+            .streamsUseVarintRowCount = false,
+        }};
     const std::string payload{static_cast<char>(version)};
     NIMBLE_ASSERT_THROW(
         slicer.slice(payload, /*offset=*/0, /*length=*/1),
@@ -851,10 +1112,35 @@ TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
         slicer.slice(
             std::vector<std::string_view>{},
             /*offset=*/0,
-            /*length=*/1,
-            version),
+            /*length=*/1),
         "StreamSlicer raw streams must be kSerialization, kProjection, or "
         "kTablet encoded");
+  }
+}
+
+TEST_F(StreamSlicerTest, rejectsFixedRowCountOptionForNonTabletFormats) {
+  auto type = ROW({{"id", INTEGER()}});
+  auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
+  auto [_, schema] = serialize(input, type);
+  for (const auto version : {
+           SerializationVersion::kSerialization,
+           SerializationVersion::kProjection,
+       }) {
+    SCOPED_TRACE(toString(version));
+    StreamSlicer slicer{
+        schema,
+        pool_.get(),
+        StreamSlicer::Options{
+            .streamVersion = version,
+            .streamHasChunkHeader = false,
+            .streamsUseVarintRowCount = false,
+        }};
+    NIMBLE_ASSERT_THROW(
+        slicer.slice(
+            std::vector<std::string_view>{},
+            /*offset=*/0,
+            /*length=*/1),
+        "Non-tablet streams must use varint row counts");
   }
 }
 

@@ -17,9 +17,9 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
 namespace facebook::nimble::tools {
 namespace {
@@ -52,6 +52,7 @@ void extractCompressionType(
            }});
       break;
     }
+    case EncodingType::Slice:
     case EncodingType::RLE:
     case EncodingType::Dictionary:
     case EncodingType::SharedDictionary:
@@ -138,7 +139,10 @@ void traverseEncodings(
     case EncodingType::SimdForBitpack:
     // SubIntSplit integration is disabled; treat it as having no nested
     // encoding to traverse.
-    case EncodingType::SubIntSplit: {
+    case EncodingType::SubIntSplit:
+    // The wrapped encoding is carried verbatim rather than as a nested
+    // stream, so there is nothing to traverse into here.
+    case EncodingType::Slice: {
       // don't have any nested encoding
       break;
     }
@@ -332,8 +336,6 @@ void traverseEncodings(
     }
     case EncodingType::SharedDictionary: {
       const char* pos = stream.data() + prefixSize(stream, useVarintRowCount);
-      readSharedDictionaryScope(stream, pos);
-      readSharedDictionaryId(stream, pos);
       const auto indicesOffset = static_cast<size_t>(pos - stream.data());
       NIMBLE_CHECK_LT(
           indicesOffset,

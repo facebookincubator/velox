@@ -100,8 +100,8 @@ TEST_F(PrefixEncodingTest, materialize) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), testCase.values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     EXPECT_EQ(encoding->rowCount(), testCase.values.size());
     EXPECT_EQ(encoding->encodingType(), EncodingType::Prefix);
@@ -112,6 +112,53 @@ TEST_F(PrefixEncodingTest, materialize) {
     for (size_t i = 0; i < testCase.values.size(); ++i) {
       EXPECT_EQ(decoded[i], testCase.values[i]) << "Mismatch at index " << i;
     }
+  }
+}
+
+TEST_F(PrefixEncodingTest, resetReusesMultipleStringBufferPages) {
+  constexpr uint32_t kValueCount = 48;
+  constexpr size_t kValueSize = 20 * 1024;
+
+  std::vector<std::string> storage;
+  storage.reserve(kValueCount);
+  const std::string commonPrefix(kValueSize, 'p');
+  for (uint32_t i = 0; i < kValueCount; ++i) {
+    storage.push_back(commonPrefix + fmt::format("/{:04}", i));
+  }
+
+  std::vector<std::string_view> values;
+  values.reserve(storage.size());
+  for (const auto& value : storage) {
+    values.push_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto encoded = EncodingFactory::encode<std::string_view>(
+      createSelectionPolicy(), values, buffer);
+  auto encoding =
+      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(values.size(), decoded.data());
+  ASSERT_EQ(values, decoded);
+  const auto pageCount = stringBuffers_.size();
+  ASSERT_GT(pageCount, 2);
+
+  for (uint32_t round = 0; round < 100; ++round) {
+    encoding->reset();
+    if (round % 2 == 0) {
+      encoding->materialize(values.size(), decoded.data());
+    } else {
+      uint32_t offset = 0;
+      while (offset < values.size()) {
+        const uint32_t count =
+            std::min<uint32_t>(1 + offset % 7, values.size() - offset);
+        encoding->materialize(count, decoded.data() + offset);
+        offset += count;
+      }
+    }
+    ASSERT_EQ(values, decoded) << "round=" << round;
+    ASSERT_EQ(pageCount, stringBuffers_.size()) << "round=" << round;
   }
 }
 
@@ -157,8 +204,8 @@ TEST_F(PrefixEncodingTest, varyingNumRestarts) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     EXPECT_EQ(encoding->rowCount(), values.size());
     EXPECT_EQ(encoding->encodingType(), EncodingType::Prefix);
@@ -270,8 +317,8 @@ TEST_F(PrefixEncodingTest, skipAndMaterializeSteps) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Run through steps twice
 
@@ -347,8 +394,8 @@ TEST_F(PrefixEncodingTest, fuzzerMaterialize) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Generate random steps
     std::uniform_int_distribution<uint32_t> numStepsDist(1, kMaxNumSteps);
@@ -422,8 +469,8 @@ TEST_F(PrefixEncodingTest, debugString) {
   auto encoded = EncodingFactory::encode<std::string_view>(
       createSelectionPolicy(), values, buffer);
   stringBuffers_.clear();
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   std::string debug = encoding->debugString();
   EXPECT_TRUE(debug.find("Prefix") != std::string::npos);
@@ -471,8 +518,8 @@ TEST_F(PrefixEncodingTest, customRestartInterval) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         std::move(policy), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Verify restart interval is correctly set from config or default
     const std::string debug = encoding->debugString();
@@ -665,8 +712,8 @@ TEST_F(PrefixEncodingTest, encode) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Verify basic properties
     EXPECT_EQ(encoding->rowCount(), values.size());
@@ -797,8 +844,8 @@ TEST_F(PrefixEncodingTest, fuzzerEncode) {
     auto encoded = EncodingFactory::encode<std::string_view>(
         createSelectionPolicy(), values, buffer);
     stringBuffers_.clear();
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     // Verify properties
     EXPECT_EQ(encoding->rowCount(), values.size());
@@ -873,8 +920,8 @@ TEST_F(PrefixEncodingTest, encodeLargeInputRoundTrip) {
                           << elapsed << "s";
 
   stringBuffers_.clear();
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
   EXPECT_EQ(encoding->rowCount(), kNumValues);
 
   std::vector<std::string_view> decoded(kNumValues);

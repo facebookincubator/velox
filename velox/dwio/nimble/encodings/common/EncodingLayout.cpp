@@ -21,10 +21,10 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
 namespace facebook::nimble {
 
@@ -201,6 +201,11 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::Slice:
+      // The wrapped encoding is carried verbatim rather than as a nested
+      // stream, and the layout tree describes how data is encoded, not how a
+      // slice was deferred. Reported as childless.
+      break;
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;
       const auto header = detail::alp::readHeader(pos);
@@ -325,8 +330,6 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::SharedDictionary: {
       children.reserve(1);
       const char* pos = encoding.data() + prefixSize;
-      readSharedDictionaryScope(encoding, pos);
-      readSharedDictionaryId(encoding, pos);
       const auto indicesOffset = static_cast<size_t>(pos - encoding.data());
       NIMBLE_CHECK_LT(
           indicesOffset,

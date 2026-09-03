@@ -58,7 +58,7 @@ if(VELOX_ENABLE_ABFS)
     SOURCES
       Main.cpp
       AbfsReadTest.cpp
-      ${CMAKE_SOURCE_DIR}/velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../../connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
     LIBS
       velox_cudf_exec_test_lib
       velox_cudf_hive_connector
@@ -192,6 +192,12 @@ velox_add_cudf_test(
   SOURCES Main.cpp LogicalFunctionsTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_expression
   TIMEOUT 3000
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_local_merge_test
+  SOURCES Main.cpp LocalMergeTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 
 velox_add_cudf_test(

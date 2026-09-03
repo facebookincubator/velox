@@ -162,14 +162,17 @@ NIMBLE_DECLARE_CHECK_FAIL_TEMPLATES(::facebook::nimble::NimbleInternalError);
 // Verify an expected file format conditions.
 // the file is corrupted (e.g. passed magic number and version verification, but
 // got unexpected format). This will trigger a user error.
-#define NIMBLE_CHECK_FILE(condition, ...)              \
-  if (UNLIKELY(!(condition))) {                        \
-    NIMBLE_RAISE_USER_ERROR(                           \
-        #condition,                                    \
-        ::facebook::nimble::error_code::CorruptedFile, \
-        /* retryable */ false,                         \
-        __VA_ARGS__);                                  \
+#define _NIMBLE_CHECK_FILE_IMPL(condition, conditionString, ...) \
+  if (UNLIKELY(!(condition))) {                                  \
+    NIMBLE_RAISE_USER_ERROR(                                     \
+        conditionString,                                         \
+        ::facebook::nimble::error_code::CorruptedFile,           \
+        /* retryable */ false,                                   \
+        __VA_ARGS__);                                            \
   }
+
+#define NIMBLE_CHECK_FILE(condition, ...) \
+  _NIMBLE_CHECK_FILE_IMPL(condition, #condition, ##__VA_ARGS__)
 
 // Should be raised when we don't expect to hit a code path, but we did. This
 // means a bug in Nimble.
@@ -248,6 +251,10 @@ NIMBLE_DECLARE_CHECK_FAIL_TEMPLATES(::facebook::nimble::NimbleInternalError);
 #define _NIMBLE_CHECK_OP(expr1, expr2, op, ...) \
   _NIMBLE_CHECK_OP_HELPER(_NIMBLE_CHECK_IMPL, expr1, expr2, op, ##__VA_ARGS__)
 
+#define _NIMBLE_CHECK_FILE_OP(expr1, expr2, op, ...) \
+  _NIMBLE_CHECK_OP_HELPER(                           \
+      _NIMBLE_CHECK_FILE_IMPL, expr1, expr2, op, ##__VA_ARGS__)
+
 #define _NIMBLE_USER_CHECK_IMPL(expr, exprStr, ...)    \
   _NIMBLE_CHECK_AND_THROW_IMPL(                        \
       exprStr,                                         \
@@ -269,6 +276,20 @@ NIMBLE_DECLARE_CHECK_FAIL_TEMPLATES(::facebook::nimble::NimbleInternalError);
 #define NIMBLE_CHECK_EQ(e1, e2, ...) _NIMBLE_CHECK_OP(e1, e2, ==, ##__VA_ARGS__)
 #define NIMBLE_CHECK_NE(e1, e2, ...) _NIMBLE_CHECK_OP(e1, e2, !=, ##__VA_ARGS__)
 
+// Comparison check macros - corrupted file errors
+#define NIMBLE_CHECK_FILE_GT(e1, e2, ...) \
+  _NIMBLE_CHECK_FILE_OP(e1, e2, >, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_GE(e1, e2, ...) \
+  _NIMBLE_CHECK_FILE_OP(e1, e2, >=, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_LT(e1, e2, ...) \
+  _NIMBLE_CHECK_FILE_OP(e1, e2, <, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_LE(e1, e2, ...) \
+  _NIMBLE_CHECK_FILE_OP(e1, e2, <=, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_EQ(e1, e2, ...) \
+  _NIMBLE_CHECK_FILE_OP(e1, e2, ==, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_NE(e1, e2, ...) \
+  _NIMBLE_CHECK_FILE_OP(e1, e2, !=, ##__VA_ARGS__)
+
 // Comparison check macros - user errors
 #define NIMBLE_USER_CHECK_GT(e1, e2, ...) \
   _NIMBLE_USER_CHECK_OP(e1, e2, >, ##__VA_ARGS__)
@@ -287,6 +308,8 @@ NIMBLE_DECLARE_CHECK_FAIL_TEMPLATES(::facebook::nimble::NimbleInternalError);
 #define NIMBLE_CHECK_NULL(e, ...) NIMBLE_CHECK((e) == nullptr, ##__VA_ARGS__)
 #define NIMBLE_CHECK_NOT_NULL(e, ...) \
   NIMBLE_CHECK((e) != nullptr, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_NOT_NULL(e, ...) \
+  NIMBLE_CHECK_FILE((e) != nullptr, ##__VA_ARGS__)
 #define NIMBLE_USER_CHECK_NULL(e, ...) \
   NIMBLE_USER_CHECK((e) == nullptr, ##__VA_ARGS__)
 #define NIMBLE_USER_CHECK_NOT_NULL(e, ...) \

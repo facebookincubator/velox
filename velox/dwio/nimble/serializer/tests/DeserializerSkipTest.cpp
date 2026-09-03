@@ -104,6 +104,7 @@ class DeserializerSkipTest : public ::testing::Test {
         .requiresNullBarrier = parser.requiresNullBarrier(),
         .streamEncodingUsesVarintRowCount =
             parser.streamEncodingUsesVarintRowCount(),
+        .streamHasChunkHeader = false,
         .rowRange = rowRange,
     });
     std::string output(
@@ -1095,6 +1096,84 @@ TEST_F(DeserializerSkipTest, rejectRowRangeEndRowPastBatchRowCount) {
   velox::VectorPtr out;
   EXPECT_THROW(
       ds.deserialize(views, {nimble::RowRange{0, 11}}, out), NimbleUserError);
+}
+
+// Many ranges out of one batch must match feeding the same batch once per
+// range through the multi-batch overload, which is the pattern this
+// overload replaces.
+TEST_F(DeserializerSkipTest, singleBatchMultipleRanges) {
+  auto type = velox::ROW({{"a", velox::INTEGER()}});
+  constexpr velox::vector_size_t kRows = 1000;
+  auto batch = vm_->rowVector(
+      {"a"}, {vm_->flatVector<int32_t>(kRows, [](velox::vector_size_t i) {
+        return static_cast<int32_t>(i);
+      })});
+  auto [serialized, schema] = serialize(type, {batch});
+
+  const std::vector<nimble::RowRange> ranges{
+      nimble::RowRange{10, 20},
+      nimble::RowRange{100, 101},
+      nimble::RowRange{500, 550},
+      nimble::RowRange{999, 1000}};
+
+  DeserializerOptions dsOpts{.hasHeader = true};
+  Deserializer singleBatch{schema, pool_.get(), dsOpts};
+  velox::VectorPtr out;
+  singleBatch.deserialize(serialized[0], ranges, out);
+
+  std::vector<std::string_view> repeated(ranges.size(), serialized[0]);
+  Deserializer multiBatch{schema, pool_.get(), dsOpts};
+  velox::VectorPtr expected;
+  multiBatch.deserialize(repeated, ranges, expected);
+
+  ASSERT_EQ(out->size(), 62);
+  ASSERT_EQ(expected->size(), out->size());
+  auto* column =
+      out->as<velox::RowVector>()->childAt(0)->as<velox::FlatVector<int32_t>>();
+  velox::vector_size_t position = 0;
+  for (const auto& range : ranges) {
+    for (uint32_t row = range.startRow; row < range.endRow; ++row) {
+      EXPECT_EQ(column->valueAt(position), static_cast<int32_t>(row));
+      EXPECT_TRUE(out->equalValueAt(expected.get(), position, position));
+      ++position;
+    }
+  }
+}
+
+// buildDecodeOps only emits a skip when a range starts past the cursor, so
+// out-of-order or overlapping ranges would silently fold into the preceding
+// read instead of failing.
+TEST_F(DeserializerSkipTest, rejectUnsortedOrOverlappingSingleBatchRanges) {
+  auto type = velox::ROW({{"a", velox::INTEGER()}});
+  auto batch = vm_->rowVector(
+      {"a"}, {vm_->flatVector<int32_t>(100, [](velox::vector_size_t i) {
+        return static_cast<int32_t>(i);
+      })});
+  auto [serialized, schema] = serialize(type, {batch});
+
+  DeserializerOptions dsOpts{.hasHeader = true};
+  velox::VectorPtr out;
+
+  Deserializer unsorted{schema, pool_.get(), dsOpts};
+  EXPECT_THROW(
+      unsorted.deserialize(
+          serialized[0],
+          {nimble::RowRange{50, 60}, nimble::RowRange{10, 20}},
+          out),
+      NimbleUserError);
+
+  Deserializer overlapping{schema, pool_.get(), dsOpts};
+  EXPECT_THROW(
+      overlapping.deserialize(
+          serialized[0],
+          {nimble::RowRange{10, 30}, nimble::RowRange{20, 40}},
+          out),
+      NimbleUserError);
+
+  Deserializer pastEnd{schema, pool_.get(), dsOpts};
+  EXPECT_THROW(
+      pastEnd.deserialize(serialized[0], {nimble::RowRange{90, 200}}, out),
+      NimbleUserError);
 }
 
 // Bad input: data.size() != rowRanges.size().

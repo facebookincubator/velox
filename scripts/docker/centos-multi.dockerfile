@@ -44,7 +44,6 @@ COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
-COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
 COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
 
 ARG VELOX_BUILD_SHARED=ON
@@ -71,7 +70,6 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 # https://github.com/apache/arrow/pull/45424
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
     VELOX_ARROW_CMAKE_PATCH="/arrow-testing-boost.patch /cmake-compatibility.patch" \
-    VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch" \
     VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch"
 
 # Ensure libraries installed to INSTALL_PREFIX are found at runtime (e.g.

@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <span>
 #include <utility>
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -96,6 +97,15 @@ class NullableEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Wraps pre-serialized value and null child encodings in a NullableEncoding
+  /// envelope. The value child may use either T or physicalType.
+  static std::string_view encodeNullable(
+      uint32_t rowCount,
+      std::string_view serializedValues,
+      std::string_view serializedNulls,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
   static std::string_view slice(
       std::string_view encoded,
       uint32_t offset,
@@ -136,7 +146,7 @@ class NullableEncoding final
       const Encoding::Options& options);
 
   // One bit for each row. A true bit represents a row with a non-null value.
-  const char* bitmap_;
+  const char* bitmap_{};
   std::unique_ptr<Encoding> nonNullValues_;
   std::unique_ptr<Encoding> nulls_;
   uint32_t row_ = 0;
@@ -157,16 +167,16 @@ NullableEncoding<T>::NullableEncoding(
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>(pool, data, options),
       nullBuffer_(this->template getVectorBuffer<bool>()) {
-  const EncodingFactory factory{options};
   const char* pos = data.data() + this->dataOffset();
   const uint32_t nonNullsBytes = encoding::readUint32(pos);
-  nonNullValues_ =
-      factory.create(*this->pool_, {pos, nonNullsBytes}, stringBufferFactory);
+  nonNullValues_ = EncodingFactory().create(
+      *this->pool_, {pos, nonNullsBytes}, stringBufferFactory, options);
   pos += nonNullsBytes;
-  nulls_ = factory.create(
+  nulls_ = EncodingFactory().create(
       *this->pool_,
       {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      stringBufferFactory,
+      options);
   NIMBLE_DCHECK_EQ(
       Encoding::rowCount(), nulls_->rowCount(), "Nulls count mismatch.");
 }
@@ -259,6 +269,17 @@ uint32_t NullableEncoding<T>::materializeNullable(
       scatterSize,
       rowCount,
       "Scattered output must have at least rowCount positions");
+
+  // A column that is entirely null over this batch would still walk every
+  // position in the scatter loop below to set nothing. Short-circuit to the
+  // cleared bitmap.
+  if (nonNullCount == 0 && scatterSize != 0) {
+    velox::bits::BitmapBuilder nullBits{getOutputNulls(), offset + scatterSize};
+    nullBits.clear(offset, offset + scatterSize);
+    row_ += rowCount;
+    return 0;
+  }
+
   if (nonNullCount != scatterSize) {
     void* nullBitmap = getOutputNulls();
     velox::bits::BitmapBuilder nullBits{nullBitmap, offset + scatterSize};
@@ -374,7 +395,10 @@ std::string_view NullableEncoding<T>::encodeNullable(
     std::span<const bool> nulls,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const bool useVarint = options.useVarintRowCount;
+  NIMBLE_CHECK_LE(
+      values.size(),
+      nulls.size(),
+      "Nullable value count cannot exceed null count.");
   const uint32_t rowCount = nulls.size();
 
   auto* pool = &buffer.getMemoryPool();
@@ -387,6 +411,40 @@ std::string_view NullableEncoding<T>::encodeNullable(
           options);
   std::string_view serializedNulls = selection.template encodeNested<bool>(
       EncodingIdentifiers::Nullable::Nulls, nulls, scopedBuffer.get(), options);
+
+  return encodeNullable(
+      rowCount, serializedValues, serializedNulls, buffer, options);
+}
+
+template <typename T>
+std::string_view NullableEncoding<T>::encodeNullable(
+    uint32_t rowCount,
+    std::string_view serializedValues,
+    std::string_view serializedNulls,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  const bool useVarint = options.useVarintRowCount;
+  const auto valueDataType = EncodingPrefix::readDataType(serializedValues);
+  NIMBLE_CHECK(
+      valueDataType == TypeTraits<T>::dataType ||
+          valueDataType == TypeTraits<physicalType>::dataType,
+      "Nullable value child data type must match the parent or its physical type.");
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::readDataType(serializedNulls),
+      DataType::Bool,
+      "Nullable null child must be bool.");
+  const auto valueRowCount =
+      EncodingPrefix::readRowCount(serializedValues, useVarint);
+  const auto nullRowCount =
+      EncodingPrefix::readRowCount(serializedNulls, useVarint);
+  NIMBLE_CHECK_LE(
+      valueRowCount,
+      rowCount,
+      "Nullable value child row count cannot exceed null child row count.");
+  NIMBLE_CHECK_EQ(
+      nullRowCount,
+      rowCount,
+      "Nullable null child row count must match parent.");
 
   const uint32_t encodingSize =
       TypedEncoding<T, physicalType>::serializePrefixSize(rowCount, useVarint) +
@@ -421,7 +479,7 @@ std::pair<uint32_t, uint32_t> NullableEncoding<T>::countNonNullsForSlice(
   auto encoding = EncodingFactory{options}.create(
       *pool, encoded, [](uint32_t /*size*/) -> void* { return nullptr; });
 
-  Vector<bool> values{pool, rowEnd};
+  ScopedVector<bool> values{rowEnd, pool, options.bufferPool};
   encoding->materialize(rowEnd, values.data());
   const auto sliceBegin = values.begin() + offset;
   return {
@@ -468,22 +526,7 @@ std::string_view NullableEncoding<T>::slice(
   const auto slicedNulls = EncodingFactory::slice(
       nulls, offset, length, scopedBuffer.get(), options);
 
-  const auto prefixSize =
-      EncodingPrefix::serializedSize(length, options.useVarintRowCount);
-  const auto encodingSize =
-      prefixSize + sizeof(uint32_t) + slicedValues.size() + slicedNulls.size();
-  char* reserved = buffer.reserve(encodingSize);
-  char* writePos = reserved;
-  EncodingPrefix::serialize(
-      EncodingType::Nullable,
-      TypeTraits<T>::dataType,
-      length,
-      options.useVarintRowCount,
-      writePos);
-  encoding::writeString(slicedValues, writePos);
-  encoding::writeBytes(slicedNulls, writePos);
-  NIMBLE_CHECK_EQ(writePos - reserved, encodingSize, "Encoding size mismatch.");
-  return {reserved, encodingSize};
+  return encodeNullable(length, slicedValues, slicedNulls, buffer, options);
 }
 
 template <typename T>

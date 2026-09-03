@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <span>
+#include <vector>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -140,6 +141,13 @@ class FsstEncoding final
 
   static constexpr size_t kStringPageSize = 256 * 1024;
 
+  struct StringPageSlot {
+    // Non-owning page address returned by stringBufferFactory_.
+    char* data;
+    // Number of writable bytes in the page.
+    size_t capacity;
+  };
+
   struct Header {
     // Serialized FSST symbol table byte length.
     uint32_t symbolTableSize;
@@ -175,8 +183,8 @@ class FsstEncoding final
     size_t totalCompressedSize{0};
   };
 
-  // Parses the serialized FSST header after the encoding prefix.
-  static Header parseHeader(const char* pos);
+  // Parses the serialized FSST header at offset within encoding.
+  static Header parseHeader(std::string_view encoding, size_t offset);
 
   // Trains FSST and compresses each input string independently.
   static CompressedValues compressValues(
@@ -234,6 +242,10 @@ class FsstEncoding final
   char* currentPage_{nullptr};
   size_t pageCapacityBytes_{0};
   size_t pageUsedBytes_{0};
+  // Factory-allocated pages retained as non-owning slots for reuse after reset.
+  std::vector<StringPageSlot> stringPages_;
+  // Slot containing currentPage_.
+  size_t currentPageIndex_{0};
 
   // Scratch buffer for decompression output.
   Vector<char> decompressBuffer_;

@@ -63,6 +63,10 @@ class TableEvolutionFuzzer {
         std::unordered_map<std::string, std::string>,
         std::unordered_map<std::string, std::string>>(FuzzerGenerator&)>
         extraReadSessionProperties;
+
+    /// Probability that each fuzzed element is NULL. Default 0 (no nulls).
+    /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
+    double nullRatio = 0;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A

@@ -46,6 +46,7 @@ TabletChunkHeader extractTabletChunkHeader(const char*& pos, const char* end) {
   header.requiresNullBarrier = flags.requiresNullBarrier;
   header.streamEncodingUsesVarintRowCount =
       flags.streamEncodingUsesVarintRowCount;
+  header.streamHasChunkHeader = flags.streamHasChunkHeader;
 
   const uint32_t startRow = varint::readVarint32(&pos);
   const uint32_t endRow = varint::readVarint32(&pos);
@@ -90,6 +91,7 @@ readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
         .requiresNullBarrier = tablet.requiresNullBarrier,
         .streamEncodingUsesVarintRowCount =
             tablet.streamEncodingUsesVarintRowCount,
+        .streamHasChunkHeader = tablet.streamHasChunkHeader,
     };
     // TODO: consider setting rowRange to nullopt when it covers the full
     // stripe (startRow==0 && endRow==rowCount) to let consumers skip the
@@ -135,7 +137,9 @@ folly::IOBuf createTabletChunkHeader(const TabletChunkHeader& header) {
   *pos++ = static_cast<char>(SerializationVersion::kTablet);
   varint::writeVarint(/*val=*/header.rowCount, &pos);
   *pos++ = static_cast<char>(detail::makeFlagsByte(
-      header.requiresNullBarrier, header.streamEncodingUsesVarintRowCount));
+      header.requiresNullBarrier,
+      header.streamEncodingUsesVarintRowCount,
+      header.streamHasChunkHeader));
   varint::writeVarint(/*val=*/header.rowRange.startRow, &pos);
   varint::writeVarint(/*val=*/header.rowRange.endRow, &pos);
   varint::writeVarint(/*val=*/resumeKeyLength, &pos);

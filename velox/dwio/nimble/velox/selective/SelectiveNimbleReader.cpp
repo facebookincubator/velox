@@ -46,7 +46,7 @@ namespace {
 
 Encoding::Options encodingOptions(const TabletReader& tablet) {
   Encoding::Options options;
-  options.useVarintRowCount = tablet.features().compactRowCountEncoding();
+  options.useVarintRowCount = tablet.properties().compactRowCountEncoding();
   return options;
 }
 
@@ -739,8 +739,8 @@ SelectiveNimbleReader::createIndexReader(
 
 void SelectiveNimbleReader::validateOmittedKeyColumnStorageAccess(
     const dwio::common::RowReaderOptions& options) const {
-  const auto& features = readerBase_->tablet().features();
-  if (!features.clusterIndexKeyColumnStorageOmitted()) {
+  const auto& properties = readerBase_->tablet().properties();
+  if (!properties.clusterIndexKeyColumnStorageOmitted()) {
     return;
   }
 
@@ -748,7 +748,7 @@ void SelectiveNimbleReader::validateOmittedKeyColumnStorageAccess(
                                                   : readerBase_->fileSchema();
   const auto* scanSpec = options.scanSpec().get();
   for (const auto& column :
-       features.clusterIndexKeyColumnsWithOmittedStorage()) {
+       properties.clusterIndexKeyColumnsWithOmittedStorage()) {
     NIMBLE_USER_CHECK(
         !outputType->containsChild(column),
         "Cluster index key column '{}' cannot be projected because this file stores it only in the cluster index key stream",

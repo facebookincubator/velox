@@ -27,7 +27,7 @@ namespace facebook::nimble::test {
 
 // --- toString for EncodingType ---
 
-TEST(TypesTest, EncodingTypeStringConversion) {
+TEST(TypesTest, encodingTypeStringConversion) {
   const std::vector<std::pair<EncodingType, std::string_view>> testCases{
       {EncodingType::Trivial, "Trivial"},
       {EncodingType::RLE, "RLE"},
@@ -59,16 +59,26 @@ TEST(TypesTest, EncodingTypeStringConversion) {
   }
 }
 
-TEST(TypesTest, EncodingTypeToStringUnknown) {
+TEST(TypesTest, encodingTypeToStringUnknown) {
   auto result = toString(static_cast<EncodingType>(255));
   EXPECT_NE(result.find("Unknown"), std::string::npos);
 }
 
-TEST(TypesTest, ToEncodingTypeUnknown) {
+TEST(TypesTest, toEncodingTypeUnknown) {
   EXPECT_ANY_THROW(toEncodingType("unknown"));
 }
 
-TEST(TypesTest, EncodingTypeStreamOperator) {
+TEST(TypesTest, readOnlyEncoding) {
+  EXPECT_FALSE(isReadOnlyEncoding(EncodingType::PFOR));
+  EXPECT_FALSE(isReadOnlyEncoding("PFOR"));
+  EXPECT_TRUE(isReadOnlyEncoding(EncodingType::FOR));
+  EXPECT_TRUE(isReadOnlyEncoding("FOR"));
+  EXPECT_FALSE(isReadOnlyEncoding(EncodingType::Trivial));
+  EXPECT_FALSE(isReadOnlyEncoding("Trivial"));
+  EXPECT_FALSE(isReadOnlyEncoding("unknown"));
+}
+
+TEST(TypesTest, encodingTypeStreamOperator) {
   std::ostringstream ss;
   ss << EncodingType::Trivial;
   EXPECT_EQ(ss.str(), "Trivial");
@@ -76,7 +86,7 @@ TEST(TypesTest, EncodingTypeStreamOperator) {
 
 // --- toString for DataType ---
 
-TEST(TypesTest, DataTypeToString) {
+TEST(TypesTest, dataTypeToString) {
   EXPECT_EQ(toString(DataType::Int8), "Int8");
   EXPECT_EQ(toString(DataType::Uint8), "Uint8");
   EXPECT_EQ(toString(DataType::Int16), "Int16");
@@ -91,25 +101,25 @@ TEST(TypesTest, DataTypeToString) {
   EXPECT_EQ(toString(DataType::String), "String");
 }
 
-TEST(TypesTest, DataTypeToStringUnknown) {
+TEST(TypesTest, dataTypeToStringUnknown) {
   auto result = toString(static_cast<DataType>(200));
   EXPECT_NE(result.find("Unknown"), std::string::npos);
 }
 
-TEST(TypesTest, DataTypeStreamOperator) {
+TEST(TypesTest, dataTypeStreamOperator) {
   std::ostringstream ss;
   ss << DataType::Int32;
   EXPECT_EQ(ss.str(), "Int32");
 }
 
-TEST(TypesTest, DataTypeFmtFormat) {
+TEST(TypesTest, dataTypeFmtFormat) {
   EXPECT_EQ(fmt::format("{}", DataType::Int32), "Int32");
   EXPECT_EQ(fmt::format("{}", DataType::String), "String");
 }
 
 // --- toString for CompressionType ---
 
-TEST(TypesTest, CompressionTypeStringConversion) {
+TEST(TypesTest, compressionTypeStringConversion) {
   const std::vector<std::pair<CompressionType, std::string_view>> testCases{
       {CompressionType::Uncompressed, "Uncompressed"},
       {CompressionType::Zstd, "Zstd"},
@@ -124,69 +134,69 @@ TEST(TypesTest, CompressionTypeStringConversion) {
   }
 }
 
-TEST(TypesTest, CompressionTypeToStringUnknown) {
+TEST(TypesTest, compressionTypeToStringUnknown) {
   auto result = toString(static_cast<CompressionType>(200));
   EXPECT_NE(result.find("Unknown"), std::string::npos);
 }
 
-TEST(TypesTest, ToCompressionTypeUnknown) {
+TEST(TypesTest, toCompressionTypeUnknown) {
   EXPECT_ANY_THROW(toCompressionType("unknown"));
 }
 
-TEST(TypesTest, CompressionTypeStreamOperator) {
+TEST(TypesTest, compressionTypeStreamOperator) {
   std::ostringstream ss;
   ss << CompressionType::Zstd;
   EXPECT_EQ(ss.str(), "Zstd");
 }
 
-TEST(TypesTest, CompressionTypeFmtFormatter) {
+TEST(TypesTest, compressionTypeFmtFormatter) {
   auto str = fmt::format("{}", CompressionType::Zstd);
   EXPECT_EQ(str, "Zstd");
 }
 
-TEST(TypesTest, EncodingTypeFmtFormatter) {
+TEST(TypesTest, encodingTypeFmtFormatter) {
   auto str = fmt::format("{}", EncodingType::Dictionary);
   EXPECT_EQ(str, "Dictionary");
 }
 
 // --- toString for ChecksumType ---
 
-TEST(TypesTest, ChecksumTypeToString) {
+TEST(TypesTest, checksumTypeToString) {
   EXPECT_EQ(toString(ChecksumType::XXH3_64), "XXH3_64");
 }
 
-TEST(TypesTest, ChecksumTypeToStringUnknown) {
+TEST(TypesTest, checksumTypeToStringUnknown) {
   auto result = toString(static_cast<ChecksumType>(200));
   EXPECT_NE(result.find("Unknown"), std::string::npos);
 }
 
 // --- Variant ---
 
-TEST(TypesTest, VariantSetGetInt) {
+TEST(TypesTest, variantSetGetInt) {
   VariantType v;
   Variant<int32_t>::set(v, 42);
   EXPECT_EQ(Variant<int32_t>::get(v), 42);
 }
 
-TEST(TypesTest, VariantSetGetNegativeInt) {
+TEST(TypesTest, variantSetGetNegativeInt) {
   VariantType v;
   Variant<int64_t>::set(v, -12345);
   EXPECT_EQ(Variant<int64_t>::get(v), -12345);
 }
 
-TEST(TypesTest, VariantSetGetDouble) {
+TEST(TypesTest, variantSetGetDouble) {
   VariantType v;
   Variant<double>::set(v, 3.14);
   EXPECT_DOUBLE_EQ(Variant<double>::get(v), 3.14);
 }
 
-TEST(TypesTest, VariantSetGetFloat) {
+TEST(TypesTest, variantSetGetFloat) {
   VariantType v;
   Variant<float>::set(v, 2.5f);
   EXPECT_FLOAT_EQ(Variant<float>::get(v), 2.5f);
 }
 
-TEST(TypesTest, VariantSetGetBool) {
+TEST(TypesTest, variantSetGetBool) {
   VariantType v;
   Variant<bool>::set(v, true);
   EXPECT_TRUE(Variant<bool>::get(v));
@@ -195,13 +205,13 @@ TEST(TypesTest, VariantSetGetBool) {
   EXPECT_FALSE(Variant<bool>::get(v));
 }
 
-TEST(TypesTest, VariantSetGetString) {
+TEST(TypesTest, variantSetGetString) {
   VariantType v;
   Variant<std::string>::set(v, std::string("hello"));
   EXPECT_EQ(Variant<std::string>::get(v), "hello");
 }
 
-TEST(TypesTest, VariantSetGetStringView) {
+TEST(TypesTest, variantSetGetStringView) {
   VariantType v;
   // string_view specialization stores as std::string internally
   Variant<std::string_view>::set(v, std::string_view("world"));
@@ -209,13 +219,13 @@ TEST(TypesTest, VariantSetGetStringView) {
   EXPECT_EQ(result, "world");
 }
 
-TEST(TypesTest, VariantSetGetUint8) {
+TEST(TypesTest, variantSetGetUint8) {
   VariantType v;
   Variant<uint8_t>::set(v, 200);
   EXPECT_EQ(Variant<uint8_t>::get(v), 200);
 }
 
-TEST(TypesTest, VariantSetGetInt16) {
+TEST(TypesTest, variantSetGetInt16) {
   VariantType v;
   Variant<int16_t>::set(v, -300);
   EXPECT_EQ(Variant<int16_t>::get(v), -300);
@@ -223,7 +233,7 @@ TEST(TypesTest, VariantSetGetInt16) {
 
 // --- TypeTraits ---
 
-TEST(TypesTest, TypeTraitsDataType) {
+TEST(TypesTest, typeTraitsDataType) {
   EXPECT_EQ(TypeTraits<int8_t>::dataType, DataType::Int8);
   EXPECT_EQ(TypeTraits<uint8_t>::dataType, DataType::Uint8);
   EXPECT_EQ(TypeTraits<int16_t>::dataType, DataType::Int16);
@@ -239,7 +249,7 @@ TEST(TypesTest, TypeTraitsDataType) {
   EXPECT_EQ(TypeTraits<std::string_view>::dataType, DataType::String);
 }
 
-TEST(TypesTest, TypeTraitsPhysicalType) {
+TEST(TypesTest, typeTraitsPhysicalType) {
   static_assert(std::is_same_v<TypeTraits<int8_t>::physicalType, uint8_t>);
   static_assert(std::is_same_v<TypeTraits<uint8_t>::physicalType, uint8_t>);
   static_assert(std::is_same_v<TypeTraits<int16_t>::physicalType, uint16_t>);
@@ -277,7 +287,7 @@ TEST(TypesTest, decodedValueWidth) {
 
 // --- Type predicates ---
 
-TEST(TypesTest, IsIntegralType) {
+TEST(TypesTest, isIntegralType) {
   EXPECT_TRUE(isIntegralType<int8_t>());
   EXPECT_TRUE(isIntegralType<uint8_t>());
   EXPECT_TRUE(isIntegralType<int16_t>());
@@ -292,7 +302,7 @@ TEST(TypesTest, IsIntegralType) {
   EXPECT_FALSE(isIntegralType<std::string>());
 }
 
-TEST(TypesTest, IsSignedIntegralType) {
+TEST(TypesTest, isSignedIntegralType) {
   EXPECT_TRUE(isSignedIntegralType<int8_t>());
   EXPECT_TRUE(isSignedIntegralType<int16_t>());
   EXPECT_TRUE(isSignedIntegralType<int32_t>());
@@ -301,7 +311,7 @@ TEST(TypesTest, IsSignedIntegralType) {
   EXPECT_FALSE(isSignedIntegralType<float>());
 }
 
-TEST(TypesTest, IsUnsignedIntegralType) {
+TEST(TypesTest, isUnsignedIntegralType) {
   EXPECT_TRUE(isUnsignedIntegralType<uint8_t>());
   EXPECT_TRUE(isUnsignedIntegralType<uint16_t>());
   EXPECT_TRUE(isUnsignedIntegralType<uint32_t>());
@@ -326,7 +336,7 @@ TEST(TypesTest, isTwoByteIntegralType) {
   EXPECT_FALSE(isTwoByteIntegralType<float>());
 }
 
-TEST(TypesTest, IsFourByteIntegralType) {
+TEST(TypesTest, isFourByteIntegralType) {
   EXPECT_TRUE(isFourByteIntegralType<int32_t>());
   EXPECT_TRUE(isFourByteIntegralType<uint32_t>());
   EXPECT_FALSE(isFourByteIntegralType<int64_t>());
@@ -343,14 +353,14 @@ TEST(TypesTest, isEightByteIntegralType) {
   EXPECT_FALSE(isEightByteIntegralType<double>());
 }
 
-TEST(TypesTest, IsFloatingPointType) {
+TEST(TypesTest, isFloatingPointType) {
   EXPECT_TRUE(isFloatingPointType<float>());
   EXPECT_TRUE(isFloatingPointType<double>());
   EXPECT_FALSE(isFloatingPointType<int32_t>());
   EXPECT_FALSE(isFloatingPointType<bool>());
 }
 
-TEST(TypesTest, IsNumericType) {
+TEST(TypesTest, isNumericType) {
   EXPECT_TRUE(isNumericType<int32_t>());
   EXPECT_TRUE(isNumericType<uint64_t>());
   EXPECT_TRUE(isNumericType<float>());
@@ -359,14 +369,14 @@ TEST(TypesTest, IsNumericType) {
   EXPECT_FALSE(isNumericType<std::string>());
 }
 
-TEST(TypesTest, IsStringType) {
+TEST(TypesTest, isStringType) {
   EXPECT_TRUE(isStringType<std::string>());
   EXPECT_TRUE(isStringType<std::string_view>());
   EXPECT_FALSE(isStringType<int32_t>());
   EXPECT_FALSE(isStringType<bool>());
 }
 
-TEST(TypesTest, IsBoolType) {
+TEST(TypesTest, isBoolType) {
   EXPECT_TRUE(isBoolType<bool>());
   EXPECT_FALSE(isBoolType<int32_t>());
   EXPECT_FALSE(isBoolType<std::string>());
