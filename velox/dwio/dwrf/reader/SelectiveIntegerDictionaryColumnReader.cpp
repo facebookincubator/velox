@@ -64,6 +64,32 @@ SelectiveIntegerDictionaryColumnReader::SelectiveIntegerDictionaryColumnReader(
   scanState_.updateRawState();
 }
 
+void SelectiveIntegerDictionaryColumnReader::getValues(
+    const RowSet& rows,
+    VectorPtr* result) {
+  if (!requestedType_->isVarchar()) {
+    SelectiveIntegerColumnReader::getValues(rows, result);
+    return;
+  }
+
+  VectorPtr integers;
+  getIntValues(rows, fileType_->type(), &integers);
+  switch (fileType_->type()->kind()) {
+    case TypeKind::SMALLINT:
+      *result = convertIntegerToVarchar<int16_t>(integers, pool_);
+      return;
+    case TypeKind::INTEGER:
+      *result = convertIntegerToVarchar<int32_t>(integers, pool_);
+      return;
+    case TypeKind::BIGINT:
+      *result = convertIntegerToVarchar<int64_t>(integers, pool_);
+      return;
+    default:
+      VELOX_UNREACHABLE(
+          "Unexpected integer type: {}", fileType_->type()->toString());
+  }
+}
+
 uint64_t SelectiveIntegerDictionaryColumnReader::skip(uint64_t numValues) {
   numValues = SelectiveColumnReader::skip(numValues);
   dataReader_->skip(numValues);
