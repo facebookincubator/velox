@@ -878,7 +878,7 @@ the written file paths on storage and the collected column stats.</p>
 <td><p>Optional Aggregation plan node used to collect column stats for the data written to storage.</p></td>
 </tr>
 <tr class="row-odd"><td><p>insertTableHandle</p></td>
-<td><p>Connector-specific description of the destination table.</p></td>
+<td><p>Connector-specific description of the destination table. Its notNullColumns is a subset of columnNames; writing a null into one of them fails the query.</p></td>
 </tr>
 <tr class="row-even"><td><p>outputType</p></td>
 <td><p>A list of output columns containing the metadata of the data written storage.</p></td>
