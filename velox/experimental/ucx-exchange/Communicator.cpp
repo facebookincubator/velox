@@ -150,6 +150,7 @@ void Communicator::run() {
   // Therefore workQueue_ can remain non-empty indefinitely. Process it in
   // bounded batches so deferred handshakes, endpoint cleanup, and heartbeat
   // work at the top of this loop cannot be starved.
+  constexpr size_t kMaxDeferredActionsPerLoop = 256;
   constexpr size_t kMaxWorkItemsPerLoop = 256;
   while (running_) {
     try {
@@ -214,22 +215,29 @@ void Communicator::run() {
 
       // Run actions submitted by other threads. These must execute here
       // because they may issue UCXX operations on this worker.
-      while (auto deferredAction = deferredActions_.pop()) {
+      for (size_t deferredActionsThisLoop = 0;
+           deferredActionsThisLoop < kMaxDeferredActionsPerLoop;
+           ++deferredActionsThisLoop) {
+        auto deferredAction = deferredActions_.pop();
+        if (!deferredAction) {
+          break;
+        }
         deferredAction->action();
+        worker_->progress();
       }
 
       // Process a bounded batch from the work queue. Make sure that
       // communication is progressed after each call to a comms element,
       // otherwise we will deadlock.
-      size_t workItemsThisLoop = 0;
-      while (workItemsThisLoop < kMaxWorkItemsPerLoop) {
+      for (size_t workItemsThisLoop = 0;
+           workItemsThisLoop < kMaxWorkItemsPerLoop;
+           ++workItemsThisLoop) {
         auto comms = workQueue_.pop();
         if (!comms) {
           break;
         }
         comms->process();
         ++workItemsProcessed_;
-        ++workItemsThisLoop;
         // Progress after each work item to allow UCXX to advance
         // its internal state (complete sends/receives, fire callbacks).
         // Use non-blocking progress here to avoid blocking between
