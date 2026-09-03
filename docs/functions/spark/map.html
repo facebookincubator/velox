@@ -100,9 +100,14 @@ for duplicate keys. Allows single map input.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="map_from_arrays">
 <span class="sig-name descname"><span class="pre">map_from_arrays</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array(K)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">array(V))</span> <span class="pre">-&gt;</span> <span class="pre">map(K</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">V</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#map_from_arrays" title="Link to this definition">¶</a></dt>
-<dd><p>Creates a map with a pair of the given key/value arrays. All elements in keys should not be null.
-If key size != value size will throw exception that key and value must have the same length.:</p>
+<dd><p>Creates a map by pairing up the given key and value arrays. Returns NULL if either array is
+NULL. Throws if a top-level key is NULL, or if the two arrays have different lengths. Array and
+row keys may contain nested NULL values. When a key is repeated, the behavior depends on the
+<code class="docutils literal notranslate"><span class="pre">throw_exception_on_duplicate_map_keys</span></code> configuration
+property: if true, throws; otherwise the last value wins and the key keeps the position of its
+first occurrence.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">map_from_arrays</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="s1">'2'</span><span class="p">,</span> <span class="s1">'4'</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="mf">1.0</span> <span class="o">-&gt;</span> <span class="mi">2</span><span class="p">,</span> <span class="mf">3.0</span> <span class="o">-&gt;</span> <span class="mi">4</span><span class="p">}</span>
+<span class="n">SELECT</span> <span class="n">map_from_arrays</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">array</span><span class="p">(</span><span class="s1">'a'</span><span class="p">,</span> <span class="s1">'b'</span><span class="p">,</span> <span class="s1">'c'</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="mi">2</span> <span class="o">-&gt;</span> <span class="s1">'c'</span><span class="p">,</span> <span class="mi">1</span> <span class="o">-&gt;</span> <span class="s1">'b'</span><span class="p">}</span>
 </pre></div>
 </div>
 </dd></dl>
