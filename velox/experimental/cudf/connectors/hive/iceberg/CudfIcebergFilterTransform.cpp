@@ -17,9 +17,12 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/hive/PartitionValue.h"
 
 #include <cudf/ast/detail/expression_transformer.hpp>
 #include <cudf/utilities/traits.hpp>
+
+#include <folly/Conv.h>
 
 #include <algorithm>
 #include <functional>
@@ -412,6 +415,39 @@ TransformedFilter transformFilterForInjectedColumns(
   return InjectedColumnFilterTransformer(
              filter, sortedInjectedColumnIndices, injectedColumnFolds)
       .transformedFilter();
+}
+
+bool isDaysSinceEpoch(
+    const TypePtr& type,
+    const std::optional<std::string>& value) {
+  return type->isDate() and value.has_value() and
+      folly::tryTo<int32_t>(value.value()).hasValue();
+}
+
+ConstantFilterFold foldFilterOnConstant(
+    const common::Filter& filter,
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    bool readTimestampAsLocalTime) {
+  if (not value.has_value()) {
+    return filter.testNull() ? ConstantFilterFold::kAlwaysTrue
+                             : ConstantFilterFold::kAlwaysFalse;
+  }
+
+  namespace velox_hive = ::facebook::velox::connector::hive;
+  const auto typedValue = velox_hive::PartitionValue::fromString(
+      value.value(),
+      *type,
+      readTimestampAsLocalTime
+          ? velox_hive::PartitionValue::TimestampMode::kLocalTime
+          : velox_hive::PartitionValue::TimestampMode::kUtc,
+      isDaysSinceEpoch(type, value)
+          ? velox_hive::PartitionValue::DateMode::kDaysSinceEpoch
+          : velox_hive::PartitionValue::DateMode::kIsoString);
+
+  return common::applyFilter(filter, typedValue)
+      ? ConstantFilterFold::kAlwaysTrue
+      : ConstantFilterFold::kAlwaysFalse;
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

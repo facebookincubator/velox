@@ -16,8 +16,8 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConstantColumnFilter.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"

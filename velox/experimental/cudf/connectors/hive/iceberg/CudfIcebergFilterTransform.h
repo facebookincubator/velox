@@ -16,9 +16,14 @@
 
 #pragma once
 
+#include "velox/type/Filter.h"
+#include "velox/type/Type.h"
+
 #include <cudf/ast/expressions.hpp>
 
+#include <optional>
 #include <span>
+#include <string>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -86,5 +91,23 @@ TransformedFilter transformFilterForInjectedColumns(
     const cudf::ast::expression& filter,
     std::span<const cudf::size_type> sortedInjectedColumnIndices,
     std::span<const ConstantFilterFold> injectedColumnFolds);
+
+/// Returns whether a DATE partition value uses days-since-epoch encoding.
+bool isDaysSinceEpoch(
+    const TypePtr& type,
+    const std::optional<std::string>& value);
+
+/// Evaluates a filter against a column's constant value for the whole split.
+///
+/// @param filter Filter over the whole column.
+/// @param type Type of the column.
+/// @param value The column's value, or `nullopt` if it is NULL throughout.
+/// @param readTimestampAsLocalTime Whether a TIMESTAMP value is local time.
+/// @return Whether the filter accepts or rejects the split.
+ConstantFilterFold foldFilterOnConstant(
+    const common::Filter& filter,
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    bool readTimestampAsLocalTime);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg
