@@ -74,6 +74,12 @@ using Subfield = velox::common::Subfield;
 ///       // cut-short response) the resume key embedded in the header.
 ///     }
 ///   }
+///
+/// Shared dictionary encoding is not supported. The output carries projected
+/// stream bytes only and has nowhere to put the alphabet a shared dictionary
+/// stream decodes against, so create() rejects any tablet that records shared
+/// dictionaries.
+///
 /// NOTE: NimbleIndexProjector is not thread-safe. Each thread must use its
 /// own instance.
 class NimbleIndexProjector {

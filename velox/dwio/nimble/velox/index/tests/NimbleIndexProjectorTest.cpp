@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
@@ -33,7 +34,9 @@
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
+#include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include "folly/Random.h"
@@ -211,9 +214,6 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
       CompressionType chunkCompressionType = CompressionType::Uncompressed,
       bool skipConstantFlatMapInMapStreams = false,
       bool enableChunking = true) {
-    sinkData_.clear();
-    auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
-
     WriterOptions options;
     options.enableChunking = enableChunking;
     options.flatMapColumns = flatMapColumns;
@@ -225,15 +225,7 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
         .acceptRatio = 10.0f,
     };
     options.skipConstantFlatMapInMapStreams = skipConstantFlatMapInMapStreams;
-    options.clusterIndexConfig =
-        ClusterIndexConfigBuilder{}
-            .withKeyColumns(indexColumns)
-            .withSortOrders(
-                std::vector<SortOrder>(
-                    indexColumns.size(), SortOrder{.ascending = true}))
-            .withEnforceKeyOrder(true)
-            .withNoDuplicateKey(true)
-            .build();
+    options.clusterIndexConfig = makeClusterIndexConfig(indexColumns);
 
     options.flushPolicyFactory = [stripeSize]() {
       return std::make_unique<LambdaFlushPolicy>(
@@ -242,6 +234,29 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
             return progress.stripeRawSize >= stripeSize;
           });
     };
+    writeBatches(batches, std::move(options));
+  }
+
+  // Returns an ascending, duplicate-free cluster index over `indexColumns`.
+  static std::shared_ptr<const index::IndexConfig> makeClusterIndexConfig(
+      const std::vector<std::string>& indexColumns) {
+    return ClusterIndexConfigBuilder{}
+        .withKeyColumns(indexColumns)
+        .withSortOrders(
+            std::vector<SortOrder>(
+                indexColumns.size(), SortOrder{.ascending = true}))
+        .withEnforceKeyOrder(true)
+        .withNoDuplicateKey(true)
+        .build();
+  }
+
+  // Writes `batches` into sinkData_ under `options` and drops the readers
+  // holding the previous file.
+  void writeBatches(
+      const std::vector<RowVectorPtr>& batches,
+      WriterOptions options) {
+    sinkData_.clear();
+    auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
     auto rowType = asRowType(batches[0]->type());
     Writer writer(
         rowType, std::move(writeFile), *rootPool_, std::move(options));
@@ -5362,6 +5377,62 @@ TEST_P(NimbleIndexProjectorTest, requiresIoStats) {
             /*setMetadataIoStats=*/testCase.setMetadataIoStats,
             /*setIndexIoStats=*/testCase.setIndexIoStats),
         testCase.expectedMessage);
+  }
+}
+
+TEST_P(NimbleIndexProjectorTest, rejectsSharedDictionaryEncoding) {
+  constexpr uint32_t kDictionaryId{7};
+  constexpr velox::vector_size_t kNumRows{2'000};
+  const std::vector<int32_t> alphabet{0, 10, 20, 30};
+  auto batch = vectorMaker_->rowVector(
+      {"key", "value"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return row; }),
+       vectorMaker_->flatVector<int32_t>(kNumRows, [&](auto row) {
+         return alphabet[row % alphabet.size()];
+       })});
+
+  // Stripe scope lands in the catalog's stripe references while File and
+  // External land in its file and external references, so the two halves of
+  // the guard are exercised separately.
+  for (const auto scope :
+       {SharedDictionaryScope::Stripe,
+        SharedDictionaryScope::File,
+        SharedDictionaryScope::External}) {
+    SCOPED_TRACE(
+        fmt::format("scope={}", SharedDictionaryScopeName::toName(scope)));
+    SharedDictionaryConfig dictionary{.scope = scope};
+    if (scope != SharedDictionaryScope::Stripe) {
+      // Stripe scope derives the id from its auxiliary alphabet stream and
+      // rejects a caller-assigned one.
+      dictionary.dictionaryId = kDictionaryId;
+    }
+
+    WriterOptions options;
+    options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+    options.experimentalSharedDictionaryEncoding =
+        SharedDictionaryEncodingConfig::builder()
+            .addColumnDictionary("value", std::move(dictionary))
+            .build();
+    if (scope == SharedDictionaryScope::External) {
+      // An external alphabet is supplied rather than built from the data, so
+      // it has to already hold every value written above.
+      options.experimentalSharedDictionaryEncoding.externalResolver =
+          std::make_shared<SharedDictionaryTestResolver>(
+              std::vector<SharedDictionaryTestDictionary>{
+                  {kDictionaryId, alphabet}},
+              leafPool_.get());
+    }
+    // The catalog only records a dictionary the writer actually used, so steer
+    // encoding selection to the shared-dictionary path.
+    configureSharedDictionarySelectionPolicy(options);
+    writeBatches({batch}, std::move(options));
+
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    NIMBLE_ASSERT_THROW(
+        createProjector(subfields),
+        "NimbleIndexProjector does not support shared dictionary encoding");
   }
 }
 
