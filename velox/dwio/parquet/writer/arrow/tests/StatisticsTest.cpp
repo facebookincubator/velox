@@ -20,12 +20,11 @@
 
 #include "arrow/testing/builder.h"
 
-#include "velox/common/io/IoStatistics.h"
-#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
 #include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/StringTruncation.h"
+#include "velox/dwio/parquet/writer/arrow/tests/ParquetTestFile.h"
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 using arrow::default_memory_pool;
@@ -35,25 +34,12 @@ using arrow::util::SafeCopy;
 namespace bit_util = arrow::bit_util;
 
 namespace facebook::velox::parquet::arrow {
-using namespace facebook::velox::common::testutil;
 
 using schema::GroupNode;
 using schema::NodePtr;
 using schema::PrimitiveNode;
 
 namespace test {
-namespace {
-void writeToFile(
-    std::shared_ptr<TempFilePath> filePath,
-    std::shared_ptr<::arrow::Buffer> buffer) {
-  auto localWriteFile =
-      std::make_unique<LocalWriteFile>(filePath->getPath(), false, false);
-  auto bufferReader = std::make_shared<::arrow::io::BufferReader>(buffer);
-  auto bufferToString = bufferReader->buffer()->ToString();
-  localWriteFile->append(bufferToString);
-  localWriteFile->close();
-}
-} // namespace
 
 // ----------------------------------------------------------------------.
 // Test Comparators.
@@ -480,25 +466,9 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
 
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
 
-    // Write the buffer to a temp file.
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath, buffer);
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
-        memory::memoryManager()->addRootPool("StatisticsTest");
-    std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
-        rootPool->addLeafChild("StatisticsTest");
-    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
-    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-    dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setDataIoStats(dataIoStats);
-    readerOptions.setMetadataIoStats(metadataIoStats);
-    auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(filePath->getPath()),
-        readerOptions.memoryPool());
-    auto reader =
-        std::make_unique<ParquetReader>(std::move(input), readerOptions);
-    auto rowGroup = reader->fileMetaData().rowGroup(0);
+    auto file = ParquetTestFile::open(buffer, "StatisticsTest");
+    auto& reader = file.reader();
+    auto rowGroup = reader.fileMetaData().rowGroup(0);
     auto columnChunk = rowGroup.columnChunk(0);
     EXPECT_EQ(nullCount, columnChunk.getColumnMetadataStatsNullCount());
     EXPECT_TRUE(expectedStats->hasMinMax());
@@ -508,8 +478,8 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
     EXPECT_EQ(
         expectedStats->encodeMax(),
         columnChunk.getColumnMetadataStatsMaxValue());
-    auto& parquetType = static_cast<const ParquetTypeWithId&>(
-        *reader->typeWithId()->childAt(0));
+    auto& parquetType =
+        static_cast<const ParquetTypeWithId&>(*reader.typeWithId()->childAt(0));
     auto columnStats = columnChunk.getColumnStatistics(
         parquetType.type(),
         rowGroup.numRows(),
@@ -1034,25 +1004,9 @@ class TestStatisticsSortOrder : public ::testing::Test {
   void verifyParquetStats() {
     ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
-    // Write the pbuffer to a temp file.
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath, pbuffer);
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
-        memory::memoryManager()->addRootPool("StatisticsTest");
-    std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
-        rootPool->addLeafChild("StatisticsTest");
-    auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
-    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-    dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setDataIoStats(dataIoStats);
-    readerOptions.setMetadataIoStats(metadataIoStats);
-    auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(filePath->getPath()),
-        readerOptions.memoryPool());
-    auto reader =
-        std::make_unique<ParquetReader>(std::move(input), readerOptions);
-    auto rowGroup = reader->fileMetaData().rowGroup(0);
+    auto file = ParquetTestFile::open(pbuffer, "StatisticsTest");
+    auto& reader = file.reader();
+    auto rowGroup = reader.fileMetaData().rowGroup(0);
     for (int i = 0; i < static_cast<int>(fields_.size()); i++) {
       ARROW_SCOPED_TRACE("Statistics for field #", i);
       auto columnChunk = rowGroup.columnChunk(i);
@@ -1333,25 +1287,9 @@ TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
 
   ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
-  // Write the pbuffer to a temp file.
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath, pbuffer);
-  memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool =
-      memory::memoryManager()->addRootPool("StatisticsTest");
-  std::shared_ptr<facebook::velox::memory::MemoryPool> leafPool =
-      rootPool->addLeafChild("StatisticsTest");
-  auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
-  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions(leafPool.get());
-  readerOptions.setDataIoStats(dataIoStats);
-  readerOptions.setMetadataIoStats(metadataIoStats);
-  auto input = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePath->getPath()),
-      readerOptions.memoryPool());
-  auto reader =
-      std::make_unique<ParquetReader>(std::move(input), readerOptions);
-  auto rowGroup = reader->fileMetaData().rowGroup(0);
+  auto file = ParquetTestFile::open(pbuffer, "StatisticsTest");
+  auto& reader = file.reader();
+  auto rowGroup = reader.fileMetaData().rowGroup(0);
   auto columnChunk = rowGroup.columnChunk(0);
   ASSERT_TRUE(columnChunk.hasStatistics());
 }
