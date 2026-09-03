@@ -368,6 +368,10 @@ class LocalMerge : public Merge {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::LocalMergeNode>& localMergeNode);
 
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return core::PlanNode::Boundary::kOutput;
+  }
+
  protected:
   BlockingReason addMergeSources(ContinueFuture* future) override;
 };

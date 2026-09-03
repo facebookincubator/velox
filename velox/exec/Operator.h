@@ -350,6 +350,13 @@ class Operator : public BaseRuntimeStatWriter {
     return false;
   }
 
+  /// Returns this operator's contribution to its plan node's input and output
+  /// totals. An operator that shares its plan node id with other operators
+  /// overrides this so that 'toPlanStats' does not count the same rows twice.
+  virtual core::PlanNode::Boundary planNodeBoundary() const {
+    return core::PlanNode::Boundary::kBoth;
+  }
+
   /// Returns copy of operator stats. If 'clear' is true, the function also
   /// clears the operator stats after retrieval.
   virtual OperatorStats stats(bool clear);
