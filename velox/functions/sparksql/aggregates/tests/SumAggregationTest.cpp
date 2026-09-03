@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "exec/PlanNodeStats.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/AggregateUtil.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -723,9 +723,11 @@ TEST_F(SumAggregationTest, dummySum) {
 }
 
 TEST_F(SumAggregationTest, abandonPartialAggregation) {
+  constexpr int32_t kNumBatches = 3;
   constexpr vector_size_t kBatchSize = 100;
   std::vector<RowVectorPtr> data;
-  for (auto batch = 0; batch < 3; ++batch) {
+  data.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
     data.push_back(makeRowVector(
         {"k", "i", "b", "r", "m"},
         {makeFlatVector<int64_t>(
