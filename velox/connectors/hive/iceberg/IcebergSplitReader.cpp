@@ -196,8 +196,7 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     return fieldIds;
   }
 
-  const auto* hiveTableHandle =
-      dynamic_cast<const HiveTableHandle*>(tableHandle_.get());
+  const auto* hiveTableHandle = tableHandle_->as<HiveTableHandle>();
   const auto* dataColumnFieldIds = hiveTableHandle != nullptr
       ? &hiveTableHandle->dataColumnFieldIds()
       : nullptr;
@@ -727,8 +726,7 @@ IcebergSplitReader::resolveEqualityColumns(
       "table data columns are not available in IcebergTableHandle.",
       deleteFile.filePath);
   std::unordered_map<int32_t, uint32_t> columnIndexByFieldId;
-  if (const auto* hiveTableHandle =
-          dynamic_cast<const HiveTableHandle*>(tableHandle_.get())) {
+  if (const auto* hiveTableHandle = tableHandle_->as<HiveTableHandle>()) {
     const auto& dataColumnFieldIds = hiveTableHandle->dataColumnFieldIds();
     columnIndexByFieldId.reserve(dataColumnFieldIds.size());
     for (uint32_t i = 0; i < dataColumnFieldIds.size(); ++i) {
