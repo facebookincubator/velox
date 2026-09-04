@@ -298,7 +298,7 @@ void NimbleIndexProjector::prepareStripes() {
   const auto needResumeKey = ctx_.options->needResumeKey;
   auto& rowsPerRequest = ctx_.rowsPerRequest;
   rowsPerRequest.assign(ctx_.numRequests, 0);
-  ctx_.hasStripeRanges.assign(ctx_.numRequests, false);
+  ctx_.hasProcessedStripeRange.assign(ctx_.numRequests, false);
   ctx_.resumeKeys.assign(ctx_.numRequests, std::nullopt);
   // Reserve against the number of stripes that carry ranges, not the min..max
   // span: the CSR is now indexed by position in resolvedStripes, so the span
@@ -327,24 +327,54 @@ void NimbleIndexProjector::prepareStripes() {
     const auto rangeOffset = ctx_.plan.stripeRanges.size();
     uint32_t numStripeRanges{0};
 
+    // Located on demand by the first range that can still take rows. A stripe
+    // whose requests have all hit maxRowsPerRequest retains nothing and is
+    // dropped below, so it never pays for the lookup: stripeIdentifier()
+    // loads stripe-group and chunk-stats metadata on a cache miss, and
+    // streamLocations() scans every projected stream. The old ordering got
+    // that skip for free by locating only after the numStripeRanges check.
+    std::optional<StripeStreams> streams;
+
     uint64_t stripeRows{0};
     for (const auto& range : spanRanges) {
+      const auto requestIndex = range.requestIndex;
+      // The request reached this stripe, whether or not the stripe hands it
+      // any data. Recording that keeps it out of the retry path in
+      // setResumeKeys(), which would otherwise return its own lower key and
+      // have it scan the same ground again.
+      ctx_.hasProcessedStripeRange[requestIndex] = true;
+
+      if (maxRowsPerRequest > 0 &&
+          rowsPerRequest[requestIndex] >= maxRowsPerRequest) {
+        continue;
+      }
+
+      if (!streams.has_value()) {
+        streams = locateStripeStreams(stripeIndex);
+      }
+      // A stripe can hold none of the projected streams -- a flat map with
+      // none of the requested keys, for instance. It has no bytes to read and
+      // no slice to emit, and both the read and pack paths reject a stripe
+      // with nothing in it, so it must stay out of the plan. Deciding that
+      // before charging rows below is the point: the caller receives none of
+      // these rows, so counting them against maxRowsPerRequest would starve
+      // later stripes that do carry data. Retaining no range here is what
+      // drops the stripe, through the numStripeRanges check below.
+      if (streams->numStreams == 0) {
+        continue;
+      }
+
       auto stripeRange = range;
-      const auto requestIndex = stripeRange.requestIndex;
       const auto numRows =
           static_cast<uint64_t>(stripeRange.rowRange.numRows());
       if (maxRowsPerRequest == 0) {
         rowsPerRequest[requestIndex] += numRows;
         stripeRows += numRows;
-        ctx_.hasStripeRanges[requestIndex] = true;
         ctx_.plan.stripeRanges.push_back(stripeRange);
         ++numStripeRanges;
         continue;
       }
 
-      if (rowsPerRequest[requestIndex] >= maxRowsPerRequest) {
-        continue;
-      }
       const auto remaining = maxRowsPerRequest - rowsPerRequest[requestIndex];
       const auto rowsToRead = std::min(numRows, remaining);
       rowsPerRequest[requestIndex] += rowsToRead;
@@ -367,7 +397,6 @@ void NimbleIndexProjector::prepareStripes() {
             stripeRange.rowRange.endRow,
             partialRead);
       }
-      ctx_.hasStripeRanges[requestIndex] = true;
       ctx_.plan.stripeRanges.push_back(stripeRange);
       ++numStripeRanges;
     }
@@ -376,8 +405,10 @@ void NimbleIndexProjector::prepareStripes() {
       continue;
     }
 
+    // A retained range means the lookup ran, so `streams` is engaged.
+    appendStripePlan(stripeIndex, rangeOffset, *streams);
     totalRows += stripeRows;
-    totalBytes += appendStripePlan(stripeIndex, rangeOffset);
+    totalBytes += streams->projectedBytes;
     if ((ctx_.options->maxRows > 0 && totalRows >= ctx_.options->maxRows) ||
         (ctx_.options->maxBytes > 0 && totalBytes >= ctx_.options->maxBytes)) {
       ctx_.plan.truncated = true;
@@ -385,6 +416,8 @@ void NimbleIndexProjector::prepareStripes() {
     }
   }
   ctx_.plan.stripeRangeOffsets.push_back(ctx_.plan.stripeRanges.size());
+  ctx_.plan.projectedStreams.resize(
+      ctx_.plan.stripeIndices.size() * projection_->streamOffsets.size());
 }
 
 void NimbleIndexProjector::initRequest(
@@ -419,7 +452,7 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.plan.stripeRangeOffsets.clear();
   ctx_.plan.stripeRanges.clear();
   ctx_.plan.truncated = false;
-  ctx_.hasStripeRanges.clear();
+  ctx_.hasProcessedStripeRange.clear();
   ctx_.resumeKeys.clear();
   ctx_.dataInputIndices.clear();
   ctx_.dataHandle.reset();
@@ -654,19 +687,11 @@ void NimbleIndexProjector::finalizeSliceOutputBuffer() {
   ctx_.sliceOutputChunks.reset();
 }
 
-uint64_t NimbleIndexProjector::appendStripePlan(
-    uint32_t stripeIndex,
-    size_t rangeOffset) {
+NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
+    uint32_t stripeIndex) {
   auto& plan = ctx_.plan;
   const auto stripeOffset = plan.stripeIndices.size();
   const auto numProjectedStreams = projection_->streamOffsets.size();
-  plan.stripeIndices.push_back(stripeIndex);
-  plan.numRows.push_back(stripeRowCount(stripeIndex));
-  plan.requiresNullBarriers.push_back(false);
-  plan.numStreams.push_back(0);
-  plan.projectedBytes.push_back(0);
-  plan.stripeFileOffsets.push_back(tablet_->stripeOffset(stripeIndex));
-  plan.stripeRangeOffsets.push_back(rangeOffset);
   plan.projectedStreams.resize((stripeOffset + 1) * numProjectedStreams);
 
   const auto stripeId = tablet_->stripeIdentifier(stripeIndex);
@@ -675,21 +700,36 @@ uint64_t NimbleIndexProjector::appendStripePlan(
   tablet_->streamLocations(
       stripeId, projection_->streamOffsets, projectedStreams);
 
-  uint64_t projectedBytes{0};
+  StripeStreams streams;
   for (size_t i = 0; i < projectedStreams.size(); ++i) {
     const auto& stream = projectedStreams[i];
     if (stream.size == 0) {
       continue;
     }
-    ++plan.numStreams.back();
-    projectedBytes += stream.size;
+    ++streams.numStreams;
+    streams.projectedBytes += stream.size;
     if (projection_->rowOrFlatMapNullStreams[i]) {
       // A present Row/FlatMap null stream means the slice may carry nulls.
-      plan.requiresNullBarriers.back() = true;
+      streams.requiresNullBarrier = true;
     }
   }
-  plan.projectedBytes.back() = projectedBytes;
-  return projectedBytes;
+  return streams;
+}
+
+void NimbleIndexProjector::appendStripePlan(
+    uint32_t stripeIndex,
+    size_t rangeOffset,
+    const StripeStreams& streams) {
+  NIMBLE_CHECK_GT(
+      streams.numStreams, 0, "Planned stripe must project at least one stream");
+  auto& plan = ctx_.plan;
+  plan.stripeIndices.push_back(stripeIndex);
+  plan.numRows.push_back(stripeRowCount(stripeIndex));
+  plan.requiresNullBarriers.push_back(streams.requiresNullBarrier);
+  plan.numStreams.push_back(streams.numStreams);
+  plan.projectedBytes.push_back(streams.projectedBytes);
+  plan.stripeFileOffsets.push_back(tablet_->stripeOffset(stripeIndex));
+  plan.stripeRangeOffsets.push_back(rangeOffset);
 }
 
 std::span<const StripeGroup::StreamLocation>
@@ -1058,11 +1098,13 @@ void NimbleIndexProjector::setResumeKeys(Result& result) {
     }
   }
 
-  // For requests that were never started (no stripe ranges in any plan),
-  // set resume key to their original lower key so the caller can retry.
+  // For requests planning never reached before truncation, set the resume key
+  // to their original lower key so the caller can retry. A request whose only
+  // stripes projected no streams was reached and is complete, so it is not
+  // sent back here to re-scan ground that holds nothing for it.
   for (size_t i = 0; i < result.responses.size(); ++i) {
     auto& response = result.responses[i];
-    if (!ctx_.hasStripeRanges[i] && !response.resumeKey.has_value()) {
+    if (!ctx_.hasProcessedStripeRange[i] && !response.resumeKey.has_value()) {
       const auto& keyBounds = ctx_.request->keyBounds[i];
       NIMBLE_CHECK(
           keyBounds.lowerKey.has_value(),
