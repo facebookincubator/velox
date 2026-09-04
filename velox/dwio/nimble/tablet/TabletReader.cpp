@@ -185,18 +185,6 @@ MetadataSection toMetadataSection(const T* section) {
                            : std::nullopt};
 }
 
-size_t copyTo(const folly::IOBuf& source, void* target, size_t size) {
-  NIMBLE_DCHECK_LE(
-      source.computeChainDataLength(), size, "Target buffer too small.");
-  size_t offset = 0;
-  for (const auto& chunk : source) {
-    std::copy(chunk.begin(), chunk.end(), static_cast<char*>(target) + offset);
-    offset += chunk.size();
-  }
-
-  return offset;
-}
-
 } // namespace
 
 TabletReader::TabletReader(
@@ -850,17 +838,21 @@ struct LoadTask {
   std::vector<StreamTask> streamTasks;
 };
 
-class PreloadedStreamLoader : public StreamLoader {
+class IOBufStreamLoader : public StreamLoader {
  public:
-  explicit PreloadedStreamLoader(Vector<char>&& stream)
-      : stream_{std::move(stream)} {}
+  explicit IOBufStreamLoader(folly::IOBuf&& stream)
+      : stream_{std::move(stream)} {
+    // getStream() returns a single contiguous view (no-op for single-buffer
+    // reads).
+    stream_.coalesce();
+  }
 
   const std::string_view getStream() const override {
-    return {stream_.data(), stream_.size()};
+    return {reinterpret_cast<const char*>(stream_.data()), stream_.length()};
   }
 
  private:
-  const Vector<char> stream_;
+  folly::IOBuf stream_;
 };
 
 struct RegionHash {
@@ -1073,14 +1065,16 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
         iobufs.size(), uniqueRegions.size(), "Buffer size mismatch.");
     for (uint32_t i = 0; i < uniqueRegions.size(); ++i) {
       // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-      const auto size = iobufs[i].computeChainDataLength();
+      auto& iobuf = iobufs[i];
       const auto& streamIndices = regionToStreamIndices[uniqueRegions[i]];
-      for (uint32_t streamIndex : streamIndices) {
-        Vector<char> vector{pool_, size};
-        copyTo(iobufs[i], vector.data(), vector.size());
-        streams[streamIndex] =
-            std::make_unique<PreloadedStreamLoader>(std::move(vector));
+      // The last stream mapped to a region takes ownership of the IOBuf;
+      // any others share it via a reference-counted clone.
+      for (size_t j = 0; j + 1 < streamIndices.size(); ++j) {
+        streams[streamIndices[j]] =
+            std::make_unique<IOBufStreamLoader>(iobuf.cloneAsValue());
       }
+      streams[streamIndices.back()] =
+          std::make_unique<IOBufStreamLoader>(std::move(iobuf));
     }
   }
 
