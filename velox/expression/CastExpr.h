@@ -185,6 +185,18 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& fromType);
 
+  VectorPtr castToTimestampUTC(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
+
+  VectorPtr castFromTimestampUTC(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType);
+
   VectorPtr castFromIntervalDayTime(
       const SelectivityVector& rows,
       const BaseVector& input,

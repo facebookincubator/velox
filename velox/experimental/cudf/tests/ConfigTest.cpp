@@ -15,9 +15,11 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#if defined(VELOX_CUDF_HAS_UCX)
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/exec/OutputTransportRegistry.h"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -30,6 +32,8 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfMemoryResource, "arena"},
       {CudfConfig::kCudfMemoryPercent, "25"},
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
+      {CudfConfig::kCudfStreamingGroupbyEnabled, "true"},
+      {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
       {CudfConfig::kCudfAllowCpuFallback, "false"},
       {CudfConfig::kUcxExchange, "true"},
       {CudfConfig::kUcxxErrorHandling, "false"},
@@ -44,12 +48,16 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kUcxExchangeCompressionSafetyMargin, "1.5"}};
 
   CudfConfig config;
+  ASSERT_FALSE(config.streamingGroupbyEnabled);
+  ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 2.0);
   config.initialize(std::move(options));
   ASSERT_EQ(config.enabled, false);
   ASSERT_EQ(config.debugEnabled, true);
   ASSERT_EQ(config.memoryResource, "arena");
   ASSERT_EQ(config.memoryPercent, 25);
   ASSERT_EQ(config.functionNamePrefix, "presto");
+  ASSERT_EQ(config.streamingGroupbyEnabled, true);
+  ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 3.5);
   ASSERT_EQ(config.allowCpuFallback, false);
   ASSERT_TRUE(config.exchange);
   ASSERT_FALSE(config.ucxxErrorHandling);
@@ -64,6 +72,7 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_DOUBLE_EQ(config.exchangeCompressionSafetyMargin, 1.5);
 }
 
+#if defined(VELOX_CUDF_HAS_UCX)
 TEST(ConfigTest, ucxTransportRegistration) {
   auto& config = CudfConfig::getInstance();
   std::unordered_map<std::string, std::string> options = {
@@ -83,4 +92,5 @@ TEST(ConfigTest, ucxTransportRegistration) {
       nullptr);
   exec::OutputTransportRegistry::unregisterAll();
 }
+#endif
 } // namespace facebook::velox::cudf_velox::test

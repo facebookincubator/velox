@@ -90,10 +90,12 @@ class Writer : public velox::dwio::common::Writer {
     static constexpr std::string_view kWriteCpuNanos = "nimble.writeCpuNanos";
     /// Wall clock time spent in tabletWriter write.
     static constexpr std::string_view kWriteWallNanos = "nimble.writeWallNanos";
-    /// CPU time spent ingesting vectors into field writer buffers. Sequential —
-    /// no wall time needed.
+    /// CPU time spent ingesting vectors into field writer buffers.
     static constexpr std::string_view kIngestionCpuNanos =
         "nimble.ingestionCpuNanos";
+    /// Wall clock time spent ingesting vectors into field writer buffers.
+    static constexpr std::string_view kIngestionWallNanos =
+        "nimble.ingestionWallNanos";
     /// CPU time spent on encoding and compression.
     // TODO: Separate encoding and compression costs.
     static constexpr std::string_view kEncodingCpuNanos =
@@ -323,7 +325,7 @@ class Writer : public velox::dwio::common::Writer {
   // by sequential writes; parallel writes use one pool per concurrent encode
   // task because EncodingBufferPool is not thread-safe.
   std::unique_ptr<EncodingBufferPool> makeEncodingBufferPool() const;
-  uint32_t encodingConcurrency(uint32_t taskCount) const;
+  uint32_t encodingConcurrency(uint32_t streamCount) const;
   void ensureEncodingScratchBufferPools(uint32_t poolCount);
   void ensureEncodingBufferPools(uint32_t poolCount);
   velox::BufferPool* encodingScratchBufferPool(uint32_t index = 0);

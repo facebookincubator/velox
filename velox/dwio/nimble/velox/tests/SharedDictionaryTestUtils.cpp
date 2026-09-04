@@ -36,31 +36,15 @@ std::unique_ptr<EncodingSelectionPolicyBase> sharedDictionarySelectionPolicy(
     DataType dataType,
     SharedDictionarySelectionPolicyOptions selectionOptions) {
   std::vector<std::pair<EncodingType, float>> readFactors;
-  switch (dataType) {
-    case DataType::Int32:
-      if (selectionOptions.forceDictionaryForInt32) {
-        readFactors = {{EncodingType::Dictionary, 1.0}};
-      } else {
-        readFactors = {
-            {EncodingType::Trivial, 1.0}, {EncodingType::Dictionary, 1.0}};
-      }
-      break;
-    case DataType::Uint32:
-      readFactors = {{EncodingType::FixedBitWidth, 1.0}};
-      break;
-    case DataType::Undefined:
-    case DataType::Int8:
-    case DataType::Uint8:
-    case DataType::Int16:
-    case DataType::Uint16:
-    case DataType::Int64:
-    case DataType::Uint64:
-    case DataType::Float:
-    case DataType::Double:
-    case DataType::Bool:
-    case DataType::String:
-      readFactors = {{EncodingType::Trivial, 1.0}};
-      break;
+  if (isSharedDictionaryType(dataType)) {
+    if (selectionOptions.forceDictionaryForSharedTypes) {
+      readFactors = {{EncodingType::Dictionary, 1.0}};
+    } else {
+      readFactors = {
+          {EncodingType::Trivial, 1.0}, {EncodingType::Dictionary, 1.0}};
+    }
+  } else {
+    readFactors = {{EncodingType::Trivial, 1.0}};
   }
   return ManualEncodingSelectionPolicyFactory{
       readFactors, /*compressionOptions=*/std::nullopt}

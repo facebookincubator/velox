@@ -111,7 +111,7 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
  public:
   using Options = SharedDictionaryWriter::Options;
 
-  static_assert(isIntegralType<T>() && !std::is_same_v<T, bool>);
+  static_assert(isSharedDictionaryType<T>());
 
   TypedSharedDictionaryWriter(
       velox::memory::MemoryPool* pool,

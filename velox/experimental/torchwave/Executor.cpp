@@ -776,11 +776,20 @@ void WaveGraphExecutor::returnFrame(
 std::vector<c10::IValue> WaveGraphExecutor::execute(
     nativert::ExecutionFrame& /*frame*/,
     std::vector<c10::IValue> inputs) {
+  return runInputs(std::move(inputs));
+}
+
+std::vector<c10::IValue> WaveGraphExecutor::runInputs(
+    std::vector<c10::IValue> inputs) {
   auto pooledFrame = getFrame();
+  // Returned on the throwing paths too: a frame that never comes back is gone
+  // from the pool for the process's life, so a caller that retries after an
+  // error drains it one frame per attempt.
+  SCOPE_EXIT {
+    returnFrame(std::move(pooledFrame));
+  };
   fillUserInputs(*pooledFrame, std::move(inputs));
-  auto outputs = executeWithPrefilledFrame(*pooledFrame);
-  returnFrame(std::move(pooledFrame));
-  return outputs;
+  return executeWithPrefilledFrame(*pooledFrame);
 }
 
 std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(

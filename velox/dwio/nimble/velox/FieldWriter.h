@@ -18,9 +18,6 @@
 
 #include <set>
 
-#include <folly/Executor.h>
-#include <folly/coro/Task.h>
-
 #include "folly/container/F14Map.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -251,28 +248,6 @@ class FieldWriterContext {
     maxFlatMapKeys_ = value;
   }
 
-  void setParallelEncoding(
-      folly::Executor* executor,
-      uint32_t maxEncodeParallelism = 8,
-      uint32_t minStreamsPerEncodeUnit = 2) {
-    NIMBLE_CHECK_NOT_NULL(executor, "encodeExecutor must not be null");
-    encodeExecutor_ = executor;
-    maxEncodeParallelism_ = maxEncodeParallelism;
-    minStreamsPerEncodeUnit_ = minStreamsPerEncodeUnit;
-  }
-
-  folly::Executor* encodeExecutor() const {
-    return encodeExecutor_;
-  }
-
-  uint32_t maxEncodeParallelism() const {
-    return maxEncodeParallelism_;
-  }
-
-  uint32_t minStreamsPerEncodeUnit() const {
-    return minStreamsPerEncodeUnit_;
-  }
-
   inline std::unique_ptr<InputBufferGrowthPolicy>& inputBufferGrowthPolicy() {
     return inputBufferGrowthPolicy_;
   }
@@ -497,10 +472,6 @@ class FieldWriterContext {
   bool disableSharedStringBuffers_{false};
   uint32_t maxFlatMapKeys_{kDefaultMaxFlatMapKeys};
 
-  folly::Executor* encodeExecutor_{nullptr};
-  uint32_t maxEncodeParallelism_{0};
-  uint32_t minStreamsPerEncodeUnit_{1};
-
   std::unique_ptr<InputBufferGrowthPolicy> inputBufferGrowthPolicy_;
   std::unique_ptr<InputBufferGrowthPolicy> stringBufferGrowthPolicy_;
   InputBufferGrowthStats inputBufferGrowthStats_;
@@ -646,13 +617,6 @@ class FieldWriter {
       const velox::VectorPtr& vector,
       const OrderedRanges& ranges) = 0;
 
-  virtual folly::coro::Task<void> co_write(
-      const velox::VectorPtr& vector,
-      const OrderedRanges& ranges) {
-    write(vector, ranges);
-    co_return;
-  }
-
   // Collects stats and clears interanl state and any accumulated data in
   // internal buffers.
   virtual void reset() = 0;
@@ -675,13 +639,6 @@ class FieldWriter {
       std::function<void(TypeBuilder&, uint32_t)> typeAddedHandler);
 
  protected:
-  // Computes the number of parallel write tasks based on max parallelism and
-  // minimum streams per task. The result is clamped to [1, numChildren].
-  uint32_t computeParallelWriteTaskCount(uint32_t numChildren) const;
-
-  // Returns true if child fields should be written in parallel.
-  bool parallelWriteEnabled(uint32_t numChildren) const;
-
   FieldWriterContext& context_;
   std::shared_ptr<TypeBuilder> typeBuilder_;
 };

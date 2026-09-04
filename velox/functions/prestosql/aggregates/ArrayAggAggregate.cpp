@@ -48,7 +48,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       : Aggregate(resultType), ignoreNulls_(ignoreNulls) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return clusteredInput_ ? sizeof(ClusteredAccumulator)
+    return canRetainInput_ ? sizeof(ClusteredAccumulator)
                            : sizeof(ArrayAccumulator);
   }
 
@@ -128,7 +128,7 @@ class ArrayAggAggregate : public exec::Aggregate {
     elements->resize(numElements);
 
     vector_size_t arrayOffset = 0;
-    if (clusteredInput_) {
+    if (canRetainInput_) {
       bool singleSource{true};
       VectorPtr* currentSource{nullptr};
       bool contiguousElementsPerGroup = true;
@@ -259,7 +259,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    VELOX_CHECK(!clusteredInput_);
+    VELOX_CHECK(!canRetainInput_);
     decodedElements_.decode(*args[0], rows);
     rows.applyToSelected([&](vector_size_t row) {
       if (ignoreNulls_ && decodedElements_.isNullAt(row)) {
@@ -273,7 +273,7 @@ class ArrayAggAggregate : public exec::Aggregate {
   }
 
   bool supportsAddRawClusteredInput() const override {
-    return clusteredInput_;
+    return canRetainInput_;
   }
 
   void addRawClusteredInput(
@@ -281,7 +281,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       const folly::Range<const vector_size_t*>& groupBoundaries) override {
-    VELOX_CHECK(clusteredInput_);
+    VELOX_CHECK(canRetainInput_);
     decodedElements_.decode(*args[0]);
     vector_size_t groupStart = 0;
     auto forEachAccumulator = [&](auto func) {
@@ -347,7 +347,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
-    VELOX_CHECK(!clusteredInput_);
+    VELOX_CHECK(!canRetainInput_);
     auto& values = value<ArrayAccumulator>(group)->elements;
 
     decodedElements_.decode(*args[0], rows);
@@ -365,7 +365,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /* mayPushdown */) override {
-    VELOX_CHECK(!clusteredInput_);
+    VELOX_CHECK(!canRetainInput_);
     decodedIntermediate_.decode(*args[0], rows);
     auto arrayVector = decodedIntermediate_.base()->as<ArrayVector>();
 
@@ -388,7 +388,7 @@ class ArrayAggAggregate : public exec::Aggregate {
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
     for (auto index : indices) {
-      if (clusteredInput_) {
+      if (canRetainInput_) {
         new (groups[index] + offset_) ClusteredAccumulator();
       } else {
         new (groups[index] + offset_) ArrayAccumulator();
@@ -399,7 +399,7 @@ class ArrayAggAggregate : public exec::Aggregate {
   void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
-        if (clusteredInput_) {
+        if (canRetainInput_) {
           auto* accumulator = value<ClusteredAccumulator>(group);
           std::destroy_at(accumulator);
         } else {
@@ -412,7 +412,7 @@ class ArrayAggAggregate : public exec::Aggregate {
  private:
   vector_size_t countElements(char** groups, int32_t numGroups) const {
     vector_size_t size = 0;
-    if (clusteredInput_) {
+    if (canRetainInput_) {
       for (int32_t i = 0; i < numGroups; ++i) {
         auto* accumulator = value<ClusteredAccumulator>(groups[i]);
         for (auto& source : accumulator->sources) {

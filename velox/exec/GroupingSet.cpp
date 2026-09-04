@@ -1625,9 +1625,8 @@ void GroupingSet::toIntermediate(
     if (function->supportsToIntermediate()) {
       populateTempVectors(i, input);
       VELOX_DCHECK(aggregateVector);
-      TestValue::adjust(
-          "facebook::velox::exec::Aggregate::toIntermediate", function.get());
       function->toIntermediate(rows, tempVectors_, aggregateVector);
+      ++numToIntermediateFastPathCalls_;
       continue;
     }
 

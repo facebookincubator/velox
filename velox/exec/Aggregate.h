@@ -182,12 +182,15 @@ class Aggregate {
       const std::vector<VectorPtr>& args,
       bool mayPushdown) = 0;
 
-  /// Called by aggregation operator to set whether the input data is eligible
-  /// for clustered input optimization.  This is turned off, in cases for
-  /// example if the input rows from same group are not contiguous, or the
-  /// aggregate is sorted or distinct.
-  void setClusteredInput(bool value) {
-    clusteredInput_ = value;
+  /// Called by aggregation operator to set whether an accumulator may keep a
+  /// reference to the input vector rather than copying the value out of it.
+  /// This requires both that the input rows from same group are contiguous and
+  /// that no group spans batches, so each reference is dropped when the group's
+  /// output is produced. Without the latter a group stays open across batches
+  /// and the references pin every input batch that contributed a group. Also
+  /// turned off if the aggregate is sorted or distinct.
+  void setCanRetainInput(bool value) {
+    canRetainInput_ = value;
   }
 
   /// Whether the function itself supports clustered input optimization.
@@ -519,7 +522,7 @@ class Aggregate {
 
   bool validateIntermediateInputs_ = false;
 
-  bool clusteredInput_ = false;
+  bool canRetainInput_ = false;
 };
 
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(

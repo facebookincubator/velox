@@ -32,6 +32,7 @@
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -646,15 +647,58 @@ class MainlyConstantEncodingBase
     }
   }
 
-  static std::pair<uint32_t, uint32_t> countCommonForSlice(
+  // Carries common-value counts and, when available, a sliced isCommon stream.
+  struct SlicedCommonResult {
+    // Number of common-value rows before the requested slice.
+    uint32_t numCommonBeforeSlice{0};
+    // Number of common-value rows inside the requested slice.
+    uint32_t numCommonInSlice{0};
+    // Encoded isCommon slice when producing it was already needed for counting.
+    std::string_view slicedIsCommon;
+  };
+
+  static SlicedCommonResult countCommonForSlice(
       std::string_view encoded,
       uint32_t offset,
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options) {
+    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
     const auto rowEnd = offset + length;
-    if (rowEnd == 0) {
-      return {0, 0};
+
+    const auto encodingType = EncodingPrefix::encodingType(encoded);
+    if (encodingType == EncodingType::Constant) {
+      NIMBLE_CHECK_EQ(
+          EncodingPrefix::dataType(encoded),
+          DataType::Bool,
+          "MainlyConstant isCommon child must be boolean.");
+      const char* pos = encoded.data() +
+          EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+      const bool value = encoding::read<bool>(pos);
+      return {
+          .numCommonBeforeSlice = value ? offset : 0,
+          .numCommonInSlice = value ? length : 0,
+          .slicedIsCommon = {},
+      };
+    }
+    if (encodingType == EncodingType::RLE) {
+      RLEEncoding<bool>::RangeCounts counts;
+      RLEEncoding<bool>::countTrue(
+          encoded, offset, length, buffer, counts, options);
+      return {
+          .numCommonBeforeSlice = counts.numTrueBeforeRange,
+          .numCommonInSlice = counts.numTrueInRange,
+          .slicedIsCommon = {},
+      };
+    }
+    if (encodingType == EncodingType::SparseBool) {
+      const auto sliceResult = SparseBoolEncoding::sliceAndCount(
+          encoded, offset, length, buffer, options);
+      return {
+          .numCommonBeforeSlice = sliceResult.counts.numTrueBeforeRange,
+          .numCommonInSlice = sliceResult.counts.numTrueInRange,
+          .slicedIsCommon = sliceResult.sliced,
+      };
     }
 
     auto* pool = &buffer.getMemoryPool();
@@ -665,8 +709,12 @@ class MainlyConstantEncodingBase
     encoding->materialize(rowEnd, values.data());
     const auto sliceBegin = values.begin() + offset;
     return {
-        std::count(values.begin(), sliceBegin, true),
-        std::count(sliceBegin, values.end(), true)};
+        .numCommonBeforeSlice =
+            static_cast<uint32_t>(std::count(values.begin(), sliceBegin, true)),
+        .numCommonInSlice =
+            static_cast<uint32_t>(std::count(sliceBegin, values.end(), true)),
+        .slicedIsCommon = {},
+    };
   }
 
   static std::string_view slice(
@@ -692,10 +740,12 @@ class MainlyConstantEncodingBase
     const std::string_view commonValue{
         pos, static_cast<size_t>(encoded.end() - pos)};
 
-    const auto [commonBefore, commonInSlice] =
-        countCommonForSlice(isCommon, offset, length, buffer, options);
-    const auto otherOffset = offset - commonBefore;
-    const auto otherCount = length - commonInSlice;
+    auto* pool = &buffer.getMemoryPool();
+    ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+    const auto slicedCommonResult = countCommonForSlice(
+        isCommon, offset, length, scopedBuffer.get(), options);
+    const auto otherOffset = offset - slicedCommonResult.numCommonBeforeSlice;
+    const auto otherCount = length - slicedCommonResult.numCommonInSlice;
 
     if (otherCount == 0) {
       const auto prefixSize =
@@ -715,10 +765,11 @@ class MainlyConstantEncodingBase
       return {reserved, encodingSize};
     }
 
-    auto* pool = &buffer.getMemoryPool();
-    ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-    const auto slicedIsCommon = EncodingFactory::slice(
-        isCommon, offset, length, scopedBuffer.get(), options);
+    auto slicedIsCommon = slicedCommonResult.slicedIsCommon;
+    if (slicedIsCommon.empty()) {
+      slicedIsCommon = EncodingFactory::slice(
+          isCommon, offset, length, scopedBuffer.get(), options);
+    }
     const auto slicedOtherValues = EncodingFactory::slice(
         otherValues, otherOffset, otherCount, scopedBuffer.get(), options);
 

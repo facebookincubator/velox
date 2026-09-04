@@ -201,6 +201,11 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::Slice:
+      // The wrapped encoding is carried verbatim rather than as a nested
+      // stream, and the layout tree describes how data is encoded, not how a
+      // slice was deferred. Reported as childless.
+      break;
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;
       const auto header = detail::alp::readHeader(pos);

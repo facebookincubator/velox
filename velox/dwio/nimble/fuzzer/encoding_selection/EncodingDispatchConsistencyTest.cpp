@@ -314,6 +314,7 @@ TEST_F(
   fuzzer.run();
 
   EXPECT_EQ(fuzzer.numUnfilteredFilesWritten(), kNumUnfilteredRounds);
+  EXPECT_FALSE(fuzzer.coverage().contains(EncodingType::Huffman));
   for (const auto encodingType : allCandidateEncodings()) {
     SCOPED_TRACE(toString(encodingType));
     const auto entry = fuzzer.coverage().find(encodingType);

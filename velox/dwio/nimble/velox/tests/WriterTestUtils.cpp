@@ -45,7 +45,7 @@ std::vector<velox::RowVectorPtr> generateBatches(
 }
 
 ChunkSizeResults validateChunkSize(
-    nimble::VeloxReader& reader,
+    nimble::BatchReader& reader,
     const uint64_t minStreamChunkRawSize,
     const uint64_t maxStreamChunkRawSize) {
   constexpr int kRowCountOffset = 2;

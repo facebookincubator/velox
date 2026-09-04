@@ -862,6 +862,12 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   std::vector<c10::IValue> executeWithPrefilledFrame(
       nativert::ExecutionFrame& frame) override;
 
+  /// Runs the graph on positional 'inputs' (in graph user-input order) using a
+  /// pooled device frame and returns the user outputs. Convenience wrapper over
+  /// getFrame()/fillUserInputs()/executeWithPrefilledFrame()/returnFrame() for
+  /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
+  std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
+
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();
 

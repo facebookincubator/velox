@@ -540,7 +540,7 @@ bool nonNullRowsFromSparse(
 template <typename Visitor, bool hasNulls>
 bool useFastPath(Visitor& visitor) {
   return (!std::is_same_v<typename Visitor::DataType, int128_t>) &&
-      process::hasAvx2() && Visitor::FilterType::deterministic &&
+      process::hasSimd() && Visitor::FilterType::deterministic &&
       Visitor::kHasBulkPath &&
       (std::
            is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue> ||

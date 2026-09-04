@@ -701,8 +701,10 @@ void readWithVisitorFast(
   const auto numNonNullsSoFar =
       velox::bits::countNonNulls(nulls, 0, params.numScanned);
   if constexpr (V::dense) {
-    NIMBLE_DCHECK(
-        !visitor.reader().hasNulls() || visitor.reader().returnReaderNulls());
+    if constexpr (kOutputNulls) {
+      NIMBLE_DCHECK(
+          !visitor.reader().hasNulls() || visitor.reader().returnReaderNulls());
+    }
     outerRows.resize(numRows);
     auto numNonNulls = velox::simd::indicesOfSetBits(
         nulls, visitor.rowIndex(), visitor.numRows(), outerRows.data());

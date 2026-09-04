@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
@@ -39,6 +41,8 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
+  ~StructColumnReader() override;
+
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
@@ -59,8 +63,12 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   void setNullsFromRepDefs(PageReader& pageReader);
 
-  dwio::common::SelectiveColumnReader* childForRepDefs() const {
-    return childForRepDefs_;
+  /// Returns the reader that supplies repetition and definition levels for
+  /// this struct. This is null exactly for the root struct. For a nested
+  /// struct, the reader may be a logical child or a synthetic physical leaf
+  /// and must not be advanced using the enclosing struct's row count.
+  dwio::common::SelectiveColumnReader* repDefSourceReader() const {
+    return repDefSourceReader_;
   }
 
   /// Nested struct readers all get null flags and lengths for
@@ -78,23 +86,33 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
  private:
-  dwio::common::SelectiveColumnReader* findBestLeaf();
+  struct SyntheticRepDefSource;
+
+  // Creates a non-projected physical leaf reader to source repetition and
+  // definition levels when no logical child reader is available.
+  void ensureSyntheticRepDefSource(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      ParquetParams& params);
+
+  dwio::common::SelectiveColumnReader* FOLLY_NONNULL findBestLeaf();
 
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
 
-  // Leaf column reader used for getting nullability information for
-  // 'this'. This is nullptr for the root of a table.
-  dwio::common::SelectiveColumnReader* childForRepDefs_{nullptr};
+  // Reader subtree used for getting nullability information for 'this'.
+  dwio::common::SelectiveColumnReader* repDefSourceReader_{nullptr};
 
-  // Mode for getting nulls from repdefs. kStructOverLists if 'this'
-  // only has list children.
+  // Mode for getting nulls from repdefs. kStructOverLists if the source is
+  // below an ARRAY or MAP.
   LevelMode levelMode_;
 
   // The level information for extracting nulls for 'this' from the
   // repdefs in a leaf PageReader.
   LevelInfo levelInfo_;
+
+  // Owns the synthetic non-projected reader and its ScanSpec.
+  std::unique_ptr<SyntheticRepDefSource> syntheticRepDefSource_;
 };
 
 } // namespace facebook::velox::parquet

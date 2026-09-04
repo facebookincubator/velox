@@ -21,6 +21,7 @@
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -362,6 +363,51 @@ TEST_P(ScalarColumnReaderTest, bigintWithNulls) {
   scanSpec->addAllChildFields(*input->type());
   auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
   validate(*input, *readers.rowReader, 19);
+}
+
+TEST_P(
+    ScalarColumnReaderTest,
+    dictionaryBigintAfterNullableChunkWithNullAllowedFilter) {
+  const bool stringDecoderZeroCopy = GetParam();
+  auto makeBatch = [&](int32_t offset, int32_t size, bool hasNulls) {
+    return makeRowVector({makeFlatVector<int64_t>(
+        size,
+        [offset](auto row) { return static_cast<int64_t>((offset + row) % 4); },
+        hasNulls ? nullEvery(5) : nullptr)});
+  };
+  auto firstBatch = makeBatch(0, 33, true);
+  auto secondBatch = makeBatch(33, 33, false);
+  auto thirdBatch = makeBatch(66, 34, true);
+  const std::vector<VectorPtr> batches{firstBatch, secondBatch, thirdBatch};
+
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      100,
+      [](auto row) { return static_cast<int64_t>(row % 4); },
+      [](auto row) {
+        return row < 33 ? row % 5 == 0 : row >= 66 && (row - 66) % 5 == 0;
+      })});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(1, 3, true));
+
+  auto writerOptions =
+      makeForcedEncodingWriterOptions(EncodingType::Dictionary);
+  writerOptions.enableChunking = true;
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  const auto file = test::createNimbleFile(
+      *rootPool(), batches, std::move(writerOptions), false);
+  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  validateWithFilter(*input, *readers.rowReader, 100, [](auto row) {
+    const auto value = row % 4;
+    const bool isNull = row < 33 ? row % 5 == 0 : row >= 66 && row % 5 == 1;
+    return isNull || (value >= 1 && value <= 3);
+  });
 }
 
 TEST_P(ScalarColumnReaderTest, integerAllNulls) {

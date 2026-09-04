@@ -464,3 +464,66 @@ TEST_F(ConstantEncodingStringTest, invalidSliceRange) {
         "");
   }
 }
+
+// estimateSize() answers constancy through Statistics. Integral types now take
+// that answer from min/max rather than from the unique-count map, so these
+// cases pin the observable behaviour of both the constant and the non-constant
+// path. The string case is included because string min/max are by length, not
+// lexicographic, which is why strings keep the unique-count path.
+TEST(ConstantEncodingEstimateSizeTest, integralConstancy) {
+  const nimble::Encoding::Options options{};
+
+  const std::vector<uint32_t> constantValues{7, 7, 7, 7};
+  EXPECT_TRUE(
+      nimble::ConstantEncoding<int32_t>::estimateSize(
+          constantValues,
+          nimble::Statistics<uint32_t>::create(constantValues),
+          options)
+          .has_value());
+
+  // Differs only in the final element, so a min/max check must still see it.
+  const std::vector<uint32_t> trailingOutlier{7, 7, 7, 8};
+  EXPECT_FALSE(
+      nimble::ConstantEncoding<int32_t>::estimateSize(
+          trailingOutlier,
+          nimble::Statistics<uint32_t>::create(trailingOutlier),
+          options)
+          .has_value());
+
+  // Differs only in the first element, which min/max also has to catch.
+  const std::vector<uint32_t> leadingOutlier{6, 7, 7, 7};
+  EXPECT_FALSE(
+      nimble::ConstantEncoding<int32_t>::estimateSize(
+          leadingOutlier,
+          nimble::Statistics<uint32_t>::create(leadingOutlier),
+          options)
+          .has_value());
+
+  const std::vector<uint32_t> singleValue{7};
+  EXPECT_TRUE(
+      nimble::ConstantEncoding<int32_t>::estimateSize(
+          singleValue,
+          nimble::Statistics<uint32_t>::create(singleValue),
+          options)
+          .has_value());
+}
+
+TEST(ConstantEncodingEstimateSizeTest, stringConstancy) {
+  const nimble::Encoding::Options options{};
+
+  const std::vector<std::string_view> constantValues{"abc", "abc", "abc"};
+  EXPECT_TRUE(
+      nimble::ConstantEncoding<std::string_view>::estimateSize(
+          constantValues,
+          nimble::Statistics<std::string_view>::create(constantValues),
+          options)
+          .has_value());
+
+  const std::vector<std::string_view> mixedValues{"abc", "abc", "abd"};
+  EXPECT_FALSE(
+      nimble::ConstantEncoding<std::string_view>::estimateSize(
+          mixedValues,
+          nimble::Statistics<std::string_view>::create(mixedValues),
+          options)
+          .has_value());
+}

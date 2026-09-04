@@ -49,10 +49,10 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -3159,7 +3159,7 @@ TEST_P(SelectiveNimbleReaderTest, pinMetadata) {
   }
 }
 
-// Verifies that within the same TabletReader, the second VeloxReader pass
+// Verifies that within the same TabletReader, the second BatchReader pass
 // does not re-read metadata. The weak-pointer cache retains entries while the
 // tablet is alive, so metadata is always reused regardless of pinMetadata,
 // cacheMetadata, or whether cache infrastructure is provided.
@@ -3235,11 +3235,11 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseWithSameReader) {
 
     auto tablet = TabletReader::create(trackingFile, pool(), tabletOptions);
 
-    nimble::VeloxReadParams readParams;
+    nimble::BatchReadParams readParams;
     readParams.decodingExecutor =
         std::make_shared<folly::CPUThreadPoolExecutor>(1);
 
-    auto reader1 = std::make_unique<nimble::VeloxReader>(
+    auto reader1 = std::make_unique<nimble::BatchReader>(
         tablet, *pool(), selector, readParams);
     VectorPtr result;
     ASSERT_TRUE(reader1->next(100, result));
@@ -3255,10 +3255,10 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseWithSameReader) {
 
     const auto ramHitsAfterFirstPass = metadataIoStats_->ramHit().count();
 
-    // Second pass: new VeloxReader on the same TabletReader. Metadata is
+    // Second pass: new BatchReader on the same TabletReader. Metadata is
     // always reused within the same tablet regardless of settings.
     trackingFile->resetMaxReadOffset();
-    auto reader2 = std::make_unique<nimble::VeloxReader>(
+    auto reader2 = std::make_unique<nimble::BatchReader>(
         tablet, *pool(), selector, readParams);
     ASSERT_TRUE(reader2->next(100, result));
     ASSERT_EQ(result->size(), 100);
@@ -3370,10 +3370,10 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
     ASSERT_EQ(stripeGroupsMeta.size(), 1);
     const auto metadataBoundary = stripeGroupsMeta[0].offset();
 
-    nimble::VeloxReadParams readParams;
+    nimble::BatchReadParams readParams;
     readParams.decodingExecutor =
         std::make_shared<folly::CPUThreadPoolExecutor>(1);
-    auto reader1 = std::make_unique<nimble::VeloxReader>(
+    auto reader1 = std::make_unique<nimble::BatchReader>(
         tablet1, *pool(), selector, readParams);
     VectorPtr result;
     ASSERT_TRUE(reader1->next(100, result));
@@ -3394,7 +3394,7 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
     auto metadataIoStats2 = std::make_shared<io::IoStatistics>();
     std::unique_ptr<FileHandle> fh2;
     auto tablet2 = makeTablet(metadataIoStats2, fh2);
-    auto reader3 = std::make_unique<nimble::VeloxReader>(
+    auto reader3 = std::make_unique<nimble::BatchReader>(
         tablet2, *pool(), selector, readParams);
     ASSERT_TRUE(reader3->next(100, result));
     ASSERT_EQ(result->size(), 100);
