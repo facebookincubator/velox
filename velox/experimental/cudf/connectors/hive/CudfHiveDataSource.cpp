@@ -32,10 +32,10 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/FieldReference.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <cudf/stream_compaction.hpp>
 
