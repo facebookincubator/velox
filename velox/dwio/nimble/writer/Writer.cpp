@@ -2861,14 +2861,6 @@ void Writer::suppressRedundantInMapStreams() {
     return;
   }
 
-  // Chunked writes have never skipped constant in-map streams: the old marking
-  // ran only in processStream(), which the chunked path does not call. Reading
-  // the encoding instead would start suppressing here for free, so this holds
-  // that behaviour until it is enabled deliberately, with its own coverage.
-  if (context_->options().enableChunking) {
-    return;
-  }
-
   const auto hasEncodedStream = [this](offset_size offset) {
     return offset < encodedStreams_.size() &&
         !encodedStreams_[offset].chunks.empty();
