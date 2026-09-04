@@ -68,30 +68,20 @@ static uint64_t hashUii(const TUii& uii) {
 
 template <typename TJoinKey>
 static int64_t hashKey(TJoinKey joinKey) {
-  int64_t result;
-  if constexpr (std::is_same_v<TJoinKey, Timestamp>) {
-    result = joinKey.toMillis();
-  } else if constexpr (
+  if constexpr (
       std::is_same_v<TJoinKey, int128_t> ||
       std::is_same_v<TJoinKey, uint128_t>) {
     return Murmur3Hash128::hash64(&joinKey, sizeof(joinKey), 0);
-  } else if constexpr (std::is_integral_v<TJoinKey>) {
-    result = static_cast<int64_t>(joinKey);
-  } else if constexpr (std::is_same_v<TJoinKey, float>) {
-    // Cast to double first, then extract bits, based on implicit coercion
-    double dbl = static_cast<double>(joinKey);
-    std::memcpy(&result, &dbl, sizeof(result));
-  } else if constexpr (std::is_same_v<TJoinKey, double>) {
-    std::memcpy(&result, &joinKey, sizeof(result));
   } else if constexpr (std::is_same_v<TJoinKey, StringView>) {
-    result =
-        common::hll::Murmur3Hash128::hash64(joinKey.data(), joinKey.size(), 0);
+    // Presto hashes a string key once with Murmur3 over the bytes, unlike the
+    // numeric path below which hashes the long bit pattern.
+    return Murmur3Hash128::hash64(
+        joinKey.data(), static_cast<int32_t>(joinKey.size()), 0);
   } else {
-    VELOX_UNREACHABLE("Unsupported input type: {}", typeid(TJoinKey).name());
+    return Murmur3Hash128::hash64ForLong(toLongBits(joinKey), 0);
   }
-
-  return Murmur3Hash128::hash64(&result, sizeof(result), 0);
 }
+
 } // namespace detail
 
 template <typename TUii, typename TAllocator>
