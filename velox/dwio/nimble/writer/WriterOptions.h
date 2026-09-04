@@ -65,6 +65,15 @@ struct WriterOptions {
   std::unordered_map<std::string, std::string> metadata =
       detail::defaultMetadata();
 
+  /// Supplies user metadata that is only known once every row has been
+  /// written, for callers whose value is not final when the writer opens.
+  /// Invoked once from close(), after the last stripe is written and before
+  /// the metadata section is serialized, so it observes the finished file.
+  /// Entries it returns win over `metadata` on a key collision, including
+  /// over the defaults seeded above. Throwing from it fails close().
+  std::function<std::unordered_map<std::string, std::string>()>
+      metadataProvider{};
+
   /// Shared dictionary encoding settings.
   /// EXPERIMENTAL: Shared dictionary encoding is not production-ready. Do not
   /// enable for production tables without consulting the Nimble team (oncall:

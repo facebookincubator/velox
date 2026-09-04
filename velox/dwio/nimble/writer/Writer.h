@@ -290,7 +290,8 @@ class Writer : public velox::dwio::common::Writer {
   void updateIoStatistics();
 
   // Writes caller-supplied key/value metadata into the optional metadata
-  // section.
+  // section, merging whatever `options.metadataProvider` returns over
+  // `options.metadata`.
   void writeMetadata();
   // Writes the column statistics section, using the vectorized representation
   // when enabled and the legacy raw-size section otherwise.
