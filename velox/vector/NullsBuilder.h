@@ -16,6 +16,9 @@
 #pragma once
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Nulls.h"
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox {
 
@@ -27,11 +30,19 @@ struct NullsBuilder {
   /// Marks specified row as null. Allocates and initializes null buffer if this
   /// is the first null.
   void setNull(vector_size_t row) {
-    if (nulls_ == nullptr) {
-      nulls_ = AlignedBuffer::allocate<bool>(size_, pool_, bits::kNotNull);
-      rawNulls_ = nulls_->asMutable<uint64_t>();
-    }
+    allocate();
     bits::setNull(rawNulls_, row, true);
+  }
+
+  /// Marks every row that is null in 'nulls' as null. 'nulls' may be nullptr,
+  /// meaning there is nothing to add. Allocates and initializes the null buffer
+  /// on the first non-null 'nulls'.
+  void addNulls(const uint64_t* nulls) {
+    if (nulls == nullptr) {
+      return;
+    }
+    allocate();
+    bits::andBits(rawNulls_, nulls, 0, size_);
   }
 
   /// Returns nulls buffer or nullptr if no nulls were added (e.g. setNull was
@@ -41,6 +52,13 @@ struct NullsBuilder {
   }
 
  private:
+  void allocate() {
+    if (nulls_ == nullptr) {
+      nulls_ = AlignedBuffer::allocate<bool>(size_, pool_, bits::kNotNull);
+      rawNulls_ = nulls_->asMutable<uint64_t>();
+    }
+  }
+
   const vector_size_t size_;
   memory::MemoryPool* pool_;
   BufferPtr nulls_{nullptr};
