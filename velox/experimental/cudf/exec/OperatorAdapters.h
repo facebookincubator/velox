@@ -84,13 +84,11 @@ class OperatorAdapter {
   /// Create the GPU operator(s) this adapter contributes to the driver.
   ///
   /// When keepOperator() is false the returned operators replace 'op', and at
-  /// least one operator must be returned. Combining keepOperator() == false
-  /// with canRunOnGPU() == true and an empty result is not supported: with CPU
-  /// fallback disabled the driver is rejected, and with fallback enabled a
-  /// conversion operator appended behind the failed replacement takes the place
-  /// of 'op', which drops the plan node from the pipeline. An adapter that
-  /// cannot implement a particular operator returns false from canRunOnGPU()
-  /// instead, which keeps 'op' in place.
+  /// least one operator must be returned. Returning none is a defect in the
+  /// adapter rather than a plan that cannot run on GPU, so CompileState fails
+  /// the query whatever allowCpuFallback says. An adapter that cannot implement
+  /// a particular operator returns false from canRunOnGPU() instead, which
+  /// keeps 'op' in place for CPU execution.
   ///
   /// When keepOperator() is true the returned operators are inserted after
   /// 'op', which is how a plan node that expands into several operators is
