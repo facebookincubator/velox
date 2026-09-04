@@ -36,10 +36,12 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
@@ -57,6 +59,7 @@
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
 #include "velox/dwio/nimble/velox/RawSizeUtils.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
 
@@ -2762,6 +2765,140 @@ void Writer::encodeStream(
   streamData.reset();
 }
 
+namespace {
+
+// Visits every flat map in the schema tree.
+template <typename Visitor>
+void visitFlatMaps(const TypeBuilder& type, const Visitor& visit) {
+  if (type.kind() == Kind::FlatMap) {
+    const auto& flatMap = type.asFlatMap();
+    visit(flatMap);
+    for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+      visitFlatMaps(flatMap.childAt(i), visit);
+    }
+    return;
+  }
+  switch (type.kind()) {
+    case Kind::Row: {
+      const auto& row = type.asRow();
+      for (size_t i = 0; i < row.childrenCount(); ++i) {
+        visitFlatMaps(row.childAt(i), visit);
+      }
+      return;
+    }
+    case Kind::Array:
+      visitFlatMaps(type.asArray().elements(), visit);
+      return;
+    case Kind::ArrayWithOffsets:
+      visitFlatMaps(type.asArrayWithOffsets().elements(), visit);
+      return;
+    case Kind::Map:
+      visitFlatMaps(type.asMap().keys(), visit);
+      visitFlatMaps(type.asMap().values(), visit);
+      return;
+    case Kind::SlidingWindowMap:
+      visitFlatMaps(type.asSlidingWindowMap().keys(), visit);
+      visitFlatMaps(type.asSlidingWindowMap().values(), visit);
+      return;
+    case Kind::Scalar:
+    case Kind::TimestampMicroNano:
+      // Leaf kinds: no children to descend into.
+      return;
+    case Kind::FlatMap:
+      break;
+  }
+  // FlatMap returns above; every other kind returns from its case. Listing all
+  // kinds instead of a default keeps -Wswitch-enum quiet, which OSS builds
+  // with -Werror.
+  NIMBLE_UNREACHABLE("Unexpected type kind {}", type.kind());
+}
+
+// Whether every chunk of an already-encoded in-map stream is a Constant
+// encoding of true, i.e. the key was carried by every row of the stripe.
+//
+// Reads only the chunk and encoding prefixes; it never decodes or
+// decompresses. Anything it cannot prove -- no chunks, an unexpected chunk
+// shape, a compressed payload, a non-Constant encoding -- answers false and
+// the stream stays on disk. The asymmetry is deliberate: Constant means every
+// value is identical by the encoding's own contract, so a true answer cannot
+// be wrong, while a false answer costs only the space saving.
+bool isAllTrueEncodedStream(const Stream& stream) {
+  if (stream.chunks.empty()) {
+    return false;
+  }
+  for (const auto& chunk : stream.chunks) {
+    // ChunkedStreamWriter emits exactly {header, payload}.
+    if (chunk.content.size() != 2 ||
+        chunk.content[0].size() != kChunkHeaderSize) {
+      return false;
+    }
+    const char* headerPos = chunk.content[0].data();
+    if (readChunkHeader(headerPos).compressionType !=
+        CompressionType::Uncompressed) {
+      return false;
+    }
+    const auto payload = chunk.content[1];
+    if (payload.size() <= EncodingPrefix::kRowCountOffset ||
+        EncodingPrefix::encodingType(payload) != EncodingType::Constant ||
+        EncodingPrefix::dataType(payload) != DataType::Bool) {
+      return false;
+    }
+    // A ConstantEncoding<bool> payload is the prefix followed by its single
+    // value byte and nothing else, so the value is the last byte. Reading it
+    // that way avoids having to know whether the row count was serialized
+    // fixed-width or as a varint, which the prefix does not record.
+    if (payload.back() == 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+} // namespace
+
+void Writer::suppressRedundantInMapStreams() {
+  if (!context_->options().skipConstantFlatMapInMapStreams) {
+    return;
+  }
+
+  // Chunked writes have never skipped constant in-map streams: the old marking
+  // ran only in processStream(), which the chunked path does not call. Reading
+  // the encoding instead would start suppressing here for free, so this holds
+  // that behaviour until it is enabled deliberately, with its own coverage.
+  if (context_->options().enableChunking) {
+    return;
+  }
+
+  const auto hasEncodedStream = [this](offset_size offset) {
+    return offset < encodedStreams_.size() &&
+        !encodedStreams_[offset].chunks.empty();
+  };
+
+  visitFlatMaps(
+      *context_->schemaBuilder().root(),
+      [&](const FlatMapTypeBuilder& flatMap) {
+        // The schema pairs each key's in-map descriptor with its value type by
+        // index, so no separate bookkeeping is needed to relate the two.
+        for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+          const auto& inMapDescriptor = flatMap.inMapDescriptorAt(i);
+          const auto inMapOffset = inMapDescriptor.offset();
+          // Scoped to flat map in-map descriptors by construction: this walk
+          // only ever reaches the streams reached via inMapDescriptorAt().
+          if (inMapOffset >= encodedStreams_.size() ||
+              !isAllTrueEncodedStream(encodedStreams_[inMapOffset])) {
+            continue;
+          }
+
+          // Drop the all-true in-map stream only while a value stream proves
+          // the key was present. Asked with the reader's own traversal, so the
+          // writer cannot count bytes the reader will not look at.
+          if (visitValueStreamLeaves(flatMap.childAt(i), hasEncodedStream)) {
+            encodedStreams_[inMapOffset].chunks.clear();
+          }
+        }
+      });
+}
+
 void Writer::processStream(
     StreamData& streamData,
     velox::BufferPool* encodingScratchBufferPool,
@@ -2769,7 +2906,7 @@ void Writer::processStream(
     uint64_t& streamSize,
     std::atomic_uint64_t& chunkSize) {
   const auto offset = streamData.descriptor().offset();
-  const auto* context = streamData.descriptor().context<WriterStreamContext>();
+  auto* context = streamData.descriptor().context<WriterStreamContext>();
   NIMBLE_CHECK(encodedStreams_[offset].chunks.empty());
   if ((context != nullptr) && context->isNullStream()) {
     // For null streams we promote the null values to be written as
@@ -2786,15 +2923,26 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are all-true (every row
-    // has the key) or all-false (no row has the key). The reader distinguishes
-    // these by checking value stream presence: all-true keys have value
-    // streams, all-false keys do not.
+    // When enabled, skip encoding in-map streams that are constant, since the
+    // reader recovers the in-map state from value stream presence.
+    //
+    // All-false is dropped here: the key really is absent from this stripe,
+    // which is exactly what the reader concludes from two missing streams.
+    //
+    // All-true cannot be decided yet. It is only safe to drop while some value
+    // stream survives to prove the key was present, and whether that happens
+    // is not known until every stream in the stripe has been encoded --
+    // streams are encoded concurrently here and must not inspect each other.
+    // So it is encoded now and reconsidered by
+    // suppressRedundantInMapStreams() at stripe close, which recognizes it
+    // from its own encoding and drops it if a value stream did reach disk.
     //
     // NOTE: readers that don't infer missing in-map streams require
     // skipConstantFlatMapInMapStreams to remain false.
     streamData.materialize();
-    if (!isConstantBoolStream(streamData.data())) {
+    const auto data = streamData.data();
+    const bool allTrue = isAllTrueBoolStream(data);
+    if (allTrue || !isConstantBoolStream(data)) {
       encodeStream(
           streamData,
           encodingScratchBufferPool,
@@ -3047,6 +3195,8 @@ bool Writer::writeStripe() {
   uint64_t stripeSize{0};
   {
     LoggingScope scope{*context_->logger()};
+
+    suppressRedundantInMapStreams();
 
     size_t nonEmptyCount{0};
     for (auto i = 0; i < encodedStreams_.size(); ++i) {
