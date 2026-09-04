@@ -20,6 +20,7 @@
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/HashTableCache.h"
+#include "velox/exec/JoinTableBuilder.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/Spiller.h"
@@ -99,7 +100,7 @@ class HashBuild final : public Operator {
   }
 
   const std::vector<column_index_t>& dependentChannels() const {
-    return dependentChannels_;
+    return tableBuilder_->dependentChannels();
   }
 
   const std::shared_ptr<HashJoinBridge>& joinBridge() const {
@@ -121,8 +122,9 @@ class HashBuild final : public Operator {
     return cacheEntry_->builderTaskId == taskId();
   }
 
-  // Invoked to set up hash table to build.
-  void setupTable();
+  // Creates the join table builder. Called from the constructor as the key and
+  // the dependent channels it resolves are used before 'initialize()'.
+  void setupTableBuilder();
 
   // Sets up hash table caching if enabled. Returns true if the cached table
   // is already available or if this operator should wait for another task
@@ -222,31 +224,22 @@ class HashBuild final : public Operator {
   // Invoked to process data from spill input reader on restoring.
   void processSpillInput();
 
-  // Set up for null-aware and regular anti-join with filter processing.
-  void setupFilterForAntiJoins(
-      const folly::F14FastMap<column_index_t, column_index_t>& keyChannelMap);
+  // Compiles the join filter of an anti join to find out if it is null
+  // propagating and which build side columns it references.
+  JoinTableBuilder::AntiJoinFilterInfo analyzeAntiJoinFilter();
 
-  // Invoked when preparing for null-aware and regular anti join with
-  // null-propagating filter. The function deselects the input rows which have
-  // any null in the filter input columns. This is an optimization for
-  // null-aware and regular anti join processing at the probe side as any probe
-  // matches with the deselected rows can't pass the null-propagating filter and
-  // will be added to the joined output.
-  void removeInputRowsForAntiJoinFilter();
+  // Updates the null keys stats from the keys decoded by the table builder.
+  void updateNullKeysStats();
+
+  // Sets the probed flag vector to restore when the input comes from a spilled
+  // table, nullptr otherwise.
+  const FlatVector<bool>* spillProbedFlags(const RowVectorPtr& input) const;
 
   void addRuntimeStats();
 
   // Indicates if this hash build operator is under non-reclaimable state or
   // not.
   bool nonReclaimableState() const;
-
-  // True if we have enough rows and not enough duplicate join keys, i.e. more
-  // than 'abandonHashBuildDedupMinRows_' rows and more than
-  // 'abandonHashBuildDedupMinPct_' % of rows are unique.
-  bool abandonHashBuildDedupEarly(int64_t numDistinct) const;
-
-  // Invoked to abandon build deduped hash table.
-  void abandonHashBuildDedup();
 
   // Returns true if this operator is using a cached hash table.
   // When enabled, the hash table is built once and cached for reuse
@@ -284,22 +277,6 @@ class HashBuild final : public Operator {
   // not.
   const bool needProbedFlagSpill_;
 
-  // Indicates whether drop duplicate rows. Rows containing duplicate keys
-  // can be removed for left semi and anti join.
-  const bool dropDuplicates_;
-
-  // Maximum number of distinct values to keep when merging vector hashers
-  const size_t vectorHasherMaxNumDistinct_;
-
-  // Minimum number of rows to see before deciding to give up build no
-  // duplicates hash table.
-  const int32_t abandonHashBuildDedupMinRows_;
-
-  // Min unique rows pct for give up build deduped hash table. If more
-  // than this many rows are unique, build hash table in addInput phase is not
-  // worthwhile.
-  const int32_t abandonHashBuildDedupMinPct_;
-
   std::shared_ptr<HashJoinBridge> joinBridge_;
 
   tsan_atomic<bool> exceededMaxSpillLevelLimit_{false};
@@ -316,58 +293,29 @@ class HashBuild final : public Operator {
   // Retrieved from HashTableCache.
   std::shared_ptr<HashTableCacheEntry> cacheEntry_;
 
-  // The row type used for hash table build and disk spilling.
-  RowTypePtr tableType_;
+  // Accumulates the build input into the hash table. Holds the state and the
+  // logic shared with the non-operator build side users.
+  std::unique_ptr<JoinTableBuilder> tableBuilder_;
 
-  // Used to serialize access to internal state including 'table_' and
-  // 'spiller_'. This is only required when variables are accessed
-  // concurrently, that is, when a thread tries to close the operator while
-  // another thread is building the hash table. Refer to 'close()' and
+  // Used to serialize access to internal state including the table of
+  // 'tableBuilder_' and 'spiller_'. This is only required when variables are
+  // accessed concurrently, that is, when a thread tries to close the operator
+  // while another thread is building the hash table. Refer to 'close()' and
   // finishHashBuild()' for more details.
   std::mutex mutex_;
 
-  // Indicates if the intermediate state ('table_' and 'spiller_') has
-  // been cleared. This can happen either when the operator is closed or when
-  // the last hash build operator transfers ownership of them to itself while
-  // building the final hash table.
+  // Indicates if the intermediate state (the table of 'tableBuilder_' and
+  // 'spiller_') has been cleared. This can happen either when the operator is
+  // closed or when the last hash build operator transfers ownership of them to
+  // itself while building the final hash table.
   bool stateCleared_{false};
-
-  // Container for the rows being accumulated.
-  std::unique_ptr<BaseHashTable> table_;
-
-  // Used for building hash table while adding input rows.
-  std::unique_ptr<HashLookup> lookup_;
-
-  // Key channels in 'input_'
-  std::vector<column_index_t> keyChannels_;
-
-  // Non-key channels in 'input_'.
-  std::vector<column_index_t> dependentChannels_;
-
-  // Corresponds 1:1 to 'dependentChannels_'.
-  std::vector<std::unique_ptr<DecodedVector>> decoders_;
 
   // Future for synchronizing with other Drivers of the same pipeline. All build
   // Drivers must be completed before making the hash table.
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 
-  // True if we are considering use of normalized keys or array hash tables. Set
-  // to false when the dataset is no longer suitable.
-  bool analyzeKeys_;
-
-  // Temporary space for hash numbers.
-  raw_vector<uint64_t> hashes_;
-
-  // Set of active rows during addInput().
-  SelectivityVector activeRows_;
-
-  // True if this is a build side of an anti or left semi project join and has
-  // at least one entry with null join keys.
-  bool joinHasNullKeys_{false};
-
-  // Whether to abandon building a HashTable without duplicates in HashBuild
-  // addInput phase for left semi/anti join.
-  bool abandonHashBuildDedup_{false};
+  // Temporary space for the hash numbers of the input spill partitioning.
+  raw_vector<uint64_t> spillHashes_;
 
   // The type used to spill hash table which might attach a boolean column to
   // record the probed flag if 'needProbedFlagSpill_' is true.
@@ -399,21 +347,6 @@ class HashBuild final : public Operator {
   std::vector<BufferPtr> spillInputIndicesBuffers_;
   std::vector<vector_size_t*> rawSpillInputIndicesBuffers_;
   std::vector<VectorPtr> spillChildVectors_;
-
-  // Indicates whether the filter is null-propagating.
-  bool filterPropagatesNulls_{false};
-
-  // Indices of key columns used by the filter in build side table.
-  std::vector<column_index_t> keyFilterChannels_;
-  // Indices of dependent columns used by the filter in 'decoders_'.
-  std::vector<column_index_t> dependentFilterChannels_;
-
-  // Maps key channel in 'input_' to channel in key.
-  folly::F14FastMap<column_index_t, column_index_t> keyChannelMap_;
-
-  // Count the number of hash table input rows for building deduped
-  // hash table. It will not be updated after abandonBuildNoDupHash_ is true.
-  int64_t numHashInputRows_ = 0;
 };
 
 inline std::ostream& operator<<(std::ostream& os, HashBuild::State state) {
