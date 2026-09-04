@@ -2093,24 +2093,37 @@ velox::VectorPtr Writer::storedDataInput(const velox::VectorPtr& input) const {
 }
 
 void Writer::writeMetadata() {
-  if (context_->options().metadata.empty()) {
+  const auto& optionsMetadata = context_->options().metadata;
+  const auto& metadataProvider = context_->options().metadataProvider;
+  // Called here rather than at open so it observes the finished file.
+  const auto providedMetadata = metadataProvider
+      ? metadataProvider()
+      : std::unordered_map<std::string, std::string>{};
+  if (optionsMetadata.empty() && providedMetadata.empty()) {
     return;
   }
-  auto& metadata = context_->options().metadata;
-  auto it = metadata.cbegin();
-  flatbuffers::FlatBufferBuilder builder(kInitialSchemaSectionSize);
-  auto entries =
-      builder.CreateVector<flatbuffers::Offset<serialization::MetadataEntry>>(
-          metadata.size(), [&builder, &it](size_t /* i */) {
-            auto entry = serialization::CreateMetadataEntry(
-                builder,
-                builder.CreateString(it->first),
-                builder.CreateString(it->second));
-            ++it;
-            return entry;
-          });
 
-  builder.Finish(serialization::CreateMetadata(builder, entries));
+  flatbuffers::FlatBufferBuilder builder(kInitialSchemaSectionSize);
+  std::vector<flatbuffers::Offset<serialization::MetadataEntry>> entries;
+  entries.reserve(optionsMetadata.size() + providedMetadata.size());
+  const auto appendEntry = [&builder, &entries](
+                               const auto& key, const auto& value) {
+    entries.push_back(
+        serialization::CreateMetadataEntry(
+            builder, builder.CreateString(key), builder.CreateString(value)));
+  };
+  for (const auto& [key, value] : optionsMetadata) {
+    // Skip the keys the provider overrode, so each key appears once.
+    if (!providedMetadata.contains(key)) {
+      appendEntry(key, value);
+    }
+  }
+  for (const auto& [key, value] : providedMetadata) {
+    appendEntry(key, value);
+  }
+
+  builder.Finish(
+      serialization::CreateMetadata(builder, builder.CreateVector(entries)));
   tabletWriter_->writeOptionalSection(
       std::string(kMetadataSection),
       {reinterpret_cast<const char*>(builder.GetBufferPointer()),

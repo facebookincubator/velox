@@ -1047,6 +1047,99 @@ TEST_F(WriterTest, exceptionOnClose) {
   }
 }
 
+TEST_F(WriterTest, metadataProviderWrittenAtClose) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"col0"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  nimble::WriterOptions options;
+  // Drop the seeded defaults so this also covers a file whose only metadata
+  // arrives late, which the writer used to skip serializing altogether.
+  options.metadata.clear();
+  options.metadataProvider = [] {
+    return std::unordered_map<std::string, std::string>{{"key 1", "value 1"}};
+  };
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const std::map<std::string, std::string> expected{{"key 1", "value 1"}};
+  EXPECT_EQ(reader.metadata(), expected);
+}
+
+TEST_F(WriterTest, metadataProviderOverridesOptionsMetadata) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"col0"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  nimble::WriterOptions options;
+  options.metadata = {{"key 1", "value 1"}, {"key 2", "value 2"}};
+  options.metadataProvider = [] {
+    return std::unordered_map<std::string, std::string>{
+        {"key 2", "late value 2"}, {"key 3", "value 3"}};
+  };
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const std::map<std::string, std::string> expected{
+      {"key 1", "value 1"}, {"key 2", "late value 2"}, {"key 3", "value 3"}};
+  EXPECT_EQ(reader.metadata(), expected);
+}
+
+TEST_F(WriterTest, metadataProviderObservesEveryWrittenRow) {
+  // The whole point of the hook: the provider runs late enough to report a
+  // value that is only final once the caller has written its last row.
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"col0"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  uint32_t rowsWritten = 0;
+  uint32_t providerCalls = 0;
+
+  nimble::WriterOptions options;
+  options.metadata.clear();
+  options.metadataProvider = [&] {
+    ++providerCalls;
+    return std::unordered_map<std::string, std::string>{
+        {"rows", folly::to<std::string>(rowsWritten)}};
+  };
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  for (int batch = 0; batch < 2; ++batch) {
+    writer.write(vector);
+    rowsWritten += vector->size();
+  }
+  writer.close();
+
+  EXPECT_EQ(providerCalls, 1);
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const std::map<std::string, std::string> expected{{"rows", "6"}};
+  EXPECT_EQ(reader.metadata(), expected);
+}
+
 TEST_F(WriterTest, emptyFileNoSchema) {
   const uint32_t batchSize = 10;
   auto type = velox::ROW({{"simple", velox::INTEGER()}});
