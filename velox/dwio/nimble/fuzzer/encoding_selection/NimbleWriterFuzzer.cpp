@@ -51,6 +51,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/fuzzer/encoding_selection/WriterConfigRandomizer.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
@@ -241,97 +242,6 @@ EncodingSelectionPolicyCreator gateFloatingPointStreams(
             compressionOptions}
             .createPolicy(dataType);
       };
-}
-
-CompressionType randomCompressionType(FuzzerGenerator& rng) {
-  static constexpr std::array<CompressionType, 5> kCompressionTypes = {
-      CompressionType::Uncompressed,
-      CompressionType::Zstd,
-      CompressionType::MetaInternal,
-      CompressionType::Lz4,
-      CompressionType::OpenZL,
-  };
-  return kCompressionTypes[folly::Random::rand32(
-      kCompressionTypes.size(), rng)];
-}
-
-// Applies the layout and experimental knobs the fuzzer is meant to cover. Kept
-// separate from encoding selection so a failure can be attributed to either the
-// requested encoding or the surrounding configuration.
-void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
-  options.compressionOptions.compressionType = randomCompressionType(rng);
-  // Accept ratio in [0.5, 1.0]. A low floor keeps compression from being
-  // rejected so often that the compressed paths go unexercised.
-  options.compressionOptions.compressionAcceptRatio =
-      0.5f + 0.5f * static_cast<float>(folly::Random::randDouble01(rng));
-  options.compressionOptions.zstdCompressionLevel =
-      1 + folly::Random::rand32(9, rng);
-  options.compressionOptions.internalCompressionLevel =
-      1 + folly::Random::rand32(9, rng);
-  // Compress even tiny streams; the production minimums would skip nearly
-  // everything the fuzzer writes.
-  options.compressionOptions.zstdMinCompressionSize = 0;
-  options.compressionOptions.lz4MinCompressionSize = 0;
-  options.compressionOptions.internalMinCompressionSize = 0;
-  options.compressionOptions.openzlMinCompressionSize = 0;
-
-  options.enableChunking = !folly::Random::oneIn(4, rng);
-  options.minStreamChunkRawSize = folly::Random::oneIn(2, rng)
-      ? 0
-      : (uint64_t{1} << folly::Random::rand32(14, rng));
-  options.maxStreamChunkRawSize = uint64_t{1}
-      << (10 + folly::Random::rand32(12, rng));
-  options.enableChunkIndex =
-      options.enableChunking && folly::Random::oneIn(2, rng);
-  options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
-  options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
-  options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
-  // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
-  // encoding is actually exercised instead of rejected on size.
-  options.fsstCompressionTargetRatio =
-      0.2 + 1.0 * folly::Random::randDouble01(rng);
-  options.blockBitPackingBlockSize =
-      static_cast<uint16_t>(1 << (5 + folly::Random::rand32(6, rng)));
-
-  // Three flush regimes: a small size-based threshold, a chunk on every batch,
-  // and seeded probabilistic chunking plus stripe cutting. These only take
-  // effect because writeFile passes flushAfterWrite=false; with the helper's
-  // default the writer would cut a stripe per batch and shouldFlush would
-  // never be consulted. The lambda policies need an rng that outlives them,
-  // because VeloxWriter rebuilds the policy on every write().
-  switch (folly::Random::rand32(3, rng)) {
-    case 1:
-      options.flushPolicyFactory = []() {
-        return std::make_unique<LambdaFlushPolicy>(
-            [](const StripeProgress&) { return false; },
-            [](const StripeProgress&) { return true; });
-      };
-      break;
-    case 2: {
-      auto policyRng =
-          std::make_shared<std::mt19937_64>(folly::Random::rand64(rng));
-      options.flushPolicyFactory = [policyRng]() {
-        return std::make_unique<LambdaFlushPolicy>(
-            [policyRng](const StripeProgress&) {
-              return folly::Random::oneIn(20, *policyRng);
-            },
-            [policyRng](const StripeProgress&) {
-              return folly::Random::oneIn(3, *policyRng);
-            });
-      };
-      break;
-    }
-    default: {
-      // A threshold small enough that the fuzzer's modest batches actually
-      // cross it, so this regime produces multi-stripe files.
-      const uint64_t stripeRawSize = uint64_t{1}
-          << (12 + folly::Random::rand32(8, rng));
-      options.flushPolicyFactory = [stripeRawSize]() {
-        return std::make_unique<StripeRawSizeFlushPolicy>(stripeRawSize);
-      };
-      break;
-    }
-  }
 }
 
 uint64_t totalRows(const std::vector<VectorPtr>& batches) {
@@ -951,10 +861,13 @@ std::string NimbleWriterFuzzer::writeFile(
     const std::vector<VectorPtr>& batches,
     std::optional<EncodingType> encodingType,
     uint64_t iterationSeed) {
-  FuzzerGenerator rng(iterationSeed);
   WriterOptions writerOptions;
+  std::optional<RandomizedWriterConfig> randomizedConfig;
   if (options_.randomizeWriterConfig) {
-    randomizeWriterOptions(writerOptions, rng);
+    randomizedConfig = randomizeWriterConfig(iterationSeed);
+    randomizedConfig->applyTo(writerOptions);
+    randomizedConfig->applyEncodingSelectionTo(writerOptions, encodingType);
+    VLOG(1) << "Writer config: " << randomizedConfig->debugString();
   }
 
   // Build the policy through the config-string parser rather than constructing
@@ -962,19 +875,24 @@ std::string NimbleWriterFuzzer::writeFile(
   // covered too. Every candidate encoding is accepted by that parser, which
   // validates against
   // ManualEncodingSelectionPolicyFactory::possibleEncodings().
-  const auto selectionConfig = encodingType.has_value()
-      ? fmt::format(
-            "type:random,seed:{},encodings:{}",
-            iterationSeed,
-            toString(*encodingType))
-      : fmt::format("type:random,seed:{}", iterationSeed);
-  auto parsedCreator = createEncodingSelectionPolicyFactory(
-      selectionConfig, writerOptions.compressionOptions);
-  NIMBLE_CHECK(
-      parsedCreator.has_value(),
-      "Encoding selection config produced no policy creator for '{}'.",
-      selectionConfig);
-  EncodingSelectionPolicyCreator policyCreator = std::move(*parsedCreator);
+  EncodingSelectionPolicyCreator policyCreator;
+  if (randomizedConfig.has_value()) {
+    policyCreator = std::move(writerOptions.encodingSelectionPolicyCreator);
+  } else {
+    const auto selectionConfig = encodingType.has_value()
+        ? fmt::format(
+              "type:random,seed:{},encodings:{}",
+              iterationSeed,
+              toString(*encodingType))
+        : fmt::format("type:random,seed:{}", iterationSeed);
+    auto parsedCreator = createEncodingSelectionPolicyFactory(
+        selectionConfig, writerOptions.compressionOptions);
+    NIMBLE_CHECK(
+        parsedCreator.has_value(),
+        "Encoding selection config produced no policy creator for '{}'.",
+        selectionConfig);
+    policyCreator = std::move(*parsedCreator);
+  }
 
   // The write-side gate admits floating point directly for SimdForBitpack and
   // Huffman. A Nullable float's nested policy can also admit DeltaBlock after
