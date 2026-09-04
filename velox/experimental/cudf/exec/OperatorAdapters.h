@@ -44,7 +44,10 @@ class OperatorAdapter {
   virtual bool canHandle(const exec::Operator* op) const = 0;
 
   /// Check if the operator is supported for GPU execution. Returns true if
-  /// the operator can be executed on GPU.
+  /// the operator can be executed on GPU. Returning false is how an adapter
+  /// declines an operator it cannot implement, which leaves the operator in
+  /// place for CPU execution; createReplacements() must not be used for that,
+  /// see below.
   virtual bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -79,10 +82,20 @@ class OperatorAdapter {
   }
 
   /// Create the GPU operator(s) this adapter contributes to the driver.
-  /// When keepOperator() is false they replace 'op', and returning none means
-  /// the operator could not be replaced. When keepOperator() is true they are
-  /// inserted after 'op', which is how a plan node that expands into several
-  /// operators is described; returning none then simply keeps 'op' alone.
+  ///
+  /// When keepOperator() is false the returned operators replace 'op', and at
+  /// least one operator must be returned. Combining keepOperator() == false
+  /// with canRunOnGPU() == true and an empty result is not supported: with CPU
+  /// fallback disabled the driver is rejected, and with fallback enabled a
+  /// conversion operator appended behind the failed replacement takes the place
+  /// of 'op', which drops the plan node from the pipeline. An adapter that
+  /// cannot implement a particular operator returns false from canRunOnGPU()
+  /// instead, which keeps 'op' in place.
+  ///
+  /// When keepOperator() is true the returned operators are inserted after
+  /// 'op', which is how a plan node that expands into several operators is
+  /// described; returning none then simply keeps 'op' alone.
+  ///
   /// Either way the caller renumbers the driver's operator ids afterwards, so
   /// 'operatorId' need not be unique across the returned operators.
   virtual std::vector<std::unique_ptr<exec::Operator>> createReplacements(
@@ -121,6 +134,12 @@ class OperatorAdapterRegistry {
 
   /// Register an adapter with the registry.
   void registerAdapter(std::unique_ptr<OperatorAdapter> adapter);
+
+  /// Registers 'adapter' ahead of everything already registered, so it wins
+  /// findAdapter() for an operator a built-in adapter also handles. For
+  /// substituting an adapter in a test; production registration appends with
+  /// registerAdapter(). Relies on findAdapter() returning the first match.
+  void registerAdapterFront(std::unique_ptr<OperatorAdapter> adapter);
 
   /// Find an adapter that can handle the given operator. Returns a pointer
   /// to the adapter, or nullptr if none found.
