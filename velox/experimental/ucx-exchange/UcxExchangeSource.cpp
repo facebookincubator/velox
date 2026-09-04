@@ -266,14 +266,34 @@ folly::F14FastMap<std::string, int64_t> UcxExchangeSource::stats() const {
 
 folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeSource::metrics()
     const {
+  std::lock_guard<std::mutex> lock(metricsMutex_);
   folly::F14FastMap<std::string, RuntimeMetric> map;
 
   // these metrics will be aggregated over all exchange sources of the same
   // exchange client.
   map["ucxExchangeSource.numPackedColumns"] = metrics_.numPackedColumns_;
   map["ucxExchangeSource.totalBytes"] = metrics_.totalBytes_;
+  map["ucxExchangeSource.intraNodePackedColumns"] =
+      metrics_.intraNodePackedColumns_;
+  map["ucxExchangeSource.intraNodeBytes"] = metrics_.intraNodeBytes_;
+  map["ucxExchangeSource.remotePackedColumns"] = metrics_.remotePackedColumns_;
+  map["ucxExchangeSource.remoteBytes"] = metrics_.remoteBytes_;
   map["ucxExchangeSource.rttPerRequest"] = metrics_.rttPerRequest_;
   return map;
+}
+
+void UcxExchangeSource::recordPayloadMetrics(uint64_t dataBytes) {
+  const auto bytes = saturateCast(dataBytes);
+  std::lock_guard<std::mutex> lock(metricsMutex_);
+  metrics_.numPackedColumns_.addValue(1);
+  metrics_.totalBytes_.addValue(bytes);
+  if (isIntraNodeTransfer_) {
+    metrics_.intraNodePackedColumns_.addValue(1);
+    metrics_.intraNodeBytes_.addValue(bytes);
+  } else {
+    metrics_.remotePackedColumns_.addValue(1);
+    metrics_.remoteBytes_.addValue(bytes);
+  }
 }
 
 // private methods ---
@@ -602,8 +622,7 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
     std::shared_ptr<DataAndMetadata> ptr =
         std::static_pointer_cast<DataAndMetadata>(arg);
 
-    metrics_.numPackedColumns_.addValue(1);
-    metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
+    recordPayloadMetrics(ptr->metadata.dataSizeBytes);
 
     // Create packed_columns from the received metadata and data buffer
     cudf::packed_columns packedCols(
@@ -765,12 +784,12 @@ void UcxExchangeSource::onIntraNodeData(
     return;
   }
 
+  const auto dataSize = data->gpu_data->size();
   VLOG(3) << toString()
           << " Intra-node transfer: received data for seq=" << sequenceNumber_
-          << " size=" << data->gpu_data->size();
+          << " size=" << dataSize;
 
-  metrics_.numPackedColumns_.addValue(1);
-  metrics_.totalBytes_.addValue(data->gpu_data->size());
+  recordPayloadMetrics(dataSize);
 
   // Convert packed_columns to PackedTableWithStream for the queue.
   // Create packed_columns from the shared data.
