@@ -424,8 +424,9 @@ uint64_t ZstdDecompressor::decompress(
   // ZSTD_decompressDCtx() forwards to ZSTD_decompressMultiFrame() and therefore
   // decodes every concatenated frame in 'src'. Its only requirement is that
   // 'destLength' holds the total decompressed size across all frames; that is
-  // satisfied by getDecompressedLength(), which returns ZSTD_decompressBound()
-  // over the whole input (see below).
+  // satisfied by getDecompressedLength(), which returns the exact total over
+  // the whole input via ZSTD_findDecompressedSize() (falling back to the
+  // ZSTD_decompressBound() upper bound for streaming frames; see below).
   // Reuse 'ZSTD_DCtx' per-thread to avoid repeated allocations.
   thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> ctx{
       ZSTD_createDCtx(), ZSTD_freeDCtx};
@@ -441,16 +442,17 @@ uint64_t ZstdDecompressor::decompress(
 std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
     const char* src,
     uint64_t srcLength) const {
-  // A Parquet/ORC block may hold several concatenated ZSTD frames (large string
-  // columns). ZSTD_getFrameContentSize() reports only the first frame, which
-  // under-sizes the destination and makes decompress() fail with
-  // dstSize_tooSmall. Prefer the exact total across all frames via
-  // ZSTD_findDecompressedSize(), which also lets the caller skip a block
-  // without decompressing it (the 'exact' flag). For streaming frames (no
-  // content-size header) it returns ZSTD_CONTENTSIZE_UNKNOWN, so fall back to
-  // the upper bound ZSTD_decompressBound(), which never returns UNKNOWN --
-  // correct, at the cost of that bound ('exact' false, so such a block cannot
-  // be skipped without decoding).
+  // A decompressor block may hold several concatenated ZSTD frames (e.g. a raw
+  // compressed stream fed whole to the decompressor via useRawDecompression,
+  // as the Text reader does). ZSTD_getFrameContentSize() reports only the
+  // first frame, which under-sizes the destination and makes decompress()
+  // fail with dstSize_tooSmall. Instead prefer the exact total across all
+  // frames via ZSTD_findDecompressedSize(), which also lets the caller skip a
+  // block without decompressing it (the 'exact' flag). For streaming frames
+  // (no content-size header) it returns ZSTD_CONTENTSIZE_UNKNOWN, so fall
+  // back to the upper bound ZSTD_decompressBound(), which never returns
+  // UNKNOWN -- correct, at the cost of that bound ('exact' false, so such a
+  // block cannot be skipped without decoding).
   if (auto exact = ZSTD_findDecompressedSize(src, srcLength);
       exact != ZSTD_CONTENTSIZE_UNKNOWN && exact != ZSTD_CONTENTSIZE_ERROR) {
     return {static_cast<int64_t>(exact), true};
