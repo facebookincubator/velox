@@ -16,6 +16,7 @@
 #pragma once
 
 #include "folly/CancellationToken.h"
+#include "velox/common/Casts.h"
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/PrefixSortConfig.h"
@@ -104,6 +105,26 @@ struct ConnectorSplit : public ISerializable {
         splitWeight,
         cacheable ? "true" : "false");
   }
+
+  /// Returns true if this split is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this split as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this split as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
+  }
 };
 
 class ColumnHandle : public ISerializable {
@@ -114,6 +135,26 @@ class ColumnHandle : public ISerializable {
 
   virtual std::string toString() const {
     return name();
+  }
+
+  /// Returns true if this handle is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this handle as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this handle as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
   }
 
   folly::dynamic serialize() const override;
@@ -163,6 +204,26 @@ class ConnectorTableHandle : public ISerializable {
     return name();
   }
 
+  /// Returns true if this handle is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this handle as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this handle as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
+  }
+
   virtual folly::dynamic serialize() const override;
 
  protected:
@@ -184,6 +245,26 @@ class ConnectorInsertTableHandle : public ISerializable {
   }
 
   virtual std::string toString() const = 0;
+
+  /// Returns true if this handle is of connector-specific type 'T'.
+  template <typename T>
+  bool is() const {
+    return as<T>() != nullptr;
+  }
+
+  /// Returns this handle as connector-specific type 'T', or nullptr if it is
+  /// not of that type.
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
+  /// Returns this handle as connector-specific type 'T'. Throws if it is not
+  /// of that type.
+  template <typename T>
+  const T* asChecked() const {
+    return checkedPointerCast<const T>(this);
+  }
 
   folly::dynamic serialize() const override {
     VELOX_NYI();

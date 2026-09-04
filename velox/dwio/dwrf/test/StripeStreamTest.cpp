@@ -898,10 +898,10 @@ TEST_F(StripeStreamTest, shareDictionary) {
   char nonSharedDictBuffer[1024];
   size_t nonSharedDictBufferSize = writeRange(nonSharedDictBuffer, 0, 100);
   EXPECT_CALL(ss, getStreamProxy(1, 0, proto::Stream_Kind_DICTIONARY_DATA, _))
-      .WillOnce(InvokeWithoutArgs([&]() {
+      .WillOnce([&]() {
         return new SeekableArrayInputStream(
             nonSharedDictBuffer, nonSharedDictBufferSize);
-      }));
+      });
   auto sharedDictionaryEncoding2_2 =
       genColumnEncoding(2, 2, proto::ColumnEncoding_Kind_DICTIONARY, 100);
   EXPECT_CALL(ss, getEncodingProxy(2, 2))
@@ -929,10 +929,10 @@ TEST_F(StripeStreamTest, shareDictionary) {
   char sharedDictBuffer[2048];
   size_t sharedDictBufferSize = writeRange(sharedDictBuffer, 100, 200);
   EXPECT_CALL(ss, getStreamProxy(2, 0, proto::Stream_Kind_DICTIONARY_DATA, _))
-      .WillRepeatedly(InvokeWithoutArgs([&]() {
+      .WillRepeatedly([&]() {
         return new SeekableArrayInputStream(
             sharedDictBuffer, sharedDictBufferSize);
-      }));
+      });
   EXPECT_CALL(
       ss, getStreamProxy(2, Not(0), proto::Stream_Kind_DICTIONARY_DATA, _))
       .WillRepeatedly(Return(nullptr));

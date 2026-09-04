@@ -103,6 +103,13 @@ class VectorWindowPartition : public WindowPartition {
       vector_size_t* rawFrameBounds,
       SelectivityVector& validFrames) const override;
 
+  /// Returns the number of retained input vector ranges. Row lookup and
+  /// 'removeProcessedRows()' both walk these, so a caller that adds rows in
+  /// many small ranges pays for it on every access.
+  size_t testingNumRanges() const {
+    return ranges_.size();
+  }
+
  private:
   class VectorAccessor;
 
