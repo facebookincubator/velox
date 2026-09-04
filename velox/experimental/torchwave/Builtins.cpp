@@ -561,6 +561,53 @@ void resolveLogitDefault(nativert::Node* node, const ValueTypes& /*types*/) {
   }
 }
 
+// Resolves 'value' to the buffer it will actually read once clone elision has
+// run. Follows storage aliasing like viewStorageBase, and additionally looks
+// through aten.clone: a clone taken only to snapshot a value for reading is
+// elidable, and once elision drops it the clone's output IS its source's
+// buffer. Comparing post-elision roots errs in the safe direction -- a clone
+// that survives costs one needless materialization, a clone that is dropped
+// after we assumed it would not would be a wrong answer.
+ValueCP elidableStorageRoot(ValueCP value) {
+  while (value != nullptr) {
+    auto* base = viewStorageBase(value);
+    auto* producer = base->producer();
+    if (!producer || producer->target() != "torch.ops.aten.clone.default" ||
+        producer->inputs().empty()) {
+      return base;
+    }
+    value = producer->inputs()[0].value;
+  }
+  return value;
+}
+
+// True if an aten.copy node may read the buffer its result is written back
+// into. The copy's result always lands in self's storage: the enclosing
+// slice_scatter / select_scatter writes it there, in place once clone elision
+// drops the defensive copy of self. So self and src sharing a storage root
+// means the read and the write can overlap -- and at a shift, since they are
+// different views of it. Identical views are exempt: self[i] = self[i] needs no
+// ordering.
+bool copyMayOverlap(NodeCP node) {
+  auto* self = inputAt(node, 0);
+  auto* src = inputAt(node, 1);
+  if (!self || !src || self == src) {
+    return false;
+  }
+  auto* selfRoot = elidableStorageRoot(self);
+  auto* srcRoot = elidableStorageRoot(src);
+  // A root can come back null when a clone chain has an unset source. Two
+  // nulls comparing equal would be the right answer only by accident, and one
+  // null would report "no overlap" on no evidence. Report possible overlap
+  // instead: that is the same safe direction the root comparison itself errs
+  // in -- a needless materialization costs one step, a missed hazard is a
+  // wrong answer.
+  if (!selfRoot || !srcRoot) {
+    return true;
+  }
+  return selfRoot == srcRoot;
+}
+
 void resolveDtypeFromInputExact(nativert::Node* node, const ValueTypes& types) {
   if (node->tryGetAttribute("dtype") || node->tryGetInput("dtype")) {
     return;
@@ -614,6 +661,37 @@ bool hasDynamicArg(NodeCP node, const char* name) {
 // Value operand; any additional Value input is such a dynamic shape argument.
 bool viewHasDynamicShapeArgs(NodeCP node, const ValueTypes& /*types*/) {
   return node->inputs().size() > 1;
+}
+
+// A metadata getter (sym_size / sym_numel) is worth running on the host exactly
+// when it would otherwise be an expression of its own. The host already holds
+// every tensor, so reading a size there is a field access; a kernel op has to
+// pass the tensor's metadata in, compute one scalar, and read it back out. When
+// the getter instead feeds a single fusable consumer it is a subexpression of
+// that consumer's kernel, where the value is wanted on the device anyway, so it
+// stays fused.
+//
+// Consulting the consumer's isStandalone cannot recurse back here: a getter
+// takes a tensor and yields a scalar, so a getter is never the user of a
+// getter.
+// Unused while the isStandaloneFunc call sites below are disabled.
+[[maybe_unused]] bool metadataGetterIsAlone(
+    NodeCP node,
+    const ValueTypes& types) {
+  if (node->outputs().empty() || node->outputs()[0] == nullptr) {
+    return false;
+  }
+  ValueCP out = node->outputs()[0];
+  if (types.graphOutput(out)) {
+    return true;
+  }
+  const auto& users = out->users();
+  if (users.size() != 1) {
+    // Unused, or shared -- either way it is materialized on its own.
+    return true;
+  }
+  const Metadata* userMeta = Registry::metadata(users[0]->target());
+  return userMeta == nullptr || userMeta->isStandalone(users[0], types);
 }
 
 std::vector<std::vector<Dim>> sizeAttrReserveShape(
@@ -1586,6 +1664,117 @@ void registerBuiltins() {
           {"layout", "device", "pin_memory", "non_blocking", "memory_format"})
       .registerOp();
 
+  // copy(self, src, non_blocking) -> Tensor: the functionalized form of copy_.
+  // The result carries self's shape, dtype, device and layout but src's values,
+  // so it is `_to_copy(src.expand_as(self), dtype=self.dtype)` -- one register
+  // input and a cast. self contributes metadata only: it is skipped during
+  // argument iteration (ignoreAttrs) and read through rankArgument /
+  // reserveShape, the same way full_like reads the tensor it takes its shape
+  // from. Skipping it matters beyond the saved load: reading the destination
+  // would make the copy depend on its contents and force an ordering edge that
+  // the op does not actually need.
+  //
+  // The elementwise loop is sized by the output (self's shape) and reads src
+  // per lane, so a size-1 dim or an aten.expand source broadcasts through the
+  // ordinary stride-0 leaf path with no separate expand step.
+  //
+  // A copy whose src shares storage with self is retargeted to tw.copy_out --
+  // see copyMayOverlap.
+  {
+    // self's shape, for both the register and the materializing form.
+    auto selfShape =
+        [](NodeCP node,
+           nativert::ExecutionFrame& frame,
+           const FormalToActual& map,
+           NodeCP /*originalFormalNode*/,
+           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+      return elementwiseInputShape(node, frame, map, 0);
+    };
+    // The result has self's rank but is a fresh dense buffer, not self's
+    // (possibly strided) layout.
+    auto selfRankContiguous =
+        [](NodeCP node,
+           const ValueTypes& types) -> std::vector<ValueConstraint> {
+      return {
+          {.rank = types.rank(inputAt(node, 0)),
+           .contiguity = Contiguity::kContiguous}};
+    };
+    // resolveDtypeFromInputExact writes self's dtype onto the node, so the cast
+    // is driven by the same "dtype" attribute _to_copy and to.dtype use.
+    auto castToDtype =
+        [](std::stringstream& ss, NodeCP node, std::vector<std::string> args) {
+          TORCH_CHECK(!args.empty(), "copy requires a src input");
+          const auto* dtypeAttr = node->tryGetAttribute("dtype");
+          if (!dtypeAttr ||
+              std::holds_alternative<nativert::None>(dtypeAttr->value)) {
+            ss << args[0];
+            return;
+          }
+          ss << "static_cast<" << cudaTypeFromDtype(*dtypeAttr) << ">("
+             << args[0] << ")";
+        };
+
+    MetadataBuilder("torch.ops.aten.copy.default")
+        .elementwiseFunc("__to")
+        .numArgs(1)
+        .ignoreAttrs({"self", "non_blocking"})
+        .argumentMeta({{}, {.isRegister = true}, {}})
+        .returnMeta({{.isRegister = true, .reserveShape = selfShape}})
+        .normalize(resolveDtypeFromInputExact)
+        .rankArgument(0)
+        .outputConstraints(selfRankContiguous)
+        .generateCall(castToDtype)
+        .layoutAgnostic()
+        .maybeReplace(
+            [](NodeCP node, ValueTypes& /*types*/, WaveGraph& /*waveGraph*/)
+                -> std::vector<std::pair<ValueCP, ValueCP>> {
+              // Retargeted in place rather than returned as a replacement:
+              // the node keeps its identity, inputs and users, and only the op
+              // it resolves to changes, so there is nothing for the caller to
+              // rewire -- an empty substitution list is the accurate answer.
+              // Guarded on the target so a repeat call is a no-op: once the
+              // node is tw.copy_out this hook is not reached for it again.
+              if (node->target() == "torch.ops.aten.copy.default" &&
+                  copyMayOverlap(node)) {
+                const_cast<nativert::Node*>(node)->setTarget("tw.copy_out");
+              }
+              return {};
+            })
+        .registerOp();
+
+    // tw.copy_out: aten.copy with its result in memory instead of a register.
+    // Used when the copy reads the buffer the enclosing scatter writes back
+    // into. A register result is inlined into the scatter's write, so the read
+    // of lane i and the write of lane j land in one loop with no ordering
+    // between them; when the two views overlap at a shift that is a data race.
+    // Materializing splits the copy into its own elementwise expression, and
+    // because the consumer then reads a value a producer wrote earlier in the
+    // same kernel, callNeedsBarrier emits the barrier that orders the whole
+    // read before the write.
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.copy_out",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("src", c10::TensorType::get())},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .elementwiseFunc("__copy_out")
+        .numArgs(1)
+        .hasIdxArg()
+        .hasOutputArg()
+        .hasDtypeTemplateParam()
+        .ignoreAttrs({"self", "non_blocking"})
+        .argumentMeta({{}, {.isRegister = true}})
+        .returnMeta({{.isRegister = false, .reserveShape = selfShape}})
+        .normalize(resolveDtypeFromInputExact)
+        .rankArgument(0)
+        .outputConstraints(selfRankContiguous)
+        .layoutAgnostic()
+        .registerOp();
+  }
+
   // scalar_tensor: materialize a Scalar as a 0-d (single-element) tensor.
   // Elementwise with one (register) scalar input; the output is always one
   // element and its value is, like to.dtype, a static_cast of the scalar to the
@@ -1611,6 +1800,13 @@ void registerBuiltins() {
               // scalar_tensor shape.
               return {{}};
             }}})
+      // The optimizer's elementwise fallback derives an output rank as the max
+      // over the input ranks; this op's only input is a rankless scalar, so the
+      // 0-d rank has to be stated here or the output is left rank-unknown.
+      .outputConstraints([](NodeCP /*node*/, const ValueTypes& /*types*/) {
+        return std::vector<ValueConstraint>{
+            {.rank = 0, .contiguity = Contiguity::kContiguous}};
+      })
       .generateCall([](std::stringstream& ss,
                        NodeCP node,
                        std::vector<std::string> args) {
@@ -1796,6 +1992,8 @@ void registerBuiltins() {
           {{.isRegister = false, .wholeTensor = true}, {.isRegister = true}})
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .metadataOnly()
+      // TEMP-AB-DISABLED .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -1807,6 +2005,8 @@ void registerBuiltins() {
       .argumentMeta({{.isRegister = false, .wholeTensor = true}})
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .metadataOnly()
+      // TEMP-AB-DISABLED .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -2880,7 +3080,22 @@ void registerBuiltins() {
   }
 
   // Transpose -- a view that permutes dims, generally not contiguous.
-  registerRankPreservingStandalone("torch.ops.aten.transpose.int", 0);
+  // EXPERIMENT: transpose as a fusable view rather than an unconditional
+  // standalone, so setOutputs reaches its meta->isView() branch and the view
+  // becomes an OutputDesc (viewNode) of the enclosing kernel op.
+  MetadataBuilder("torch.ops.aten.transpose.int")
+      .sizeOrdinal({0})
+      .viewOfArg(0)
+      .metadataOnly()
+      .isStandaloneFunc(viewHasDynamicShapeArgs)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguity = Contiguity::kUnknown}};
+          })
+      .registerOp();
 
   // Contiguous -- always materializes a dense result.
   registerRankPreservingStandalone(
@@ -2893,6 +3108,7 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .viewOfArg(0)
       .metadataOnly()
+      .normalizeDimAttr()
       .isStandaloneFunc(viewHasDynamicShapeArgs)
       .headerFile("velox/experimental/torchwave/Views.cuh")
       .deviceFunc("tw_slice")
@@ -2938,6 +3154,7 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .viewOfArg(0)
       .metadataOnly()
+      .normalizeDimAttr()
       .headerFile("velox/experimental/torchwave/Views.cuh")
       .deviceFunc("tw_select")
       .typeTemplateParams({0})
@@ -2971,6 +3188,7 @@ void registerBuiltins() {
       .isStandalone()
       .viewOfArg(0)
       .metadataOnly()
+      .normalizeDimAttr()
       .rankArgument(0)
       .registerOp();
 
@@ -3165,10 +3383,16 @@ void registerBuiltins() {
       .registerOp();
 
   // Flatten.
+  // Not viewOfArg: flatten only returns a view when the flattened range is
+  // contiguous in memory. On any other layout aten falls back to reshape, which
+  // copies, so the output does not alias self and the op does real device work.
+  // Nothing here constrains the input's layout, so claiming the view would let
+  // the clone-elision and fusion paths (Metadata::isView) read through to a
+  // buffer the output does not actually share. viewStorageBase is unaffected --
+  // it takes the alias from the c10 schema's Tensor(a), which is authoritative.
   MetadataBuilder("torch.ops.aten.flatten.using_ints")
       .sizeOrdinal({0})
       .isStandalone()
-      .viewOfArg(0)
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
@@ -3196,10 +3420,14 @@ void registerBuiltins() {
           })
       .registerOp();
 
-  // Unbind.
+  // Unbind. Each output is a select() view of self, so this enqueues nothing on
+  // the device: metadataOnly keeps it from forcing a wave-stream sync before
+  // its step's kernel, and from taking a timing sync that would charge it the
+  // drain of every outstanding wave kernel.
   MetadataBuilder("torch.ops.aten.unbind.int")
       .sizeOrdinal({0})
       .isStandalone()
+      .metadataOnly()
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
@@ -3220,6 +3448,7 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.split_with_sizes.default")
       .sizeOrdinal({0})
       .isStandalone()
+      .metadataOnly()
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
@@ -3949,6 +4178,19 @@ void registerBuiltins() {
       .hasBlockSizeTemplateParam()
       .alwaysSingleBlock()
       .multiBlockReturnBarrier()
+      // One row per non-zero element, one column per input dim (nonzeroReserve
+      // and nonzero1d both produce that shape), so the result is one rank wider
+      // than the input. Without this, consumers see an unknown rank and fall
+      // back to their eager form.
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            auto rank = types.rank(inputAt(node, 0));
+            return {
+                {.rank = rank >= 0 ? static_cast<int8_t>(rank + 1)
+                                   : static_cast<int8_t>(-1),
+                 .contiguity = Contiguity::kContiguous}};
+          })
       .registerOp();
 
   // tw.nonzero1d_head: (Tensor) -> Tensor
@@ -4044,8 +4286,8 @@ void registerBuiltins() {
       .numBarriers(3)
       .registerOp();
 
-  // Cat — registered in Cat.cpp.
-  registerCatMetadata();
+  // Cat and stack — registered together in Cat.cpp.
+  registerConcatMetadata();
 
   // --- repeat_interleave ---
 
@@ -4057,20 +4299,67 @@ void registerBuiltins() {
              ValueTypes& types,
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             auto* graph = waveGraph.graph();
-            auto inputId = node->inputs()[0].value->id();
-            auto inputDtype = types.types[inputId]->dtype();
-            auto* headNode = graph->createNode(
-                "tw.repeat_interleave_head",
-                {{"repeats", node->inputs()[1].value}});
+            auto* input = node->inputs()[0].value;
+            auto* repeats = node->inputs()[1].value;
+            auto inputDtype = types.types[input->id()]->dtype();
+            // The interleave axis is resolved once, here, and handed to both
+            // nodes already normalized: nullopt means dim=None (flatten to
+            // 1-D), otherwise a non-negative axis. Normalizing in one place
+            // keeps the head and the final from disagreeing about what a
+            // negative 'dim' means.
+            std::optional<int64_t> dim;
+            if (auto dimOpt = constIntArg(node, "dim")) {
+              int64_t rank = static_cast<int64_t>(types.rank(input));
+              int64_t resolved = *dimOpt < 0 ? *dimOpt + rank : *dimOpt;
+              TORCH_CHECK(
+                  resolved >= 0 && resolved < rank,
+                  "repeat_interleave: dim ",
+                  *dimOpt,
+                  " out of range for rank ",
+                  rank);
+              dim = resolved;
+            }
+            // A 0-dim repeat count broadcasts to every segment; the broadcast
+            // head reads the segment count from its (host-sized) prefix, so it
+            // takes 'input' and the 'dim' attr. A 1-D repeats is per-segment.
+            //
+            // torch.repeat_interleave also broadcasts a 1-D repeats of length
+            // 1, but that cannot be detected here: an input's TensorMeta
+            // carries placeholder sizes (only its rank is meaningful), so
+            // numel() would misroute every 1-D repeats to the broadcast head.
+            // The length is first known at launch, by which point the head
+            // kernel is already chosen -- so instead of guessing,
+            // repeatInterleaveFinalReserve rejects a prefix that does not cover
+            // the segment count, turning what would be an out-of-bounds device
+            // read into a host-side error.
+            nativert::Node* headNode = nullptr;
+            if (types.rank(repeats) == 0) {
+              headNode = graph->createNode(
+                  "tw.repeat_interleave_bcast_head",
+                  {{"repeats", repeats}, {"input", input}});
+              if (dim.has_value()) {
+                headNode->addAttribute({"dim", *dim});
+              }
+            } else {
+              headNode = graph->createNode(
+                  "tw.repeat_interleave_head", {{"repeats", repeats}});
+            }
             auto* prefixOutput = waveGraph.newTensorValue(
                 headNode, "repeat_prefix", c10::ScalarType::Int);
             auto* totalOutput = waveGraph.newScalarValue(
                 headNode, "repeat_total", c10::ScalarType::Int);
             auto* finalNode = graph->createNode(
                 "tw.repeat_interleave_final",
-                {{"input", node->inputs()[0].value},
+                {{"input", input},
                  {"prefix", prefixOutput},
                  {"total", totalOutput}});
+            // Propagate the interleave axis so the final's reserveShape and
+            // rank constraint reconstruct the full (multi-dim) output shape,
+            // and so the kernel knows the axis without re-deriving it from the
+            // shapes (which is ambiguous when the repeats sum back to
+            // size(input, dim)). It is a template parameter of the device func,
+            // so the flatten-to-1D case (dim=None) is encoded as -1.
+            finalNode->addAttribute({"dim", dim.value_or(-1)});
             auto* resultOutput = waveGraph.newTensorValue(
                 finalNode, "repeat_result", inputDtype);
             return {{node->outputs()[0], resultOutput}};
@@ -4110,6 +4399,62 @@ void registerBuiltins() {
           })
       .registerOp();
 
+  auto repeatInterleaveBcastReserve =
+      [](NodeCP node,
+         nativert::ExecutionFrame& frame,
+         const FormalToActual& map,
+         NodeCP /*originalFormalNode*/,
+         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+    // prefix length = number of source segments = size(input, dim), or
+    // numEl(input) when flattening (dim=None).
+    auto inputTensor = paramTensor(node->inputs()[1].value, frame, map);
+    auto dimOpt = constIntArg(node, "dim");
+    if (!dimOpt.has_value()) {
+      return {{static_cast<Dim>(inputTensor.numel())}};
+    }
+    // 'dim' arrives already normalized to a non-negative axis -- the rewrite
+    // resolves it once for both this head and the final -- so this only
+    // re-checks it against the runtime rank.
+    int64_t rank = inputTensor.dim();
+    int64_t dim = *dimOpt;
+    TORCH_CHECK(
+        dim >= 0 && dim < rank,
+        "repeat_interleave: dim ",
+        dim,
+        " out of range for rank ",
+        rank);
+    return {{static_cast<Dim>(inputTensor.size(dim))}};
+  };
+
+  // Broadcast (0-dim repeat count) head: prefix[i] = (i+1)*r, sized to the
+  // segment count. Reused for both dim-given and flatten (dim=None) cases.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.repeat_interleave_bcast_head",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("repeats", c10::TensorType::get()),
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("prefix", c10::TensorType::get()),
+              c10::Argument("total", c10::IntType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false, .reserveShape = repeatInterleaveBcastReserve},
+           {.neededOnHost = true}})
+      .headerFile(kScanHeader)
+      .deviceFunc("repeat_interleave_bcast_head")
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP /*node*/,
+             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+            return {{.rank = 1}, {}};
+          })
+      .registerOp();
+
   auto repeatInterleaveFinalReserve =
       [](NodeCP node,
          nativert::ExecutionFrame& frame,
@@ -4117,7 +4462,64 @@ void registerBuiltins() {
          NodeCP /*originalFormalNode*/,
          const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
     auto total = paramSymInt(node->inputs()[2].value, frame, map);
-    return {{static_cast<Dim>(total)}};
+    // The whole scan pipeline indexes prefixes with int32, so a result at or
+    // past INT32_MAX cannot be represented no matter how it arose. The
+    // broadcast head saturates to INT32_MAX on an overflowing segments *
+    // repeatCount and reports it through debugInfo, but that report is
+    // diagnostic only -- errorString() is gated on keepStatsOnThread and never
+    // throws -- so without this the gather would run on a clamped prefix and
+    // return wrong data. 'total' is already neededOnHost, so gating here costs
+    // no extra device round trip.
+    TORCH_CHECK(
+        total < std::numeric_limits<int32_t>::max(),
+        "repeat_interleave: result of ",
+        total,
+        " elements along the interleave axis is not representable in the "
+        "int32 prefix-sum pipeline");
+    auto dimOpt = constIntArg(node, "dim");
+    // The gather walks prefix[0 .. segments), where segments is size(input,
+    // dim) or numEl(input) when flattening. A per-segment 'repeats' sizes the
+    // prefix by its own length, so a mismatch (notably torch's length-1
+    // broadcast form, which the rewrite cannot recognize -- see the comment
+    // there) would read past the end of the prefix on device. Checked here,
+    // where the real extents are known, so it surfaces as a host-side error.
+    // The index_final overload shares this reserve, carries no 'dim' at all,
+    // and sizes its prefix from the same repeats it iterates, so it is exempt.
+    auto checkPrefixCoversSegments = [&](int64_t segments) {
+      auto prefixTensor = paramTensor(node->inputs()[1].value, frame, map);
+      TORCH_CHECK(
+          prefixTensor.numel() == segments,
+          "repeat_interleave: 'repeats' has ",
+          prefixTensor.numel(),
+          " entries but the input has ",
+          segments,
+          " segments along the interleave axis; a length-1 broadcast 'repeats'"
+          " is not supported on the wave path");
+    };
+    // dim=None: repeat_interleave flattens to a 1-D output of 'total'
+    // elements. The index_final overload shares this reserve and never carries
+    // a 'dim'; the gather final always does, using -1 for the flatten case.
+    if (!dimOpt.has_value()) {
+      return {{static_cast<Dim>(total)}};
+    }
+    auto inputTensor = paramTensor(node->inputs()[0].value, frame, map);
+    if (*dimOpt < 0) {
+      checkPrefixCoversSegments(inputTensor.numel());
+      return {{static_cast<Dim>(total)}};
+    }
+    int64_t rank = inputTensor.dim();
+    int64_t dim = *dimOpt;
+    TORCH_CHECK(
+        dim < rank,
+        "repeat_interleave: dim ",
+        dim,
+        " out of range for rank ",
+        rank);
+    checkPrefixCoversSegments(inputTensor.size(dim));
+    std::vector<Dim> shape(
+        inputTensor.sizes().begin(), inputTensor.sizes().end());
+    shape.at(dim) = static_cast<Dim>(total);
+    return {shape};
   };
 
   // tw.repeat_interleave_final: (Tensor, Tensor, int) -> Tensor
@@ -4134,15 +4536,34 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // The gather decomposes the output index and maps it through the
+      // output's strides, so it fills a pitched concat band correctly.
+      .mayWriteStrided()
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_final")
-      .sharedDecls({{"uint32_t", "size"}, {"uint32_t", "rounded"}})
+      .sharedDecls({{"uint32_t", "size"}})
       .typeTemplateParams({0})
+      // The interleave axis is a compile-time parameter of the kernel: it
+      // cannot be recovered on device from the shapes alone.
+      .templateAttrs({"dim"})
       .hasBarrier()
       .hasBlockSizeTemplateParam()
       .multiBlockReturnBarrier()
-      .outputConstraints(rank1Constraint)
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            // dim=None (encoded as -1) flattens to rank 1; otherwise the
+            // output keeps the input's rank (only the interleave axis changes
+            // length).
+            auto dimOpt = constIntArg(node, "dim");
+            if (!dimOpt.has_value() || *dimOpt < 0) {
+              return {{.rank = 1, .contiguity = Contiguity::kContiguous}};
+            }
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguity = Contiguity::kContiguous}};
+          })
       .registerOp();
 
   // Index-generating overload: given a 1-D counts tensor, returns a 1-D tensor
@@ -4193,6 +4614,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // No mayWriteStrided: unlike repeat_interleave_final, this one writes the
+      // run of repeated indices as out[j] for j in [start, end), a linear walk
+      // that ignores the output's strides. A pitched concat band would land in
+      // the wrong places, silently, since a placed operand is not copied in.
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_index_final")
@@ -4308,8 +4733,149 @@ void registerBuiltins() {
       .outputConstraints(rank1Constraint)
       .registerOp();
 
+  // tw.pad_last_dim: the fused form of aten.pad below when constant mode pads
+  // only the last dimension, where the op is just a gather with a default (see
+  // __pad_last_dim). Elementwise, so it folds into the consumer's kernel
+  // instead of taking a launch and a wave-stream sync of its own. 'self' is
+  // read at computed offsets, so it is a whole-tensor random-access operand.
+  // 'pad' carries the whole list for the host-side output width only and is
+  // kept out of the kernel arguments (ignoreAttrs); the kernel takes the two
+  // amounts as 'left'/'right' registers. Reading the list rather than the two
+  // elements matters: paramIntListByName resolves the packed list from the
+  // frame, which a dynamic pad amount populates before an element-wise read of
+  // the prim.ListPack operands would see it.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.pad_last_dim",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get()),
+              c10::Argument("pad", c10::ListType::create(c10::IntType::get())),
+              c10::Argument("left", c10::IntType::get()),
+              c10::Argument("right", c10::IntType::get()),
+              c10::Argument("value", c10::NumberType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .elementwiseFunc("__pad_last_dim")
+      .hasIdxArg()
+      .ignoreAttrs({"pad"})
+      .argumentMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {},
+           {.isRegister = true},
+           {.isRegister = true},
+           {.isRegister = true}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserveShape =
+                [](NodeCP node,
+                   nativert::ExecutionFrame& frame,
+                   const FormalToActual& map,
+                   NodeCP originalFormalNode,
+                   const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
+              auto self = paramTensor(node->inputs()[0].value, frame, map);
+              auto pad = paramIntListByName(
+                  originalFormalNode, "pad", frame, map, nodeMap);
+              auto sizes = self.sizes();
+              std::vector<Dim> shape(sizes.begin(), sizes.end());
+              shape.back() += static_cast<Dim>(pad[0] + pad[1]);
+              return {std::move(shape)};
+            }}})
+      .typeTemplateParams({0})
+      // The output extent (self's, widened by the pad amounts) is not derivable
+      // from the operands: self is a whole-tensor operand, which the
+      // elementwise size leaves drop, so a fused pad would leave its consumer's
+      // expression with no size leaf at all. sizeFromOutput keeps the output as
+      // a shape-only tensor and sizes the enclosing expression from it, as for
+      // index_select.
+      .sizeFromOutput()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguity = Contiguity::kContiguous}};
+          })
+      .registerOp();
+
   MetadataBuilder("torch.ops.aten.pad.default")
       .isStandalone()
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            // Only constant mode is an index-with-default: reflect/replicate
+            // mirror indices back into self, and circular wraps them. A pad
+            // list longer than 2 pads interior dims, which would need those
+            // dims decomposed out of the lane index too.
+            const auto* mode = node->tryGetAttribute("mode");
+            if (mode && std::holds_alternative<std::string>(mode->value) &&
+                std::get<std::string>(mode->value) != "constant") {
+              return {};
+            }
+            auto* self = inputAt(node, 0);
+            if (!self || types.rank(self) < 1) {
+              return {};
+            }
+            auto selfId = self->id();
+            if (selfId < 0 ||
+                static_cast<size_t>(selfId) >= types.types.size() ||
+                !types.types[selfId]) {
+              return {};
+            }
+            // normalize() above fills a missing/None 'value' with a typed
+            // zero, so anything else here is a form this rewrite does not
+            // model.
+            const auto* value = node->tryGetAttribute("value");
+            if (!value) {
+              return {};
+            }
+            nativert::Constant deflt;
+            if (std::holds_alternative<int64_t>(value->value)) {
+              deflt = nativert::Constant{std::get<int64_t>(value->value)};
+            } else if (std::holds_alternative<double>(value->value)) {
+              deflt = nativert::Constant{std::get<double>(value->value)};
+            } else {
+              return {};
+            }
+            // The pad amounts are either a constant list attribute or a
+            // prim.ListPack of two symints; both give the kernel its two
+            // registers, and the list itself gives the reserve the width.
+            auto* graph = waveGraph.graph();
+            std::vector<nativert::NamedArgument> inputs{{"self", self}};
+            nativert::Node* fused = nullptr;
+            if (const auto* padValue = node->tryGetInput("pad")) {
+              auto* pack = padValue->value->producer();
+              if (!pack || pack->target() != "prim.ListPack" ||
+                  pack->inputs().size() != 2) {
+                return {};
+              }
+              inputs.push_back({"pad", padValue->value});
+              inputs.push_back({"left", pack->inputs()[0].value});
+              inputs.push_back({"right", pack->inputs()[1].value});
+              fused = graph->createNode("tw.pad_last_dim", inputs);
+            } else {
+              const auto* padAttr = node->tryGetAttribute("pad");
+              if (!padAttr ||
+                  !std::holds_alternative<std::vector<int64_t>>(
+                      padAttr->value)) {
+                return {};
+              }
+              const auto& pad = std::get<std::vector<int64_t>>(padAttr->value);
+              if (pad.size() != 2) {
+                return {};
+              }
+              fused = graph->createNode("tw.pad_last_dim", inputs);
+              fused->addAttribute({"pad", pad});
+              fused->addAttribute({"left", pad[0]});
+              fused->addAttribute({"right", pad[1]});
+            }
+            fused->addAttribute({"value", std::move(deflt)});
+            graph->insertBefore(fused, const_cast<nativert::Node*>(node));
+            auto* fusedOutput = waveGraph.newTensorValue(
+                fused, "pad_last_dim", types.types[selfId]->dtype());
+            return {{node->outputs()[0], fusedOutput}};
+          })
       .outputConstraints(
           [](NodeCP node,
              const ValueTypes& types) -> std::vector<ValueConstraint> {
@@ -4529,9 +5095,49 @@ void registerBuiltins() {
       .registerOp();
 
   // expand: broadcast view (0 strides on expanded dims), rank = size length.
+  //
+  // Two lowerings. A consumer that reads the result from memory wants the view:
+  // 0 strides cost nothing, while a fused broadcast would materialize every
+  // repeat. A consumer that takes the value in a register wants the fused form:
+  // the elementwise identity below inlines into the consumer's expression and
+  // produces nothing at all, where the view costs a standalone launch and a
+  // real tensor. isStandaloneFunc picks the view unless every consumer is an
+  // elementwise op -- the aten.copy case, where expand is how a functionalized
+  // `dst.copy_(src)` spells its broadcast.
+  //
+  // viewOfArg stays set either way: the fused form reads the source's storage,
+  // so resolving the result to that base is what alias analysis needs (and what
+  // copyMayOverlap relies on to see through an expand into the real buffer).
   MetadataBuilder("torch.ops.aten.expand.default")
       .sizeOrdinal({0})
-      .isStandalone()
+      .isStandaloneFunc(
+          [constAttrList](NodeCP node, const ValueTypes& /*types*/) {
+            // A dynamic size arrives as a SymIntList operand that is not
+            // resolved when the op runs, so only a compile-time size can be
+            // fused; the ROO graph has both forms.
+            if (!constAttrList(node, "size")) {
+              return true;
+            }
+            const auto& outputs = node->outputs();
+            if (outputs.empty() || outputs[0]->users().empty()) {
+              return true;
+            }
+            for (auto* user : outputs[0]->users()) {
+              const auto* userMeta = Registry::metadata(user->target());
+              if (!userMeta || !userMeta->elementwise) {
+                return true;
+              }
+            }
+            return false;
+          })
+      .elementwiseFunc("__to")
+      .numArgs(1)
+      .generateCall([](std::stringstream& ss,
+                       NodeCP /*node*/,
+                       std::vector<std::string> args) {
+        TORCH_CHECK(!args.empty(), "expand requires a self input");
+        ss << args[0];
+      })
       .viewOfArg(0)
       .metadataOnly()
       .shapeAttr("size")
@@ -4700,19 +5306,9 @@ void registerBuiltins() {
             return {};
           })
       .registerOp();
-  // copy (functional): returns a tensor with self's shape holding src's values
-  // (src broadcast to self); output has self's rank.
-  MetadataBuilder("torch.ops.aten.copy.default")
-      .sizeOrdinal({0})
-      .isStandalone()
-      .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            return {
-                {.rank = types.rank(inputAt(node, 0)),
-                 .contiguity = Contiguity::kContiguous}};
-          })
-      .registerOp();
+  // aten.copy.default is registered as a fused elementwise next to _to_copy,
+  // which it decomposes to. The registry keeps the last registration for a
+  // name, so it must not be re-registered as a standalone here.
 
   // Additional tensor-writing ops, registered as eager standalone (functional:
   // output has self's shape, freshly contiguous). The in-place rewrite pass
@@ -5130,24 +5726,6 @@ void registerBuiltins() {
             })
         .registerOp();
   }
-  // stack: concatenates along a new dim, so rank = element rank + 1.
-  MetadataBuilder("torch.ops.aten.stack.default")
-      .sizeOrdinal({0})
-      .isStandalone()
-      .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            auto elems = inputAt(node, 0)->getListElements();
-            if (elems.empty()) {
-              return {};
-            }
-            auto r = types.rank(elems[0]);
-            return {
-                {.rank = r >= 0 ? static_cast<int8_t>(r + 1)
-                                : static_cast<int8_t>(-1),
-                 .contiguity = Contiguity::kContiguous}};
-          })
-      .registerOp();
   // full_like: self-shaped tensor filled with a scalar. Like ones_like, but the
   // fill value arrives as the "fill_value" scalar attribute param consumed by
   // __full. self is used only for the output shape, so it is skipped during

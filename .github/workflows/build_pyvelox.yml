@@ -115,7 +115,7 @@ jobs:
           uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@f03ac7617d6cff873ccf24cc0d567ef5ba5a9e6d # v4.0.0
+        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
         env:
           BUILD_VERSION: ${{ inputs.version }}
           CIBW_BUILD: cp310-* cp311-* cp312-* cp313-*

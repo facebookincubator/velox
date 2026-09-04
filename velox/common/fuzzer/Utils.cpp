@@ -119,8 +119,14 @@ int32_t randDate(FuzzerGenerator& rng) {
   return rand<int32_t>(rng, min, max);
 }
 
-int32_t randTime(FuzzerGenerator& rng) {
-  return rand<int64_t>(rng, TIME()->getMin(), TIME()->getMax());
+int64_t randTime(FuzzerGenerator& rng, const TypePtr& type) {
+  VELOX_DCHECK(type->isTime());
+  const bool isTimeMicroUtc = type->equivalent(*TIME_MICRO_UTC());
+  const int64_t min =
+      isTimeMicroUtc ? TIME_MICRO_UTC()->getMin() : TIME()->getMin();
+  const int64_t max =
+      isTimeMicroUtc ? TIME_MICRO_UTC()->getMax() : TIME()->getMax();
+  return rand<int64_t>(rng, min, max);
 }
 
 /// Unicode character ranges. Ensure the vector indexes match the UTF8CharList

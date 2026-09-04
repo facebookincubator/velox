@@ -477,14 +477,14 @@ BaseVector* RowVector::loadedVector() {
       hasLazy = true;
     }
   }
-  containsLazyNotLoaded_.store(hasLazy ? 1 : 0, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = hasLazy ? 1 : 0;
   childrenLoaded_ = true;
   return this;
 }
 
 void RowVector::invalidateContainsLazyNotLoaded() const {
   childrenLoaded_ = false;
-  containsLazyNotLoaded_.store(-1, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = -1;
 }
 
 void RowVector::computeContainsLazyNotLoaded() const {
@@ -495,14 +495,14 @@ void RowVector::computeContainsLazyNotLoaded() const {
       break;
     }
   }
-  containsLazyNotLoaded_.store(result, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = result;
 }
 
 bool RowVector::containsLazyNotLoaded() const {
-  if (containsLazyNotLoaded_.load(std::memory_order_relaxed) < 0) {
+  if (containsLazyNotLoaded_ < 0) {
     computeContainsLazyNotLoaded();
   }
-  return containsLazyNotLoaded_.load(std::memory_order_relaxed) == 1;
+  return containsLazyNotLoaded_ == 1;
 }
 
 void ArrayVectorBase::copyRangesImpl(
@@ -590,6 +590,11 @@ void ArrayVectorBase::copyRangesImpl(
           }
         });
     outRanges.reserve(totalCount);
+    // Current run of consecutive source rows, appended to 'outRanges' only when
+    // the run breaks.  Deliberately a local, not 'outRanges.back()', so it
+    // stays register-resident in the hot loop; do not simplify back to
+    // '.back()'.
+    CopyRange run{};
     applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
       if (source->isNullAt(sourceIndex)) {
         setNull(targetIndex, true);
@@ -605,12 +610,13 @@ void ArrayVectorBase::copyRangesImpl(
 
           // If we're copying two adjacent ranges, merge them.  This only
           // works if they're consecutive.
-          if (!outRanges.empty() &&
-              (outRanges.back().sourceIndex + outRanges.back().count ==
-               copyOffset)) {
-            outRanges.back().count += copySize;
+          if (run.count != 0 && run.sourceIndex + run.count == copyOffset) {
+            run.count += copySize;
           } else {
-            outRanges.push_back({copyOffset, childSize, copySize});
+            if (run.count != 0) {
+              outRanges.push_back(run);
+            }
+            run = {copyOffset, childSize, copySize};
           }
         }
 
@@ -619,6 +625,10 @@ void ArrayVectorBase::copyRangesImpl(
         childSize = checkedPlus<vector_size_t>(childSize, copySize);
       }
     });
+
+    if (run.count != 0) {
+      outRanges.push_back(run);
+    }
 
     targetValues->get()->resize(childSize);
     targetValues->get()->copyRanges(sourceValues, outRanges);

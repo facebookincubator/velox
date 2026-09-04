@@ -355,7 +355,11 @@ void SharedArbitrator::setupGlobalArbitration(
                              ",", globalArbitrationSpillCapacityLimits_);
 
   globalArbitrationController_ = std::make_unique<std::thread>([&]() {
-    folly::setThreadName("GlobalArbitrationController");
+    // Thread names are truncated to 15 characters (Linux TASK_COMM_LEN - 1),
+    // so keep this name short enough to stay fully visible in top and pstack.
+    static constexpr std::string_view kThreadName{"ArbitrationMain"};
+    static_assert(kThreadName.size() <= 15);
+    folly::setThreadName(kThreadName);
     globalArbitrationMain();
   });
 }
@@ -1289,7 +1293,7 @@ uint64_t SharedArbitrator::reclaimUsedMemoryBySpill(
     }
   }
   if (victims.empty()) {
-    FB_LOG_EVERY_MS(WARNING, 1'000)
+    VELOX_MEM_LOG_EVERY_MS(WARNING, 1'000)
         << "No spill victim participant found with global arbitration target: "
         << succinctBytes(targetBytes);
     return 0;
@@ -1408,8 +1412,8 @@ uint64_t SharedArbitrator::reclaim(
 
   freeCapacity(reclaimedBytes);
   if (reclaimedBytes == 0) {
-    FB_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
-        "Nothing reclaimed from memory pool {} with reclaim target {},  memory pool stats:\n{}\n{}",
+    VELOX_MEM_LOG_EVERY_MS(WARNING, 1'000) << fmt::format(
+        "Nothing reclaimed from memory pool {} with reclaim target {}, memory pool stats:\n{}\n{}",
         participant->name(),
         succinctBytes(targetBytes),
         participant->pool()->toString(),

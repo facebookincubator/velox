@@ -219,7 +219,7 @@ std::unique_ptr<cudf::column> makeRowIndexColumn(
       rowIndex->mutable_view().data<uint64_t>(),
       rowIndexHost.data(),
       rowIndexHost.size() * sizeof(uint64_t),
-      cudaMemcpyHostToDevice,
+      cudaMemcpyDefault,
       stream.value()));
   return rowIndex;
 }
@@ -239,7 +239,7 @@ std::vector<IndexType> getSetBits(
       host.data(),
       deleteMask.data<bool>(),
       numRows * sizeof(bool),
-      cudaMemcpyDeviceToHost,
+      cudaMemcpyDefault,
       stream.value()));
   stream.synchronize();
 
@@ -637,7 +637,7 @@ TEST_F(CudfDeletionVectorReaderTest, deleteOverflowing64BitRowIndices) {
       deleteMask->mutable_view().data<bool>(),
       initialMask.data(),
       initialMask.size() * sizeof(bool),
-      cudaMemcpyHostToDevice,
+      cudaMemcpyDefault,
       stream().value()));
   reader.applyDeletes(
       deleteMask->mutable_view(), rowIndex->view(), stream(), mr());
@@ -688,7 +688,7 @@ TEST_F(CudfDeletionVectorReaderTest, applyBitmapToMaskByRowIndex) {
       deviceBitmap.data(),
       &bitmap,
       sizeof(bitmap),
-      cudaMemcpyHostToDevice,
+      cudaMemcpyDefault,
       stream().value()));
 
   std::vector<uint64_t> rowIndexHost = {99, 100, 101, 103, 104};
@@ -699,7 +699,7 @@ TEST_F(CudfDeletionVectorReaderTest, applyBitmapToMaskByRowIndex) {
       deleteMask->mutable_view().data<bool>(),
       &deleted,
       sizeof(deleted),
-      cudaMemcpyHostToDevice,
+      cudaMemcpyDefault,
       stream().value()));
 
   facebook::velox::cudf_velox::connector::hive::iceberg::applyBitmapToMask(

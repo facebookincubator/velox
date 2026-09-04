@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/TableWriter.h"
+
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
@@ -72,6 +73,7 @@ TableWriter::TableWriter(
       connectorPool_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr);
   setTypeMappings(tableWriteNode);
+  setNotNullChannels(tableWriteNode);
 }
 
 void TableWriter::setTypeMappings(
@@ -96,6 +98,22 @@ void TableWriter::setTypeMappings(
 
   mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
+}
+
+void TableWriter::setNotNullChannels(
+    const core::TableWriteNodePtr& tableWriteNode) {
+  const auto& notNullColumns =
+      tableWriteNode->insertTableHandle()->notNullColumns();
+  if (notNullColumns.empty()) {
+    return;
+  }
+
+  const auto& targetNames = tableWriteNode->columnNames();
+  for (auto i = 0; i < targetNames.size(); ++i) {
+    if (notNullColumns.contains(targetNames[i])) {
+      notNullChannels_.emplace_back(inputMapping_[i], targetNames[i]);
+    }
+  }
 }
 
 void TableWriter::initialize() {
@@ -143,10 +161,29 @@ bool TableWriter::finishDataSink() {
   return dataSink_->finish();
 }
 
+void TableWriter::checkNotNullConstraints(const RowVectorPtr& input) {
+  if (notNullChannels_.empty()) {
+    return;
+  }
+
+  // Bounded to the batch's rows because a child may be longer than 'input'.
+  notNullRows_.resizeFill(input->size());
+
+  for (const auto& [channel, name] : notNullChannels_) {
+    notNullDecodedVector_.decode(*input->childAt(channel), notNullRows_);
+    VELOX_USER_CHECK(
+        !notNullDecodedVector_.hasNulls(),
+        "NULL value not allowed for NOT NULL column: {}",
+        name);
+  }
+}
+
 void TableWriter::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
+
+  checkNotNullConstraints(input);
 
   std::vector<VectorPtr> mappedChildren;
   mappedChildren.reserve(inputMapping_.size());
