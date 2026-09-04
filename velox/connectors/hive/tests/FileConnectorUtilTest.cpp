@@ -787,4 +787,62 @@ TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
           /*asLocalTime=*/false));
 }
 
+TEST_F(FileConnectorUtilTest, openSplitFileUsesPhysicalFilePath) {
+  filesystems::registerLocalFileSystem();
+  auto tempFile = exec::test::TempFilePath::create();
+  // TempFilePath creates the file; LocalWriteFile will not reopen it.
+  remove(tempFile->getPath().c_str());
+  {
+    LocalWriteFile writeFile(tempFile->getPath());
+    writeFile.append("foo");
+  }
+
+  FileHandleFactory factory(
+      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(1'000),
+      std::make_unique<FileHandleGenerator>());
+  const FileProperties properties;
+
+  hive::FileConnectorSplit split(
+      "connectorId", "/does/not/exist", dwio::common::FileFormat::DWRF);
+  split.physicalFilePath = tempFile->getPath();
+
+  auto handle = hive::openSplitFile(
+      split,
+      factory,
+      properties,
+      /*tokenProvider=*/nullptr,
+      /*ioStats=*/nullptr);
+  ASSERT_NE(handle.get(), nullptr);
+  EXPECT_EQ(handle->file->size(), 3);
+}
+
+TEST_F(FileConnectorUtilTest, openSplitFileFallsBackToFilePath) {
+  filesystems::registerLocalFileSystem();
+  auto tempFile = exec::test::TempFilePath::create();
+  // TempFilePath creates the file; LocalWriteFile will not reopen it.
+  remove(tempFile->getPath().c_str());
+  {
+    LocalWriteFile writeFile(tempFile->getPath());
+    writeFile.append("foo");
+  }
+
+  FileHandleFactory factory(
+      std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(1'000),
+      std::make_unique<FileHandleGenerator>());
+  const FileProperties properties;
+
+  hive::FileConnectorSplit split(
+      "connectorId", tempFile->getPath(), dwio::common::FileFormat::DWRF);
+  split.physicalFilePath = tempFile->getPath() + ".does_not_exist";
+
+  auto handle = hive::openSplitFile(
+      split,
+      factory,
+      properties,
+      /*tokenProvider=*/nullptr,
+      /*ioStats=*/nullptr);
+  ASSERT_NE(handle.get(), nullptr);
+  EXPECT_EQ(handle->file->size(), 3);
+}
+
 } // namespace facebook::velox::connector

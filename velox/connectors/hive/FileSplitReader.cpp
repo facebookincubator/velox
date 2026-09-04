@@ -222,9 +222,6 @@ void FileSplitReader::createReader(
       baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
 
   FileHandleCachedPtr fileHandleCachePtr;
-  FileHandleKey fileHandleKey{
-      .filename = fileSplit_->filePath,
-      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
   auto fileProperties = fileSplit_->properties.value_or(FileProperties{});
   fileProperties.fileReadOps = fileReadOps;
@@ -242,9 +239,12 @@ void FileSplitReader::createReader(
       fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
 
   try {
-    fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
-    VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+    fileHandleCachePtr = openSplitFile(
+        *fileSplit_,
+        *fileHandleFactory_,
+        fileProperties,
+        connectorQueryCtx_->fsTokenProvider(),
+        ioStats_ ? ioStats_.get() : nullptr);
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
         fileConfig_->ignoreMissingFiles(
