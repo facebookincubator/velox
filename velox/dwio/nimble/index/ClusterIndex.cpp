@@ -690,4 +690,67 @@ std::string ClusterIndex::keyAtRow(uint32_t row) const {
   return decodedChunk.data->encoding->get(rowInChunk);
 }
 
+// ---------------------------------------------------------------------------
+// ClusterIndex::KeyIterator
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<IndexKeyCursor> ClusterIndex::keyCursor(RowRange rows) const {
+  return std::make_unique<KeyIterator>(*this, rows);
+}
+
+ClusterIndex::KeyIterator::KeyIterator(const ClusterIndex& index, RowRange rows)
+    : index_{index}, endRow_{rows.endRow}, nextRow_{rows.startRow} {
+  NIMBLE_CHECK_LE(
+      rows.startRow,
+      rows.endRow,
+      "Cluster index iterator row range is inverted: {}",
+      rows.toString());
+  NIMBLE_CHECK_LE(
+      rows.endRow,
+      index_.numRows_,
+      "Row range {} is beyond file total rows {}",
+      rows.toString(),
+      index_.numRows_);
+}
+
+std::string_view ClusterIndex::KeyIterator::next() {
+  NIMBLE_CHECK(
+      hasNext(), "Cluster index iterator is exhausted at row {}", nextRow_);
+  // The key cursor runs out exactly at the chunk boundary, so its own
+  // exhaustion is what says to move on.
+  if (cursor_ == nullptr || !cursor_->hasNext()) {
+    openChunkAt(nextRow_);
+  }
+  // Advance only once the key is in hand: a throwing cursor must not leave
+  // nextRow_ claiming a row that was never returned.
+  const auto key = cursor_->next();
+  ++nextRow_;
+  return key;
+}
+
+void ClusterIndex::KeyIterator::openChunkAt(uint32_t row) {
+  const auto* partition = index_.lookupPartition(row);
+  const uint32_t partitionRow = index_.partitionRow(partition->id, row);
+  const auto chunkLocation = index_.lookupChunk(partition, partitionRow);
+  auto chunk = index_.getDecodedChunk(partition, chunkLocation).data;
+
+  // chunk_rows is a partition-relative prefix sum, so this chunk's entry is
+  // the row it ends at and its distance from rowOffset is its row count.
+  const uint32_t chunkEndRowInPartition =
+      partition->index->chunk_rows()->Get(chunkLocation.chunkIndex);
+  NIMBLE_CHECK_EQ(
+      chunk->encoding->rowCount(),
+      chunkEndRowInPartition - chunkLocation.rowOffset,
+      "Decoded key chunk holds a different row count than partition {} chunk {} metadata",
+      partition->id,
+      chunkLocation.chunkIndex);
+
+  auto cursor = chunk->encoding->cursor(partitionRow - chunkLocation.rowOffset);
+
+  // Commit after every step that can throw, so a failure leaves the iterator
+  // on its previous chunk rather than half-moved onto this one.
+  chunk_ = std::move(chunk);
+  cursor_ = std::move(cursor);
+}
+
 } // namespace facebook::nimble::index
