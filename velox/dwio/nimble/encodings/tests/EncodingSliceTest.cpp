@@ -282,6 +282,16 @@ class EncodingSliceTest : public ::testing::Test {
         expectedEncodingType = nimble::EncodingType::Slice;
       }
     }
+    if constexpr (std::is_same_v<
+                      EncodingType,
+                      nimble::BlockBitPackingEncoding<T>>) {
+      // A range whose boundary sits inside a block keeps the boundary blocks
+      // whole and comes back wrapped. This test's sources fit in one block, so
+      // any range that isn't the full source is mid-block.
+      if (offset > 0 || offset + length < values.size()) {
+        expectedEncodingType = nimble::EncodingType::Slice;
+      }
+    }
 
     EXPECT_EQ(encoding->encodingType(), expectedEncodingType);
     EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
@@ -361,9 +371,17 @@ TYPED_TEST(EncodingSliceTypedTest, materializesRange) {
   constexpr uint32_t offset{1};
   constexpr uint32_t length{3};
 
+  // BlockBitPacking with default blockSize (1024) fits the 6-value source in
+  // one block, so this mid-block range comes back wrapped in a SliceEncoding.
+  auto expectedType = nimble::test::Encoder<EncodingType>::encodingType();
+  if constexpr (std::is_same_v<
+                    EncodingType,
+                    nimble::BlockBitPackingEncoding<uint32_t>>) {
+    expectedType = nimble::EncodingType::Slice;
+  }
   this->template expectSliceMaterializes<EncodingType>(
       nimble::toString(nimble::test::Encoder<EncodingType>::encodingType()),
-      nimble::test::Encoder<EncodingType>::encodingType(),
+      expectedType,
       values,
       offset,
       length);
