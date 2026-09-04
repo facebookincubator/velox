@@ -223,7 +223,7 @@ void FileSplitReader::createReader(
 
   FileHandleCachedPtr fileHandleCachePtr;
   FileHandleKey fileHandleKey{
-      .filename = fileSplit_->filePath,
+      .filename = fileSplit_->readPath(),
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
   auto fileProperties = fileSplit_->properties.value_or(FileProperties{});
