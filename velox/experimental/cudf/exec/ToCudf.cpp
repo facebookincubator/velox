@@ -357,6 +357,10 @@ void registerCudf() {
 void unregisterCudf() {
   output_mr_.reset();
   mr_.reset();
+  // registerCudf() populated this through registerAllOperatorAdapters(), so
+  // undo it here as well. Nothing can read it once the driver adapter below is
+  // gone, since CompileState is the only production reader.
+  OperatorAdapterRegistry::getInstance().clear();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
