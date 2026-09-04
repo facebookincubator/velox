@@ -32,17 +32,171 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/expression/FieldReference.h"
-#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/FieldReference.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
+#include <cudf/binaryop.hpp>
+#include <cudf/column/column.hpp>
+#include <cudf/lists/lists_column_view.hpp>
+#include <cudf/scalar/scalar.hpp>
 #include <cudf/stream_compaction.hpp>
+#include <cudf/unary.hpp>
+
+#include <algorithm>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+bool containsTimestampWithTimeZone(const TypePtr& type) {
+  if (isTimestampWithTimeZoneType(type)) {
+    return true;
+  }
+  for (size_t i = 0; i < type->size(); ++i) {
+    if (containsTimestampWithTimeZone(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+template <typename TransformChildrenFn>
+std::unique_ptr<cudf::column> rebuildWithTransformedChildren(
+    std::unique_ptr<cudf::column> column,
+    TransformChildrenFn&& transformChildren) {
+  const auto type = column->type();
+  const auto size = column->size();
+  const auto nullCount = column->null_count();
+  auto contents = column->release();
+  transformChildren(contents.children);
+  return std::make_unique<cudf::column>(
+      type,
+      size,
+      std::move(*contents.data),
+      std::move(*contents.null_mask),
+      nullCount,
+      std::move(contents.children));
+}
+
+std::unique_ptr<cudf::column> normalizeTimestampColumn(
+    std::unique_ptr<cudf::column> column,
+    const TypePtr& veloxType,
+    cudf::data_type configuredTimestampType,
+    cudf::data_type readerTimestampType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  if (isTimestampWithTimeZoneType(veloxType)) {
+    if (column->type().id() == cudf::type_id::INT64) {
+      return column;
+    }
+    VELOX_USER_CHECK(
+        column->type().id() == cudf::type_id::TIMESTAMP_MICROSECONDS,
+        "Iceberg TIMESTAMP WITH TIME ZONE must be read as microseconds; "
+        "found cuDF type ID {}",
+        static_cast<int>(column->type().id()));
+
+    // A cuDF timestamp column and an INT64 column have the same physical
+    // representation. Reinterpret first to preserve the exact microsecond
+    // ticks, then use integer division so negative sub-millisecond values
+    // truncate toward zero, matching Velox and Java timestamp semantics.
+    const auto size = column->size();
+    const auto nullCount = column->null_count();
+    auto contents = column->release();
+    VELOX_CHECK(contents.children.empty());
+    auto micros = std::make_unique<cudf::column>(
+        cudf::data_type{cudf::type_id::INT64},
+        size,
+        std::move(*contents.data),
+        std::move(*contents.null_mask),
+        nullCount);
+    cudf::numeric_scalar<int64_t> microsPerMilli(
+        1'000, true, stream, get_temp_mr());
+    auto millis = cudf::binary_operation(
+        *micros,
+        microsPerMilli,
+        cudf::binary_operator::DIV,
+        cudf::data_type{cudf::type_id::INT64},
+        stream,
+        mr);
+    cudf::numeric_scalar<int64_t> packedMillisMultiplier(
+        int64_t{1} << kMillisShift, true, stream, get_temp_mr());
+    return cudf::binary_operation(
+        *millis,
+        packedMillisMultiplier,
+        cudf::binary_operator::MUL,
+        cudf::data_type{cudf::type_id::INT64},
+        stream,
+        mr);
+  }
+
+  if (veloxType->kind() == TypeKind::TIMESTAMP &&
+      readerTimestampType != configuredTimestampType) {
+    return cudf::cast(column->view(), configuredTimestampType, stream, mr);
+  }
+
+  if (veloxType->kind() == TypeKind::ROW) {
+    const auto& rowType = veloxType->asRow();
+    VELOX_CHECK_EQ(column->num_children(), rowType.size());
+    return rebuildWithTransformedChildren(
+        std::move(column), [&](auto& children) {
+          for (size_t i = 0; i < rowType.size(); ++i) {
+            children[i] = normalizeTimestampColumn(
+                std::move(children[i]),
+                rowType.childAt(i),
+                configuredTimestampType,
+                readerTimestampType,
+                stream,
+                mr);
+          }
+        });
+  }
+
+  if (veloxType->kind() == TypeKind::ARRAY) {
+    VELOX_CHECK_EQ(column->num_children(), 2);
+    return rebuildWithTransformedChildren(
+        std::move(column), [&](auto& children) {
+          const auto childIndex = cudf::lists_column_view::child_column_index;
+          children[childIndex] = normalizeTimestampColumn(
+              std::move(children[childIndex]),
+              veloxType->childAt(0),
+              configuredTimestampType,
+              readerTimestampType,
+              stream,
+              mr);
+        });
+  }
+
+  return column;
+}
+
+std::unique_ptr<cudf::table> normalizeTimestampColumns(
+    std::unique_ptr<cudf::table> table,
+    const RowTypePtr& rowType,
+    cudf::data_type configuredTimestampType,
+    cudf::data_type readerTimestampType,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  auto columns = table->release();
+  const auto numColumns = std::min<size_t>(columns.size(), rowType->size());
+  for (size_t i = 0; i < numColumns; ++i) {
+    columns[i] = normalizeTimestampColumn(
+        std::move(columns[i]),
+        rowType->childAt(i),
+        configuredTimestampType,
+        readerTimestampType,
+        stream,
+        mr);
+  }
+  return std::make_unique<cudf::table>(std::move(columns));
+}
+
+} // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -61,6 +215,9 @@ CudfHiveDataSource::CudfHiveDataSource(
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
       outputType_(outputType),
+      configuredTimestampType_(cudfHiveConfig->timestampTypeSession(
+          connectorQueryCtx->sessionProperties())),
+      readerTimestampType_(configuredTimestampType_),
       pool_(connectorQueryCtx->memoryPool()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   // Set up column projection if needed
@@ -142,6 +299,14 @@ CudfHiveDataSource::CudfHiveDataSource(
         optimizedRemainingFilter_, remainingFilterType, pool_);
   }
 
+  // Iceberg stores timestamp-with-zone values as UTC microseconds. cuDF has a
+  // single timestamp output unit for the whole read, so preserve microseconds
+  // whenever any requested column needs the packed logical representation.
+  if (containsTimestampWithTimeZone(getTableRowType())) {
+    readerTimestampType_ =
+        cudf::data_type{cudf::type_id::TIMESTAMP_MICROSECONDS};
+  }
+
   // Build a combined AST for all subfield filters once. This is query-constant
   // and doesn't depend on split-specific state.
   if (!subfieldFilters_.empty()) {
@@ -156,8 +321,7 @@ CudfHiveDataSource::CudfHiveDataSource(
         subfieldTree_,
         subfieldScalars_,
         readerFilterType,
-        cudfHiveConfig_->timestampTypeSession(
-            connectorQueryCtx_->sessionProperties()),
+        readerTimestampType_,
         sessionTimezone);
   }
 
@@ -186,6 +350,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
+      readerTimestampType_,
       subfieldFilterExpr_);
 }
 
@@ -266,6 +431,17 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   auto cudfTable = std::move(chunkOpt.value());
   auto stream = cudfSplitReader_->stream();
 
+  // Split readers return physical Parquet timestamps. Normalize after the
+  // Iceberg reader has applied deletes, but before remaining filters and
+  // logical output wrapping consume the requested schema.
+  cudfTable = normalizeTimestampColumns(
+      std::move(cudfTable),
+      getTableRowType(),
+      configuredTimestampType_,
+      readerTimestampType_,
+      stream,
+      get_output_mr());
+
   uint64_t filterTimeUs{0};
   if (optimizedRemainingFilter_) {
     MicrosecondWallTimer filterTimer(&filterTimeUs);
@@ -344,7 +520,18 @@ const RowTypePtr CudfHiveDataSource::getTableRowType() {
     std::vector<std::string> names;
     std::vector<TypePtr> types;
     for (const auto& name : readColumnNames_) {
-      auto parsedType = tableHandle_->dataColumns()->findChild(name);
+      const auto parsedType = [&]() -> TypePtr {
+        if (tableHandle_->dataColumns()->containsChild(name)) {
+          return tableHandle_->dataColumns()->findChild(name);
+        }
+        if (outputType_->containsChild(name)) {
+          // Partition, info, and schema-evolution columns can be projected but
+          // absent from the physical data-column schema.
+          return outputType_->findChild(name);
+        }
+        VELOX_USER_FAIL(
+            "Column '{}' is missing from the table and output schemas", name);
+      }();
       names.emplace_back(std::move(name));
       types.push_back(parsedType);
     }

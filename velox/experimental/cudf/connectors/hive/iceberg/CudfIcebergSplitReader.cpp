@@ -28,6 +28,7 @@
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/BufferUtil.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 
 #include <cudf/column/column_factories.hpp>
@@ -95,6 +96,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
+    cudf::data_type readerTimestampType,
     cudf::ast::expression const* subfieldFilterExpr)
     : CudfSplitReader(
           std::move(split),
@@ -108,6 +110,7 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           ioStatistics,
           ioStats,
           useExperimentalCudfReader,
+          readerTimestampType,
           subfieldFilterExpr),
       icebergSplit_(std::move(icebergSplit)),
       hiveConfig_(hiveConfig) {}
@@ -754,7 +757,31 @@ void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
         childIdx,
         meta.schema.size(),
         "Parquet schema child index out of range");
-    fileColumnNames_.insert(meta.schema[childIdx].name);
+    const auto& fileColumn = meta.schema[childIdx];
+    fileColumnNames_.insert(fileColumn.name);
+
+    const auto requestedType = [&]() -> TypePtr {
+      if (outputType_->containsChild(fileColumn.name)) {
+        return outputType_->findChild(fileColumn.name);
+      }
+      const auto& dataColumns = tableHandle_->dataColumns();
+      return dataColumns && dataColumns->containsChild(fileColumn.name)
+          ? dataColumns->findChild(fileColumn.name)
+          : nullptr;
+    }();
+    if (requestedType && isTimestampWithTimeZoneType(requestedType)) {
+      const auto hasTimestampAnnotation = fileColumn.logical_type.has_value() &&
+          fileColumn.logical_type->type ==
+              cudf::io::parquet::LogicalType::TIMESTAMP &&
+          fileColumn.logical_type->timestamp_type.has_value();
+      VELOX_USER_CHECK(
+          fileColumn.type == cudf::io::parquet::Type::INT64 &&
+              hasTimestampAnnotation &&
+              fileColumn.logical_type->timestamp_type->isAdjustedToUTC,
+          "Column '{}' requested as TIMESTAMP WITH TIME ZONE must be an "
+          "INT64 Parquet timestamp with isAdjustedToUTC=true",
+          fileColumn.name);
+    }
   }
 }
 

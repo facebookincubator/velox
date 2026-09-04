@@ -64,6 +64,7 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
+      cudf::data_type readerTimestampType,
       cudf::ast::expression const* subfieldFilterExpr);
 
   virtual ~CudfSplitReader() = default;
@@ -164,6 +165,7 @@ class CudfSplitReader : public NvtxHelper {
   CudfHybridScanReaderPtr exptSplitReader_;
   std::unique_ptr<HybridScanState> hybridScanState_;
   bool useExperimentalCudfReader_;
+  const cudf::data_type readerTimestampType_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
   cudf::ast::expression const* subfieldFilterExpr_;
