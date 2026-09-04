@@ -170,41 +170,38 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
+      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
+      bool adapterReturnedOperators = false;
+      if (canUseGpuPath) {
+        // Whether these run instead of 'oper' or after it is keepOperator()'s
+        // decision, not this call's. A kept operator describing operators that
+        // run after it is how one plan node expanding into several operators is
+        // expressed: the replaceOperators() call below inserts them behind the
+        // kept operator and renumbers the whole driver, so the expansion needs
+        // no operator ids of its own.
+        auto replacements =
+            adapter->createReplacements(oper, planNode, ctx, id);
+        adapterReturnedOperators = !replacements.empty();
+        for (auto& r : replacements) {
+          replaceOp.push_back(std::move(r));
+        }
+      }
+
       if (keepOperator == 0) {
-        if (planNode && thisOpProps.canRunOnGPU) {
-          auto replacements =
-              adapter->createReplacements(oper, planNode, ctx, id);
-          // An adapter that replaces its operator but returns nothing has not
-          // replaced it, so the operator is still a CPU operator. Decide that
-          // from what createReplacements() returned rather than from having
-          // called it, because replaceOp can still gain a conversion operator
-          // further down and an empty replacement would then be
-          // indistinguishable from a successful one.
-          isPureCpuOperator = replacements.empty();
-          for (auto& r : replacements) {
-            replaceOp.push_back(std::move(r));
-          }
-        } else {
-          // This is the CPU fallback case.
-          isPureCpuOperator = true;
-        }
+        // An adapter that replaces its operator but returns nothing has not
+        // replaced it, so the operator is still a CPU operator. That is the
+        // same outcome as the adapter having declined the operator through
+        // canRunOnGPU(), which is why both fold into one condition here. The
+        // decision has to come from what createReplacements() returned rather
+        // than from replaceOp, because replaceOp can still gain a conversion
+        // operator further down and an empty replacement would then be
+        // indistinguishable from a successful one.
+        isPureCpuOperator = !adapterReturnedOperators;
       } else {
-        // adapter is present and keepOperator is 1, so this is GPU compatible
-        // operator. so this CPU operators is allowed even if fallback is
-        // disabled.
+        // A kept operator is GPU compatible, so it is allowed even when
+        // fallback is disabled, whether or not the adapter described any
+        // operators to run after it.
         isPureCpuOperator = false;
-        if (planNode && thisOpProps.canRunOnGPU) {
-          // A kept operator may still describe operators that have to run
-          // after it. That is how one plan node expanding into several
-          // operators is expressed: the replaceOperators() call below inserts
-          // them behind the kept operator and renumbers the whole driver, so
-          // the expansion needs no operator ids of its own.
-          auto replacements =
-              adapter->createReplacements(oper, planNode, ctx, id);
-          for (auto& r : replacements) {
-            replaceOp.push_back(std::move(r));
-          }
-        }
       }
     } else {
       // special case for CudfOperator
