@@ -18,7 +18,9 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/IOUtils.h"
+#include "velox/common/base/XxHashInline.h"
 #include "velox/common/hyperloglog/Murmur3Hash128.h"
+#include "velox/functions/lib/KHyperLogLog.h"
 #include "velox/type/HugeInt.h"
 
 namespace facebook::velox::common::hll {
@@ -28,6 +30,41 @@ constexpr uint8_t kVersionByte = 1;
 constexpr int64_t kHashOutputHalfRange = INT64_MAX;
 constexpr size_t kHeaderSize = sizeof(uint8_t) // version
     + 4 * sizeof(int32_t); // maxSize, hllBuckets, minhashSize, hllsTotalSize;
+
+// The format carries a REAL as its floatToIntBits() pattern, not as a widened
+// DOUBLE, so float and double take different branches.
+template <typename T>
+static int64_t toLongBits(const T& value) {
+  if constexpr (std::is_same_v<T, Timestamp>) {
+    return value.toMillis();
+  } else if constexpr (std::is_same_v<T, float>) {
+    int32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+  } else if constexpr (std::is_same_v<T, double>) {
+    int64_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+  } else if constexpr (std::is_integral_v<T>) {
+    return static_cast<int64_t>(value);
+  } else {
+    VELOX_UNREACHABLE("Unsupported input type: {}", typeid(T).name());
+  }
+}
+
+// Presto pre-hashes a varchar uii with XxHash64 and adds the resulting long. A
+// varchar join key is hashed differently, once with Murmur3 over the bytes, so
+// the two cannot share a helper. approx_set adds the raw bytes instead of
+// pre-hashing, so this cannot live in HllAccumulator's hashOne() either.
+template <typename TUii>
+static uint64_t hashUii(const TUii& uii) {
+  if constexpr (std::is_same_v<TUii, StringView>) {
+    return Murmur3Hash128::hash64ForLong(
+        static_cast<int64_t>(XXH64(uii.data(), uii.size(), 0)), 0);
+  } else {
+    return Murmur3Hash128::hash64ForLong(toLongBits(uii), 0);
+  }
+}
 
 template <typename TJoinKey>
 static int64_t hashKey(TJoinKey joinKey) {
@@ -226,7 +263,7 @@ void KHyperLogLog<TUii, TAllocator>::update(int64_t hash, TUii uii) {
     decreaseTotalHllSize(*hll);
   }
 
-  hll->append(uii);
+  hll->insertHash(detail::hashUii(uii));
 
   increaseTotalHllSize(*hll);
   removeOverflowEntries();
