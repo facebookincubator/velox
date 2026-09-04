@@ -60,9 +60,27 @@ class ClusterIndexTest : public ClusterIndexTestBase {
     std::vector<uint32_t> chunkOffsets;
   };
 
+  // Pins the key-stream encoding the way ClusterIndexWriter does. A
+  // selection policy would not: EncodingSizeEstimation has no Prefix case
+  // for std::string_view, so it reports Prefix as incompatible and the
+  // policy silently falls back to Trivial.
+  static EncodingLayout keyEncodingLayout(EncodingType encodingType) {
+    if (encodingType == EncodingType::Prefix) {
+      return EncodingLayout{
+          EncodingType::Prefix, {}, CompressionType::Uncompressed};
+    }
+    return EncodingLayout{
+        EncodingType::Trivial,
+        {},
+        CompressionType::Uncompressed,
+        {EncodingLayout{
+            EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
+  }
+
   // Encodes multiple chunks of keys into a single stream.
   EncodedKeyStream encodeKeyStream(
-      const std::vector<std::vector<std::string>>& keyChunks) {
+      const std::vector<std::vector<std::string>>& keyChunks,
+      EncodingType encodingType = EncodingType::Trivial) {
     EncodedKeyStream result;
     Buffer buffer{*pool_};
 
@@ -77,11 +95,12 @@ class ClusterIndexTest : public ClusterIndexTestBase {
 
       Buffer encodingBuffer{*pool_};
       auto policy =
-          std::make_unique<ManualEncodingSelectionPolicy<std::string_view>>(
-              std::vector<std::pair<EncodingType, float>>{
-                  {EncodingType::Trivial, 1.0}},
+          std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
+              keyEncodingLayout(encodingType),
               CompressionOptions{},
-              std::nullopt);
+              [](DataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+                return nullptr;
+              });
       auto encoded = EncodingFactory::encode<std::string_view>(
           std::move(policy), keyViews, encodingBuffer);
 
@@ -1041,6 +1060,49 @@ TEST_P(ClusterIndexLookupTest, keyAtRowOutOfRange) {
   NIMBLE_ASSERT_THROW(clusterIndex_->keyAtRow(100), "beyond file total rows");
 }
 
+TEST_P(ClusterIndexLookupTest, keyIteratorMatchesKeyAtRow) {
+  constexpr uint32_t kNumRows = 9;
+
+  std::vector<std::string> scanned;
+  scanned.reserve(kNumRows);
+  auto iterator = clusterIndex_->keyCursor(RowRange{0, kNumRows});
+  while (iterator->hasNext()) {
+    scanned.emplace_back(iterator->next());
+  }
+
+  std::vector<std::string> expected;
+  expected.reserve(kNumRows);
+  for (uint32_t row = 0; row < kNumRows; ++row) {
+    expected.emplace_back(clusterIndex_->keyAtRow(row));
+  }
+  EXPECT_EQ(scanned, expected);
+}
+
+TEST_P(ClusterIndexLookupTest, keyIteratorRowRange) {
+  auto iterator = clusterIndex_->keyCursor(RowRange{2, 7});
+  std::vector<std::string> scanned;
+  while (iterator->hasNext()) {
+    scanned.emplace_back(iterator->next());
+  }
+
+  const std::vector<std::string> expected = {
+      "key_c", "key_d", "key_e", "key_f", "key_g"};
+  EXPECT_EQ(scanned, expected);
+}
+
+TEST_P(ClusterIndexLookupTest, keyIteratorEmptyRange) {
+  auto iterator = clusterIndex_->keyCursor(RowRange{4, 4});
+  EXPECT_FALSE(iterator->hasNext());
+  NIMBLE_ASSERT_THROW(iterator->next(), "Cluster index iterator is exhausted");
+}
+
+TEST_P(ClusterIndexLookupTest, keyIteratorRowRangeOutOfRange) {
+  NIMBLE_ASSERT_THROW(
+      clusterIndex_->keyCursor(RowRange{0, 10}), "beyond file total rows");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex_->keyCursor(RowRange{5, 2}), "row range is inverted");
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ChunkGranularity,
     ClusterIndexLookupTest,
@@ -1239,6 +1301,203 @@ TEST_F(ClusterIndexTest, keyAtRowUnevenChunks) {
   EXPECT_EQ(clusterIndex->keyAtRow(4), "key_e");
 
   NIMBLE_ASSERT_THROW(clusterIndex->keyAtRow(6), "beyond file total rows");
+}
+
+TEST_F(ClusterIndexTest, keyIteratorMultiplePartitionsMultipleChunks) {
+  // 2 partitions, each with 2 chunks of 2 rows = 8 rows total. Exercises
+  // chunk and partition transitions mid-scan.
+  std::vector<std::vector<std::string>> p0Chunks = {
+      {"key_a", "key_b"}, {"key_c", "key_d"}};
+  std::vector<std::vector<std::string>> p1Chunks = {
+      {"key_e", "key_f"}, {"key_g", "key_h"}};
+
+  auto encoded0 = encodeKeyStream(p0Chunks);
+  auto encoded1 = encodeKeyStream(p1Chunks);
+  std::string combinedStream = encoded0.data + encoded1.data;
+
+  std::vector<std::string> indexColumns = {"col1"};
+  std::string minKey = "key_0";
+  std::vector<Stripe> stripes = {
+      createStripeWithKeys(
+          {.streamOffset = 0,
+           .streamSize = static_cast<uint32_t>(encoded0.data.size()),
+           .stream =
+               {.numChunks = 2,
+                .chunkRows = {2, 2},
+                .chunkOffsets = encoded0.chunkOffsets},
+           .chunkKeys = {"key_b", "key_d"}}),
+      createStripeWithKeys(
+          {.streamOffset = static_cast<uint32_t>(encoded0.data.size()),
+           .streamSize = static_cast<uint32_t>(encoded1.data.size()),
+           .stream =
+               {.numChunks = 2,
+                .chunkRows = {2, 2},
+                .chunkOffsets = encoded1.chunkOffsets},
+           .chunkKeys = {"key_f", "key_h"}})};
+  std::vector<int> stripeGroups = {1, 1};
+
+  auto indexBuffers =
+      createTestClusterIndex(indexColumns, minKey, stripes, stripeGroups);
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(combinedStream));
+
+  std::vector<std::string> scanned;
+  auto iterator = clusterIndex->keyCursor(RowRange{0, 8});
+  while (iterator->hasNext()) {
+    scanned.emplace_back(iterator->next());
+  }
+  const std::vector<std::string> expected = {
+      "key_a", "key_b", "key_c", "key_d", "key_e", "key_f", "key_g", "key_h"};
+  EXPECT_EQ(scanned, expected);
+
+  // A range that starts inside partition 0's second chunk and ends inside
+  // partition 1's first chunk.
+  scanned.clear();
+  auto rangeIterator = clusterIndex->keyCursor(RowRange{3, 6});
+  while (rangeIterator->hasNext()) {
+    scanned.emplace_back(rangeIterator->next());
+  }
+  const std::vector<std::string> expectedRange = {"key_d", "key_e", "key_f"};
+  EXPECT_EQ(scanned, expectedRange);
+}
+
+TEST_F(ClusterIndexTest, keyIteratorPrefixEncodedChunks) {
+  // Prefix is the default production key encoding, so scan chunks that are
+  // really prefix-encoded: two chunks of 20 rows, which puts a restart block
+  // boundary inside each chunk as well as a chunk boundary in the middle.
+  constexpr uint32_t kRowsPerChunk = 20;
+  constexpr uint32_t kNumRows = 2 * kRowsPerChunk;
+
+  std::vector<std::string> allKeys;
+  allKeys.reserve(kNumRows);
+  for (uint32_t row = 0; row < kNumRows; ++row) {
+    allKeys.push_back(fmt::format("key_{:04d}", row));
+  }
+  std::vector<std::vector<std::string>> keyChunks = {
+      {allKeys.begin(), allKeys.begin() + kRowsPerChunk},
+      {allKeys.begin() + kRowsPerChunk, allKeys.end()}};
+  auto encoded = encodeKeyStream(keyChunks, EncodingType::Prefix);
+
+  std::vector<std::string> indexColumns = {"col1"};
+  std::string minKey = "key_0000";
+  std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 2,
+            .chunkRows = {kRowsPerChunk, kRowsPerChunk},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {allKeys[kRowsPerChunk - 1], allKeys.back()}})};
+  std::vector<int> stripeGroups = {1};
+
+  auto indexBuffers =
+      createTestClusterIndex(indexColumns, minKey, stripes, stripeGroups);
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(encoded.data));
+
+  std::vector<std::string> scanned;
+  scanned.reserve(kNumRows);
+  auto iterator = clusterIndex->keyCursor(RowRange{0, kNumRows});
+  while (iterator->hasNext()) {
+    scanned.emplace_back(iterator->next());
+  }
+  EXPECT_EQ(scanned, allKeys);
+
+  // Starting mid-chunk must resume against the right shared prefix, which is
+  // where a prefix cursor differs from a trivial one.
+  auto midChunk = clusterIndex->keyCursor(RowRange{25, kNumRows});
+  scanned.clear();
+  while (midChunk->hasNext()) {
+    scanned.emplace_back(midChunk->next());
+  }
+  EXPECT_EQ(
+      scanned, std::vector<std::string>(allKeys.begin() + 25, allKeys.end()));
+}
+
+TEST_F(ClusterIndexTest, keyIteratorDuplicateKeys) {
+  // Duplicate keys are legal unless the writer enforces noDuplicateKey, and
+  // a run of them can straddle a chunk boundary. The iterator reports one
+  // key per row regardless.
+  std::vector<std::vector<std::string>> keyChunks = {
+      {"key_a", "key_b"}, {"key_b", "key_b"}, {"key_b", "key_c"}};
+  auto encoded = encodeKeyStream(keyChunks);
+
+  std::vector<std::string> indexColumns = {"col1"};
+  std::string minKey = "key_0";
+  std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 3,
+            .chunkRows = {2, 2, 2},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {"key_b", "key_b", "key_c"}})};
+  std::vector<int> stripeGroups = {1};
+
+  auto indexBuffers =
+      createTestClusterIndex(indexColumns, minKey, stripes, stripeGroups);
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(encoded.data));
+
+  std::vector<std::string> scanned;
+  auto iterator = clusterIndex->keyCursor(RowRange{0, 6});
+  while (iterator->hasNext()) {
+    scanned.emplace_back(iterator->next());
+  }
+  const std::vector<std::string> expected = {
+      "key_a", "key_b", "key_b", "key_b", "key_b", "key_c"};
+  EXPECT_EQ(scanned, expected);
+}
+
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_F(ClusterIndexTest, keyIteratorReusesCachedChunk) {
+  // Callers scan in row batches, so several short-lived iterators walk one
+  // chunk in turn. They must share the decoded-chunk cache rather than each
+  // decoding the chunk again.
+  std::vector<std::vector<std::string>> keyChunks = {
+      {"key_a", "key_b"}, {"key_c", "key_d"}};
+  auto encoded = encodeKeyStream(keyChunks);
+
+  std::vector<std::string> indexColumns = {"col1"};
+  std::string minKey = "key_0";
+  std::vector<Stripe> stripes = {createStripeWithKeys(
+      {.streamOffset = 0,
+       .streamSize = static_cast<uint32_t>(encoded.data.size()),
+       .stream =
+           {.numChunks = 2,
+            .chunkRows = {2, 2},
+            .chunkOffsets = encoded.chunkOffsets},
+       .chunkKeys = {"key_b", "key_d"}})};
+  std::vector<int> stripeGroups = {1};
+
+  auto indexBuffers =
+      createTestClusterIndex(indexColumns, minKey, stripes, stripeGroups);
+  auto clusterIndex =
+      createClusterIndex(indexBuffers, createKeyStreamFile(encoded.data));
+
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t decodeCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndex::getDecodedChunk",
+      std::function<void(DecodedKeyChunk*)>(
+          [&](DecodedKeyChunk* /*decodedChunk*/) { ++decodeCount; }));
+
+  // One iterator per row, as a batched caller produces.
+  auto firstRow = clusterIndex->keyCursor(RowRange{0, 1});
+  EXPECT_EQ(firstRow->next(), "key_a");
+  EXPECT_EQ(decodeCount.load(), 1);
+
+  auto secondRow = clusterIndex->keyCursor(RowRange{1, 2});
+  EXPECT_EQ(secondRow->next(), "key_b");
+  EXPECT_EQ(decodeCount.load(), 1)
+      << "second iterator re-decoded a chunk the first one had cached";
+
+  // Reaching into the next chunk must decode, so a stuck counter cannot make
+  // the assertions above pass vacuously.
+  auto thirdRow = clusterIndex->keyCursor(RowRange{2, 3});
+  EXPECT_EQ(thirdRow->next(), "key_c");
+  EXPECT_EQ(decodeCount.load(), 2);
 }
 
 // Verifies that the index caching mechanism works end-to-end when

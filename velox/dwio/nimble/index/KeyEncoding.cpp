@@ -61,6 +61,32 @@ std::unique_ptr<KeyEncoding> KeyEncoding::create(
 // TrivialKeyEncoding
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Walks pre-materialized key views.
+class TrivialKeyCursor final : public KeyEncoding::Cursor {
+ public:
+  TrivialKeyCursor(
+      const std::string_view* position,
+      const std::string_view* end)
+      : position_{position}, end_{end} {}
+
+  bool hasNext() const override {
+    return position_ != end_;
+  }
+
+  std::string_view next() override {
+    NIMBLE_CHECK(hasNext(), "Key cursor advanced past the last row");
+    return *position_++;
+  }
+
+ private:
+  const std::string_view* position_;
+  const std::string_view* const end_;
+};
+
+} // namespace
+
 TrivialKeyEncoding::TrivialKeyEncoding(std::vector<std::string_view> values)
     : values_{std::move(values)} {}
 
@@ -93,9 +119,73 @@ std::vector<std::string> TrivialKeyEncoding::materialize(
   return result;
 }
 
+std::unique_ptr<KeyEncoding::Cursor> TrivialKeyEncoding::cursor(
+    uint32_t startRow) const {
+  NIMBLE_CHECK_LT(startRow, values_.size());
+  return std::make_unique<TrivialKeyCursor>(
+      values_.data() + startRow, values_.data() + values_.size());
+}
+
 // ---------------------------------------------------------------------------
 // PrefixKeyEncoding
 // ---------------------------------------------------------------------------
+
+namespace {
+
+// Decodes the entry at 'pos' into 'decoded', which must hold the preceding
+// entry's key so the shared prefix can be reused. Advances 'pos' past the
+// entry and increments 'row'.
+std::string_view
+decodeEntryAt(const char*& pos, uint32_t& row, std::string& decoded) {
+  const uint32_t sharedPrefixLen = encoding::readUint32(pos);
+  const uint32_t suffixLen = encoding::readUint32(pos);
+  const uint32_t fullLen = sharedPrefixLen + suffixLen;
+  NIMBLE_DCHECK_LE(sharedPrefixLen, decoded.size());
+  decoded.resize(fullLen);
+  if (suffixLen > 0) {
+    std::memcpy(decoded.data() + sharedPrefixLen, pos, suffixLen);
+    pos += suffixLen;
+  }
+  ++row;
+  return std::string_view(decoded.data(), fullLen);
+}
+
+// Decodes prefix-compressed keys one row at a time, carrying the previous
+// key forward as the shared prefix instead of restarting from a restart
+// point on every row.
+class PrefixKeyCursor final : public KeyEncoding::Cursor {
+ public:
+  PrefixKeyCursor(
+      const char* position,
+      std::string decoded,
+      uint32_t row,
+      uint32_t rowCount)
+      : position_{position},
+        decoded_{std::move(decoded)},
+        row_{row},
+        rowCount_{rowCount} {}
+
+  bool hasNext() const override {
+    return row_ < rowCount_;
+  }
+
+  std::string_view next() override {
+    NIMBLE_CHECK(hasNext(), "Key cursor advanced past the last row");
+    return decodeEntryAt(position_, row_, decoded_);
+  }
+
+ private:
+  const char* position_;
+
+  // Key of the row the cursor last returned; the next key is decoded on top
+  // of it.
+  std::string decoded_;
+
+  uint32_t row_;
+  const uint32_t rowCount_;
+};
+
+} // namespace
 
 PrefixKeyEncoding::PrefixKeyEncoding(
     std::string_view encodedData,
@@ -109,24 +199,6 @@ PrefixKeyEncoding::PrefixKeyEncoding(
       numRestarts_{velox::bits::divRoundUp(rowCount_, restartInterval_)},
       restartOffsets_{encodedData.data() + dataOffset + sizeof(uint32_t)},
       dataStart_{restartOffsets_ + numRestarts_ * sizeof(uint32_t)} {}
-
-// static
-std::string_view PrefixKeyEncoding::decodeEntryAt(
-    const char*& pos,
-    uint32_t& row,
-    std::string& decoded) {
-  const uint32_t sharedPrefixLen = encoding::readUint32(pos);
-  const uint32_t suffixLen = encoding::readUint32(pos);
-  const uint32_t fullLen = sharedPrefixLen + suffixLen;
-  NIMBLE_DCHECK_LE(sharedPrefixLen, decoded.size());
-  decoded.resize(fullLen);
-  if (suffixLen > 0) {
-    std::memcpy(decoded.data() + sharedPrefixLen, pos, suffixLen);
-    pos += suffixLen;
-  }
-  ++row;
-  return std::string_view(decoded.data(), fullLen);
-}
 
 uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
   NIMBLE_CHECK_LT(restartIndex, numRestarts_, "Restart index out of bounds");
@@ -188,6 +260,28 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
   return std::nullopt;
 }
 
+std::unique_ptr<KeyEncoding::Cursor> PrefixKeyEncoding::cursor(
+    uint32_t startRow) const {
+  NIMBLE_CHECK_LT(startRow, rowCount_);
+
+  const uint32_t restartIndex = startRow / restartInterval_;
+  const char* pos = restartPosition(restartIndex);
+  uint32_t currentRow = restartIndex * restartInterval_;
+  std::string decoded;
+
+  // Decode up to startRow, leaving 'decoded' holding the preceding key so
+  // the first next() has the right shared prefix to build on.
+  while (currentRow < startRow) {
+    decodeEntryAt(pos, currentRow, decoded);
+  }
+
+  return std::make_unique<PrefixKeyCursor>(
+      pos, std::move(decoded), currentRow, rowCount_);
+}
+
+// Walks its own entries rather than going through cursor(): a one-off read
+// should not pay for the cursor's heap allocation, which measured ~19% of
+// this call.
 std::string PrefixKeyEncoding::get(uint32_t row) const {
   NIMBLE_CHECK_LT(row, rowCount_);
 
@@ -208,21 +302,17 @@ std::vector<std::string> PrefixKeyEncoding::materialize(
     uint32_t count) const {
   NIMBLE_CHECK_LE(startRow + count, rowCount_);
 
-  const uint32_t restartIndex = startRow / restartInterval_;
-  const char* pos = restartPosition(restartIndex);
-  uint32_t currentRow = restartIndex * restartInterval_;
-  std::string decoded;
-
-  // Skip to startRow.
-  while (currentRow < startRow) {
-    decodeEntryAt(pos, currentRow, decoded);
+  // An empty range needs no cursor, and asking for one at startRow ==
+  // rowCount_ would throw.
+  if (count == 0) {
+    return {};
   }
 
+  auto keyCursor = cursor(startRow);
   std::vector<std::string> result;
   result.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
-    decodeEntryAt(pos, currentRow, decoded);
-    result.emplace_back(decoded);
+    result.emplace_back(keyCursor->next());
   }
   return result;
 }

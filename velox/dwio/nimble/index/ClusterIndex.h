@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -118,6 +119,20 @@ class ClusterIndex : public IndexLookup {
     return sortOrders_;
   }
 
+  /// Returns a cursor over the encoded keys of the rows in 'rows'.
+  ///
+  /// Scanning advances a chunk cursor instead of binary searching per row,
+  /// takes the partition lock once per chunk rather than once per row, and
+  /// returns views instead of owned strings. Chunks come from the same
+  /// decoded-chunk cache that lookups use, so short cursors walking
+  /// consecutive row ranges of one chunk decode it only once between them.
+  ///
+  /// A cursor holds no locks between calls and is not thread-safe; use one
+  /// per thread. Cursors share no state with one another, so concurrent
+  /// scans need no coordination beyond that. The ClusterIndex must outlive
+  /// them.
+  std::unique_ptr<IndexKeyCursor> keyCursor(RowRange rows) const override;
+
   /// File-level index layout for diagnostic output (nimble_dump, FileLayout).
   struct Layout {
     /// Per-partition detail. Only populated when layout(detail=true).
@@ -153,6 +168,43 @@ class ClusterIndex : public IndexLookup {
   Layout layout(bool detail = true) const;
 
  private:
+  // Walks the index's keys a chunk at a time. Reached only through
+  // keyCursor(), so callers depend on IndexKeyCursor rather than on this
+  // type.
+  class KeyIterator final : public IndexKeyCursor {
+   public:
+    KeyIterator(const ClusterIndex& index, RowRange rows);
+
+    bool hasNext() const override {
+      return nextRow_ < endRow_;
+    }
+
+    std::string_view next() override;
+
+   private:
+    // Loads the chunk holding 'row' and positions the key cursor at it. Runs
+    // once per chunk, so the binary searches it performs are amortized over
+    // the chunk's rows.
+    void openChunkAt(uint32_t row);
+
+    // Index being scanned.
+    const ClusterIndex& index_;
+
+    // File-level row the iteration stops at, exclusive.
+    const uint32_t endRow_;
+
+    // File-level row that the next next() call reads.
+    uint32_t nextRow_;
+
+    // Chunk the key cursor reads. Held so that keys returned from a
+    // pre-materialized encoding stay valid while the chunk is current.
+    std::shared_ptr<DecodedKeyChunk> chunk_;
+
+    // Reads keys from chunk_. Exhausted exactly at the chunk boundary, which
+    // is what drives the transition to the next chunk.
+    std::unique_ptr<KeyEncoding::Cursor> cursor_;
+  };
+
   ClusterIndex(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
