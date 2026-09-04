@@ -146,6 +146,9 @@ struct ExchangeTestParamsPrinter {
 
 class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
  protected:
+  // Tests that mutate CudfConfig::intraNodeExchange must use process-level
+  // parallelism only: it is mutable process-global state read by the
+  // communicator's Acceptor thread.
   // Chosen per process in SetUpTestCase() rather than hardcoded. The
   // communicator opens a listener on this port without address reuse, so two
   // runs of this binary in quick succession fail the second with
@@ -1081,6 +1084,90 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
            << "IntraNodeTransferRegistry for cancelled task";
   }
   // If we get here, the source correctly detected the cancelled task.
+}
+
+// A same-process consumer can connect before the producer task has initialized
+// its output queue. The handshake must wait for the real output kind instead of
+// permanently falling back to remote UCX based on the placeholder queue.
+TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP() << "partitionedPlaceholderUsesIntraNodePath: runs only once";
+    }
+  }
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
+
+  auto metricSum = [](
+                       const folly::F14FastMap<std::string, RuntimeMetric>&
+                           stats,
+                       std::string_view name) {
+    auto it = stats.find(std::string{name});
+    return it == stats.end() ? 0 : it->second.sum;
+  };
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "partitionedPlaceholderSrc";
+  const std::string sinkTaskId = taskPrefix + "partitionedPlaceholderSink";
+  constexpr int numChunks = 2;
+  constexpr int numRowsPerChunk = 1000;
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
+  auto sinkDriver =
+      std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  std::vector<exec::Split> splits;
+  splits.emplace_back(remoteSplit(srcTaskId, /*partitionId=*/0));
+  sinkDriver->addSplits(splits);
+
+  // Start the consumer first and give its handshake time to reach the server.
+  // At this point the producer is represented only by an uninitialized task ID.
+  sinkDriver->run();
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+  EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  EXPECT_TRUE(queueManager_->canUseIntraNode(srcTaskId));
+
+  auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      srcTaskId,
+      /*numDrivers=*/1,
+      /*numPartitions=*/1,
+      numChunks,
+      numRowsPerChunk);
+  sourceMock->run();
+
+  sourceMock->joinThreads();
+  sinkDriver->joinThreads();
+
+  EXPECT_EQ(
+      sinkDriver->numRows(),
+      static_cast<uint64_t>(numChunks * numRowsPerChunk));
+
+  const auto sinkStats = sinkDriver->exchangeClientStats();
+  EXPECT_EQ(
+      metricSum(sinkStats, "ucxExchangeSource.intraNodePackedColumns"),
+      numChunks);
+  EXPECT_GT(metricSum(sinkStats, "ucxExchangeSource.intraNodeBytes"), 0);
+  EXPECT_EQ(metricSum(sinkStats, "ucxExchangeSource.remotePackedColumns"), 0);
+  EXPECT_EQ(metricSum(sinkStats, "ucxExchangeSource.remoteBytes"), 0);
+
+  queueManager_->removeTask(srcTaskId);
 }
 
 // Regression test for broadcast + intra-node SIGSEGV.
