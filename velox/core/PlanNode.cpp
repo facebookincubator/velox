@@ -1292,6 +1292,26 @@ void TableScanNode::accept(
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
   stream << tableHandle_->toString();
+
+  // Assignments are expected to name every output column, but some frontends
+  // build scans with no assignments at all.
+  if (assignments_.empty()) {
+    return;
+  }
+
+  bool first = true;
+  for (auto i = 0; i < outputType_->size(); ++i) {
+    if (outputType_->childAt(i)->isPrimitiveType()) {
+      continue;
+    }
+    const auto& outputName = outputType_->nameOf(i);
+    stream << (first ? ", assignments: [" : ", ");
+    first = false;
+    stream << outputName << " := " << assignments_.at(outputName)->toString();
+  }
+  if (!first) {
+    stream << "]";
+  }
 }
 
 void TableScanNode::addSummaryDetails(
