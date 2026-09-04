@@ -19,6 +19,8 @@
 #include <fmt/format.h>
 #include <unordered_map>
 
+#include "velox/common/base/Counters.h"
+#include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileConfig.h"
@@ -270,7 +272,50 @@ bool testFilterOnConstantVector(
       testFilterTyped, constantVec->typeKind(), filter, constantVec);
 }
 
+FileHandleCachedPtr openAt(
+    const std::string& path,
+    FileHandleFactory& fileHandleFactory,
+    const FileProperties& properties,
+    const std::shared_ptr<filesystems::TokenProvider>& tokenProvider,
+    IoStats* ioStats) {
+  const FileHandleKey fileHandleKey{
+      .filename = path, .tokenProvider = tokenProvider};
+  auto handle = fileHandleFactory.generate(fileHandleKey, &properties, ioStats);
+  VELOX_CHECK_NOT_NULL(handle.get());
+  return handle;
+}
+
 } // namespace
+
+FileHandleCachedPtr openSplitFile(
+    const FileConnectorSplit& split,
+    FileHandleFactory& fileHandleFactory,
+    const FileProperties& properties,
+    const std::shared_ptr<filesystems::TokenProvider>& tokenProvider,
+    IoStats* ioStats) {
+  if (split.readPath() == split.filePath) {
+    return openAt(
+        split.filePath, fileHandleFactory, properties, tokenProvider, ioStats);
+  }
+
+  try {
+    return openAt(
+        split.readPath(),
+        fileHandleFactory,
+        properties,
+        tokenProvider,
+        ioStats);
+  } catch (const VeloxRuntimeError& e) {
+    LOG(WARNING) << fmt::format(
+        "Failed to open split at its physical path, falling back to '{}'. Physical path: '{}'. Error: {}",
+        split.filePath,
+        split.physicalFilePath,
+        e.what());
+    RECORD_METRIC_VALUE(kMetricHiveSplitPhysicalPathFallbackCount);
+    return openAt(
+        split.filePath, fileHandleFactory, properties, tokenProvider, ioStats);
+  }
+}
 
 bool testFilters(
     const common::ScanSpec* scanSpec,

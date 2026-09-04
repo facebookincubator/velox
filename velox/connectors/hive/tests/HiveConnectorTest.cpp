@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
@@ -809,6 +810,11 @@ class CapturingFileSystem : public filesystems::FileSystem {
     return instance;
   }
 
+  static std::vector<std::string>& openedPaths() {
+    static std::vector<std::string> instance;
+    return instance;
+  }
+
   explicit CapturingFileSystem(std::shared_ptr<const config::ConfigBase> config)
       : FileSystem(std::move(config)) {}
 
@@ -827,6 +833,7 @@ class CapturingFileSystem : public filesystems::FileSystem {
       std::string_view path,
       const filesystems::FileOptions& options) override {
     capturedFileReadOps() = options.fileReadOps;
+    openedPaths().emplace_back(path);
     auto localPath = extractPath(path);
     return filesystems::getFileSystem(localPath, config_)
         ->openFileForRead(localPath, options);
@@ -864,10 +871,8 @@ class CapturingFileSystem : public filesystems::FileSystem {
   }
 };
 
-TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
-  // Register the capturing filesystem once.
-  static bool registered = false;
-  if (!registered) {
+void registerCapturingFileSystemOnce() {
+  static const bool registered = [] {
     filesystems::registerFileSystem(
         [](std::string_view path) {
           return path.find(CapturingFileSystem::kScheme) == 0;
@@ -875,8 +880,46 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
         [](std::shared_ptr<const config::ConfigBase> config, std::string_view) {
           return std::make_shared<CapturingFileSystem>(std::move(config));
         });
-    registered = true;
-  }
+    return true;
+  }();
+  (void)registered;
+}
+
+TEST_F(HiveConnectorTest, unreadablePhysicalFilePathFallsBackToFilePath) {
+  registerCapturingFileSystemOnce();
+
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto vector = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vector);
+
+  const auto canonical = fmt::format("capture:{}", filePath->getPath());
+  const auto physical = canonical + ".does_not_exist";
+  CapturingFileSystem::openedPaths().clear();
+
+  auto split = HiveConnectorSplitBuilder(canonical)
+                   .connectorId(kHiveConnectorId)
+                   .fileFormat(dwio::common::FileFormat::DWRF)
+                   .physicalFilePath(physical)
+                   .build();
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .assignments(allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  AssertQueryBuilder(plan).split(split).assertResults(vector);
+
+  // The rows alone would look the same if the physical path were never tried.
+  EXPECT_THAT(
+      CapturingFileSystem::openedPaths(),
+      testing::ElementsAre(physical, canonical));
+}
+
+TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
+  registerCapturingFileSystemOnce();
 
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
