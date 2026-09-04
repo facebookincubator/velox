@@ -38,10 +38,12 @@ struct HostPort {
 
   // Strict weak ordering for std::map
   bool operator<(HostPort const& other) const noexcept {
-    if (hostname < other.hostname)
+    if (hostname < other.hostname) {
       return true;
-    if (other.hostname < hostname)
+    }
+    if (other.hostname < hostname) {
       return false;
+    }
     return port < other.port;
   }
 };
