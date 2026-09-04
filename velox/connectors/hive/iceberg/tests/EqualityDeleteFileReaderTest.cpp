@@ -268,7 +268,7 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityColumnNotInProjection) {
 // Regression test: a column only a later split needs. The stable child order
 // used to be fixed when the first reader tree was built, so the second
 // split's tree had no reader for 'id' and its delete went unapplied.
-TEST_P(EqualityDeleteFileReaderTestP, equalityColumnAddedBySecondSplit) {
+TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
   auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
   // 'id' is outside the projection, so only the delete file puts it in the
   // scan spec.

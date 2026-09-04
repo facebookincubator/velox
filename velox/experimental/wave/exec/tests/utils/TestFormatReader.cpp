@@ -279,7 +279,7 @@ class TestStructColumnReader : public StructColumnReader {
     const auto stableChildren = scanSpec.stableChildren();
     const auto& childSpecs = *stableChildren;
     for (auto i = 0; i < childSpecs.size(); ++i) {
-      auto childSpec = childSpecs[i];
+      const auto& childSpec = childSpecs[i];
       if (isChildConstant(*childSpec)) {
         VELOX_NYI();
         continue;

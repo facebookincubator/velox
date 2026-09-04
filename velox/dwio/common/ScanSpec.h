@@ -181,14 +181,18 @@ class ScanSpec {
     return children_;
   }
 
+  /// Snapshot of the children in a stable order. Keeps both the vector and
+  /// the specs in it alive, so it may outlive the spec it came from.
+  using StableChildren =
+      std::shared_ptr<const std::vector<std::shared_ptr<ScanSpec>>>;
+
   /// Returns 'children' in a stable order. May be used for parallel
   /// construction and read-ahead of reader trees while the main user
   /// of 'this' is running. 'children_' may be reordered while running
   /// but the tree being constructed must see a single, unchanging
   /// order. A snapshot never changes once returned; a child added later
-  /// appears only in later snapshots, at the end. It keeps the vector alive,
-  /// not the specs in it, so it must not outlive 'this'.
-  std::shared_ptr<const std::vector<ScanSpec*>> stableChildren();
+  /// appears only in later snapshots, at the end.
+  StableChildren stableChildren();
 
   /// Returns a read sequence number. This can b used for tagging
   /// lazy vectors with a generation number so that we can check that
@@ -545,11 +549,11 @@ class ScanSpec {
 
   // Children in the order they were added, never reordered. Not handed out;
   // 'stableChildren_' publishes a copy.
-  std::vector<ScanSpec*> stableOrder_;
+  std::vector<std::shared_ptr<ScanSpec>> stableOrder_;
 
   // Snapshot of 'stableOrder_' handed to reader trees. Never written to once
   // published: an add drops it and the next stableChildren() republishes.
-  std::shared_ptr<const std::vector<ScanSpec*>> stableChildren_;
+  StableChildren stableChildren_;
 
   folly::F14FastMap<std::string, ScanSpec*> childByFieldName_;
 

@@ -45,12 +45,12 @@ ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
     return it->second;
   }
   this->children_.push_back(std::make_shared<ScanSpec>(name));
-  auto* child = this->children_.back().get();
+  const auto& child = this->children_.back();
   child->parent_ = this;
-  this->childByFieldName_[child->fieldName()] = child;
+  this->childByFieldName_[child->fieldName()] = child.get();
   stableOrder_.push_back(child);
   stableChildren_.reset();
-  return child;
+  return child.get();
 }
 
 ScanSpec* ScanSpec::getOrCreateChild(const Subfield& subfield) {
@@ -164,11 +164,12 @@ void ScanSpec::resetDeltaUpdates() {
   }
 }
 
-std::shared_ptr<const std::vector<ScanSpec*>> ScanSpec::stableChildren() {
+ScanSpec::StableChildren ScanSpec::stableChildren() {
   std::lock_guard<std::mutex> l(mutex_);
   if (stableChildren_ == nullptr) {
     stableChildren_ =
-        std::make_shared<const std::vector<ScanSpec*>>(stableOrder_);
+        std::make_shared<const std::vector<std::shared_ptr<ScanSpec>>>(
+            stableOrder_);
   }
   return stableChildren_;
 }

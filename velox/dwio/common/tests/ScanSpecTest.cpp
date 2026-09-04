@@ -29,6 +29,7 @@ namespace {
 
 using testing::Each;
 using testing::ElementsAre;
+using testing::Pointer;
 using testing::SizeIs;
 
 class ScanSpecTest : public testing::Test, public test::VectorTestBase {
@@ -181,13 +182,15 @@ TEST_F(ScanSpecTest, stableChildrenAfterAddingChild) {
   auto* first = scanSpec.childByName("c0");
   auto* second = scanSpec.childByName("c1");
   const auto beforeAdd = scanSpec.stableChildren();
-  EXPECT_THAT(*beforeAdd, ElementsAre(first, second));
+  EXPECT_THAT(*beforeAdd, ElementsAre(Pointer(first), Pointer(second)));
 
   auto* third = scanSpec.addField("c2", 2);
-  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first, second, third));
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
 
   // The snapshot a reader tree is walking is never mutated.
-  EXPECT_THAT(*beforeAdd, ElementsAre(first, second));
+  EXPECT_THAT(*beforeAdd, ElementsAre(Pointer(first), Pointer(second)));
 
   // 'c2' is the only child with a filter, so it sorts to the front. The
   // stable order must not follow.
@@ -195,7 +198,9 @@ TEST_F(ScanSpecTest, stableChildrenAfterAddingChild) {
       std::make_shared<BigintRange>(10, 20, false));
   scanSpec.resetCachedValues(true);
   ASSERT_EQ(scanSpec.children().front().get(), third);
-  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first, second, third));
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
 }
 
 // An add drops the published snapshot. The next call republishes the whole
@@ -204,16 +209,18 @@ TEST_F(ScanSpecTest, stableChildrenRepublishedAfterAdd) {
   ScanSpec scanSpec("<root>");
   auto* first = scanSpec.addField("c0", 0);
   // Published and dropped, so nothing holds it when 'c1' is added.
-  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first));
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(Pointer(first)));
 
   auto* second = scanSpec.addField("c1", 1);
   const auto held = scanSpec.stableChildren();
-  EXPECT_THAT(*held, ElementsAre(first, second));
+  EXPECT_THAT(*held, ElementsAre(Pointer(first), Pointer(second)));
 
   // Held this time, so adding 'c2' must leave 'held' alone.
   auto* third = scanSpec.addField("c2", 2);
-  EXPECT_THAT(*held, ElementsAre(first, second));
-  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first, second, third));
+  EXPECT_THAT(*held, ElementsAre(Pointer(first), Pointer(second)));
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
 }
 
 // Two threads calling getOrCreateChild() for one name must get one child. A

@@ -439,7 +439,7 @@ folly::F14FastSet<std::string> SelectiveNimbleRowReader::computeLazyIoColumns(
   VELOX_CHECK_NOT_NULL(scanSpec);
   const auto& remainingFilterColumns = options.remainingFilterColumns();
   const auto stableChildren = scanSpec->stableChildren();
-  for (auto* childSpec : *stableChildren) {
+  for (const auto& childSpec : *stableChildren) {
     if (childSpec->isConstant() || !childSpec->readFromFile()) {
       continue;
     }

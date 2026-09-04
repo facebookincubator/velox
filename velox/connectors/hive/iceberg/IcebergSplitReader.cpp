@@ -544,6 +544,7 @@ void IcebergSplitReader::prepareSplit(
             resolveEqualityColumns(deleteFile);
 
         if (!equalityColumnNames.empty()) {
+          checkEqualityDeleteColumnsAreReadable(equalityColumnNames);
           equalityDeleteFileReaders_.push_back(
               std::make_unique<EqualityDeleteFileReader>(
                   deleteFile,
@@ -712,6 +713,33 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
   names.insert(names.end(), extraNames.begin(), extraNames.end());
   types.insert(types.end(), extraTypes.begin(), extraTypes.end());
   readerOutputType_ = ROW(std::move(names), std::move(types));
+}
+
+void IcebergSplitReader::checkEqualityDeleteColumnsAreReadable(
+    const std::vector<std::string>& equalityColumnNames) const {
+  for (const auto& name : equalityColumnNames) {
+    auto* fieldSpec = scanSpec_->childByName(name);
+    VELOX_CHECK_NOT_NULL(
+        fieldSpec, "Iceberg equality delete column has no scan spec: {}", name);
+    VELOX_CHECK(
+        fieldSpec->projectOut(),
+        "Iceberg equality delete column is not projected out: {}",
+        name);
+    VELOX_CHECK(
+        readerOutputType_->containsChild(name),
+        "Iceberg equality delete column is missing from the reader output "
+        "type: {}",
+        name);
+    // A constant column carries its own value and needs no column reader. Any
+    // other column gets one, and its position among the struct reader's
+    // children, when the reader tree is built. A negative subscript means the
+    // tree was built without this column -- see 'ScanSpec::stableChildren()'
+    // for how a spec that changes mid-scan used to produce that.
+    VELOX_CHECK(
+        fieldSpec->isConstant() || fieldSpec->subscript() >= 0,
+        "Iceberg equality delete column has no column reader: {}",
+        name);
+  }
 }
 
 std::pair<std::vector<std::string>, std::vector<TypePtr>>
