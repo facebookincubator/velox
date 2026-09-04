@@ -179,6 +179,46 @@ class AppendingAdapter : public cudf_velox::OperatorAdapter {
     return appended;
   }
 };
+// Claims FilterProject but declines it, which is how an adapter reports that it
+// cannot implement a particular operator. createReplacements() is never called
+// on this path, so the operator stays on the CPU and allowCpuFallback alone
+// decides whether that is acceptable.
+class DecliningAdapter : public cudf_velox::OperatorAdapter {
+ public:
+  DecliningAdapter() : cudf_velox::OperatorAdapter("Declining") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return dynamic_cast<const exec::FilterProject*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/) const override {
+    return false;
+  }
+
+  bool acceptsGpuInput() const override {
+    return false;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  bool keepOperator() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      exec::DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    VELOX_FAIL(
+        "createReplacements() must not be called for a declined operator");
+  }
+};
 } // namespace
 
 TEST_F(AdapterOperatorTest, adapterStatsMergedIntoPlanNode) {
@@ -234,13 +274,12 @@ TEST_F(AdapterOperatorTest, keptOperatorNeedsNoAppendedOperators) {
   EXPECT_EQ(results->size(), 5);
 }
 
-// The same failure, but with the adapter claiming GPU output so that
-// CompileState appends a CudfToVelox conversion behind it. Deciding the failure
-// from the accumulated replacement list rather than from what the adapter
-// returned would see that conversion operator and conclude the replacement
-// succeeded, so this case is what pins the decision to the adapter's own
-// result. Left undetected the conversion replaces the operator outright, which
-// drops the plan node from the pipeline.
+// The same failure with the adapter also claiming GPU output, which is the
+// shape that used to be destructive: the CudfToVelox appended behind the empty
+// replacement took the operator's place and the plan node dropped out of the
+// pipeline. The rejection has to name the adapter rather than surface later as
+// a conversion operator receiving the wrong vector type, so this case pins the
+// error to the contract check.
 TEST_F(
     AdapterOperatorTest,
     emptyReplacementIsRejectedDespiteConversionOperator) {
@@ -276,6 +315,50 @@ TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithCpuFallbackEnabled) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool(), task),
       "Adapter replaced an operator with nothing");
+}
+
+// An adapter declining its operator is the other reason the operator stays on
+// the CPU, and it is a different failure from returning nothing: the plan
+// cannot run on GPU rather than the adapter being broken, so allowCpuFallback
+// decides it and the error names the fallback rather than the adapter.
+TEST_F(AdapterOperatorTest, declinedOperatorIsRejectedWithoutFallback) {
+  registerAdapterFirst(std::make_unique<DecliningAdapter>());
+
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  auto plan = PlanBuilder().values({data}).project({"c0 * 2 as x"}).planNode();
+
+  std::shared_ptr<exec::Task> task;
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool(), task),
+      "Replacement with cuDF operator failed");
+}
+
+// The same declined operator with fallback enabled has to run, on the CPU
+// operator that was left in place. Checking the plan node reports FilterProject
+// and no cuDF operator is what distinguishes running on the CPU from having
+// been replaced after all.
+TEST_F(AdapterOperatorTest, declinedOperatorRunsOnCpuWithFallback) {
+  enableCpuFallback();
+  registerAdapterFirst(std::make_unique<DecliningAdapter>());
+
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  core::PlanNodeId projNodeId;
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"c0 * 2 as x"})
+                  .capturePlanNodeId(projNodeId)
+                  .planNode();
+
+  std::shared_ptr<exec::Task> task;
+  auto results = AssertQueryBuilder(plan).copyResults(pool(), task);
+  facebook::velox::test::assertEqualVectors(
+      makeRowVector({"x"}, {makeFlatVector<int64_t>({2, 4, 6, 8, 10})}),
+      results);
+
+  auto stats = toPlanStats(task->taskStats());
+  auto& projStats = stats.at(projNodeId);
+  EXPECT_EQ(projStats.operatorStats.count("FilterProject"), 1);
+  EXPECT_EQ(projStats.operatorStats.count("CudfFilterProject"), 0);
 }
 
 // The capability this contract change exists for: a kept operator describing

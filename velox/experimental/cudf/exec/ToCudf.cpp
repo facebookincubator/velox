@@ -171,7 +171,6 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (adapter) {
       keepOperator = adapter->keepOperator();
       const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
-      bool adapterReturnedOperators = false;
       if (canUseGpuPath) {
         // Whether these run instead of 'oper' or after it is keepOperator()'s
         // decision, not this call's. A kept operator describing operators that
@@ -181,14 +180,13 @@ bool CompileState::compile(bool allowCpuFallback) {
         // no operator ids of its own.
         auto replacements =
             adapter->createReplacements(oper, planNode, ctx, id);
-        adapterReturnedOperators = !replacements.empty();
         // An adapter that does not keep its operator has to return something
         // to put in its place. Returning nothing is a defect in the adapter,
         // not a plan that cannot run on GPU, so it fails the query whatever
         // allowCpuFallback says. Checking here, before the conversion operator
         // below can join replaceOp, keeps the driver unmodified.
         VELOX_CHECK(
-            keepOperator != 0 || adapterReturnedOperators,
+            keepOperator != 0 || !replacements.empty(),
             "Adapter replaced an operator with nothing: {}",
             adapter->name());
         for (auto& r : replacements) {
@@ -197,11 +195,11 @@ bool CompileState::compile(bool allowCpuFallback) {
       }
 
       if (keepOperator == 0) {
-        // No GPU operators were produced for this operator, so it stays a CPU
-        // operator. After the check above the only way to reach this with
-        // adapterReturnedOperators false is canRunOnGPU() having declined the
-        // operator, which is the ordinary CPU fallback case.
-        isPureCpuOperator = !adapterReturnedOperators;
+        // The check above already rejected an adapter that reached the GPU path
+        // and returned nothing, so the only way this operator is still a CPU
+        // operator is canRunOnGPU() having declined it. That is the ordinary
+        // CPU fallback case, which allowCpuFallback below decides on.
+        isPureCpuOperator = !canUseGpuPath;
       } else {
         // A kept operator is GPU compatible, so it is allowed even when
         // fallback is disabled, whether or not the adapter described any
