@@ -61,6 +61,16 @@ class AdapterOperatorTest : public OperatorTestBase {
         std::move(adapter));
   }
 
+  // Rebuilds the cuDF registration with CPU fallback enabled, because
+  // CudfDriverAdapter captures allowCpuFallback when registerCudf() runs, so
+  // setting the config afterwards has no effect on the driver adapter already
+  // installed by SetUp().
+  void enableCpuFallback() {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+    cudf_velox::registerCudf();
+  }
+
   bool savedCpuFallback_{true};
 };
 
@@ -205,7 +215,7 @@ TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithoutFallback) {
   std::shared_ptr<exec::Task> task;
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool(), task),
-      "Replacement with cuDF operator failed");
+      "Adapter replaced an operator with nothing");
 }
 
 // The mirror case, so that rejecting an empty replacement cannot be implemented
@@ -244,7 +254,28 @@ TEST_F(
   std::shared_ptr<exec::Task> task;
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool(), task),
-      "Replacement with cuDF operator failed");
+      "Adapter replaced an operator with nothing");
+}
+
+// The same defect with CPU fallback enabled, which is the configuration that
+// used to lose the operator silently: the conversion operator appended behind
+// the empty replacement took its place and the plan node dropped out of the
+// pipeline. An adapter returning nothing while not keeping its operator is a
+// defect in the adapter rather than a plan that cannot run on GPU, so it is
+// rejected whatever allowCpuFallback says.
+TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithCpuFallbackEnabled) {
+  enableCpuFallback();
+  registerAdapterFirst(
+      std::make_unique<EmptyReplacementAdapter>(
+          /*keepOperator=*/false, /*producesGpuOutput=*/true));
+
+  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  auto plan = PlanBuilder().values({data}).project({"c0 * 2 as x"}).planNode();
+
+  std::shared_ptr<exec::Task> task;
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool(), task),
+      "Adapter replaced an operator with nothing");
 }
 
 // The capability this contract change exists for: a kept operator describing

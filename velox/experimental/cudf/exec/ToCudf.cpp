@@ -182,20 +182,25 @@ bool CompileState::compile(bool allowCpuFallback) {
         auto replacements =
             adapter->createReplacements(oper, planNode, ctx, id);
         adapterReturnedOperators = !replacements.empty();
+        // An adapter that does not keep its operator has to return something
+        // to put in its place. Returning nothing is a defect in the adapter,
+        // not a plan that cannot run on GPU, so it fails the query whatever
+        // allowCpuFallback says. Checking here, before the conversion operator
+        // below can join replaceOp, keeps the driver unmodified.
+        VELOX_CHECK(
+            keepOperator != 0 || adapterReturnedOperators,
+            "Adapter replaced an operator with nothing: {}",
+            adapter->name());
         for (auto& r : replacements) {
           replaceOp.push_back(std::move(r));
         }
       }
 
       if (keepOperator == 0) {
-        // An adapter that replaces its operator but returns nothing has not
-        // replaced it, so the operator is still a CPU operator. That is the
-        // same outcome as the adapter having declined the operator through
-        // canRunOnGPU(), which is why both fold into one condition here. The
-        // decision has to come from what createReplacements() returned rather
-        // than from replaceOp, because replaceOp can still gain a conversion
-        // operator further down and an empty replacement would then be
-        // indistinguishable from a successful one.
+        // No GPU operators were produced for this operator, so it stays a CPU
+        // operator. After the check above the only way to reach this with
+        // adapterReturnedOperators false is canRunOnGPU() having declined the
+        // operator, which is the ordinary CPU fallback case.
         isPureCpuOperator = !adapterReturnedOperators;
       } else {
         // A kept operator is GPU compatible, so it is allowed even when
