@@ -515,6 +515,23 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     return params;
   }
 
+  // Pruned set for the chunked rerun. Chunking is a writer-side concern and
+  // is independent of the reader-side dimensions, so rerunning the full matrix
+  // under chunking would double a heavyweight suite to find nothing. Only
+  // skipConstantFlatMapInMapStreams is crossed, since that is the writer
+  // decision chunking actually interacts with.
+  static std::vector<TestParam> getChunkedTestParams() {
+    std::vector<TestParam> params;
+    for (const bool skip : {false, true}) {
+      params.emplace_back(
+          TestParam{/*optimizeStringBufferHandling=*/false,
+                    /*skipConstantFlatMapInMapStreams=*/skip,
+                    /*enableCache=*/false,
+                    /*pinMetadata=*/false});
+    }
+    return params;
+  }
+
   static std::vector<TestParam> getMetadataReuseTestParams() {
     std::vector<TestParam> params;
     for (const auto& param : getTestParams()) {
@@ -617,9 +634,24 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
         readFile.get(), pool, std::move(selector), std::move(params));
   }
 
+  // Whether writers built by this fixture chunk their streams. Overridden by
+  // BatchReaderChunkedTest, which reruns the chunk-sensitive tests with
+  // chunking on rather than having each of them loop over both modes.
+  virtual bool enableChunking() const {
+    return false;
+  }
+
+  // Chunk-sensitive test bodies, shared so BatchReaderChunkedTest can rerun
+  // them with chunking on without duplicating the bodies.
+  void verifyFlatMapAllTrueInMapWithAllNullValues();
+
+  void verifyFlatMapNullValuesThenNonNullAcrossChunks();
+
+  void verifyFlatMapAllNullValuesAcrossChunks();
+
   nimble::WriterOptions createFlatMapWriterOptions() const {
     nimble::WriterOptions options;
-    options.enableChunking = false;
+    options.enableChunking = enableChunking();
     options.skipConstantFlatMapInMapStreams = skipConstantFlatMapInMapStreams();
     return options;
   }
@@ -1485,6 +1517,17 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
 class FsstStringBatchReaderTest : public BatchReaderTest {};
 
 class MetadataReuseTest : public BatchReaderTest {};
+
+// Reruns the chunk-sensitive tests with the writer chunking its streams.
+// Carried by a separate fixture rather than a loop inside each test so the
+// chunked runs show up as their own cases, and so the chunked matrix can stay
+// pruned independently of the base one.
+class BatchReaderChunkedTest : public BatchReaderTest {
+ protected:
+  bool enableChunking() const override {
+    return true;
+  }
+};
 
 nimble::EncodingLayout makeFsstEncodingLayout() {
   return nimble::EncodingLayout{
@@ -4129,7 +4172,7 @@ TEST_P(BatchReaderTest, flatMapSkipAllTrueInMapStream) {
   }
 }
 
-TEST_P(BatchReaderTest, DISABLED_flatMapAllTrueInMapWithAllNullValues) {
+void BatchReaderTest::verifyFlatMapAllTrueInMapWithAllNullValues() {
   auto type =
       velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
 
@@ -4143,7 +4186,6 @@ TEST_P(BatchReaderTest, DISABLED_flatMapAllTrueInMapWithAllNullValues) {
   std::string file;
   auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
   auto writerOptions = createFlatMapWriterOptions();
-  writerOptions.enableChunking = true;
   writerOptions.flatMapColumns["flat_map"];
   nimble::Writer writer(
       type, std::move(writeFile), *rootPool_, std::move(writerOptions));
@@ -4157,6 +4199,10 @@ TEST_P(BatchReaderTest, DISABLED_flatMapAllTrueInMapWithAllNullValues) {
         &readFile, *leafPool_, std::move(selector), createReadParams());
     const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
     ASSERT_EQ(flatMap.childrenCount(), 1);
+    // Every value is null, so no value stream reaches disk. That leaves the
+    // in-map stream as the only record that the key is present at all, so the
+    // constant in-map skip must not drop it -- otherwise the key is
+    // byte-indistinguishable from one absent from the stripe.
     EXPECT_TRUE(existingStreamOffsets(*leafPool_, &readFile, 0)
                     .count(flatMap.inMapDescriptorAt(0).offset()));
   }
@@ -4174,6 +4220,369 @@ TEST_P(BatchReaderTest, DISABLED_flatMapAllTrueInMapWithAllNullValues) {
       EXPECT_TRUE(vectorEquals(vector, output, i)) << "Mismatch at row " << i;
     }
   }
+}
+
+TEST_P(BatchReaderTest, flatMapAllTrueInMapWithAllNullValues) {
+  verifyFlatMapAllTrueInMapWithAllNullValues();
+}
+
+TEST_P(BatchReaderChunkedTest, flatMapAllTrueInMapWithAllNullValues) {
+  verifyFlatMapAllTrueInMapWithAllNullValues();
+}
+
+// Same invariant as flatMapAllTrueInMapWithAllNullValues, with string values.
+// Covers NullableContentStringStreamData, whose data() is only valid once
+// materialized. Deciding at stripe close, from what each stream actually
+// encoded, is what keeps this path off that trap.
+TEST_P(BatchReaderTest, flatMapAllTrueInMapWithAllNullStringValues) {
+  auto type = velox::ROW(
+      {{"flat_map", velox::MAP(velox::INTEGER(), velox::VARCHAR())}});
+
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  auto keys = vectorMaker.flatVector<int32_t>({1, 1, 1, 1});
+  auto values = vectorMaker.flatVectorNullable<velox::StringView>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  auto vector = vectorMaker.rowVector(
+      {"flat_map"}, {vectorMaker.mapVector({0, 1, 2, 3}, keys, values)});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.flatMapColumns["flat_map"];
+  nimble::Writer writer(
+      type, std::move(writeFile), *rootPool_, std::move(writerOptions));
+  writer.write(vector);
+  writer.close();
+
+  velox::InMemoryReadFile readFile(file);
+  auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, std::move(selector), createReadParams());
+  velox::VectorPtr output;
+  ASSERT_TRUE(reader.next(4, output));
+  ASSERT_EQ(output->size(), 4);
+  for (auto i = 0; i < 4; ++i) {
+    EXPECT_TRUE(vectorEquals(vector, output, i)) << "Mismatch at row " << i;
+  }
+}
+
+// Two stripes: the key is in every row of the first (all-true in-map, dropped
+// because the value stream proves presence) and in only one row of the second
+// (mixed in-map, which must reach disk). The all-true mark lives on the schema
+// descriptor, which outlives a stripe, so it has to be reassigned per stripe
+// rather than only set. Left stale, the sweep would drop the second stripe's
+// real in-map stream and the absent key would read back as present.
+TEST_P(BatchReaderTest, flatMapAllTrueInMapThenMixedAcrossStripes) {
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  std::vector<velox::VectorPtr> vectors{
+      vectorMaker.rowVector(
+          {"flat_map"},
+          {vectorMaker.mapVector<int32_t, int64_t>({{{1, 10}}, {{1, 11}}})}),
+      vectorMaker.rowVector(
+          {"flat_map"},
+          {vectorMaker.mapVector<int32_t, int64_t>({{{1, 12}}, {}})}),
+  };
+
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.flatMapColumns["flat_map"];
+  auto file = nimble::test::createNimbleFile(
+      *rootPool_, vectors, std::move(writerOptions), /*flushAfterWrite=*/true);
+
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+
+  velox::VectorPtr result;
+  for (const auto& expected : vectors) {
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(expected->size(), result->size());
+    for (auto i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+          << "Mismatch at row " << i;
+    }
+  }
+}
+
+namespace {
+
+// Writer options that emit one chunk per write call, so multi-batch tests
+// exercise real chunk boundaries instead of deferring everything to the final
+// chunk at stripe close.
+nimble::WriterOptions chunkPerWriteOptions(nimble::WriterOptions options) {
+  options.minStreamChunkRawSize = 0;
+  options.flatMapColumns["flat_map"];
+  options.flushPolicyFactory = []() {
+    return std::make_unique<nimble::LambdaFlushPolicy>(
+        /*flushLambda=*/[](auto&) { return false; },
+        /*chunkLambda=*/[](auto&) { return true; });
+  };
+  return options;
+}
+
+// Writer options that chunk every write call and enable chunking, for tests
+// that need the chunked write path specifically rather than the fixture's
+// parameterization.
+nimble::WriterOptions chunkedFlatMapOptions(nimble::WriterOptions options) {
+  options.enableChunking = true;
+  return chunkPerWriteOptions(std::move(options));
+}
+
+} // namespace
+
+// Chunked writes suppress constant in-map streams too. The decision is read
+// back from each stream's own encoding at stripe close, so a stream split
+// across several chunks is dropped only when every chunk encodes a Constant
+// true -- there is no per-chunk in-map state to accumulate.
+TEST_P(BatchReaderTest, flatMapSkipAllTrueInMapStreamChunked) {
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  auto batch = [&](int64_t base) {
+    return vectorMaker.rowVector(
+        {"flat_map"},
+        {vectorMaker.mapVector<int32_t, int64_t>(
+            {{{1, base}}, {{1, base + 1}}})});
+  };
+  std::vector<velox::VectorPtr> vectors{batch(10), batch(20), batch(30)};
+
+  auto file = nimble::test::createNimbleFile(
+      *rootPool_,
+      vectors,
+      chunkedFlatMapOptions(createFlatMapWriterOptions()),
+      /*flushAfterWrite=*/false);
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector =
+        std::make_shared<velox::dwio::common::ColumnSelector>(velox::ROW(
+            {{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}}));
+    nimble::BatchReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
+    ASSERT_EQ(flatMap.childrenCount(), 1);
+    const auto offsets = existingStreamOffsets(*leafPool_, &readFile, 0);
+    const auto inMapOffset = flatMap.inMapDescriptorAt(0).offset();
+    if (skipConstantFlatMapInMapStreams()) {
+      EXPECT_FALSE(offsets.count(inMapOffset))
+          << "all-true in-map stream should be dropped on the chunked path";
+    } else {
+      EXPECT_TRUE(offsets.count(inMapOffset));
+    }
+  }
+
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+  velox::VectorPtr result;
+  for (const auto& expected : vectors) {
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(expected->size(), result->size());
+    for (auto i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+          << "Mismatch at row " << i;
+    }
+  }
+}
+
+// The all-null invariant holds on the chunked path: with no value stream to
+// prove the key was present, the all-true in-map stream is the only record of
+// it and must survive even though it is constant.
+TEST_P(BatchReaderTest, flatMapAllNullValuesKeepsInMapChunked) {
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  auto allNullBatch = [&]() {
+    return vectorMaker.rowVector(
+        {"flat_map"},
+        {vectorMaker.mapVector(
+            {0, 1},
+            vectorMaker.flatVector<int32_t>({1, 1}),
+            vectorMaker.flatVectorNullable<int64_t>(
+                {std::nullopt, std::nullopt}))});
+  };
+  std::vector<velox::VectorPtr> vectors{
+      allNullBatch(), allNullBatch(), allNullBatch()};
+
+  auto file = nimble::test::createNimbleFile(
+      *rootPool_,
+      vectors,
+      chunkedFlatMapOptions(createFlatMapWriterOptions()),
+      /*flushAfterWrite=*/false);
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector =
+        std::make_shared<velox::dwio::common::ColumnSelector>(velox::ROW(
+            {{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}}));
+    nimble::BatchReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
+    ASSERT_EQ(flatMap.childrenCount(), 1);
+    EXPECT_TRUE(existingStreamOffsets(*leafPool_, &readFile, 0)
+                    .count(flatMap.inMapDescriptorAt(0).offset()))
+        << "in-map stream is the key's only record and must be kept";
+  }
+
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+  velox::VectorPtr result;
+  for (const auto& expected : vectors) {
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(expected->size(), result->size());
+    for (auto i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+          << "Mismatch at row " << i;
+    }
+  }
+}
+
+// A key present in some rows and absent in others produces a mixed in-map
+// stream, which is not Constant and so is never dropped -- including when the
+// all-true chunks come first and the mixed one only later.
+TEST_P(BatchReaderTest, flatMapMixedInMapAcrossChunksKeepsStream) {
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  std::vector<velox::VectorPtr> vectors{
+      vectorMaker.rowVector(
+          {"flat_map"},
+          {vectorMaker.mapVector<int32_t, int64_t>({{{1, 10}}, {{1, 11}}})}),
+      vectorMaker.rowVector(
+          {"flat_map"},
+          {vectorMaker.mapVector<int32_t, int64_t>({{{1, 12}}, {}})}),
+  };
+
+  auto file = nimble::test::createNimbleFile(
+      *rootPool_,
+      vectors,
+      chunkedFlatMapOptions(createFlatMapWriterOptions()),
+      /*flushAfterWrite=*/false);
+
+  {
+    velox::InMemoryReadFile readFile(file);
+    auto selector =
+        std::make_shared<velox::dwio::common::ColumnSelector>(velox::ROW(
+            {{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}}));
+    nimble::BatchReader reader(
+        &readFile, *leafPool_, std::move(selector), createReadParams());
+    const auto& flatMap = reader.schema()->asRow().childAt(0)->asFlatMap();
+    ASSERT_EQ(flatMap.childrenCount(), 1);
+    EXPECT_TRUE(existingStreamOffsets(*leafPool_, &readFile, 0)
+                    .count(flatMap.inMapDescriptorAt(0).offset()))
+        << "a mixed in-map stream must reach disk";
+  }
+
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+  velox::VectorPtr result;
+  for (const auto& expected : vectors) {
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(expected->size(), result->size());
+    for (auto i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+          << "Mismatch at row " << i;
+    }
+  }
+}
+
+// A key whose values are null in an early batch and non-null in a later one
+// must survive the chunk boundary between them. The writer defers a chunk
+// while the stream is still empty of payload, and a deferred attempt consumes
+// nothing -- it stays "first chunk" and its rows fold into the next emitted
+// chunk. Were they dropped instead, the value stream would be short and every
+// later row would decode shifted.
+void BatchReaderTest::verifyFlatMapNullValuesThenNonNullAcrossChunks() {
+  auto type =
+      velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  std::vector<velox::VectorPtr> vectors{
+      vectorMaker.rowVector(
+          {"flat_map"},
+          {vectorMaker.mapVector(
+              {0, 1},
+              vectorMaker.flatVector<int32_t>({1, 1}),
+              vectorMaker.flatVectorNullable<int64_t>(
+                  {std::nullopt, std::nullopt}))}),
+      vectorMaker.rowVector(
+          {"flat_map"},
+          {vectorMaker.mapVector(
+              {0, 1},
+              vectorMaker.flatVector<int32_t>({1, 1}),
+              vectorMaker.flatVectorNullable<int64_t>({10, 20}))}),
+  };
+
+  auto file = nimble::test::createNimbleFile(
+      *rootPool_,
+      vectors,
+      chunkPerWriteOptions(createFlatMapWriterOptions()),
+      /*flushAfterWrite=*/false);
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+
+  velox::VectorPtr result;
+  for (const auto& expected : vectors) {
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(expected->size(), result->size());
+    for (auto i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+          << "Mismatch at row " << i;
+    }
+  }
+}
+
+TEST_P(BatchReaderTest, flatMapNullValuesThenNonNullAcrossChunks) {
+  verifyFlatMapNullValuesThenNonNullAcrossChunks();
+}
+
+TEST_P(BatchReaderChunkedTest, flatMapNullValuesThenNonNullAcrossChunks) {
+  verifyFlatMapNullValuesThenNonNullAcrossChunks();
+}
+
+// All values null for the key across several chunks, so no value stream is
+// written at all. The in-map stream is then the key's only record and must
+// survive, the same invariant as the single-batch case but with the stream
+// spanning chunk boundaries.
+void BatchReaderTest::verifyFlatMapAllNullValuesAcrossChunks() {
+  auto type =
+      velox::ROW({{"flat_map", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+
+  facebook::velox::test::VectorMaker vectorMaker(leafPool_.get());
+  auto allNullBatch = [&]() {
+    return vectorMaker.rowVector(
+        {"flat_map"},
+        {vectorMaker.mapVector(
+            {0, 1},
+            vectorMaker.flatVector<int32_t>({1, 1}),
+            vectorMaker.flatVectorNullable<int64_t>(
+                {std::nullopt, std::nullopt}))});
+  };
+  std::vector<velox::VectorPtr> vectors{
+      allNullBatch(), allNullBatch(), allNullBatch()};
+
+  auto file = nimble::test::createNimbleFile(
+      *rootPool_,
+      vectors,
+      chunkPerWriteOptions(createFlatMapWriterOptions()),
+      /*flushAfterWrite=*/false);
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(
+      &readFile, *leafPool_, /*selector=*/nullptr, createReadParams());
+
+  velox::VectorPtr result;
+  for (const auto& expected : vectors) {
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(expected->size(), result->size());
+    for (auto i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), i, i))
+          << "Mismatch at row " << i;
+    }
+  }
+}
+
+TEST_P(BatchReaderTest, flatMapAllNullValuesAcrossChunks) {
+  verifyFlatMapAllNullValuesAcrossChunks();
+}
+
+TEST_P(BatchReaderChunkedTest, flatMapAllNullValuesAcrossChunks) {
+  verifyFlatMapAllNullValuesAcrossChunks();
 }
 
 // Verify mixed in-map streams: some keys present in all rows (all-true,
@@ -8264,6 +8673,14 @@ INSTANTIATE_TEST_SUITE_P(
     BatchReaderTestSuite,
     BatchReaderTest,
     ::testing::ValuesIn(BatchReaderTest::getTestParams()),
+    [](const ::testing::TestParamInfo<TestParam>& info) {
+      return info.param.debugString();
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    BatchReaderChunkedTestSuite,
+    BatchReaderChunkedTest,
+    ::testing::ValuesIn(BatchReaderTest::getChunkedTestParams()),
     [](const ::testing::TestParamInfo<TestParam>& info) {
       return info.param.debugString();
     });
