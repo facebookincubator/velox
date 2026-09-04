@@ -3238,6 +3238,18 @@ inline bool isCountingJoin(JoinType joinType) {
   return isCountingAntiJoin(joinType) || isCountingLeftSemiFilterJoin(joinType);
 }
 
+/// Indicates if a join with 'joinType' can drop the build side rows with a
+/// duplicate join key. 'withFilter' is true if the join has an extra filter.
+/// Left semi and anti join with no extra filter only need to know whether there
+/// is a match, hence there is no need to store entries with duplicate keys.
+/// Counting joins always deduplicate and track counts.
+inline bool canDropDuplicates(JoinType joinType, bool withFilter) {
+  return isCountingJoin(joinType) ||
+      (!withFilter &&
+       (isLeftSemiFilterJoin(joinType) || isLeftSemiProjectJoin(joinType) ||
+        isAntiJoin(joinType)));
+}
+
 /// Returns true if the join type is "probe-only", meaning the output includes
 /// only columns from the probe side (plus possibly a mark column).
 inline bool isProbeOnlyJoin(JoinType joinType) {
@@ -3408,12 +3420,7 @@ class AbstractJoinNode : public PlanNode {
   /// For left semi and anti join, it is not necessary to store duplicate rows.
   /// For counting joins, duplicates are folded into a per-key count.
   bool canDropDuplicates() const {
-    // Left semi and anti join with no extra filter only needs to know whether
-    // there is a match. Hence, no need to store entries with duplicate keys.
-    // Counting joins always deduplicate and track counts.
-    return isCountingJoin() ||
-        (!filter() &&
-         (isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin()));
+    return core::canDropDuplicates(joinType_, filter() != nullptr);
   }
 
   const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
