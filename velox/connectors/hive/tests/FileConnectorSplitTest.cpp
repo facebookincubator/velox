@@ -74,6 +74,30 @@ TEST(FileConnectorSplitTest, getFileNameNoSlash) {
   EXPECT_EQ(split.getFileName(), "file.orc");
 }
 
+TEST(FileConnectorSplitTest, readPathDefaultsToFilePath) {
+  FileConnectorSplit split(
+      "connectorId",
+      "/path/to/file.parquet",
+      dwio::common::FileFormat::PARQUET);
+
+  EXPECT_TRUE(split.physicalFilePath.empty());
+  EXPECT_EQ(split.readPath(), "/path/to/file.parquet");
+}
+
+TEST(FileConnectorSplitTest, readPathUsesPhysicalFilePath) {
+  FileConnectorSplit split(
+      "connectorId",
+      "/path/to/file.parquet",
+      dwio::common::FileFormat::PARQUET);
+  split.physicalFilePath = "/replica/to/file.parquet";
+
+  EXPECT_EQ(split.readPath(), "/replica/to/file.parquet");
+
+  // Identity and everything derived from it stay on 'filePath'.
+  EXPECT_EQ(split.filePath, "/path/to/file.parquet");
+  EXPECT_EQ(split.getFileName(), "file.parquet");
+}
+
 TEST(FileConnectorSplitTest, fileProperties) {
   FileProperties props = {.fileSize = 1024, .modificationTime = 999};
   FileConnectorSplit split(
