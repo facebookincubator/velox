@@ -17,7 +17,9 @@
 #include "velox/common/memory/Memory.h"
 
 #include <folly/Random.h>
+#include <folly/String.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <set>
 #include <unordered_set>
 #include "velox/type/Timestamp.h"
@@ -210,6 +212,155 @@ TEST_F(KHyperLogLogTest, merge) {
   auto larger = createLarger();
   larger->mergeWith(*createSmaller());
   EXPECT_NE(larger->cardinality(), largerFist->cardinality());
+}
+namespace {
+template <typename TUii>
+std::string serialized(KHyperLogLog<TUii, HashStringAllocator>& khll) {
+  std::string buffer(khll.estimatedSerializedSize(), '\0');
+  khll.serialize(buffer.data());
+  return buffer;
+}
+} // namespace
+
+// The format widens an integral uii to a long, so the declared column width
+// must not change the sketch.
+TEST_F(KHyperLogLogTest, uiiHashIgnoresIntegerWidth) {
+  KHyperLogLog<int64_t, HashStringAllocator> asBigint(allocator_);
+  KHyperLogLog<int32_t, HashStringAllocator> asInteger(allocator_);
+  KHyperLogLog<int16_t, HashStringAllocator> asSmallint(allocator_);
+
+  for (int32_t i = 0; i < 100; ++i) {
+    asBigint.add(int64_t{1}, static_cast<int64_t>(i));
+    asInteger.add(int64_t{1}, static_cast<int32_t>(i));
+    asSmallint.add(int64_t{1}, static_cast<int16_t>(i));
+  }
+
+  EXPECT_EQ(serialized(asBigint), serialized(asInteger));
+  EXPECT_EQ(serialized(asBigint), serialized(asSmallint));
+}
+
+// The format pre-hashes a varchar uii with XxHash64, so a varchar uii must
+// behave like a BIGINT uii holding that hash. Expected values come from:
+//
+//     SELECT from_big_endian_64(xxhash64(to_utf8(<text>)))
+TEST_F(KHyperLogLogTest, uiiVarcharIsPreHashedWithXxHash64) {
+  const std::vector<std::pair<std::string, int64_t>> uiis = {
+      {"abc", 4'952'883'123'889'572'249LL},
+      {"caf\xc3\xa9", -7'331'673'579'364'787'606LL},
+      {"aaaaaa\xc3\xa9", 8'051'246'313'758'655'368LL},
+  };
+
+  KHyperLogLog<StringView, HashStringAllocator> asVarchar(allocator_);
+  KHyperLogLog<int64_t, HashStringAllocator> asBigint(allocator_);
+
+  for (const auto& [text, xxHash] : uiis) {
+    asVarchar.add(int64_t{1}, StringView(text));
+    asBigint.add(int64_t{1}, xxHash);
+  }
+
+  EXPECT_EQ(serialized(asVarchar), serialized(asBigint));
+}
+
+// Presto hashes a string join key once, not twice. The expected value is the
+// Murmur3 hash64 of "abc", computed from the airlift/slice definition rather
+// than from the code under test.
+TEST_F(KHyperLogLogTest, varcharJoinKeyIsHashedOnce) {
+  const std::string key = "abc";
+  EXPECT_EQ(
+      common::hll::detail::hashKey(StringView(key)),
+      -5'434'086'359'492'102'041LL);
+}
+
+// The format carries a REAL as its floatToIntBits() pattern, so a REAL key must
+// hash to the same value as an INTEGER key holding those bits.
+TEST_F(KHyperLogLogTest, realJoinKeyUsesFloatToIntBits) {
+  for (float value :
+       {3.5f,
+        -3.5f,
+        0.0f,
+        -0.0f,
+        1e-30f,
+        std::numeric_limits<float>::quiet_NaN()}) {
+    int32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    EXPECT_EQ(
+        common::hll::detail::hashKey(value), common::hll::detail::hashKey(bits))
+        << "value=" << value;
+  }
+
+  // -0.0f and 0.0f compare equal but carry different bit patterns, so they are
+  // distinct keys. NaN is not canonicalized: the raw payload is hashed, which
+  // matches HllAccumulator but differs from Java's floatToIntBits(), which
+  // collapses every NaN to 0x7fc00000.
+  EXPECT_NE(
+      common::hll::detail::hashKey(0.0f), common::hll::detail::hashKey(-0.0f));
+}
+
+// The numeric path routes every non-string key through toLongBits() and
+// hash64ForLong(). Expected values were computed from the airlift/slice
+// definition rather than from the code under test, so a change to the helper or
+// to the trailing hash is caught here rather than passing silently.
+TEST_F(KHyperLogLogTest, numericJoinKeysHashTheirLongBits) {
+  EXPECT_EQ(
+      common::hll::detail::hashKey(int64_t{42}), -5'283'633'198'602'748'424LL);
+  EXPECT_EQ(common::hll::detail::hashKey(1.5), -981'000'774'749'194'061LL);
+  EXPECT_EQ(
+      common::hll::detail::hashKey(Timestamp(1234, 0)),
+      1'508'765'520'729'823'031LL);
+
+  // A narrow integral key is widened, so it agrees with the BIGINT of the same
+  // value.
+  EXPECT_EQ(
+      common::hll::detail::hashKey(int32_t{42}),
+      common::hll::detail::hashKey(int64_t{42}));
+}
+
+namespace {
+// A KHyperLogLog produced by a conforming writer of the serialization format.
+// Ten join keys, each carrying the same three uii strings rebuilt below.
+const char* const kReferenceSketchHex =
+    "0100100000000100000A000000A00000001000000010000000100000001000000010"
+    "0000001000000010000000100000001000000010000000C1B66A4810D219B4A8C076"
+    "6CA02008DE4AC405FBB703440053262CD578ECC9061B776C9BF6C5D40F721E622C39"
+    "342F12E6D7EADF801D341BB28F7F259329E13079DFF0068CD287390C8B48B239583D"
+    "5B02080300C1A3074DC1AB008500B025CB02080300018AC70A03B2A43603682FCF02"
+    "08030042B20A008077C14CC213FD830208030080507B29C029F1AD00D232D1020803"
+    "008066C33F8050BF4C0176739A0208030086584C5742285D6F4101CB9D0208030081"
+    "BA8552002385A0C386A9A802080300C4A8D542408A4999C06D8FF00208030001A0E0"
+    "0201430DA0407273C902080300C037210C40C1E4694185A773";
+} // namespace
+
+// The uii hash is part of the serialization format. Two producers that disagree
+// on it put the same element in different buckets, and a merge double counts.
+TEST_F(KHyperLogLogTest, mergeWithReferenceSketchDoesNotDoubleCount) {
+  constexpr int64_t kKeys = 10;
+  constexpr int64_t kUiisPerKey = 3;
+
+  std::vector<std::string> uiis;
+  for (int64_t key = 1; key <= kKeys; ++key) {
+    for (int64_t i = 1; i <= kUiisPerKey; ++i) {
+      uiis.push_back(fmt::format("u{}_{}", key, i));
+    }
+  }
+
+  KHyperLogLog<StringView, HashStringAllocator> sketch(allocator_);
+  size_t next = 0;
+  for (int64_t key = 1; key <= kKeys; ++key) {
+    for (int64_t i = 0; i < kUiisPerKey; ++i) {
+      sketch.add(key, StringView(uiis[next++]));
+    }
+  }
+
+  const auto reference = folly::unhexlify<std::string>(kReferenceSketchHex);
+  sketch.mergeWith(StringView(reference), allocator_);
+
+  // The reference covers the same ten keys, so the merge adds none.
+  EXPECT_EQ(sketch.cardinality(), kKeys);
+
+  // Every key must still report three distinct uii.
+  const auto histogram = sketch.uniquenessDistribution(kKeys);
+  EXPECT_NEAR(histogram.at(kUiisPerKey), 1.0, 1e-9);
+  EXPECT_NEAR(histogram.at(2 * kUiisPerKey), 0.0, 1e-9);
 }
 
 TEST_F(KHyperLogLogTest, serde) {
