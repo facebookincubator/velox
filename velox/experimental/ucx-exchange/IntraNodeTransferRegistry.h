@@ -37,10 +37,12 @@ struct IntraNodeTransferKey {
   uint32_t sequenceNumber;
 
   bool operator<(const IntraNodeTransferKey& other) const {
-    if (taskId != other.taskId)
+    if (taskId != other.taskId) {
       return taskId < other.taskId;
-    if (destination != other.destination)
+    }
+    if (destination != other.destination) {
       return destination < other.destination;
+    }
     return sequenceNumber < other.sequenceNumber;
   }
 };
