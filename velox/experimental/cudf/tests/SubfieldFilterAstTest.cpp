@@ -21,6 +21,7 @@
 
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -235,6 +236,40 @@ TEST_F(SubfieldFilterAstTest, timestampRangeUsesReaderTimestampUnit) {
 
     testFilterExecution(rowType, columnName, filter, vector, expression);
   }
+}
+
+TEST_F(SubfieldFilterAstTest, timestampWithTimeZoneRangeUsesRawTickWindow) {
+  const std::string columnName{"timestamp"};
+  const auto rowType = ROW({{columnName, TIMESTAMP_WITH_TIME_ZONE()}});
+  const common::Subfield subfield{columnName};
+  const auto stream = cudf::get_default_stream();
+
+  const auto translatedBounds = [&](int64_t millis) {
+    const auto packed = pack(millis, 0);
+    const common::BigintRange filter{packed, packed, /*nullAllowed=*/false};
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    createAstFromSubfieldFilter(
+        subfield,
+        filter,
+        tree,
+        scalars,
+        rowType,
+        cudf::data_type{cudf::type_id::TIMESTAMP_MICROSECONDS});
+    EXPECT_EQ(scalars.size(), 2);
+    const auto valueAt = [&](size_t index) {
+      return static_cast<const cudf::timestamp_scalar<cudf::timestamp_us>&>(
+                 *scalars.at(index))
+          .value(stream)
+          .time_since_epoch()
+          .count();
+    };
+    return std::pair{valueAt(0), valueAt(1)};
+  };
+
+  EXPECT_EQ(translatedBounds(0), std::pair(-999L, 999L));
+  EXPECT_EQ(translatedBounds(-499), std::pair(-499'999L, -499'000L));
+  EXPECT_EQ(translatedBounds(123), std::pair(123'000L, 123'999L));
 }
 
 TEST_F(SubfieldFilterAstTest, timestampRangeConvertsSessionTimezoneBounds) {

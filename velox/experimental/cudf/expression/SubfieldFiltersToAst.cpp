@@ -107,6 +107,80 @@ const cudf::ast::expression* dispatchAddTimestampLiteral(
   }
 }
 
+int64_t timestampTicksPerMilli(cudf::data_type timestampType) {
+  switch (timestampType.id()) {
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return 1;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return 1'000;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return 1'000'000;
+    default:
+      VELOX_FAIL(
+          "TIMESTAMP WITH TIME ZONE pushdown requires a millisecond, "
+          "microsecond, or nanosecond reader type");
+  }
+}
+
+Timestamp timestampFromTicks(int64_t ticks, cudf::data_type timestampType) {
+  switch (timestampType.id()) {
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return Timestamp::fromMillis(ticks);
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return Timestamp::fromMicros(ticks);
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return Timestamp::fromNanos(ticks);
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+// Translates an inclusive range over packed TIMESTAMP WITH TIME ZONE values
+// into the exact inclusive range over raw Parquet timestamp ticks. Packed
+// values emitted by this reader use the UTC key (zero).
+std::pair<int64_t, int64_t> translatePackedTimestampRange(
+    const common::BigintRange& filter,
+    cudf::data_type timestampType) {
+  constexpr __int128_t kPackUnit = __int128_t{1} << kMillisShift;
+  const auto floorDiv = [](__int128_t dividend, __int128_t divisor) {
+    auto quotient = dividend / divisor;
+    if (dividend % divisor != 0 && dividend < 0) {
+      --quotient;
+    }
+    return quotient;
+  };
+  const auto ceilDiv = [&](const __int128_t dividend,
+                           const __int128_t divisor) {
+    return -floorDiv(-dividend, divisor);
+  };
+
+  const auto millisLow =
+      ceilDiv(static_cast<__int128_t>(filter.lower()), kPackUnit);
+  const auto millisHigh =
+      floorDiv(static_cast<__int128_t>(filter.upper()), kPackUnit);
+  if (millisLow > millisHigh) {
+    return {1, 0};
+  }
+
+  const __int128_t ticks = timestampTicksPerMilli(timestampType);
+  // Narrowing to milliseconds truncates toward zero. Millisecond zero
+  // therefore contains both negative and positive sub-millisecond ticks.
+  const auto lowEdge =
+      millisLow <= 0 ? millisLow * ticks - ticks + 1 : millisLow * ticks;
+  const auto highEdge =
+      millisHigh >= 0 ? millisHigh * ticks + ticks - 1 : millisHigh * ticks;
+  const auto clamp = [](__int128_t value) {
+    if (value < std::numeric_limits<int64_t>::min()) {
+      return std::numeric_limits<int64_t>::min();
+    }
+    if (value > std::numeric_limits<int64_t>::max()) {
+      return std::numeric_limits<int64_t>::max();
+    }
+    return static_cast<int64_t>(value);
+  };
+  return {clamp(lowEdge), clamp(highEdge)};
+}
+
 // Builds a cuDF AST expression for a TimestampRange or packed TIMESTAMP WITH
 // TIME ZONE BigintRange filter.
 const cudf::ast::expression& createTimestampRangeExpr(
@@ -136,10 +210,12 @@ const cudf::ast::expression& createTimestampRangeExpr(
       const auto& range = static_cast<const common::BigintRange&>(filter);
       isLowerUnbounded = range.lower() == std::numeric_limits<int64_t>::min();
       isUpperUnbounded = range.upper() == std::numeric_limits<int64_t>::max();
-      lower =
-          isLowerUnbounded ? Timestamp{} : unpackTimestampUtc(range.lower());
-      upper =
-          isUpperUnbounded ? Timestamp{} : unpackTimestampUtc(range.upper());
+      const auto [lowerTicks, upperTicks] =
+          translatePackedTimestampRange(range, timestampType);
+      lower = isLowerUnbounded ? Timestamp{}
+                               : timestampFromTicks(lowerTicks, timestampType);
+      upper = isUpperUnbounded ? Timestamp{}
+                               : timestampFromTicks(upperTicks, timestampType);
       break;
     }
     default:
