@@ -389,6 +389,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.encoding.enable_selection_cache",
     false);
 
+/* static */ Config::Entry<std::string> Config::FEATURE_ORDERING_OVERRIDE(
+    "nimble.feature.ordering.override",
+    "");
+
 // Defaults match the corresponding WriterOptions fields, so an absent key
 // leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD is the
 // exception: WriterOptions holds an optional and the writer substitutes its own
