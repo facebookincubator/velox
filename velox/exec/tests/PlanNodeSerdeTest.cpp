@@ -1152,6 +1152,48 @@ TEST_F(PlanNodeSerdeTest, fixedPointFibonacci) {
   testSerde(plan);
 }
 
+// Shape (5): a convergence criterion that is itself a shuffling sequence --
+// the only serde case where convergenceConfig carries more than one plan.
+// Every other fixed point test round-trips a single convergence plan, so this
+// is what covers the array.
+TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto shuffleType = ROW({"partial"}, BIGINT());
+  auto seed =
+      PlanBuilder(idGenerator)
+          .values({makeRowVector(
+              {"key", "val"},
+              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})})})
+          .planNode();
+  auto body = PlanBuilder(idGenerator)
+                  .stateSource("vals", schema)
+                  .project({"key", "val + 1 AS val"})
+                  .planNode();
+  // Each worker reduces its shard, then every worker sums the peers' partials
+  // and emits the same verdict.
+  auto partial = PlanBuilder(idGenerator)
+                     .stateSource("vals", schema)
+                     .singleAggregation({}, {"sum(val)"})
+                     .project({"a0 AS partial"})
+                     .partitionedOutput({}, 2)
+                     .planNode();
+  auto verdict = PlanBuilder(idGenerator)
+                     .exchange(shuffleType, "Presto")
+                     .singleAggregation({}, {"sum(partial)"})
+                     .project({"a0 >= 16 AS converged"})
+                     .planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {core::VectorState("vals", schema).initial(seed)},
+              {body},
+              core::ConvergenceConfig::converging({partial, verdict}, 100),
+              "vals")
+          .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   // Shape (3): people within 3 degrees in the social graph, modeled as
   // hash-table reuse -- a HashTable state (the graph) built once and probed via
@@ -1210,7 +1252,7 @@ TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   ASSERT_NE(fixedPoint, nullptr);
   EXPECT_EQ(fixedPoint->outputStateEntry(), "reach");
   ASSERT_EQ(fixedPoint->stateDeclarations().size(), 2);
-  ASSERT_NE(fixedPoint->convergenceConfig().plan, nullptr);
+  ASSERT_EQ(fixedPoint->convergenceConfig().plans.size(), 1);
 
   const auto& hashTableState =
       dynamic_cast<const core::HashTableStateDeclaration&>(

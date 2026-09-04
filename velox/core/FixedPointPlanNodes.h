@@ -227,47 +227,60 @@ class HashTableState {
 /// terminal state).  maxIterations (a ConvergenceConfig field below) is always
 /// active as a safety bound.
 ///
-/// Multi-worker contract: each worker evaluates `plan` over its own local
+/// Multi-worker contract: each worker evaluates the sequence over its own local
 /// shard, so for a shuffling fixed point (N > 1) the verdict must be globally
 /// consistent -- every worker must reach the same value on the same iteration,
 /// or lockstep breaks and the shuffle deadlocks.  Making it consistent is the
-/// plan's responsibility: synchronize the convergence-deciding state across
-/// workers through the body's shuffle (e.g. replicate it), so each worker's
-/// local read agrees.  The framework deliberately performs no cross-worker
-/// reduction (that would add an all-reduce shuffle).  A null plan means "never
-/// converge" (the loop is bounded only by maxIterations) and is always safe.
+/// plan's responsibility, and there are two ways to do it.  When the body's
+/// shuffle already replicates the convergence-deciding state, a single-plan
+/// sequence reads it locally and every worker agrees.  When the statistic is
+/// only known after the body's last exchange -- PageRank's post-update RMSE,
+/// say, whose squared error does not exist until the new ranks are computed,
+/// and whose reduce therefore has nowhere to go in the body (the last body plan
+/// produces the state itself) -- the sequence shuffles: earlier plans reduce
+/// partials, the last emits the verdict.  The framework performs no
+/// cross-worker reduction of its own.  An empty sequence means "never converge"
+/// (the loop is bounded only by maxIterations) and is always safe.
 struct ConvergenceConfig {
-  /// Plan producing exactly one BOOLEAN output column.  Starts with a
-  /// StateSourceNode.  The framework reads that single column after each
-  /// iteration; a true value stops the loop.  Null means never converge (loop
-  /// bounded by maxIterations).
-  PlanNodePtr plan{nullptr};
+  /// Plans run in order after each iteration, chained by shuffle exactly as
+  /// FixedPointNode::plans() are: the first starts with a StateSourceNode
+  /// reading the state the iteration just committed, every later one starts
+  /// with an Exchange, every non-last one ends with a PartitionedOutput.  The
+  /// last plan produces exactly one BOOLEAN output column, which the framework
+  /// reads; true stops the loop.  Convergence plans never write state.  Empty
+  /// means never converge (loop bounded by maxIterations).
+  std::vector<PlanNodePtr> plans;
 
   /// Maximum iterations the loop runs -- always active as a safety bound, and
-  /// the sole bound when `plan` is null (a fixed-count loop).
+  /// the sole bound when `plans` is empty (a fixed-count loop).
   int32_t maxIterations{0};
 
   /// Decides what happens when `maxIterations` is reached before the
-  /// convergence `plan` signals convergence.  When true (the default), the
+  /// convergence sequence signals convergence.  When true (the default), the
   /// fixed point fails -- a guard against silently returning a non-converged
   /// result.  When false, the loop instead stops at the cap and returns the
   /// current approximate result without failing: best-effort convergence (run
   /// toward convergence, but accept the partial result if the cap is hit
-  /// first), as in an early-stopped KMeans.  Requires a convergence `plan`
-  /// (FixedPointNode validates this) -- a null plan never converges, so set
-  /// this false for a fixed-count loop with no convergence plan, where the cap
-  /// is the intended stopping point rather than a best-effort cutoff.
+  /// first), as in an early-stopped KMeans or PageRank.  Requires a non-empty
+  /// `plans` (FixedPointNode validates this) -- an empty sequence never
+  /// converges, so set this false for a fixed-count loop, where the cap is the
+  /// intended stopping point rather than a best-effort cutoff.
   bool errorWhenMaxIterationReached{true};
 
-  /// Builds a fixed-count loop config: no convergence plan, bounded only by
+  /// Builds a fixed-count loop config: no convergence plans, bounded only by
   /// `maxIterations`, so it never errors on reaching the bound.  Use for loops
   /// with a known iteration count (e.g. Fibonacci, a bounded expansion).
   static ConvergenceConfig withMaxIterations(int32_t maxIterations);
 
-  /// Builds a convergence-plan loop config: runs `plan` after each iteration
-  /// and stops when its BOOLEAN output is true, failing if `maxIterations` is
-  /// reached first.
+  /// Builds a convergence loop config: runs `plan` after each iteration and
+  /// stops when its BOOLEAN output is true, failing if `maxIterations` is
+  /// reached first.  For a convergence criterion that needs its own shuffle,
+  /// pass the whole chain to the vector overload.
   static ConvergenceConfig converging(PlanNodePtr plan, int32_t maxIterations);
+
+  static ConvergenceConfig converging(
+      std::vector<PlanNodePtr> plans,
+      int32_t maxIterations);
 
   folly::dynamic serialize() const;
 
@@ -346,6 +359,14 @@ class FixedPointNode : public PlanNode {
   /// fully local fixed point needs no splits.
   bool requiresSplits() const override;
 
+  /// Number of workers this fixed point runs as: one per output partition of
+  /// whichever chain shuffles.  Either chain can be the shuffling one, and a
+  /// plan of either may contain a nested FixedPointNode whose own chains
+  /// shuffle -- each enclosing worker hosts one nested task and those are each
+  /// other's peers, so a nested shuffle widens the enclosing loop too.  1 when
+  /// nothing shuffles.
+  int32_t numWorkers() const;
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -384,6 +405,8 @@ class FixedPointNode : public PlanNode {
   // named by outputStateEntry_.
   RowTypePtr outputType_;
 };
+
+using FixedPointNodePtr = std::shared_ptr<const FixedPointNode>;
 
 /// Reads a Vector persistent state entry as row batches into the pipeline.
 ///
@@ -450,6 +473,8 @@ class StateSourceNode : public PlanNode {
   bool delta_;
 };
 
+using StateSourceNodePtr = std::shared_ptr<const StateSourceNode>;
+
 /// Inner-joins the input (probe) against a HashTable persistent state entry
 /// that is built once and reused across iterations (hash-table reuse). Output
 /// rows are the probe input columns followed by the hash table's dependent
@@ -508,5 +533,7 @@ class StateHashJoinNode : public PlanNode {
 
   std::vector<PlanNodePtr> sources_;
 };
+
+using StateHashJoinNodePtr = std::shared_ptr<const StateHashJoinNode>;
 
 } // namespace facebook::velox::core

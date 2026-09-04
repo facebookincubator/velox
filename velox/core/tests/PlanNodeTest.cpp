@@ -692,7 +692,7 @@ TEST_F(PlanNodeTest, fixedPointValidation) {
           "fp",
           std::vector<StateDeclarationPtr>{vectorN()},
           std::vector<PlanNodePtr>{body},
-          ConvergenceConfig{.plan = nonBoolConvergence, .maxIterations = 5},
+          ConvergenceConfig{.plans = {nonBoolConvergence}, .maxIterations = 5},
           "n"),
       "convergence plan output column must be BOOLEAN");
 
@@ -706,7 +706,7 @@ TEST_F(PlanNodeTest, fixedPointValidation) {
               vectorN(),
               std::make_shared<VectorStateDeclaration>("flags", twoColSchema)},
           std::vector<PlanNodePtr>{body},
-          ConvergenceConfig{.plan = twoColConvergence, .maxIterations = 5},
+          ConvergenceConfig{.plans = {twoColConvergence}, .maxIterations = 5},
           "n"),
       "exactly one output column");
 
