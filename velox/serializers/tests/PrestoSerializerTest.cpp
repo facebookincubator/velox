@@ -1092,6 +1092,39 @@ TEST_P(PrestoSerializerTest, unknown) {
   testAllNullSerializedAsUnknown(flatVector, BIGINT());
 }
 
+TEST_P(PrestoSerializerTest, multiColumnWithUnknown) {
+  const vector_size_t size = 50;
+
+  // Create a RowVector with 2 columns. Column 0 is UNKNOWN with all nulls.
+  auto unknownCol =
+      BaseVector::createNullConstant(UNKNOWN(), size, pool_.get());
+  auto intCol = makeFlatVector<int32_t>(size, [](auto row) { return row; });
+  auto rowVector = makeRowVector({unknownCol, intCol});
+
+  // Serialize two pages into a single stream.
+  std::ostringstream out;
+  serialize(rowVector, &out, nullptr);
+  serialize(rowVector, &out, nullptr);
+
+  auto bytes = out.str();
+
+  // Deserialize expecting (BIGINT, INTEGER).
+  auto outputType = ROW({"c0", "c1"}, {BIGINT(), INTEGER()});
+  auto byteStream = toByteStream(bytes);
+  auto paramOptions = getParamSerdeOptions(nullptr);
+
+  RowVectorPtr result;
+  serde_->deserialize(
+      byteStream.get(), pool_.get(), outputType, &result, 0, &paramOptions);
+  ASSERT_EQ(result->size(), size);
+
+  ASSERT_FALSE(byteStream->atEnd());
+  serde_->deserialize(
+      byteStream.get(), pool_.get(), outputType, &result, 0, &paramOptions);
+  ASSERT_EQ(result->size(), size);
+  ASSERT_TRUE(byteStream->atEnd());
+}
+
 TEST_P(PrestoSerializerTest, multiPage) {
   std::ostringstream out;
   std::vector<RowVectorPtr> testVectors;
