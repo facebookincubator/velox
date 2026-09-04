@@ -237,6 +237,12 @@ class Writer : public velox::dwio::common::Writer {
       uint64_t& streamSize,
       std::atomic_uint64_t& chunkSize);
 
+  // Drops all-true flat map in-map streams whose key is still provable from a
+  // value stream. Runs once the stripe is fully encoded, where every stream's
+  // fate is known -- the concurrent encode cannot decide this, since a stream
+  // may not inspect its peers there.
+  void suppressRedundantInMapStreams();
+
   void processStream(
       StreamData& streamData,
       velox::BufferPool* encodingScratchBufferPool,
