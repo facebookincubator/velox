@@ -24,6 +24,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/rpc/RPCOperator.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/DemoBatchRPCFunction.h"
@@ -379,7 +380,7 @@ TEST_F(RPCOperatorTest, batchMakesProgressWhenIntakeIsThrottled) {
     prompts.reserve(kRowsPerVector);
     for (int i = 0; i < kRowsPerVector; ++i) {
       storage.push_back(fmt::format("throttled-{}-{}", v, i));
-      prompts.push_back(StringView(storage.back()));
+      prompts.emplace_back(storage.back());
     }
     inputs.push_back(
         makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)}));
@@ -422,7 +423,7 @@ void RPCOperatorTest::runContendedDrain(bool batchMode) {
   prompts.reserve(kRows);
   for (int i = 0; i < kRows; ++i) {
     storage.push_back(fmt::format("contended-{}", i));
-    prompts.push_back(StringView(storage.back()));
+    prompts.emplace_back(storage.back());
   }
   auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
 
@@ -465,6 +466,30 @@ TEST_F(RPCOperatorTest, batchDrainCompletesWhileTheTierIsHeld) {
   runContendedDrain(/*batchMode=*/true);
 }
 
+// close() runs on operators that never initialized. Driver::closeOperators()
+// walks every operator regardless of whether Driver::initializeOperators() ran,
+// so a task that terminates during setup reaches close() with limiter_ still
+// null -- and recordRuntimeStats() dereferenced it unconditionally, taking the
+// worker down with SIGSEGV rather than failing the query.
+//
+// An unregistered function name reaches that state deterministically:
+// initialize() throws at the "Unknown RPC function" check, which runs long
+// before limiter_ is assigned. The query must surface that error; without the
+// guard the process dies instead.
+TEST_F(RPCOperatorTest, closeWithoutInitializeDoesNotCrash) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b", "c"})});
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "no_such_rpc_function_registered");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+      "Unknown RPC function");
+}
+
 TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
   constexpr int64_t kCeiling = 1;
   std::vector<std::string> storage;
@@ -473,7 +498,7 @@ TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
   prompts.reserve(64);
   for (int i = 0; i < 64; ++i) {
     storage.push_back(fmt::format("row-{}", i));
-    prompts.push_back(StringView(storage.back()));
+    prompts.emplace_back(storage.back());
   }
   auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
 
@@ -491,6 +516,102 @@ TEST_F(RPCOperatorTest, batchDispatchRespectsTheTierCap) {
 
   EXPECT_LE(limiter.stats().peakPending, kCeiling)
       << "dispatch admitted more than the tier cap";
+}
+
+// BATCH reserves one slot per flushBatch() regardless of row count, so its
+// AIMD recovery has to be credited in batches too. onSuccess() steps capacity
+// by units/capacity, so crediting the row count against a capacity counted in
+// batches makes the step grow as capacity shrinks -- recovery accelerates
+// exactly when it should be most cautious, undoing the multiplicative
+// decrease.
+//
+// Four batches of 16 rows drain successfully from a capacity of 2. Credited in
+// batches the capacity walks 2 -> 6, one step per batch. Credited in rows it
+// jumps 2 -> 10 on the first batch alone (16/2 = 8) and lands at 13.
+TEST_F(RPCOperatorTest, batchAimdRecoversPerBatchNotPerRow) {
+  constexpr int64_t kCeiling = 64;
+  constexpr int64_t kRows = 64;
+  constexpr int32_t kDispatchBatchSize = 16;
+  constexpr int64_t kNumBatches = kRows / kDispatchBatchSize;
+
+  std::vector<std::string> storage;
+  std::vector<StringView> prompts;
+  storage.reserve(kRows);
+  prompts.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    storage.push_back(fmt::format("row-{}", i));
+    prompts.emplace_back(storage.back());
+  }
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce([](RPCRateLimiter::Config& config) {
+    config.ceiling = kCeiling;
+    config.adaptive = true;
+    // Below the built-in floor of 50, so capacity can be driven low enough
+    // for the two crediting schemes to separate.
+    config.floor = 1;
+    config.decreaseFactor = 0.5;
+  });
+
+  // 64 -> 32 -> 16 -> 8 -> 4 -> 2.
+  for (int i = 0; i < 5; ++i) {
+    limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
+  }
+  const int64_t shrunk = limiter.stats().capacity;
+  ASSERT_EQ(shrunk, 2) << "precondition: capacity must start well below the "
+                          "rows per batch for the two schemes to differ";
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc",
+      kDispatchBatchSize);
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), kRows);
+
+  EXPECT_EQ(limiter.stats().capacity, shrunk + kNumBatches)
+      << "capacity recovered by " << (limiter.stats().capacity - shrunk)
+      << " over " << kNumBatches
+      << " successful batches; additive increase on a batch-denominated "
+         "capacity must be one step per batch";
+}
+
+// The low-water capacity lands on every query, not only the ones where the
+// backend shrank. A query that never backed off reports the ceiling, which is
+// a real capacity; the old sentinel zero was indistinguishable from "the stat
+// was never recorded".
+TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
+  constexpr int64_t kCeiling = 16;
+  std::vector<std::string> storage;
+  std::vector<StringView> prompts;
+  storage.reserve(8);
+  prompts.reserve(8);
+  for (int i = 0; i < 8; ++i) {
+    storage.push_back(fmt::format("healthy-{}", i));
+    prompts.emplace_back(storage.back());
+  }
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce(
+      [](RPCRateLimiter::Config& config) { config.ceiling = kCeiling; });
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_batch_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+  ASSERT_EQ(result->size(), 8);
+
+  // Nothing drove an overload, so the cap never shrank.
+  ASSERT_EQ(limiter.stats().capacity, kCeiling);
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at("rpc-0").customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcRateLimiterMinCap), 1)
+      << "the low-water stat must land even when the backend never shrank";
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcRateLimiterMinCap).sum, kCeiling);
 }
 
 // Reversed responses: the mock returns results in reverse order.
