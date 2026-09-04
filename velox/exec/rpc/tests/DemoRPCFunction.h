@@ -52,7 +52,8 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& queryConfig,
       const std::vector<TypePtr>& inputTypes,
-      const std::vector<VectorPtr>& constantInputs) override;
+      const std::vector<VectorPtr>& constantInputs,
+      RPCStreamingMode instruction) override;
 
   std::string name() const override {
     return "demo_rpc";
@@ -60,6 +61,11 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  /// Per-row only: it has no multi-row call to make.
+  RpcDispatchPath dispatchPath() const override {
+    return RpcDispatchPath::kPerRow;
   }
 
   /// Dispatch one simulated RPC per active row. Null-input rows short-circuit

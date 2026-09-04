@@ -84,7 +84,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) override {
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) override {
     // Call ordinals are what pin the burst to rows [kWarmupRows,
     // kWarmupRows + kBurstRows). A second initialize() would install a fresh
     // client whose ordinals restart at 0 and silently move the burst, so
@@ -98,6 +99,11 @@ class BurstFunctionBase : public AsyncRPCFunction {
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  /// Per-row only: it has no multi-row call to make.
+  RpcDispatchPath dispatchPath() const override {
+    return RpcDispatchPath::kPerRow;
   }
 
   std::string tierKey() const override {
@@ -199,6 +205,11 @@ class BurstRPCFunction : public BurstFunctionBase {
 class BurstBatchRPCFunction : public BurstFunctionBase {
  public:
   using BurstFunctionBase::BurstFunctionBase;
+
+  /// Batch only: the whole point of this harness is the multi-row call.
+  RpcDispatchPath dispatchPath() const override {
+    return RpcDispatchPath::kNativeBatch;
+  }
 
   std::string name() const override {
     return "burst_batch_rpc";

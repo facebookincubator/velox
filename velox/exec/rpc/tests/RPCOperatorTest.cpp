@@ -844,17 +844,26 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
       : latency_(latency), executor_(std::move(executor)) {}
 
-  void initialize(
-      const core::QueryConfig&,
-      const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
-
   std::string name() const override {
     return "slow_batch_rpc";
   }
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    dispatchPath_ = instruction == RPCStreamingMode::kBatch
+        ? RpcDispatchPath::kNativeBatch
+        : RpcDispatchPath::kPerRow;
+  }
+
+  RpcDispatchPath dispatchPath() const override {
+    return dispatchPath_;
   }
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -903,6 +912,9 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     return pending_;
   }
 
+ protected:
+  RpcDispatchPath dispatchPath_{RpcDispatchPath::kPerRow};
+
  private:
   const std::chrono::milliseconds latency_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
@@ -911,6 +923,30 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       const std::vector<RPCResponse>& responses,
       memory::MemoryPool* pool) const override {
     return buildTextOutput(responses, pool);
+  }
+};
+
+// A batch function that can only answer once initialize() has run, like the
+// production functions: they resolve their backend from query config and
+// constant arguments there, and the path they can serve follows from it.
+class LateResolvingRPCFunction : public SlowBatchRPCFunction {
+ public:
+  using SlowBatchRPCFunction::SlowBatchRPCFunction;
+
+  std::string name() const override {
+    return "late_resolving_rpc";
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    // Resolving the backend and the path it implies in one call is the order
+    // the production functions use, and the reason both live in initialize().
+    dispatchPath_ = instruction == RPCStreamingMode::kBatch
+        ? RpcDispatchPath::kNativeBatch
+        : RpcDispatchPath::kPerRow;
   }
 };
 
@@ -1004,6 +1040,34 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
   EXPECT_EQ(rows["OVERLOAD one"], "demo: OVERLOAD one");
   EXPECT_EQ(rows["OVERLOAD two"], "demo: OVERLOAD two");
   EXPECT_EQ(rows["normal three"], "demo: normal three");
+}
+
+// A BATCH query reaches the function as an instruction, and the function
+// resolves it against the backend it settled in the same call. Nothing can ask
+// before the backend exists, so a batch query cannot silently degrade to
+// per-row.
+TEST_F(RPCOperatorTest, batchInstructionReachesTheFunction) {
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  std::shared_ptr<LateResolvingRPCFunction> function;
+  AsyncRPCFunctionRegistry::registerFunction(
+      "late_resolving_rpc", [&function, rpcExecutor]() {
+        function = std::make_shared<LateResolvingRPCFunction>(
+            std::chrono::milliseconds{0}, rpcExecutor);
+        return function;
+      });
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "late_resolving_rpc");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  ASSERT_NE(function, nullptr);
+  EXPECT_EQ(function->dispatchPath(), RpcDispatchPath::kNativeBatch);
 }
 
 } // namespace facebook::velox::exec::rpc

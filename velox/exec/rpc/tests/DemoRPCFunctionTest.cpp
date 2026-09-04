@@ -43,7 +43,8 @@ class DemoRPCFunctionTest : public testing::Test {
     pool_ = memory::memoryManager()->addLeafPool();
 
     // Follow the lifecycle: initialize() before any dispatch.
-    function_->initialize(core::QueryConfig{{}}, {}, {});
+    function_->initialize(
+        core::QueryConfig{{}}, {}, {}, RPCStreamingMode::kPerRow);
   }
 
   std::shared_ptr<DemoAsyncRPCFunction> function_;

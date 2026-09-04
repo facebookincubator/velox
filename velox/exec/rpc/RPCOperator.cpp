@@ -106,8 +106,14 @@ void RPCOperator::initialize() {
 
   // Initialize the function with query config, argument types, and constants.
   // The function creates/caches its own transport and clients internally.
+  // The instruction goes in with everything else the function needs: it
+  // resolves its backend and how it will serve the instruction on that backend
+  // in one place, and the framework never learns which path it picked.
   function_->initialize(
-      operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
+      operatorCtx_->driverCtx()->queryConfig(),
+      inputTypes,
+      constantInputs,
+      rpcNode_->streamingMode());
 
   tierKey_ = function_->tierKey();
 
@@ -145,7 +151,9 @@ void RPCOperator::initialize() {
                  << ", operatorId=" << operatorId() << ", streamingMode="
                  << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
                          ? "BATCH"
-                         : "PER_ROW");
+                         : "PER_ROW")
+                 << ", dispatchPath="
+                 << RpcDispatchPathName::toName(function_->dispatchPath());
 
   if (!argumentSources_.empty()) {
     RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()

@@ -23,6 +23,7 @@
 
 #include <folly/futures/Future.h>
 
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/type/Type.h"
@@ -37,6 +38,17 @@ namespace facebook::velox::exec::rpc {
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCResponsePayload;
 using velox::rpc::RPCStreamingMode;
+
+/// How one call carries rows. kAsyncJob is a distinct protocol rather than a
+/// faster batch: submit, poll, fetch, so its round trip is queue and GPU time
+/// rather than a measure of backend load.
+enum class RpcDispatchPath {
+  kPerRow,
+  kNativeBatch,
+  kAsyncJob,
+};
+
+VELOX_DECLARE_ENUM_NAME(RpcDispatchPath);
 
 /// Read a response's payload as the concrete type the function produced.
 ///
@@ -141,10 +153,24 @@ class AsyncRPCFunction {
   /// @param constantInputs Constant values aligned with inputTypes.
   ///        Non-constant arguments are nullptr. Constant arguments are
   ///        single-element ConstantVectors.
+  /// @param instruction What the query asked for, per-row or batch, already
+  ///        resolved from the caller's objective by the coordinator's policy.
+  ///        A function that serves it on a particular path works that out here,
+  ///        alongside the backend it resolves, and keeps the answer to itself.
   virtual void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) {}
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) {}
+
+  /// How this function is dispatching, for logging and metrics only. Nothing
+  /// in the framework branches on it: a function expresses the consequences of
+  /// its own choice through the other hooks it implements, not through this.
+  ///
+  /// No default. A base class cannot know whether a backend has a multi-row
+  /// call, and a backend that only runs offline jobs cannot serve per-row at
+  /// all, so there is no path the framework could answer with.
+  virtual RpcDispatchPath dispatchPath() const = 0;
 
   /// Return the name of this RPC function.
   virtual std::string name() const = 0;

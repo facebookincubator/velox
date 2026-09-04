@@ -53,6 +53,11 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  /// Per-row only: it has no multi-row call to make.
+  RpcDispatchPath dispatchPath() const override {
+    return RpcDispatchPath::kPerRow;
+  }
+
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
   dispatchPerRow(
       const SelectivityVector& rows,

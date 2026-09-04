@@ -52,7 +52,12 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {}
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    RPCStreamingMode instruction) {
+  dispatchPath_ = instruction == RPCStreamingMode::kBatch
+      ? RpcDispatchPath::kNativeBatch
+      : RpcDispatchPath::kPerRow;
+}
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
 DemoBatchRPCFunction::dispatchPerRow(
