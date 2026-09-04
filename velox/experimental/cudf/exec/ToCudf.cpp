@@ -174,10 +174,16 @@ bool CompileState::compile(bool allowCpuFallback) {
         if (planNode && thisOpProps.canRunOnGPU) {
           auto replacements =
               adapter->createReplacements(oper, planNode, ctx, id);
+          // An adapter that replaces its operator but returns nothing has not
+          // replaced it, so the operator is still a CPU operator. Decide that
+          // from what createReplacements() returned rather than from having
+          // called it, because replaceOp can still gain a conversion operator
+          // further down and an empty replacement would then be
+          // indistinguishable from a successful one.
+          isPureCpuOperator = replacements.empty();
           for (auto& r : replacements) {
             replaceOp.push_back(std::move(r));
           }
-          isPureCpuOperator = false;
         } else {
           // This is the CPU fallback case.
           isPureCpuOperator = true;
