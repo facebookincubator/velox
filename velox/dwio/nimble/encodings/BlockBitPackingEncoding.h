@@ -343,7 +343,8 @@ class BlockBitPackingEncoding final
     NIMBLE_CHECK_GT(source.lastBlockRows, 0);
     NIMBLE_CHECK_LE(source.lastBlockRows, source.blockSize);
 
-    source.packedData = {pos, static_cast<size_t>(encoded.end() - pos)};
+    source.packedData = {
+        pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
     return source;
   }
 

@@ -96,7 +96,7 @@ class HuffmanEncodingView final : public TypedEncodingView<T> {
     }
     bitstreamBytes_ = varint::readVarint32(&pos);
     bitstream_ = reinterpret_cast<const uint8_t*>(pos);
-    NIMBLE_CHECK_EQ(pos + bitstreamBytes_, data.end());
+    NIMBLE_CHECK_EQ(pos + bitstreamBytes_, data.data() + data.size());
   }
 
   ~HuffmanEncodingView() override {

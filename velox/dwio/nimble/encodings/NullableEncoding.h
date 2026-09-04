@@ -174,7 +174,7 @@ NullableEncoding<T>::NullableEncoding(
   pos += nonNullsBytes;
   nulls_ = EncodingFactory().create(
       *this->pool_,
-      {pos, static_cast<size_t>(data.end() - pos)},
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
       stringBufferFactory,
       options);
   NIMBLE_DCHECK_EQ(
@@ -505,7 +505,7 @@ std::string_view NullableEncoding<T>::slice(
   const uint32_t valuesSize = encoding::readUint32(pos);
   const std::string_view values{pos, valuesSize};
   pos += valuesSize;
-  const std::string_view nulls{pos, encoded.end()};
+  const std::string_view nulls{pos, encoded.data() + encoded.size()};
 
   const auto [nonNullOffset, nonNullCount] =
       countNonNullsForSlice(nulls, offset, length, buffer, options);

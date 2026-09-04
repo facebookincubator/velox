@@ -26,9 +26,10 @@ ConstantEncoding<std::string_view>::ConstantEncoding(
     : ConstantEncodingBase<std::string_view>(pool, data, options) {
   const char* pos = data.data() + this->dataOffset();
   value_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(), "Unexpected constant encoding end");
   auto stringBuffer = static_cast<char*>(stringBufferFactory(value_.size()));
-  std::memcpy(stringBuffer, value_.begin(), value_.size());
+  std::memcpy(stringBuffer, value_.data(), value_.size());
   value_ = std::string_view{stringBuffer, value_.size()};
 }
 
