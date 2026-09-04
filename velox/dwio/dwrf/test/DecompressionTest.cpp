@@ -1217,7 +1217,8 @@ std::string zstdFrame(const std::string& data) {
 
 // Compresses 'data' into a ZSTD streaming frame with the content-size field
 // suppressed, so ZSTD_getFrameContentSize() reports ZSTD_CONTENTSIZE_UNKNOWN.
-// Large Parquet/ORC string columns are often written this way.
+// Streaming frames in this form are produced by tools that write ZSTD as an
+// opaque stream and keep no record of the uncompressed size.
 std::string zstdStreamingFrame(const std::string& data) {
   ZSTD_CCtx* cctx = ZSTD_createCCtx();
   ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 1);
@@ -1243,28 +1244,29 @@ std::string zstdStreamingFrame(const std::string& data) {
   return compressed;
 }
 
-// Decodes a raw (Parquet-style) page whose compressed bytes are 'page' by
-// routing it through a PagedInputStream with a ZSTD decompressor, returning the
-// full decompressed output.
-std::string decodeZstdRawPage(
+// Decodes a raw compressed stream whose compressed bytes are 'data' by routing
+// it through a PagedInputStream with a ZSTD decompressor (the shape used for
+// e.g. the Text reader, which decompresses a whole file as one raw block),
+// returning the full decompressed output.
+std::string decodeZstdRawStream(
     facebook::velox::memory::MemoryPool& pool,
-    const std::string& page) {
+    const std::string& data) {
   auto input = std::make_unique<SeekableArrayInputStream>(
-      page.data(), page.size(), 1024);
+      data.data(), data.size(), 1024);
   auto decompressor =
       facebook::velox::dwio::common::compression::createBlockDecompressor(
           CompressionKind_ZSTD,
           1 << 20 /*blockSize*/,
           facebook::velox::dwio::common::compression::CompressionOptions{},
-          "zstd-page");
+          "zstd-raw");
   compression::PagedInputStream stream(
       std::move(input),
       pool,
       std::move(decompressor),
       /*decrypter=*/nullptr,
-      "zstd-page",
+      "zstd-raw",
       /*useRawDecompression=*/true,
-      page.size());
+      data.size());
 
   std::string decoded;
   const void* ptr = nullptr;
@@ -1276,31 +1278,33 @@ std::string decodeZstdRawPage(
 }
 } // namespace
 
-// A single Parquet page's compressed data may be made of multiple concatenated
-// ZSTD frames (large string columns). getDecompressedLength() must size the
-// destination for the total across all frames (via ZSTD_decompressBound), and
-// decompress() (ZSTD_decompressDCtx) must decode all of them. The pre-fix code
-// sized only from the first frame's content-size, so a multi-frame page failed
-// with "Destination buffer is too small".
-TEST_F(DecompressionTest, testZstdMultiFramePage) {
+// A raw compressed stream (e.g. a ZSTD-compressed Text/Spark file, or any codec
+// path that hands the whole compressed input to the decompressor via
+// useRawDecompression) may hold several concatenated ZSTD frames.
+// getDecompressedLength() must size the destination for the total across all
+// frames (ZSTD_findDecompressedSize / ZSTD_decompressBound), and decompress()
+// (ZSTD_decompressDCtx) must decode all of them. The pre-fix code sized only
+// from the first frame's content-size, so a multi-frame input failed with
+// "Destination buffer is too small".
+TEST_F(DecompressionTest, testZstdMultiFrameRawStream) {
   // Two distinct pieces so a truncated decode is obvious.
   const std::string part1 = "alpha-beta-gamma-delta-epsilon";
   const std::string part2 = "omega-psi-phi";
   const std::string expected = part1 + part2;
 
-  // Build a raw page whose compressed form is two concatenated ZSTD frames.
-  const std::string page = zstdFrame(part1) + zstdFrame(part2);
+  // Build a raw stream whose compressed form is two concatenated ZSTD frames.
+  const std::string data = zstdFrame(part1) + zstdFrame(part2);
 
-  EXPECT_EQ(expected, decodeZstdRawPage(*pool_, page));
+  EXPECT_EQ(expected, decodeZstdRawStream(*pool_, data));
 }
 
-// A Parquet/ORC page may be a streaming ZSTD frame with no content-size header
-// (ZSTD_CONTENTSIZE_UNKNOWN). getDecompressedLength() must still bound the size
+// A raw compressed stream may be a streaming ZSTD frame with no content-size
+// header (ZSTD_CONTENTSIZE_UNKNOWN). getDecompressedLength() must still size it
 // correctly (ZSTD_decompressBound never returns UNKNOWN) so decompression fits
 // and completes.
 TEST_F(DecompressionTest, testZstdStreamingFrame) {
   const std::string expected = "streaming-frame-alpha-beta";
-  const std::string page = zstdStreamingFrame(expected);
+  const std::string data = zstdStreamingFrame(expected);
 
-  EXPECT_EQ(expected, decodeZstdRawPage(*pool_, page));
+  EXPECT_EQ(expected, decodeZstdRawStream(*pool_, data));
 }
