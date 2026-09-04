@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -2651,6 +2652,27 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   return std::min({streamCount, options.maxEncodeParallelism, maxByStreams});
 }
 
+std::vector<uint32_t> Writer::encodeOrder(
+    std::span<const uint32_t> streamIndices) const {
+  const auto& streams = context_->streams();
+  std::vector<uint32_t> orderedIndices{
+      streamIndices.begin(), streamIndices.end()};
+  // Encode tasks are dispatched in fixed-size batches that each wait on their
+  // slowest member, so a batch mixing one large stream with small ones leaves
+  // most of it idle. Grouping comparable sizes into the same batch keeps the
+  // batch maximum close to its mean. Sizes are read before materialize(), so
+  // this is the buffered size rather than the encoded one -- good enough to
+  // rank by, and it costs no extra pass over the data.
+  std::stable_sort(
+      orderedIndices.begin(),
+      orderedIndices.end(),
+      [&streams](uint32_t lhs, uint32_t rhs) {
+        return streams[lhs].second->memoryUsed() >
+            streams[rhs].second->memoryUsed();
+      });
+  return orderedIndices;
+}
+
 void Writer::ensureEncodingScratchBufferPools(uint32_t poolCount) {
   if (context_->options().maxCachedEncodingScratchBuffers == 0) {
     NIMBLE_CHECK(
@@ -2739,6 +2761,9 @@ void Writer::writeStreams() {
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
+      std::vector<uint32_t> streamIndices(streamCount);
+      std::iota(streamIndices.begin(), streamIndices.end(), 0u);
+      const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
@@ -2752,11 +2777,12 @@ void Writer::writeStreams() {
                   const_cast<uint32_t*>(&taskId));
               const auto startCpuNanos = velox::process::threadCpuNanos();
               while (true) {
-                const auto streamIndex =
+                const auto fetchIndex =
                     nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (streamIndex >= streamCount) {
+                if (fetchIndex >= streamCount) {
                   break;
                 }
+                const auto streamIndex = orderedIndices[fetchIndex];
                 auto& [nodeId, streamData] = streams[streamIndex];
                 uint64_t streamSize{0};
                 processStream(
@@ -2978,6 +3004,7 @@ bool Writer::writeChunks(
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
+      const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
@@ -2995,7 +3022,7 @@ bool Writer::writeChunks(
             if (inputIndex >= streamCount) {
               break;
             }
-            const auto streamIndex = streamIndices[inputIndex];
+            const auto streamIndex = orderedIndices[inputIndex];
             auto& [nodeId, streamData] = streams[streamIndex];
             const auto offset = streamData->descriptor().offset();
             uint64_t streamSize{0};
