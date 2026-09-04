@@ -16,9 +16,11 @@
 
 #include "velox/functions/sparksql/aggregates/AverageAggregate.h"
 #include "velox/functions/lib/aggregates/AverageAggregateBase.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/DecimalAverageAggregate.h"
 
 using namespace facebook::velox::functions::aggregate;
+using facebook::velox::functions::sparksql::SparkQueryConfig;
 
 namespace facebook::velox::functions::aggregate::sparksql {
 namespace {
@@ -85,6 +87,7 @@ TypePtr getAvgResultType(const TypePtr& rawInputType) {
       std::min<uint8_t>(LongDecimalType::kMaxPrecision, s + 4));
 }
 
+template <bool throwOnOverflow = false>
 std::unique_ptr<exec::Aggregate> getDecimalAverageAggregate(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
@@ -95,15 +98,16 @@ std::unique_ptr<exec::Aggregate> getDecimalAverageAggregate(
   if (inputType->isShortDecimal()) {
     if (avgType->isShortDecimal()) {
       return std::make_unique<exec::SimpleAggregateAdapter<
-          DecimalAverageAggregate<int64_t, int64_t>>>(
+          DecimalAverageAggregate<int64_t, int64_t, throwOnOverflow>>>(
           step, argTypes, resultType);
     }
     return std::make_unique<exec::SimpleAggregateAdapter<
-        DecimalAverageAggregate<int64_t, int128_t>>>(
+        DecimalAverageAggregate<int64_t, int128_t, throwOnOverflow>>>(
         step, argTypes, resultType);
   }
   return std::make_unique<exec::SimpleAggregateAdapter<
-      DecimalAverageAggregate<int128_t, int128_t>>>(step, argTypes, resultType);
+      DecimalAverageAggregate<int128_t, int128_t, throwOnOverflow>>>(
+      step, argTypes, resultType);
 }
 
 } // namespace
@@ -151,11 +155,14 @@ exec::AggregateRegistrationResult registerAverage(
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
+          const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         const auto& inputType = argTypes[0];
+        // When Spark ANSI mode is enabled, decimal AVG throws on overflow
+        // instead of returning null. Only the decimal paths can overflow;
+        // integer/floating-point AVG widens to DOUBLE and cannot overflow.
+        const bool ansiEnabled = SparkQueryConfig{config}.ansiEnabled();
         if (exec::isRawInput(step)) {
           switch (inputType->kind()) {
             case TypeKind::SMALLINT:
@@ -178,14 +185,20 @@ exec::AggregateRegistrationResult registerAverage(
                 // will always be a long decimal. We can directly assume that
                 // the physical type of the intermediate sum is int128_t.
                 VELOX_USER_CHECK_GT(precision, 11);
-                return getDecimalAverageAggregate(step, argTypes, resultType);
+                return ansiEnabled ? getDecimalAverageAggregate<true>(
+                                         step, argTypes, resultType)
+                                   : getDecimalAverageAggregate<false>(
+                                         step, argTypes, resultType);
               }
               return std::make_unique<
                   AverageAggregate<int64_t, double, double>>(resultType);
             }
             case TypeKind::HUGEINT: {
               if (inputType->isLongDecimal()) {
-                return getDecimalAverageAggregate(step, argTypes, resultType);
+                return ansiEnabled ? getDecimalAverageAggregate<true>(
+                                         step, argTypes, resultType)
+                                   : getDecimalAverageAggregate<false>(
+                                         step, argTypes, resultType);
               }
               VELOX_NYI();
             }
@@ -210,6 +223,13 @@ exec::AggregateRegistrationResult registerAverage(
             case TypeKind::DOUBLE:
             case TypeKind::ROW:
               if (inputType->childAt(0)->isDecimal()) {
+                if (ansiEnabled) {
+                  return std::make_unique<
+                      exec::SimpleAggregateAdapter<DecimalAverageAggregate<
+                          int128_t /*unused*/,
+                          int128_t /*unused*/,
+                          true>>>(step, argTypes, resultType);
+                }
                 return std::make_unique<
                     exec::SimpleAggregateAdapter<DecimalAverageAggregate<
                         int128_t /*unused*/,
@@ -219,11 +239,25 @@ exec::AggregateRegistrationResult registerAverage(
                   AverageAggregate<int64_t, double, double>>(resultType);
             case TypeKind::BIGINT:
               VELOX_USER_CHECK(resultType->isShortDecimal());
+              if (ansiEnabled) {
+                return std::make_unique<
+                    exec::SimpleAggregateAdapter<DecimalAverageAggregate<
+                        int64_t /*unused*/,
+                        int64_t,
+                        true>>>(step, argTypes, resultType);
+              }
               return std::make_unique<exec::SimpleAggregateAdapter<
                   DecimalAverageAggregate<int64_t /*unused*/, int64_t>>>(
                   step, argTypes, resultType);
             case TypeKind::HUGEINT:
               VELOX_USER_CHECK(resultType->isLongDecimal());
+              if (ansiEnabled) {
+                return std::make_unique<
+                    exec::SimpleAggregateAdapter<DecimalAverageAggregate<
+                        int128_t /*unused*/,
+                        int128_t,
+                        true>>>(step, argTypes, resultType);
+              }
               return std::make_unique<exec::SimpleAggregateAdapter<
                   DecimalAverageAggregate<int128_t /*unused*/, int128_t>>>(
                   step, argTypes, resultType);
