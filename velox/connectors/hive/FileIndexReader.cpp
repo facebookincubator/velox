@@ -263,7 +263,7 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NULL(readerOpts.randomSkip());
 
   FileHandleKey fileHandleKey{
-      .filename = hiveSplit_->filePath,
+      .filename = hiveSplit_->readPath(),
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
   auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
