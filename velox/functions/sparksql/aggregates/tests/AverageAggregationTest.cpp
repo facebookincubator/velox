@@ -15,7 +15,7 @@
  */
 #include <folly/init/Init.h>
 
-#include "common/base/tests/GTestUtils.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
