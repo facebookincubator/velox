@@ -15,7 +15,10 @@
  */
 
 #include "velox/experimental/torchwave/Compile.h"
+
 #include <fmt/format.h>
+#include <iostream>
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Headers.h" // @manual: registers JIT headers via static init
@@ -745,6 +748,7 @@ bool CompileCtx::isMultikernel(
 
 ProjectOperation* CompileCtx::makeProjectionOperation(const Subgraph& sg) {
   projectOpSubgraph_ = &sg;
+  opCarvesAConcat_ = false;
   constantMap_ = sg.makeConstantIndices();
   opStorage_.push_back(std::make_unique<ProjectOperation>(sg));
   auto* projectOp = opStorage_.back().get();
@@ -880,6 +884,14 @@ void CompileCtx::collectExtraValues(ProjectOperation* projectOp) {
           for (auto* value : launch.op->orderedInputs()) {
             addIfCreated(value);
           }
+          // A launch that carries its own parameters -- one of the copies that
+          // fill a wide concat's bands -- names values the op itself does not,
+          // since they all share one op. Missing them here leaves them
+          // unduplicated, so every instance of a deduplicated project op would
+          // write the same band and the last one would win.
+          for (auto* value : launch.values) {
+            addIfCreated(value);
+          }
         }
       }
     }
@@ -892,13 +904,28 @@ void CompileCtx::collectExtraValues(ProjectOperation* projectOp) {
 void CompileCtx::newGrid() {
   placed_ = placedBeforeNode_;
   grid_.clear();
+  gridWrittenAt_.clear();
+  gridRealizedAt_.clear();
 }
 
 LaunchGrid CompileCtx::makeGrid(NodeCP node) {
   newGrid();
+  concatPushdownSkips_.clear();
   auto result = placeKernels(node, Context::kTop);
   if (result == Context::kFused) {
     pushdownFused(node);
+  }
+  // Only the reasons are gathered under kTiming, so without it every line here
+  // would be a bare concat id. Now that every wide concat takes this path that
+  // is a line per concat on every compile.
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) != 0) {
+    for (const auto& [concatId, reasons] : concatPushdownSkips_) {
+      std::cout << "  concat fill pushdown %" << concatId << ":";
+      for (const auto& [reason, howMany] : reasons) {
+        std::cout << " [" << howMany << " x " << reason << "]";
+      }
+      std::cout << std::endl;
+    }
   }
   return std::move(grid_);
 }
@@ -1155,6 +1182,14 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
             .value->producer());
   }
 
+  // Concat operand copies, held back until the concat itself has a step. A
+  // copy fills a band of the concat result, and that band exists only once the
+  // allocation group has carved it -- which cannot happen before the step whose
+  // head lays the result out. Placed as they are found, they would go one step
+  // after their own source instead, which for an operand that was ready early
+  // is steps ahead of the group. See the emission after the pushdown below.
+  std::vector<std::pair<ValueCP, ValueCP>> pendingConcatCopies;
+
   for (auto i = 0; i < node->inputs().size(); ++i) {
     // The ordering input was placed above. Its non-ordering siblings still need
     // their producers placed if the previous-kernel stage did not already
@@ -1202,14 +1237,70 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
         producer->target() == "prim.ListPack") {
       const bool hostShapes = concatNeedsHostShapes(node, types_);
       const bool parallelFill = concatFillsInParallel(node, types_);
-      for (const auto& listInput : producer->inputs()) {
+      const auto* dimAttr = node->tryGetAttribute("dim");
+      const int64_t concatDim =
+          dimAttr != nullptr && std::holds_alternative<int64_t>(dimAttr->value)
+          ? std::get<int64_t>(dimAttr->value)
+          : 0;
+      const auto resultId = node->outputs()[0]->id();
+      const auto resultDtype = resultId >= 0 &&
+              static_cast<size_t>(resultId) < types_.types.size() &&
+              types_.types[resultId]
+          ? types_.types[resultId]->dtype()
+          : c10::ScalarType::Float;
+      // Every operand is placed first. Where the result can be laid out is the
+      // latest point at which any operand's dimensions become known, and none
+      // of those points exists until the launches that write them have landed
+      // -- placeInput is what lands them. So the carve decision cannot be
+      // taken in the same pass that places the operands.
+      std::vector<ValueCP> operands;
+      operands.reserve(producer->inputs().size());
+      for (const auto& listArg : producer->inputs()) {
+        auto* listInput = listArg.value;
+        operands.push_back(listInput);
         if (hostShapes) {
-          breakUnmeasurableProducers(listInput.value);
+          breakUnmeasurableProducers(listInput);
         }
-        if (parallelFill) {
-          breakConcatOperandIntoOwnKernel(listInput.value, node->outputs()[0]);
+        // Pushing the operand into a kernel of its own is what makes it
+        // "already placed" when the carve is decided, and an already-placed
+        // operand cannot be given a band -- it is copied instead. When its
+        // producer could write the band itself, leave it here: placeInput then
+        // fuses it into the concat's own kernel, reserveConcatOutput binds it
+        // to its band, and the copy disappears.
+        const bool inPlace =
+            concatOperandFusesInPlace(listInput, node, concatDim, resultDtype);
+        if (parallelFill && !inPlace) {
+          breakConcatOperandIntoOwnKernel(listInput, node->outputs()[0]);
         }
-        placeInput(listInput.value, isScalarSize);
+        placeInput(listInput, isScalarSize);
+      }
+      // Decided whenever the allocation-group pass will look at this concat,
+      // not only when the operands are filled in parallel: the group carves
+      // from these verdicts either way, and the flag decides only whether a
+      // copy op fills the bands the group does not carve or the concat's own
+      // kernel does.
+      if (concatAllocGroupEnabled()) {
+        decideConcatCarve(node, operands, concatDim, resultDtype);
+      }
+      // An operand the concat allocation group will carve writes its band
+      // itself; anything else needs a copy to move it there. One decision
+      // answers both, so the group cannot later carve a band a copy is already
+      // filling, nor leave a copy writing through a slot nothing bound.
+      if (parallelFill) {
+        for (size_t i = 0; i < operands.size(); ++i) {
+          const auto occurrence = static_cast<int32_t>(i);
+          if (!concatOperandNeedsCopyOp(node, occurrence)) {
+            continue;
+          }
+          // The destination has to be minted now: the concat's own setOutputs
+          // reads concatCopyDest_ when its code is generated, just below, to
+          // know which operands its kernel must not move. Only the launch
+          // waits.
+          if (auto* destination =
+                  makeConcatCopyDestination(node, occurrence, operands[i])) {
+            pendingConcatCopies.emplace_back(operands[i], destination);
+          }
+        }
       }
     } else {
       placeInput(inputValue, isScalarSize);
@@ -1229,7 +1320,17 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
   // opBarrier on top of every operand's op, which the fusion path has no way to
   // express.
   if (concatFillsInParallel(node, types_)) {
-    pushdownFused(node);
+    const auto concatLevel = pushdownFused(node);
+    // Same step as the concat, not before it. A step sizes every launch, then
+    // carves its groups -- binding each copy's band -- then fills the parameter
+    // blocks, then launches; so a copy sharing the concat's step still finds
+    // its band bound, while one placed earlier does not. The concat's own
+    // kernel emits nothing for a copied operand, so the two never touch the
+    // same bytes.
+    for (const auto& [operand, destination] : pendingConcatCopies) {
+      emitConcatOperandCopy(
+          operand, destination, node->outputs()[0], concatLevel);
+    }
     return Context::kFusedBreak;
   }
   if (meta->isKernelBreak(
@@ -1316,7 +1417,7 @@ void CompileCtx::fillConstantIndices(const Subgraph& sg, Launch& launch) {
       ")");
 }
 
-void CompileCtx::pushdownFused(NodeCP node) {
+int32_t CompileCtx::pushdownFused(NodeCP node, int32_t minLevel) {
   auto sg = extractSubgraph(node, *inputs_, placed_);
   Launch launch;
 
@@ -1325,10 +1426,12 @@ void CompileCtx::pushdownFused(NodeCP node) {
   launch.op = kernelOpStorage_.back().get();
   launch.values.assign(
       launch.op->orderedInputs().begin(), launch.op->orderedInputs().end());
+  launch.minLevel = minLevel;
 
   fillConstantIndices(sg, launch);
-  placeKernelLaunch(std::move(launch));
+  const auto level = placeKernelLaunch(std::move(launch));
   placed_.insert(node);
+  return level;
 }
 
 void CompileCtx::breakUnmeasurableProducers(ValueCP value) {
@@ -1355,22 +1458,766 @@ void CompileCtx::breakUnmeasurableProducers(ValueCP value) {
   }
 }
 
-void CompileCtx::breakConcatOperandIntoOwnKernel(
+bool CompileCtx::computedByThisKernel(ValueCP operand) const {
+  auto* producer = operand->producer();
+  return producer != nullptr && placed_.count(producer) == 0 &&
+      (inputs_ == nullptr || inputs_->count(producer) == 0);
+}
+
+namespace {
+
+// Follows a value back through prim.ListUnpack / prim.ListPack pairs to the
+// value that was packed, which is the one a launch writes. The unpack does not
+// copy -- it moves the packed element into its own frame slot -- so the two
+// name one tensor, and every question about who fills its buffer has to be
+// asked of the packed value. A concat operand reaching the list through more
+// than one pack/unpack pair is why this loops rather than taking one hop.
+ValueCP throughListPlumbing(ValueCP value) {
+  for (int32_t guard = 0; guard < 8; ++guard) {
+    auto* unpack = value->producer();
+    if (unpack == nullptr || unpack->target() != "prim.ListUnpack" ||
+        unpack->inputs().empty()) {
+      return value;
+    }
+    const auto& outs = unpack->outputs();
+    size_t index = outs.size();
+    for (size_t i = 0; i < outs.size(); ++i) {
+      if (outs[i] == value) {
+        index = i;
+        break;
+      }
+    }
+    auto* pack = unpack->inputs()[0].value->producer();
+    if (index == outs.size() || pack == nullptr ||
+        pack->target() != "prim.ListPack" || index >= pack->inputs().size()) {
+      return value;
+    }
+    value = pack->inputs()[index].value;
+  }
+  return value;
+}
+
+// The copy cause of a value already resolved through list plumbing.
+//
+// kNoMetadata is overruled when a launch writes the value. That verdict says
+// only that the producing op is unregistered, which is what a chain of
+// prim.ListUnpack looks like from here -- and it is exactly the question
+// 'written' has already answered: a launch filling the buffer means there is a
+// real kernel output to hand a band to, not a view and not a value the graph
+// merely named. Every other cause still refuses, because each of those says
+// something the write does not contradict.
+ConcatCopyCause concatCopyCauseAfterPlumbing(
+    ValueCP writer,
+    const WaveGraph::SchedulePoint* written,
+    int64_t dim,
+    c10::ScalarType resultDtype,
+    const ValueTypes& types) {
+  const auto cause = concatOperandCopyCause(writer, dim, resultDtype, types);
+  if (cause == ConcatCopyCause::kNoMetadata && written != nullptr) {
+    return ConcatCopyCause::kNone;
+  }
+  return cause;
+}
+
+} // namespace
+
+// True when 'operand' should stay for the concat's own kernel to compute rather
+// than be pushed into a kernel of its own a step earlier.
+//
+// The pushdown exists so the host can measure the operand before the result is
+// laid out. That is the right answer for an operand whose extent is only known
+// once it has run; it is the wrong one for an ordinary size-preserving producer
+// the concat is the only reader of, which can just as well write its band from
+// inside the concat's kernel and save the copy entirely.
+bool CompileCtx::concatOperandFusesInPlace(
+    ValueCP operand,
+    NodeCP concat,
+    int64_t dim,
+    c10::ScalarType resultDtype) const {
+  if (!WaveConfig::get().concatOperandsInPlace) {
+    return false;
+  }
+  auto* producer = operand->producer();
+  // Nothing here to fuse: the pushdown would be a no-op and the operand is
+  // copied either way.
+  if (producer == nullptr || placed_.count(producer) != 0 ||
+      (inputs_ != nullptr && inputs_->count(producer) != 0)) {
+    return false;
+  }
+  // The band has to be writable by this producer at all -- a view, a promoted
+  // dtype or a device-settled extent is refused here for the same reasons the
+  // carve refuses it.
+  if (concatOperandCopyCause(operand, dim, resultDtype, types_) !=
+      ConcatCopyCause::kNone) {
+    return false;
+  }
+  // The result is laid out before the kernel runs, so the host has to be able
+  // to size this operand without it. An extent only its own reserve or the
+  // device knows is exactly what the pushdown was for.
+  //
+  // This has to ask the question the ALLOCATION GROUP will ask, not a similar
+  // one. The group refuses a whole concat when any operand answers
+  // hasReserveShapeInChain (Cat.cpp), and refusing it after placement has
+  // already minted copies for the other operands is a hard error, not a missed
+  // optimization -- those copies would write bands nothing bound.
+  // sizeNeedsReserve is NOT that question: it excludes an elementwise producer
+  // and a multi-output one before it ever looks at the reserve, while the
+  // group's walk scans every returnMeta of every node with no such exclusion.
+  // An elementwise producer carrying a real reserve therefore passed here and
+  // trapped there, which is what fusing in place by default first hit.
+  //
+  // Asking it of this producer alone is enough because of the sole-absorbed-
+  // level rule below: every one of its inputs is already materialized, so once
+  // the subgraph is extracted they are its inputs and the group's walk stops on
+  // them immediately.
+  auto reserveDefeatsGroup = [](NodeCP node) {
+    const auto* meta = nodeMeta(node);
+    if (meta == nullptr) {
+      return false;
+    }
+    for (const auto& ret : meta->returnMeta) {
+      if (ret.reserveShape != nullptr && ret.shapeFromInput < 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (setsSizeOnDevice(producer) || reserveDefeatsGroup(producer)) {
+    return false;
+  }
+  // And the producer must be the ONLY thing this kernel absorbs for it: every
+  // one of its inputs is already materialized. Walking further was tried and
+  // is not sound here -- 'placed_' at placement time is not the boundary
+  // ConcatInputInfo::hasReserveInChain uses once the subgraph is extracted, so
+  // a chain that looked clear still handed the operand a reserve and cost the
+  // whole concat its allocation group. One level, with everything behind it
+  // already measured, is the case this is for anyway: an elementwise producer
+  // reading values an earlier step wrote.
+  for (const auto& input : producer->inputs()) {
+    auto* inputProducer =
+        input.value == nullptr ? nullptr : input.value->producer();
+    if (inputProducer == nullptr || placed_.count(inputProducer) != 0 ||
+        (inputs_ != nullptr && inputs_->count(inputProducer) != 0)) {
+      continue;
+    }
+    return false;
+  }
+  // Sole consumer. A value read by anything else is a partitioner CSE border
+  // and becomes a top-level output of its ProjectNode, so it is not this
+  // concat's to reschedule. aten.sym_size.int reads the shape and no data, so
+  // it does not make the operand shared.
+  const auto mainIt = waveGraph_.idToValue().find(operand->id());
+  auto* asRewritten =
+      mainIt != waveGraph_.idToValue().end() ? mainIt->second : operand;
+  for (auto* user : asRewritten->users()) {
+    if (user == concat || user->target() == "prim.ListPack" ||
+        user->target() == "torch.ops.aten.sym_size.int") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+void CompileCtx::decideConcatCarve(
+    NodeCP concat,
+    const std::vector<ValueCP>& operands,
+    int64_t dim,
+    c10::ScalarType resultDtype) {
+  auto* original = originalFromVariant(concat);
+  if (original == nullptr) {
+    original = concat;
+  }
+
+  // Where the result's layout can first be computed: the latest point at which
+  // any operand's dimensions become known. An operand no launch produces -- a
+  // graph input, an eager op's output -- carries its extent from the start and
+  // puts no floor under it.
+  // The earliest point the host can know a value's EXTENT, which is not the
+  // point its buffer is filled. An ordinary kernel output is a shape function
+  // of its inputs, so its extent is knowable as soon as theirs are -- measuring
+  // it at the write is what pinned a wide concat's layout to the last launch of
+  // its node, and refused a band to every operand written in an earlier one.
+  //
+  // The conservative case is recognised from the recording rather than from
+  // metadata: recordSchedulePoints gives a standalone's output, and one the
+  // device sizes, a realized point one step AFTER its write, precisely because
+  // nothing on the host knows the extent until it has run. That is the
+  // merge_and_dedup case, and it must keep its late point -- a cat fed by it
+  // genuinely cannot be laid out until it returns.
+  // 'known' false means the recursion could not answer and the caller keeps the
+  // operand's own conservative point. That is NOT the same as a null point,
+  // which means the extent puts no floor under the layout at all -- a value the
+  // graph handed us carries its extent from the start. Conflating the two is
+  // wrong in a way a bad layout does not reveal: schedule points are filled AS
+  // placement progresses, so an ancestor not yet placed has no record and would
+  // read as "known from the start", moving the layout too early and giving a
+  // different answer depending on when this runs.
+  // An op that declares its whole output size as a literal -- view/reshape with
+  // no -1, zeros/ones/full with an explicit size -- knows its extent at compile
+  // time, whatever its input does. Following its input would inherit a floor
+  // that the shape does not actually depend on.
+  auto constantShaped = [](NodeCP producer) {
+    const auto* attr =
+        const_cast<nativert::Node*>(producer)->tryGetAttribute("size");
+    const auto* dims =
+        attr ? std::get_if<std::vector<int64_t>>(&attr->value) : nullptr;
+    if (dims == nullptr || dims->empty()) {
+      return false;
+    }
+    return std::all_of(
+        dims->begin(), dims->end(), [](int64_t d) { return d >= 0; });
+  };
+  struct ShapePoint {
+    bool known{false};
+    std::optional<WaveGraph::SchedulePoint> point;
+    // Which branch settled it, for the diagnostic below.
+    const char* why{"recursed to inputs"};
+  };
+  std::unordered_map<nativert::ValueId, ShapePoint> shapeMemo;
+  std::function<ShapePoint(ValueCP, int32_t)> shapeRealized =
+      [&](ValueCP value, int32_t depth) -> ShapePoint {
+    if (value == nullptr) {
+      return {false, std::nullopt};
+    }
+    const auto valueId = value->id();
+    if (auto it = shapeMemo.find(valueId); it != shapeMemo.end()) {
+      return it->second;
+    }
+    const auto* realized = realizedPoint(valueId);
+    auto* producer = value->producer();
+    const ShapePoint recorded{
+        true,
+        realized != nullptr ? std::optional<WaveGraph::SchedulePoint>{*realized}
+                            : std::nullopt};
+    // A value no node produces carries its extent from the start. Reported as
+    // the graph's first point rather than as "no floor": by the time a concat
+    // is placed the whole grid is laid out, so every operand's extent IS known
+    // somewhere definite, and an absent answer only hides which. It also gives
+    // the layout a point it can actually use -- the old null fell through to
+    // the concat's own launch, the LATEST legal point, which is the opposite of
+    // what "known from the start" means.
+    if (producer == nullptr) {
+      shapeMemo[valueId] =
+          ShapePoint{true, WaveGraph::SchedulePoint{0, 0}, "known from start"};
+      return shapeMemo[valueId];
+    }
+    // Constant output shape: no floor, and no reason to look at the input.
+    if (constantShaped(producer)) {
+      shapeMemo[valueId] =
+          ShapePoint{true, WaveGraph::SchedulePoint{0, 0}, "constant size"};
+      return shapeMemo[valueId];
+    }
+    // Produced but never recorded. By the time a concat is placed the whole
+    // grid is laid out, so this is not a value waiting to be placed -- it is
+    // one that is never a launch output: an intermediate fused into a kernel's
+    // expression, which allocates nothing and so puts no floor of its own. Its
+    // extent is known when its inputs' are, so walk through it rather than
+    // giving up, which would inherit the CONSUMER's point instead.
+    const bool fusedIntermediate = realized == nullptr;
+    // Guard the recursion before it can cycle, and memoize so a wide operand
+    // list does not walk one shared ancestor once per operand.
+    if (depth >= 32) {
+      auto tooDeep = recorded;
+      tooDeep.why = "recursion depth";
+      shapeMemo[valueId] = tooDeep;
+      return tooDeep;
+    }
+    const auto* written = writtenPoint(valueId);
+    // Realized later than written: the recording already says the host cannot
+    // size this until it has run. Believe it. That is merge_and_dedup, and any
+    // other standalone.
+    // A reserve function is NOT a reason to stop. It is the host-side mechanism
+    // that computes the extent from the inputs, so it can run as soon as they
+    // are known -- which for a chain gather is once the flip or masked-select
+    // HEAD it reads has produced its offsets, not once the gather itself has
+    // run. Stopping here charged the gather's own step to every cat that reads
+    // it. What genuinely has to wait is an extent the DEVICE settles, and a
+    // standalone, both of which show up as realized after written.
+    if (!fusedIntermediate &&
+        (written == nullptr || !(*realized == *written) ||
+         setsSizeOnDevice(producer))) {
+      auto stop = recorded;
+      stop.why = written == nullptr ? "never written"
+          : !(*realized == *written)
+          ? "realized after written (standalone or device-sized)"
+          : "sets size on device";
+      shapeMemo[valueId] = stop;
+      return stop;
+    }
+    std::optional<WaveGraph::SchedulePoint> latest;
+    for (const auto& input : producer->inputs()) {
+      const auto point = shapeRealized(input.value, depth + 1);
+      if (!point.known) {
+        auto blocked = recorded;
+        blocked.why = "an input is genuinely unanswerable";
+        shapeMemo[valueId] = blocked;
+        return blocked;
+      }
+      if (point.point.has_value() &&
+          (!latest.has_value() || *latest < *point.point)) {
+        latest = point.point;
+      }
+    }
+    // Answered, and nothing under it imposes a floor: the extent is settled
+    // from the start. Reported as the first point for the same reason as a
+    // producer-less value -- an absent answer is not one.
+    shapeMemo[valueId] = ShapePoint{
+        true,
+        latest.has_value() ? latest : WaveGraph::SchedulePoint{0, 0},
+        latest.has_value() ? "recursed to inputs" : "no input imposes a floor"};
+    return shapeMemo[valueId];
+  };
+
+  // Two points per operand, deliberately kept apart.
+  //
+  // The SHAPE point is when the host can know the extent; the DATA point is
+  // when a launch fills the buffer. The layout only needs the first, but
+  // CARVING needs the second, because the allocation-group collector is built
+  // per step (CompiledOp.cpp, AllocGroupCollector(stepGroups)) and can only
+  // intercept a member whose launch is sized in the step the group belongs to.
+  //
+  // So the layout still runs off the data points, which is what keeps a group
+  // where its members are sized. The shape points are recorded beside them and
+  // are what a collector able to span steps would use instead: they are
+  // strictly earlier, and the gap between the two is the carving this cannot
+  // reach yet.
+  std::optional<WaveGraph::SchedulePoint> shapeAt;
+  ValueCP shapeSetter = nullptr;
+  const char* shapeWhy = "";
+  std::optional<WaveGraph::SchedulePoint> layoutAt;
+  ValueCP layoutSetter = nullptr;
+  std::unordered_map<nativert::ValueId, std::optional<WaveGraph::SchedulePoint>>
+      operandShapePoint;
+  for (auto* operand : operands) {
+    const auto shape = shapeRealized(operand, 0);
+    const auto* dataRealized = realizedPoint(operand->id());
+    const auto dataPoint = dataRealized != nullptr
+        ? std::optional<WaveGraph::SchedulePoint>{*dataRealized}
+        : std::nullopt;
+    const auto shapePoint = shape.known ? shape.point : dataPoint;
+    operandShapePoint[operand->id()] = shapePoint;
+    if (shapePoint.has_value() &&
+        (!shapeAt.has_value() || *shapeAt < *shapePoint)) {
+      shapeAt = shapePoint;
+      shapeSetter = operand;
+      shapeWhy = shape.why;
+    }
+    if (dataPoint.has_value() &&
+        (!layoutAt.has_value() || *layoutAt < *dataPoint)) {
+      layoutAt = dataPoint;
+      layoutSetter = operand;
+    }
+  }
+  concatShapePoint_[original] = shapeAt;
+  const auto dataAtForDiag = layoutAt;
+  // Lay the result out where its SHAPE is knowable, not where the last
+  // operand's data lands. Operands written after that point find their band
+  // already there and fill it; the allocation-group pass gives each its own
+  // group at the step its launch is sized, so moving this earlier no longer
+  // costs the members written later.
+  // NOT switched to shapeAt yet, though it is strictly earlier -- see
+  // concatShapePoint. Two things still stand in the way, both found by trying
+  // it: an operand whose extent has no floor at all would want the layout at
+  // the earliest WRITE, and writtenPoint disagrees with the allocation group's
+  // 'produced' map for a value an eager op writes (%2842 on the ROO graph),
+  // which trips the carved-but-nothing-writes-it check. The per-step group
+  // split below is in place and waiting for it.
+  const WaveGraph::SchedulePoint* layoutPoint =
+      layoutAt.has_value() ? &*layoutAt : nullptr;
+  // DIAGNOSTIC: the one operand whose realization the whole layout waits on,
+  // and why it is late. Every other operand written before this point is
+  // refused a band only because of this one.
+  if (layoutSetter != nullptr && operands.size() > 2 &&
+      getenv("TW_CARVE_DIAG") != nullptr) {
+    auto* setterProducer = layoutSetter->producer();
+    const auto* meta = setterProducer == nullptr
+        ? nullptr
+        : Registry::metadata(setterProducer->target());
+    bool sod = false;
+    if (meta != nullptr) {
+      for (const auto& returnMeta : meta->returnMeta) {
+        sod = sod || returnMeta.shapeSetOnDevice;
+      }
+    }
+    const auto* setterWritten = writtenPoint(layoutSetter->id());
+    fprintf(
+        stderr,
+        "TW_CARVE_DIAG concat %%%d of %d: SHAPE=%s(%%%d %s / %s) DATA=%s | layout at node %d step %d set by"
+        " %%%d producer=%s shapeOnDevice=%d registered=%d writtenAt=%s\n",
+        static_cast<int>(concat->outputs()[0]->id()),
+        static_cast<int>(operands.size()),
+        shapeAt.has_value()
+            ? fmt::format("{}/{}", shapeAt->node, shapeAt->step).c_str()
+            : "none",
+        shapeSetter != nullptr ? static_cast<int>(shapeSetter->id()) : -1,
+        (shapeSetter != nullptr && shapeSetter->producer() != nullptr)
+            ? std::string(shapeSetter->producer()->target()).c_str()
+            : "<none>",
+        shapeWhy,
+        dataAtForDiag.has_value()
+            ? fmt::format("{}/{}", dataAtForDiag->node, dataAtForDiag->step)
+                  .c_str()
+            : "none",
+        layoutPoint->node,
+        layoutPoint->step,
+        static_cast<int>(layoutSetter->id()),
+        setterProducer == nullptr
+            ? "<none>"
+            : std::string(setterProducer->target()).c_str(),
+        sod ? 1 : 0,
+        meta != nullptr ? 1 : 0,
+        setterWritten == nullptr
+            ? "<none>"
+            : fmt::format("{}/{}", setterWritten->node, setterWritten->step)
+                  .c_str());
+  }
+
+  // A concat may join one value at more than one position -- cat([x, y, x]) --
+  // and one buffer cannot be two bands of the result.
+  std::unordered_map<nativert::ValueId, int32_t> occurrences;
+  for (auto* operand : operands) {
+    ++occurrences[operand->id()];
+  }
+
+  // Whatever it decides, this op is now tied to the schedule around it and
+  // must not be deduplicated onto an isomorphic concat elsewhere.
+  opCarvesAConcat_ = true;
+
+  // Where the group will be created. With no operand fixing an earlier point
+  // the layout happens at the concat's own launch, which is the next step this
+  // grid will place -- every operand of it is written there or in place.
+  concatLayoutPoint_[original] = layoutPoint != nullptr
+      ? *layoutPoint
+      : WaveGraph::SchedulePoint{
+            compileNodeIndex_, static_cast<int32_t>(grid_.size())};
+
+  int32_t occurrence = -1;
+  for (auto* operand : operands) {
+    ++occurrence;
+    const auto operandId = operand->id();
+    // Asked of the value in the graph the rewrites left, not of this one: a
+    // variant graph gives every boundary value a stand-in with no producer, so
+    // asking here would answer "needs a copy" for every operand that merely
+    // crosses into this kernel.
+    const auto mainIt = waveGraph_.idToValue().find(operandId);
+    auto* asRewritten =
+        mainIt != waveGraph_.idToValue().end() ? mainIt->second : operand;
+    // A prim.ListUnpack names an element of somebody else's list without
+    // copying it, so an operand reached that way has no producer of its own to
+    // ask and no launch writes its id. Every question below -- can the producer
+    // write a band, does a launch write this, which slot does the group bind --
+    // is about the value that was PACKED, so resolve to it once and ask there.
+    auto* writer = throughListPlumbing(asRewritten);
+    const auto writerId = writer->id();
+    const bool throughPlumbing = writer != asRewritten;
+    const auto* written = writtenPoint(throughPlumbing ? writerId : operandId);
+
+    ConcatCarve decision;
+    decision.needsCopy = true;
+    if (throughPlumbing) {
+      decision.writerId = writerId;
+    }
+    if (occurrences[operandId] != 1) {
+      decision.reason = "joined at more than one position";
+    } else if (
+        carvedOperands_.count(throughPlumbing ? writerId : operandId) != 0) {
+      decision.reason = "already carved for an earlier concat";
+    } else if (const auto cause = concatCopyCauseAfterPlumbing(
+                   writer, written, dim, resultDtype, types_);
+               cause != ConcatCopyCause::kNone) {
+      // Naming the producer's op, not just the cause: whether a copy is
+      // avoidable depends on WHAT cannot write the band. An operand resolved
+      // through plumbing blames the value that was packed, which is the one
+      // that would have to write it.
+      auto* blame = writer->producer();
+      decision.reason = blame == nullptr
+          ? std::string(concatCopyCauseText(cause))
+          : fmt::format("{} ({})", concatCopyCauseText(cause), blame->target());
+    } else if (computedByThisKernel(operand)) {
+      // The concat's own kernel computes it, so reserveConcatOutput binds it
+      // to its band and the expression writes the result in place. Neither a
+      // group member -- the group allocates no buffer for it -- nor a copy.
+      decision.needsCopy = false;
+      decision.reason = "written in place by the concat's own kernel";
+    } else if (written == nullptr) {
+      // The seam this closes: in the main graph the value has a producer, so
+      // the test above says its band is writable, but no wave kernel launch
+      // writes it -- an eager op does. Nothing would fill the band.
+      decision.reason = "no kernel launch writes it";
+    } else if (layoutPoint == nullptr) {
+      // Nothing measures earlier than the concat's own launch, so that is
+      // where the result is laid out -- after this operand was written.
+      decision.reason = "written before the concat's own launch lays it out";
+    } else if (*written < *layoutPoint) {
+      // DIAGNOSTIC: whether this operand could be MOVED past the point the
+      // cat's dims become known. That is only safe if the cat is its sole
+      // consumer -- a value with another user is a partitioner CSE border and
+      // becomes a top-level output of its ProjectNode, so it cannot be
+      // rescheduled into the concat's own kernel.
+      if (getenv("TW_CARVE_DIAG") != nullptr) {
+        int32_t users = 0;
+        std::string others;
+        for (auto* user : asRewritten->users()) {
+          ++users;
+          const bool isConcatSide = user == concat || user == original ||
+              user->target() == "prim.ListPack";
+          if (!isConcatSide) {
+            others += " ";
+            others += user->target();
+          }
+        }
+        auto* blameOp = writer->producer();
+        // Why it is not already in the concat's own kernel:
+        // computedByThisKernel is false when the producer is in placed_
+        // (something got there first) or in inputs_ (it crosses into this
+        // kernel from outside).
+        auto* prod = operand->producer();
+        const char* placedWhy = prod == nullptr ? "no-producer"
+            : placed_.count(prod) != 0          ? "already-placed"
+            : (inputs_ != nullptr && inputs_->count(prod) != 0) ? "kernel-input"
+                                                                : "would-fuse";
+        fprintf(
+            stderr,
+            "TW_CARVE_DIAG movable concat=%%%d operand=%%%d by=%s users=%d"
+            " placed=%s otherUsers=[%s]\n",
+            static_cast<int>(concat->outputs()[0]->id()),
+            static_cast<int>(operand->id()),
+            blameOp == nullptr ? "<none>"
+                               : std::string(blameOp->target()).c_str(),
+            users,
+            placedWhy,
+            others.empty() ? "" : others.c_str() + 1);
+      }
+      // Strictly before, not merely different. The layout point now comes from
+      // when extents are KNOWABLE, so it can precede the writes: an operand
+      // written after the result is laid out finds its band already there and
+      // fills it, which is the whole point. Only one written before the band
+      // exists has to be copied.
+      auto* blame = writer->producer();
+      decision.reason = fmt::format(
+          "written at node {} step {} by {}, before the result is laid out at "
+          "node {} step {}",
+          written->node,
+          written->step,
+          blame == nullptr ? "<none>" : std::string(blame->target()),
+          layoutPoint->node,
+          layoutPoint->step);
+    } else {
+      decision.groupCarves = true;
+      decision.needsCopy = false;
+      decision.reason = "written where the result is laid out";
+      // Keyed on what the group binds: two concats reaching one packed value
+      // through different unpacks would otherwise each carve it a band.
+      carvedOperands_.insert(throughPlumbing ? writerId : operandId);
+    }
+    concatCarve_[{original, occurrence}] = std::move(decision);
+  }
+
+  // Recorded, not printed. This runs while the graph compiles, and tracing is
+  // normally turned on around a later run -- printing here would reach a clear
+  // trace bit and the reasons would be lost, which is what made a concat that
+  // carves nothing impossible to account for from outside.
+  std::map<std::string, std::vector<nativert::ValueId>> byReason;
+  for (size_t i = 0; i < operands.size(); ++i) {
+    const auto& decision = concatCarve_[{original, static_cast<int32_t>(i)}];
+    byReason[decision.reason].push_back(operands[i]->id());
+  }
+  auto line = fmt::format(
+      "  concat carve %{} of {} operands:",
+      concat->outputs()[0]->id(),
+      operands.size());
+  for (const auto& [reason, ids] : byReason) {
+    line += fmt::format(" [{} x {}:", ids.size(), reason);
+    for (size_t i = 0; i < ids.size() && i < 6; ++i) {
+      line += fmt::format(" %{}", ids[i]);
+    }
+    line += "]";
+  }
+  waveGraph_.addConcatCarveReport(line + "\n");
+}
+
+bool CompileCtx::breakConcatOperandIntoOwnKernel(
     ValueCP operand,
     ValueCP concatOutput) {
   auto* producer = operand->producer();
+  const bool trace = (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
+  auto& skips = concatPushdownSkips_[concatOutput->id()];
   if (!producer || placed_.count(producer) ||
       (inputs_ && inputs_->count(producer))) {
     // Nothing of this operand is computed here: it is a graph input or a value
     // an earlier step already materialized, so there is no producing expression
-    // to push down. The concat still copies it in.
-    return;
+    // to push down and no write of its own to redirect. It is copied instead.
+    if (trace) {
+      ++skips
+          [!producer ? std::string("copied: no producer")
+               : placed_.count(producer)
+               ? std::string("copied: already placed: ") +
+                   std::string(producer->target())
+               : std::string("copied: a subgraph input: ") +
+                   std::string(producer->target())];
+    }
+    return false;
+  }
+  if (trace) {
+    ++skips[std::string("pushed down: ") + std::string(producer->target())];
   }
   const size_t before = kernelOpStorage_.size();
   breakProducerIntoOwnKernel(producer);
   for (size_t i = before; i < kernelOpStorage_.size(); ++i) {
     kernelOpStorage_[i]->addOrderingOutput(concatOutput->id());
   }
+  return true;
+}
+
+nativert::Value* CompileCtx::makeConcatCopyDestination(
+    NodeCP concat,
+    int32_t occurrence,
+    ValueCP operand) {
+  const auto resultId = concat->outputs()[0]->id();
+  if (resultId < 0 || static_cast<size_t>(resultId) >= types_.types.size() ||
+      !types_.types[resultId]) {
+    return nullptr;
+  }
+  const auto dtype = types_.types[resultId]->dtype();
+
+  auto* graph = const_cast<nativert::Node*>(concat)->owningGraph();
+  const auto known = concatCopyDest(originalFromVariant(concat), occurrence);
+
+  // Normally each grid variant is built into a graph of its own, so the
+  // destination is minted into a graph that has never seen it. A concat outside
+  // every variant chain is the exception: it stays on the main graph, so all
+  // three variants ask for the destination on the SAME graph. Naming it apart
+  // from the minted value is what lets both cases use one key -- the minted
+  // value is "cat_copy_<id>" on the main graph, and colliding with it is how
+  // this crashed once the multi-kernel grid started carving.
+  const auto destName =
+      known >= 0 ? fmt::format("cat_copy_out_{}", known) : std::string{};
+  if (!destName.empty()) {
+    if (auto* existing = graph->tryGetValue(destName)) {
+      // One copy node per occurrence per graph is exactly what is wanted: it
+      // reads the same source and writes the same band either way.
+      return existing;
+    }
+  }
+
+  // A node of its own so the copy has an expression to generate from, holding
+  // the source it reads. Its output is not consumed by anything: the concat's
+  // operand list still names the original operand, which is what the layout
+  // measures, and the copy only fills the band that operand occupies.
+  auto* copyNode = graph->createNode(
+      "torch.ops.aten.clone.default",
+      {{"self", const_cast<nativert::Value*>(operand)}});
+  graph->insertBefore(copyNode, const_cast<nativert::Node*>(concat));
+
+  if (known >= 0) {
+    auto* copied = copyNode->addOutput(
+        destName, nativert::Type(nativert::Type::Kind::Tensor));
+    copied->setId(known);
+    return copied;
+  }
+  // The id is minted on the main graph and mirrored here, never handed out by
+  // this graph: a variant is built by giving fresh values the ids of the ones
+  // they stand for, so its own id counter is still near zero and an id it hands
+  // out lands on a frame slot some live value already holds. The band view then
+  // goes over that value, and its reader sees the wrong tensor.
+  auto* minted = waveGraph_.newTensorValue(
+      waveGraph_.placeholderNode(), "cat_copy", dtype);
+  auto* copied = copyNode->addOutput(
+      fmt::format("cat_copy_out_{}", minted->id()), minted->type());
+  copied->setId(minted->id());
+  setConcatCopyDest(originalFromVariant(concat), occurrence, copied->id());
+  // The destination is a band of the result, which off the outermost axis is
+  // pitched. Saying contiguous there would let a reader take a fast path the
+  // layout does not support; __copyTensor goes through the strides either way.
+  auto& constraint = waveGraph_.types().constraints.at(copied->id());
+  constraint.rank = types_.rank(operand);
+  const auto* dimAttr = concat->tryGetAttribute("dim");
+  const bool joinsOutermost = dimAttr == nullptr ||
+      !std::holds_alternative<int64_t>(dimAttr->value) ||
+      std::get<int64_t>(dimAttr->value) == 0;
+  constraint.contiguity =
+      joinsOutermost ? Contiguity::kContiguous : Contiguity::kUnknown;
+  return copied;
+}
+
+bool CompileCtx::emitConcatOperandCopy(
+    ValueCP operand,
+    ValueCP destination,
+    ValueCP concatOutput,
+    int32_t minLevel) {
+  if (destination == nullptr) {
+    return false;
+  }
+  const auto destId = destination->id();
+  if (destId < 0 || static_cast<size_t>(destId) >= types_.types.size() ||
+      !types_.types[destId]) {
+    return false;
+  }
+  const auto dtype = types_.types[destId]->dtype();
+
+  auto* copyNode = destination->producer();
+  TORCH_CHECK(
+      copyNode != nullptr,
+      "Concat operand copy destination %",
+      destId,
+      " has no copy node");
+
+  auto it = concatCopyOp_.find(dtype);
+  const bool traceCopy = (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
+  auto traceLevel = [&](int32_t level, const char* how) {
+    if (traceCopy) {
+      std::cout << "  concat copy %" << operand->id() << " -> %" << destId
+                << " dtype=" << c10::toString(dtype) << " minLevel=" << minLevel
+                << " landed at " << level << " " << how << std::endl;
+    }
+  };
+  if (it == concatCopyOp_.end()) {
+    // The first of its type carries the code. pushdownFused builds the op from
+    // the copy node's own subgraph, whose only input is the source, so the
+    // parameter block is the two descriptors this copy needs rather than every
+    // operand of the concat.
+    const size_t before = kernelOpStorage_.size();
+    traceLevel(pushdownFused(copyNode, minLevel), "(new op)");
+    TORCH_CHECK(
+        kernelOpStorage_.size() > before,
+        "pushdownFused produced no kernel op for a concat operand copy");
+    for (size_t i = before; i < kernelOpStorage_.size(); ++i) {
+      kernelOpStorage_[i]->addOrderingOutput(concatOutput->id());
+    }
+    // The band is the concat group's, put in the frame before this runs, so
+    // the copy must not have a buffer reserved for it.
+    kernelOpStorage_.back()->delegateOutputs();
+    concatCopyOp_[dtype] = kernelOpStorage_.back().get();
+    return true;
+  }
+
+  // Every later copy is the same op with different parameters. Launch::values
+  // is positional against op->orderedInputs(), so the substitution is by
+  // position: the op's own source and destination stand for this one's.
+  auto* op = it->second;
+  Launch launch;
+  launch.op = op;
+  launch.values.reserve(op->orderedInputs().size());
+  auto* formalDest = op->expr() != nullptr && !op->expr()->outputs().empty()
+      ? op->expr()->outputs()[0]
+      : nullptr;
+  auto* formalSource = op->expr() != nullptr && !op->expr()->inputs().empty()
+      ? op->expr()->inputs()[0].value
+      : nullptr;
+  for (auto* value : op->orderedInputs()) {
+    if (value == formalSource) {
+      launch.values.push_back(operand);
+    } else if (value == formalDest) {
+      launch.values.push_back(destination);
+    } else {
+      launch.values.push_back(value);
+    }
+  }
+  launch.minLevel = minLevel;
+  traceLevel(placeKernelLaunch(std::move(launch)), "(reuses the op)");
+  placed_.insert(copyNode);
+  return true;
 }
 
 void CompileCtx::breakProducerIntoOwnKernel(NodeCP producer) {
@@ -1418,7 +2265,7 @@ void CompileCtx::generateFusedInner(const Subgraph& sg) {
   fusedCode(sg.root, resultSpecs);
 }
 
-void CompileCtx::placeKernelLaunch(Launch launch) {
+int32_t CompileCtx::placeKernelLaunch(Launch launch) {
   int32_t latestLevel = -1;
 
   // Collect input value ids of this launch.
@@ -1429,6 +2276,17 @@ void CompileCtx::placeKernelLaunch(Launch launch) {
     }
   } else if (launch.op) {
     inputIds = launch.op->orderingInputs();
+    // A launch carrying its own parameters is ordered against those, not
+    // against the op's. The copies that fill a wide concat's bands all run one
+    // op, so taking the op's inputs would schedule every one of them against
+    // the first copy's source: a copy whose own source is written later would
+    // be placed in a step before the value it reads exists.
+    if (launch.values.size() == launch.op->orderedInputs().size()) {
+      const auto numInputs = launch.op->numInputs();
+      for (int32_t i = 0; i < numInputs; ++i) {
+        inputIds.insert(launch.values[i]->id());
+      }
+    }
   }
 
   // Find the latest level in grid_ containing a Launch that produces
@@ -1457,8 +2315,8 @@ void CompileCtx::placeKernelLaunch(Launch launch) {
     }
   }
 
-  int32_t targetLevel = latestLevel + 1;
-  if (targetLevel >= static_cast<int32_t>(grid_.size())) {
+  int32_t targetLevel = std::max(latestLevel + 1, launch.minLevel);
+  while (targetLevel >= static_cast<int32_t>(grid_.size())) {
     grid_.emplace_back();
   }
   if (launch.op) {
@@ -1472,7 +2330,120 @@ void CompileCtx::placeKernelLaunch(Launch launch) {
             targetLevel,
             numDistinctOps_));
   }
+  recordSchedulePoints(launch, targetLevel, {}, /*intoGrid=*/true);
   grid_[targetLevel].push_back(std::move(launch));
+  return targetLevel;
+}
+
+void CompileCtx::recordInvocationSchedulePoints(OpInvocation& op) {
+  // The grid the allocation-group mode will run, which is the one its step
+  // indices name.
+  auto& grid = allocGroupGrid(op);
+  for (size_t level = 0; level < grid.size(); ++level) {
+    for (const auto& launch : grid[level]) {
+      recordSchedulePoints(
+          launch,
+          static_cast<int32_t>(level),
+          op.bindings(),
+          /*intoGrid=*/false);
+    }
+  }
+}
+
+const WaveGraph::SchedulePoint* CompileCtx::writtenPoint(
+    nativert::ValueId id) const {
+  const auto it = gridWrittenAt_.find(id);
+  return it != gridWrittenAt_.end() ? &it->second : waveGraph_.writtenAt(id);
+}
+
+const WaveGraph::SchedulePoint* CompileCtx::realizedPoint(
+    nativert::ValueId id) const {
+  const auto it = gridRealizedAt_.find(id);
+  return it != gridRealizedAt_.end() ? &it->second : waveGraph_.realizedAt(id);
+}
+
+void CompileCtx::recordSchedulePoints(
+    const Launch& launch,
+    int32_t step,
+    const FormalToActual& bindings,
+    bool intoGrid) {
+  // A step index only names one launch when the config fixes a single grid.
+  // Otherwise the same op is placed once per variant and the first variant
+  // built would decide every point, which is not the grid that runs.
+  //
+  // Which grid that is does not have to be the cooperative one: the
+  // multi-kernel grid is settled by the same compilation. What matters is that
+  // the choice is made, so the points name the launches that will actually run.
+  // Left at auto, either could run and a point names nothing. The per-grid maps
+  // are cleared by newGrid() for every variant, so recording while a variant
+  // that will not run is being built only affects that variant's own placement
+  // decisions; the graph-wide map is written from one grid, by
+  // recordInvocationSchedulePoints.
+  const auto& config = WaveConfig::get();
+  if (!config.isCg.has_value()) {
+    return;
+  }
+  const WaveGraph::SchedulePoint atStep{compileNodeIndex_, step};
+  const WaveGraph::SchedulePoint afterStep{compileNodeIndex_, step + 1};
+  // Translated to this invocation's own values. A grid is built once per
+  // project op, over the formal subgraph, and every invocation of it binds its
+  // own actuals -- which is what the frame, and the allocation group reading
+  // it, are expressed in. Recording the formals would name values no execution
+  // ever writes.
+  auto record = [&](nativert::ValueId id,
+                    const WaveGraph::SchedulePoint& realized) {
+    if (id < 0) {
+      return;
+    }
+    if (intoGrid) {
+      gridWrittenAt_.try_emplace(id, atStep);
+      gridRealizedAt_.try_emplace(id, realized);
+      return;
+    }
+    const auto it = bindings.find(id);
+    waveGraph_.addSchedulePoint(
+        it != bindings.end() ? it->second : id, atStep, realized);
+  };
+
+  if (launch.standalone != nullptr) {
+    // A standalone sizes its own output, so nothing on the host knows the
+    // extent until it has run.
+    for (auto* output : launch.standalone->outputs()) {
+      record(output->id(), afterStep);
+    }
+    return;
+  }
+  if (launch.op == nullptr) {
+    return;
+  }
+  // A launch carrying its own parameters -- one of the copies filling a wide
+  // concat's bands -- names values the shared op does not, so its outputs are
+  // its own rather than the op's formals.
+  const auto& formals = launch.op->orderedInputs();
+  const auto& values =
+      launch.values.size() == formals.size() ? launch.values : formals;
+  const auto numInputs = static_cast<size_t>(launch.op->numInputs());
+  const auto& descs = launch.op->outputDescs();
+  for (size_t i = 0; i < descs.size(); ++i) {
+    const size_t slot = numInputs + i;
+    if (slot >= values.size() || values[slot] == nullptr) {
+      break;
+    }
+    const auto& realized = descs[i].shapeSetOnDevice ? afterStep : atStep;
+    // A tensor list output is a header, not a buffer: each element is reserved
+    // and written on its own, and it is the elements a concat joins. Recording
+    // only the header would leave every element looking like a value no launch
+    // writes.
+    if (values[slot]->type().kind() == nativert::Type::Kind::TensorList) {
+      for (const auto* element : values[slot]->getListElements()) {
+        if (element != nullptr) {
+          record(element->id(), realized);
+        }
+      }
+      continue;
+    }
+    record(values[slot]->id(), realized);
+  }
 }
 
 void CompileCtx::generateElementwiseBorderImpl(
@@ -2594,6 +3565,12 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   // opcode whose case is absent from this node's kernel. Clear the map so dedup
   // never crosses node boundaries.
   projectOps_.clear();
+  // The KernelOperation a concat operand copy reuses is owned by
+  // kernelOpStorage_, which is moved into this node's CompositeKernel the same
+  // way, so it cannot cross a node boundary either. Kept until the second node
+  // with a wide concat this was a launch of the previous node's code: the band
+  // stayed at whatever the allocation held.
+  concatCopyOp_.clear();
   placedBeforeNode_ = placed_;
   inputs_ = &project.inputs();
   currentNodeId_ = project.id();
@@ -2609,6 +3586,7 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       ops_.emplace_back(it->second, sg, ivalueStorage_);
       addDuplicateExtraBindings(
           ops_.back(), it->second->extraValues(), waveGraph_);
+      recordInvocationSchedulePoints(ops_.back());
       // Map formal syncable and standalone value ids to actual ids.
       const auto& bindings = ops_.back().bindings();
       for (const auto& [formalId, actualId] : bindings) {
@@ -2634,9 +3612,22 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       allStandalone_ = savedAllStandalone;
       ++numDistinctOps_;
       if (projectOp) {
-        projectOps_[sg] = projectOp;
+        // Left out of the dedup map when it carves a concat. Carving is an
+        // agreement between this occurrence and the schedule around it: which
+        // operands the kernel writes in place and which a copy fills depends on
+        // the step each operand's producer landed on, and the generated code
+        // bakes that in -- concatSpecialForm emits a move for exactly the
+        // operands placement said to copy. A second, isomorphic concat later in
+        // the graph joins different values at different steps, so one kernel
+        // cannot serve both. Registering it would also make the decision's
+        // value ids formal rather than actual, which is what the allocation
+        // group reads them as.
+        if (!opCarvesAConcat_) {
+          projectOps_[sg] = projectOp;
+        }
         ops_.emplace_back(projectOp, sg, ivalueStorage_);
         addSelfExtraBindings(ops_.back(), projectOp->extraValues());
+        recordInvocationSchedulePoints(ops_.back());
       }
     }
   };
@@ -2781,6 +3772,10 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
       std::vector<Launch>{},
       std::move(elidedCloneInputs));
   placed_.insert(nodes.begin(), nodes.end());
+  // Only a node that produces one takes an index, so the count stays in step
+  // with the position this node will have among the graph's CompiledNodes --
+  // which is what the schedule points above are expressed against.
+  ++compileNodeIndex_;
   return std::make_unique<CompiledNode>(std::move(invocation));
 }
 

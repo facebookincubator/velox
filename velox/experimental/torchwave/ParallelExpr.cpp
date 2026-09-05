@@ -1050,10 +1050,7 @@ bool tryElideMultiUserClone(
 // dropping one is always a win when it is safe. Safety is exactly
 // tryElideMultiUserClone's: no user writes it, it does not escape as a graph
 // output, and the source's storage is never mutated anywhere.
-int64_t elideReadOnlyClones(
-    nativert::Graph& graph,
-    const ValueTypes& types,
-    const folly::F14FastSet<ValueCP>& keep) {
+int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types) {
   std::unordered_set<ValueCP> mutatedBases;
   for (const auto& node : graph.nodes()) {
     for (auto* mutated : dataMutatedInputs(&node)) {
@@ -1074,9 +1071,6 @@ int64_t elideReadOnlyClones(
 
   int64_t elided = 0;
   for (NodeCP cloneNode : clones) {
-    if (keep.count(cloneNode->outputs()[0]) > 0) {
-      continue;
-    }
     if (tryElideMultiUserClone(cloneNode, graph, mutatedBases, types)) {
       ++elided;
     }
@@ -1091,12 +1085,6 @@ int64_t elideReadOnlyClones(
   std::map<std::pair<ValueCP, std::string>, ValueCP> firstCloneOf;
   for (NodeCP cloneNode : clones) {
     if (isDeadNode(cloneNode) || cloneNode->outputs()[0]->users().empty()) {
-      continue;
-    }
-    // Two fill clones of one source are NOT interchangeable: cat([x, y, x])
-    // needs one buffer per region, which is the whole reason they were made
-    // per occurrence.
-    if (keep.count(cloneNode->outputs()[0]) > 0) {
       continue;
     }
     ValueCP src = cloneNode->inputs()[0].value;

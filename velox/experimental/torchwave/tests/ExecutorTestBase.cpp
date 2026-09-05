@@ -226,6 +226,10 @@ DEFINE_bool(
     true,
     "Run a lone aten.sym_size/sym_numel as a host-side shortcut standalone rather than a fused kernel op that spends a whole block reading one field");
 DEFINE_bool(
+    concat_operands_in_place,
+    true,
+    "Leave a concat operand whose producer can write its band to be fused into the concat's own kernel, instead of pushing it into its own kernel a step earlier and copying it in");
+DEFINE_bool(
     fold_shared_chains,
     true,
     "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
@@ -245,10 +249,6 @@ DEFINE_bool(
     enable_lifetime_alloc_group,
     true,
     "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
-DEFINE_bool(
-    parallel_concat_fill,
-    false,
-    "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
 DEFINE_bool(
     order_blocks_by_cost,
     false,
@@ -733,13 +733,13 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().cseViews = FLAGS_cse_views;
   WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
   WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
+  WaveConfig::get().concatOperandsInPlace = FLAGS_concat_operands_in_place;
   WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
   WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
   WaveConfig::get().enableLifetimeAllocGroup =
       FLAGS_enable_lifetime_alloc_group;
-  WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
   WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
   WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
   WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
@@ -1123,16 +1123,19 @@ ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
   };
 }
 
-AllocGroupStats ExecutorTestBase::allocGroupStats(const std::string& pt2File) {
+AllocGroupStats ExecutorTestBase::allocGroupStats(
+    const std::string& pt2File,
+    bool cg) {
   auto baseDir = dataDir();
   auto pt2Path =
       pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
   auto fixture = ModelFixture::load(pt2Path);
   TORCH_CHECK(fixture != nullptr, "allocGroupStats: failed to load ", pt2Path);
   setGraphDevice(fixture->model.graph.get(), true);
-  // The plan is expressed in the steps of the cooperative grid, which is also
-  // the only grid the mode runs, so the graph has to be compiled for it before
-  // the footprints mean anything.
+  // The plan is expressed in the steps of whichever grid the mode runs, so the
+  // graph has to be compiled for that grid before the footprints mean anything.
+  // 'cg' picks it: both grids are settled by compilation, and the plan is built
+  // against the one the config names.
   auto& config = WaveConfig::get();
   const auto savedCg = config.isCg;
   const auto savedFree = config.freeIntermediates;
@@ -1142,7 +1145,7 @@ AllocGroupStats ExecutorTestBase::allocGroupStats(const std::string& pt2File) {
     config.freeIntermediates = savedFree;
     config.enableAllocGroup = savedGroup;
   });
-  config.isCg = true;
+  config.isCg = cg;
   config.freeIntermediates = true;
   config.enableAllocGroup = true;
 

@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/WaveGraph.h"
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Executor.h"
@@ -243,7 +244,7 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   // survives fusion costs a copy and a barrier, so eliding is a win whenever
   // it is safe. Gated on enableReuse with the rest of the reuse work.
   if (WaveConfig::get().enableReuse && WaveConfig::get().elideClones) {
-    elideReadOnlyClones(*graph_, types_, concatFillClones_);
+    elideReadOnlyClones(*graph_, types_);
   }
 
   // Merge equal computations. After the rewrites above, which are what create
@@ -383,6 +384,17 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     }
   }
   standaloneStats_.resize(standaloneIndices_.size());
+
+  // The grouping is a function of the compiled grids alone, so it is settled
+  // here rather than on the first execution. What it decides is expressed in
+  // (node, step) pairs of those grids, and the concat pass reads those
+  // decisions back while a concat's kernel is generated -- which has already
+  // happened by the time any execution starts. Left as ensureAllocGroupPlans
+  // rather than a bare call so the first execution still builds the plan for a
+  // graph compiled before the mode was turned on.
+  if (allocGroupEnabled()) {
+    ensureAllocGroupPlans([&] { installGraphAllocGroupPlans(*this, types_); });
+  }
 
   optimizer_.reset();
 }
@@ -542,12 +554,6 @@ nativert::Value* WaveGraph::newListValue(
 
 bool WaveGraph::isCreatedValue(ValueCP value) const {
   return createdValueDtypes_.count(value->id()) > 0;
-}
-
-void WaveGraph::markConcatFillClone(ValueCP value) {
-  if (value != nullptr) {
-    concatFillClones_.insert(value);
-  }
 }
 
 void WaveGraph::declareMultiplyReferencedInput(const nativert::Value* value) {

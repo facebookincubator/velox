@@ -1448,10 +1448,55 @@ LaunchData::LaunchData(
   } else {
     // Kernel op: translate sizeExpr, inputs, outputs, and output descs.
     auto* kernelOp = launch.op;
-    sizeExpr = kernelOp->sizeExpr().toActual(bindings, idToValue);
 
-    const auto& orderedInputs = kernelOp->orderedInputs();
+    // launch.values stands in for the op's own parameters, position by
+    // position. They are the same for all but one case: the copies that fill a
+    // wide concat's bands all run one kernel op, generated once, and each
+    // launch names the source it reads and the band it writes. Falls back to
+    // the op's own when a launch did not set them.
+    const auto& opInputs = kernelOp->orderedInputs();
+    const auto& orderedInputs =
+        launch.values.size() == opInputs.size() ? launch.values : opInputs;
     auto nInputs = kernelOp->numInputs();
+
+    // The size expression names the op's formals, and every tensor leaf of one
+    // IS an input: makeDeepSizeExpr either walks the elementwise subgraph as
+    // far as its inputs, or lists orderedInputs outright. So it has to be
+    // translated through whatever the inputs were -- the launch's own values
+    // where it set them, not the invocation's bindings alone. The two agree for
+    // every op that is not shared across launches with different parameters,
+    // which is why the bindings sufficed until the concat copies arrived.
+    //
+    // Getting this wrong is silent, not fatal: the formal is a real graph value
+    // with a live frame entry, so the grid comes out sized for whichever
+    // operand the op was GENERATED against. The kernel still copies the right
+    // data -- the device loop runs to the true size -- on a grid that can be
+    // orders of magnitude too small. On the ROO graph it sized 414 copies at
+    // 256 elements against 96.8M actual, one of them 2.87M on a single block.
+    bool perLaunchValues = launch.values.size() == opInputs.size();
+    if (perLaunchValues) {
+      perLaunchValues = false;
+      for (size_t i = 0; i < opInputs.size(); ++i) {
+        if (launch.values[i] != opInputs[i]) {
+          perLaunchValues = true;
+          break;
+        }
+      }
+    }
+    // Built only when a launch actually renamed something: copying the
+    // invocation's bindings for every launch of every op would cost more than
+    // the concat copies it exists for.
+    FormalToActual perLaunchBindings;
+    if (perLaunchValues) {
+      perLaunchBindings = bindings;
+      for (size_t i = 0; i < opInputs.size(); ++i) {
+        perLaunchBindings[opInputs[i]->id()] = translateId(launch.values[i]);
+      }
+    }
+    const FormalToActual& sizeBindings =
+        perLaunchValues ? perLaunchBindings : bindings;
+
+    sizeExpr = kernelOp->sizeExpr().toActual(sizeBindings, idToValue);
     for (int32_t i = 0; i < nInputs; ++i) {
       actualInputs.push_back(translateId(orderedInputs[i]));
     }
@@ -1463,7 +1508,7 @@ LaunchData::LaunchData(
     for (size_t i = 0; i < outputDescs.size(); ++i) {
       const auto& desc = outputDescs[i];
       OutputDesc actualDesc = desc;
-      actualDesc.sizeExpr = desc.sizeExpr.toActual(bindings, idToValue);
+      actualDesc.sizeExpr = desc.sizeExpr.toActual(sizeBindings, idToValue);
       if (desc.viewNode) {
         auto viewIt = op.nodeMap().find(desc.viewNode);
         TORCH_CHECK(
@@ -3509,6 +3554,20 @@ void verifyAgainstReference(
   };
   int32_t numMismatches = 0;
   std::string passedIds;
+  // Which values failed, not just which passed: the detail goes to LOG(ERROR),
+  // and a host that drops glog output leaves the message that does come out
+  // naming everything except the thing that went wrong.
+  std::string failedIds;
+  // The first difference of the first failure, which otherwise only exists in
+  // the LOG(ERROR) below. A host that drops glog output is left with a message
+  // that names the value and says nothing about how it is wrong.
+  std::string firstFailure;
+  auto addFailed = [&failedIds](nativert::ValueId actualId) {
+    if (!failedIds.empty()) {
+      failedIds += " ";
+    }
+    failedIds += "%" + std::to_string(actualId);
+  };
   int32_t numPassed = 0;
   for (const auto& data : launches) {
     bool nodeChecked = false;
@@ -3558,6 +3617,7 @@ void verifyAgainstReference(
             data.actualOutputDescs[oi].shapeOnly;
         if (!isShapeOnly) {
           ++numMismatches;
+          addFailed(actualId);
           LOG(ERROR) << "Value %" << actualId
                      << " is a meta tensor (no data) but is not a shape-only "
                         "output; cannot verify (unexpected materialization).";
@@ -3570,6 +3630,11 @@ void verifyAgainstReference(
       nodeChecked = true;
       if (!tensorsMatch(actualTensor, refTensor)) {
         ++numMismatches;
+        addFailed(actualId);
+        if (firstFailure.empty()) {
+          firstFailure = fmt::format(
+              "%{}: {}", actualId, firstDifference(actualTensor, refTensor));
+        }
         auto limit = WaveConfig::get().tensorPrintElementLimit;
         LOG(ERROR) << "Reference mismatch for value %" << actualId << "\n  "
                    << firstDifference(actualTensor, refTensor)
@@ -3669,11 +3734,13 @@ void verifyAgainstReference(
   }
   if (numMismatches > 0 || numCorrupted > 0) {
     auto msg = fmt::format(
-        "{} reference mismatches, {} corrupted, {} passed ({})",
+        "{} reference mismatches ({}), {} corrupted, {} passed ({})\n  first: {}",
         numMismatches,
+        failedIds,
         numCorrupted,
         numPassed,
-        passedIds);
+        passedIds,
+        firstFailure);
     if (WaveConfig::get().continueAfterMismatch) {
       LOG(ERROR) << msg;
     } else {
@@ -4743,13 +4810,13 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
   auto& gridChoices = sv0.gridChoices;
   gridChoices.clear();
   for (auto& op : ops_) {
-    // Fixed at the cooperative grid, not the multi-block default that
-    // gatherLaunches would switch away from. An op with no cooperative variant
-    // keeps its own grid; the plan was built from the same choice, so the two
-    // agree.
-    auto& cg = op.projectOp()->cgGrid();
+    // Fixed at whichever grid the plan indexes, not the multi-block default
+    // that gatherLaunches would switch away from. allocGroupGrid is the same
+    // function the plan was built from, so the two agree by construction --
+    // under the cooperative grid and the multi-kernel one alike.
+    auto& grid = allocGroupGrid(op);
     gridChoices.push_back(
-        {0, false, cg.empty() ? &op.projectOp()->grid() : &cg});
+        {0, &grid == &op.projectOp()->singleBlockGrid(), &grid});
   }
 
   // A lifetime crosses nodes: the node that allocates a value is rarely the one
@@ -4769,6 +4836,16 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
         "graph-wide plan was built from");
   }
   const auto& plan = *allocGroupPlan_;
+
+  // The plan is settled while the graph compiles, but tracing is usually turned
+  // on around a later run, so the report is rendered there and printed here --
+  // once, by whichever node executes first with the bit set.
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) != 0 &&
+      !state.waveGraph->allocGroupReport().empty() &&
+      state.waveGraph->takeAllocGroupReportUnprinted()) {
+    std::cout << state.waveGraph->concatCarveReport()
+              << state.waveGraph->allocGroupReport();
+  }
 
   using Clock = std::chrono::high_resolution_clock;
   const bool doTiming = WaveConfig::get().printTiming ||
@@ -4870,10 +4947,19 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
     // yet. After the deferred pass the step's sizing is over, so what is still
     // unsized never will be -- the plan proposed a member the sizing path
     // allocates some other way -- and the group is carved without it.
+    //
+    // needsSync is asked separately, because being sized is not the same as
+    // being right. A concat group measures every operand, carved or not, and an
+    // operand the device sizes reads back as whatever the frame last held until
+    // the transfer lands -- so the layout comes out of stale extents. Having no
+    // members at all does not exempt it: a group that carves nothing still owns
+    // the result and lays every band out, and 'complete' over an empty member
+    // list is vacuously true, which is exactly the group that must wait.
     auto materializeReady = [&](bool afterWait) {
       for (size_t g = 0; g < collector.numGroups(); ++g) {
         if (collector.materialized(g) ||
-            (!afterWait && !collector.complete(g))) {
+            (!afterWait &&
+             (!collector.complete(g) || collector.needsSync(g)))) {
           continue;
         }
         // A concat group is laid out by the shape of the result rather than by

@@ -218,7 +218,6 @@ void setFreeIntermediates(bool on);
 void setEnableAllocGroup(bool on);
 void setEnableConcatAllocGroup(bool on);
 void setEnableLifetimeAllocGroup(bool on);
-void setParallelConcatFill(bool on);
 void setOrderBlocksByCost(bool on);
 void setPartitionLaunches(bool on);
 void setMaxLaunchWaves(int32_t waves);
