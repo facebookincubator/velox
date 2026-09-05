@@ -18,6 +18,7 @@ velox_add_library(
   velox_abfs
   RegisterAbfsFileSystem.cpp
   HEADERS
+  AbfsAsyncRuntime.h
   AbfsFileSystem.h
   AbfsPath.h
   AbfsReadFile.h
@@ -28,7 +29,13 @@ velox_add_library(
   AzureClientProviderFactories.h
   AzureClientProviderImpl.h
   AzureDataLakeFileClient.h
+  AsyncChannelFactory.h
   DynamicSasTokenClientProvider.h
+  EventSocketChannelFactory.h
+  FollyHttpConnection.h
+  FollyHttpTransport.h
+  FollyResponseBodyStream.h
+  HttpConnection.h
   RegisterAbfsFileSystem.h
 )
 
@@ -36,6 +43,7 @@ if(VELOX_ENABLE_ABFS)
   velox_sources(
     velox_abfs
     PRIVATE
+      AbfsAsyncRuntime.cpp
       AbfsFileSystem.cpp
       AbfsPath.cpp
       AbfsReadFile.cpp
@@ -44,6 +52,10 @@ if(VELOX_ENABLE_ABFS)
       AzureClientProviderFactories.cpp
       AzureClientProviderImpl.cpp
       DynamicSasTokenClientProvider.cpp
+      EventSocketChannelFactory.cpp
+      FollyHttpConnection.cpp
+      FollyHttpTransport.cpp
+      FollyResponseBodyStream.cpp
   )
 
   velox_link_libraries(
@@ -57,6 +69,10 @@ if(VELOX_ENABLE_ABFS)
       Azure::azure-storage-blobs
       Azure::azure-storage-files-datalake
       Folly::folly
+      Boost::headers
+      OpenSSL::SSL
+      OpenSSL::Crypto
+      Threads::Threads
       glog::glog
       fmt::fmt
   )

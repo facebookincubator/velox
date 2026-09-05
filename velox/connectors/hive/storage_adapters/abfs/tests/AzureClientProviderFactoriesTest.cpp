@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 #include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
@@ -25,6 +26,23 @@ using namespace facebook::velox;
 using namespace facebook::velox::filesystems;
 
 namespace {
+
+class TestAzureBlobClient final : public AzureBlobClient {
+ public:
+  Azure::Response<Azure::Storage::Blobs::Models::BlobProperties> getProperties()
+      override {
+    VELOX_FAIL("TestAzureBlobClient: Not implemented.");
+  }
+
+  Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult> download(
+      const Azure::Storage::Blobs::DownloadBlobOptions& options) override {
+    VELOX_FAIL("TestAzureBlobClient: Not implemented.");
+  }
+
+  std::string getUrl() override {
+    return "test";
+  }
+};
 
 class DummyAzureClientProvider final : public AzureClientProvider {
  public:
@@ -41,7 +59,143 @@ class DummyAzureClientProvider final : public AzureClientProvider {
   }
 };
 
+class LegacyAzureClientProvider final : public AzureClientProvider {
+ public:
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    return std::make_unique<TestAzureBlobClient>();
+  }
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    VELOX_FAIL("LegacyAzureClientProvider: Not implemented.");
+  }
+};
+
+struct ProviderCallCounts {
+  int factory{0};
+  int sync{0};
+  int fiber{0};
+  std::string account;
+  const Azure::Storage::Blobs::BlobClientOptions* options{nullptr};
+};
+
+class PairAzureClientProvider final : public AzureClientProvider {
+ public:
+  explicit PairAzureClientProvider(
+      std::shared_ptr<ProviderCallCounts> callCounts)
+      : callCounts_(std::move(callCounts)) {}
+
+  std::unique_ptr<AzureBlobClient> getReadFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    ++callCounts_->sync;
+    syncCreated_ = true;
+    return std::make_unique<TestAzureBlobClient>();
+  }
+
+  std::unique_ptr<AzureBlobClient> getReadFileClientWithOptions(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config,
+      const Azure::Storage::Blobs::BlobClientOptions& options) override {
+    VELOX_CHECK(syncCreated_);
+    ++callCounts_->fiber;
+    callCounts_->options = &options;
+    return std::make_unique<TestAzureBlobClient>();
+  }
+
+  std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config) override {
+    VELOX_FAIL("PairAzureClientProvider: Not implemented.");
+  }
+
+ private:
+  const std::shared_ptr<ProviderCallCounts> callCounts_;
+  bool syncCreated_{false};
+};
+
 } // namespace
+
+TEST(AzureClientProviderFactoriesTest, readFileClientsWithoutFiberOptions) {
+  const auto abfsPath = std::make_shared<AbfsPath>(
+      "abfss://abc@pairednull.dfs.core.windows.net/file/test.txt");
+  const auto callCounts = std::make_shared<ProviderCallCounts>();
+  registerAzureClientProviderFactory(
+      "pairednull", [callCounts](const std::string& account) {
+        ++callCounts->factory;
+        callCounts->account = account;
+        return std::make_unique<PairAzureClientProvider>(callCounts);
+      });
+
+  auto clients = AzureClientProviderFactories::getReadFileClients(
+      abfsPath, config::ConfigBase({}), nullptr);
+
+  EXPECT_NE(clients.sync, nullptr);
+  EXPECT_EQ(clients.fiber, nullptr);
+  EXPECT_TRUE(clients.asyncUnsupportedReason.empty());
+  EXPECT_EQ(clients.providerContext, "registered provider");
+  EXPECT_EQ(callCounts->factory, 1);
+  EXPECT_EQ(callCounts->sync, 1);
+  EXPECT_EQ(callCounts->fiber, 0);
+  EXPECT_EQ(callCounts->account, "pairednull");
+}
+
+TEST(AzureClientProviderFactoriesTest, readFileClientsWithFiberOptions) {
+  const auto abfsPath = std::make_shared<AbfsPath>(
+      "abfss://abc@pairedoptions.dfs.core.windows.net/file/test.txt");
+  const auto callCounts = std::make_shared<ProviderCallCounts>();
+  registerAzureClientProviderFactory(
+      "pairedoptions", [callCounts](const std::string& account) {
+        ++callCounts->factory;
+        callCounts->account = account;
+        return std::make_unique<PairAzureClientProvider>(callCounts);
+      });
+  const Azure::Storage::Blobs::BlobClientOptions options;
+  auto authService = std::make_shared<AbfsAsyncAuthService>(1, 1);
+  const AzureAsyncReadContext context{options, authService};
+
+  auto clients = AzureClientProviderFactories::getReadFileClients(
+      abfsPath, config::ConfigBase({}), &context);
+
+  EXPECT_NE(clients.sync, nullptr);
+  EXPECT_NE(clients.fiber, nullptr);
+  EXPECT_TRUE(clients.asyncUnsupportedReason.empty());
+  EXPECT_EQ(clients.providerContext, "registered provider");
+  EXPECT_EQ(callCounts->factory, 1);
+  EXPECT_EQ(callCounts->sync, 1);
+  EXPECT_EQ(callCounts->fiber, 1);
+  EXPECT_EQ(callCounts->account, "pairedoptions");
+  EXPECT_EQ(callCounts->options, &options);
+}
+
+TEST(
+    AzureClientProviderFactoriesTest,
+    legacyProviderDoesNotSupportFiberOptions) {
+  const auto abfsPath = std::make_shared<AbfsPath>(
+      "abfss://abc@pairedlegacy.dfs.core.windows.net/file/test.txt");
+  int factoryCalls{0};
+  registerAzureClientProviderFactory(
+      "pairedlegacy", [&factoryCalls](const std::string& account) {
+        ++factoryCalls;
+        return std::make_unique<LegacyAzureClientProvider>();
+      });
+  const Azure::Storage::Blobs::BlobClientOptions options;
+  auto authService = std::make_shared<AbfsAsyncAuthService>(1, 1);
+  const AzureAsyncReadContext context{options, authService};
+
+  auto clients = AzureClientProviderFactories::getReadFileClients(
+      abfsPath, config::ConfigBase({}), &context);
+
+  EXPECT_NE(clients.sync, nullptr);
+  EXPECT_EQ(clients.fiber, nullptr);
+  EXPECT_EQ(
+      clients.asyncUnsupportedReason,
+      "Azure client provider does not support read clients with custom options.");
+  EXPECT_EQ(factoryCalls, 1);
+}
 
 TEST(AzureClientProviderFactoriesTest, registerFromConfig) {
   const auto abfsPath = std::make_shared<AbfsPath>(

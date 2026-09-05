@@ -1,0 +1,39 @@
+Stage 2 C2 sanitizer environment
+Date: 2026-07-20
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+Execution environment
+- OS: Ubuntu 24.04 under WSL2
+- Kernel: 6.18.33.2-microsoft-standard-WSL2
+- Architecture: x86_64
+- Build filesystem: WSL ext4
+- CMake: 3.30.4
+- Ninja: 1.11.1
+- Clang/Clang++: Ubuntu 20.1.2 (0ubuntu1~24.04.3)
+- ASAN/TSAN runtime: compiler-rt 20.1.2
+- Pinned formatter: clang-format 21.1.2
+
+Build trees
+- Ordinary Debug: abfs-stage1-debug
+- ASAN Debug: abfs-stage2-asan-clang20-debug
+- TSAN Debug: abfs-stage2-tsan-clang20-debug
+
+Sanitizer prerequisites
+- Clang 20 and compiler-rt were extracted into a user-owned WSL toolchain.
+  No system package was installed and no privileged command was used.
+- Both sanitizer trees use the pinned bundled Folly source. Mixing
+  sanitizer-enabled Folly headers with the prebuilt system libfolly aborts in
+  the fiber stack-switch protocol and is not valid sanitizer evidence.
+- The ASAN tree compiles all bundled Folly and ABFS objects with
+  -fsanitize=address. Folly's generated library sanitizer marker is set to 1
+  in that build tree so its sanitizer fiber-switch wrappers dispatch to the
+  linked compiler-rt hooks. Repository source is not patched for this marker.
+- TSAN commands run through setarch x86_64 -R. Without process-local ASLR
+  disablement, even an empty GCC or Clang TSAN program can fail before main
+  with an unexpected-memory-mapping error under this WSL kernel.
+
+Security and privacy
+- All tests use loopback fixtures and deterministic test certificates.
+- No public DNS, Azure endpoint, account identifier, credential, SAS value,
+  authorization header, username, hostname, or private absolute path is
+  retained in repository evidence.

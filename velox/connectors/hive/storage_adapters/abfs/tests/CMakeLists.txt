@@ -44,3 +44,80 @@ target_link_libraries(
 )
 
 target_compile_options(velox_abfs_registration_test PRIVATE -Wno-deprecated-declarations)
+
+add_executable(
+  velox_abfs_stage1_transport_test
+  ../FollyHttpTransport.cpp
+  ../FollyResponseBodyStream.cpp
+  ../EventSocketChannelFactory.cpp
+  ../FollyHttpConnection.cpp
+  FollyHttpTransportTest.cpp
+  FollyHttpTransportC1Test.cpp
+)
+
+add_test(velox_abfs_stage1_transport_test velox_abfs_stage1_transport_test)
+target_link_libraries(
+  velox_abfs_stage1_transport_test
+  PRIVATE
+    Folly::folly
+    Boost::headers
+    Azure::azure-core
+    Azure::azure-storage-blobs
+    GTest::gtest
+    GTest::gtest_main
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+target_compile_definitions(
+  velox_abfs_stage1_transport_test
+  PRIVATE VELOX_ABFS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
+
+add_executable(
+  velox_abfs_stage2_runtime_test
+  ../AbfsAsyncRuntime.cpp
+  ../FollyHttpTransport.cpp
+  ../FollyResponseBodyStream.cpp
+  ../EventSocketChannelFactory.cpp
+  ../FollyHttpConnection.cpp
+  AbfsAsyncRuntimeTest.cpp
+)
+
+add_test(velox_abfs_stage2_runtime_test velox_abfs_stage2_runtime_test)
+target_link_libraries(
+  velox_abfs_stage2_runtime_test
+  PRIVATE
+    Folly::folly
+    Boost::headers
+    Azure::azure-core
+    GTest::gtest
+    GTest::gtest_main
+    Threads::Threads
+    OpenSSL::SSL
+    OpenSSL::Crypto
+)
+
+if(
+  VELOX_ENABLE_BENCHMARKS
+  AND VELOX_ENABLE_PARQUET
+  AND VELOX_ENABLE_HIVE_CONNECTOR)
+  add_executable(
+    velox_abfs_parquet_benchmark
+    AbfsParquetBenchmark.cpp
+    AzuriteServer.cpp)
+  target_link_libraries(
+    velox_abfs_parquet_benchmark
+    PRIVATE
+      velox_abfs
+      velox_hive_connector
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+      velox_exec
+      velox_exec_test_lib
+      GTest::gtest
+      Folly::folly
+  )
+  target_compile_options(
+    velox_abfs_parquet_benchmark PRIVATE -Wno-deprecated-declarations)
+endif()

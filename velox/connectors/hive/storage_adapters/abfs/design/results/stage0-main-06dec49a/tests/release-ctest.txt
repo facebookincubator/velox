@@ -1,0 +1,11 @@
+configuration=Release
+command=env PATH=<user-local-bin>:/usr/local/bin:/usr/bin:/bin ctest --test-dir <release-build> --output-on-failure --timeout 1800 -R '^(velox_abfs_test|velox_abfs_registration_test|velox_dwio_parquet_reader_test)$'
+exit_code=0
+elapsed_seconds=64.49
+
+velox_dwio_parquet_reader_test: PASS (6.17 sec)
+velox_abfs_test: PASS (57.69 sec)
+velox_abfs_registration_test: PASS (0.07 sec)
+
+100% tests passed, 0 tests failed out of 3.
+stderr_bytes=0
