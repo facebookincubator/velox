@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -540,20 +541,23 @@ bool CudfWindow::canRunOnGPU(
       }
     }
 
+    const bool isFullPartition =
+        isFullPartitionFrame(func, !windowNode.sortingKeys().empty());
+    const bool isDecimalAverage = baseName == "avg" &&
+        !func.functionCall->inputs().empty() &&
+        func.functionCall->inputs()[0]->type()->isDecimal();
+
     if (!func.functionCall->inputs().empty()) {
       const auto& argumentType = func.functionCall->inputs()[0]->type();
 
       const bool unsupportedRealSum =
           baseName == "sum" && argumentType->isReal();
-      const bool unsupportedDecimalAverage =
-          baseName == "avg" && argumentType->isDecimal();
       const bool unsupportedNestedMinMax =
           (baseName == "min" || baseName == "max") &&
           (argumentType->isArray() || argumentType->isMap() ||
            argumentType->isRow());
 
-      if (unsupportedRealSum || unsupportedDecimalAverage ||
-          unsupportedNestedMinMax) {
+      if (unsupportedRealSum || unsupportedNestedMinMax) {
         if (reason) {
           *reason = fmt::format(
               "{} does not support input type {} on cuDF",
@@ -562,15 +566,36 @@ bool CudfWindow::canRunOnGPU(
         }
         return false;
       }
+
+      if (isDecimalAverage) {
+        const auto& resultType = func.functionCall->type();
+        const bool supportedShape = resultType->isDecimal() &&
+            isFullPartition && windowNode.sortingKeys().empty();
+        if (!supportedShape) {
+          if (reason) {
+            *reason =
+                "DECIMAL AVG only supports partition-wide frames "
+                "without ORDER BY on cuDF";
+          }
+          return false;
+        }
+
+        if (!resultType->equivalent(*argumentType)) {
+          if (reason) {
+            *reason =
+                "DECIMAL AVG result type must match its input type on cuDF";
+          }
+          return false;
+        }
+      }
     }
 
-    const bool isFullPartition =
-        isFullPartitionFrame(func, !windowNode.sortingKeys().empty());
     const bool usesRollingFullPartitionPath =
         !windowNode.partitionKeys().empty() ||
         !windowNode.sortingKeys().empty();
 
-    if (baseName == "avg" && isFullPartition && usesRollingFullPartitionPath) {
+    if (baseName == "avg" && !isDecimalAverage && isFullPartition &&
+        usesRollingFullPartitionPath) {
       if (reason) {
         *reason = "Full-partition AVG requires optimized cuDF MEAN support";
       }
@@ -891,12 +916,14 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     bool isFullPartition,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr) const {
-  // RANGE frames are handled by the batched grouped_range_rolling_window path
-  // in doGetOutput (see toBatchRangeWindowTypes). canRunOnGPU only accepts
-  // RANGE frames that path can express, so RANGE never reaches here.
+  // Non-full RANGE frames are handled by grouped_range_rolling_window in
+  // doGetOutput. A full-partition frame uses unbounded bounds regardless of
+  // whether SQL expresses it as ROWS or RANGE.
   VELOX_CHECK(
-      func.frame.type != core::WindowNode::WindowType::kRange,
-      "RANGE window frames must be handled by the batched range rolling path");
+      isFullPartition ||
+          func.frame.type != core::WindowNode::WindowType::kRange,
+      "Non-full RANGE window frames must be handled by the batched range "
+      "rolling path");
 
   if (isFullPartition) {
     return cudf::grouped_rolling_window(
@@ -940,6 +967,56 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
       -1, nullPolicy);
   return invokeGroupedRollingWindow(
       partKeys, inputCol, func, std::move(agg), isFullPartition, stream, mr);
+}
+
+std::unique_ptr<cudf::column> CudfWindow::computeDecimalAverageColumn(
+    const cudf::table_view& partitionKeys,
+    cudf::column_view inputColumn,
+    const core::WindowNode::Function& function,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) const {
+  // Casts to int because fmt does not understand cudf::type_id.
+  const auto inputTypeId = static_cast<int>(inputColumn.type().id());
+  VELOX_CHECK_EQ(
+      inputTypeId,
+      static_cast<int>(cudf::type_id::DECIMAL128),
+      "DECIMAL AVG input must be widened to DECIMAL128");
+  const bool isFullPartition =
+      isFullPartitionFrame(function, !sortKeyIndices_.empty());
+  VELOX_CHECK(
+      isFullPartition && sortKeyIndices_.empty(),
+      "DECIMAL AVG only supports partition-wide windows without ORDER BY");
+
+  auto const tempMr = get_temp_mr();
+  // cuDF optimizes fully unbounded rolling windows into reduce-and-repeat for
+  // OVER (), or groupby plus a group-label gather for PARTITION BY. Reusing
+  // that path keeps row-to-group expansion and input ordering inside cuDF.
+  auto sumAggregation = cudf::make_sum_aggregation<cudf::rolling_aggregation>();
+  auto sum = invokeGroupedRollingWindow(
+      partitionKeys,
+      inputColumn,
+      function,
+      std::move(sumAggregation),
+      isFullPartition,
+      stream,
+      tempMr);
+  auto countAggregation =
+      cudf::make_count_aggregation<cudf::rolling_aggregation>(
+          cudf::null_policy::EXCLUDE);
+  auto count = invokeGroupedRollingWindow(
+      partitionKeys,
+      inputColumn,
+      function,
+      std::move(countAggregation),
+      isFullPartition,
+      stream,
+      tempMr);
+  return finalizeDecimalAverage(
+      std::move(sum),
+      std::move(count),
+      function.functionCall->type(),
+      stream,
+      mr);
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
@@ -1067,7 +1144,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
   std::vector<std::unique_ptr<cudf::column>> windowResultCols(
       windowNode_->windowFunctions().size());
-  std::vector<std::unique_ptr<cudf::column>> decimalSumInputOwners(
+  std::vector<std::unique_ptr<cudf::column>> widenedDecimalInputOwners(
       windowNode_->windowFunctions().size());
   std::vector<RangeRollingBatch> rangeRollingBatches;
   std::vector<std::pair<size_t, std::string>> pendingRanks;
@@ -1134,14 +1211,20 @@ RowVectorPtr CudfWindow::doGetOutput() {
           ? makeCountStarInputColumn(
                 sortedView, logicalRowCount_, countStarColOwner, stream_, mr)
           : sortedView.column(*inputColIdx);
-      if (baseName == "sum" &&
-          func.functionCall->inputs()[0]->type()->isDecimal()) {
+      const bool requiresWidenedDecimalInput =
+          (baseName == "sum" || baseName == "avg") &&
+          func.functionCall->inputs()[0]->type()->isDecimal();
+      if (requiresWidenedDecimalInput) {
         inputCol = castDecimal64InputToDecimal128(
-            inputCol, decimalSumInputOwners[funcIndex], stream_);
+            inputCol, widenedDecimalInputOwners[funcIndex], stream_);
       }
       const bool isFullPartition =
           isFullPartitionFrame(func, !sortKeyIndices_.empty());
-      if (isFullPartition && sortKeyIndices_.empty() &&
+      if (baseName == "avg" && requiresWidenedDecimalInput) {
+        windowResultCols[funcIndex] =
+            computeDecimalAverageColumn(partKeys, inputCol, func, stream_, mr);
+      } else if (
+          isFullPartition && sortKeyIndices_.empty() &&
           partKeys.num_columns() == 0) {
         windowResultCols[funcIndex] = computeGlobalAggregate(
             inputCol,
