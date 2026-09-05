@@ -24,6 +24,7 @@ velox_add_library(
 velox_link_libraries(velox_spark_query_config velox_config_property velox_core)
 
 add_subdirectory(specialforms)
+
 velox_add_library(
   velox_functions_spark_impl
   ArrayGetFunction.cpp
@@ -51,6 +52,7 @@ velox_add_library(
   TimestampUtils.cpp
   Transform.cpp
   UnscaledValueFunction.cpp
+  XPathUtil.cpp
   XxHash64.cpp
   HEADERS
   AnsiMode.h
@@ -105,6 +107,8 @@ velox_add_library(
   UnscaledValueFunction.h
   Uuid.h
   VarcharTypeWriteSideCheck.h
+  XPathFunctions.h
+  XPathUtil.h
   XxHash64.h
 )
 
@@ -116,6 +120,7 @@ velox_link_libraries(
   velox_functions_util
   Folly::folly
   simdjson::simdjson
+  LibXml2::LibXml2
 )
 
 if(NOT VELOX_MONO_LIBRARY)
