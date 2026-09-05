@@ -289,6 +289,13 @@ class StringFunctionsTest : public FunctionBaseTest {
       std::pair<std::tuple<std::string, std::string, int64_t>, int64_t>>;
 
   template <typename TInstance>
+  void testStringPosition(
+      std::string_view functionName,
+      const strpos_input_test_t& tests,
+      const std::vector<std::optional<bool>>& asciiEncodings,
+      bool withInstanceArgument);
+
+  template <typename TInstance>
   void testStringPositionAllFlatVector(
       const strpos_input_test_t& tests,
       const std::vector<std::optional<bool>>& stringEncodings,
@@ -305,11 +312,6 @@ class StringFunctionsTest : public FunctionBaseTest {
 
   void testCodePointFlatVector(
       const std::vector<std::pair<std::string, int32_t>>& tests);
-
-  void testStringPositionFastPath(
-      const std::vector<std::tuple<std::string, int64_t>>& tests,
-      const std::string& subString,
-      int64_t instance);
 
   int64_t levenshteinDistance(
       const std::string& left,
@@ -1141,9 +1143,9 @@ TEST_F(StringFunctionsTest, endsWithHasNull) {
   ASSERT_TRUE(rest->isNullAt(0));
 }
 
-// Test strpos function
 template <typename TInstance>
-void StringFunctionsTest::testStringPositionAllFlatVector(
+void StringFunctionsTest::testStringPosition(
+    std::string_view functionName,
     const strpos_input_test_t& tests,
     const std::vector<std::optional<bool>>& asciiEncodings,
     bool withInstanceArgument) {
@@ -1170,16 +1172,27 @@ void StringFunctionsTest::testStringPositionAllFlatVector(
   FlatVectorPtr<int64_t> result;
   if (withInstanceArgument) {
     result = evaluate<FlatVector<int64_t>>(
-        "strpos(c0, c1,c2)",
+        fmt::format("{}(c0, c1, c2)", functionName),
         makeRowVector({stringVector, subStringVector, instanceVector}));
   } else {
     result = evaluate<FlatVector<int64_t>>(
-        "strpos(c0, c1)", makeRowVector({stringVector, subStringVector}));
+        fmt::format("{}(c0, c1)", functionName),
+        makeRowVector({stringVector, subStringVector}));
   }
 
   for (int32_t i = 0; i < tests.size(); ++i) {
     ASSERT_EQ(result->valueAt(i), tests[i].second);
   }
+}
+
+// Test strpos function
+template <typename TInstance>
+void StringFunctionsTest::testStringPositionAllFlatVector(
+    const strpos_input_test_t& tests,
+    const std::vector<std::optional<bool>>& asciiEncodings,
+    bool withInstanceArgument) {
+  testStringPosition<TInstance>(
+      "strpos", tests, asciiEncodings, withInstanceArgument);
 }
 
 TEST_F(StringFunctionsTest, stringPosition) {
@@ -1217,45 +1230,14 @@ TEST_F(StringFunctionsTest, stringPosition) {
   }
 }
 
-// Test strpos function
+// Test strrpos function
 template <typename TInstance>
 void StringFunctionsTest::testStringPositionFromEndAllFlatVector(
     const strpos_input_test_t& tests,
     const std::vector<std::optional<bool>>& asciiEncodings,
     bool withInstanceArgument) {
-  auto stringVector = makeFlatVector<StringView>(tests.size());
-  auto subStringVector = makeFlatVector<StringView>(tests.size());
-  auto instanceVector =
-      withInstanceArgument ? makeFlatVector<TInstance>(tests.size()) : nullptr;
-
-  for (int i = 0; i < tests.size(); i++) {
-    stringVector->set(i, StringView(std::get<0>(tests[i].first)));
-    subStringVector->set(i, StringView(std::get<1>(tests[i].first)));
-    if (instanceVector) {
-      instanceVector->set(i, std::get<2>(tests[i].first));
-    }
-  }
-
-  if (asciiEncodings[0].has_value()) {
-    stringVector->setAllIsAscii(asciiEncodings[0].value());
-  }
-  if (asciiEncodings[1].has_value()) {
-    subStringVector->setAllIsAscii(asciiEncodings[1].value());
-  }
-
-  FlatVectorPtr<int64_t> result;
-  if (withInstanceArgument) {
-    result = evaluate<FlatVector<int64_t>>(
-        "strrpos(c0, c1,c2)",
-        makeRowVector({stringVector, subStringVector, instanceVector}));
-  } else {
-    result = evaluate<FlatVector<int64_t>>(
-        "strrpos(c0, c1)", makeRowVector({stringVector, subStringVector}));
-  }
-
-  for (int32_t i = 0; i < tests.size(); ++i) {
-    ASSERT_EQ(result->valueAt(i), tests[i].second);
-  }
+  testStringPosition<TInstance>(
+      "strrpos", tests, asciiEncodings, withInstanceArgument);
 }
 
 TEST_F(StringFunctionsTest, stringPositionFromEnd) {
