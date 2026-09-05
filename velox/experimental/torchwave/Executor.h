@@ -785,10 +785,14 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
+/// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
+/// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
+/// cooperative grid when an op in the step asks for dynamic shared memory.
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM = 0);
+    int32_t maxBlocksPerSM = 0,
+    int32_t staticSharedPerBlock = 0);
 
 /// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
 at::Tensor paramTensor(

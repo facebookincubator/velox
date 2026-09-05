@@ -229,6 +229,14 @@ DEFINE_bool(
     parallel_concat_fill,
     false,
     "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
+DEFINE_bool(
+    tw_single_pass,
+    false,
+    "Register one decoupled look-back implementation of cumsum, exclusive sum and masked_select instead of the single-block, multi-kernel and cooperative-grid variants");
+DEFINE_bool(
+    tw_single_pass_select,
+    false,
+    "Expand fb.masked_select_jagged to its single-pass look-back form instead of the barrier-based cooperative-grid one. Only has an effect in cooperative-grid mode");
 
 namespace torch::wave {
 
@@ -684,6 +692,9 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableLifetimeAllocGroup =
       FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
+  // Read by registerBuiltins(), which initialize() calls below.
+  WaveConfig::get().singlePass = FLAGS_tw_single_pass;
+  WaveConfig::get().singlePassSelect = FLAGS_tw_single_pass_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));

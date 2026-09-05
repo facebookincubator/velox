@@ -100,6 +100,8 @@ std::string WaveConfig::toString() const {
   addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
   addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
   addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
+  addBool("singlePassSelect", &WaveConfig::singlePassSelect);
+  addBool("singlePass", &WaveConfig::singlePass);
 
   if (parts.empty()) {
     return "defaults";
