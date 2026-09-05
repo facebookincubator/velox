@@ -321,6 +321,13 @@ function install_s2geometry {
     # Apply the same GCC 12 patch used by the BUNDLED CMake resolver.
     patch -p1 -d "${DEPENDENCY_DIR}/s2geometry" < \
       "${SCRIPT_DIR}/../CMake/resolve_dependency_modules/s2geometry/s2geometry-gcc12-max.patch" || true
+    # On macOS folly defines `nallocx` as a null function pointer, which
+    # collides with s2's weak function and crashes with SIGBUS. Apply the same
+    # patch the BUNDLED CMake resolver uses.
+    if [[ $(uname) == "Darwin" ]]; then
+      patch -p1 -d "${DEPENDENCY_DIR}/s2geometry" < \
+        "${SCRIPT_DIR}/../CMake/resolve_dependency_modules/s2geometry/s2geometry-apple-nallocx.patch" || true
+    fi
     cmake_install_dir s2geometry -DBUILD_TESTING=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
   fi
 }

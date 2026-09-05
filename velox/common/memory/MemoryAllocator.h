@@ -70,7 +70,7 @@ struct SizeClassStats {
     SizeClassStats result;
     result.size = size;
     result.allocateClocks = allocateClocks - other.allocateClocks;
-    result.allocateClocks = freeClocks - other.freeClocks;
+    result.freeClocks = freeClocks - other.freeClocks;
     result.numAllocations = numAllocations - other.numAllocations;
     result.totalBytes = totalBytes - other.totalBytes;
     return result;

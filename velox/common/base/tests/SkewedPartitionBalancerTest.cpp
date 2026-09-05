@@ -395,7 +395,9 @@ TEST_F(SkewedPartitionRebalancerTest, singleThreadFuzz) {
           fmt::format("taskCount {}, iteration {}", taskCount, iteration));
       const uint64_t processedBytes = 1 + folly::Random::rand32(512, rng);
       balancer->addProcessedBytes(processedBytes);
-      const auto numPartitons = folly::Random::rand32(32, rng);
+      // rebalance() requires at least one recorded row; adding processed
+      // bytes alone violates the balancer's contract and throws.
+      const auto numPartitons = 1 + folly::Random::rand32(32, rng);
       for (auto i = 0; i < numPartitons; ++i) {
         const auto partition = folly::Random::rand32(32, rng);
         const auto numRows = 1 + folly::Random::rand32(32, rng);
