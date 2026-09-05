@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <span>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@
 #include "openzl/cpp/Input.hpp"
 #include "openzl/cpp/Output.hpp"
 #include "openzl/zl_graphs.h"
+#include "openzl/zl_reflection.h"
 #include "openzl/zl_version.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 
@@ -92,6 +94,65 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
     return compressed_.size();
   }
 
+  // Report the codec graph OpenZL chose for this column.
+  //
+  // The compression driver prints this beside SubIntSplit's section tree when
+  // --mlidc_dump_encoding is set, which is what makes the two comparable: the
+  // section tree says how SubIntSplit split the word, and this says what the
+  // black box did instead. Without it a study can observe only that OpenZL
+  // won, never what it did differently.
+  //
+  // Reflection decompresses the frame to rebuild the graph, so this is only
+  // ever called outside a timed region.
+  std::string describe() override {
+    if (compressed_.empty()) {
+      return {};
+    }
+
+    ReflectionContext reflection;
+    if (!reflection.valid()) {
+      return {};
+    }
+    const ZL_Report report = ZL_ReflectionCtx_setCompressedFrame(
+        reflection.get(), compressed_.data(), compressed_.size());
+    if (ZL_isError(report)) {
+      // Stay silent rather than print a half-built graph.
+      return {};
+    }
+
+    ZL_ReflectionCtx* rctx = reflection.get();
+    const size_t numCodecs = ZL_ReflectionCtx_getNumCodecs_lastChunk(rctx);
+
+    std::ostringstream out;
+    out << "OpenZLGraph codecs=" << numCodecs
+        << " frameHeaderBytes=" << ZL_ReflectionCtx_getFrameHeaderSize(rctx)
+        << " storedOutputs="
+        << ZL_ReflectionCtx_getNumStoredOutputs_lastChunk(rctx) << "\n";
+
+    for (size_t i = 0; i < numCodecs; ++i) {
+      const ZL_CodecInfo* codec = ZL_ReflectionCtx_getCodec_lastChunk(rctx, i);
+      if (codec == nullptr) {
+        continue;
+      }
+      const char* name = ZL_CodecInfo_getName(codec);
+      out << "  [" << i << "] " << (name != nullptr ? name : "<unnamed>")
+          << (ZL_CodecInfo_isStandardCodec(codec) ? " standard" : " custom")
+          << " id=" << ZL_CodecInfo_getCodecID(codec);
+
+      const size_t numOutputs = ZL_CodecInfo_getNumOutputs(codec);
+      size_t outputBytes = 0;
+      for (size_t output = 0; output < numOutputs; ++output) {
+        const ZL_DataInfo* stream = ZL_CodecInfo_getOutput(codec, output);
+        if (stream != nullptr) {
+          outputBytes += ZL_DataInfo_getContentSize(stream);
+        }
+      }
+      out << " outputs=" << numOutputs << " outputBytes=" << outputBytes
+          << "\n";
+    }
+    return out.str();
+  }
+
   std::vector<std::span<const std::byte>> internalBuffers() const override {
     return {
         {reinterpret_cast<const std::byte*>(compressed_.data()),
@@ -99,6 +160,33 @@ class OpenZLBenchTarget : public NimbleBenchTargetBase<T> {
   }
 
  private:
+  // Owns a reflection context so a frame walk cannot leak one on an early
+  // return.
+  class ReflectionContext {
+   public:
+    ReflectionContext() : rctx_(ZL_ReflectionCtx_create()) {}
+
+    ~ReflectionContext() {
+      if (rctx_ != nullptr) {
+        ZL_ReflectionCtx_free(rctx_);
+      }
+    }
+
+    ReflectionContext(const ReflectionContext&) = delete;
+    ReflectionContext& operator=(const ReflectionContext&) = delete;
+
+    bool valid() const {
+      return rctx_ != nullptr;
+    }
+
+    ZL_ReflectionCtx* get() const {
+      return rctx_;
+    }
+
+   private:
+    ZL_ReflectionCtx* rctx_;
+  };
+
   // Charged on every partial read, never cached across calls: a reader holding
   // a compressed block pays this each time it needs rows.
   void decompressAll() {
