@@ -14,6 +14,20 @@
 add_subdirectory(utils)
 
 add_executable(
+  file_exchange_test
+  FileExchangeTest.cpp
+)
+add_test(file_exchange_test file_exchange_test)
+target_link_libraries(
+  file_exchange_test
+  velox_exec
+  fmt::fmt
+  Folly::folly
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(
   aggregate_companion_functions_test
   AggregateCompanionAdapterTest.cpp
   AggregateCompanionSignaturesTest.cpp

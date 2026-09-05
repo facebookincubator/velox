@@ -34,6 +34,8 @@ velox_add_library(
   ExchangeQueue.cpp
   ExchangeSink.cpp
   ExchangeSource.cpp
+  FileExchangeSink.cpp
+  FileExchangeSource.cpp
   MaterializedOutputBuffer.cpp
   MaterializedOutputBufferManager.cpp
   MaterializedPartitionedOutput.cpp
@@ -141,6 +143,9 @@ velox_add_library(
   ExchangeSink.h
   ExchangeSource.h
   Expand.h
+  FileExchangeFormat.h
+  FileExchangeSink.h
+  FileExchangeSource.h
   FilterProject.h
   GroupId.h
   GroupingSet.h
