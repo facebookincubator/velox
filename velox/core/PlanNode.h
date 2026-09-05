@@ -4207,6 +4207,10 @@ class NestedLoopJoinNode : public PlanNode {
     return "NestedLoopJoin";
   }
 
+  bool canSpill(const QueryConfig& queryConfig) const override {
+    return queryConfig.joinSpillEnabled();
+  }
+
   const TypedExprPtr& joinCondition() const {
     return joinCondition_;
   }
