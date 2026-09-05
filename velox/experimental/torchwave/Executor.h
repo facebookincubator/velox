@@ -21,6 +21,7 @@
 #include <deque>
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/LaunchPartition.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/wave/common/Buffer.h"
@@ -131,6 +132,15 @@ struct LaunchMeta {
   int32_t numFused{0};
   int32_t numStandalone{0};
   int32_t numShortcut{0};
+  // How balanced this step's grid came out, and how many launches it ran as.
+  GridStats gridStats;
+
+  /// The launches the step ran as, each owning a contiguous range of the block
+  /// array the DebugInfo of this step is indexed by. Empty for a step that was
+  /// not split. Kept so the balance report can score each launch on its own:
+  /// they run back to back, so a block in one was never able to run beside a
+  /// block in another.
+  std::vector<LaunchSegment> segments;
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -191,6 +201,46 @@ struct WaveThreadInfo {
 
 /// Returns the thread-local WaveThreadInfo for the current thread.
 const WaveThreadInfo& waveThreadInfo();
+
+/// Sets WaveConfig::get().trace from within this translation unit, so callers
+/// (e.g. the pybind extension) reach the exact WaveConfig singleton instance
+/// the executor reads at run time -- a plain wave_config().trace assignment
+/// made in another TU can hit a duplicated inline-static instance and not take
+/// effect.
+void setWaveTrace(int32_t trace);
+
+/// Returns WaveConfig::get().trace as seen by the executor's TU.
+int32_t getWaveTrace();
+
+/// Set WaveConfig flags on the exact singleton the executor's TU reads (same
+/// rationale as setWaveTrace: avoids a duplicated inline-static instance).
+void setFreeIntermediates(bool on);
+void setEnableAllocGroup(bool on);
+void setEnableConcatAllocGroup(bool on);
+void setEnableLifetimeAllocGroup(bool on);
+void setOrderBlocksByCost(bool on);
+void setPartitionLaunches(bool on);
+void setMaxLaunchWaves(int32_t waves);
+void setLaunchSkewThreshold(double skew);
+void setMinBlockUs(double us);
+void setAutoAdjustCost(bool on);
+void setIsCg(bool on);
+void setSinglePassSelect(bool on);
+void setFoldSharedChains(bool on);
+void setKernelCacheDir(const std::string& dir);
+void setAllStandalone(bool on);
+void setBlockSize(int32_t blockSize);
+void setEnableReuse(bool on);
+void setElideClones(bool on);
+void setStepLastUse(bool on);
+void setSyncEachStep(bool on);
+void setDeferD2h(bool on);
+void setRunAhead(bool on);
+void setMaxDelayedFree(int64_t bytes);
+void setDuplicateMetadata(bool on);
+void setDonateBuffers(bool on);
+void setDonationCarryBytes(int64_t bytes);
+void setPerOpStandaloneTiming(bool on);
 
 /// Lifecycle of a step's kernel outputs, used to bundle intermediate freeing
 /// with wave-stream syncs (see WaveConfig::freeIntermediates).
@@ -278,6 +328,38 @@ struct StepVectors {
   /// Used by makeGrid (output).
   std::vector<BlockInfo> blocks;
   std::vector<int32_t> launchIndices;
+
+  /// The kernel launches 'blocks' is run as, in order. Always at least one
+  /// entry; more only when WaveConfig::partitionLaunches split the step. Each
+  /// launch takes its own slice of 'blocks' and its own dynamic shared memory,
+  /// which is where the occupancy a split buys actually lands.
+  std::vector<LaunchSegment> segments;
+
+  /// How balanced this step's grid came out, from the last makeGrid that ran
+  /// for it. Reported per step under WaveConfig::kGrid and summarized in the
+  /// performance report; also what the partitioning gate reads.
+  GridStats gridStats;
+
+  /// Thread-block clocks this step spent per unit of cost, measured on its
+  /// previous execution. Turns WaveConfig::minBlockUs into the cost units the
+  /// block quantum is expressed in. 0 until the first execution has been
+  /// measured, which falls the quantum back to an even division of the step.
+  double clocksPerCost{0};
+
+  /// How well the blocks of this step's previous execution filled the time its
+  /// slowest one took: mean block clocks over max, the same figure the per-step
+  /// balance line reports. 0 until measured.
+  ///
+  /// This is the only honest signal that a step needs MORE blocks. The
+  /// cost-model skew in gridStats cannot tell -- it is derived from the same
+  /// costs the sizing uses, so a step whose costs are wrong looks balanced to
+  /// it. A step already near 1.0 here has nothing to gain from a wider grid and
+  /// everything to lose, since the extra blocks arrive as serialized launches.
+  double measuredUtil{0};
+
+  /// Blocks the previous execution actually ran, so a step that measured well
+  /// can be held to what already worked.
+  int32_t measuredBlocks{0};
 
   /// Used by makeGrid (internal temporaries).
   std::vector<float> costs;
@@ -785,10 +867,20 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
+/// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
+/// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
+/// cooperative grid when an op in the step asks for dynamic shared memory.
+/// 'occupancyFor' answers the same question from the driver at a given dynamic
+/// shared memory, and supersedes the other two when given: a cooperative launch
+/// is packed to exactly that figure, so deriving it any other way risks a grid
+/// the driver refuses. See GridDevice::occupancyFor.
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM = 0);
+    int32_t maxBlocksPerSM = 0,
+    int32_t staticSharedPerBlock = 0,
+    const std::function<int32_t(int32_t dynamicShared)>& occupancyFor =
+        nullptr);
 
 /// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
 at::Tensor paramTensor(
@@ -868,6 +960,14 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
   std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
 
+  /// Like runInputs but reuses a single held device frame across calls instead
+  /// of getting/returning a pooled frame each time: weights and constants stay
+  /// resident (set once) and only the user inputs are refilled per call. The
+  /// graph re-executes over the held frame, so stale intermediates are simply
+  /// overwritten. Single-threaded fast path (one in-flight call at a time),
+  /// e.g. for latency benchmarks; use runInputs() for concurrent callers.
+  std::vector<c10::IValue> runInputsReuse(std::vector<c10::IValue> inputs);
+
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();
 
@@ -935,6 +1035,10 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
+
+  /// Single held frame for runInputsReuse(): persistent tensors stay resident,
+  /// only user inputs are refilled each call. Not thread-safe.
+  std::unique_ptr<nativert::ExecutionFrame> reuseFrame_;
 
   uint64_t frameGeneration_{0};
 

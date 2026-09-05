@@ -163,12 +163,36 @@ std::vector<AllocGroup> buildAllocGroups(
     const std::vector<AllocLifetime>& lifetimes,
     std::vector<nativert::ValueId>* ungrouped = nullptr);
 
-/// True when the allocation-group path should run: the config selects it, the
-/// cooperative grid is in force -- which is what fixes the step boundaries an
-/// allocation's lifetime is expressed in before the first execution -- and the
-/// intermediates are freed, without which no group's buffer is ever released
-/// and there are no lifetimes to fold.
+/// True when the allocation-group path should run: the config selects it and
+/// the grid mode is decided, which is what fixes the step boundaries an
+/// allocation's lifetime is expressed in before the first execution.
+///
+/// What the mode needs is not the cooperative grid specifically but a grid that
+/// is known while the graph compiles and does not change under it afterwards.
+/// Both compiled grids qualify -- the multi-kernel one is settled by the same
+/// compilation -- so the requirement is only that the choice between them is
+/// made, which is what isCg holding a value means. Left at auto the op could
+/// run either, and a lifetime naming a step of the wrong one names nothing.
+///
+/// Deliberately independent of whether intermediates are freed. With the
+/// freeing off a group's buffer simply stays in the frame and the next run
+/// resizes it in place, so the mode still works; and the freeing is set after
+/// the graph is loaded, so reading it here would make every decision the mode
+/// takes at compile time see it as off.
 bool allocGroupEnabled();
+
+/// The compiled grid the allocation-group mode runs 'op' on, and the one every
+/// step index in the plan indexes into.
+///
+/// Single source of truth for that choice. The plan is built from this at
+/// compile time and executeAllocGroups pins the op to it at run time, so the
+/// two cannot disagree; when they did, a lifetime pointed at a step of a grid
+/// the op was not running and the group carved a buffer nothing wrote.
+///
+/// An explicit --single_block wins over everything, then the cooperative grid
+/// where the mode asks for it and the op has one, then the multi-block grid an
+/// op always has.
+LaunchGrid& allocGroupGrid(OpInvocation& op);
 
 /// A fused cat / stack as the whole-graph scan sees it: the result and the
 /// operands it joins, in frame values, with every id already translated out of
@@ -179,6 +203,9 @@ struct ConcatFootprint {
   bool isStack{false};
   int32_t dim{0};
   int8_t outRank{-1};
+  /// Where placement settled the result's layout. See ConcatLayout.
+  int32_t layoutNode{-1};
+  int32_t layoutStep{-1};
   /// The operands in join order, sizeExpr translated to frame values.
   std::vector<ConcatInputInfo> operands;
 };
@@ -195,6 +222,13 @@ struct LaunchFootprint {
   std::vector<nativert::ValueId> writes;
   std::vector<c10::ScalarType> writeDtypes;
   std::vector<bool> writeNeedsSync;
+
+  /// Outputs this launch's sizing pass puts in the frame without allocating a
+  /// buffer for them: a view, a delegated output, an in-place alias, a
+  /// shape-only tensor. They are none of them allocations, so they carry no
+  /// lifetime -- but they are not in the frame before this point either, and
+  /// anything that measures one earlier reads an empty slot.
+  std::vector<nativert::ValueId> binds;
 
   /// Fused concats this launch runs. Empty for all but the few launches that
   /// hold one.
@@ -290,9 +324,6 @@ struct AllocGroupStats {
   int32_t numConcatOnDevice{0};
   int32_t numConcatUnplaceableOperand{0};
   int32_t numConcatNoMembers{0};
-  /// Joined on an axis other than the outermost, so an operand's region of the
-  /// result is a strided band rather than a run.
-  int32_t numConcatStridedBand{0};
 };
 
 /// Turns per-node footprints into one lifetime per allocated value.

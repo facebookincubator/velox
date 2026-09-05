@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/WaveGraph.h"
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Executor.h"
@@ -252,6 +253,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   // would undo.
   commonSubexpressions(*graph_, types_);
 
+  // Then split list-producing ops into per-tensor nodes, which is what makes
+  // each column visible to the partitioner as its own cost.
+  if (WaveConfig::get().decomposeLists) {
+    decomposeListOps(*graph_, *this);
+  }
+
   // Last of the pre-partition passes: the clone CSE above merges equal values,
   // which would undo the duplicates this inserts.
   if (WaveConfig::get().duplicateMetadata) {
@@ -325,6 +332,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     ck->warmup();
     auto info = ck->kernelInfo();
     LOG(INFO) << "Kernel " << ck->entryPoint() << ": " << info.toString();
+    // With configPerOp, the same numbers for each op on its own. Waiting here
+    // rather than at construction keeps the per-op compiles overlapped with the
+    // composites'.
+    for (const auto& [entryPoint, opInfo] : ck->perOpKernelInfo()) {
+      LOG(INFO) << "Kernel " << entryPoint << ": " << opInfo.toString();
+    }
   }
 
   // Build standaloneIndices_ by walking all launches across all compiled nodes.
@@ -371,6 +384,17 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     }
   }
   standaloneStats_.resize(standaloneIndices_.size());
+
+  // The grouping is a function of the compiled grids alone, so it is settled
+  // here rather than on the first execution. What it decides is expressed in
+  // (node, step) pairs of those grids, and the concat pass reads those
+  // decisions back while a concat's kernel is generated -- which has already
+  // happened by the time any execution starts. Left as ensureAllocGroupPlans
+  // rather than a bare call so the first execution still builds the plan for a
+  // graph compiled before the mode was turned on.
+  if (allocGroupEnabled()) {
+    ensureAllocGroupPlans([&] { installGraphAllocGroupPlans(*this, types_); });
+  }
 
   optimizer_.reset();
 }
@@ -420,23 +444,6 @@ void WaveGraph::normalizeAndAnnotateGraph() {
     // Runs after the defaults above, since 'dim' is usually one of them.
     if (md && md->normalizeDimAttr) {
       normalizeDimAttribute(node, types_);
-    }
-
-    if (md && md->makeMultiKernelVariant) {
-      auto* lastNode = md->makeMultiKernelVariant(&node, this);
-      auto inputs = inputValues(&node);
-      std::vector<const nativert::TensorMeta*> inputTypes;
-      inputTypes.reserve(inputs.size());
-      for (const auto* value : inputs) {
-        auto id = value->id();
-        inputTypes.push_back(
-            id < static_cast<int>(types_.types.size()) ? types_.types[id]
-                                                       : nullptr);
-      }
-      multiKernelVariants_[&node] = Subgraph{
-          .root = lastNode,
-          .inputs = std::move(inputs),
-          .inputTypes = std::move(inputTypes)};
     }
   }
 }
@@ -496,7 +503,7 @@ nativert::Value* WaveGraph::newTensorValue(
   return value;
 }
 
-nativert::Value* WaveGraph::newScalarValue(
+nativert::Value* WaveGraph::newSharedScalarValue(
     nativert::Node* node,
     std::string_view name,
     c10::ScalarType dtype) {
@@ -523,6 +530,14 @@ nativert::Value* WaveGraph::newScalarValue(
     types_.constraints.resize(id + 1);
   }
   idToValue_[id] = value;
+  return value;
+}
+
+nativert::Value* WaveGraph::newScalarValue(
+    nativert::Node* node,
+    std::string_view name,
+    c10::ScalarType dtype) {
+  auto* value = newSharedScalarValue(node, name, dtype);
   createdValueDtypes_[value->id()] = dtype;
   return value;
 }

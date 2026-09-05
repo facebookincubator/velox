@@ -60,6 +60,15 @@ struct Launch {
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
+  /// Earliest step this launch may be placed in, or -1 for no floor. Placement
+  /// otherwise puts a launch one step after the last of its inputs, which is as
+  /// early as its data allows -- right for compute, wrong for a copy that fills
+  /// a band of a concat result. That band exists only once the concat's
+  /// allocation group has been carved, so such a copy has to sit no earlier
+  /// than the step whose head lays the concat out, however early its own source
+  /// happens to be ready.
+  int32_t minLevel{-1};
+
   /// Indices into constants in enclosing OpInvocation.
   std::vector<int32_t> constantIndices;
 
@@ -214,6 +223,13 @@ class CompositeKernel {
   /// default KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
 
+  /// Blocks of this kernel that stay resident on one SM at 'dynamicSharedBytes'
+  /// of dynamic shared memory, as the driver computes it. 0 when there is no
+  /// compiled kernel to ask. Sizing a cooperative launch by anything else risks
+  /// a grid the driver will refuse, so the launch partitioner reads this rather
+  /// than dividing KernelInfo's zero-shared figure down.
+  int32_t occupancy(int32_t numThreads, int32_t dynamicSharedBytes) const;
+
   std::string toString(Listing mode = kExprs) const;
 
   const std::string& entryPoint() const {
@@ -226,16 +242,33 @@ class CompositeKernel {
 
   void warmup();
 
+  /// Waits for the per-op diagnostic kernels queued under
+  /// WaveConfig::configPerOp and returns each one's entry point and occupancy,
+  /// in the order the ops appear in this kernel. Empty when configPerOp is off
+  /// or no GPU is present.
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+  perOpKernelInfo();
+
   const std::vector<std::unique_ptr<KernelOperation>>& kernelOps() const {
     return kernelOpStorage_;
   }
 
  private:
+  /// One single-op kernel built beside the composite when configPerOp is set.
+  /// Diagnostic only: never launched for results, only warmed up so its
+  /// occupancy can be read.
+  struct PerOpKernel {
+    int32_t opCode{0};
+    std::string entryPoint;
+    std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
+  };
+
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
   std::string entryPoint_;
   std::string text_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
+  std::vector<PerOpKernel> perOpKernels_;
 };
 
 /// Records the grid variant (single-block vs multi-block) chosen for a
@@ -388,6 +421,11 @@ class CompositeInvocation {
   /// Installs the groups this invocation allocates, built once for the whole
   /// graph before its first execution.
   void setAllocGroupPlan(std::unique_ptr<AllocGroupPlan> plan);
+
+  /// The groups this invocation allocates, or null while none are installed.
+  const AllocGroupPlan* allocGroupPlan() const {
+    return allocGroupPlan_.get();
+  }
 
  private:
   /// Launches the kernel. In debug_single_ops mode, launches once per block
