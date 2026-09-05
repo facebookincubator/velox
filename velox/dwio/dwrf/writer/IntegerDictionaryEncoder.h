@@ -17,7 +17,6 @@
 #pragma once
 
 #include <folly/container/F14Set.h>
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 #include "velox/dwio/dwrf/common/IntEncoder.h"
 #include "velox/dwio/dwrf/writer/DictionaryEncodingUtils.h"
@@ -277,28 +276,12 @@ class IntegerDictionaryEncoder : public AbstractIntegerDictionaryEncoder {
   }
 
  private:
-  VELOX_FRIEND_TEST(TestIntegerDictionaryEncoder, Clear);
-  VELOX_FRIEND_TEST(TestIntegerDictionaryEncoder, GetCount);
-  VELOX_FRIEND_TEST(WriterContextTest, GetIntDictionaryEncoder);
-
   // TODO: partially specialize for integers only.
   template <typename T>
   static bool shouldWriteKey(
       const IntegerDictionaryEncoder<T>& dictEncoder,
       size_t index) {
     return dictEncoder.getCount(index) > 1;
-  }
-
-  // Get the index/encoded value of a key.
-  // Can throw out_of_range exception if key does not exist in dictionary.
-  // This method is only used by tests
-  uint32_t getIndex(Integer key) const {
-    IntegerLookupKey<Integer> lookupKey{key, 0};
-    auto ret = keyIndex_.find(lookupKey);
-    if (ret != keyIndex_.end()) {
-      return ret->index;
-    }
-    return size();
   }
 
   memory::MemoryPool& generalPool_;
