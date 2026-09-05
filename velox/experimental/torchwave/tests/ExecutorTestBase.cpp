@@ -198,6 +198,14 @@ DEFINE_bool(
     false,
     "Rematerialize each multiply-used sym_size / sym_numel at its use sites before partitioning, so it stops being a top-level output of a ProjectNode");
 DEFINE_bool(
+    config_per_op,
+    false,
+    "Alongside each composite kernel, compile one single-op kernel per op it "
+    "contains (<composite>_op_<opCode>) and log its register / shared / local "
+    "memory and occupancy after graph construction. Diagnostic only: the "
+    "per-op kernels are never launched for results, they resolve the occupancy "
+    "numbers to a single op instead of the fused whole");
+DEFINE_bool(
     input_contiguous,
     false,
     "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
@@ -681,6 +689,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().runAhead = FLAGS_run_ahead;
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
+  WaveConfig::get().configPerOp = FLAGS_config_per_op;
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;

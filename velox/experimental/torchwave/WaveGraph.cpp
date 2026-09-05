@@ -325,6 +325,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     ck->warmup();
     auto info = ck->kernelInfo();
     LOG(INFO) << "Kernel " << ck->entryPoint() << ": " << info.toString();
+    // With configPerOp, the same numbers for each op on its own. Waiting here
+    // rather than at construction keeps the per-op compiles overlapped with the
+    // composites'.
+    for (const auto& [entryPoint, opInfo] : ck->perOpKernelInfo()) {
+      LOG(INFO) << "Kernel " << entryPoint << ": " << opInfo.toString();
+    }
   }
 
   // Build standaloneIndices_ by walking all launches across all compiled nodes.

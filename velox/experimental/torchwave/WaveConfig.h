@@ -301,6 +301,15 @@ struct WaveConfig {
   // one block. The concat then becomes a kernel break that copies nothing.
   bool parallelConcatFill{false};
 
+  // If true, alongside each composite kernel also compile one single-op kernel
+  // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the
+  // per-op kernels are never launched for results, they exist so the register /
+  // shared / local memory and occupancy numbers logged after graph construction
+  // are available at one-op resolution instead of only for the fused whole.
+  // Their compiles are queued with the composite's, so the extra cost is
+  // compile parallelism rather than serial latency. Off by default.
+  bool configPerOp{false};
+
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
   /// The singleton is not thread-safe; all of its mutations must happen before
