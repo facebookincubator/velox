@@ -2265,6 +2265,7 @@ const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries() {
         {2231, "Pacific/Kanton"},
         {2232, "Europe/Kyiv"},
         {2233, "America/Ciudad_Juarez"},
+        {2234, "America/Coyhaique"},
     };
   }());
   return *tzDB;
