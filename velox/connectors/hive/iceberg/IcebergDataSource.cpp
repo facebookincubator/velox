@@ -16,8 +16,11 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -42,8 +45,93 @@ IcebergDataSource::IcebergDataSource(
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
+  auto* icebergTableHandle =
+      dynamic_cast<const IcebergTableHandle*>(tableHandle_.get());
+  VELOX_CHECK_NOT_NULL(
+      icebergTableHandle, "tableHandle_ is not IcebergTableHandle");
 
-  auto reader = std::make_unique<IcebergSplitReader>(
+  if (icebergTableHandle->isChangelogQuery()) {
+    // Changelog query: build a base-table readerOutputType and scanSpec from
+    // the data column handles stored in the table handle, then create an
+    // IcebergChangelogSplitReader that reads the data columns and wraps each
+    // batch into the changelog output schema.
+    const auto& dataColumns = tableHandle_->dataColumns();
+    VELOX_CHECK_NOT_NULL(
+        dataColumns,
+        "IcebergDataSource: changelog query requires tableHandle.dataColumns");
+
+    const auto& rawDataHandles = icebergTableHandle->dataColumnHandles();
+    auto dataColumnHandles = std::make_shared<ColumnHandleMap>();
+    for (const auto& [name, handle] : rawDataHandles) {
+      dataColumnHandles->emplace(name, handle);
+    }
+
+    // Build the base-table readerOutputType: include columns present in both
+    // the table schema and the data column handles.
+    std::vector<std::string> dataNames;
+    std::vector<TypePtr> dataTypes;
+    for (uint32_t i = 0; i < dataColumns->size(); ++i) {
+      const auto& physName = dataColumns->nameOf(i);
+      if (rawDataHandles.count(physName)) {
+        dataNames.push_back(physName);
+        dataTypes.push_back(dataColumns->childAt(i));
+      }
+    }
+    auto dataReaderOutputType = ROW(std::move(dataNames), std::move(dataTypes));
+
+    // Build a data-scoped scanSpec covering the projected base-table columns.
+    // Pass empty filters: changelog metadata filters (operation/ordinal/
+    // snapshotid) are constant per-split and evaluated in
+    // IcebergChangelogSplitReader::prepareSplit(); they must NOT be forwarded
+    // to makeScanSpec because those names do not exist in the base-table schema
+    // and would cause "Field not found" errors.  Data-column predicates (e.g.
+    // rowdata.id < 50) reference the nested "rowdata" namespace and are not
+    // present as bare subfield filters here; any remaining predicate is
+    // evaluated by the downstream Filter operator.
+    //
+    // subfields_ is in changelog space (keys: operation/ordinal/snapshotid/
+    // rowdata) and must not be forwarded here: the base-table column names
+    // (id, name, …) would never match, so pruning would be silently lost
+    // anyway.  Pass an empty map so every base-table column is read in full.
+    // Proper rowdata→base-table subfield remapping can be added when needed.
+    auto dataScanSpec = makeScanSpec(
+        dataReaderOutputType,
+        /*outputSubfields=*/{},
+        common::SubfieldFilters{},
+        /*indexColumns=*/{},
+        tableHandle_->dataColumns(),
+        partitionKeys_,
+        infoColumns_,
+        specialColumns_,
+        fileConfig_->readStatsBasedFilterReorderDisabled(
+            connectorQueryCtx_->sessionProperties()),
+        pool_);
+
+    auto changelogOutputType = getOutputType();
+    // columnHandles_ holds the changelog output column handles
+    // (operation/ordinal/snapshotid/rowdata) — passed as
+    // changelogColumnHandles.
+    return std::make_unique<IcebergChangelogSplitReader>(
+        icebergSplit,
+        tableHandle_,
+        &partitionKeys_,
+        connectorQueryCtx_,
+        fileConfig_,
+        dataReaderOutputType,
+        dataIoStats_,
+        metadataIoStats_,
+        ioStats_,
+        fileHandleFactory_,
+        ioExecutor_,
+        dataScanSpec,
+        dataColumnHandles,
+        changelogOutputType, // changelog output type
+        *columnHandles_, // changelog column handles
+        &filters_);
+  }
+
+  // Regular (non-changelog) Iceberg query.
+  return std::make_unique<IcebergSplitReader>(
       icebergSplit,
       tableHandle_,
       &partitionKeys_,
@@ -57,8 +145,6 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       ioExecutor_,
       scanSpec_,
       columnHandles_);
-
-  return reader;
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

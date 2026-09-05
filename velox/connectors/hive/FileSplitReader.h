@@ -131,7 +131,7 @@ class FileSplitReader {
 
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
-  const RowTypePtr& readerOutputType() const {
+  virtual const RowTypePtr& readerOutputType() const {
     return readerOutputType_;
   }
 
