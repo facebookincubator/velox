@@ -41,16 +41,31 @@ FetchContent_Declare(
 # glog relies on the old `google` namespace
 set(GFLAGS_NAMESPACE "google;gflags")
 
-set(GFLAGS_BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
-# Always build the static target. The pre-installed folly in the
-# velox-dev:ubuntu-22.04 image was linked against gflags_static and its
-# exported config (folly-targets.cmake) keeps `gflags_static` in
-# INTERFACE_LINK_LIBRARIES. When VELOX_BUILD_SHARED=ON,
+# Always build both the static and shared targets, unconditionally, tied to
+# neither VELOX_BUILD_SHARED nor VELOX_GFLAGS_TYPE:
+#
+# Static: The pre-installed folly in the velox-dev:ubuntu-22.04 image was
+# linked against gflags_static and its exported config (folly-targets.cmake)
+# keeps `gflags_static` in INTERFACE_LINK_LIBRARIES. When VELOX_BUILD_SHARED=ON,
 # cmake_dependent_option forces VELOX_BUILD_STATIC=OFF, so without this
-# override BUNDLED gflags would only emit the shared variants and CMake
-# would fall back to a literal `-lgflags_static` that the linker can't
-# resolve. Cost is one extra small static archive.
+# override BUNDLED gflags would only emit the shared variant and CMake would
+# fall back to a literal `-lgflags_static` that the linker can't resolve.
+#
+# Shared: symmetrically, the pre-installed FBThrift's exported
+# FBThriftTargets.cmake (FBThrift::concurrency, FBThrift::thriftfrozen2) keeps
+# a literal `gflags_shared` in INTERFACE_LINK_LIBRARIES too. VELOX_GFLAGS_TYPE
+# defaults to "shared", but that COMPONENTS request only reaches a real
+# find_package(gflags) on the SYSTEM/AUTO path - this BUNDLED module doesn't
+# consume it, and used to key GFLAGS_BUILD_SHARED_LIBS off VELOX_BUILD_SHARED
+# (OFF by default) instead, so `gflags_shared` never got built and any target
+# pulling in FBThrift::thriftcpp2 failed at link time with
+# `cannot find -lgflags_shared`.
+#
+# gflags is tiny, so building both unconditionally is cheap and keeps both
+# legacy names resolvable regardless of which one a dependency's exported
+# config happens to reference.
 set(GFLAGS_BUILD_STATIC_LIBS ON)
+set(GFLAGS_BUILD_SHARED_LIBS ON)
 
 set(GFLAGS_BUILD_gflags_LIB ON)
 set(GFLAGS_BUILD_gflags_nothreads_LIB ON)
