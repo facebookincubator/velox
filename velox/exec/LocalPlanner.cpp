@@ -21,6 +21,7 @@
 #include "velox/exec/EnforceDistinct.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/GroupId.h"
@@ -499,7 +500,8 @@ void LocalPlanner::markMixedJoinBridges(
 
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
-    std::shared_ptr<InMemoryExchangeClient> exchangeClient,
+    std::shared_ptr<ExchangeClient> exchangeClient,
+    std::shared_ptr<ExchangeTransportEntry> exchangeTransportEntry,
     const PartitionedOutputFactory& outputOperatorFactory,
     std::shared_ptr<PipelinePushdownFilters> filters,
     std::function<int(int pipelineId)> numDrivers) {
@@ -569,16 +571,31 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<MergeExchange>(i, ctx.get(), mergeExchangeNode));
+      // Task resolved the entry when it created the exchange client, so a null
+      // entry here is an engine bug rather than a misconfigured plan.
+      VELOX_CHECK_NOT_NULL(
+          exchangeTransportEntry,
+          "No exchange transport entry was resolved for transport '{}'",
+          mergeExchangeNode->transportKind());
+      // The transport lacking a merge builder is the same user error Task
+      // reports; keep the class and the wording identical.
+      VELOX_USER_CHECK(
+          exchangeTransportEntry->makeMergeExchangeOperator != nullptr,
+          "Exchange transport does not support merge exchange: {}",
+          mergeExchangeNode->transportKind());
+      operators.push_back(exchangeTransportEntry->makeMergeExchangeOperator(
+          id, ctx.get(), mergeExchangeNode, exchangeClient));
     } else if (
         auto exchangeNode =
             std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
       // NOTE: the exchange client can only be used by one operator in a driver.
       VELOX_CHECK_NOT_NULL(exchangeClient);
-      operators.push_back(
-          std::make_unique<Exchange>(
-              id, ctx.get(), exchangeNode, std::move(exchangeClient)));
+      VELOX_CHECK_NOT_NULL(
+          exchangeTransportEntry,
+          "No exchange transport entry was resolved for transport '{}'",
+          exchangeNode->transportKind());
+      operators.push_back(exchangeTransportEntry->makeExchangeOperator(
+          id, ctx.get(), exchangeNode, std::move(exchangeClient)));
     } else if (
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
@@ -740,8 +757,19 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         // NOTE: the exchange client can only be used by one operator in a
         // driver.
         VELOX_CHECK_NOT_NULL(exchangeClient);
+        // A custom node reaches its operator through
+        // Operator::PlanNodeTranslator, which names the in-memory client. Such
+        // a node is not an ExchangeNode, so Task resolves the in-memory
+        // transport for it and the cast holds; check it rather than assume it,
+        // because a translator registered for an ExchangeNode would not.
+        auto inMemoryExchangeClient =
+            std::dynamic_pointer_cast<InMemoryExchangeClient>(exchangeClient);
+        VELOX_CHECK_NOT_NULL(
+            inMemoryExchangeClient,
+            "Plan node requires an in-memory exchange client: {}",
+            planNode->toString());
         extended = Operator::fromPlanNode(
-            ctx.get(), id, planNode, std::move(exchangeClient));
+            ctx.get(), id, planNode, std::move(inMemoryExchangeClient));
       } else {
         extended = Operator::fromPlanNode(ctx.get(), id, planNode);
       }
