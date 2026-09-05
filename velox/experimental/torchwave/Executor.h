@@ -212,6 +212,7 @@ void setParallelConcatFill(bool on);
 void setAutoAdjustCost(bool on);
 void setIsCg(bool on);
 void setSinglePassSelect(bool on);
+void setFoldSharedChains(bool on);
 void setKernelCacheDir(const std::string& dir);
 void setAllStandalone(bool on);
 void setBlockSize(int32_t blockSize);

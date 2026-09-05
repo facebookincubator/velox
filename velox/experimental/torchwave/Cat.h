@@ -66,6 +66,14 @@ struct ConcatInputInfo {
   /// The operand's extent is settled by device code, so the host cannot lay it
   /// out ahead of the launch that produces it.
   bool hasShapeOnDevice{false};
+  /// A producer inside the concat's own kernel sizes its output with a reserve
+  /// function. The extent is the host's to compute, but only once that
+  /// producer's launch is sized, which is after the allocation-group pass
+  /// carves the result -- so the operand cannot be measured in time. An operand
+  /// whose own descriptor carries a reserve function is caught by
+  /// 'reserveShape'; this is the case where an elementwise op stands between
+  /// the two and lends the operand a size expression the producer never had.
+  bool hasReserveInChain{false};
   /// The kernel that produces the operand writes through its output's strides,
   /// so it can be handed a pitched band of the result. Captured here because
   /// the allocation-group pass sees only value ids, not the producing nodes.

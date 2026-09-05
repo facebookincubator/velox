@@ -259,8 +259,9 @@ TEST(WaveConfigTest, toStringReportsOnlyNonDefaults) {
 
   config.enableReuse = true;
   config.trace = WaveConfig::kTiming;
-  config.freeIntermediates = true;
-  EXPECT_EQ(config.toString(), "trace=16, freeIntermediates=true");
+  // freeIntermediates defaults to true, so turning it off is what shows up.
+  config.freeIntermediates = false;
+  EXPECT_EQ(config.toString(), "trace=16, freeIntermediates=false");
 }
 
 TEST_F(CompileTest, maskedSelectTest) {

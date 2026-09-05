@@ -206,6 +206,19 @@ class CompileCtx {
 
   void emitCode(std::string_view text);
 
+  /// Appends text at translation-unit scope, ahead of the kernel function and
+  /// inside namespace torch::wave. For an op that codegens something its own
+  /// call names -- a type, a constant table -- rather than passes as data.
+  void emitHelperCode(std::string_view text);
+
+  /// A number unique within this translation unit, for naming what
+  /// emitHelperCode declares. Two congruent nodes share one KernelOperation
+  /// and so ask once, but two different ones may want the same declaration
+  /// under different names.
+  int32_t nextHelperId() {
+    return helperId_++;
+  }
+
   void emitBarrier();
 
   /// Returns true if 'node' reads any input whose producer ran earlier in the
@@ -519,6 +532,9 @@ class CompileCtx {
 
   // Sequential counter for out-of-line elementwise helper functions.
   int32_t outOfLineCounter_{0};
+
+  // Sequential counter handed out by nextHelperId.
+  int32_t helperId_{0};
 
   // Maps each helper function name to the set of bN variable indices it
   // requires (directly or transitively via called helpers).

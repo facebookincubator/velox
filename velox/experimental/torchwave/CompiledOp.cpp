@@ -3290,6 +3290,23 @@ void verifyAgainstReference(
     return state.waveGraph != nullptr &&
         state.waveGraph->isElidedCloneInput(id);
   };
+  // An output no node reads is never written by anyone: the op declares it
+  // because the eager schema has it (an exported graph names these
+  // '<op>_unused_N'), but nothing consumes the data so no kernel fills it. Its
+  // buffer holds whatever the allocator last left there, so comparing it tests
+  // allocation history rather than correctness -- it passes or fails depending
+  // on which buffer the value happened to get. Only ever skips values with no
+  // users at all; a graph output has the output node as a user, and a stale
+  // user entry keeps the value compared, so this cannot hide a real reader.
+  auto hasNoReader = [&](nativert::ValueId id) {
+    if (state.waveGraph == nullptr) {
+      return false;
+    }
+    const auto& idToValue = state.waveGraph->idToValue();
+    auto it = idToValue.find(id);
+    return it != idToValue.end() && it->second != nullptr &&
+        it->second->users().empty();
+  };
   int32_t numMismatches = 0;
   std::string passedIds;
   int32_t numPassed = 0;
@@ -3297,7 +3314,7 @@ void verifyAgainstReference(
     bool nodeChecked = false;
     for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
       auto actualId = data.actualOutputs[oi];
-      if (isElidedCloneInput(actualId)) {
+      if (isElidedCloneInput(actualId) || hasNoReader(actualId)) {
         continue;
       }
       auto refIt = ref->find(actualId);
