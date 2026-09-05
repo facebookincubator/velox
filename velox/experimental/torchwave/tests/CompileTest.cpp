@@ -1004,6 +1004,50 @@ return(%r)
   EXPECT_GT(countSteps(*standaloneGraph), fusedSteps)
       << standalonePlan.describe();
 }
+
+// An operand that is a transposed view of a value the same kernel just wrote
+// is read, at index i, as an element some other block produced. Only a
+// grid-wide barrier orders that; the __syncthreads() between two fused
+// expressions covers one block. The operand is marked isRegister like every
+// elementwise argument, which is why the barrier test cannot go by that flag.
+TEST_F(CompileTest, barrierBeforeATransposedLeafOfThisKernel) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()}, {"b", f()}, {"c", f()}, {"s", f()}, {"ts", f()}, {"r", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c):
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%ts = torch.ops.aten.transpose.int(self=%s, dim0=0, dim1=1)
+%r = torch.ops.aten.mul.Tensor(self=%ts, other=%c)
+return(%r)
+)";
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(waveGraph, nullptr);
+  auto plan = CompiledPlan::from(*waveGraph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(plan.fuses({"aten.add.Tensor", "aten.mul.Tensor"}))
+      << plan.describe();
+  EXPECT_TRUE(plan.barrierBetween("aten.mul.Tensor", "aten.add.Tensor"))
+      << plan.describe();
+
+  // Contrast: consumed straight through, the intermediate stays in a register
+  // and there is nothing to order. Without this the test would still pass if
+  // every fused elementwise pair started carrying a barrier.
+  std::unordered_map<std::string, torch::_export::TensorMeta> directMeta = {
+      {"a", f()}, {"b", f()}, {"c", f()}, {"s", f()}, {"r", f()}};
+  const char* directStr = R"(graph(%a, %b, %c):
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%r = torch.ops.aten.mul.Tensor(self=%s, other=%c)
+return(%r)
+)";
+
+  auto directGraph = compileGraphString(directStr, directMeta);
+  ASSERT_NE(directGraph, nullptr);
+  auto directPlan =
+      CompiledPlan::from(*directGraph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_FALSE(directPlan.barrierBetween("aten.mul.Tensor", "aten.add.Tensor"))
+      << directPlan.describe();
+}
+
 // True when the node producing %<name> reads the same value twice, i.e. its
 // two operands were merged. Asking the consumer rather than counting nodes is
 // what keeps the answer independent of whether the merged-away node is later
