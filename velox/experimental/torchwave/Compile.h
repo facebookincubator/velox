@@ -212,6 +212,12 @@ class CompileCtx {
   /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
 
+  /// Returns true if reading 'operand' from memory needs a barrier first:
+  /// something earlier in this same kernel writes the storage it names and no
+  /// barrier has separated the two. 'consumer' is the node about to read it,
+  /// which is not counted as a writer of its own input.
+  bool valueNeedsBarrier(ValueCP operand, NodeCP consumer);
+
   void addInclude(std::string_view header);
 
   std::string declareAttributes(
