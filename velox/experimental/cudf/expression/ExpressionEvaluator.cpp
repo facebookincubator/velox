@@ -29,6 +29,8 @@
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
+#include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
 #include "velox/type/Type.h"
@@ -72,6 +74,7 @@
 #include <cctype>
 #include <cmath>
 #include <memory>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
@@ -3032,6 +3035,32 @@ bool containsTimezoneSensitiveDateTrunc(const core::TypedExprPtr& expr) {
   return false;
 }
 
+constexpr std::string_view kDateFormatName{"date_format"};
+
+bool isSparkDateFormatCall(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto functionName = exprRegistryName(expr);
+  return functionName.size() >= kDateFormatName.size() &&
+      functionName.compare(
+          functionName.size() - kDateFormatName.size(),
+          kDateFormatName.size(),
+          kDateFormatName) == 0;
+}
+
+bool containsSparkDateFormatCall(const core::TypedExprPtr& expr) {
+  if (isSparkDateFormatCall(expr)) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsSparkDateFormatCall(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // True if `expr` must fall back to CPU because it contains a timezone-sensitive
 // date_trunc while the session enables adjust_timestamp_to_session_timezone,
 // which cuDF cannot honor. False when `queryCtx` is null or the config is
@@ -3052,6 +3081,23 @@ bool requiresCpuForTimezone(
   return false;
 }
 
+bool requiresCpuForSparkDateFormat(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx) {
+  if (queryCtx == nullptr) {
+    return false;
+  }
+  const auto& queryConfig = queryCtx->queryConfig();
+  const bool usesLegacyFormatter =
+      functions::sparksql::SparkQueryConfig{queryConfig}.legacyDateFormatter();
+  const auto* sessionTimeZone = functions::getTimeZoneFromConfig(queryConfig);
+  if (!usesLegacyFormatter &&
+      (sessionTimeZone == nullptr || sessionTimeZone->id() == 0)) {
+    return false;
+  }
+  return containsSparkDateFormatCall(expr);
+}
+
 } // namespace
 
 bool canExprRunOnGpu(
@@ -3067,6 +3113,7 @@ bool canExprRunOnGpu(
       ? expression::optimize(expr, queryCtx, pool)
       : expr;
   return !requiresCpuForTimezone(checked, queryCtx) &&
+      !requiresCpuForSparkDateFormat(checked, queryCtx) &&
       canBeEvaluatedByCudf(checked);
 }
 
