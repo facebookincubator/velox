@@ -26,6 +26,7 @@
 #include <ATen/ATen.h>
 #include <c10/core/CachingDeviceAllocator.h>
 #include <c10/util/StringUtil.h>
+#include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 #include <folly/chrono/Hardware.h>
 #include <gflags/gflags.h>
@@ -33,6 +34,7 @@
 #include <atomic>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 #include <unordered_set>
@@ -463,28 +465,233 @@ constexpr int32_t kDefaultNumSMs = 100;
 // Default blocks per SM when occupancy info is unavailable.
 constexpr int32_t kDefaultBlocksPerSM = 4;
 
+// Shared memory per SM assumed when device info is unavailable (A100).
+constexpr int32_t kDefaultSharedMemPerSM = 164 * 1024;
+
+namespace {
+// Dynamic shared memory a launch of 'launches' needs: the max over the ops,
+// since the ops share one kernel launch.
+int32_t dynamicSharedBytes(const std::vector<LaunchData>& launches) {
+  int64_t bytes = 0;
+  for (const auto& launch : launches) {
+    if (launch.launch && launch.launch->op) {
+      bytes = std::max(bytes, launch.launch->op->dynamicSharedBytes());
+    }
+  }
+  return static_cast<int32_t>(bytes);
+}
+} // namespace
+
 // Blocks a step's grid aims to fill: the device's SM count times the blocks of
 // this kernel that stay resident on one SM. makeGrid distributes this many
 // across the step's launches, and layoutParamSlots bounds the BlockInfo
 // reservation by it, so the two must derive it the same way -- a reservation
 // computed from a larger figure than makeGrid uses would be too small.
-int32_t targetBlockCount(int32_t maxBlocksPerSM) {
+//
+// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory. If
+// an op in the step needs some, fewer blocks fit on an SM, and a cooperative
+// launch of more blocks than fit fails outright. A caller that only wants an
+// upper bound can pass dynSharedPerBlock == 0, which skips that reduction and
+// so can only over-estimate.
+GridDevice currentGridDevice(
+    int32_t maxBlocksPerSM,
+    int32_t staticSharedPerBlock,
+    std::function<int32_t(int32_t)> occupancyFor = nullptr) {
+  auto* device = facebook::velox::wave::currentDevice();
   int32_t numSMs = WaveConfig::get().numSms;
   if (numSMs == 0) {
-    numSMs = kDefaultNumSMs;
-    if (auto* device = facebook::velox::wave::currentDevice()) {
-      numSMs = device->numSM;
-    }
+    numSMs = device ? device->numSM : kDefaultNumSMs;
   }
-  const int32_t blocksPerSM =
-      maxBlocksPerSM > 0 ? maxBlocksPerSM : kDefaultBlocksPerSM;
-  return numSMs * blocksPerSM;
+  return {
+      .numSMs = numSMs,
+      .maxBlocksPerSM =
+          maxBlocksPerSM > 0 ? maxBlocksPerSM : kDefaultBlocksPerSM,
+      .sharedPerSM = device ? device->sharedMemPerSM : kDefaultSharedMemPerSM,
+      .staticSharedPerBlock = staticSharedPerBlock,
+      .occupancyFor = std::move(occupancyFor)};
 }
+
+// Asks the driver for the kernel's occupancy, memoized per dynamic shared size.
+// The packer calls it once per op while grouping, and a step's ops fall into a
+// handful of distinct shared-memory sizes, so the driver is asked a handful of
+// times rather than once per op.
+std::function<int32_t(int32_t)> occupancyQuery(const CompositeKernel* kernel) {
+  if (kernel == nullptr) {
+    return nullptr;
+  }
+  const int32_t blockSize = WaveConfig::get().blockSize;
+  auto cache = std::make_shared<folly::F14FastMap<int32_t, int32_t>>();
+  return [kernel, blockSize, cache](int32_t dynamicShared) -> int32_t {
+    auto it = cache->find(dynamicShared);
+    if (it != cache->end()) {
+      return it->second;
+    }
+    const int32_t blocks = kernel->occupancy(blockSize, dynamicShared);
+    cache->emplace(dynamicShared, blocks);
+    return blocks;
+  };
+}
+
+int32_t targetBlockCount(
+    int32_t maxBlocksPerSM,
+    int32_t dynSharedPerBlock,
+    int32_t staticSharedPerBlock) {
+  const auto device = currentGridDevice(maxBlocksPerSM, staticSharedPerBlock);
+  return device.numSMs * blocksPerSM(device, dynSharedPerBlock);
+}
+
+namespace {
+
+// Nanoseconds one thread-block clock tick is worth. The performance report
+// converts block clocks to microseconds with the same figure.
+constexpr double kNsPerBlockClock = 0.7;
+
+// The step's ops as the launch layout sees them: cost and block cap from the
+// pass above, occupancy and splittability from the op itself.
+std::vector<GridOp> describeGridOps(
+    const std::vector<LaunchData>& launches,
+    const StepVectors& sv) {
+  std::vector<GridOp> ops(launches.size());
+  for (size_t i = 0; i < launches.size(); ++i) {
+    auto* kernelOp = launches[i].launch->op;
+    ops[i].cost = sv.costs[i];
+    ops[i].maxBlocks = sv.maxBlocks[i];
+    ops[i].dynamicShared =
+        kernelOp ? static_cast<int32_t>(kernelOp->dynamicSharedBytes()) : 0;
+    ops[i].alwaysSingleBlock = kernelOp && kernelOp->alwaysSingleBlock();
+    ops[i].hasBarrier = kernelOp && !kernelOp->barrierCounters().empty();
+    ops[i].blocksPerSm = launches[i].launch->blocksPerSm;
+  }
+  return ops;
+}
+
+// WaveConfig::minBlockUs in the cost units the block quantum is expressed in,
+// from the clocks per unit cost this step's previous execution measured. 0
+// when nothing has been measured yet, which leaves the quantum at an even
+// division of the step over one wave.
+float minBlockCost(const StepVectors& sv) {
+  const float targetUs = WaveConfig::get().minBlockUs;
+  if (targetUs <= 0 || sv.clocksPerCost <= 0) {
+    return 0;
+  }
+  const double clocks = targetUs * 1000.0 / kNsPerBlockClock;
+  return static_cast<float>(clocks / sv.clocksPerCost);
+}
+
+// Splits the step into several launches when its single launch is skewed or
+// occupancy-starved enough to be worth the serialization.
+//
+// A step with barrier ops is not refused. opBarrier needs every block of ITS
+// op co-resident, which the packer already guarantees -- a barrier op is never
+// split across launches and no launch is wider than a wave -- and each segment
+// carries its own cooperative flag, exactly as the whole-step launch derives
+// one today. This is the case that matters on the real graph: the cg trim
+// below reduces a step with more ops than a wave has blocks to one block per
+// op, whatever the costs say, and then launches it non-cooperatively anyway.
+PartitionParams partitionParams(const StepVectors& sv) {
+  const auto& config = WaveConfig::get();
+  return PartitionParams{
+      .maxWaves = config.maxLaunchWaves,
+      .skewThreshold = config.launchSkewThreshold,
+      .minBlockCost = minBlockCost(sv),
+      .measuredUtil = sv.measuredUtil,
+      .measuredBlocks = sv.measuredBlocks};
+}
+
+std::optional<LaunchPlan> maybePartition(
+    const std::vector<GridOp>& ops,
+    const GridDevice& device,
+    const StepVectors& sv) {
+  const auto& config = WaveConfig::get();
+  if (config.debugSingleOps) {
+    return std::nullopt;
+  }
+  const auto params = partitionParams(sv);
+  // Sizing every step by quantum needs no skew gate: the question it answers is
+  // how many blocks the work is worth, which does not depend on the step being
+  // skewed. Presized, so a step that packs into one launch still gets the
+  // quantum's counts rather than falling back to the pro-rata ones.
+  if (config.quantumGrid) {
+    const auto want = sizeByQuantum(ops, device, params);
+    return partitionLaunches(ops, device, sv.gridStats, params, &want);
+  }
+  // A step that would launch cooperatively wider than the device holds
+  // co-resident has to be split whatever the skew gate says: the driver
+  // refuses such a launch outright, so leaving it whole is not a slower plan
+  // but a broken one. The one-block-per-op floor alone reaches this on a step
+  // with more ops than a wave has blocks -- the trim in makeGrid cannot go
+  // below one block per op -- which is how a 631-op step came to ask for 631
+  // blocks against a 540-block cooperative capacity.
+  const bool mustSplit =
+      exceedsCooperativeCapacity(ops, sv.numBlocksPerLaunch, device);
+  if (!config.partitionLaunches) {
+    return std::nullopt;
+  }
+  if (!mustSplit && !shouldPartition(sv.gridStats, params)) {
+    return std::nullopt;
+  }
+  return partitionLaunches(ops, device, sv.gridStats, params);
+}
+
+// Turns the laid-out grid into the BlockInfo array the kernel reads. An op
+// split across launches keeps one blockInOp series over the whole step, so a
+// block finds its slice the same way wherever it was launched from.
+void emitGrid(
+    const std::vector<LaunchData>& launches,
+    const LaunchPlan& plan,
+    StepVectors& sv) {
+  sv.blocks.resize(plan.blocks.size());
+  sv.launchIndices.resize(plan.blocks.size());
+  for (size_t b = 0; b < plan.blocks.size(); ++b) {
+    const auto& gridBlock = plan.blocks[b];
+    auto& info = sv.blocks[b];
+    info.op = launches[gridBlock.op].launch->op->opCode();
+    info.blockInOp = gridBlock.blockInOp;
+    info.numBlocksInOp = plan.blocksPerOp[gridBlock.op];
+    info.params = nullptr;
+    sv.launchIndices[b] = gridBlock.op;
+  }
+}
+
+// Prints one line per step under WaveConfig::kGrid: what the block allocator
+// was working with and how balanced the grid came out.
+void traceGrid(int32_t sequenceNumber, int32_t stepIdx, const StepVectors& sv) {
+  const auto& stats = sv.gridStats;
+  std::string text = fmt::format(
+      "  grid {}.{}: ops={} target={} blocks={} cost={:.4g} skew={:.2f} starved={} occ={}/{} poison={:.2f}",
+      sequenceNumber,
+      stepIdx,
+      stats.numOps,
+      stats.targetBlocks,
+      stats.totalBlocks,
+      stats.totalCost,
+      stats.skew,
+      stats.numStarved,
+      stats.occupancy,
+      stats.bestOccupancy,
+      stats.poison);
+  if (sv.segments.size() > 1) {
+    text += fmt::format(" launches={} [", sv.segments.size());
+    for (size_t i = 0; i < sv.segments.size(); ++i) {
+      text += fmt::format(
+          "{}{}b/{}KB",
+          i == 0 ? "" : " ",
+          sv.segments[i].numBlocks,
+          sv.segments[i].dynamicShared / 1024);
+    }
+    text += "]";
+  }
+  std::cout << text << std::endl;
+}
+
+} // namespace
 
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM) {
+    int32_t maxBlocksPerSM,
+    int32_t staticSharedPerBlock,
+    const std::function<int32_t(int32_t)>& occupancyFor) {
   const int32_t blockSize = WaveConfig::get().blockSize;
 
   // Compute cost per launch: numElements * unitCost * costAdjustFactor.
@@ -525,8 +732,25 @@ int32_t makeGrid(
   }
 
   // Target blocks from device SM count and kernel occupancy.
-  int32_t maxBlocks = targetBlockCount(maxBlocksPerSM);
+  const auto budgetDevice =
+      currentGridDevice(maxBlocksPerSM, staticSharedPerBlock, occupancyFor);
+  int32_t maxBlocks = budgetDevice.numSMs *
+      blocksPerSM(budgetDevice, dynamicSharedBytes(launches));
   int32_t targetBlocks = maxBlocks;
+
+  // An op that asked for a width gets no more than numSMs times it.
+  // partitionLaunchPlan caps a launch's capacity the same way, but it declines
+  // to reshape a step that is already a single launch -- which is exactly the
+  // shape a lone op has, and a lone expensive op is the case the preference
+  // exists for -- so the cap has to be applied to the op's block ceiling here
+  // as well, where every path goes through it.
+  for (size_t i = 0; i < launches.size(); ++i) {
+    const int32_t prefer = launches[i].launch->blocksPerSm;
+    if (prefer > 0) {
+      sv.maxBlocks[i] =
+          std::max(1, std::min(sv.maxBlocks[i], budgetDevice.numSMs * prefer));
+    }
+  }
 
   // Assign blocks pro rata by cost, at least 1 per launch, capped by
   // maxBlocks.
@@ -560,6 +784,66 @@ int32_t makeGrid(
     }
     sv.numBlocksPerLaunch[i] = assigned;
     totalAssigned += assigned;
+  }
+
+  // A width is a property of a LAUNCH -- blocks resident per SM -- not of one
+  // op's share of it, so the cap is on the total blocks of the ops that asked
+  // for the same width, not on each one. One opcode can be several launches in
+  // a step: op 107 on the ROO graph is five launches of one KernelOperation,
+  // each well under numSMs times its preference and together well over it.
+  //
+  // Done here rather than only in partitionLaunchPlan because that declines to
+  // reshape a step it would leave as a single launch, which is the common case
+  // for exactly these ops, and its capacity is a packing hint for an ordinary
+  // launch rather than a bound.
+  if (!WaveConfig::get().preferBlocksPerSm.empty()) {
+    std::map<int32_t, int32_t> assignedPerWidth;
+    for (size_t i = 0; i < launches.size(); ++i) {
+      const int32_t prefer = launches[i].launch->blocksPerSm;
+      if (prefer > 0) {
+        assignedPerWidth[prefer] += sv.numBlocksPerLaunch[i];
+      }
+    }
+    for (const auto& [prefer, assigned] : assignedPerWidth) {
+      const int32_t budget = std::max(1, budgetDevice.numSMs * prefer);
+      if (assigned <= budget) {
+        continue;
+      }
+      // Scale the members down together, then trim the largest until the sum
+      // fits: proportional scaling alone cannot land exactly, and rounding up
+      // anywhere would leave the launch wider than was asked for.
+      const float scale = static_cast<float>(budget) / assigned;
+      int32_t sum = 0;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (launches[i].launch->blocksPerSm != prefer) {
+          continue;
+        }
+        auto& blocks = sv.numBlocksPerLaunch[i];
+        totalAssigned -= blocks;
+        blocks = std::max(
+            1, static_cast<int32_t>(static_cast<float>(blocks) * scale));
+        sum += blocks;
+      }
+      while (sum > budget) {
+        int32_t widest = -1;
+        for (size_t i = 0; i < launches.size(); ++i) {
+          if (launches[i].launch->blocksPerSm == prefer &&
+              sv.numBlocksPerLaunch[i] > 1 &&
+              (widest < 0 ||
+               sv.numBlocksPerLaunch[i] > sv.numBlocksPerLaunch[widest])) {
+            widest = static_cast<int32_t>(i);
+          }
+        }
+        if (widest < 0) {
+          // Every member is down to one block; the width cannot be honoured
+          // without dropping an op, so leave it at one apiece.
+          break;
+        }
+        --sv.numBlocksPerLaunch[widest];
+        --sum;
+      }
+      totalAssigned += sum;
+    }
   }
 
   // For cooperative grids, cap total blocks at what the GPU can run
@@ -651,23 +935,32 @@ int32_t makeGrid(
     launches[i].expectedFraction = totalCost > 0 ? sv.costs[i] / totalCost : 0;
   }
 
-  // Fill blocks and launchIndices.
-  sv.blocks.resize(totalAssigned);
-  sv.launchIndices.resize(totalAssigned);
-  int32_t blockIdx = 0;
-  for (size_t i = 0; i < launches.size(); ++i) {
-    auto opCode = launches[i].launch->op->opCode();
-    auto nBlocks = sv.numBlocksPerLaunch[i];
-    for (int32_t b = 0; b < nBlocks; ++b) {
-      auto& info = sv.blocks[blockIdx];
-      info.op = opCode;
-      info.blockInOp = b;
-      info.numBlocksInOp = nBlocks;
-      info.params = nullptr;
-      sv.launchIndices.at(blockIdx) = static_cast<int32_t>(i);
-      ++blockIdx;
+  const auto device =
+      currentGridDevice(maxBlocksPerSM, staticSharedPerBlock, occupancyFor);
+  const auto gridOps = describeGridOps(launches, sv);
+  // Measured on the grid above, i.e. on the single launch the step would run
+  // as today. That is the opportunity the partitioning gate reads, so it must
+  // not describe the split the gate went on to make.
+  sv.gridStats = gridStats(gridOps, sv.numBlocksPerLaunch, device);
+
+  auto plan = maybePartition(gridOps, device, sv);
+  if (plan.has_value()) {
+    sv.numBlocksPerLaunch = plan->blocksPerOp;
+    // With no gate to feed, the reported grid should describe what ran rather
+    // than the pro-rata split that was discarded. util and starved are how the
+    // sizing is judged, so they have to be measured on it.
+    if (WaveConfig::get().quantumGrid) {
+      const auto segments = sv.gridStats.numSegments;
+      sv.gridStats = gridStats(gridOps, sv.numBlocksPerLaunch, device);
+      sv.gridStats.numSegments = segments;
     }
+  } else {
+    plan = singleLaunchPlan(
+        gridOps, sv.numBlocksPerLaunch, WaveConfig::get().orderBlocksByCost);
   }
+  emitGrid(launches, *plan, sv);
+  sv.segments = std::move(plan->segments);
+  sv.gridStats.numSegments = static_cast<int32_t>(sv.segments.size());
   return blockSize;
 }
 
@@ -1230,10 +1523,55 @@ LaunchData::LaunchData(
   } else {
     // Kernel op: translate sizeExpr, inputs, outputs, and output descs.
     auto* kernelOp = launch.op;
-    sizeExpr = kernelOp->sizeExpr().toActual(bindings, idToValue);
 
-    const auto& orderedInputs = kernelOp->orderedInputs();
+    // launch.values stands in for the op's own parameters, position by
+    // position. They are the same for all but one case: the copies that fill a
+    // wide concat's bands all run one kernel op, generated once, and each
+    // launch names the source it reads and the band it writes. Falls back to
+    // the op's own when a launch did not set them.
+    const auto& opInputs = kernelOp->orderedInputs();
+    const auto& orderedInputs =
+        launch.values.size() == opInputs.size() ? launch.values : opInputs;
     auto nInputs = kernelOp->numInputs();
+
+    // The size expression names the op's formals, and every tensor leaf of one
+    // IS an input: makeDeepSizeExpr either walks the elementwise subgraph as
+    // far as its inputs, or lists orderedInputs outright. So it has to be
+    // translated through whatever the inputs were -- the launch's own values
+    // where it set them, not the invocation's bindings alone. The two agree for
+    // every op that is not shared across launches with different parameters,
+    // which is why the bindings sufficed until the concat copies arrived.
+    //
+    // Getting this wrong is silent, not fatal: the formal is a real graph value
+    // with a live frame entry, so the grid comes out sized for whichever
+    // operand the op was GENERATED against. The kernel still copies the right
+    // data -- the device loop runs to the true size -- on a grid that can be
+    // orders of magnitude too small. On the ROO graph it sized 414 copies at
+    // 256 elements against 96.8M actual, one of them 2.87M on a single block.
+    bool perLaunchValues = launch.values.size() == opInputs.size();
+    if (perLaunchValues) {
+      perLaunchValues = false;
+      for (size_t i = 0; i < opInputs.size(); ++i) {
+        if (launch.values[i] != opInputs[i]) {
+          perLaunchValues = true;
+          break;
+        }
+      }
+    }
+    // Built only when a launch actually renamed something: copying the
+    // invocation's bindings for every launch of every op would cost more than
+    // the concat copies it exists for.
+    FormalToActual perLaunchBindings;
+    if (perLaunchValues) {
+      perLaunchBindings = bindings;
+      for (size_t i = 0; i < opInputs.size(); ++i) {
+        perLaunchBindings[opInputs[i]->id()] = translateId(launch.values[i]);
+      }
+    }
+    const FormalToActual& sizeBindings =
+        perLaunchValues ? perLaunchBindings : bindings;
+
+    sizeExpr = kernelOp->sizeExpr().toActual(sizeBindings, idToValue);
     for (int32_t i = 0; i < nInputs; ++i) {
       actualInputs.push_back(translateId(orderedInputs[i]));
     }
@@ -1245,7 +1583,7 @@ LaunchData::LaunchData(
     for (size_t i = 0; i < outputDescs.size(); ++i) {
       const auto& desc = outputDescs[i];
       OutputDesc actualDesc = desc;
-      actualDesc.sizeExpr = desc.sizeExpr.toActual(bindings, idToValue);
+      actualDesc.sizeExpr = desc.sizeExpr.toActual(sizeBindings, idToValue);
       if (desc.viewNode) {
         auto viewIt = op.nodeMap().find(desc.viewNode);
         TORCH_CHECK(
@@ -1310,7 +1648,19 @@ CompositeKernel::CompositeKernel(
       ss << kop->helperCode();
     }
   }
-  ss << "__global__ void " << kernelName << "(TorchWaveParams params) {\n"
+  // An op whose device function is register-hungry would otherwise cost every
+  // other op in this kernel its occupancy, so honor the largest blocks-per-SM
+  // any of them asks for.
+  int32_t minBlocksPerSm = 0;
+  for (const auto& kop : kernelOpStorage_) {
+    minBlocksPerSm = std::max(minBlocksPerSm, kop->minBlocksPerSm());
+  }
+  ss << "__global__ ";
+  if (minBlocksPerSm > 0) {
+    ss << "__launch_bounds__(" << WaveConfig::get().blockSize << ", "
+       << minBlocksPerSm << ") ";
+  }
+  ss << "void " << kernelName << "(TorchWaveParams params) {\n"
      << "  ENTRY;\n";
   eltTrace(
       ss,
@@ -1537,6 +1887,71 @@ CompositeKernel::CompositeKernel(
     }
   }
 
+  // Diagnostic: one single-case kernel per op, queued alongside the composite
+  // below so the two compile concurrently. Each is the composite's preamble
+  // with a switch holding only this op's case, so its register / shared /
+  // local-memory footprint is that op's alone. Nothing launches them for
+  // results; WaveGraph warms them up once at the end of graph construction and
+  // logs their occupancy next to the composite's.
+  if (WaveConfig::get().configPerOp && facebook::velox::wave::currentDevice()) {
+    std::stringstream includeHeader;
+    includeHeader << "#include \"velox/experimental/torchwave/Core.cuh\"\n";
+    for (const auto& inc : includes) {
+      includeHeader << "#include \"" << inc << "\"\n";
+    }
+    auto headerStr = includeHeader.str();
+
+    for (const auto& kop : kernelOpStorage_) {
+      auto opName = kernelName + "_op_" + std::to_string(kop->opCode());
+      auto opEntry = "torch::wave::" + opName;
+      auto opFile = "/tmp/" + opName + ".cu";
+
+      std::stringstream os;
+      os << headerStr << "\nnamespace torch::wave {\n\n";
+      if (!kop->helperCode().empty()) {
+        os << kop->helperCode();
+      }
+      os << "__global__ void " << opName << "(TorchWaveParams params) {\n"
+         << "  ENTRY;\n";
+      for (const auto& decl : kop->sharedDeclarations()) {
+        os << decl;
+      }
+      os << "  switch (blockInfo.op) {\n"
+         << "    case " << kop->opCode() << ": {\n"
+         << kop->code() << "      break;\n"
+         << "    }\n"
+         << "  }\n"
+         << "  LEAVE();\n"
+         << "}\n\n"
+         << "} // namespace torch::wave\n";
+      auto opText = os.str();
+      {
+        std::ofstream out(opFile);
+        out << opText;
+      }
+
+      PerOpKernel perOp;
+      perOp.opCode = kop->opCode();
+      perOp.entryPoint = opEntry;
+      // Deliberately not the KernelFsCache: these are throwaway diagnostics and
+      // must not compete with the composite for the on-disk cache.
+      perOp.kernel = facebook::velox::wave::CompiledKernel::getKernel(
+          opText,
+          [code = opText,
+           opEntry,
+           opFile]() -> facebook::velox::wave::KernelSpec {
+            facebook::velox::wave::KernelSpec spec;
+            spec.code = code;
+            spec.entryPoints = {opEntry};
+            spec.filePath = opFile;
+            spec.numHeaders = 0;
+            spec.headers = nullptr;
+            return spec;
+          });
+      perOpKernels_.push_back(std::move(perOp));
+    }
+  }
+
   // Only compile the kernel if a GPU is available. The one-time
   // NVRTC/system-header initialization (CompiledKernel::initialize()) is run
   // eagerly on the main thread by torch::wave::initialize() before any kernel
@@ -1581,11 +1996,45 @@ void CompositeKernel::warmup() {
   stream.wait();
 }
 
+std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+CompositeKernel::perOpKernelInfo() {
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>> result;
+  result.reserve(perOpKernels_.size());
+  for (auto& perOp : perOpKernels_) {
+    if (!perOp.kernel) {
+      continue;
+    }
+    // The launch is the sync point with the queued compile, exactly as
+    // warmup() is for the composite. blockInfo.op is kDebugNoOp, which matches
+    // no case, so the body does nothing.
+    TorchWaveParams params{};
+    memset(&params, 0, sizeof(params));
+    params.info = nullptr;
+    params.debugInfo = nullptr;
+    params.inlineInfo[0].op = kDebugNoOp;
+    void* args[] = {&params};
+    facebook::velox::wave::Stream stream;
+    perOp.kernel->launch(0, 1, 1, 0, &stream, args);
+    stream.wait();
+    result.emplace_back(perOp.entryPoint, perOp.kernel->info(0));
+  }
+  return result;
+}
+
 facebook::velox::wave::KernelInfo CompositeKernel::kernelInfo() const {
   if (kernel_) {
     return kernel_->info(0);
   }
   return {};
+}
+
+int32_t CompositeKernel::occupancy(
+    int32_t numThreads,
+    int32_t dynamicSharedBytes) const {
+  if (!kernel_) {
+    return 0;
+  }
+  return kernel_->occupancy(0, numThreads, dynamicSharedBytes);
 }
 
 void CompositeKernel::launch(
@@ -2624,9 +3073,24 @@ void CompositeInvocation::layoutParamSlots(int32_t stepIdx, StepVectors& sv) {
   // (the per-launch cap, the round-down to whole blockSize chunks) and the
   // rebalancing pass conserves the total. So the sum cannot exceed
   // targetBlocks plus 1.5 per launch; take 2 per launch.
+  //
+  // Partitioning a step deliberately emits more than one wave -- that is the
+  // point of it -- so the reservation grows by the same cap the packer bounds
+  // itself with. Without the flag the figure is exactly what it always was.
   const auto numSlots = static_cast<int32_t>(sv.slotOffsets.size());
-  sv.blockCapacity =
-      2 * numSlots + targetBlockCount(kernel_->kernelInfo().maxOccupancy0);
+  const int32_t waves = WaveConfig::get().partitionLaunches
+      ? std::max(1, WaveConfig::get().maxLaunchWaves)
+      : 1;
+  sv.blockCapacity = 2 * numSlots +
+      waves *
+          targetBlockCount(
+              kernel_->kernelInfo().maxOccupancy0,
+              // A bound, so skip the shared-memory reduction: it only ever
+              // lowers the count makeGrid will actually use, and a step's
+              // dynamic shared-memory need is not known until its launches are
+              // gathered.
+              /*dynSharedPerBlock=*/0,
+              /*staticSharedPerBlock=*/0);
 }
 
 bool CompositeInvocation::chooseGridVariant(
@@ -3146,14 +3610,45 @@ void verifyAgainstReference(
     return state.waveGraph != nullptr &&
         state.waveGraph->isElidedCloneInput(id);
   };
+  // An output no node reads is never written by anyone: the op declares it
+  // because the eager schema has it (an exported graph names these
+  // '<op>_unused_N'), but nothing consumes the data so no kernel fills it. Its
+  // buffer holds whatever the allocator last left there, so comparing it tests
+  // allocation history rather than correctness -- it passes or fails depending
+  // on which buffer the value happened to get. Only ever skips values with no
+  // users at all; a graph output has the output node as a user, and a stale
+  // user entry keeps the value compared, so this cannot hide a real reader.
+  auto hasNoReader = [&](nativert::ValueId id) {
+    if (state.waveGraph == nullptr) {
+      return false;
+    }
+    const auto& idToValue = state.waveGraph->idToValue();
+    auto it = idToValue.find(id);
+    return it != idToValue.end() && it->second != nullptr &&
+        it->second->users().empty();
+  };
   int32_t numMismatches = 0;
   std::string passedIds;
+  // Which values failed, not just which passed: the detail goes to LOG(ERROR),
+  // and a host that drops glog output leaves the message that does come out
+  // naming everything except the thing that went wrong.
+  std::string failedIds;
+  // The first difference of the first failure, which otherwise only exists in
+  // the LOG(ERROR) below. A host that drops glog output is left with a message
+  // that names the value and says nothing about how it is wrong.
+  std::string firstFailure;
+  auto addFailed = [&failedIds](nativert::ValueId actualId) {
+    if (!failedIds.empty()) {
+      failedIds += " ";
+    }
+    failedIds += "%" + std::to_string(actualId);
+  };
   int32_t numPassed = 0;
   for (const auto& data : launches) {
     bool nodeChecked = false;
     for (size_t oi = 0; oi < data.actualOutputs.size(); ++oi) {
       auto actualId = data.actualOutputs[oi];
-      if (isElidedCloneInput(actualId)) {
+      if (isElidedCloneInput(actualId) || hasNoReader(actualId)) {
         continue;
       }
       auto refIt = ref->find(actualId);
@@ -3197,6 +3692,7 @@ void verifyAgainstReference(
             data.actualOutputDescs[oi].shapeOnly;
         if (!isShapeOnly) {
           ++numMismatches;
+          addFailed(actualId);
           LOG(ERROR) << "Value %" << actualId
                      << " is a meta tensor (no data) but is not a shape-only "
                         "output; cannot verify (unexpected materialization).";
@@ -3209,6 +3705,11 @@ void verifyAgainstReference(
       nodeChecked = true;
       if (!tensorsMatch(actualTensor, refTensor)) {
         ++numMismatches;
+        addFailed(actualId);
+        if (firstFailure.empty()) {
+          firstFailure = fmt::format(
+              "%{}: {}", actualId, firstDifference(actualTensor, refTensor));
+        }
         auto limit = WaveConfig::get().tensorPrintElementLimit;
         LOG(ERROR) << "Reference mismatch for value %" << actualId << "\n  "
                    << firstDifference(actualTensor, refTensor)
@@ -3308,11 +3809,13 @@ void verifyAgainstReference(
   }
   if (numMismatches > 0 || numCorrupted > 0) {
     auto msg = fmt::format(
-        "{} reference mismatches, {} corrupted, {} passed ({})",
+        "{} reference mismatches ({}), {} corrupted, {} passed ({})\n  first: {}",
         numMismatches,
+        failedIds,
         numCorrupted,
         numPassed,
-        passedIds);
+        passedIds,
+        firstFailure);
     if (WaveConfig::get().continueAfterMismatch) {
       LOG(ERROR) << msg;
     } else {
@@ -4064,8 +4567,13 @@ void CompositeInvocation::execute(ExecutionState& state) {
       if (gridSizesMatch(sv.kernels, sv)) {
         blockSize = sv.cachedBlockSize;
       } else {
-        blockSize =
-            makeGrid(sv.kernels, sv, kernel_->kernelInfo().maxOccupancy0);
+        const auto kernelInfo = kernel_->kernelInfo();
+        blockSize = makeGrid(
+            sv.kernels,
+            sv,
+            kernelInfo.maxOccupancy0,
+            kernelInfo.sharedMemory,
+            occupancyQuery(kernel_.get()));
         TORCH_CHECK(
             (blockSize & (blockSize - 1)) == 0,
             "Block size must be a power of two, got ",
@@ -4075,6 +4583,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
       }
       if (doTiming) {
         sv.gridUs = elapsed(t0);
+      }
+      if (WaveConfig::get().trace & WaveConfig::kGrid) {
+        traceGrid(sequenceNumber_, stepIdx, sv);
       }
     }
 
@@ -4374,13 +4885,13 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
   auto& gridChoices = sv0.gridChoices;
   gridChoices.clear();
   for (auto& op : ops_) {
-    // Fixed at the cooperative grid, not the multi-block default that
-    // gatherLaunches would switch away from. An op with no cooperative variant
-    // keeps its own grid; the plan was built from the same choice, so the two
-    // agree.
-    auto& cg = op.projectOp()->cgGrid();
+    // Fixed at whichever grid the plan indexes, not the multi-block default
+    // that gatherLaunches would switch away from. allocGroupGrid is the same
+    // function the plan was built from, so the two agree by construction --
+    // under the cooperative grid and the multi-kernel one alike.
+    auto& grid = allocGroupGrid(op);
     gridChoices.push_back(
-        {0, false, cg.empty() ? &op.projectOp()->grid() : &cg});
+        {0, &grid == &op.projectOp()->singleBlockGrid(), &grid});
   }
 
   // A lifetime crosses nodes: the node that allocates a value is rarely the one
@@ -4400,6 +4911,16 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
         "graph-wide plan was built from");
   }
   const auto& plan = *allocGroupPlan_;
+
+  // The plan is settled while the graph compiles, but tracing is usually turned
+  // on around a later run, so the report is rendered there and printed here --
+  // once, by whichever node executes first with the bit set.
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) != 0 &&
+      !state.waveGraph->allocGroupReport().empty() &&
+      state.waveGraph->takeAllocGroupReportUnprinted()) {
+    std::cout << state.waveGraph->concatCarveReport()
+              << state.waveGraph->allocGroupReport();
+  }
 
   using Clock = std::chrono::high_resolution_clock;
   const bool doTiming = WaveConfig::get().printTiming ||
@@ -4501,10 +5022,19 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
     // yet. After the deferred pass the step's sizing is over, so what is still
     // unsized never will be -- the plan proposed a member the sizing path
     // allocates some other way -- and the group is carved without it.
+    //
+    // needsSync is asked separately, because being sized is not the same as
+    // being right. A concat group measures every operand, carved or not, and an
+    // operand the device sizes reads back as whatever the frame last held until
+    // the transfer lands -- so the layout comes out of stale extents. Having no
+    // members at all does not exempt it: a group that carves nothing still owns
+    // the result and lays every band out, and 'complete' over an empty member
+    // list is vacuously true, which is exactly the group that must wait.
     auto materializeReady = [&](bool afterWait) {
       for (size_t g = 0; g < collector.numGroups(); ++g) {
         if (collector.materialized(g) ||
-            (!afterWait && !collector.complete(g))) {
+            (!afterWait &&
+             (!collector.complete(g) || collector.needsSync(g)))) {
           continue;
         }
         // A concat group is laid out by the shape of the result rather than by
@@ -4767,8 +5297,12 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
       if (gridSizesMatch(sv.kernels, sv)) {
         blockSize = sv.cachedBlockSize;
       } else {
-        blockSize =
-            makeGrid(sv.kernels, sv, kernel_->kernelInfo().maxOccupancy0);
+        blockSize = makeGrid(
+            sv.kernels,
+            sv,
+            kernel_->kernelInfo().maxOccupancy0,
+            /*staticSharedPerBlock=*/0,
+            occupancyQuery(kernel_.get()));
         TORCH_CHECK(
             (blockSize & (blockSize - 1)) == 0,
             "Block size must be a power of two, got ",
@@ -4778,6 +5312,9 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
       }
       if (doTiming) {
         sv.gridUs = elapsed(t0);
+      }
+      if (WaveConfig::get().trace & WaveConfig::kGrid) {
+        traceGrid(sequenceNumber_, stepIdx, sv);
       }
     }
 
@@ -4992,6 +5529,12 @@ void CompositeInvocation::launch(
   params.debugInfo = deviceDebugBase;
   void* args[] = {&params};
 
+  // Ops declare their extern __shared__ needs through
+  // Metadata::dynamicSharedMemory; the ops of a step share one launch, so the
+  // launch takes the max. Steps with no such op launch with zero and keep the
+  // occupancy they would have had.
+  const int32_t dynShared = dynamicSharedBytes(sv.kernels);
+
   // opBarrier (Core.cuh) is a counter spin-wait that blocks until numBlocksInOp
   // blocks have arrived, so it needs those blocks co-resident -- which only a
   // cooperative launch guarantees. A barrier op assigned a single block passes
@@ -5019,6 +5562,43 @@ void CompositeInvocation::launch(
   auto* pinnedBlocks =
       reinterpret_cast<BlockInfo*>(pinnedBase + sv.blockInfoOffset);
 
+  // Ordinarily one launch over every block of the step. A step the packer
+  // split runs its launches back to back on the same stream, each over its own
+  // slice of the block array and with only the shared memory its own ops need
+  // -- which is where the occupancy a split buys actually lands.
+  std::vector<LaunchSegment> wholeStep;
+  if (sv.segments.empty()) {
+    wholeStep.push_back(
+        {.firstBlock = 0,
+         .numBlocks = numBlocks,
+         .dynamicShared = dynShared,
+         .cooperative = cooperative});
+  }
+  const auto& segments = sv.segments.empty() ? wholeStep : sv.segments;
+  auto* deviceBlocks =
+      reinterpret_cast<BlockInfo*>(deviceBase + sv.blockInfoOffset);
+  auto launchSegment = [&](const LaunchSegment& segment) {
+    params.info = deviceBlocks + segment.firstBlock;
+    // ENTRY reads the block's DebugInfo at blockIdx.x of whatever base it is
+    // handed, so the base has to move with the segment; otherwise every launch
+    // would overwrite the first one's per-block timings.
+    params.debugInfo = deviceDebugBase != nullptr
+        ? deviceDebugBase + segment.firstBlock
+        : nullptr;
+    // A step that was not split keeps deciding this here, from the block
+    // counts as they stand at launch time rather than as makeGrid left them.
+    // The two agree, but this one cannot go stale behind a reused grid.
+    const bool launchCooperative =
+        segments.size() > 1 ? segment.cooperative : cooperative;
+    if (launchCooperative) {
+      kernel_->launchCooperative(
+          segment.numBlocks, blockSize, segment.dynamicShared, stream, args);
+    } else {
+      kernel_->launch(
+          segment.numBlocks, blockSize, segment.dynamicShared, stream, args);
+    }
+  };
+
   if (WaveConfig::get().debugSingleOps) {
     std::vector<int32_t> originalOps(numBlocks);
     for (int32_t b = 0; b < numBlocks; ++b) {
@@ -5029,98 +5609,119 @@ void CompositeInvocation::launch(
     stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
     stream->wait();
 
-    auto* deviceBlocks =
-        reinterpret_cast<BlockInfo*>(deviceBase + sv.blockInfoOffset);
+    // One op at a time, inside one launch at a time. maybePartition declines to
+    // partition under this flag, but a step whose grid was laid out by the
+    // normal pass keeps that pass's segments, and a step split because it
+    // exceeded the cooperative capacity must be walked segment by segment:
+    // launching its whole block array as one cooperative grid is wider than the
+    // device holds co-resident, and fails here alone.
+    for (const auto& segment : segments) {
+      // Per launch, not per step: an op with blocks in two launches has to run
+      // in both. Hoisting this out of the loop would silently drop its second
+      // half and leave the output partly written.
+      folly::F14FastSet<uintptr_t> launched;
+      const int32_t segFirst = segment.firstBlock;
+      const int32_t segEnd = segment.firstBlock + segment.numBlocks;
+      params.info = deviceBlocks + segFirst;
+      params.debugInfo =
+          deviceDebugBase != nullptr ? deviceDebugBase + segFirst : nullptr;
+      for (int32_t active = segFirst; active < segEnd; ++active) {
+        // launchIndices has one entry per block; guard the access so a short
+        // vector fails loudly instead of reading out of bounds.
+        TORCH_CHECK(active < static_cast<int32_t>(sv.launchIndices.size()));
+        auto launchIdx = sv.launchIndices[active];
+        // A barrier op needs cooperative grouping only when it spans more than
+        // one block (see 'cooperative' above): opBarrier waits for
+        // numBlocksInOp arrivals, which is immediate for a single-block op.
+        bool hasBarriers =
+            launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
+            sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op &&
+            !sv.kernels[launchIdx].launch->op->barrierCounters().empty() &&
+            launchIdx < static_cast<int32_t>(sv.numBlocksPerLaunch.size()) &&
+            sv.numBlocksPerLaunch[launchIdx] > 1;
 
-    // Run blocks individually or grouped. Ops with barrierCounters need all
-    // blocks of the same project op launched together with cooperative launch.
-    folly::F14FastSet<uintptr_t> launched;
-    for (int32_t active = 0; active < numBlocks; ++active) {
-      // launchIndices has one entry per block; guard the access so a short
-      // vector fails loudly instead of reading out of bounds.
-      TORCH_CHECK(active < static_cast<int32_t>(sv.launchIndices.size()));
-      auto launchIdx = sv.launchIndices[active];
-      // A barrier op needs cooperative grouping only when it spans more than
-      // one block (see 'cooperative' above): opBarrier waits for numBlocksInOp
-      // arrivals, which is immediate for a single-block op.
-      bool hasBarriers = launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
-          sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op &&
-          !sv.kernels[launchIdx].launch->op->barrierCounters().empty() &&
-          launchIdx < static_cast<int32_t>(sv.numBlocksPerLaunch.size()) &&
-          sv.numBlocksPerLaunch[launchIdx] > 1;
+        // Only a barrier op has to move as a unit. Everything else advances one
+        // block per launch, which is what makes a failure land on a block
+        // rather than on an op. A cg step still launches cooperatively -- the
+        // kernel was compiled that way -- it just runs with one live block.
+        bool groupAll = hasBarriers;
 
-      // Under a cooperative grid the whole step is compiled as one cooperative
-      // kernel whose cross-block barriers require every block of an op to be
-      // co-resident and launched cooperatively. Single-stepping a subset of an
-      // op's blocks, or launching that kernel via the regular (non-cooperative)
-      // path, faults with an illegal memory access. So when the step needs a
-      // cooperative launch, treat every op like a barrier op: activate all of
-      // its blocks and launch cooperatively, mirroring the non-debug path
-      // below.
-      bool groupAndCooperative = hasBarriers || cooperative;
+        // Quiet this launch's blocks; the rest are not in the grid.
+        setOpCodes(
+            deviceBlocks, segFirst, segment.numBlocks, kDebugNoOp, stream);
 
-      // Set all opcodes to kDebugNoOp on device.
-      setOpCodes(deviceBlocks, 0, numBlocks, kDebugNoOp, stream);
-
-      if (groupAndCooperative) {
-        auto* inv = sv.kernels.at(launchIdx).invocation;
-        if (!launched.insert(reinterpret_cast<intptr_t>(inv)).second) {
-          continue;
-        }
-        // Activate all blocks belonging to the same project op.
-        for (int32_t b = 0; b < numBlocks; ++b) {
-          auto bIdx = sv.launchIndices[b];
-          bool sameOp = bIdx < static_cast<int32_t>(sv.kernels.size()) &&
-              sv.kernels[bIdx].invocation == inv;
-          if (sameOp) {
-            setOpCodes(deviceBlocks, b, 1, originalOps[b], stream);
+        if (groupAll) {
+          auto* inv = sv.kernels.at(launchIdx).invocation;
+          if (!launched.insert(reinterpret_cast<intptr_t>(inv)).second) {
+            continue;
           }
+          // Activate the op's blocks inside this launch. A barrier op is never
+          // split across launches, so this reaches all of them.
+          for (int32_t b = segFirst; b < segEnd; ++b) {
+            auto bIdx = sv.launchIndices[b];
+            bool sameOp = bIdx < static_cast<int32_t>(sv.kernels.size()) &&
+                sv.kernels[bIdx].invocation == inv;
+            if (sameOp) {
+              setOpCodes(deviceBlocks, b, 1, originalOps[b], stream);
+            }
+          }
+        } else {
+          setOpCodes(deviceBlocks, active, 1, originalOps[active], stream);
         }
-      } else {
-        setOpCodes(deviceBlocks, active, 1, originalOps[active], stream);
-      }
 
-      // Reset barrier counters on device for the active op. Ops without
-      // barriers have an empty barrierCounters(), so this loop is a no-op for
-      // them even when it runs under a cooperative grid.
-      if (groupAndCooperative) {
-        for (size_t li = 0; li < sv.kernels.size(); ++li) {
-          if (sv.kernels[li].invocation == sv.kernels[launchIdx].invocation) {
-            auto* kernelOp = sv.kernels[li].launch->op;
-            for (auto offset : kernelOp->barrierCounters()) {
-              int32_t zero = 0;
-              auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
-              stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+        // Reset barrier counters on device for the active op. Ops without
+        // barriers have an empty barrierCounters(), so this loop is a no-op for
+        // them even when it runs under a cooperative grid.
+        if (groupAll) {
+          for (size_t li = 0; li < sv.kernels.size(); ++li) {
+            if (sv.kernels[li].invocation == sv.kernels[launchIdx].invocation) {
+              auto* kernelOp = sv.kernels[li].launch->op;
+              for (auto offset : kernelOp->barrierCounters()) {
+                int32_t zero = 0;
+                auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
+                stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+              }
             }
           }
         }
-      }
 
-      try {
-        if (groupAndCooperative) {
-          kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
-        } else {
-          kernel_->launch(numBlocks, blockSize, 0, stream, args);
+        try {
+          if (groupAll || segment.cooperative) {
+            kernel_->launchCooperative(
+                segment.numBlocks,
+                blockSize,
+                segment.dynamicShared,
+                stream,
+                args);
+          } else {
+            kernel_->launch(
+                segment.numBlocks,
+                blockSize,
+                segment.dynamicShared,
+                stream,
+                args);
+          }
+          stream->wait();
+        } catch (const std::exception& e) {
+          auto opCode = originalOps[active];
+          std::string opText;
+          std::string paramText;
+          if (launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
+              sv.kernels[launchIdx].launch &&
+              sv.kernels[launchIdx].launch->op) {
+            auto* kernelOp = sv.kernels[launchIdx].launch->op;
+            opText = kernelOp->toString(sv.kernels[launchIdx].invocation);
+            auto* opParams = pinnedBase + sv.paramOffsets.at(launchIdx);
+            paramText = dumpOpParams(
+                *kernelOp, opParams, sv.kernels[launchIdx].invocation);
+          }
+          LOG(ERROR) << "debug_single_ops: block " << active << " opCode "
+                     << opCode << " blockInOp "
+                     << pinnedBlocks[active].blockInOp << " stepIdx " << stepIdx
+                     << " op: " << opText << "\nparams:\n"
+                     << paramText << "error: " << e.what();
+          throw;
         }
-        stream->wait();
-      } catch (const std::exception& e) {
-        auto opCode = originalOps[active];
-        std::string opText;
-        std::string paramText;
-        if (launchIdx < static_cast<int32_t>(sv.kernels.size()) &&
-            sv.kernels[launchIdx].launch && sv.kernels[launchIdx].launch->op) {
-          auto* kernelOp = sv.kernels[launchIdx].launch->op;
-          opText = kernelOp->toString(sv.kernels[launchIdx].invocation);
-          auto* opParams = pinnedBase + sv.paramOffsets.at(launchIdx);
-          paramText = dumpOpParams(
-              *kernelOp, opParams, sv.kernels[launchIdx].invocation);
-        }
-        LOG(ERROR) << "debug_single_ops: block " << active << " opCode "
-                   << opCode << " blockInOp " << pinnedBlocks[active].blockInOp
-                   << " stepIdx " << stepIdx << " op: " << opText
-                   << "\nparams:\n"
-                   << paramText << "error: " << e.what();
-        throw;
       }
     }
 
@@ -5143,10 +5744,8 @@ void CompositeInvocation::launch(
     }
   } else {
     stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
-    if (cooperative) {
-      kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
-    } else {
-      kernel_->launch(numBlocks, blockSize, 0, stream, args);
+    for (const auto& segment : segments) {
+      launchSegment(segment);
     }
     if (returnBegin >= 0) {
       stream->deviceToHostAsync(

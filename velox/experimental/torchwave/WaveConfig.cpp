@@ -16,9 +16,11 @@
 
 #include "velox/experimental/torchwave/WaveConfig.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace torch::wave {
@@ -37,6 +39,11 @@ std::string WaveConfig::toString() const {
     }
   };
   auto addInt = [&](const char* name, auto WaveConfig::* field) {
+    if (this->*field != kDefaults.*field) {
+      parts.push_back(std::string(name) + "=" + std::to_string(this->*field));
+    }
+  };
+  auto addFloat = [&](const char* name, float WaveConfig::* field) {
     if (this->*field != kDefaults.*field) {
       parts.push_back(std::string(name) + "=" + std::to_string(this->*field));
     }
@@ -88,6 +95,10 @@ std::string WaveConfig::toString() const {
   addBool("inputContiguous", &WaveConfig::inputContiguous);
   addBool("cseCompute", &WaveConfig::cseCompute);
   addBool("cseViews", &WaveConfig::cseViews);
+  addBool("decomposeLists", &WaveConfig::decomposeLists);
+  addBool("metadataGetterStandalone", &WaveConfig::metadataGetterStandalone);
+  addBool("concatOperandsInPlace", &WaveConfig::concatOperandsInPlace);
+  addBool("foldSharedChains", &WaveConfig::foldSharedChains);
   addBool("mkSelect", &WaveConfig::mkSelect);
   addBool("stepLastUse", &WaveConfig::stepLastUse);
   addBool("syncEachStep", &WaveConfig::syncEachStep);
@@ -95,11 +106,33 @@ std::string WaveConfig::toString() const {
   addBool("runAhead", &WaveConfig::runAhead);
   addInt("maxDelayedFree", &WaveConfig::maxDelayedFree);
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
+  addBool("configPerOp", &WaveConfig::configPerOp);
+  addBool("deferSizeOutputs", &WaveConfig::deferSizeOutputs);
   addBool("donateBuffers", &WaveConfig::donateBuffers);
   addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
   addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
   addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
-  addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
+  addBool("enableLifetimeAllocGroup", &WaveConfig::enableLifetimeAllocGroup);
+  addBool("orderBlocksByCost", &WaveConfig::orderBlocksByCost);
+  addBool("partitionLaunches", &WaveConfig::partitionLaunches);
+  addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);
+  addFloat("launchSkewThreshold", &WaveConfig::launchSkewThreshold);
+  addFloat("minBlockUs", &WaveConfig::minBlockUs);
+  addBool("singlePassSelect", &WaveConfig::singlePassSelect);
+  addBool("singlePass", &WaveConfig::singlePass);
+  if (!preferBlocksPerSm.empty()) {
+    std::vector<std::pair<int32_t, int32_t>> entries(
+        preferBlocksPerSm.begin(), preferBlocksPerSm.end());
+    std::sort(entries.begin(), entries.end());
+    std::string joined;
+    for (const auto& [opCode, blocks] : entries) {
+      if (!joined.empty()) {
+        joined += ",";
+      }
+      joined += std::to_string(opCode) + "=" + std::to_string(blocks);
+    }
+    parts.push_back("preferBlocksPerSm=" + joined);
+  }
 
   if (parts.empty()) {
     return "defaults";

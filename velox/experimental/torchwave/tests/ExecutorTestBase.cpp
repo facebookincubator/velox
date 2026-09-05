@@ -163,7 +163,7 @@ DEFINE_bool(
     "With --enable_reuse, run the pre-partition read-only clone elision pass");
 DEFINE_bool(
     free_intermediates,
-    false,
+    true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
 DEFINE_bool(
     step_last_use,
@@ -175,7 +175,7 @@ DEFINE_bool(
     "Drain both streams at the end of every step, so freed buffers are back in the allocator before the next step allocates (serializes the pipeline; for measuring peak memory)");
 DEFINE_bool(
     defer_d2h,
-    false,
+    true,
     "Do not wait for a step's device-to-host transfer at the step that issues it; parse its pinned buffer at the first later step that reads one of the returned values");
 DEFINE_bool(
     run_ahead,
@@ -198,6 +198,14 @@ DEFINE_bool(
     false,
     "Rematerialize each multiply-used sym_size / sym_numel at its use sites before partitioning, so it stops being a top-level output of a ProjectNode");
 DEFINE_bool(
+    config_per_op,
+    false,
+    "Alongside each composite kernel, compile one single-op kernel per op it "
+    "contains (<composite>_op_<opCode>) and log its register / shared / local "
+    "memory and occupancy after graph construction. Diagnostic only: the "
+    "per-op kernels are never launched for results, they resolve the occupancy "
+    "numbers to a single op instead of the fused whole");
+DEFINE_bool(
     input_contiguous,
     false,
     "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
@@ -209,6 +217,35 @@ DEFINE_bool(
     cse_views,
     false,
     "Before partitioning, merge view nodes that produce the same value from the same operands");
+DEFINE_bool(
+    decompose_lists,
+    true,
+    "Before partitioning, split a list-producing op into one node per tensor so each column is costed and given blocks on its own, and fold chains of them where the op supports it");
+DEFINE_bool(
+    metadata_getter_standalone,
+    true,
+    "Run a lone aten.sym_size/sym_numel as a host-side shortcut standalone rather than a fused kernel op that spends a whole block reading one field");
+DEFINE_bool(
+    concat_operands_in_place,
+    true,
+    "Leave a concat operand whose producer can write its band to be fused into the concat's own kernel, instead of pushing it into its own kernel a step earlier and copying it in");
+DEFINE_bool(
+    defer_size_outputs,
+    false,
+    "EXPERIMENT, not correct yet. Stop counting a returned sym_size / sym_numel as a use of its operand when the partitioner builds its levels, so the operand does not become a CSE border on the getter's account. Measures what removing those borders is worth; the getter can end up reading a tensor that was fused away");
+DEFINE_string(
+    prefer_per_sm,
+    "",
+    "Preferred blocks per SM for individual kernel ops, as a comma-separated "
+    "list of <opcode>=<blocks>, e.g. \"30=1,300=3\". A trailing comma is "
+    "allowed and empty entries are skipped. An op with a preference is packed "
+    "only with ops that share it, and its launch is capped at numSMs times the "
+    "preference. Opcodes are the op numbers the --trace=16 legend prints");
+
+DEFINE_bool(
+    fold_shared_chains,
+    true,
+    "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
 DEFINE_bool(
     mk_select,
     false,
@@ -226,9 +263,37 @@ DEFINE_bool(
     true,
     "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
 DEFINE_bool(
-    parallel_concat_fill,
+    order_blocks_by_cost,
     false,
-    "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
+    "Emit a step's blocks in descending projected latency instead of in op order, so the ops expected to run longest start first and the cheap ones backfill SMs as those retire");
+DEFINE_bool(
+    partition_launches,
+    true,
+    "Split a badly balanced or occupancy-starved step into several kernel launches, each packed to about one wave at the occupancy its own ops allow");
+DEFINE_int32(
+    max_launch_waves,
+    3,
+    "Most launches --partition_launches may split one step into, and the multiple of one wave the block array is reserved for");
+DEFINE_double(
+    launch_skew_threshold,
+    1.3,
+    "Step makespan over that of a perfectly balanced, fully occupied one, at and above which --partition_launches splits a step");
+DEFINE_double(
+    min_block_us,
+    100.0,
+    "GPU microseconds a block should be worth before --partition_launches opens one, converted to cost units with the thread-block clocks the step's previous execution measured");
+DEFINE_bool(
+    quantum_grid,
+    false,
+    "Size a step's blocks against a per-block work quantum and round the total up to whole waves, instead of handing out one wave's worth pro rata and trimming");
+DEFINE_bool(
+    tw_single_pass,
+    false,
+    "Register one decoupled look-back implementation of cumsum, exclusive sum and masked_select instead of the single-block, multi-kernel and cooperative-grid variants");
+DEFINE_bool(
+    tw_single_pass_select,
+    false,
+    "Expand fb.masked_select_jagged to its single-pass look-back form instead of the barrier-based cooperative-grid one. Only has an effect in cooperative-grid mode");
 
 namespace torch::wave {
 
@@ -614,6 +679,46 @@ std::unique_ptr<ModelContext> ModelFixture::makeModelContext() {
 
 // --- ExecutorTestBase ---
 
+namespace {
+
+// Parses --prefer_per_sm: a comma-separated list of <opcode>=<blocks>. A
+// trailing comma and empty entries are tolerated so a list can be built up by
+// appending. Throws on anything else rather than silently ignoring it -- a
+// typo here is a measurement that quietly did not happen.
+std::unordered_map<int32_t, int32_t> parsePreferPerSm(const std::string& spec) {
+  std::unordered_map<int32_t, int32_t> result;
+  size_t pos = 0;
+  while (pos < spec.size()) {
+    const size_t comma = spec.find(',', pos);
+    const std::string entry =
+        spec.substr(pos, comma == std::string::npos ? comma : comma - pos);
+    pos = comma == std::string::npos ? spec.size() : comma + 1;
+    if (entry.empty()) {
+      continue;
+    }
+    const size_t eq = entry.find('=');
+    TORCH_CHECK(
+        eq != std::string::npos && eq > 0 && eq + 1 < entry.size(),
+        "--prefer_per_sm entry '",
+        entry,
+        "' is not <opcode>=<blocks>");
+    const int32_t opCode = std::stoi(entry.substr(0, eq));
+    const int32_t blocks = std::stoi(entry.substr(eq + 1));
+    TORCH_CHECK(
+        blocks > 0,
+        "--prefer_per_sm entry '",
+        entry,
+        "' asks for ",
+        blocks,
+        " blocks per SM; the value is a width, and 0 means unspecified, so it "
+        "must be at least 1");
+    result[opCode] = blocks;
+  }
+  return result;
+}
+
+} // namespace
+
 void ExecutorTestBase::SetUpTestSuite() {
   // Diagnostic: print device properties and test basic CUDA ops.
   LOG(INFO) << "CUDA device count: " << at::cuda::device_count();
@@ -673,17 +778,33 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().runAhead = FLAGS_run_ahead;
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
+  WaveConfig::get().configPerOp = FLAGS_config_per_op;
+  WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
+  WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
+  WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
+  WaveConfig::get().concatOperandsInPlace = FLAGS_concat_operands_in_place;
+  WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
+  WaveConfig::get().preferBlocksPerSm = parsePreferPerSm(FLAGS_prefer_per_sm);
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
   WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
   WaveConfig::get().enableLifetimeAllocGroup =
       FLAGS_enable_lifetime_alloc_group;
-  WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
+  WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
+  WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
+  WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
+  WaveConfig::get().launchSkewThreshold =
+      static_cast<float>(FLAGS_launch_skew_threshold);
+  WaveConfig::get().minBlockUs = static_cast<float>(FLAGS_min_block_us);
+  WaveConfig::get().quantumGrid = FLAGS_quantum_grid;
+  // Read by registerBuiltins(), which initialize() calls below.
+  WaveConfig::get().singlePass = FLAGS_tw_single_pass;
+  WaveConfig::get().singlePassSelect = FLAGS_tw_single_pass_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -1057,16 +1178,19 @@ ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
   };
 }
 
-AllocGroupStats ExecutorTestBase::allocGroupStats(const std::string& pt2File) {
+AllocGroupStats ExecutorTestBase::allocGroupStats(
+    const std::string& pt2File,
+    bool cg) {
   auto baseDir = dataDir();
   auto pt2Path =
       pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
   auto fixture = ModelFixture::load(pt2Path);
   TORCH_CHECK(fixture != nullptr, "allocGroupStats: failed to load ", pt2Path);
   setGraphDevice(fixture->model.graph.get(), true);
-  // The plan is expressed in the steps of the cooperative grid, which is also
-  // the only grid the mode runs, so the graph has to be compiled for it before
-  // the footprints mean anything.
+  // The plan is expressed in the steps of whichever grid the mode runs, so the
+  // graph has to be compiled for that grid before the footprints mean anything.
+  // 'cg' picks it: both grids are settled by compilation, and the plan is built
+  // against the one the config names.
   auto& config = WaveConfig::get();
   const auto savedCg = config.isCg;
   const auto savedFree = config.freeIntermediates;
@@ -1076,7 +1200,7 @@ AllocGroupStats ExecutorTestBase::allocGroupStats(const std::string& pt2File) {
     config.freeIntermediates = savedFree;
     config.enableAllocGroup = savedGroup;
   });
-  config.isCg = true;
+  config.isCg = cg;
   config.freeIntermediates = true;
   config.enableAllocGroup = true;
 
@@ -1478,6 +1602,17 @@ std::vector<c10::IValue> ExecutorTestBase::runNativertReferenceWithInputs(
   stripDataAsserts(graph);
   applySyntheticGraphRewrites(graph);
   setGraphDevice(&graph, true);
+  // Everything above runs on the wave graph too, so up to here the two number
+  // their Values identically. The two passes below do NOT -- wave resolves
+  // cpuOnly arguments itself at runtime and keeps its own concat -- and every
+  // Value they mint takes an id past the loaded graph's last. That is exactly
+  // where the wave graph, whose id counter never advanced, starts numbering
+  // the Values ITS rewrites create. So an id at or above this boundary names
+  // one value in the reference and a different one in wave, and comparing
+  // them is comparing two unrelated tensors: on the ROO train graph a
+  // tensor_split indices copy, int64[10], against a repeat_interleave prefix,
+  // int32[1024]. Recorded here and enforced in dropUnsharedReferenceValues.
+  numSharedReferenceValues_ = static_cast<int32_t>(graph.numValues());
   rewriteGpuIncompatibleOps(graph);
   insertCpuOnlyCopies(graph);
 
@@ -1580,6 +1715,28 @@ void ExecutorTestBase::executeAndCompareWave(
                            << " output(s) differ from the nativert reference";
 }
 
+int32_t ExecutorTestBase::dropUnsharedReferenceValues(
+    std::unordered_map<int32_t, c10::IValue>& refFrame) const {
+  if (numSharedReferenceValues_ < 0) {
+    return 0;
+  }
+  int32_t dropped = 0;
+  for (auto it = refFrame.begin(); it != refFrame.end();) {
+    if (it->first >= numSharedReferenceValues_) {
+      it = refFrame.erase(it);
+      ++dropped;
+    } else {
+      ++it;
+    }
+  }
+  if (dropped > 0) {
+    LOG(INFO) << "reference frame: dropped " << dropped
+              << " value(s) at or above id " << numSharedReferenceValues_
+              << ", which the reference graph has and the wave graph does not";
+  }
+  return dropped;
+}
+
 void ExecutorTestBase::runWaveWithInputs(
     ModelFixture& fixture,
     std::vector<c10::IValue> inputs,
@@ -1588,6 +1745,7 @@ void ExecutorTestBase::runWaveWithInputs(
   std::unordered_map<int32_t, c10::IValue> refFrame;
   if (!refFramePath.empty()) {
     refFrame = loadReferenceFrame(refFramePath);
+    dropUnsharedReferenceValues(refFrame);
     WaveConfig::get().referenceFrame = &refFrame;
   }
 
@@ -1639,6 +1797,7 @@ void ExecutorTestBase::runSyntheticSweep(
   // Load the reference frame once. Verification only reads it and executions
   // are serial, so all configs share this single map.
   auto refFrame = loadReferenceFrame(refFramePath);
+  dropUnsharedReferenceValues(refFrame);
 
   struct SweepConfig {
     const char* name{};
@@ -1690,6 +1849,17 @@ void ExecutorTestBase::runSyntheticSweep(
     stripDataAsserts(*fixture->model.graph);
     applySyntheticGraphRewrites(*fixture->model.graph);
     setGraphDevice(fixture->model.graph.get(), true);
+    // The same prep the reference had when it recorded the boundary, so the
+    // two must agree on the Value count here. If they ever do not, every id
+    // past the first divergence names a different value in each graph and the
+    // whole intermediates check is silently comparing unrelated tensors --
+    // which reads as one arbitrary tensor mismatch, not as the id-space bug it
+    // is. Fail as itself instead.
+    ASSERT_EQ(
+        static_cast<int32_t>(fixture->model.graph->numValues()),
+        numSharedReferenceValues_)
+        << "reference and wave graphs disagree on their Value count, so the "
+           "reference frame's ids no longer name the same values";
 
     auto ctx = fixture->makeModelContext();
     auto cfg = std::make_shared<WaveConfig>(baseConfig);
