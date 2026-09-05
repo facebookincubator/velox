@@ -120,7 +120,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         stream,
         tempMr);
     seenFilter_ = std::make_unique<cudf::filtered_join>(
-        seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+        seenKeys_->view(), cudf::null_equality::EQUAL, stream, tempMr);
     seenStateStream_ = stream;
 
   } else {
@@ -197,7 +197,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
 
     if (updatedSeenKeys) {
       auto updatedSeenFilter = std::make_unique<cudf::filtered_join>(
-          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream);
+          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream, tempMr);
       seenFilter_ = std::move(updatedSeenFilter);
       seenKeys_ = std::move(updatedSeenKeys);
       seenStateStream_ = stream;

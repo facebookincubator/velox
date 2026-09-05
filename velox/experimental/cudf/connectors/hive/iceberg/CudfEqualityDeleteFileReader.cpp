@@ -204,7 +204,11 @@ void CudfEqualityDeleteFileReader::buildHashJoin(rmm::cuda_stream_view stream) {
   // null_equality::EQUAL per Iceberg spec (NULL == NULL for equality deletes).
   // distinct_hash_join treats all NaNs as equal by default.
   deleteHashJoin_ = std::make_unique<cudf::distinct_hash_join>(
-      deleteKeyTable_->view(), cudf::null_equality::EQUAL, 0.5, stream);
+      deleteKeyTable_->view(),
+      cudf::null_equality::EQUAL,
+      0.5,
+      stream,
+      get_temp_mr());
 }
 
 void CudfEqualityDeleteFileReader::buildEqualityColumnIndices(
