@@ -425,6 +425,16 @@ void HashProbe::pushdownDynamicFilters() {
           if (!hashProbeStringDynamicFilterPushdownEnabled) {
             return false;
           }
+          // A custom logical type may have a connector-specific physical
+          // representation that differs from its in-memory representation, so
+          // generic code here cannot assume the two are byte-equivalent. A
+          // pushed-down filter is evaluated by the scan against the physical
+          // bytes, so producing one from in-memory values could drop matching
+          // rows. Skip the filter and let the hash join do the matching; this
+          // costs an optimization, not correctness.
+          if (customTypeExists(hasher.type()->name())) {
+            return false;
+          }
         }
         filter = hasher.getFilter(false);
         if (!filter) {

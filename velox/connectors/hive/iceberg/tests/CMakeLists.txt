@@ -94,6 +94,67 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  # Iceberg geometry reads exist only in a geospatial-enabled build, so the test target follows the
+  # same flag. This keeps a VELOX_ENABLE_GEO=OFF build free of any reference to GEOS targets.
+  if(VELOX_ENABLE_GEO AND VELOX_ENABLE_PARQUET)
+    add_executable(
+      velox_hive_iceberg_geometry_test
+      IcebergGeometryCrossRuntimeEncodingTest.cpp
+      IcebergGeometryReadTest.cpp
+      IcebergTestBase.cpp
+      Main.cpp
+    )
+    velox_add_test_headers(velox_hive_iceberg_geometry_test IcebergTestBase.h)
+    add_test(velox_hive_iceberg_geometry_test velox_hive_iceberg_geometry_test)
+
+    target_link_libraries(
+      velox_hive_iceberg_geometry_test
+      velox_exec_test_lib
+      velox_hive_connector
+      velox_hive_iceberg_splitreader
+      velox_common_geospatial_serde
+      velox_presto_types
+      velox_vector_test_lib
+      velox_vector_fuzzer
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+      GEOS::geos
+      GTest::gtest
+      OpenSSL::Crypto
+    )
+  endif()
+
+  # Compiled in *both* GEO configurations: it pins the runtime behavior of a geometry read as a
+  # function of VELOX_ENABLE_GEO. Needs no GEOS (hard-coded WKB, header-only GeometryType), so it
+  # links in a geospatial-free build too.
+  add_executable(
+    velox_hive_iceberg_geometry_gate_test
+    IcebergGeometryBuildGateTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_geometry_gate_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_geometry_gate_test velox_hive_iceberg_geometry_gate_test)
+  target_link_libraries(
+    velox_hive_iceberg_geometry_gate_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    GTest::gtest
+  )
+  if(VELOX_ENABLE_GEO)
+    target_compile_definitions(velox_hive_iceberg_geometry_gate_test PRIVATE VELOX_ENABLE_GEO)
+  endif()
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_geometry_gate_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
+
   add_executable(velox_hive_iceberg_deletion_vector_test DeletionVectorReaderTest.cpp)
   add_test(velox_hive_iceberg_deletion_vector_test velox_hive_iceberg_deletion_vector_test)
 
