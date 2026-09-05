@@ -2109,7 +2109,7 @@ TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
   // ignored.
   auto rowType = ROW({{"c0", INTEGER()}, {"c1", INTEGER()}});
   auto vectors = makeVectors(rowType, 1, 50);
-  // Make some c0 nulls so fallback engages.
+  // Make some c0 nulls to exercise the GPU replace_nulls path.
   auto& vec = vectors[0];
   auto c0 = vec->childAt(0)->asFlatVector<int32_t>();
   for (vector_size_t i = 1; i < vec->size(); i += 4) {
@@ -2292,6 +2292,7 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

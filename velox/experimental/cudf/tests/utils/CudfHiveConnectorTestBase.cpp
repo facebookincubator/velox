@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -66,6 +67,8 @@ void CudfHiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
 
   // Register cudf to enable the CudfDatasource creation from CudfHiveConnector
+  facebook::velox::cudf_velox::CudfConfig::getInstance().allowCpuFallback =
+      false;
   facebook::velox::cudf_velox::registerCudf();
 
   // Register Hive connector
