@@ -23,6 +23,8 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+#include <string_view>
+
 namespace facebook::velox::exec {
 namespace test {
 class RowContainerTestHelper;
@@ -422,12 +424,41 @@ class RowContainer {
   void extractSerializedRows(folly::Range<char**> rows, const VectorPtr& result)
       const;
 
+  /// Returns the number of bytes 'serializeRows' writes for 'rows'. Reads the
+  /// rows only when the container has variable-width columns.
+  size_t serializedRowsSize(folly::Range<char**> rows) const;
+
+  /// Serializes 'rows' back to back into 'destination', which must have room
+  /// for 'serializedRowsSize(rows)' bytes. Produces the same per-row bytes as
+  /// 'extractSerializedRows', letting callers serialize straight into their own
+  /// buffer instead of going through a vector. If 'rowSizes' is not null, fills
+  /// it with the per-row byte counts. Returns the number of bytes written.
+  size_t serializeRows(
+      folly::Range<char**> rows,
+      char* destination,
+      vector_size_t* rowSizes) const;
+
   /// Copies serialized row produced by 'extractSerializedRow' into the
   /// container.
   void storeSerializedRow(
       const FlatVector<StringView>& vector,
       vector_size_t index,
       char* row);
+
+  /// Copies the first serialized row of 'serialized' into the container.
+  /// 'serialized' may hold more than one row, as produced by 'serializeRows'.
+  /// Returns the number of bytes consumed.
+  size_t storeSerializedRow(std::string_view serialized, char* row);
+
+  /// Creates 'numRows' rows and fills them from 'serialized', which holds that
+  /// many rows back to back as produced by 'serializeRows'. Writes the new row
+  /// pointers to 'rows'. Resets the probed flag and the duplicate count, which
+  /// the serialized bytes carry over from the source container. Returns the
+  /// number of bytes consumed.
+  size_t storeSerializedRows(
+      std::string_view serialized,
+      vector_size_t numRows,
+      char** rows);
 
   /// Copies the values at 'col' into 'result' (starting at 'resultOffset')
   /// for the 'numRows' rows pointed to by 'rows'. If a 'row' is null, sets
@@ -1006,6 +1037,25 @@ class RowContainer {
   // bytes.
   int32_t
   storeVariableSizeAt(const char* data, char* row, column_index_t column);
+
+  // Byte offset within a row of the first of the 'flagBytes_' null and flag
+  // bytes that serialized rows start with.
+  int32_t serializedFlagsOffset() const;
+
+  // Returns the serialized size of one row when it does not depend on the row's
+  // content, i.e. when all columns are fixed width, and std::nullopt otherwise.
+  std::optional<size_t> fixedSerializedRowSize() const;
+
+  // Per-column offset and, for fixed-width columns, value size. 'fixedSize' is
+  // zero for variable-width columns.
+  struct SerializedColumn {
+    int32_t offset;
+    int32_t fixedSize;
+  };
+
+  // Precomputes the column layout so that serializing or storing a batch of
+  // rows does not repeat the type dispatch for every row.
+  std::vector<SerializedColumn> serializedColumns() const;
 
   template <TypeKind Kind>
   static void extractColumnTyped(

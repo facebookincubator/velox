@@ -848,6 +848,23 @@ class HashTable : public BaseHashTable {
   /// are left till the end of the table.
   std::string toString(int64_t startBucket, int64_t numBuckets = 1) const;
 
+  /// Returns the exact serialized size in bytes for the current hash table.
+  size_t serializedSize() const;
+
+  /// Serializes the hash table directly to a caller-provided memory buffer.
+  /// @param data Destination buffer
+  /// @param size Size of destination buffer in bytes. Must equal
+  /// serializedSize().
+  void serializeTo(void* data, size_t size) const;
+
+  /// Deserializes the hash table directly from a contiguous memory buffer.
+  /// @param data Serialized hash table bytes
+  /// @param size Serialized hash table size in bytes
+  /// @param pool Memory pool for allocating deserialized data
+  /// @return A new HashTable instance with deserialized data
+  static std::unique_ptr<HashTable<ignoreNullKeys>>
+  deserializeFrom(const void* data, size_t size, memory::MemoryPool* pool);
+
   /// Invoked to check the consistency of the internal state. The function scans
   /// all the table slots to check if the relevant slot counting are correct
   /// such as the number of used slots ('numDistinct_') and the number of
@@ -882,6 +899,12 @@ class HashTable : public BaseHashTable {
   }
 
  private:
+  // Writes the serialized form to 'writer'. 'Writer' is either a writer that
+  // only counts the bytes, for serializedSize(), or one that fills in a
+  // destination buffer, for serializeTo().
+  template <typename Writer>
+  void serializeImpl(Writer& writer) const;
+
   // Enables debug stats for collisions for debug build.
 #ifdef NDEBUG
   static constexpr bool kTrackLoads = false;
