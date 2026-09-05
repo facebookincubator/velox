@@ -336,6 +336,36 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
       << "Source build drivers retained input batches after transfer";
 }
 
+DEBUG_ONLY_TEST_F(HashJoinTest, releasesBatchedBuildInputsIncrementally) {
+  auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMax = cudfConfig.batchSizeMaxThreshold;
+  cudfConfig.batchSizeMaxThreshold = 10;
+  SCOPE_EXIT {
+    cudfConfig.batchSizeMaxThreshold = savedMax;
+  };
+
+  std::vector<size_t> retainedInputBatches;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::getConcatenatedTableBatched::retainedInputBatchesAfterBatchRelease",
+      std::function<void(size_t*)>([&](size_t* retained) {
+        retainedInputBatches.push_back(*retained);
+      }));
+
+  // Each 10-row build vector forms its own output batch. The source references
+  // must be released after each batch rather than all at function exit.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .injectSpill(false)
+      .numDrivers(1)
+      .keyTypes({BIGINT()})
+      .probeVectors(10, 1)
+      .buildVectors(10, 3)
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
+      .run();
+
+  EXPECT_EQ(retainedInputBatches, std::vector<size_t>({2, 1, 0}));
+}
+
 TEST_P(MultiThreadedHashJoinTest, normalizedKey) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)

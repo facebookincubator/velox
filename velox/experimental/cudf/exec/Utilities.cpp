@@ -19,6 +19,8 @@
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/testutil/TestValue.h"
+
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
@@ -171,52 +173,51 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     return concatTables;
   }
 
-  auto inputStreams = std::vector<rmm::cuda_stream_view>();
-  auto tableViews = std::vector<cudf::table_view>();
-
-  inputStreams.reserve(tables.size());
-  tableViews.reserve(tables.size());
-
-  for (const auto& table : tables) {
-    VELOX_CHECK_NOT_NULL(table);
-    tableViews.push_back(table->getTableView());
-    inputStreams.push_back(table->stream());
-  }
-
-  cudf::detail::join_streams(inputStreams, stream);
-
   std::vector<std::unique_ptr<cudf::table>> outputTables;
   auto const maxRows = maxBatchRows();
-  size_t startpos = 0;
-  size_t runningRows = 0;
-  for (size_t i = 0; i < tableViews.size(); ++i) {
-    auto const numRows = static_cast<size_t>(tableViews[i].num_rows());
-    // If adding this table would exceed the limit, flush current batch
-    // [startpos, i).
-    if (runningRows > 0 && runningRows + numRows > maxRows) {
-      outputTables.push_back(
-          cudf::concatenate(
-              std::vector<cudf::table_view>(
-                  tableViews.begin() + startpos, tableViews.begin() + i),
-              stream,
-              mr));
-      startpos = i;
-      runningRows = 0;
+  size_t start = 0;
+  while (start < tables.size()) {
+    size_t end = start;
+    size_t runningRows = 0;
+    while (end < tables.size()) {
+      VELOX_CHECK_NOT_NULL(tables[end]);
+      auto const numRows =
+          static_cast<size_t>(tables[end]->getTableView().num_rows());
+      if (runningRows > 0 && runningRows + numRows > maxRows) {
+        break;
+      }
+      runningRows += numRows;
+      ++end;
     }
-    runningRows += numRows;
-  }
-  // Flush the final batch [startpos, end).
-  if (startpos < tableViews.size()) {
-    outputTables.push_back(
-        cudf::concatenate(
-            std::vector<cudf::table_view>(
-                tableViews.begin() + startpos, tableViews.end()),
-            stream,
-            mr));
-  }
-  orderCudfVectorDeallocationsAfterStream(tables, inputStreams, stream);
 
-  // Input tables are deallocated here when 'tables' goes out of scope.
+    std::vector<CudfVectorPtr> batch;
+    std::vector<cudf::table_view> tableViews;
+    std::vector<rmm::cuda_stream_view> inputStreams;
+    batch.reserve(end - start);
+    tableViews.reserve(end - start);
+    inputStreams.reserve(end - start);
+    for (size_t i = start; i < end; ++i) {
+      batch.push_back(std::move(tables[i]));
+      tableViews.push_back(batch.back()->getTableView());
+      inputStreams.push_back(batch.back()->stream());
+    }
+
+    cudf::detail::join_streams(inputStreams, stream);
+    outputTables.push_back(cudf::concatenate(tableViews, stream, mr));
+
+    // Rebind deallocation to the output stream where possible, then release
+    // this group's inputs. Each completed output replaces its source inputs,
+    // so peak memory is approximately the original input footprint plus the
+    // largest output batch instead of the full input and output footprints.
+    orderCudfVectorDeallocationsAfterStream(batch, inputStreams, stream);
+    batch.clear();
+
+    auto retainedInputBatches = tables.size() - end;
+    common::testutil::TestValue::adjust(
+        "facebook::velox::cudf_velox::getConcatenatedTableBatched::retainedInputBatchesAfterBatchRelease",
+        &retainedInputBatches);
+    start = end;
+  }
   return outputTables;
 }
 
