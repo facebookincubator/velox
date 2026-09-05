@@ -41,6 +41,7 @@ add_executable(
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
   ElementAtTest.cpp
+  EncodeTest.cpp
   FactorialTest.cpp
   FilterTest.cpp
   FormatNumberTest.cpp
