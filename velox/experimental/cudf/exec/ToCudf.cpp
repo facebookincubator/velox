@@ -170,22 +170,40 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
-      if (keepOperator == 0) {
-        if (planNode && thisOpProps.canRunOnGPU) {
-          auto replacements =
-              adapter->createReplacements(oper, planNode, ctx, id);
-          for (auto& r : replacements) {
-            replaceOp.push_back(std::move(r));
-          }
-          isPureCpuOperator = false;
-        } else {
-          // This is the CPU fallback case.
-          isPureCpuOperator = true;
+      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
+      if (canUseGpuPath) {
+        // Whether these run instead of 'oper' or after it is keepOperator()'s
+        // decision, not this call's. A kept operator describing operators that
+        // run after it is how one plan node expanding into several operators is
+        // expressed: the replaceOperators() call below inserts them behind the
+        // kept operator and renumbers the whole driver, so the expansion needs
+        // no operator ids of its own.
+        auto replacements =
+            adapter->createReplacements(oper, planNode, ctx, id);
+        // An adapter that does not keep its operator has to return something
+        // to put in its place. Returning nothing is a defect in the adapter,
+        // not a plan that cannot run on GPU, so it fails the query whatever
+        // allowCpuFallback says. Checking here, before the conversion operator
+        // below can join replaceOp, keeps the driver unmodified.
+        VELOX_CHECK(
+            keepOperator != 0 || !replacements.empty(),
+            "Adapter replaced an operator with nothing: {}",
+            adapter->name());
+        for (auto& r : replacements) {
+          replaceOp.push_back(std::move(r));
         }
+      }
+
+      if (keepOperator == 0) {
+        // The check above already rejected an adapter that reached the GPU path
+        // and returned nothing, so the only way this operator is still a CPU
+        // operator is canRunOnGPU() having declined it. That is the ordinary
+        // CPU fallback case, which allowCpuFallback below decides on.
+        isPureCpuOperator = !canUseGpuPath;
       } else {
-        // adapter is present and keepOperator is 1, so this is GPU compatible
-        // operator. so this CPU operators is allowed even if fallback is
-        // disabled.
+        // A kept operator is GPU compatible, so it is allowed even when
+        // fallback is disabled, whether or not the adapter described any
+        // operators to run after it.
         isPureCpuOperator = false;
       }
     } else {
@@ -345,6 +363,10 @@ void registerCudf() {
 void unregisterCudf() {
   output_mr_.reset();
   mr_.reset();
+  // registerCudf() populated this through registerAllOperatorAdapters(), so
+  // undo it here as well. Nothing can read it once the driver adapter below is
+  // gone, since CompileState is the only production reader.
+  OperatorAdapterRegistry::getInstance().clear();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),

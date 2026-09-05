@@ -44,7 +44,10 @@ class OperatorAdapter {
   virtual bool canHandle(const exec::Operator* op) const = 0;
 
   /// Check if the operator is supported for GPU execution. Returns true if
-  /// the operator can be executed on GPU.
+  /// the operator can be executed on GPU. Returning false is how an adapter
+  /// declines an operator it cannot implement, which leaves the operator in
+  /// place for CPU execution; createReplacements() must not be used for that,
+  /// see below.
   virtual bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -78,8 +81,21 @@ class OperatorAdapter {
     return props;
   }
 
-  /// Create replacement GPU operator(s). Returns a vector of replacement
-  /// operators (empty if operator should be kept).
+  /// Create the GPU operator(s) this adapter contributes to the driver.
+  ///
+  /// When keepOperator() is false the returned operators replace 'op', and at
+  /// least one operator must be returned. Returning none is a defect in the
+  /// adapter rather than a plan that cannot run on GPU, so CompileState fails
+  /// the query whatever allowCpuFallback says. An adapter that cannot implement
+  /// a particular operator returns false from canRunOnGPU() instead, which
+  /// keeps 'op' in place for CPU execution.
+  ///
+  /// When keepOperator() is true the returned operators are inserted after
+  /// 'op', which is how a plan node that expands into several operators is
+  /// described; returning none then simply keeps 'op' alone.
+  ///
+  /// Either way the caller renumbers the driver's operator ids afterwards, so
+  /// 'operatorId' need not be unique across the returned operators.
   virtual std::vector<std::unique_ptr<exec::Operator>> createReplacements(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -87,7 +103,11 @@ class OperatorAdapter {
       int32_t operatorId) const = 0;
 
   /// Check if the original operator should be kept (not replaced). Returns
-  /// true if the original operator should be kept, false otherwise.
+  /// true if the original operator should be kept, in which case anything
+  /// createReplacements() returns runs after it rather than instead of it. The
+  /// decision is a property of the adapter and the plan, not of per-query
+  /// state: the transport an exchange uses is resolved from the plan node
+  /// through the transport registries before this runs.
   virtual bool keepOperator() const {
     return false;
   }
@@ -112,6 +132,12 @@ class OperatorAdapterRegistry {
 
   /// Register an adapter with the registry.
   void registerAdapter(std::unique_ptr<OperatorAdapter> adapter);
+
+  /// Registers 'adapter' ahead of everything already registered, so it wins
+  /// findAdapter() for an operator a built-in adapter also handles. For
+  /// substituting an adapter in a test; production registration appends with
+  /// registerAdapter(). Relies on findAdapter() returning the first match.
+  void registerAdapterFront(std::unique_ptr<OperatorAdapter> adapter);
 
   /// Find an adapter that can handle the given operator. Returns a pointer
   /// to the adapter, or nullptr if none found.
