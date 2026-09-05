@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/row/UnsafeRowFast.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::row {
@@ -31,7 +32,8 @@ int32_t alignBytes(int32_t numBytes) {
 }
 
 bool isFixedWidth(const TypePtr& type) {
-  return type->isFixedWidth() && !type->isLongDecimal();
+  return type->isFixedWidth() && !type->isLongDecimal() &&
+      !type->isCalendarInterval();
 }
 } // namespace
 
@@ -112,7 +114,8 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       fixedWidthTypeKind_ = true;
       break;
     case TypeKind::HUGEINT:
-      [[fallthrough]];
+      isCalendarInterval_ = type->isCalendarInterval();
+      break;
     case TypeKind::VARCHAR:
       [[fallthrough]];
     case TypeKind::VARBINARY:
@@ -152,6 +155,10 @@ int32_t UnsafeRowFast::variableWidthRowSize(vector_size_t index) const {
       return alignBytes(value.size());
     }
     case TypeKind::HUGEINT:
+      if (isCalendarInterval_) {
+        // CalendarInterval is always 16 bytes: months(4) + days(4) + micros(8).
+        return 16;
+      }
       return DecimalUtil::getByteArrayLength(decoded_.valueAt<int128_t>(index));
     case TypeKind::ARRAY:
       return arrayRowSize(index);
@@ -218,6 +225,15 @@ int32_t UnsafeRowFast::serializeVariableWidth(vector_size_t index, char* buffer)
     }
     case TypeKind::HUGEINT: {
       auto value = decoded_.valueAt<int128_t>(index);
+      if (isCalendarInterval_) {
+        // Spark UnsafeRow CalendarInterval layout: months(4) | days(4) |
+        // microseconds(8), native byte order.
+        auto interval = CalendarInterval::unpack(value);
+        memcpy(buffer, &interval.months, sizeof(int32_t));
+        memcpy(buffer + 4, &interval.days, sizeof(int32_t));
+        memcpy(buffer + 8, &interval.microseconds, sizeof(int64_t));
+        return 16;
+      }
       return DecimalUtil::toByteArray(value, buffer);
     }
     case TypeKind::ARRAY:
@@ -699,6 +715,43 @@ VectorPtr deserializeLongDecimal(
   return flatVector;
 }
 
+VectorPtr deserializeCalendarInterval(
+    const TypePtr& type,
+    const std::vector<char*>& data,
+    const BufferPtr& nulls,
+    std::vector<size_t>& offsets,
+    memory::MemoryPool* pool) {
+  const auto numRows = data.size();
+  auto flatVector =
+      BaseVector::create<FlatVector<int128_t>>(type, numRows, pool);
+  auto rawValues = flatVector->mutableRawValues();
+
+  auto* rawNulls = nulls->as<uint64_t>();
+
+  for (auto i = 0; i < numRows; ++i) {
+    if (bits::isBitNull(rawNulls, i)) {
+      flatVector->setNull(i, true);
+    } else {
+      // Read offset+size from the fixed-width region.
+      auto offsetAndSize =
+          *reinterpret_cast<const uint64_t*>(data[i] + offsets[i]);
+      auto wordOffset = static_cast<int32_t>(offsetAndSize >> 32);
+      // Read months(4) | days(4) | microseconds(8) from variable region.
+      const char* src = data[i] + wordOffset;
+      int32_t months;
+      int32_t days;
+      int64_t microseconds;
+      memcpy(&months, src, sizeof(int32_t));
+      memcpy(&days, src + 4, sizeof(int32_t));
+      memcpy(&microseconds, src + 8, sizeof(int64_t));
+      rawValues[i] = CalendarInterval(months, days, microseconds).pack();
+    }
+    offsets[i] += kFieldWidth;
+  }
+
+  return flatVector;
+}
+
 VectorPtr deserializeUnknownArrays(
     const TypePtr& type,
     const std::vector<char*>& data,
@@ -1019,6 +1072,9 @@ VectorPtr deserialize(
 
   switch (typeKind) {
     case TypeKind::HUGEINT:
+      if (type->isCalendarInterval()) {
+        return deserializeCalendarInterval(type, data, nulls, offsets, pool);
+      }
       return deserializeLongDecimal(type, data, nulls, offsets, pool);
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
