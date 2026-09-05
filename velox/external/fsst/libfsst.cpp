@@ -17,6 +17,8 @@
 // You can contact the authors via the FSST source repository : https://github.com/cwida/fsst
 #include "libfsst.hpp"
 
+namespace nimble_fsst_internal {
+
 Symbol concat(Symbol a, Symbol b) {
    Symbol s;
    u32 length = a.length()+b.length();
@@ -26,11 +28,13 @@ Symbol concat(Symbol a, Symbol b) {
    return s;
 }
 
+} // namespace nimble_fsst_internal
+
 namespace std {
 template <>
-class hash<QSymbol> {
+class hash<nimble_fsst_internal::QSymbol> {
    public:
-   size_t operator()(const QSymbol& q) const {
+   size_t operator()(const nimble_fsst_internal::QSymbol& q) const {
       uint64_t k = q.symbol.val.num;
       const uint64_t m = 0xc6a4a7935bd1e995;
       const int r = 47;
@@ -47,6 +51,8 @@ class hash<QSymbol> {
    }
 };
 }
+
+namespace nimble_fsst_internal {
 
 bool isEscapeCode(u16 pos) { return pos < FSST_CODE_BASE; }
 
@@ -639,3 +645,5 @@ extern "C" fsst_decoder_t fsst_decoder(fsst_encoder_t *encoder) {
    assert(cnt1 == cnt2); (void) cnt1; (void) cnt2; 
    return decoder;
 }
+
+} // namespace nimble_fsst_internal
