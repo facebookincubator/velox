@@ -213,6 +213,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_key_normalization_test
+  SOURCES Main.cpp KeyNormalizationTest.cpp
+  LIBS velox_cudf_exec cudf::cudf
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_null_mask_test
   SOURCES Main.cpp NullMaskTest.cpp
   LIBS velox_cudf_expression cudf::cudf

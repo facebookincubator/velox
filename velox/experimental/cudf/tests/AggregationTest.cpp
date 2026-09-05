@@ -26,7 +26,9 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <cmath>
 
@@ -2385,6 +2387,228 @@ TEST_F(AggregationTest, zeroColumnThroughCudfFromVelox) {
       .config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2")
       .plan(plan)
       .assertResults("SELECT count(*) FROM tmp WHERE c0 > 0");
+}
+
+// ---------------------------------------------------------------------------
+// Grouping on a TIMESTAMP WITH TIME ZONE key.
+//
+// The type is physically (millis << 12) | zone_key and Velox groups it on the
+// INSTANT alone -- TimestampWithTimeZoneType::hash and ::compare read
+// unpackMillisUtc, via the type's ProvideCustomComparison hook. Two values for
+// the same moment in different zones are therefore ONE group. cuDF sees a bare
+// INT64, so before the key-normalization fix it produced one group per zone
+// key.
+//
+// These assert on the unpacked result rather than through assertQuery, because
+// DuckDB has no TIMESTAMP WITH TIME ZONE to compare against.
+// ---------------------------------------------------------------------------
+namespace {
+// Kiritimati (+14) and Midway (-11) are the extremes of the offset range, so
+// their zone keys are as far apart as their offsets.
+int64_t packAt(int64_t millis, const char* zone) {
+  return pack(millis, tz::getTimeZoneID(zone));
+}
+} // namespace
+
+TEST_F(AggregationTest, groupByTimestampWithTimeZoneCollapsesZoneKeys) {
+  const int64_t millis = 1'623'758'400'000;
+  const int64_t other = -14'182'940'000;
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {packAt(millis, "Pacific/Kiritimati"),
+       packAt(millis, "Pacific/Midway"),
+       packAt(millis, "Asia/Kolkata"),
+       packAt(other, "Pacific/Midway"),
+       packAt(other, "UTC")},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  // Two instants, so two groups -- not the five the packed values would give.
+  ASSERT_EQ(result->size(), 2);
+  auto keys = result->childAt(0)->as<SimpleVector<int64_t>>();
+  auto counts = result->childAt(1)->as<SimpleVector<int64_t>>();
+
+  std::map<int64_t, int64_t> countByInstant;
+  for (auto i = 0; i < result->size(); ++i) {
+    // The surviving zone key is unspecified, but it must be a REAL one from the
+    // group's own rows -- never 0 from a normalized key leaking into the
+    // output. Both groups here are all-non-UTC except the second, so assert
+    // membership rather than a fixed value.
+    countByInstant[unpackMillisUtc(keys->valueAt(i))] = counts->valueAt(i);
+  }
+  EXPECT_EQ(countByInstant[millis], 3);
+  EXPECT_EQ(countByInstant[other], 2);
+}
+
+// The emitted group key must carry a zone key from one of the group's own rows.
+// Every row here is non-UTC, so a normalized key leaking into the output would
+// show up as zone 0 -- which is what this catches and the test above cannot,
+// since there UTC is a legitimate answer.
+TEST_F(AggregationTest, groupByTimestampWithTimeZoneEmitsARealZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kolkata = tz::getTimeZoneID("Asia/Kolkata");
+  const auto kathmandu = tz::getTimeZoneID("Asia/Kathmandu");
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {pack(millis, kolkata), pack(millis, kathmandu)},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  const auto key = result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(key), millis);
+  const auto zone = unpackZoneKeyId(key);
+  EXPECT_TRUE(zone == kolkata || zone == kathmandu)
+      << "the group key must keep a zone key from one of its rows, got "
+      << zone;
+  EXPECT_NE(zone, 0) << "zone 0 would mean a normalized key reached the output";
+}
+
+// Nulls still form their own group, and normalization must not turn a null key
+// into a value: under Velox's semantics a null key is distinct from the epoch.
+TEST_F(AggregationTest, groupByTimestampWithTimeZoneKeepsNullsSeparate) {
+  const int64_t millis = 1'623'758'400'000;
+  auto data = makeRowVector({makeNullableFlatVector<int64_t>(
+      {packAt(millis, "Pacific/Kiritimati"),
+       packAt(millis, "Pacific/Midway"),
+       std::nullopt,
+       std::nullopt},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"count(1)"})
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+  auto keys = result->childAt(0)->as<SimpleVector<int64_t>>();
+  auto counts = result->childAt(1)->as<SimpleVector<int64_t>>();
+  for (auto i = 0; i < result->size(); ++i) {
+    if (keys->isNullAt(i)) {
+      EXPECT_EQ(counts->valueAt(i), 2) << "the two nulls form one group";
+    } else {
+      EXPECT_EQ(unpackMillisUtc(keys->valueAt(i)), millis);
+      EXPECT_EQ(counts->valueAt(i), 2) << "the two zones collapse to one group";
+    }
+  }
+}
+
+// SELECT DISTINCT on a TIMESTAMP WITH TIME ZONE key. A distinct aggregation
+// (grouping keys, no aggregates) routes to CudfDistinct rather than
+// CudfGroupby, and that operator returns its KEY columns as its output -- so
+// the fix there had to take the indices of the distinct rows from normalized
+// keys and gather the ORIGINAL columns, rather than deduplicate normalized
+// values and emit them.
+TEST_F(AggregationTest, distinctTimestampWithTimeZoneCollapsesZoneKeys) {
+  const int64_t millis = 1'623'758'400'000;
+  const int64_t other = -14'182'940'000;
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {packAt(millis, "Pacific/Kiritimati"),
+       packAt(millis, "Pacific/Midway"),
+       packAt(other, "Asia/Kolkata"),
+       packAt(millis, "UTC")},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      PlanBuilder().values({data}).singleAggregation({"c0"}, {}).planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2) << "two instants, not four packed values";
+  auto keys = result->childAt(0)->as<SimpleVector<int64_t>>();
+  std::set<int64_t> instants;
+  for (auto i = 0; i < result->size(); ++i) {
+    instants.insert(unpackMillisUtc(keys->valueAt(i)));
+  }
+  EXPECT_EQ(instants, (std::set<int64_t>{millis, other}));
+}
+
+// The surviving row must keep its own zone key. Every row is non-UTC, so a
+// normalized key reaching the output shows up as zone 0 -- which the test above
+// cannot detect, because there UTC is one of the legitimate answers.
+TEST_F(AggregationTest, distinctTimestampWithTimeZoneEmitsARealZoneKey) {
+  const int64_t millis = 1'623'758'400'000;
+  const auto kolkata = tz::getTimeZoneID("Asia/Kolkata");
+  const auto kathmandu = tz::getTimeZoneID("Asia/Kathmandu");
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {pack(millis, kolkata), pack(millis, kathmandu)},
+      TIMESTAMP_WITH_TIME_ZONE())});
+
+  auto plan =
+      PlanBuilder().values({data}).singleAggregation({"c0"}, {}).planNode();
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  const auto key = result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
+  EXPECT_EQ(unpackMillisUtc(key), millis);
+  const auto zone = unpackZoneKeyId(key);
+  EXPECT_TRUE(zone == kolkata || zone == kathmandu)
+      << "the surviving row must keep a zone key from the input, got " << zone;
+  EXPECT_NE(zone, 0) << "zone 0 would mean a normalized key reached the output";
+}
+
+// count(DISTINCT ts) is deliberately NOT asserted here. That plan shape is
+// DECLINED by cuDF, and this fixture sets allowCpuFallback = false, so the test
+// would fail on "Replacement with cuDF operator failed" rather than on the
+// deduplication. Allowing fallback instead would assert CPU's answer and prove
+// nothing about the GPU. It is the reason the parity suite's
+// n_tswtz_count_distinct_across_zones case sets gpu_claimed: false and is
+// measured on the PERMISSIVE cluster, where the shape runs partly on GPU and
+// the wrong count is observable -- a strict-mode raise alone does not establish
+// that a shape is safely declined.
+
+// The same grouping across a hash-partitioned local exchange, which is the
+// shape a real plan takes and the reason this needed two fixes rather than one:
+// CudfLocalPartition murmur3-hashed the packed value, so same-instant rows went
+// to different drivers and the final aggregation could not merge them even once
+// the group-by itself compared instants. maxDrivers > 1 is what makes
+// numPartitions_ exceed 1 and put CudfLocalPartition in the plan at all.
+TEST_F(AggregationTest, groupByTimestampWithTimeZoneAcrossPartitionedExchange) {
+  const int64_t millis = 1'623'758'400'000;
+  auto rows = [&](const char* zone) {
+    return makeRowVector({makeFlatVector<int64_t>(
+        {packAt(millis, zone), packAt(millis + 1, zone)},
+        TIMESTAMP_WITH_TIME_ZONE())});
+  };
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto source = [&](const char* zone) {
+    return PlanBuilder(idGenerator)
+        .values({rows(zone)})
+        .partialAggregation({"c0"}, {"count(1)"})
+        .planNode();
+  };
+  auto plan =
+      PlanBuilder(idGenerator)
+          .localPartition(
+              {"c0"}, {source("Pacific/Kiritimati"), source("Pacific/Midway")})
+          .finalAggregation()
+          .planNode();
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(2)
+          .config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2")
+          .copyResults(pool());
+
+  // Two instants, each present under both zones: two groups of two.
+  ASSERT_EQ(result->size(), 2);
+  auto keys = result->childAt(0)->as<SimpleVector<int64_t>>();
+  auto counts = result->childAt(1)->as<SimpleVector<int64_t>>();
+  std::map<int64_t, int64_t> countByInstant;
+  for (auto i = 0; i < result->size(); ++i) {
+    countByInstant[unpackMillisUtc(keys->valueAt(i))] = counts->valueAt(i);
+  }
+  EXPECT_EQ(countByInstant[millis], 2);
+  EXPECT_EQ(countByInstant[millis + 1], 2);
 }
 
 } // namespace facebook::velox::exec::test

@@ -78,6 +78,13 @@ class CudfLocalPartition : public CudfOperatorBase {
   std::vector<ContinueFuture> futures_;
 
   std::vector<column_index_t> partitionKeyIndices_;
+
+  // Which partition keys are TIMESTAMP WITH TIME ZONE, in key order, computed
+  // once at construction. Such a key must be hashed on its instant alone. The
+  // bool lets the common case of no TSWTZ key skip the work without a type scan
+  // per batch.
+  std::vector<bool> partitionKeyIsTswtz_;
+  bool partitionKeysNeedNormalization_{false};
 };
 
 } // namespace facebook::velox::cudf_velox
