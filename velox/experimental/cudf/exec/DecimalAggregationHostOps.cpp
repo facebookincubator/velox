@@ -36,11 +36,13 @@ void validateIntermediateColumnType(cudf::column_view const& column) {
       colType);
 }
 
-cudf::column_view castDecimal64InputToDecimal128(
+cudf::column_view castDecimalInputToDecimal128(
     cudf::column_view inputCol,
     std::unique_ptr<cudf::column>& holder,
     rmm::cuda_stream_view stream) {
-  if (inputCol.type().id() != cudf::type_id::DECIMAL64) {
+  const auto inputType = inputCol.type().id();
+  if (inputType != cudf::type_id::DECIMAL32 &&
+      inputType != cudf::type_id::DECIMAL64) {
     return inputCol;
   }
   holder = cudf::cast(

@@ -563,8 +563,13 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableCoalesce) {
 TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   // OK: boolean + same type BIGINT
   auto ok1 = optimizeTypedExpr(
-      "if(true, a, b)", rowType_, queryCtx_.get(), execCtx_.get());
+      "if(a > 0, a, b)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(ok1, queryCtx_.get(), pool_.get()));
+
+  // Constant conditions are folded before cuDF expression selection.
+  auto folded = optimizeTypedExpr(
+      "if(true, a, b)", rowType_, queryCtx_.get(), execCtx_.get());
+  ASSERT_TRUE(canExprRunOnGpu(folded, queryCtx_.get(), pool_.get()));
 }
 
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {

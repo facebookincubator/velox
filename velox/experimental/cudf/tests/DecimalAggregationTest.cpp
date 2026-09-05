@@ -15,9 +15,12 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
@@ -31,6 +34,7 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/reduction.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
@@ -151,8 +155,15 @@ std::unique_ptr<cudf::column> makeDecimalColumn(
     int32_t scale,
     const std::vector<bool>* valid,
     rmm::cuda_stream_view stream) {
-  cudf::type_id typeId = std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
-                                                    : cudf::type_id::DECIMAL128;
+  cudf::type_id typeId;
+  if constexpr (std::is_same_v<T, int32_t>) {
+    typeId = cudf::type_id::DECIMAL32;
+  } else if constexpr (std::is_same_v<T, int64_t>) {
+    typeId = cudf::type_id::DECIMAL64;
+  } else {
+    static_assert(std::is_same_v<T, __int128_t>);
+    typeId = cudf::type_id::DECIMAL128;
+  }
   cudf::data_type type{typeId, -scale};
   return makeFixedWidthColumn(type, values, valid, stream);
 }
@@ -241,6 +252,239 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
     exec::test::OperatorTestBase::TearDown();
   }
 };
+
+TEST_F(CudfDecimalTest, decimal32InputWidenedBeforeSum) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto input = makeDecimalColumn<int32_t>(
+      {900'000'000, 900'000'000, 900'000'000}, 2, nullptr, stream);
+
+  std::unique_ptr<cudf::column> castedInput;
+  auto widened =
+      castDecimalInputToDecimal128(input->view(), castedInput, stream);
+  EXPECT_EQ(widened.type().id(), cudf::type_id::DECIMAL128);
+  EXPECT_EQ(widened.type().scale(), input->type().scale());
+
+  auto sumAggregation = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto sum = cudf::reduce(widened, *sumAggregation, widened.type(), stream, mr);
+  auto sumColumn = cudf::make_column_from_scalar(*sum, 1, stream, mr);
+  auto result = copyColumnData<__int128_t>(sumColumn->view(), stream);
+  ASSERT_EQ(result.size(), 1);
+  EXPECT_EQ(result[0], static_cast<__int128_t>(2'700'000'000));
+}
+
+TEST_F(CudfDecimalTest, caseWhenNormalizesDecimal32Input) {
+  auto rowType = ROW({"condition", "sales_price"}, {BOOLEAN(), DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::optimizeTypedExpr(
+      "CASE WHEN condition THEN sales_price ELSE NULL END",
+      rowType,
+      queryCtx.get(),
+      &execCtx);
+  auto evaluator = createCudfExpression(expression, rowType, pool());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto condition = makeFixedWidthColumn<int8_t>(
+      cudf::data_type{cudf::type_id::BOOL8}, {1, 0, 1, 0}, nullptr, stream);
+  auto salesPrice =
+      makeDecimalColumn<int32_t>({123, 456, -789, 1'000}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{condition->view(), salesPrice->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  auto resultView = asView(result);
+  auto expectedType =
+      cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+  EXPECT_EQ(resultView.type(), expectedType);
+  EXPECT_EQ(resultView.null_count(), 2);
+
+  auto values = copyColumnData<int64_t>(resultView, stream);
+  auto nullMask = copyNullMask(resultView, stream);
+  EXPECT_TRUE(isValidAt(nullMask, 0));
+  EXPECT_EQ(values[0], 123);
+  EXPECT_FALSE(isValidAt(nullMask, 1));
+  EXPECT_TRUE(isValidAt(nullMask, 2));
+  EXPECT_EQ(values[2], -789);
+  EXPECT_FALSE(isValidAt(nullMask, 3));
+}
+
+TEST_F(CudfDecimalTest, betweenNormalizesDecimal32Input) {
+  auto rowType = ROW({"price"}, {DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::optimizeTypedExpr(
+      "price BETWEEN "
+      "CAST('0.99' AS DECIMAL(7, 2)) AND "
+      "CAST('1.49' AS DECIMAL(7, 2))",
+      rowType,
+      queryCtx.get(),
+      &execCtx);
+  auto evaluator = createCudfExpression(expression, rowType, pool());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto price =
+      makeDecimalColumn<int32_t>({98, 99, 100, 149, 150}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{price->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  auto resultView = asView(result);
+  EXPECT_EQ(resultView.type().id(), cudf::type_id::BOOL8);
+  EXPECT_EQ(
+      copyColumnData<int8_t>(resultView, stream),
+      (std::vector<int8_t>{0, 1, 1, 1, 0}));
+}
+
+TEST_F(CudfDecimalTest, multiplyNormalizesDecimal32Input) {
+  auto rowType = ROW({"quantity", "sales_price"}, {INTEGER(), DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::optimizeTypedExpr(
+      "CAST(quantity AS DECIMAL(10, 0)) * sales_price",
+      rowType,
+      queryCtx.get(),
+      &execCtx);
+  auto evaluator = createCudfExpression(expression, rowType, pool());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto quantity = makeFixedWidthColumn<int32_t>(
+      cudf::data_type{cudf::type_id::INT32},
+      {2, -3, 1'000, 0},
+      nullptr,
+      stream);
+  auto salesPrice =
+      makeDecimalColumn<int32_t>({123, 456, -789, 100}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{quantity->view(), salesPrice->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  auto resultView = asView(result);
+  auto expectedType =
+      cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+  EXPECT_EQ(resultView.type(), expectedType);
+  EXPECT_EQ(
+      copyColumnData<int64_t>(resultView, stream),
+      (std::vector<int64_t>{246, -1'368, -789'000, 0}));
+}
+
+TEST_F(CudfDecimalTest, divideUsesWidestDecimalStorage) {
+  auto rowType =
+      ROW({"numerator", "short_divisor", "long_divisor"},
+          {DECIMAL(7, 2), DECIMAL(7, 2), DECIMAL(20, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto numerator =
+      makeDecimalColumn<int32_t>({1'000, -1'000}, 2, nullptr, stream);
+  auto shortDivisor =
+      makeDecimalColumn<int32_t>({200, 400}, 2, nullptr, stream);
+  auto longDivisor = makeDecimalColumn<__int128_t>(
+      {200, static_cast<__int128_t>(1) << 64}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{
+      numerator->view(), shortDivisor->view(), longDivisor->view()};
+
+  auto assertExpression = [&](const std::string& sql,
+                              const std::vector<int64_t>& expected) {
+    auto expression =
+        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+    auto evaluator = createCudfExpression(expression, rowType, pool());
+    auto result = evaluator->eval(inputs, stream, mr);
+    auto resultView = asView(result);
+    auto expectedType =
+        cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+    EXPECT_EQ(resultView.type(), expectedType);
+    EXPECT_EQ(resultView.null_count(), 0);
+    EXPECT_EQ(copyColumnData<int64_t>(resultView, stream), expected);
+  };
+
+  // DECIMAL32 / DECIMAL128 -> DECIMAL64. The large divisor does not fit in
+  // DECIMAL64 and becomes zero if narrowed, so division must retain DECIMAL128
+  // working storage.
+  assertExpression("numerator / long_divisor", {500, 0});
+
+  // Column / scalar uses the same wide intermediate before narrowing the
+  // logical short-decimal result.
+  assertExpression(
+      "numerator / "
+      "CAST('184467440737095516.16' AS DECIMAL(20, 2))",
+      {0, 0});
+
+  // Scalar / column still widens a physical DECIMAL32 input to the logical
+  // DECIMAL64 working width.
+  assertExpression(
+      "CAST('10.00' AS DECIMAL(7, 2)) / short_divisor", {500, 250});
+}
+
+TEST_F(CudfDecimalTest, coalesceNormalizesDecimal32Input) {
+  auto rowType =
+      ROW({"sales_price", "return_amount"}, {DECIMAL(7, 2), DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::optimizeTypedExpr(
+      "sales_price - "
+      "coalesce(return_amount, CAST('0.00' AS DECIMAL(7, 2)))",
+      rowType,
+      queryCtx.get(),
+      &execCtx);
+  auto evaluator = createCudfExpression(expression, rowType, pool());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto salesPrice = makeDecimalColumn<int32_t>(
+      {1'000, 2'000, -3'000, 4'000}, 2, nullptr, stream);
+  std::vector<bool> returnAmountValid{true, false, true, false};
+  auto returnAmount = makeDecimalColumn<int32_t>(
+      {100, 999, -250, 999}, 2, &returnAmountValid, stream);
+  std::vector<cudf::column_view> inputs{
+      salesPrice->view(), returnAmount->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  auto resultView = asView(result);
+  auto expectedType =
+      cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+  EXPECT_EQ(resultView.type(), expectedType);
+  EXPECT_EQ(resultView.null_count(), 0);
+  EXPECT_EQ(
+      copyColumnData<int64_t>(resultView, stream),
+      (std::vector<int64_t>{900, 2'000, -2'750, 4'000}));
+}
+
+TEST_F(CudfDecimalTest, coalescePreservesOwnedFirstInput) {
+  auto rowType = ROW({"return_amount"}, {DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::optimizeTypedExpr(
+      "coalesce("
+      "CAST(return_amount AS DECIMAL(12, 2)), "
+      "CAST('0.00' AS DECIMAL(12, 2)))",
+      rowType,
+      queryCtx.get(),
+      &execCtx);
+  auto evaluator = createCudfExpression(expression, rowType, pool());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto returnAmount =
+      makeDecimalColumn<int32_t>({100, 200, 300}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{returnAmount->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  ASSERT_TRUE(std::holds_alternative<std::unique_ptr<cudf::column>>(result));
+
+  // Mirror CudfFilterProject's materialization of an expression result after
+  // FunctionExpression has destroyed the owning subexpression results.
+  auto materialized =
+      std::make_unique<cudf::column>(asView(result), stream, mr);
+  EXPECT_EQ(
+      materialized->type(),
+      (cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}}));
+  EXPECT_EQ(
+      copyColumnData<int64_t>(materialized->view(), stream),
+      (std::vector<int64_t>{100, 200, 300}));
+}
 
 TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {
   auto rowType = ROW({
