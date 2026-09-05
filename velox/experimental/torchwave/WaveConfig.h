@@ -67,6 +67,17 @@ struct WaveConfig {
   /// If set and true, use the cooperative grid variant when available.
   std::optional<bool> isCg;
 
+  /// If true, ops with both a barrier-based and a single-pass cooperative-grid
+  /// form (masked_select_jagged) use the single-pass one. Only has an effect in
+  /// cooperative-grid mode.
+  bool singlePassSelect{false};
+
+  /// If true, cumsum, exclusive sum and masked_select are registered with a
+  /// single decoupled look-back implementation instead of the single-block,
+  /// multi-kernel and cooperative-grid variants. Read once, by
+  /// registerBuiltins(), so it must be set before initialize().
+  bool singlePass{false};
+
   /// Reference values keyed by ValueId for verifying intermediates.
   std::unordered_map<int32_t, c10::IValue>* referenceFrame{nullptr};
 

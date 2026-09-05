@@ -94,6 +94,10 @@ class CompiledModuleImpl : public CompiledModule {
   KernelInfo info(int32_t kernelIdx) override;
 
  private:
+  // Opts the kernel in to more than the default 48KB of dynamic shared memory.
+  // A launch asking for more than that fails without this.
+  void allowLargeDynamicShared(int32_t kernelIdx, int32_t shared);
+
   CUmodule module_;
   std::vector<CUfunction> kernels_;
   int64_t compileMs_;
@@ -519,6 +523,19 @@ std::shared_ptr<CompiledModule> CompiledModule::fromCubin(
       module, std::move(funcs), elapsedMs);
 }
 
+void CompiledModuleImpl::allowLargeDynamicShared(
+    int32_t kernelIdx,
+    int32_t shared) {
+  constexpr int32_t kDefaultMaxDynamicShared = 48 * 1024;
+  if (shared <= kDefaultMaxDynamicShared) {
+    return;
+  }
+  CU_CHECK(cuFuncSetAttribute(
+      kernels_[kernelIdx],
+      CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+      shared));
+}
+
 void CompiledModuleImpl::launch(
     int32_t kernelIdx,
     int32_t numBlocks,
@@ -526,6 +543,7 @@ void CompiledModuleImpl::launch(
     int32_t shared,
     Stream* stream,
     void** args) {
+  allowLargeDynamicShared(kernelIdx, shared);
   auto result = cuLaunchKernel(
       kernels_[kernelIdx],
       numBlocks,
@@ -548,6 +566,7 @@ void CompiledModuleImpl::launchCooperative(
     int32_t shared,
     Stream* stream,
     void** args) {
+  allowLargeDynamicShared(kernelIdx, shared);
   auto result = cuLaunchCooperativeKernel(
       kernels_[kernelIdx],
       numBlocks,
