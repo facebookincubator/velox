@@ -819,18 +819,17 @@ void CudfIcebergSplitReader::adaptColumns() {
         iter != split_->infoColumns.end()) {
       injectedColumns_.push_back({i, fieldName, iter->second, veloxType});
       injectedNames.insert(fieldName);
-    } else if (auto it = icebergSplit_->partitionKeys.find(fieldName);
-               it != icebergSplit_->partitionKeys.end()) {
-      // Partition columns: Hive migrated table. In Hive-written data
-      // files, partition column values are stored in partition metadata
-      // rather than in the data file itself, following Hive's
-      // partitioning convention.
-      injectedColumns_.push_back({i, fieldName, it->second, veloxType});
-      injectedNames.insert(fieldName);
     } else if (not fileColumnNames_.contains(fieldName)) {
-      // Schema evolution: Column was added after the data file was written
-      // and doesn't exist in older data files.
-      injectedColumns_.push_back({i, fieldName, std::nullopt, veloxType});
+      // Partition columns from Hive-migrated tables are absent from data
+      // files. A name-keyed partition value cannot replace a physical Iceberg
+      // source column because transformed partition field names may collide.
+      const auto partition = icebergSplit_->partitionKeys.find(fieldName);
+      injectedColumns_.push_back(
+          {i,
+           fieldName,
+           partition == icebergSplit_->partitionKeys.end() ? std::nullopt
+                                                           : partition->second,
+           veloxType});
       injectedNames.insert(fieldName);
     }
   }
