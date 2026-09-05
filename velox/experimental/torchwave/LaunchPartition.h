@@ -83,6 +83,13 @@ struct GridOp {
   /// they must be co-resident in one launch and the op may not be split
   /// across two.
   bool hasBarrier{false};
+
+  /// Blocks per SM this op would rather run at, or 0 for unspecified. Carried
+  /// from Launch::blocksPerSm, which reads WaveConfig::preferBlocksPerSm by
+  /// opcode. Ops with different values never share a launch, and a launch of
+  /// ops that share a non-zero value is capped at numSMs times it instead of
+  /// numSMs times the occupancy their shared memory allows.
+  int32_t blocksPerSm{0};
 };
 
 /// One kernel launch of a step, over a contiguous range of the step's blocks.

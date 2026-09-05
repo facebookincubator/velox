@@ -437,6 +437,36 @@ struct WaveConfig {
   // makes the answer independent of how many ops the step happens to have.
   bool quantumGrid{false};
 
+  // Preferred blocks per SM for individual kernel ops, keyed by opcode. Absent
+  // or zero means unspecified, which is every op unless something says
+  // otherwise.
+  //
+  // An op with a preference is only packed into a launch with ops that share
+  // it, and that launch's capacity is numSMs times the preference rather than
+  // numSMs times the occupancy its shared memory allows. So a preference both
+  // segregates the op and narrows the grid it runs on.
+  //
+  // What it is for: an op whose access pattern is scattered may go faster with
+  // fewer concurrent warps -- less pressure on the memory system's outstanding
+  // requests, better L2 and TLB reuse. The other way to buy that is dynamic
+  // shared memory, which works (blocksPerSM divides sharedPerSM by the
+  // per-block request) but pays for it in L1: on an A100 shared and L1 come out
+  // of one 192 KB pool, so starving occupancy that way also starves the cache
+  // the op depends on. Narrowing the grid costs nothing but blocks.
+  //
+  // Manual for now -- set it from the command line, measure, and read the
+  // per-op block counts and clocks back out of the trace. The intent is that
+  // something eventually learns these the way autoAdjustCost learns cost
+  // multipliers, at which point this map is where the learned values land.
+  std::unordered_map<int32_t, int32_t> preferBlocksPerSm;
+
+  /// Preferred blocks per SM for the kernel op with this opcode, or 0 when
+  /// nothing is specified for it.
+  int32_t preferredBlocksPerSm(int32_t opCode) const {
+    auto it = preferBlocksPerSm.find(opCode);
+    return it == preferBlocksPerSm.end() ? 0 : it->second;
+  }
+
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
   /// The singleton is not thread-safe; all of its mutations must happen before

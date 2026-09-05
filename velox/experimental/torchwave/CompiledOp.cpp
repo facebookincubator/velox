@@ -560,6 +560,7 @@ std::vector<GridOp> describeGridOps(
         kernelOp ? static_cast<int32_t>(kernelOp->dynamicSharedBytes()) : 0;
     ops[i].alwaysSingleBlock = kernelOp && kernelOp->alwaysSingleBlock();
     ops[i].hasBarrier = kernelOp && !kernelOp->barrierCounters().empty();
+    ops[i].blocksPerSm = launches[i].launch->blocksPerSm;
   }
   return ops;
 }
@@ -737,6 +738,20 @@ int32_t makeGrid(
       blocksPerSM(budgetDevice, dynamicSharedBytes(launches));
   int32_t targetBlocks = maxBlocks;
 
+  // An op that asked for a width gets no more than numSMs times it.
+  // partitionLaunchPlan caps a launch's capacity the same way, but it declines
+  // to reshape a step that is already a single launch -- which is exactly the
+  // shape a lone op has, and a lone expensive op is the case the preference
+  // exists for -- so the cap has to be applied to the op's block ceiling here
+  // as well, where every path goes through it.
+  for (size_t i = 0; i < launches.size(); ++i) {
+    const int32_t prefer = launches[i].launch->blocksPerSm;
+    if (prefer > 0) {
+      sv.maxBlocks[i] =
+          std::max(1, std::min(sv.maxBlocks[i], budgetDevice.numSMs * prefer));
+    }
+  }
+
   // Assign blocks pro rata by cost, at least 1 per launch, capped by
   // maxBlocks.
   sv.numBlocksPerLaunch.resize(launches.size());
@@ -769,6 +784,66 @@ int32_t makeGrid(
     }
     sv.numBlocksPerLaunch[i] = assigned;
     totalAssigned += assigned;
+  }
+
+  // A width is a property of a LAUNCH -- blocks resident per SM -- not of one
+  // op's share of it, so the cap is on the total blocks of the ops that asked
+  // for the same width, not on each one. One opcode can be several launches in
+  // a step: op 107 on the ROO graph is five launches of one KernelOperation,
+  // each well under numSMs times its preference and together well over it.
+  //
+  // Done here rather than only in partitionLaunchPlan because that declines to
+  // reshape a step it would leave as a single launch, which is the common case
+  // for exactly these ops, and its capacity is a packing hint for an ordinary
+  // launch rather than a bound.
+  if (!WaveConfig::get().preferBlocksPerSm.empty()) {
+    std::map<int32_t, int32_t> assignedPerWidth;
+    for (size_t i = 0; i < launches.size(); ++i) {
+      const int32_t prefer = launches[i].launch->blocksPerSm;
+      if (prefer > 0) {
+        assignedPerWidth[prefer] += sv.numBlocksPerLaunch[i];
+      }
+    }
+    for (const auto& [prefer, assigned] : assignedPerWidth) {
+      const int32_t budget = std::max(1, budgetDevice.numSMs * prefer);
+      if (assigned <= budget) {
+        continue;
+      }
+      // Scale the members down together, then trim the largest until the sum
+      // fits: proportional scaling alone cannot land exactly, and rounding up
+      // anywhere would leave the launch wider than was asked for.
+      const float scale = static_cast<float>(budget) / assigned;
+      int32_t sum = 0;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (launches[i].launch->blocksPerSm != prefer) {
+          continue;
+        }
+        auto& blocks = sv.numBlocksPerLaunch[i];
+        totalAssigned -= blocks;
+        blocks = std::max(
+            1, static_cast<int32_t>(static_cast<float>(blocks) * scale));
+        sum += blocks;
+      }
+      while (sum > budget) {
+        int32_t widest = -1;
+        for (size_t i = 0; i < launches.size(); ++i) {
+          if (launches[i].launch->blocksPerSm == prefer &&
+              sv.numBlocksPerLaunch[i] > 1 &&
+              (widest < 0 ||
+               sv.numBlocksPerLaunch[i] > sv.numBlocksPerLaunch[widest])) {
+            widest = static_cast<int32_t>(i);
+          }
+        }
+        if (widest < 0) {
+          // Every member is down to one block; the width cannot be honoured
+          // without dropping an op, so leave it at one apiece.
+          break;
+        }
+        --sv.numBlocksPerLaunch[widest];
+        --sum;
+      }
+      totalAssigned += sum;
+    }
   }
 
   // For cooperative grids, cap total blocks at what the GPU can run

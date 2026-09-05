@@ -57,6 +57,14 @@ struct Launch {
   /// no registry entry).
   bool metadataOnly{false};
 
+  /// Blocks per SM this op would rather run at, or 0 for unspecified. Taken
+  /// from WaveConfig::preferBlocksPerSm by opcode when the launch is built, so
+  /// the partitioner does not have to consult the config per step. A non-zero
+  /// value both keeps the op out of launches with a different preference and
+  /// narrows its launch's capacity to numSMs times this. See the config field
+  /// for what it is for.
+  int32_t blocksPerSm{0};
+
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
