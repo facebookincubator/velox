@@ -65,6 +65,12 @@ class TorchWaveModel {
   /// device.
   std::vector<c10::IValue> run(std::vector<c10::IValue> inputs);
 
+  /// Like run() but reuses a single held execution frame across calls: weights
+  /// and constants stay resident (set once) and only the user inputs are
+  /// refilled. Single-threaded fast path (one in-flight call); use run() for
+  /// concurrent callers.
+  std::vector<c10::IValue> runReuse(std::vector<c10::IValue> inputs);
+
   /// Tensor-only convenience over run(): accepts tensor inputs and returns the
   /// tensor outputs (non-tensor outputs become undefined tensors).
   std::vector<at::Tensor> runTensors(std::vector<at::Tensor> inputs);

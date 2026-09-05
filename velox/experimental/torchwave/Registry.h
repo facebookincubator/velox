@@ -438,6 +438,19 @@ struct Metadata {
   /// types appear in one translation unit.
   std::vector<std::pair<int32_t, std::string>> dynamicSharedDecls;
 
+  /// If non-zero, the kernel containing this node is compiled with
+  /// __launch_bounds__ for at least this many blocks per SM. Set it on an op
+  /// whose device function the compiler would otherwise give so many registers
+  /// that it lowers the occupancy of every other op sharing the kernel.
+  int32_t minBlocksPerSm{0};
+
+  /// If set, returns the bytes of dynamic (extern __shared__) shared memory
+  /// this node's device function needs. The kernel op takes the max over its
+  /// nodes and the launch passes that as the kernel's dynamic shared memory
+  /// size, so an op that needs a large scratch buffer only costs occupancy in
+  /// the launches that contain it.
+  std::function<int64_t(NodeCP)> dynamicSharedMemory;
+
   /// Ordinal value meaning the type comes from the node's dtype attribute.
   static constexpr int32_t kTypeFromDtype = -1;
 
@@ -663,6 +676,8 @@ class MetadataBuilder {
       std::vector<std::pair<std::string, std::string>> decls);
   MetadataBuilder& dynamicSharedDecls(
       std::vector<std::pair<int32_t, std::string>> decls);
+  MetadataBuilder& dynamicSharedMemory(std::function<int64_t(NodeCP)> func);
+  MetadataBuilder& minBlocksPerSm(int32_t blocks);
   MetadataBuilder& typeTemplateParams(std::vector<int32_t> params);
   MetadataBuilder& hasBlockSizeTemplateParam(bool val = true);
   MetadataBuilder& hasDtypeTemplateParam(bool val = true);
