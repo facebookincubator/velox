@@ -21,11 +21,13 @@ endif()
 
 add_subdirectory(iceberg)
 add_subdirectory(paimon)
+add_subdirectory(delta)
 
 velox_add_library(
   velox_hive_connector
   OBJECT
   BufferedInputBuilder.cpp
+  ConstantFromString.cpp
   ExtractionUtils.cpp
   ExtractionUtils.h
   FileColumnHandle.cpp
@@ -51,6 +53,7 @@ velox_add_library(
   TableHandle.cpp
   HEADERS
   BufferedInputBuilder.h
+  ConstantFromString.h
   FileColumnHandle.h
   FileConfig.h
   FileConnectorSplit.h
@@ -91,6 +94,8 @@ velox_link_libraries(
     velox_exec
     velox_hive_partition_function
     velox_key_encoder
+    velox_presto_types
+  PUBLIC velox_hive_delta_splitreader
 )
 
 if(VELOX_ENABLE_PARQUET)
