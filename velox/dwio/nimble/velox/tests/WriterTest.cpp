@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -780,10 +781,13 @@ DEBUG_ONLY_TEST_F(WriterTest, encodingPoolsPassedToEncodeOptions) {
     uint32_t pooledEncodingBufferCount{0};
     std::set<const void*> observedScratchPools;
     std::set<const void*> observedEncodingBufferPools;
+    // Parallel encoding can invoke the callback concurrently.
+    std::mutex statsMutex;
     SCOPED_TESTVALUE_SET(
         "facebook::nimble::Writer::encode",
         std::function<void(nimble::Encoding::Options*)>(
             [&](nimble::Encoding::Options* encodingOptions) {
+              std::lock_guard lock{statsMutex};
               ++encodeCount;
               if (encodingOptions->bufferPool != nullptr) {
                 ++pooledScratchEncodeCount;
