@@ -858,7 +858,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
               std::nullopt,
               std::nullopt,
               maxRepeat + 1,
-              maxDefine,
+              maxDefine + 1,
               isOptional,
               isRepeated);
         }
@@ -1076,7 +1076,7 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
           std::nullopt,
           std::nullopt,
           maxRepeat,
-          maxDefine - 1,
+          maxDefine,
           isOptional,
           isRepeated);
     }
