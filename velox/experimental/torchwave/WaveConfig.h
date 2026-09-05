@@ -248,6 +248,30 @@ struct WaveConfig {
   // by default.
   bool duplicateMetadata{false};
 
+  // EXPERIMENT, off by default and not correct yet. If true, a metadata getter
+  // whose only reachable user is the output node stops being counted as a use
+  // of its operand when the partitioner builds its levels, so the operand does
+  // not become a CSE border on the getter's account. The getter is put back
+  // before the last layer is built, so it still runs and still occupies its
+  // output slot.
+  //
+  // What it is for: on the ROO preproc graph 255 of the 297 top-level exprs are
+  // returned sym_size getters, and 248 of them have an operand whose only other
+  // reachable user is one consumer. Each of those is a border that exists
+  // purely because the size is returned, and each pushes its operand's producer
+  // into an earlier layer. Removing them is what would give the last layer more
+  // to carve.
+  //
+  // Why it is not correct yet: dropping the reference takes those 248 operands
+  // to a single user, so their producers stop being borders and fuse into that
+  // consumer -- and 238 of the 255 are produced by aten.slice (a view) or
+  // aten.zeros, neither of which leaves a tensor in the frame once inlined. The
+  // getter would then read the size of something that does not exist. The
+  // shapes are all host-computable, so the fix is shape propagation rather than
+  // a frame read, but that is not written. Use this only to measure what the
+  // partitioning change is worth.
+  bool deferSizeOutputs{false};
+
   // If true, the graph optimizer assumes every producer-less value (model
   // input, weight, or constant) is contiguous, so downstream passes may treat
   // them as densely laid out. When on, executeWave verifies each such tensor is
