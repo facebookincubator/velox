@@ -50,6 +50,17 @@ namespace facebook::velox::connector::hive::iceberg {
 
 /// True when 'type' is GEOMETRY() or transitively contains it. Cheap and used
 /// to decide, once per split, whether any conversion work is needed at all.
+///
+/// Defined inline here rather than in IcebergGeometryConverter.cpp on purpose:
+/// that translation unit is only compiled when VELOX_ENABLE_GEO is ON (see
+/// CMakeLists.txt), whereas this predicate is called from two places that are
+/// compiled in both configurations -- IcebergSplitReader::prepareSplit(), which
+/// needs it to detect a geometry column and fail with a clear message in a
+/// geospatial-free build, and the IcebergDataSink constructor's write guard.
+/// Moving the body to the .cpp would leave both of those with an undefined
+/// reference when linking a VELOX_ENABLE_GEO=OFF build. The function is a pure
+/// type predicate with no GEOS dependency, so keeping it in the header costs
+/// nothing.
 inline bool containsGeometry(const TypePtr& type) {
   if (isGeometryType(type)) {
     return true;

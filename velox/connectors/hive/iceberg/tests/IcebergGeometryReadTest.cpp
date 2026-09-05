@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
+#include <cstring>
 #include <sstream>
 
 #include <folly/Singleton.h>
@@ -38,6 +39,22 @@ namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
 using TempFilePath = common::testutil::TempFilePath;
+
+// Little-endian WKB scalar appenders, used to hand-build payloads whose nested
+// headers no writer would emit.
+void appendUint32Le(std::string& out, uint32_t value) {
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(static_cast<char>((value >> (8 * i)) & 0xFF));
+  }
+}
+
+void appendDoubleLe(std::string& out, double value) {
+  uint64_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  for (int i = 0; i < 8; ++i) {
+    out.push_back(static_cast<char>((bits >> (8 * i)) & 0xFF));
+  }
+}
 
 // Every primary geometry kind plus a collection.
 const std::vector<std::string> kAllKinds = {
@@ -340,6 +357,144 @@ TEST_F(IcebergGeometryReadTest, constantRowWithGeometryField) {
       converted);
 }
 
+// An Iceberg equality-delete file stores its geometry as the ISO WKB the spec
+// mandates, while the base rows it is probed against have already been
+// re-encoded into Velox's internal geometry encoding. Both sides have to be
+// hashed in the same logical encoding or the delete silently never matches.
+TEST_F(IcebergGeometryReadTest, equalityDeleteOnGeometryColumn) {
+  const std::string matchWkt = "POINT (10 20)";
+  const std::string keepWkt = "LINESTRING (0 0, 1 1)";
+
+  // Base file: written as binary WKB and read back as GEOMETRY, which is how a
+  // real Iceberg geometry data file looks on disk.
+  auto baseDirectory = test::TempDirectoryPath::create();
+  auto baseData = makeRowVector(
+      {"id", "geom"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeVarbinaryVector({toWkb(matchWkt), toWkb(keepWkt)})});
+  auto baseSink =
+      createDataSinkAndAppendData({baseData}, baseDirectory->getPath());
+  baseSink->close();
+  // Release the sink before creating the next one: each sink adds a writer
+  // sub-pool named "part[0]" under the shared connector pool, so two live
+  // sinks would collide on that name.
+  baseSink.reset();
+  auto baseSplits = createSplitsForDirectory(baseDirectory->getPath());
+  ASSERT_EQ(baseSplits.size(), 1);
+  const auto baseFilePath =
+      std::dynamic_pointer_cast<HiveConnectorSplit>(baseSplits[0])->filePath;
+
+  // Equality-delete file: one row carrying G_match as ISO WKB, exactly as
+  // another engine would have written it. Written as Parquet like the base
+  // file, so this test stays inside the PR's Parquet-only geometry scope.
+  auto deleteDirectory = test::TempDirectoryPath::create();
+  auto deleteData =
+      makeRowVector({"geom"}, {makeVarbinaryVector({toWkb(matchWkt)})});
+  auto deleteSink =
+      createDataSinkAndAppendData({deleteData}, deleteDirectory->getPath());
+  deleteSink->close();
+  deleteSink.reset();
+  auto deleteSplits = createSplitsForDirectory(deleteDirectory->getPath());
+  ASSERT_EQ(deleteSplits.size(), 1);
+  const auto deleteFilePath =
+      std::dynamic_pointer_cast<HiveConnectorSplit>(deleteSplits[0])->filePath;
+
+  // Field id 2 is the second top-level column, "geom".
+  IcebergDeleteFile equalityDelete(
+      FileContent::kEqualityDeletes,
+      deleteFilePath,
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(deleteFilePath),
+      /*equalityFieldIds=*/{2});
+
+  const auto tableSchema = ROW({"id", "geom"}, {BIGINT(), GEOMETRY()});
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(tableSchema)
+                  .dataColumns(tableSchema)
+                  .endTableScan()
+                  .planNode();
+
+  // G_match is deleted; G_keep survives. Without the delete-side conversion the
+  // delete key hashes as raw WKB while the base row hashes as internal bytes,
+  // nothing matches, and both rows come back.
+  auto expected = makeRowVector(
+      {"id", "geom"},
+      {makeFlatVector<int64_t>({2}),
+       makeGeometryVector({toVeloxGeometry(keepWkt)})});
+
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(baseFilePath, {equalityDelete}))
+      .assertResults(expected);
+}
+
+// A hash join on a GEOMETRY key must return the matching Iceberg row even with
+// string/binary dynamic-filter pushdown enabled. The build side holds Velox
+// internal geometry bytes while the Iceberg file holds ISO WKB, so a
+// BytesValues filter built from the build side and evaluated by the scan
+// against the file bytes would drop the row. No filter may be produced for
+// this custom VARBINARY-backed type, leaving the join to do the matching.
+TEST_F(IcebergGeometryReadTest, geometryHashJoinWithDynamicFilterPushdown) {
+  const std::string matchWkt = "POINT (10 20)";
+  const std::string otherWkt = "LINESTRING (0 0, 1 1)";
+
+  auto directory = test::TempDirectoryPath::create();
+  auto data = makeRowVector(
+      {"id", "geom"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeVarbinaryVector({toWkb(matchWkt), toWkb(otherWkt)})});
+  auto sink = createDataSinkAndAppendData({data}, directory->getPath());
+  sink->close();
+
+  // Build side: the same shape, already in Velox's internal encoding, which is
+  // what a GEOMETRY vector anywhere in the plan carries.
+  auto buildData = makeRowVector(
+      {"bgeom"}, {makeGeometryVector({toVeloxGeometry(matchWkt)})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId scanId;
+  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(ROW({"id", "geom"}, {BIGINT(), GEOMETRY()}))
+                  .endTableScan()
+                  .capturePlanNodeId(scanId)
+                  .hashJoin(
+                      {"geom"},
+                      {"bgeom"},
+                      exec::test::PlanBuilder(planNodeIdGenerator)
+                          .values({buildData})
+                          .planNode(),
+                      /*filter=*/"",
+                      {"id"})
+                  .planNode();
+
+  auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      exec::test::AssertQueryBuilder(plan)
+          .config(
+              core::QueryConfig::kHashProbeStringDynamicFilterPushdownEnabled,
+              "true")
+          .splits(scanId, createSplitsForDirectory(directory->getPath()))
+          .copyResults(pool(), task);
+
+  velox::test::assertEqualVectors(expected, result);
+
+  // No dynamic filter may have been produced for the GEOMETRY key: the scan
+  // would have evaluated it against the file's WKB, and if the join were also
+  // replaced by that filter the matching row would be dropped outright.
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      EXPECT_EQ(op.runtimeStats.count("dynamicFiltersProduced"), 0)
+          << op.operatorType;
+      EXPECT_EQ(op.runtimeStats.count("replacedWithDynamicFilterRows"), 0)
+          << op.operatorType;
+    }
+  }
+}
+
 TEST_F(IcebergGeometryReadTest, invalidWkbErrorNamesColumnPath) {
   auto shortValue = makeVarbinaryVector({std::string("\x01\x02\x03", 3)});
   VELOX_ASSERT_THROW(
@@ -375,6 +530,135 @@ TEST_F(IcebergGeometryReadTest, zmAndEwkbAreRejectedNotFlattened) {
   expectFailure(0x8000'0001, "extended WKB (EWKB)");
   // ISO code 15 is PolyhedralSurface, which Velox GEOMETRY cannot represent.
   expectFailure(15, "unsupported WKB geometry type code 15");
+}
+
+// The children of a MULTIPOINT/MULTILINESTRING/MULTIPOLYGON/GEOMETRYCOLLECTION
+// each carry their own WKB header, so a collection whose own type word says XY
+// can still contain a Z/M/ZM/EWKB child. GEOS parses such a payload and
+// GeometrySerializer would then write X and Y only, silently discarding the
+// extra ordinate. Validation therefore has to walk every nested header.
+TEST_F(IcebergGeometryReadTest, nestedWkbHeadersAreValidated) {
+  // A child geometry with an arbitrary type word and 'numOrdinates' doubles.
+  auto child = [](uint32_t typeCode, int numOrdinates, bool hasSrid = false) {
+    std::string out;
+    out.push_back(1); // little endian
+    appendUint32Le(out, typeCode);
+    if (hasSrid) {
+      appendUint32Le(out, 4326);
+    }
+    for (int i = 0; i < numOrdinates; ++i) {
+      appendDoubleLe(out, 1.0 + i);
+    }
+    return out;
+  };
+  // A container of 'typeCode' wrapping the given complete child geometries.
+  auto container = [](uint32_t typeCode,
+                      const std::vector<std::string>& children) {
+    std::string out;
+    out.push_back(1);
+    appendUint32Le(out, typeCode);
+    appendUint32Le(out, static_cast<uint32_t>(children.size()));
+    for (const auto& c : children) {
+      out += c;
+    }
+    return out;
+  };
+  auto expectFailure = [&](const std::string& wkb, const std::string& message) {
+    auto input = makeVarbinaryVector({wkb});
+    VELOX_ASSERT_THROW(
+        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"), message);
+  };
+
+  const std::string xyPoint = child(1, 2);
+
+  // A 2D GEOMETRYCOLLECTION whose child declares extra ordinates.
+  expectFailure(
+      container(7, {xyPoint, child(1001, 3)}), "contains Z coordinates");
+  expectFailure(
+      container(7, {xyPoint, child(2001, 3)}), "contains M coordinates");
+  expectFailure(
+      container(7, {xyPoint, child(3001, 4)}), "contains Z and M coordinates");
+  // A child using PostGIS EWKB with an embedded SRID.
+  expectFailure(
+      container(7, {xyPoint, child(0x2000'0001, 2, /*hasSrid=*/true)}),
+      "extended WKB (EWKB)");
+
+  // The same, one level deeper: GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(Z)).
+  expectFailure(
+      container(7, {container(7, {child(1001, 3)})}), "contains Z coordinates");
+
+  // MULTIPOINT/MULTILINESTRING/MULTIPOLYGON use the same embedded-WKB
+  // mechanism, so the recursive walk has to cover them too.
+  expectFailure(
+      container(4, {xyPoint, child(1001, 3)}), "contains Z coordinates");
+  expectFailure(container(5, {child(1002, 0)}), "contains Z coordinates");
+  expectFailure(container(6, {child(1003, 0)}), "contains Z coordinates");
+
+  // An unsupported ISO code nested inside a valid collection.
+  expectFailure(
+      container(7, {xyPoint, child(15, 0)}),
+      "unsupported WKB geometry type code 15");
+}
+
+// The validator must accept every legal nested XY shape, including empties and
+// both byte orders, so the recursive check does not over-reject.
+TEST_F(IcebergGeometryReadTest, nestedXyWkbIsAccepted) {
+  for (
+      const std::string& wkt : {
+          "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 1))",
+          "GEOMETRYCOLLECTION (MULTIPOINT ((1 2), (3 4)))",
+          "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2)))",
+          "GEOMETRYCOLLECTION (POLYGON ((0 0, 1 0, 1 1, 0 0)))",
+          "GEOMETRYCOLLECTION (MULTIPOINT EMPTY, POINT (1 2))",
+          "GEOMETRYCOLLECTION EMPTY",
+          "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))",
+          "MULTILINESTRING ((0 0, 5 5), (10 10, 20 20))",
+      }) {
+    auto input = makeVarbinaryVector({toWkb(wkt)});
+    auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+    ASSERT_TRUE(isGeometryType(converted->type())) << wkt;
+    velox::test::assertEqualVectors(
+        makeGeometryVector({toVeloxGeometry(wkt)}), converted);
+  }
+}
+
+// A malformed or truncated payload must produce a user error rather than an
+// out-of-bounds read while walking nested headers.
+TEST_F(IcebergGeometryReadTest, malformedNestedWkbIsRejectedSafely) {
+  auto expectFailure = [&](const std::string& wkb) {
+    auto input = makeVarbinaryVector({wkb});
+    VELOX_ASSERT_THROW(
+        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"), "geom");
+  };
+
+  // A collection claiming two children but carrying none.
+  std::string missingChildren;
+  missingChildren.push_back(1);
+  appendUint32Le(missingChildren, 7);
+  appendUint32Le(missingChildren, 2);
+  expectFailure(missingChildren);
+
+  // A LINESTRING claiming a huge point count; the size computation must not
+  // overflow into a value that passes the bounds check.
+  std::string hugeCount;
+  hugeCount.push_back(1);
+  appendUint32Le(hugeCount, 2);
+  appendUint32Le(hugeCount, 0xFFFF'FFFFu);
+  expectFailure(hugeCount);
+
+  // A child header truncated mid-type-word.
+  std::string truncatedChild;
+  truncatedChild.push_back(1);
+  appendUint32Le(truncatedChild, 7);
+  appendUint32Le(truncatedChild, 1);
+  truncatedChild.push_back(1);
+  truncatedChild.push_back(1);
+  expectFailure(truncatedChild);
+
+  // Trailing bytes after a complete geometry.
+  std::string trailing = toWkb("POINT (1 2)");
+  trailing.push_back('\x00');
+  expectFailure(trailing);
 }
 
 TEST_F(IcebergGeometryReadTest, nestedRowArrayAndMap) {

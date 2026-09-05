@@ -60,11 +60,174 @@ const char* dimensionName(uint32_t dimensions) {
   }
 }
 
+// ISO WKB geometry type codes.
+constexpr uint32_t kWkbPoint = 1;
+constexpr uint32_t kWkbLineString = 2;
+constexpr uint32_t kWkbPolygon = 3;
+constexpr uint32_t kWkbMultiPoint = 4;
+constexpr uint32_t kWkbMultiLineString = 5;
+constexpr uint32_t kWkbMultiPolygon = 6;
+constexpr uint32_t kWkbGeometryCollection = 7;
+
+// An XY coordinate: two IEEE-754 doubles.
+constexpr uint32_t kXyCoordinateSize = 16;
+constexpr uint32_t kUint32Size = 4;
+
+// Walks a WKB payload and validates the header of every geometry in it,
+// including the nested geometries of MULTIPOINT, MULTILINESTRING, MULTIPOLYGON
+// and GEOMETRYCOLLECTION, which each carry their own independent WKB header.
+//
+// Checking only the outermost header is not sufficient: a collection whose own
+// type word says XY may contain a Z, M, ZM or EWKB child. GEOS parses such a
+// payload happily and GeometrySerializer then writes X and Y only, silently
+// discarding the extra ordinate. Validating recursively before parsing is what
+// keeps the XY-only contract honest, and it is why the dimensionality is not
+// re-derived from the parsed GEOS geometry afterwards.
+//
+// Only headers and element counts are read; coordinate runs are skipped
+// arithmetically, so the cost is proportional to the number of nested
+// geometries rather than to the number of coordinates. Every read is bounds
+// checked, so a truncated or malformed payload produces a user error rather
+// than an out-of-bounds read.
+class WkbHeaderValidator {
+ public:
+  WkbHeaderValidator(StringView wkb, const std::string& columnPath)
+      : data_{reinterpret_cast<const uint8_t*>(wkb.data())},
+        size_{wkb.size()},
+        columnPath_{columnPath} {}
+
+  void validate() {
+    validateGeometry();
+    // Trailing bytes mean the payload does not describe exactly one geometry.
+    VELOX_USER_CHECK_EQ(
+        position_,
+        size_,
+        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': {} trailing byte(s) after the geometry",
+        columnPath_,
+        size_ - position_);
+  }
+
+ private:
+  // Validates one geometry at the current position and advances past it.
+  void validateGeometry() {
+    const bool littleEndian = readByteOrder();
+    const uint32_t typeCode = readUint32(littleEndian);
+
+    VELOX_USER_CHECK_EQ(
+        typeCode & (kEwkbFlagZ | kEwkbFlagM | kEwkbFlagSrid),
+        0,
+        "Iceberg geometry column '{}' is encoded as extended WKB (EWKB); the Iceberg specification requires ISO WKB",
+        columnPath_);
+
+    const uint32_t dimensions = typeCode / 1000;
+    VELOX_USER_CHECK_EQ(
+        dimensions,
+        0,
+        "Iceberg geometry column '{}' contains {} coordinates; Velox GEOMETRY supports only two-dimensional (XY) geometries",
+        columnPath_,
+        dimensionName(dimensions));
+
+    const uint32_t geometryCode = typeCode % 1000;
+    VELOX_USER_CHECK(
+        geometryCode >= 1 && geometryCode <= kMaxSupportedWkbGeometryCode,
+        "Iceberg geometry column '{}' contains an unsupported WKB geometry type code {}",
+        columnPath_,
+        geometryCode);
+
+    switch (geometryCode) {
+      case kWkbPoint:
+        // A lone point has no count; an empty point is written as NaN NaN.
+        skip(kXyCoordinateSize);
+        break;
+      case kWkbLineString:
+        skipCoordinates(readUint32(littleEndian));
+        break;
+      case kWkbPolygon: {
+        const uint32_t numRings = readUint32(littleEndian);
+        for (uint32_t i = 0; i < numRings; ++i) {
+          skipCoordinates(readUint32(littleEndian));
+        }
+        break;
+      }
+      case kWkbMultiPoint:
+      case kWkbMultiLineString:
+      case kWkbMultiPolygon:
+      case kWkbGeometryCollection: {
+        // Every child is a complete WKB geometry with its own byte order and
+        // type word, so recurse rather than skipping coordinates. This is the
+        // path that catches a Z/M/ZM/EWKB child under an XY parent.
+        const uint32_t numChildren = readUint32(littleEndian);
+        for (uint32_t i = 0; i < numChildren; ++i) {
+          validateGeometry();
+        }
+        break;
+      }
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+
+  // Returns true for little endian. Rejects any other marker.
+  bool readByteOrder() {
+    require(1);
+    const uint8_t marker = data_[position_++];
+    if (marker == kWkbLittleEndian) {
+      return true;
+    }
+    if (marker == kWkbBigEndian) {
+      return false;
+    }
+    VELOX_USER_FAIL(
+        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': unknown byte order marker {}",
+        columnPath_,
+        static_cast<int32_t>(marker));
+  }
+
+  uint32_t readUint32(bool littleEndian) {
+    require(kUint32Size);
+    const uint8_t* p = data_ + position_;
+    position_ += kUint32Size;
+    if (littleEndian) {
+      return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+          (static_cast<uint32_t>(p[2]) << 16) |
+          (static_cast<uint32_t>(p[3]) << 24);
+    }
+    return (static_cast<uint32_t>(p[0]) << 24) |
+        (static_cast<uint32_t>(p[1]) << 16) |
+        (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+  }
+
+  // Skips 'count' XY coordinates. The multiplication is done in 64 bits so a
+  // corrupt count cannot overflow into a small value that passes the check.
+  void skipCoordinates(uint32_t count) {
+    skip(static_cast<uint64_t>(count) * kXyCoordinateSize);
+  }
+
+  void skip(uint64_t numBytes) {
+    require(numBytes);
+    position_ += numBytes;
+  }
+
+  void require(uint64_t numBytes) {
+    VELOX_USER_CHECK_LE(
+        numBytes,
+        size_ - position_,
+        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': truncated payload, need {} more byte(s) at offset {} of {}",
+        columnPath_,
+        numBytes,
+        position_,
+        size_);
+  }
+
+  const uint8_t* const data_;
+  const uint64_t size_;
+  const std::string& columnPath_;
+  uint64_t position_{0};
+};
+
 // Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot
-// represent faithfully, rather than silently dropping dimensions. Only the
-// outermost header is inspected: in conforming ISO WKB the dimensionality of a
-// collection is declared on the collection itself, so a 2D header implies 2D
-// children.
+// represent faithfully, rather than silently dropping dimensions. Every nested
+// header is checked, not just the outermost one; see WkbHeaderValidator.
 void validateIsoWkb(StringView wkb, const std::string& columnPath) {
   VELOX_USER_CHECK_GE(
       wkb.size(),
@@ -74,44 +237,7 @@ void validateIsoWkb(StringView wkb, const std::string& columnPath) {
       kWkbHeaderLength,
       wkb.size());
 
-  const auto* data = reinterpret_cast<const uint8_t*>(wkb.data());
-  uint32_t typeCode;
-  if (data[0] == kWkbLittleEndian) {
-    typeCode = static_cast<uint32_t>(data[1]) |
-        (static_cast<uint32_t>(data[2]) << 8) |
-        (static_cast<uint32_t>(data[3]) << 16) |
-        (static_cast<uint32_t>(data[4]) << 24);
-  } else if (data[0] == kWkbBigEndian) {
-    typeCode = (static_cast<uint32_t>(data[1]) << 24) |
-        (static_cast<uint32_t>(data[2]) << 16) |
-        (static_cast<uint32_t>(data[3]) << 8) | static_cast<uint32_t>(data[4]);
-  } else {
-    VELOX_USER_FAIL(
-        "Invalid well-known binary (WKB) in Iceberg geometry column '{}': unknown byte order marker {}",
-        columnPath,
-        static_cast<int32_t>(data[0]));
-  }
-
-  VELOX_USER_CHECK_EQ(
-      typeCode & (kEwkbFlagZ | kEwkbFlagM | kEwkbFlagSrid),
-      0,
-      "Iceberg geometry column '{}' is encoded as extended WKB (EWKB); the Iceberg specification requires ISO WKB",
-      columnPath);
-
-  const uint32_t dimensions = typeCode / 1000;
-  VELOX_USER_CHECK_EQ(
-      dimensions,
-      0,
-      "Iceberg geometry column '{}' contains {} coordinates; Velox GEOMETRY supports only two-dimensional (XY) geometries",
-      columnPath,
-      dimensionName(dimensions));
-
-  const uint32_t geometryCode = typeCode % 1000;
-  VELOX_USER_CHECK(
-      geometryCode >= 1 && geometryCode <= kMaxSupportedWkbGeometryCode,
-      "Iceberg geometry column '{}' contains an unsupported WKB geometry type code {}",
-      columnPath,
-      geometryCode);
+  WkbHeaderValidator{wkb, columnPath}.validate();
 }
 
 // Parses one WKB value and appends Velox's internal geometry encoding to
