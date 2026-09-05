@@ -44,6 +44,7 @@ by Velox. See details on bundling below.
 | s2geometry        | 0.12.0          | Yes      ||
 | fast_float        | v8.0.2          | Yes      ||
 | xxhash            | default         | No       ||
+| libxml2           | 2.13.5          | Yes      | Enabled for Spark |
 | flatbuffers       | 24.3.25         | Yes      | Only with `VELOX_ENABLE_NIMBLE=ON`. `flatc` is required, not just the runtime. Held at the version cuDF expects |
 | openzl            | 6b48fa48        | Yes      | Only with `VELOX_ENABLE_NIMBLE=ON`. Pinned to a commit; no suitable release tag |
 
