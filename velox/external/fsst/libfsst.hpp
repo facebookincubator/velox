@@ -31,9 +31,11 @@
 #include <fcntl.h>
 #include <stddef.h>
 
-using namespace std;
-
 #include "fsst.h" // the official FSST API -- also usable by C mortals
+
+namespace nimble_fsst_internal {
+
+using namespace std;
 
 /* unsigned integers */
 typedef uint8_t u8;
@@ -448,3 +450,5 @@ fsst_compressAVX512(
 // C++ fsst-compress function with some more control of how the compression happens (algorithm flavor, simd unroll degree)
 size_t compressImpl(Encoder *encoder, size_t n, size_t lenIn[], u8 *strIn[], size_t size, u8 * output, size_t *lenOut, u8 *strOut[], bool noSuffixOpt, bool avoidBranch, int simd);
 size_t compressAuto(Encoder *encoder, size_t n, size_t lenIn[], u8 *strIn[], size_t size, u8 * output, size_t *lenOut, u8 *strOut[], int simd);
+
+} // namespace nimble_fsst_internal
