@@ -792,6 +792,51 @@ std::vector<c10::IValue> WaveGraphExecutor::runInputs(
   return executeWithPrefilledFrame(*pooledFrame);
 }
 
+std::vector<c10::IValue> WaveGraphExecutor::runInputsReuse(
+    std::vector<c10::IValue> inputs) {
+  // Create the held frame on first use (makeDeviceFrame copies weights and
+  // constants to device once); subsequent calls keep it resident so the
+  // weights/constants are not re-copied and no pooled frame is
+  // fetched/returned. The prior run's non-persistent (intermediate/output)
+  // values must still be cleared each call: successive batches have different
+  // data-dependent shapes, so a stale-sized intermediate would otherwise be
+  // reused (e.g. a view onto a buffer sized for a previous batch).
+  // Weights/constants are persistent and survive the clear.
+  const bool timeIt = std::getenv("TW_TIME_EXEC") != nullptr;
+  using Clock = std::chrono::high_resolution_clock;
+  auto ms = [](Clock::time_point a, Clock::time_point b) {
+    return static_cast<double>(
+               std::chrono::duration_cast<std::chrono::microseconds>(b - a)
+                   .count()) /
+        1000.0;
+  };
+  auto t0 = Clock::now();
+  if (!reuseFrame_) {
+    reuseFrame_ = getFrame();
+  } else {
+    reuseFrame_->clearNonPersistentValues();
+  }
+  // A cleared reuse frame (freed intermediate buffers) -- or a freshly obtained
+  // one -- invalidates the launch cache's resolved value pointers/offsets, just
+  // as returnFrame's clear does on the pooled path. Bump the generation so
+  // executeWithPrefilledFrame rebuilds that cache; otherwise the reuse path
+  // launches kernels against stale/freed buffers -> illegal memory access on
+  // the second reuse call.
+  ++frameGeneration_;
+  auto t1 = Clock::now();
+  fillUserInputs(*reuseFrame_, std::move(inputs));
+  auto t2 = Clock::now();
+  auto out = executeWithPrefilledFrame(*reuseFrame_);
+  if (timeIt) {
+    syncTorchDefaultStream();
+    auto t3 = Clock::now();
+    LOG(ERROR) << "runInputsReuse ms: clear/getFrame=" << ms(t0, t1)
+               << " fillUserInputs=" << ms(t1, t2)
+               << " exec+sync=" << ms(t2, t3);
+  }
+  return out;
+}
+
 std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
     nativert::ExecutionFrame& frame) {
   // Move any user input tensors that are not on device to device.
@@ -1836,6 +1881,27 @@ void WaveGraphExecutor::executeWave(
       threadInfo.peakBytes = peakAllocatedBytes();
       threadInfo.perfReport = makePerfReport(state, wallUs);
     }
+    // Print the report on the same thread that produced it (avoids relying on a
+    // cross-thread thread_local read). Env-guarded so it does not perturb
+    // executor_test, which retrieves waveThreadInfo().perfReport itself.
+    if (std::getenv("TW_PRINT_PERF")) {
+      // The counters, not the whole report: it is tens of kilobytes and every
+      // execution produces one, so logging them all would cost more than the
+      // run being measured.
+      LOG(ERROR) << "[TW_PRINT_PERF] trace=" << WaveConfig::get().trace
+                 << " override="
+                 << (torch::wave::waveConfigOverride() != nullptr)
+                 << " perfReport.size=" << threadInfo.perfReport.size()
+                 << " runAheadMean="
+                 << (threadInfo.runAheadSamples > 0
+                         ? static_cast<double>(threadInfo.runAheadSum) /
+                             threadInfo.runAheadSamples
+                         : 0.0)
+                 << " runAheadMax=" << threadInfo.runAheadMax
+                 << " drainedStarts=" << threadInfo.numDrainedStarts << "/"
+                 << threadInfo.runAheadSamples
+                 << " peakBytes=" << threadInfo.peakBytes;
+    }
     if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
       TORCH_CHECK(false, "Wave kernel error:\n", threadInfo.errors);
     }
@@ -1942,6 +2008,98 @@ void computeGpuTimeline(ExecutionState& state) {
 }
 
 } // namespace
+
+void setWaveTrace(int32_t trace) {
+  WaveConfig::get().trace = trace;
+}
+
+int32_t getWaveTrace() {
+  return WaveConfig::get().trace;
+}
+
+void setFreeIntermediates(bool on) {
+  WaveConfig::get().freeIntermediates = on;
+}
+
+void setEnableAllocGroup(bool on) {
+  WaveConfig::get().enableAllocGroup = on;
+}
+
+void setEnableConcatAllocGroup(bool on) {
+  WaveConfig::get().enableConcatAllocGroup = on;
+}
+
+void setEnableLifetimeAllocGroup(bool on) {
+  WaveConfig::get().enableLifetimeAllocGroup = on;
+}
+
+void setParallelConcatFill(bool on) {
+  WaveConfig::get().parallelConcatFill = on;
+}
+
+void setAutoAdjustCost(bool on) {
+  WaveConfig::get().autoAdjustCost = on;
+}
+
+void setIsCg(bool on) {
+  WaveConfig::get().isCg = on;
+}
+
+void setKernelCacheDir(const std::string& dir) {
+  WaveConfig::get().kernelCacheDir = dir;
+}
+
+void setAllStandalone(bool on) {
+  WaveConfig::get().allStandalone = on;
+}
+
+void setBlockSize(int32_t blockSize) {
+  WaveConfig::get().blockSize = blockSize;
+}
+
+void setEnableReuse(bool on) {
+  WaveConfig::get().enableReuse = on;
+}
+
+void setElideClones(bool on) {
+  WaveConfig::get().elideClones = on;
+}
+
+void setStepLastUse(bool on) {
+  WaveConfig::get().stepLastUse = on;
+}
+
+void setSyncEachStep(bool on) {
+  WaveConfig::get().syncEachStep = on;
+}
+
+void setDeferD2h(bool on) {
+  WaveConfig::get().deferD2h = on;
+}
+
+void setRunAhead(bool on) {
+  WaveConfig::get().runAhead = on;
+}
+
+void setMaxDelayedFree(int64_t bytes) {
+  WaveConfig::get().maxDelayedFree = bytes;
+}
+
+void setDuplicateMetadata(bool on) {
+  WaveConfig::get().duplicateMetadata = on;
+}
+
+void setDonateBuffers(bool on) {
+  WaveConfig::get().donateBuffers = on;
+}
+
+void setDonationCarryBytes(int64_t bytes) {
+  WaveConfig::get().donationCarryBytes = bytes;
+}
+
+void setPerOpStandaloneTiming(bool on) {
+  WaveConfig::get().perOpStandaloneTiming = on;
+}
 
 void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   auto& infos = state.launchDebugInfos;
