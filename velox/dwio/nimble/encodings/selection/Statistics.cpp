@@ -287,6 +287,13 @@ void Statistics<T, InputType>::populateBucketCounts() const {
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populateBitFlipProfile() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  bitFlipProfile_ = computeBitFlipProfile<T>(data_);
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateStringLength() const {
   uint64_t totalBytes = 0;
   std::string_view minString = data_[0];
@@ -423,5 +430,15 @@ template void Statistics<uint64_t>::populateBucketCounts() const;
 template void Statistics<std::string_view>::populateStringLength() const;
 template void Statistics<std::string_view, std::string>::populateStringLength()
     const;
+
+// populateBitFlipProfile works on integral types only
+template void Statistics<int8_t>::populateBitFlipProfile() const;
+template void Statistics<uint8_t>::populateBitFlipProfile() const;
+template void Statistics<int16_t>::populateBitFlipProfile() const;
+template void Statistics<uint16_t>::populateBitFlipProfile() const;
+template void Statistics<int32_t>::populateBitFlipProfile() const;
+template void Statistics<uint32_t>::populateBitFlipProfile() const;
+template void Statistics<int64_t>::populateBitFlipProfile() const;
+template void Statistics<uint64_t>::populateBitFlipProfile() const;
 
 } // namespace facebook::nimble

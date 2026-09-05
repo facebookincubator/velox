@@ -69,6 +69,7 @@ add_library(
   selection/EncodingSelectionPolicy.h
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
+  selection/BitFlipProfile.h
   common/EncodingUtils.h
   common/EncodingType.h
   common/EncodingPrimitives.h
@@ -79,9 +80,11 @@ add_library(
   common/BufferedEncoding.h
   VarintEncoding.h
   TrivialEncoding.h
+  SubIntSplitTopLevelPolicy.h
   SubIntSplitSelector.h
   SubIntSplitSampler.h
   SubIntSplitMetrics.h
+  SubIntSplitEstimator.h
   SubIntSplitEncoding.h
   SubIntSplitCostModels.h
   SubIntSplitConfig.h
