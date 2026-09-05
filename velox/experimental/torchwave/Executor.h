@@ -192,6 +192,42 @@ struct WaveThreadInfo {
 /// Returns the thread-local WaveThreadInfo for the current thread.
 const WaveThreadInfo& waveThreadInfo();
 
+/// Sets WaveConfig::get().trace from within this translation unit, so callers
+/// (e.g. the pybind extension) reach the exact WaveConfig singleton instance
+/// the executor reads at run time -- a plain wave_config().trace assignment
+/// made in another TU can hit a duplicated inline-static instance and not take
+/// effect.
+void setWaveTrace(int32_t trace);
+
+/// Returns WaveConfig::get().trace as seen by the executor's TU.
+int32_t getWaveTrace();
+
+/// Set WaveConfig flags on the exact singleton the executor's TU reads (same
+/// rationale as setWaveTrace: avoids a duplicated inline-static instance).
+void setFreeIntermediates(bool on);
+void setEnableAllocGroup(bool on);
+void setEnableConcatAllocGroup(bool on);
+void setEnableLifetimeAllocGroup(bool on);
+void setParallelConcatFill(bool on);
+void setAutoAdjustCost(bool on);
+void setIsCg(bool on);
+void setSinglePassSelect(bool on);
+void setFoldSharedChains(bool on);
+void setKernelCacheDir(const std::string& dir);
+void setAllStandalone(bool on);
+void setBlockSize(int32_t blockSize);
+void setEnableReuse(bool on);
+void setElideClones(bool on);
+void setStepLastUse(bool on);
+void setSyncEachStep(bool on);
+void setDeferD2h(bool on);
+void setRunAhead(bool on);
+void setMaxDelayedFree(int64_t bytes);
+void setDuplicateMetadata(bool on);
+void setDonateBuffers(bool on);
+void setDonationCarryBytes(int64_t bytes);
+void setPerOpStandaloneTiming(bool on);
+
 /// Lifecycle of a step's kernel outputs, used to bundle intermediate freeing
 /// with wave-stream syncs (see WaveConfig::freeIntermediates).
 enum class ExecutionStage {
@@ -785,10 +821,14 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
+/// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
+/// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
+/// cooperative grid when an op in the step asks for dynamic shared memory.
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM = 0);
+    int32_t maxBlocksPerSM = 0,
+    int32_t staticSharedPerBlock = 0);
 
 /// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
 at::Tensor paramTensor(
@@ -868,6 +908,14 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
   std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
 
+  /// Like runInputs but reuses a single held device frame across calls instead
+  /// of getting/returning a pooled frame each time: weights and constants stay
+  /// resident (set once) and only the user inputs are refilled per call. The
+  /// graph re-executes over the held frame, so stale intermediates are simply
+  /// overwritten. Single-threaded fast path (one in-flight call at a time),
+  /// e.g. for latency benchmarks; use runInputs() for concurrent callers.
+  std::vector<c10::IValue> runInputsReuse(std::vector<c10::IValue> inputs);
+
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();
 
@@ -935,6 +983,10 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
+
+  /// Single held frame for runInputsReuse(): persistent tensors stay resident,
+  /// only user inputs are refilled each call. Not thread-safe.
+  std::unique_ptr<nativert::ExecutionFrame> reuseFrame_;
 
   uint64_t frameGeneration_{0};
 

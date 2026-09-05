@@ -361,9 +361,11 @@ void hashSubgraphNode(
       }
     }
   }
-  // SymIntList attributes are baked into the generated code and into the
-  // subgraph's shape expressions, so they are part of a node's identity (see
-  // intListAttributesMatch).
+  // SymIntList attributes are baked into the generated code as literals (see
+  // emitScalarListSetup) and into the subgraph's shape expressions, so they are
+  // part of a node's identity (see intListAttributesMatch): two otherwise
+  // identical ops differing in one must not share a deduplicated kernel. Scalar
+  // attributes go through the param area and need no hashing.
   for (const auto& attr : node->attributes()) {
     if (!std::holds_alternative<std::vector<int64_t>>(attr.value)) {
       continue;
@@ -1637,26 +1639,37 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
 
   for (const auto& input : node->inputs()) {
     auto* value = input.value;
-    if (memOutputs.count(value)) {
-      auto* producer = value->producer();
-      if (producer && !placed_.count(producer)) {
-        if (producer->target() == "prim.ListPack") {
-          placed_.insert(producer);
-          for (const auto& lpInput : producer->inputs()) {
-            auto* lpValue = lpInput.value;
-            auto* lpProducer = lpValue->producer();
-            if (lpProducer && !placed_.count(lpProducer)) {
-              std::vector<ResultSpec> lpSpecs;
-              ResultSpec rs;
-              rs.value = lpValue;
-              lpSpecs.push_back(rs);
-              fusedCode(lpProducer, lpSpecs);
-            }
-          }
-        } else {
-          auto prodSpecs = outputSpecs(producer);
-          fusedCode(producer, prodSpecs);
+    if (!value) {
+      continue;
+    }
+    auto* producer = value->producer();
+    // A tensor list read by this (non-elementwise) op is consumed from memory,
+    // so every element must be materialized to its own Value buffer -- never
+    // left in a register -- in all modes. Do this whether or not the list is a
+    // boundary memOutput: an internal ListPack fed by fused elementwise
+    // producers (e.g. values built by an add) is not a memOutput and would
+    // otherwise never be written. Element producers already placed (a boundary
+    // list from a prior op) are skipped by the placed_ guard.
+    if (producer && producer->target() == "prim.ListPack" &&
+        !placed_.count(producer)) {
+      placed_.insert(producer);
+      for (const auto& lpInput : producer->inputs()) {
+        auto* lpValue = lpInput.value;
+        auto* lpProducer = lpValue ? lpValue->producer() : nullptr;
+        if (lpProducer && !placed_.count(lpProducer)) {
+          std::vector<ResultSpec> lpSpecs;
+          ResultSpec rs;
+          rs.value = lpValue;
+          lpSpecs.push_back(rs);
+          fusedCode(lpProducer, lpSpecs);
         }
+      }
+      continue;
+    }
+    if (memOutputs.count(value)) {
+      if (producer && !placed_.count(producer)) {
+        auto prodSpecs = outputSpecs(producer);
+        fusedCode(producer, prodSpecs);
       }
     }
   }
@@ -1947,9 +1960,14 @@ std::string CompileCtx::makeCall(
   auto presenceParams = meta->hasPresentTemplateParams()
       ? presentTemplateParams(*meta, node)
       : std::string();
+  // Before the list is opened, because it may declare what it names at
+  // translation-unit scope and so must run exactly once per call.
+  auto generatedParam = meta->generateTemplateArg
+      ? meta->generateTemplateArg(node, this)
+      : std::string();
   if (meta->hasBlockSizeTemplateParam || !meta->typeTemplateParams.empty() ||
       meta->hasDtypeTemplateParam || !meta->templateAttrs.empty() ||
-      !presenceParams.empty()) {
+      !generatedParam.empty() || !presenceParams.empty()) {
     const auto& nodeInputs = node->inputs();
     ss << "<";
     bool firstTp = true;
@@ -1983,6 +2001,13 @@ std::string CompileCtx::makeCall(
       TORCH_CHECK(
           attr, node->target(), ": missing template attribute ", attrName);
       ss << constantToString(attr->value);
+    }
+    if (!generatedParam.empty()) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      firstTp = false;
+      ss << generatedParam;
     }
     if (!presenceParams.empty()) {
       if (!firstTp) {
@@ -2222,6 +2247,10 @@ void CompileCtx::emitCode(std::string_view text) {
   code_ << text;
 }
 
+void CompileCtx::emitHelperCode(std::string_view text) {
+  outOfLineFunctions_ << text;
+}
+
 void CompileCtx::emitBarrier() {
   if (isSingleBlock_) {
     code_ << "  __syncthreads();\n";
@@ -2237,52 +2266,85 @@ void CompileCtx::emitBarrier() {
   }
 }
 
+// Resolves the ordering question for one operand. An input read through a
+// view is the base's storage: a view of something this kernel fills still
+// needs the barrier, a view of anything else does not, and the view node
+// itself never writes and so never justifies one. An in-place writer is not
+// the base's producer either -- the storage was created elsewhere, often in
+// an earlier kernel -- so the producer test alone cannot see it; ask the
+// users too, since a writer running unsynchronized in this kernel is the same
+// hazard as a producer running in it.
+bool CompileCtx::valueNeedsBarrier(ValueCP operand, NodeCP consumer) {
+  auto* value = viewBase(operand);
+  if (!value) {
+    return false;
+  }
+  auto* producer = value->producer();
+  if (producer && generatingOp_->allNodes().count(producer) &&
+      !preBarrierValues_.count(value)) {
+    return true;
+  }
+  for (auto* user : value->users()) {
+    if (user == consumer || !generatingOp_->allNodes().count(user)) {
+      continue;
+    }
+    const auto* userMeta = nodeMeta(user);
+    if (!userMeta || !userMeta->mutatesArg.has_value()) {
+      continue;
+    }
+    auto ordinal = static_cast<size_t>(*userMeta->mutatesArg);
+    const auto& userInputs = user->inputs();
+    if (ordinal >= userInputs.size() || userInputs[ordinal].value != value) {
+      continue;
+    }
+    bool synchronized = true;
+    for (auto* output : user->outputs()) {
+      if (!preBarrierValues_.count(output)) {
+        synchronized = false;
+        break;
+      }
+    }
+    if (!synchronized) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool CompileCtx::callNeedsBarrier(NodeCP node) {
   // A call reads its inputs from memory, so if a producer ran earlier in this
   // same kernel with no barrier since, that producer's writes from other blocks
-  // may not yet be visible. Barrier for any such unsynchronized intra-kernel
-  // producer, regardless of whether the input is flagged random access -- a
-  // sequential read of an in-flight tensor is just as unsafe. An input read
-  // through a view is the base's storage: a view of something this kernel fills
-  // still needs the barrier, a view of anything else does not, and the view
-  // node itself never writes and so never justifies one.
-  for (const auto& input : node->inputs()) {
-    auto* value = viewBase(input.value);
+  // may not yet be visible. randomAccess is not consulted -- an aligned read is
+  // still unsafe across blocks, and the preBarrierValues_ check below avoids
+  // emitting a redundant barrier when one already separates them.
+  auto* meta = nodeMeta(node);
+  if (!meta) {
+    return false;
+  }
+  auto needsBarrierFor = [&](ValueCP operand) {
+    return valueNeedsBarrier(operand, node);
+  };
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size(); ++i) {
+    // Register inputs flow inline as fused values, not through memory, so they
+    // never need a barrier.
+    if (meta->argumentMeta[i].isRegister) {
+      continue;
+    }
+    auto* value = inputs[i].value;
     if (!value) {
       continue;
     }
-    auto* producer = value->producer();
-    if (producer && generatingOp_->allNodes().count(producer) &&
-        !preBarrierValues_.count(value)) {
-      return true;
-    }
-    // An in-place writer is not the value's producer -- the storage was created
-    // elsewhere, often in an earlier kernel -- so the producer test above
-    // cannot see it. Ask the users instead: a writer running unsynchronized in
-    // this kernel is the same hazard as a producer running in it.
-    for (auto* user : value->users()) {
-      if (user == node || !generatingOp_->allNodes().count(user)) {
-        continue;
-      }
-      const auto* userMeta = nodeMeta(user);
-      if (!userMeta || !userMeta->mutatesArg.has_value()) {
-        continue;
-      }
-      auto ordinal = static_cast<size_t>(*userMeta->mutatesArg);
-      const auto& userInputs = user->inputs();
-      if (ordinal >= userInputs.size() || userInputs[ordinal].value != value) {
-        continue;
-      }
-      bool synchronized = true;
-      for (auto* output : user->outputs()) {
-        if (!preBarrierValues_.count(output)) {
-          synchronized = false;
-          break;
+    // For a tensor list the list node itself is metadata-only; the real
+    // producers are the element nodes, so check each element.
+    if (value->type().kind() == nativert::Type::Kind::TensorList) {
+      for (auto* elem : value->getListElements()) {
+        if (elem && needsBarrierFor(elem)) {
+          return true;
         }
       }
-      if (!synchronized) {
-        return true;
-      }
+    } else if (needsBarrierFor(value)) {
+      return true;
     }
   }
   return false;

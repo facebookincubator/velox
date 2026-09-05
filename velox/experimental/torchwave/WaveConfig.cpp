@@ -88,6 +88,8 @@ std::string WaveConfig::toString() const {
   addBool("inputContiguous", &WaveConfig::inputContiguous);
   addBool("cseCompute", &WaveConfig::cseCompute);
   addBool("cseViews", &WaveConfig::cseViews);
+  addBool("decomposeLists", &WaveConfig::decomposeLists);
+  addBool("foldSharedChains", &WaveConfig::foldSharedChains);
   addBool("mkSelect", &WaveConfig::mkSelect);
   addBool("stepLastUse", &WaveConfig::stepLastUse);
   addBool("syncEachStep", &WaveConfig::syncEachStep);
@@ -95,11 +97,14 @@ std::string WaveConfig::toString() const {
   addBool("runAhead", &WaveConfig::runAhead);
   addInt("maxDelayedFree", &WaveConfig::maxDelayedFree);
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
+  addBool("configPerOp", &WaveConfig::configPerOp);
   addBool("donateBuffers", &WaveConfig::donateBuffers);
   addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
   addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
   addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
   addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
+  addBool("singlePassSelect", &WaveConfig::singlePassSelect);
+  addBool("singlePass", &WaveConfig::singlePass);
 
   if (parts.empty()) {
     return "defaults";

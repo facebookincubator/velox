@@ -1267,11 +1267,21 @@ TEST_F(ExecutorTest, catTest) {
   // already decomposed it, and its compaction step's extent is read back
   // before the cat, so that one still fuses.
   auto plans = compilePlans("data/cat_test.pt2");
-  EXPECT_FALSE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+  if (WaveConfig::get().singlePass) {
+    // --tw_single_pass replaces both decompositions with one look-back op.
+    // Like the cg variant it sets the length on device, so the concat group
+    // cannot lay the result out around it and the cat fuses neither form.
+    EXPECT_FALSE(
+        plans.cg.fuses({"aten.cat.default", "tw.masked_select_1pass"}));
+    EXPECT_FALSE(plans.multiKernel.fuses(
+        {"aten.cat.default", "tw.masked_select_1pass"}));
+  } else {
+    EXPECT_FALSE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+    EXPECT_TRUE(plans.multiKernel.fuses(
+        {"aten.cat.default", "tw.masked_select_final"}));
+  }
   EXPECT_FALSE(plans.singleBlock.fuses(
       {"aten.cat.default", "aten.masked_select.default"}));
-  EXPECT_TRUE(
-      plans.multiKernel.fuses({"aten.cat.default", "tw.masked_select_final"}));
 }
 
 TEST_F(ExecutorTest, catTest2) {
@@ -1380,12 +1390,17 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   EXPECT_EQ(stats.numConcatGroups, 2);
   EXPECT_EQ(stats.numConcatMembers, 6);
   EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 2);
-  // 'pair' is below the threshold. 'nd' has every operand computed by the
-  // concat's own kernel behind a reserveShape, so no earlier point knows their
-  // extents and the layout cannot be laid out ahead of them.
+  // 'pair' is below the threshold. 'nd' and 'scaled' have every operand
+  // computed by the concat's own kernel behind a reserveShape, so no earlier
+  // point knows their extents and the layout cannot be laid out ahead of them.
+  // 'scaled' is the case an operand's own descriptor does not show: the
+  // elementwise op between the gather and the concat gives the operand a size
+  // expression of its own, and only a walk up its producer chain finds the
+  // reserve behind it. Placed anyway, the regions are laid out from extents
+  // that are not there yet and overlap.
   EXPECT_EQ(stats.numConcatTooFew, 1);
   EXPECT_EQ(stats.numConcatNoMembers, 0);
-  EXPECT_EQ(stats.numConcatUnplaceableOperand, 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 2);
 
   // Nothing is placed with the mode's concat half switched off, which is what
   // makes the arm above an A/B rather than two runs of the same thing.
@@ -1862,15 +1877,23 @@ TEST_F(ExecutorTest, indexTensorTest) {
   EXPECT_TRUE(plans.multiKernel.standalone("aten.index.Tensor"));
   EXPECT_TRUE(plans.multiKernel.kernelBoundaryBetween(
       "aten.index.Tensor", "tw.index_select"));
-  EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_head"}));
-  EXPECT_TRUE(plans.multiKernel.inLaterStep(
-      "tw.masked_select_final", "tw.masked_select_head"));
+  if (WaveConfig::get().singlePass) {
+    // --tw_single_pass replaces the head/add_sizes/final decomposition and the
+    // cg variant with one look-back op, so there is nothing to sequence.
+    EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_1pass"}));
+  } else {
+    EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_head"}));
+    EXPECT_TRUE(plans.multiKernel.inLaterStep(
+        "tw.masked_select_final", "tw.masked_select_head"));
+  }
 
   // Single-block: masked_select fuses into one kernel instead of decomposing.
   EXPECT_TRUE(plans.singleBlock.fuses({"aten.masked_select.default"}));
 
-  // Cooperative grid: masked_select uses its dedicated cg variant.
-  EXPECT_TRUE(plans.cg.fuses({"tw.masked_select_cg"}));
+  // Cooperative grid: masked_select uses its dedicated multi-block variant.
+  EXPECT_TRUE(plans.cg.fuses(
+      {WaveConfig::get().singlePass ? "tw.masked_select_1pass"
+                                    : "tw.masked_select_cg"}));
 }
 
 TEST_F(ExecutorTest, dedupTest) {

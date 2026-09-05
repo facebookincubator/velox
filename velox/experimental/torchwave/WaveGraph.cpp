@@ -252,6 +252,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   // would undo.
   commonSubexpressions(*graph_, types_);
 
+  // Then split list-producing ops into per-tensor nodes, which is what makes
+  // each column visible to the partitioner as its own cost.
+  if (WaveConfig::get().decomposeLists) {
+    decomposeListOps(*graph_, *this);
+  }
+
   // Last of the pre-partition passes: the clone CSE above merges equal values,
   // which would undo the duplicates this inserts.
   if (WaveConfig::get().duplicateMetadata) {
@@ -325,6 +331,12 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     ck->warmup();
     auto info = ck->kernelInfo();
     LOG(INFO) << "Kernel " << ck->entryPoint() << ": " << info.toString();
+    // With configPerOp, the same numbers for each op on its own. Waiting here
+    // rather than at construction keeps the per-op compiles overlapped with the
+    // composites'.
+    for (const auto& [entryPoint, opInfo] : ck->perOpKernelInfo()) {
+      LOG(INFO) << "Kernel " << entryPoint << ": " << opInfo.toString();
+    }
   }
 
   // Build standaloneIndices_ by walking all launches across all compiled nodes.
@@ -421,23 +433,6 @@ void WaveGraph::normalizeAndAnnotateGraph() {
     if (md && md->normalizeDimAttr) {
       normalizeDimAttribute(node, types_);
     }
-
-    if (md && md->makeMultiKernelVariant) {
-      auto* lastNode = md->makeMultiKernelVariant(&node, this);
-      auto inputs = inputValues(&node);
-      std::vector<const nativert::TensorMeta*> inputTypes;
-      inputTypes.reserve(inputs.size());
-      for (const auto* value : inputs) {
-        auto id = value->id();
-        inputTypes.push_back(
-            id < static_cast<int>(types_.types.size()) ? types_.types[id]
-                                                       : nullptr);
-      }
-      multiKernelVariants_[&node] = Subgraph{
-          .root = lastNode,
-          .inputs = std::move(inputs),
-          .inputTypes = std::move(inputTypes)};
-    }
   }
 }
 
@@ -496,7 +491,7 @@ nativert::Value* WaveGraph::newTensorValue(
   return value;
 }
 
-nativert::Value* WaveGraph::newScalarValue(
+nativert::Value* WaveGraph::newSharedScalarValue(
     nativert::Node* node,
     std::string_view name,
     c10::ScalarType dtype) {
@@ -523,6 +518,14 @@ nativert::Value* WaveGraph::newScalarValue(
     types_.constraints.resize(id + 1);
   }
   idToValue_[id] = value;
+  return value;
+}
+
+nativert::Value* WaveGraph::newScalarValue(
+    nativert::Node* node,
+    std::string_view name,
+    c10::ScalarType dtype) {
+  auto* value = newSharedScalarValue(node, name, dtype);
   createdValueDtypes_[value->id()] = dtype;
   return value;
 }
