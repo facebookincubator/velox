@@ -47,6 +47,9 @@ def main() -> None:
         torch.randn(4, 8),
         torch.randn(4, 8),
         mreps,
+        torch.arange(600, 664, dtype=torch.long),
+        torch.arange(700, 764, dtype=torch.long),
+        torch.arange(800, 864, dtype=torch.long),
     )
 
     module = CatAllocGroupTest()

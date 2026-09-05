@@ -1960,9 +1960,14 @@ std::string CompileCtx::makeCall(
   auto presenceParams = meta->hasPresentTemplateParams()
       ? presentTemplateParams(*meta, node)
       : std::string();
+  // Before the list is opened, because it may declare what it names at
+  // translation-unit scope and so must run exactly once per call.
+  auto generatedParam = meta->generateTemplateArg
+      ? meta->generateTemplateArg(node, this)
+      : std::string();
   if (meta->hasBlockSizeTemplateParam || !meta->typeTemplateParams.empty() ||
       meta->hasDtypeTemplateParam || !meta->templateAttrs.empty() ||
-      !presenceParams.empty()) {
+      !generatedParam.empty() || !presenceParams.empty()) {
     const auto& nodeInputs = node->inputs();
     ss << "<";
     bool firstTp = true;
@@ -1996,6 +2001,13 @@ std::string CompileCtx::makeCall(
       TORCH_CHECK(
           attr, node->target(), ": missing template attribute ", attrName);
       ss << constantToString(attr->value);
+    }
+    if (!generatedParam.empty()) {
+      if (!firstTp) {
+        ss << ", ";
+      }
+      firstTp = false;
+      ss << generatedParam;
     }
     if (!presenceParams.empty()) {
       if (!firstTp) {
@@ -2233,6 +2245,10 @@ void CompileCtx::emitCopy(
 
 void CompileCtx::emitCode(std::string_view text) {
   code_ << text;
+}
+
+void CompileCtx::emitHelperCode(std::string_view text) {
+  outOfLineFunctions_ << text;
 }
 
 void CompileCtx::emitBarrier() {
