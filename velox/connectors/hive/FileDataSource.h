@@ -55,6 +55,13 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
 
 class FileConfig;
 
+/// Adds DWIO file I/O counters and latency histograms to connector runtime
+/// stats. The optional prefix distinguishes data and metadata I/O.
+void addIoStatsToRuntimeStats(
+    io::IoStatistics& ioStats,
+    std::string_view prefix,
+    std::unordered_map<std::string, RuntimeMetric>& res);
+
 /// Base class for file-based data sources that read from columnar file formats
 /// (ORC, Parquet, etc.) using FileSplitReader. Provides the common scan
 /// pipeline: column resolution, filter extraction, scan spec construction,
