@@ -2034,10 +2034,6 @@ void setEnableLifetimeAllocGroup(bool on) {
   WaveConfig::get().enableLifetimeAllocGroup = on;
 }
 
-void setParallelConcatFill(bool on) {
-  WaveConfig::get().parallelConcatFill = on;
-}
-
 void setOrderBlocksByCost(bool on) {
   WaveConfig::get().orderBlocksByCost = on;
 }

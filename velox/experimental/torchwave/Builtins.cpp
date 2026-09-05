@@ -2270,6 +2270,14 @@ void registerBuiltins() {
           })
       .deviceFunc("__copyTensor")
       .typeTemplateParams({0})
+      // A load and a store per element, at the 10 an elementwise op counts for
+      // one memory access.
+      .cost(20.0f)
+      // __copyTensor goes through the destination's strides, so a clone can be
+      // handed a pitched band of a concat result instead of a dense buffer the
+      // concat would then have to copy in.
+      .defaultOutputMeta()
+      .mayWriteStrided()
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& /*types*/,

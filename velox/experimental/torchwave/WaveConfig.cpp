@@ -95,6 +95,7 @@ std::string WaveConfig::toString() const {
   addBool("cseViews", &WaveConfig::cseViews);
   addBool("decomposeLists", &WaveConfig::decomposeLists);
   addBool("metadataGetterStandalone", &WaveConfig::metadataGetterStandalone);
+  addBool("concatOperandsInPlace", &WaveConfig::concatOperandsInPlace);
   addBool("foldSharedChains", &WaveConfig::foldSharedChains);
   addBool("mkSelect", &WaveConfig::mkSelect);
   addBool("stepLastUse", &WaveConfig::stepLastUse);
@@ -109,7 +110,6 @@ std::string WaveConfig::toString() const {
   addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
   addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
   addBool("enableLifetimeAllocGroup", &WaveConfig::enableLifetimeAllocGroup);
-  addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
   addBool("orderBlocksByCost", &WaveConfig::orderBlocksByCost);
   addBool("partitionLaunches", &WaveConfig::partitionLaunches);
   addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);

@@ -1260,19 +1260,17 @@ TEST_F(ExecutorTest, catTest) {
 
   // Plan structure. o3 = cat([ms1, ms2, ms3]) joins three operands, which is
   // the allocation group's path: the result is laid out on the host, so every
-  // operand's extent has to be known before the concat sizes anything. A
-  // masked_select settles its extent on device, so it now ends its own kernel
-  // first rather than fusing into the cat -- there is no serial fill to fall
-  // back on that could discover the extent as it goes. Neither does the
-  // multi-kernel decomposition fuse: breakUnmeasurableProducers ends the kernel
-  // at a reserve-sized operand too, because the layout needs every extent at
-  // one point and only that op's own reserve knows this one. One kernel
-  // boundary is what placing the result costs.
+  // operand's extent has to be known before the concat sizes anything, and
+  // there is no serial fill to fall back on that could discover an extent as
+  // it goes. A masked_select's extent is out of reach either way -- the cg and
+  // single-pass forms settle it on device, and the decomposed form's compaction
+  // step knows it only through its own reserve -- so in every grid variant the
+  // operand ends its kernel and is materialized before the cat rather than
+  // fusing into it. That read-back is the point: it is what makes the extent an
+  // ordinary frame tensor's by the time the concat lays the result out.
   auto plans = compilePlans("data/cat_test.pt2");
   if (WaveConfig::get().singlePass) {
     // --tw_single_pass replaces both decompositions with one look-back op.
-    // Like the cg variant it sets the length on device, so the concat group
-    // cannot lay the result out around it and the cat fuses neither form.
     EXPECT_FALSE(
         plans.cg.fuses({"aten.cat.default", "tw.masked_select_1pass"}));
     EXPECT_FALSE(plans.multiKernel.fuses(
@@ -1341,6 +1339,77 @@ TEST_F(ExecutorTest, catNdTest) {
   EXPECT_TRUE(plans.multiKernel.fuses({"aten.cat.default", "aten.add.Tensor"}));
 }
 
+// A copy into a pitched band. catNdTest covers the operand an expression
+// computes, which writes through the view the concat hands it; this one covers
+// the operand that is copied. A clone reads its source at the source's layout
+// and writes one element per element, so given a band with the result's row
+// pitch it has to map the write through the destination's strides -- indexing
+// the destination linearly walks out of the band and into the next operand's.
+// Every copy here therefore has a computed operand beside it, so that a linear
+// write shows up as a corrupted neighbour and not only as a short tail.
+//
+// The concat allocation group is what hands a copy its band, and it only does
+// so for a producer declaring ArgumentMeta::mayWriteStrided. So the numbers
+// alone are not the assertion: a copy refused the band still comes out right,
+// __concatCopy just moves it in afterwards. numConcatStridedBand is what
+// separates the two.
+TEST_F(ExecutorTest, catStridedBandTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_strided_band_test.pt2";
+  const std::string results = "data/cat_strided_band_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.isCg = true;
+  runTest(pt2, results, "cg");
+
+  // The arm that actually carves the bands: the group needs the cooperative
+  // grid and the freeing, and the A/B against it switched off is what shows the
+  // values do not depend on the copy being placed there.
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+  config.enableConcatAllocGroup = false;
+  runTest(pt2, results, "cg groups, concat groups off");
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg groups, concat groups on");
+
+  // Ten operands carved over four concats: the copies -- three each in o1, o2
+  // and o4, and o3's middle one.
+  //
+  // The count is what says the copies wrote through the destination's strides,
+  // because seven of the ten bands are pitched; only o4's three are a run. A
+  // copy that cannot write a pitched band is refused it and moved in afterwards
+  // by __concatCopy, which leaves the values right and the count at three.
+  //
+  // Ten and not eleven because concatOperandsInPlace is on: o3's computed
+  // operand used to be carved as an eleventh member, writing through the view
+  // the concat handed it. It is now fused into the concat's own kernel and
+  // writes its band directly, which is a member the group no longer has to
+  // bind.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatMembers, 10);
+  EXPECT_EQ(stats.numConcatGroups, 4);
+  EXPECT_EQ(stats.numConcatTooFew, 0);
+  EXPECT_EQ(stats.numConcatNoMembers, 0);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
+}
+
 // Concats whose operands are produced by kernels of their own -- the shape of
 // the ROO preproc graph's final concat. Each operand would otherwise allocate a
 // buffer that the concat immediately copies into its result; the concat
@@ -1384,21 +1453,38 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups, concat groups on");
 
-  // What the pass made of it. 'wide' places all four of its gathers, 'mixed'
-  // the two around the graph input it cannot place, and 'nd' its three, so nine
-  // operand allocations and nine concat copies go away; with the four results,
-  // thirteen values stop being the lifetime grouping's to place.
+  // What the pass made of it. Every cat above the threshold forms a group, and
+  // nothing is left to the offset walk: an operand reaches its region one of
+  // two ways, and the counts below separate them. 'wide' places all four of its
+  // gathers and 'nd' all three -- the cat is a kernel break, so the elementwise
+  // op between each gather and the concat no longer fuses into the concat's
+  // kernel and each operand becomes a launch that writes its region. 'mixed's
+  // 'plain' is the other way: the graph hands it to us, no launch writes it, so
+  // the group cannot carve it and a copy op of its own fills its band instead.
+  // That copy is outside the group, which is why 'mixed' carves 2 of 3.
+  //
+  // 'scaled' is a third way. Under concatOperandsInPlace its operands are not
+  // pushed into launches of their own at all: the concat's own kernel computes
+  // them straight into their bands, so the group binds none of them and the
+  // total is 9.
+  //
+  // The run above is what proves the copy happened. A band nothing writes is
+  // not empty, it is whatever the fresh allocation held, so 'mixed' comes back
+  // wrong from element 127 -- where 'plain's region starts -- if the copy is
+  // dropped or lands in a buffer of its own.
   auto stats = allocGroupStats(pt2);
   EXPECT_EQ(stats.numConcatGroups, 4);
-  EXPECT_EQ(stats.numConcatMembers, 4 + 2 + 3);
+  // 'wide' 4, 'mixed' 2, 'nd' 3, and 'scaled' none -- see below.
+  EXPECT_EQ(stats.numConcatMembers, 4 + 2 + 3 + 0);
+  // Each group also takes its own result out of the lifetime grouping.
   EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
-  // 'pair' is below the threshold. 'scaled' is placed but carves nothing: the
-  // elementwise op between each gather and the concat gives the operand a size
-  // expression of its own, so its extent is settled where the concat's own
-  // kernel computes it rather than at any earlier point, and there is no write
-  // left for the group to redirect. It still owns the result's buffer and lays
-  // the regions out, which is what the operands are filled through.
+  // 'pair' is below the threshold, so it keeps the concat's own fill.
   EXPECT_EQ(stats.numConcatTooFew, 1);
+  // 'scaled' carves nothing, and that is the concatOperandsInPlace state: its
+  // operands are sized where the concat's own kernel computes them, so the
+  // group owns the result's buffer and lays the regions out but has no write to
+  // redirect. With the pushdown instead, each of its three became a launch of
+  // its own and a member the group had to bind.
   EXPECT_EQ(stats.numConcatNoMembers, 1);
   EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
 
@@ -1408,6 +1494,146 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   auto without = allocGroupStats(pt2);
   EXPECT_EQ(without.numConcatGroups, 0);
   EXPECT_EQ(without.numInConcatGroup, 0);
+  config.enableConcatAllocGroup = true;
+
+  // The same mode on the multi-kernel grid. Nothing about a lifetime or a band
+  // needs the cooperative grid -- both grids are settled by compilation -- so
+  // the plan is built against whichever one the config names, and the values
+  // have to come out the same on either.
+  config.isCg = false;
+  runTest(pt2, results, "multi-kernel alloc groups, concat groups on");
+
+  auto mk = allocGroupStats(pt2, /*cg=*/false);
+  // Every concat that grouped under the cooperative grid still groups here: a
+  // group's members are decided by where the operands are written relative to
+  // where the result is laid out, and the multi-kernel grid orders those the
+  // same way.
+  EXPECT_EQ(mk.numConcatGroups, 4);
+  EXPECT_EQ(mk.numConcatMembers, 4 + 2 + 3 + 0);
+  EXPECT_EQ(mk.numInConcatGroup, mk.numConcatMembers + 4);
+  EXPECT_EQ(mk.numConcatTooFew, 1);
+  EXPECT_EQ(mk.numConcatNoMembers, 1);
+  EXPECT_EQ(mk.numConcatUnplaceableOperand, 0);
+}
+
+// The rule the parallel fill exists for: a cat of more than two operands never
+// reaches the serial fill. 'handed' is the case catAllocGroupTest does not
+// have -- six operands the graph hands over, so no launch writes any of them,
+// the allocation group carves none and every band is filled by a copy op of its
+// own. Those copies have to run in the concat's own step, side by side. One
+// after another is the chain the rule forbids, and it is not visible in the
+// values: a serial fill computes the same result, slowly.
+//
+// The other half is the kernel boundary. The bands are written by launches
+// beside the concat rather than inside it, so a reader of the result cannot
+// fuse into the concat's kernel and has to land in a later step.
+TEST_F(ExecutorTest, catParallelFillTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_parallel_fill_test.pt2";
+  const std::string results = "data/cat_parallel_fill_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.isCg = true;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg alloc groups");
+
+  // Both concats are grouped even though 'handed' has nothing to carve: the
+  // group owns the result's storage and lays the bands out, which is what the
+  // copies write through. 'mixed' carves its three gathers and copies 'tail'.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 2);
+  EXPECT_EQ(stats.numConcatMembers, 0 + 3);
+  EXPECT_EQ(stats.numConcatNoMembers, 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+
+  // With isCg forced there is one grid, and it is the cooperative one: the
+  // variant selection builds cgGrid_ only when it is choosing between variants
+  // at run time. So the plan to read is the default one, not 'cg'.
+  const auto& plan = compilePlans(pt2).multiKernel;
+  // Six copies for 'handed' and one for 'tail', each in the step of the concat
+  // whose band it fills.
+  EXPECT_TRUE(
+      plan.sideBySideWith("aten.clone.default", "aten.cat.default", 6 + 1));
+  // Neither reader fuses into a concat's kernel, and both run after the last
+  // of them -- the bands are written beside the concat, so the whole step has
+  // to be over before the result can be read.
+  EXPECT_TRUE(
+      plan.kernelBoundaryBetween("aten.cat.default", "aten.mul.Scalar"));
+  EXPECT_TRUE(plan.runsAfter("aten.mul.Scalar", "aten.cat.default"));
+  EXPECT_TRUE(
+      plan.kernelBoundaryBetween("aten.cat.default", "aten.add.Scalar"));
+  EXPECT_TRUE(plan.runsAfter("aten.add.Scalar", "aten.cat.default"));
+}
+
+// Two wide concats of the same shape over different operands. They deduplicate
+// to one project operation that runs twice, so everything the concat works
+// with is formal and each instance has to be handed its own actual -- including
+// the values the operand copies write, which stand for no node in the graph the
+// caller exported.
+//
+// 'shared' is joined twice by each concat: four regions filled from one buffer,
+// across two instances. Each needs a destination of its own. A destination
+// reused between the two instances is the failure this is for, and it is not
+// visible in the plan -- both instances look right on their own. It shows up
+// only in the values, where one concat's region holds the other's data.
+TEST_F(ExecutorTest, catDedupTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_dedup_test.pt2";
+  const std::string results = "data/cat_dedup_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = std::nullopt;
+
+  // The two concats reach the same plan, and the copies that fill their bands
+  // run off one kernel op with per-launch parameters, so a mix-up between the
+  // instances would be a mix-up between two runs of the same code.
+  config.isCg = true;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg alloc groups");
+
+  // Both concats are grouped, and each carves the one operand written at the
+  // step its result is laid out. The other gather runs a node earlier, so its
+  // buffer already exists when the result is allocated and a copy moves it;
+  // 'shared' twice and the tail are the graph's, which no launch writes at all.
+  //
+  // This counted 2 per concat before the layout point came from placement, but
+  // none of those four was ever carved: the group was created at a step where
+  // its members are not sized, so the collector captured nothing and the run
+  // reported "2 of 2 values were not sized by any launch" for each group. The
+  // count below is the number the run actually carves.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 2);
+  EXPECT_EQ(stats.numConcatMembers, 1 + 1);
 }
 
 // The same shapes joined along a new dimension instead of an existing one, up

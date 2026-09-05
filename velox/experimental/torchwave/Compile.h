@@ -16,8 +16,11 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <atomic>
 #include <deque>
+#include <map>
+#include <tuple>
 
 #include <ATen/core/ivalue.h>
 #include <torch/nativert/graph/TensorMeta.h>
@@ -25,6 +28,7 @@
 #include "velox/experimental/torchwave/ParallelExpr.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
+#include "velox/experimental/torchwave/WaveGraph.h"
 
 namespace torch::wave {
 
@@ -299,7 +303,9 @@ class CompileCtx {
 
   void pushdownStandalone(NodeCP node);
 
-  void pushdownFused(NodeCP node);
+  /// Builds the kernel op for 'node's subgraph and places its launch, no
+  /// earlier than 'minLevel'. Returns the step it landed in.
+  int32_t pushdownFused(NodeCP node, int32_t minLevel = -1);
 
   /// Ends the kernel of every op in 'value's producer chain whose output extent
   /// the host cannot work out ahead of the launch -- settled on device, or
@@ -323,8 +329,32 @@ class CompileCtx {
   /// instead of running as one link in a chain of copies inside the concat's
   /// kernel. Every op the pushdown creates is declared to write
   /// 'concatOutput', which is what orders a reader of the concat result after
-  /// all of the operands that fill it.
-  void breakConcatOperandIntoOwnKernel(ValueCP operand, ValueCP concatOutput);
+  /// all of the operands that fill it. False when the operand has no expression
+  /// here to push down, which is what leaves it to be copied instead.
+  bool breakConcatOperandIntoOwnKernel(ValueCP operand, ValueCP concatOutput);
+
+  /// The value a copy of 'concat's operand at 'occurrence' writes: a band of
+  /// the result, bound at run time by reserveConcatOutput. Creates the copy
+  /// node that holds the source, and the value on the first grid variant to
+  /// ask. Null when the result has no type to take a dtype from.
+  nativert::Value*
+  makeConcatCopyDestination(NodeCP concat, int32_t occurrence, ValueCP operand);
+
+  /// Emits the copy that fills one concat operand's band, for an operand that
+  /// exists before the concat's result is sized -- a graph input, or a value an
+  /// earlier step materialized -- so there is no producing expression to push
+  /// down and no write of its own to redirect. Returns false when the operand
+  /// has no destination, leaving it to the concat's kernel.
+  ///
+  /// The code is generated once per element type per composite kernel: the
+  /// first copy builds the kernel op, and every later one is another Launch of
+  /// that op with its own source and destination. Two hundred copies of one
+  /// __copy would otherwise be two hundred bodies in the kernel.
+  bool emitConcatOperandCopy(
+      ValueCP operand,
+      ValueCP destination,
+      ValueCP concatOutput,
+      int32_t minLevel);
 
   std::unique_ptr<KernelOperation> generateFused(const Subgraph& sg);
 
@@ -334,7 +364,9 @@ class CompileCtx {
   /// subgraph to the corresponding index in the project-level constants.
   void fillConstantIndices(const Subgraph& sg, Launch& launch);
 
-  void placeKernelLaunch(Launch launch);
+  /// Places 'launch' one step after the last of its inputs, but never before
+  /// launch.minLevel. Returns the step it landed in.
+  int32_t placeKernelLaunch(Launch launch);
 
   /// Returns the next kernel id for this compilation. The counter is per
   /// CompileCtx (one per WaveGraph construction), so kernel names are
@@ -383,12 +415,155 @@ class CompileCtx {
   /// new graph.
   Subgraph variantSubgraph(const Subgraph& sg, VariantMode mode);
 
+  /// The value the operand at 'occurrence' of 'concat' is copied into, or -1 if
+  /// nothing has asked for it yet. Keyed by the ORIGINAL concat node: the grid
+  /// variants are placed one after another over their own copies of the graph,
+  /// and the id names a frame slot, so a variant that minted its own would fill
+  /// a slot the other variants' layouts never read.
+  nativert::ValueId concatCopyDest(NodeCP concat, int32_t occurrence) const {
+    auto it = concatCopyDest_.find({concat, occurrence});
+    return it != concatCopyDest_.end() ? it->second : -1;
+  }
+
+  void setConcatCopyDest(
+      NodeCP concat,
+      int32_t occurrence,
+      nativert::ValueId destination) {
+    concatCopyDest_[{concat, occurrence}] = destination;
+  }
+
+  /// True when an op of its own fills the band of 'concat's operand at
+  /// 'occurrence', so the concat's kernel emits nothing for it.
+  bool concatOperandIsCopied(NodeCP concat, int32_t occurrence) const {
+    return concatCopyDest(originalFromVariant(concat), occurrence) >= 0;
+  }
+
+  /// Whether one operand of a fused concat writes its own band of the result,
+  /// and what decided it. Taken once, while the concat is placed, and read
+  /// again by the concat's code generation and by the allocation-group pass, so
+  /// the two cannot disagree: an operand one carves and the other copies either
+  /// writes through a frame slot nothing bound or overwrites what the copy
+  /// moved there.
+  struct ConcatCarve {
+    /// The allocation group gives this operand a view of its band instead of a
+    /// buffer, because a launch other than the concat's own fills it.
+    bool groupCarves{false};
+
+    /// A copy op of this operand's own moves it into its band. False both for
+    /// an operand the group carves and for one the concat's own kernel writes
+    /// in place -- that one is bound to its band by reserveConcatOutput and is
+    /// neither a group member nor a copy.
+    bool needsCopy{false};
+
+    /// The value the producing launch writes, when the operand is reached
+    /// through list plumbing and so is not that value itself. See
+    /// ConcatInputInfo::writerId, which this feeds. -1 otherwise.
+    nativert::ValueId writerId{-1};
+
+    /// Why, in the words the per-concat report prints.
+    std::string reason;
+  };
+
+  /// True when 'operand' should be left for 'concat's own kernel to compute
+  /// rather than pushed into a kernel of its own a step earlier, because its
+  /// producer can write the operand's band directly and the concat is its only
+  /// reader. Gated on WaveConfig::concatOperandsInPlace.
+  bool concatOperandFusesInPlace(
+      ValueCP operand,
+      NodeCP concat,
+      int64_t dim,
+      c10::ScalarType resultDtype) const;
+
+  /// Decides, for every operand of 'concat', whether its producer fills the
+  /// operand's band of the result or a copy moves it there.
+  ///
+  /// The result's layout can be computed at the latest point any operand's
+  /// dimensions become known. An operand whose buffer is filled before that
+  /// point was already materialized when the result came into being, so there
+  /// is no write left to redirect and it is copied; one filled at that point
+  /// writes its band directly. So is everything with no write of its own to
+  /// give: a view, a value no wave kernel launch writes, one another concat
+  /// already carved.
+  ///
+  /// Must run after every operand's producer has been placed, since that is
+  /// what fixes the points it reads.
+  void decideConcatCarve(
+      NodeCP concat,
+      const std::vector<ValueCP>& operands,
+      int64_t dim,
+      c10::ScalarType resultDtype);
+
+  /// Where the result of 'concat' is laid out, as decideConcatCarve settled it,
+  /// or null before the concat has been placed. The allocation group is created
+  /// there, and the carve verdicts are expressed against it.
+  const WaveGraph::SchedulePoint* concatLayoutPoint(NodeCP concat) const {
+    const auto it = concatLayoutPoint_.find(originalFromVariant(concat));
+    return it == concatLayoutPoint_.end() ? nullptr : &it->second;
+  }
+
+  /// The earliest point the host could know every operand's extent, as opposed
+  /// to concatLayoutPoint, which is where the last operand's DATA lands. Null
+  /// when no operand puts a floor under it, absent before the concat is placed.
+  ///
+  /// Not what the layout uses today: the allocation-group collector is built
+  /// per step and can only intercept a member sized in its own step, so a group
+  /// moved to this earlier point loses the members written later. Recorded so
+  /// the gap is visible and so a collector able to span steps has it ready.
+  const std::optional<WaveGraph::SchedulePoint>* concatShapePoint(
+      NodeCP concat) const {
+    const auto it = concatShapePoint_.find(originalFromVariant(concat));
+    return it == concatShapePoint_.end() ? nullptr : &it->second;
+  }
+
+  /// The decision for the operand at 'occurrence' of 'concat', or null before
+  /// the concat has been placed. Keyed by the ORIGINAL concat node, as
+  /// concatCopyDest is and for the same reason.
+  const ConcatCarve* concatCarve(NodeCP concat, int32_t occurrence) const {
+    const auto it =
+        concatCarve_.find({originalFromVariant(concat), occurrence});
+    return it == concatCarve_.end() ? nullptr : &it->second;
+  }
+
+  /// True when a copy op of its own has to move the operand at 'occurrence'
+  /// into its band.
+  bool concatOperandNeedsCopyOp(NodeCP concat, int32_t occurrence) const {
+    const auto* decision = concatCarve(concat, occurrence);
+    return decision != nullptr && decision->needsCopy;
+  }
+
  private:
   // Per-CompileCtx (one per WaveGraph construction), not process-wide, so no
   // atomicity is needed: concurrent compilations use distinct CompileCtx
   // instances, keeping kernel ids deterministic per graph for NVRTC cache-key
   // stability.
   int32_t kernelCounter_{0};
+
+  // Records where 'launch' writes each of its outputs and where each becomes
+  // measurable, for writtenAt() and realizedAt(). Called as the launch lands,
+  // which is the only point that knows the step.
+  void recordSchedulePoints(
+      const Launch& launch,
+      int32_t step,
+      const FormalToActual& bindings,
+      bool intoGrid);
+
+  // Where 'id' is written and measured, taking the grid being built first: a
+  // value this grid's earlier launches write is not in the graph-wide maps
+  // until the op is invoked. Null when no launch anywhere writes it.
+  const WaveGraph::SchedulePoint* writtenPoint(nativert::ValueId id) const;
+  const WaveGraph::SchedulePoint* realizedPoint(nativert::ValueId id) const;
+
+  // Records the schedule points of every launch of 'op's grid, in 'op's own
+  // values. Called as each invocation is created: the grid is built over the
+  // formal subgraph, and only an invocation knows which frame values its
+  // launches actually write.
+  void recordInvocationSchedulePoints(OpInvocation& op);
+
+  // True when the expression that computes 'operand' is still unplaced and is
+  // not a boundary input, so the kernel being built writes it. Such a value has
+  // no schedule point yet: the launch that writes it is placed once the whole
+  // expression has been walked.
+  bool computedByThisKernel(ValueCP operand) const;
 
   template <typename Func>
   bool allReachable(
@@ -484,6 +659,27 @@ class CompileCtx {
   std::deque<c10::IValue> ivalueStorage_;
   LaunchGrid grid_;
 
+  // Write and realization points of the launches placed in the grid being
+  // built, keyed by the values of the subgraph being placed. A launch of this
+  // grid has no invocation yet -- one is created only once the whole op is
+  // built -- so its outputs are absent from the graph-wide maps until then,
+  // and a concat placed in this same grid has to read them from here. Cleared
+  // per grid by newGrid().
+  folly::F14FastMap<nativert::ValueId, WaveGraph::SchedulePoint> gridWrittenAt_;
+  folly::F14FastMap<nativert::ValueId, WaveGraph::SchedulePoint>
+      gridRealizedAt_;
+
+  // Set while a project op is built if any concat in it took a carve decision.
+  // Such an op is never registered for deduplication -- see the comment at the
+  // registration site.
+  bool opCarvesAConcat_{false};
+
+  // Position of the node being compiled among the CompiledNodes produced so
+  // far, which is the index the allocation-group plan plans by. Advanced only
+  // by a compileNode that returns a node, so a node that compiles to nothing
+  // does not consume an index.
+  int32_t compileNodeIndex_{0};
+
   /// The Subgraph for the ProjectOperation being made.
   const Subgraph* projectOpSubgraph_{nullptr};
 
@@ -495,6 +691,32 @@ class CompileCtx {
 
   // See concatOperandIndex().
   int32_t concatOperandIndex_{-1};
+
+  // See concatCopyDest(). std::map because the key is a pair; there is one
+  // entry per copied concat operand, not one per value.
+  std::map<std::pair<NodeCP, int32_t>, nativert::ValueId> concatCopyDest_;
+
+  // See concatLayoutPoint(), keyed by the original concat node.
+  std::map<NodeCP, WaveGraph::SchedulePoint> concatLayoutPoint_;
+  std::map<NodeCP, std::optional<WaveGraph::SchedulePoint>> concatShapePoint_;
+
+  // See concatCarve(), keyed the same way.
+  std::map<std::pair<NodeCP, int32_t>, ConcatCarve> concatCarve_;
+
+  // Operands some concat already carves. One buffer cannot be two bands, so
+  // the first concat in graph order takes it and any later one copies.
+  std::unordered_set<nativert::ValueId> carvedOperands_;
+
+  // The kernel op generated for the first concat-operand copy of each element
+  // type, so the rest are launches of that same op with their own parameters
+  // rather than another copy of the code. See emitConcatOperandCopy.
+  std::map<c10::ScalarType, KernelOperation*> concatCopyOp_;
+
+  // Why each wide-cat operand did or did not get a kernel op of its own,
+  // tallied per concat result id under the timing trace. An operand left fused
+  // into the concat is an interior value no launch writes, which the
+  // allocation group cannot carve into a band.
+  std::map<int32_t, std::map<std::string, int32_t>> concatPushdownSkips_;
 
   // Intermediates within 'generatingOp_' that are backed by device memory.
   std::unordered_set<ValueCP> memoryValues_;
