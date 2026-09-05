@@ -95,11 +95,14 @@ std::string WaveConfig::toString() const {
   addBool("runAhead", &WaveConfig::runAhead);
   addInt("maxDelayedFree", &WaveConfig::maxDelayedFree);
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
+  addBool("configPerOp", &WaveConfig::configPerOp);
   addBool("donateBuffers", &WaveConfig::donateBuffers);
   addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
   addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
   addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
   addBool("parallelConcatFill", &WaveConfig::parallelConcatFill);
+  addBool("singlePassSelect", &WaveConfig::singlePassSelect);
+  addBool("singlePass", &WaveConfig::singlePass);
 
   if (parts.empty()) {
     return "defaults";

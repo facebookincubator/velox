@@ -463,28 +463,62 @@ constexpr int32_t kDefaultNumSMs = 100;
 // Default blocks per SM when occupancy info is unavailable.
 constexpr int32_t kDefaultBlocksPerSM = 4;
 
+// Shared memory per SM assumed when device info is unavailable (A100).
+constexpr int32_t kDefaultSharedMemPerSM = 164 * 1024;
+
+namespace {
+// Dynamic shared memory a launch of 'launches' needs: the max over the ops,
+// since the ops share one kernel launch.
+int32_t dynamicSharedBytes(const std::vector<LaunchData>& launches) {
+  int64_t bytes = 0;
+  for (const auto& launch : launches) {
+    if (launch.launch && launch.launch->op) {
+      bytes = std::max(bytes, launch.launch->op->dynamicSharedBytes());
+    }
+  }
+  return static_cast<int32_t>(bytes);
+}
+} // namespace
+
 // Blocks a step's grid aims to fill: the device's SM count times the blocks of
 // this kernel that stay resident on one SM. makeGrid distributes this many
 // across the step's launches, and layoutParamSlots bounds the BlockInfo
 // reservation by it, so the two must derive it the same way -- a reservation
 // computed from a larger figure than makeGrid uses would be too small.
-int32_t targetBlockCount(int32_t maxBlocksPerSM) {
+//
+// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory. If
+// an op in the step needs some, fewer blocks fit on an SM, and a cooperative
+// launch of more blocks than fit fails outright. A caller that only wants an
+// upper bound can pass dynSharedPerBlock == 0, which skips that reduction and
+// so can only over-estimate.
+int32_t targetBlockCount(
+    int32_t maxBlocksPerSM,
+    int32_t dynSharedPerBlock,
+    int32_t staticSharedPerBlock) {
+  auto* device = facebook::velox::wave::currentDevice();
   int32_t numSMs = WaveConfig::get().numSms;
   if (numSMs == 0) {
-    numSMs = kDefaultNumSMs;
-    if (auto* device = facebook::velox::wave::currentDevice()) {
-      numSMs = device->numSM;
-    }
+    numSMs = device ? device->numSM : kDefaultNumSMs;
   }
-  const int32_t blocksPerSM =
+  int32_t blocksPerSM =
       maxBlocksPerSM > 0 ? maxBlocksPerSM : kDefaultBlocksPerSM;
+  if (dynSharedPerBlock > 0) {
+    const int32_t sharedPerSM =
+        device ? device->sharedMemPerSM : kDefaultSharedMemPerSM;
+    blocksPerSM = std::max(
+        1,
+        std::min(
+            blocksPerSM,
+            sharedPerSM / (dynSharedPerBlock + staticSharedPerBlock)));
+  }
   return numSMs * blocksPerSM;
 }
 
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM) {
+    int32_t maxBlocksPerSM,
+    int32_t staticSharedPerBlock) {
   const int32_t blockSize = WaveConfig::get().blockSize;
 
   // Compute cost per launch: numElements * unitCost * costAdjustFactor.
@@ -525,7 +559,8 @@ int32_t makeGrid(
   }
 
   // Target blocks from device SM count and kernel occupancy.
-  int32_t maxBlocks = targetBlockCount(maxBlocksPerSM);
+  int32_t maxBlocks = targetBlockCount(
+      maxBlocksPerSM, dynamicSharedBytes(launches), staticSharedPerBlock);
   int32_t targetBlocks = maxBlocks;
 
   // Assign blocks pro rata by cost, at least 1 per launch, capped by
@@ -1310,7 +1345,19 @@ CompositeKernel::CompositeKernel(
       ss << kop->helperCode();
     }
   }
-  ss << "__global__ void " << kernelName << "(TorchWaveParams params) {\n"
+  // An op whose device function is register-hungry would otherwise cost every
+  // other op in this kernel its occupancy, so honor the largest blocks-per-SM
+  // any of them asks for.
+  int32_t minBlocksPerSm = 0;
+  for (const auto& kop : kernelOpStorage_) {
+    minBlocksPerSm = std::max(minBlocksPerSm, kop->minBlocksPerSm());
+  }
+  ss << "__global__ ";
+  if (minBlocksPerSm > 0) {
+    ss << "__launch_bounds__(" << WaveConfig::get().blockSize << ", "
+       << minBlocksPerSm << ") ";
+  }
+  ss << "void " << kernelName << "(TorchWaveParams params) {\n"
      << "  ENTRY;\n";
   eltTrace(
       ss,
@@ -1537,6 +1584,71 @@ CompositeKernel::CompositeKernel(
     }
   }
 
+  // Diagnostic: one single-case kernel per op, queued alongside the composite
+  // below so the two compile concurrently. Each is the composite's preamble
+  // with a switch holding only this op's case, so its register / shared /
+  // local-memory footprint is that op's alone. Nothing launches them for
+  // results; WaveGraph warms them up once at the end of graph construction and
+  // logs their occupancy next to the composite's.
+  if (WaveConfig::get().configPerOp && facebook::velox::wave::currentDevice()) {
+    std::stringstream includeHeader;
+    includeHeader << "#include \"velox/experimental/torchwave/Core.cuh\"\n";
+    for (const auto& inc : includes) {
+      includeHeader << "#include \"" << inc << "\"\n";
+    }
+    auto headerStr = includeHeader.str();
+
+    for (const auto& kop : kernelOpStorage_) {
+      auto opName = kernelName + "_op_" + std::to_string(kop->opCode());
+      auto opEntry = "torch::wave::" + opName;
+      auto opFile = "/tmp/" + opName + ".cu";
+
+      std::stringstream os;
+      os << headerStr << "\nnamespace torch::wave {\n\n";
+      if (!kop->helperCode().empty()) {
+        os << kop->helperCode();
+      }
+      os << "__global__ void " << opName << "(TorchWaveParams params) {\n"
+         << "  ENTRY;\n";
+      for (const auto& decl : kop->sharedDeclarations()) {
+        os << decl;
+      }
+      os << "  switch (blockInfo.op) {\n"
+         << "    case " << kop->opCode() << ": {\n"
+         << kop->code() << "      break;\n"
+         << "    }\n"
+         << "  }\n"
+         << "  LEAVE();\n"
+         << "}\n\n"
+         << "} // namespace torch::wave\n";
+      auto opText = os.str();
+      {
+        std::ofstream out(opFile);
+        out << opText;
+      }
+
+      PerOpKernel perOp;
+      perOp.opCode = kop->opCode();
+      perOp.entryPoint = opEntry;
+      // Deliberately not the KernelFsCache: these are throwaway diagnostics and
+      // must not compete with the composite for the on-disk cache.
+      perOp.kernel = facebook::velox::wave::CompiledKernel::getKernel(
+          opText,
+          [code = opText,
+           opEntry,
+           opFile]() -> facebook::velox::wave::KernelSpec {
+            facebook::velox::wave::KernelSpec spec;
+            spec.code = code;
+            spec.entryPoints = {opEntry};
+            spec.filePath = opFile;
+            spec.numHeaders = 0;
+            spec.headers = nullptr;
+            return spec;
+          });
+      perOpKernels_.push_back(std::move(perOp));
+    }
+  }
+
   // Only compile the kernel if a GPU is available. The one-time
   // NVRTC/system-header initialization (CompiledKernel::initialize()) is run
   // eagerly on the main thread by torch::wave::initialize() before any kernel
@@ -1579,6 +1691,31 @@ void CompositeKernel::warmup() {
   facebook::velox::wave::Stream stream;
   kernel_->launch(0, 1, 1, 0, &stream, args);
   stream.wait();
+}
+
+std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+CompositeKernel::perOpKernelInfo() {
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>> result;
+  result.reserve(perOpKernels_.size());
+  for (auto& perOp : perOpKernels_) {
+    if (!perOp.kernel) {
+      continue;
+    }
+    // The launch is the sync point with the queued compile, exactly as
+    // warmup() is for the composite. blockInfo.op is kDebugNoOp, which matches
+    // no case, so the body does nothing.
+    TorchWaveParams params{};
+    memset(&params, 0, sizeof(params));
+    params.info = nullptr;
+    params.debugInfo = nullptr;
+    params.inlineInfo[0].op = kDebugNoOp;
+    void* args[] = {&params};
+    facebook::velox::wave::Stream stream;
+    perOp.kernel->launch(0, 1, 1, 0, &stream, args);
+    stream.wait();
+    result.emplace_back(perOp.entryPoint, perOp.kernel->info(0));
+  }
+  return result;
 }
 
 facebook::velox::wave::KernelInfo CompositeKernel::kernelInfo() const {
@@ -2626,7 +2763,14 @@ void CompositeInvocation::layoutParamSlots(int32_t stepIdx, StepVectors& sv) {
   // targetBlocks plus 1.5 per launch; take 2 per launch.
   const auto numSlots = static_cast<int32_t>(sv.slotOffsets.size());
   sv.blockCapacity =
-      2 * numSlots + targetBlockCount(kernel_->kernelInfo().maxOccupancy0);
+      2 * numSlots +
+      targetBlockCount(
+          kernel_->kernelInfo().maxOccupancy0,
+          // A bound, so skip the shared-memory reduction: it only ever lowers
+          // the count makeGrid will actually use, and a step's dynamic
+          // shared-memory need is not known until its launches are gathered.
+          /*dynSharedPerBlock=*/0,
+          /*staticSharedPerBlock=*/0);
 }
 
 bool CompositeInvocation::chooseGridVariant(
@@ -4064,8 +4208,9 @@ void CompositeInvocation::execute(ExecutionState& state) {
       if (gridSizesMatch(sv.kernels, sv)) {
         blockSize = sv.cachedBlockSize;
       } else {
-        blockSize =
-            makeGrid(sv.kernels, sv, kernel_->kernelInfo().maxOccupancy0);
+        const auto kernelInfo = kernel_->kernelInfo();
+        blockSize = makeGrid(
+            sv.kernels, sv, kernelInfo.maxOccupancy0, kernelInfo.sharedMemory);
         TORCH_CHECK(
             (blockSize & (blockSize - 1)) == 0,
             "Block size must be a power of two, got ",
@@ -4992,6 +5137,12 @@ void CompositeInvocation::launch(
   params.debugInfo = deviceDebugBase;
   void* args[] = {&params};
 
+  // Ops declare their extern __shared__ needs through
+  // Metadata::dynamicSharedMemory; the ops of a step share one launch, so the
+  // launch takes the max. Steps with no such op launch with zero and keep the
+  // occupancy they would have had.
+  const int32_t dynShared = dynamicSharedBytes(sv.kernels);
+
   // opBarrier (Core.cuh) is a counter spin-wait that blocks until numBlocksInOp
   // blocks have arrived, so it needs those blocks co-resident -- which only a
   // cooperative launch guarantees. A barrier op assigned a single block passes
@@ -5098,9 +5249,10 @@ void CompositeInvocation::launch(
 
       try {
         if (groupAndCooperative) {
-          kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
+          kernel_->launchCooperative(
+              numBlocks, blockSize, dynShared, stream, args);
         } else {
-          kernel_->launch(numBlocks, blockSize, 0, stream, args);
+          kernel_->launch(numBlocks, blockSize, dynShared, stream, args);
         }
         stream->wait();
       } catch (const std::exception& e) {
@@ -5144,9 +5296,9 @@ void CompositeInvocation::launch(
   } else {
     stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
     if (cooperative) {
-      kernel_->launchCooperative(numBlocks, blockSize, 0, stream, args);
+      kernel_->launchCooperative(numBlocks, blockSize, dynShared, stream, args);
     } else {
-      kernel_->launch(numBlocks, blockSize, 0, stream, args);
+      kernel_->launch(numBlocks, blockSize, dynShared, stream, args);
     }
     if (returnBegin >= 0) {
       stream->deviceToHostAsync(

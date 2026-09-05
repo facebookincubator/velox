@@ -67,6 +67,17 @@ struct WaveConfig {
   /// If set and true, use the cooperative grid variant when available.
   std::optional<bool> isCg;
 
+  /// If true, ops with both a barrier-based and a single-pass cooperative-grid
+  /// form (masked_select_jagged) use the single-pass one. Only has an effect in
+  /// cooperative-grid mode.
+  bool singlePassSelect{false};
+
+  /// If true, cumsum, exclusive sum and masked_select are registered with a
+  /// single decoupled look-back implementation instead of the single-block,
+  /// multi-kernel and cooperative-grid variants. Read once, by
+  /// registerBuiltins(), so it must be set before initialize().
+  bool singlePass{false};
+
   /// Reference values keyed by ValueId for verifying intermediates.
   std::unordered_map<int32_t, c10::IValue>* referenceFrame{nullptr};
 
@@ -289,6 +300,15 @@ struct WaveConfig {
   // the result side by side instead of walking a chain of __concatCopy calls in
   // one block. The concat then becomes a kernel break that copies nothing.
   bool parallelConcatFill{false};
+
+  // If true, alongside each composite kernel also compile one single-op kernel
+  // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the
+  // per-op kernels are never launched for results, they exist so the register /
+  // shared / local memory and occupancy numbers logged after graph construction
+  // are available at one-op resolution instead of only for the fused whole.
+  // Their compiles are queued with the composite's, so the extra cost is
+  // compile parallelism rather than serial latency. Off by default.
+  bool configPerOp{false};
 
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
