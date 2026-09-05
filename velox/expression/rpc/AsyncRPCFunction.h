@@ -34,16 +34,77 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
-using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
+using velox::rpc::RPCResponsePayload;
 using velox::rpc::RPCStreamingMode;
+
+/// Read a response's payload as the concrete type the function produced.
+///
+/// The type is checked in debug builds only: a function reads back the payload
+/// type it wrote, so a mismatch is a programming error rather than a runtime
+/// condition, and dynamic_cast per row is the expensive half of the check.
+/// Presence of a payload is checked in every build -- see below.
+template <typename T>
+const T& responseAs(const RPCResponse& response) {
+  // Checked in every build. A response carries a payload or an error, and
+  // nothing in the type enforces that, so a null here means a producer set
+  // neither. One predictable branch per row buys a named failure instead of a
+  // null dereference on a worker.
+  VELOX_CHECK_NOT_NULL(
+      response.payload,
+      "RPC response {} has neither a payload nor an error",
+      response.rowId);
+  VELOX_DCHECK_NOT_NULL(
+      dynamic_cast<const T*>(response.payload.get()),
+      "Response payload is not of the expected type");
+  return *static_cast<const T*>(response.payload.get());
+}
+
+/// Payload for functions whose backend returns text. Shared by the text
+/// functions via buildTextOutput(); a function with a richer result (an
+/// embedding, a struct) defines its own payload type instead.
+struct TextPayload : RPCResponsePayload {
+  std::string text;
+
+  explicit TextPayload(std::string value) : text(std::move(value)) {}
+};
+
+/// Wrap text as a response payload.
+inline std::shared_ptr<const RPCResponsePayload> makeTextPayload(
+    std::string value) {
+  return std::make_shared<const TextPayload>(std::move(value));
+}
+
+/// Build a VARCHAR output vector from text payloads: errors become SQL NULL,
+/// successes carry their text through.
+///
+/// This is a helper the text functions call from their own buildOutput(), not
+/// a default they inherit. A function that returns something else gets a
+/// compile error for not implementing buildOutput(), rather than a column of
+/// silent NULLs from a default that could not read its payload.
+inline VectorPtr buildTextOutput(
+    const std::vector<RPCResponse>& responses,
+    memory::MemoryPool* pool) {
+  const auto numRows = static_cast<vector_size_t>(responses.size());
+  auto result =
+      BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    if (responses[i].hasError()) {
+      result->setNull(i, true);
+    } else {
+      result->set(i, StringView(responseAs<TextPayload>(responses[i]).text));
+    }
+  }
+  return result;
+}
 
 /// Base interface for async RPC functions (business logic layer).
 ///
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
-/// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// analogous to VectorFunction in velox/expression/. The framework-visible
+/// response type (RPCResponse) lives in velox/common/rpc/; the concrete
+/// request and response payload types belong to each function.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -179,25 +240,24 @@ class AsyncRPCFunction {
 
   // ── Output ────────────────────────────────────────────────────
 
-  /// Build output vector from completed responses.
-  /// Default: VARCHAR FlatVector (errors → SQL NULL, success → string
-  /// value). Override for non-VARCHAR return types (e.g., ARRAY(REAL)
-  /// for embeddings) or custom result processing.
+  /// Build the output vector from completed responses.
+  ///
+  /// Only the function can do this: it is the one that knows what its
+  /// payload contains and how it maps onto resultType(). Functions returning
+  /// text can delegate to buildTextOutput().
+  ///
+  /// This mirrors how VectorFunction::apply divides responsibility -- the
+  /// framework owns scheduling, the function owns materialising the result.
+  /// It differs in returning the vector rather than taking a VectorPtr& out
+  /// parameter. That parameter earns its ensureWritable contract because the
+  /// expression evaluator owns the result's lifetime: it can arrive partially
+  /// populated from another branch of a conditional, and it can be handed back
+  /// for the next call. Here the vector escapes immediately into the output
+  /// RowVector, so a caller-owned buffer could only be reused once downstream
+  /// released the previous batch -- too rare to pay for the contract.
   virtual VectorPtr buildOutput(
       const std::vector<RPCResponse>& responses,
-      memory::MemoryPool* pool) const {
-    const auto numRows = static_cast<vector_size_t>(responses.size());
-    auto result =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (responses[i].hasError()) {
-        result->setNull(i, true);
-      } else {
-        result->set(i, StringView(responses[i].result));
-      }
-    }
-    return result;
-  }
+      memory::MemoryPool* pool) const = 0;
 
   // ── Congestion Control ───────────────────────────────────────
 

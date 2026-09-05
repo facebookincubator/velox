@@ -978,6 +978,19 @@ void RPCOperator::initOutputProjections() {
     }
   }
 
+  // The framework owns the destination type; the function owns the mapping
+  // onto it. Nothing checked they agree, so a function wired to a node
+  // declaring a different type produced a RowVector whose child disagreed
+  // with its own declared type, and the failure surfaced downstream.
+  const auto& declaredType = outputType->childAt(rpcResultOutputChannel_);
+  VELOX_CHECK(
+      declaredType->equivalent(*function_->resultType()),
+      "RPC function '{}' returns {} but the plan declares column '{}' as {}",
+      function_->name(),
+      function_->resultType()->toString(),
+      outputColumn,
+      declaredType->toString());
+
   RPC_OP_VLOG(1) << "initOutputProjections: rpcResultChannel="
                  << rpcResultOutputChannel_ << ", passthroughProjections="
                  << passthroughProjections_.size();
