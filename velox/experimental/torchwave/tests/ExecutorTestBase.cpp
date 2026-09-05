@@ -230,6 +230,10 @@ DEFINE_bool(
     true,
     "Leave a concat operand whose producer can write its band to be fused into the concat's own kernel, instead of pushing it into its own kernel a step earlier and copying it in");
 DEFINE_bool(
+    defer_size_outputs,
+    false,
+    "EXPERIMENT, not correct yet. Stop counting a returned sym_size / sym_numel as a use of its operand when the partitioner builds its levels, so the operand does not become a CSE border on the getter's account. Measures what removing those borders is worth; the getter can end up reading a tensor that was fused away");
+DEFINE_bool(
     fold_shared_chains,
     true,
     "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
@@ -726,6 +730,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
   WaveConfig::get().configPerOp = FLAGS_config_per_op;
+  WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
