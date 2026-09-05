@@ -78,7 +78,10 @@ class ParquetRowReader : public dwio::common::RowReader {
   ParquetRowReader(
       const std::shared_ptr<ReaderBase>& readerBase,
       const dwio::common::RowReaderOptions& options);
-  ~ParquetRowReader() override = default;
+  // Defined out of line in ParquetReader.cpp where Impl is complete: the
+  // pimpl unique_ptr<Impl> destructor requires the complete type (unique_ptr's
+  // destructor is constexpr since C++23).
+  ~ParquetRowReader() override;
 
   int64_t nextRowNumber() override;
 
