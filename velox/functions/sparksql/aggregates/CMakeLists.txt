@@ -13,6 +13,7 @@
 # limitations under the License.
 velox_add_library(
   velox_functions_spark_aggregates
+  ApproxCountDistinctForIntervalsAggregate.cpp
   ApproxPercentileAggregate.cpp
   AverageAggregate.cpp
   BitmapConstructAggAggregate.cpp
@@ -32,6 +33,7 @@ velox_add_library(
   SumAggregate.cpp
   VarianceAggregate.cpp
   HEADERS
+  ApproxCountDistinctForIntervalsAggregate.h
   ApproxPercentileAggregate.h
   AverageAggregate.h
   BitmapConstructAggAggregate.h
@@ -54,6 +56,7 @@ velox_link_libraries(
   fmt::fmt
   velox_exec
   velox_expression_functions
+  velox_functions_spark_impl
   velox_aggregates
   velox_vector
 )
