@@ -12,18 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_mock_rpc_client_test MockRPCClientTest.cpp)
-
-target_link_libraries(
-  velox_mock_rpc_client_test
-  velox_mock_rpc_client
-  GTest::gtest
-  GTest::gtest_main
-  Folly::folly
-)
-
-add_test(NAME velox_mock_rpc_client_test COMMAND velox_mock_rpc_client_test)
-
 add_executable(velox_rpc_state_test RPCStateTest.cpp)
 
 target_link_libraries(
@@ -49,32 +37,31 @@ target_link_libraries(
 
 add_test(NAME velox_congestion_controller_test COMMAND velox_congestion_controller_test)
 
-add_executable(velox_rpc_node_test RPCNodeTest.cpp)
+add_executable(velox_rpc_node_test RPCNodeTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_node_test
-  velox_mock_rpc_client
   velox_core
   velox_memory
+  velox_process
   velox_vector
   GTest::gtest
-  GTest::gtest_main
   Folly::folly
 )
 
 add_test(NAME velox_rpc_node_test COMMAND velox_rpc_node_test)
 
-add_executable(velox_demo_rpc_function_test DemoRPCFunctionTest.cpp)
-velox_add_test_headers(velox_demo_rpc_function_test DemoRPCFunction.h)
+add_executable(velox_demo_rpc_function_test DemoRPCFunctionTest.cpp Main.cpp)
+velox_add_test_headers(velox_demo_rpc_function_test DemoRPCFunction.h ResponseSimulator.h)
 
 target_link_libraries(
   velox_demo_rpc_function_test
   velox_demo_rpc_function
   velox_core
   velox_memory
+  velox_process
   velox_vector
   GTest::gtest
-  GTest::gtest_main
   Folly::folly
 )
 
@@ -123,7 +110,6 @@ add_executable(velox_rpc_aimd_under_load_test RPCAimdUnderLoadTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_aimd_under_load_test
-  velox_mock_rpc_client
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib
