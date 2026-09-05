@@ -31,6 +31,7 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/functions/lib/string/StringImpl.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::parquet {
 
@@ -190,6 +191,13 @@ bool isInt32Compatible(
 // Checks whether the given type is compatible with a Parquet INT64 source.
 // Accepts BIGINT identity mapping and Decimal targets with sufficient
 // precision (precision - scale >= 20, covering the full INT64 range).
+// Accepts TIMESTAMP itself and TIMESTAMP WITH TIME ZONE, whose kind is BIGINT
+// and so has to be recognized by type identity.
+bool isTimestampCompatible(const TypePtr& type) {
+  return type->kind() == TypeKind::TIMESTAMP ||
+      isTimestampWithTimeZoneType(type);
+}
+
 bool isInt64Compatible(const TypePtr& type) {
   if (type->isDecimal()) {
     return hasEnoughDecimalPrecision(type, 20);
@@ -1230,12 +1238,7 @@ TypePtr ReaderBase::convertType(
             "TIMESTAMP_MICROS or TIMESTAMP_MILLIS converted type can only be set for value of thrift::Type::INT64");
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TIMESTAMP;
-                    }),
+                isCompatible(requestedType, isRepeated, isTimestampCompatible),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString(),
@@ -1407,11 +1410,7 @@ TypePtr ReaderBase::convertType(
           VELOX_CHECK(
               !requestedType ||
                   isCompatible(
-                      requestedType,
-                      isRepeated,
-                      [](const TypePtr& type) {
-                        return type->kind() == TypeKind::TIMESTAMP;
-                      }),
+                      requestedType, isRepeated, isTimestampCompatible),
               kTypeMappingErrorFmtStr,
               "TIMESTAMP",
               requestedType->toString(),
@@ -1429,12 +1428,7 @@ TypePtr ReaderBase::convertType(
       case thrift::Type::INT96:
         VELOX_CHECK(
             !requestedType ||
-                isCompatible(
-                    requestedType,
-                    isRepeated,
-                    [](const TypePtr& type) {
-                      return type->kind() == TypeKind::TIMESTAMP;
-                    }),
+                isCompatible(requestedType, isRepeated, isTimestampCompatible),
             kTypeMappingErrorFmtStr,
             "TIMESTAMP",
             requestedType->toString(),
