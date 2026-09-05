@@ -293,11 +293,30 @@ void deepFlattenIValue(
   }
 }
 
+void fillFrameFromUserInputs(
+    const nativert::Graph& graph,
+    nativert::ExecutionFrame& frame,
+    const std::vector<c10::IValue>& inputs);
+
 void fillFrameInputs(
     const nativert::Graph& graph,
     nativert::ExecutionFrame& frame,
     std::vector<c10::IValue> inputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // The two lists are not the same for every model. graph.userInputs() carries
+  // one entry per placeholder, including the ones the signature omits -- the
+  // ROO preproc has 315 of them, string constants the export kept -- and only
+  // that list aligns positionally with an already-flat external inputs file.
+  // Prefer it when the counts say it is the one the caller flattened against;
+  // keying off the signature there silently shifts every input past the first
+  // omitted leaf, which surfaces far away as an int reaching an op that wanted
+  // a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      inputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, inputs);
+    return;
+  }
   // Flatten one level to handle Objects/Tuples wrapping the actual inputs.
   std::vector<c10::IValue> flat;
   for (auto& v : inputs) {
@@ -319,11 +338,25 @@ void fillFrameInputs(
     }
     flat = std::move(next);
   }
+  if (flat.size() != userInputNames.size()) {
+    LOG(WARNING) << "fillFrameInputs: " << flat.size() << " inputs for "
+                 << userInputNames.size()
+                 << " user inputs; the alignment below will be wrong";
+  }
+  // One leaf per name, whether or not the name has a value in the graph. A
+  // placeholder the export kept but nothing reads -- the ROO preproc has 315
+  // of them, string constants that carry no graph value -- still occupies a
+  // position in the flattened inputs. Skipping the name without consuming its
+  // leaf shifts every input after it, which surfaces far away as an int
+  // arriving where an op wanted a tensor.
   size_t flatIdx = 0;
   for (const auto& name : userInputNames) {
-    auto* value = graph.tryGetValue(name);
-    if (value && flatIdx < flat.size()) {
-      frame.setIValue(value->id(), std::move(flat[flatIdx++]));
+    if (flatIdx >= flat.size()) {
+      break;
+    }
+    auto item = std::move(flat[flatIdx++]);
+    if (auto* value = graph.tryGetValue(name)) {
+      frame.setIValue(value->id(), std::move(item));
     }
   }
 }
@@ -853,6 +886,19 @@ void ExecutorTestBase::fillWaveFrame(
     nativert::ExecutionFrame& frame,
     const std::vector<c10::IValue>& deviceInputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // graph.userInputs() carries one entry per placeholder, including the ones
+  // the signature omits -- the ROO preproc has 315 of them, string constants
+  // the export kept -- and only that list aligns positionally with an
+  // already-flat external inputs file. Keying off the signature there consumes
+  // no leaf for an omitted placeholder, so every input past the first one is
+  // read from the wrong index and surfaces far away as an int reaching an op
+  // that wanted a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      deviceInputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, deviceInputs);
+    return;
+  }
   // Flatten to match user input count.
   std::vector<c10::IValue> flat;
   for (const auto& v : deviceInputs) {
