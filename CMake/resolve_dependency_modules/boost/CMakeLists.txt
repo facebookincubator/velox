@@ -49,6 +49,14 @@ FetchContent_Declare(
   URL_HASH ${VELOX_BOOST_BUILD_SHA256_CHECKSUM}
 )
 
+# Compiled Boost libraries are requested by the top-level project through
+# velox_resolve_dependency(Boost COMPONENTS ...) and forwarded here as
+# Boost_COMPONENTS. Seed them so Boost's own CMake build configures the matching
+# library targets (Boost::context, Boost::regex, ...) that the dependency chain
+# (folly, wangle, fbthrift) links against. The header-only libraries below are
+# always required and are consumed through the Boost::headers alias instead.
+list(APPEND BOOST_INCLUDE_LIBRARIES ${Boost_COMPONENTS})
+
 # Configure the file before adding the header only libs
 configure_file(
   ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake.in
