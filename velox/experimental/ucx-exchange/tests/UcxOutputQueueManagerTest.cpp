@@ -23,9 +23,13 @@
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <memory>
+#include <type_traits>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/core/PlanNode.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
 using namespace facebook::velox::ucx_exchange;
@@ -47,17 +51,19 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   std::shared_ptr<Task> initializeTask(
-      std::string_view taskId,
+      const std::string& taskId,
       int numDestinations,
       int numDrivers,
       bool cleanup = true,
       core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned) {
+          core::PartitionedOutputNode::Kind::kPartitioned,
+      uint64_t maxOutputBufferSize = FOUR_GBYTES) {
     if (cleanup) {
       queueManager_->removeTask(taskId);
     }
 
-    auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
+    auto task = createSourceTask(
+        taskId, pool_, UcxTestData::kTestRowType, maxOutputBufferSize);
 
     queueManager_->initializeTask(task, kind, numDestinations, numDrivers);
     return task;
@@ -98,6 +104,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
         destination,
         [destination, expectedEndMarker, &receivedData](
             std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
             std::vector<int64_t> remainingBytes) {
           ASSERT_EQ(expectedEndMarker, data == nullptr)
               << "for destination " << destination;
@@ -111,6 +118,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
       bool& receivedEndMarker) {
     return [destination, &receivedEndMarker](
                std::shared_ptr<cudf::packed_columns> data,
+               vector_size_t /*numRows*/,
                std::vector<int64_t> remainingBytes) {
       EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
       EXPECT_TRUE(data == nullptr) << "for destination " << destination;
@@ -145,6 +153,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
     receivedData = false;
     return [destination, &receivedData](
                std::shared_ptr<cudf::packed_columns> data,
+               vector_size_t /*numRows*/,
                std::vector<int64_t> /*remainingBytes*/) {
       EXPECT_FALSE(receivedData) << "for destination " << destination;
       EXPECT_TRUE(data != nullptr) << "for destination " << destination;
@@ -182,6 +191,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
           taskId,
           destination,
           [&](std::shared_ptr<cudf::packed_columns> data,
+              vector_size_t /*numRows*/,
               std::vector<int64_t> /*remainingBytes*/) {
             if (data == nullptr) {
               atEnd = true;
@@ -209,6 +219,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
           destination,
           [&promise](
               std::shared_ptr<cudf::packed_columns> data,
+              vector_size_t /*numRows*/,
               std::vector<int64_t> remainingBytes) {
             promise.setValue(
                 Response{std::move(data), std::move(remainingBytes)});
@@ -226,6 +237,133 @@ class UcxOutputQueueManagerTest : public testing::Test {
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
   std::shared_ptr<UcxOutputQueueManager> queueManager_;
 };
+
+// Drives all eight exec::OutputBufferManager virtuals through a base-class
+// pointer, which is the only surface exec::Task and the Presto stats layer see.
+// The utilization pair is pinned to the queue's own byte accounting rather than
+// to a loose bound, so a constant-returning implementation cannot satisfy it.
+TEST_F(UcxOutputQueueManagerTest, implementsOutputBufferManager) {
+  static_assert(
+      std::is_base_of_v<exec::OutputBufferManager, UcxOutputQueueManager>);
+
+  std::shared_ptr<exec::OutputBufferManager> mgr = queueManager_;
+  ASSERT_NE(mgr, nullptr);
+
+  // An unknown task is tolerated by every method, and the two observability
+  // methods report "no answer" rather than inventing one.
+  const std::string unknownTaskId = "outputBufferManagerIface.unknown";
+  EXPECT_NO_THROW(mgr->toString(unknownTaskId));
+  EXPECT_FALSE(mgr->updateNumDrivers(unknownTaskId, 1));
+  EXPECT_FALSE(mgr->updateOutputBuffers(unknownTaskId, 1, true));
+  EXPECT_EQ(mgr->stats(unknownTaskId), std::nullopt);
+  EXPECT_EQ(mgr->getUtilization(unknownTaskId), std::nullopt);
+  EXPECT_EQ(mgr->isOverutilized(unknownTaskId), std::nullopt);
+
+  // Use an id unique to this case: the manager is a process-wide singleton
+  // shared with every other case in the binary.
+  const std::string taskId = "outputBufferManagerIface";
+  const int numDestinations = 2;
+  // A capacity small enough that a handful of pages crosses the
+  // over-utilization threshold, so isOverutilized() is seen in both states.
+  const uint64_t maxOutputBufferSize = 4096;
+  auto task = initializeTask(
+      taskId,
+      numDestinations,
+      1 /*numDrivers*/,
+      true /*cleanup*/,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      maxOutputBufferSize);
+
+  // Empty but bounded: a real ratio of exactly zero, which is a different
+  // answer from the unbounded placeholder queue's nullopt (see
+  // lateTaskCreation).
+  auto stats = mgr->stats(taskId);
+  ASSERT_TRUE(stats.has_value());
+  ASSERT_EQ(stats->bufferedBytes, 0);
+  EXPECT_EQ(mgr->getUtilization(taskId), 0.0);
+  EXPECT_EQ(mgr->isOverutilized(taskId), false);
+
+  // One page: utilization is queued bytes over the configured capacity.
+  // Producers are only blocked *after* adding data (UcxOutputQueue::
+  // checkBlocked), so queuedBytes_ may exceed maxSize_ and the ratio is not
+  // bounded by 1.0.
+  enqueue(taskId, 0, /*size=*/10);
+  stats = mgr->stats(taskId);
+  ASSERT_TRUE(stats.has_value());
+  const int64_t bufferedBytes = stats->bufferedBytes;
+  ASSERT_GT(bufferedBytes, 0);
+
+  auto utilization = mgr->getUtilization(taskId);
+  ASSERT_TRUE(utilization.has_value());
+  EXPECT_GT(*utilization, 0.0);
+  EXPECT_DOUBLE_EQ(
+      *utilization, bufferedBytes / static_cast<double>(maxOutputBufferSize));
+
+  const auto halfCapacity = static_cast<int64_t>(maxOutputBufferSize / 2);
+  auto overutilized = mgr->isOverutilized(taskId);
+  ASSERT_TRUE(overutilized.has_value());
+  EXPECT_EQ(*overutilized, bufferedBytes > halfCapacity);
+
+  // Fill past half the capacity: the flag must follow the queued bytes. The
+  // iteration bound only stops a runaway loop if enqueue ever stops
+  // accumulating; the assertion after it is what the case actually checks.
+  for (int i = 0; i < 100 && mgr->stats(taskId)->bufferedBytes <= halfCapacity;
+       ++i) {
+    enqueue(taskId, 0, /*size=*/10);
+  }
+  ASSERT_GT(mgr->stats(taskId)->bufferedBytes, halfCapacity);
+  EXPECT_EQ(mgr->isOverutilized(taskId), true);
+  ASSERT_TRUE(mgr->getUtilization(taskId).has_value());
+  EXPECT_GT(*mgr->getUtilization(taskId), 0.5);
+
+  EXPECT_TRUE(mgr->updateNumDrivers(taskId, 2));
+  EXPECT_TRUE(mgr->updateOutputBuffers(taskId, numDestinations, true));
+  EXPECT_FALSE(mgr->toString(taskId).empty());
+
+  mgr->removeTask(taskId);
+  EXPECT_EQ(mgr->stats(taskId), std::nullopt);
+}
+
+// The output half of the kUcx registration: the entry the manager is published
+// under, and that a second registration replaces rather than rejects.
+TEST_F(UcxOutputQueueManagerTest, registersUcxOutputTransport) {
+  // Start from a clean baseline so this case does not depend on registration
+  // state left behind by other suites in the binary. unregisterAll() re-seeds
+  // the built-in in-memory default, so only kUcx is actually cleared.
+  exec::OutputTransportRegistry::unregisterAll();
+  ASSERT_EQ(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+
+  registerUcxTransports();
+  auto entry = exec::OutputTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->manager, UcxOutputQueueManager::getInstanceRef());
+  EXPECT_TRUE(static_cast<bool>(entry->makeOutputOperator));
+
+  // Idempotent: a second call replaces the entry rather than throwing on the
+  // duplicate key.
+  registerUcxTransports();
+  auto entryAfterSecondCall = exec::OutputTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(entryAfterSecondCall, nullptr);
+  EXPECT_EQ(
+      entryAfterSecondCall->manager, UcxOutputQueueManager::getInstanceRef());
+
+  // Restore the baseline this case found, dropping only this module's entry
+  // rather than every registered transport.
+  unregisterUcxTransports();
+  EXPECT_EQ(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+  EXPECT_NE(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kInMemory}),
+      nullptr);
+}
 
 TEST_F(UcxOutputQueueManagerTest, basicPartitioned) {
   vector_size_t size = 100;
@@ -356,9 +494,20 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
       destination,
       [&promise](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> remainingBytes) {
         promise.setValue(Response{std::move(data), std::move(remainingBytes)});
       });
+
+  // getData() above created a placeholder queue with no known capacity yet:
+  // maxSize_ is only set from the task's query config, in initializeTask().
+  // Both observability methods must report that honestly as nullopt -- one so
+  // it does not divide by zero, the other so it does not call an
+  // unknown-capacity queue over-utilized the moment any byte is queued.
+  std::shared_ptr<exec::OutputBufferManager> mgr = queueManager_;
+  EXPECT_EQ(mgr->getUtilization(taskId), std::nullopt);
+  EXPECT_EQ(mgr->isOverutilized(taskId), std::nullopt);
+
   // initialize task.
   auto task = initializeTask(taskId, numPartitions, 1, false);
   // enqueue some data.
@@ -381,6 +530,7 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
         destination,
         [&promise](
             std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
             std::vector<int64_t> remainingBytes) {
           promise.setValue(
               Response{std::move(data), std::move(remainingBytes)});
@@ -463,6 +613,7 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
       0, // destination
       [&callbackFired, &receivedNullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> remainingBytes) {
         callbackFired = true;
         receivedNullptr = (data == nullptr);
@@ -500,6 +651,7 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
       0,
       [&callback0Fired, &callback0Nullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> remainingBytes) {
         callback0Fired = true;
         callback0Nullptr = (data == nullptr);
@@ -509,6 +661,7 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
       1,
       [&callback1Fired, &callback1Nullptr](
           std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
           std::vector<int64_t> remainingBytes) {
         callback1Fired = true;
         callback1Nullptr = (data == nullptr);

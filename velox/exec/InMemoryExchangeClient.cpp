@@ -17,8 +17,102 @@
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/Merge.h"
 
 namespace facebook::velox::exec {
+
+InMemoryExchangeClient::InMemoryExchangeClient(
+    std::string taskId,
+    int destination,
+    int64_t maxQueuedBytes,
+    int32_t numberOfConsumers,
+    uint64_t minOutputBatchBytes,
+    memory::MemoryPool* pool,
+    folly::Executor* executor,
+    int32_t requestDataSizesMaxWaitSec,
+    bool skipRequestDataSizeWithSingleSource,
+    bool lazyFetching)
+    : taskId_{std::move(taskId)},
+      destination_(destination),
+      maxQueuedBytes_{maxQueuedBytes},
+      requestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
+      pool_(pool),
+      executor_(executor),
+      queue_(
+          std::make_shared<ExchangeQueue>(
+              numberOfConsumers,
+              minOutputBatchBytes)),
+      // See comment in 'pickSourcesToRequestLocked' for why this is needed
+      // for 'minOutputBatchBytes_'. Note: ExchangeQueue does not need max(1,
+      // minOutputBatchBytes) because for 'MergeExchangeSource', we want
+      // ExchangeQueue 'minOutputBatchBytes' to be 0 so that it always
+      // unblocks. In short, 0 has a special meaning for ExchangeQueue
+      minOutputBatchBytes_(
+          std::max(static_cast<uint64_t>(1), minOutputBatchBytes)),
+      skipRequestDataSizeWithSingleSource_(skipRequestDataSizeWithSingleSource),
+      lazyFetching_(lazyFetching) {
+  VELOX_CHECK_NOT_NULL(pool_);
+  VELOX_CHECK_NOT_NULL(executor_);
+  // NOTE: the executor is used to run async response callback from the
+  // exchange source. The provided executor must not be
+  // folly::InlineLikeExecutor, otherwise it might cause potential deadlock as
+  // the response callback in exchange client might call back into the
+  // exchange source under uncertain execution context. For instance, the
+  // exchange client might inline close the exchange source from a background
+  // thread of the exchange source, and the close needs to wait for this
+  // background thread to complete first.
+  VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
+  VELOX_CHECK_GE(
+      destination, 0, "Exchange client destination must not be negative");
+}
+
+// static
+std::shared_ptr<ExchangeTransportEntry>
+InMemoryExchangeClient::makeDefaultTransportEntry() {
+  return ExchangeTransportEntry::make<InMemoryExchangeClient>(
+      [](const ExchangeClientContext& context) {
+        // The two byte limits come from the context, not from 'queryConfig':
+        // the caller may be sizing a per-source merge budget rather than a
+        // whole-node one.
+        const auto& queryConfig = context.queryConfig;
+        return std::make_shared<InMemoryExchangeClient>(
+            context.taskId,
+            context.destination,
+            context.maxExchangeBufferSize,
+            context.numberOfConsumers,
+            context.minExchangeOutputBatchBytes,
+            context.pool,
+            context.executor,
+            queryConfig.requestDataSizesMaxWaitSec(),
+            queryConfig.singleSourceExchangeOptimizationEnabled(),
+            queryConfig.exchangeLazyFetchingEnabled());
+      },
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::ExchangeNode>& node,
+         const std::shared_ptr<InMemoryExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        return std::make_unique<Exchange>(operatorId, ctx, node, client);
+      },
+      [](int32_t operatorId,
+         DriverCtx* ctx,
+         const std::shared_ptr<const core::ExchangeNode>& node,
+         const std::shared_ptr<InMemoryExchangeClient>& /*client*/)
+          -> std::unique_ptr<Operator> {
+        const auto mergeExchangeNode =
+            std::dynamic_pointer_cast<const core::MergeExchangeNode>(node);
+        VELOX_CHECK_NOT_NULL(
+            mergeExchangeNode,
+            "MergeExchange requires a MergeExchangeNode, plan node: {}",
+            node->id());
+        return std::make_unique<MergeExchange>(
+            operatorId, ctx, mergeExchangeNode);
+      });
+}
 
 void InMemoryExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
   std::vector<RequestSpec> requestSpecs;
@@ -296,9 +390,9 @@ InMemoryExchangeClient::pickSourcesToRequestLocked() {
     //    transfer. Let the transfer happen in this case to avoid getting stuck.
     //
     // 2. We have some data in the queue that is not big enough for consumers,
-    //    and it is big enough to not allow InMemoryExchangeClient to initiate
-    //    request for more data. Let transfer happen in this case to avoid this
-    //    deadlock situation.
+    //    and it is big enough to not allow ExchangeClient to initiate request
+    //    for more data. Let transfer happen in this case to avoid this deadlock
+    //    situation.
     auto& source = producingSources_.front().source;
     auto requestBytes = producingSources_.front().remainingBytes.at(0);
     LOG(INFO) << "Requesting large single page " << requestBytes

@@ -15,23 +15,43 @@
  */
 #pragma once
 
+#include "velox/exec/ExchangeClient.h"
 #include "velox/exec/ExchangeQueue.h"
 #include "velox/exec/ExchangeSource.h"
 
 namespace facebook::velox::exec {
 
-// Handle for a set of producers. This may be shared by multiple Exchanges, one
-// per consumer thread.
-//
-// Renamed from ExchangeClient, which velox/exec/ExchangeClient.h keeps as an
-// alias of this class for the read-only-synced Prestissimo build. That alias
-// and its header go away once every caller uses this name.
+struct ExchangeTransportEntry;
+
+/// Handle for a set of producers reached through ExchangeSource, buffering
+/// their pages in an in-memory ExchangeQueue. This may be shared by multiple
+/// Exchange operators, one per consumer thread.
+///
+/// This is the client of the built-in in-memory transport
+/// (core::TransportKind::kInMemory). Its data plane -- next() and queue() -- is
+/// not part of the ExchangeClient interface: the stock Exchange operator is
+/// registered together with this client and therefore reaches it directly.
 class InMemoryExchangeClient
-    : public std::enable_shared_from_this<InMemoryExchangeClient> {
+    : public ExchangeClient,
+      public std::enable_shared_from_this<InMemoryExchangeClient> {
  public:
   static constexpr int32_t kDefaultMaxQueuedBytes = 32 << 20; // 32 MB.
   static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
 
+  /// @param taskId Id of the consuming task, for logging.
+  /// @param destination Index of the output buffer to fetch from producers.
+  /// @param maxQueuedBytes Soft limit on bytes buffered in the queue.
+  /// @param numberOfConsumers Number of Exchange operators sharing this client.
+  /// @param minOutputBatchBytes Minimum bytes to accumulate in the queue before
+  /// unblocking a consumer. 0 unblocks as soon as any page arrives.
+  /// @param pool Memory pool the received pages are allocated from.
+  /// @param executor Executor running the exchange sources' response callbacks.
+  /// Must not be a folly::InlineLikeExecutor.
+  /// @param requestDataSizesMaxWaitSec Max wait for a data-size request.
+  /// @param skipRequestDataSizeWithSingleSource If true, skips the data-size
+  /// round trip when there is exactly one source.
+  /// @param lazyFetching If true, defers fetching until next() is called
+  /// instead of starting when a remote task is added.
   InMemoryExchangeClient(
       std::string taskId,
       int destination,
@@ -42,64 +62,34 @@ class InMemoryExchangeClient
       folly::Executor* executor,
       int32_t requestDataSizesMaxWaitSec = 10,
       bool skipRequestDataSizeWithSingleSource = false,
-      bool lazyFetching = false)
-      : taskId_{std::move(taskId)},
-        destination_(destination),
-        maxQueuedBytes_{maxQueuedBytes},
-        requestDataSizesMaxWaitSec_{requestDataSizesMaxWaitSec},
-        pool_(pool),
-        executor_(executor),
-        queue_(
-            std::make_shared<ExchangeQueue>(
-                numberOfConsumers,
-                minOutputBatchBytes)),
-        // See comment in 'pickSourcesToRequestLocked' for why this is needed
-        // for 'minOutputBatchBytes_'. Note: ExchangeQueue does not need max(1,
-        // minOutputBatchBytes) because for 'MergeExchangeSource', we want
-        // ExchangeQueue 'minOutputBatchBytes' to be 0 so that it always
-        // unblocks. In short, 0 has a special meaning for ExchangeQueue
-        minOutputBatchBytes_(
-            std::max(static_cast<uint64_t>(1), minOutputBatchBytes)),
-        skipRequestDataSizeWithSingleSource_(
-            skipRequestDataSizeWithSingleSource),
-        lazyFetching_(lazyFetching) {
-    VELOX_CHECK_NOT_NULL(pool_);
-    VELOX_CHECK_NOT_NULL(executor_);
-    // NOTE: the executor is used to run async response callback from the
-    // exchange source. The provided executor must not be
-    // folly::InlineLikeExecutor, otherwise it might cause potential deadlock as
-    // the response callback in exchange client might call back into the
-    // exchange source under uncertain execution context. For instance, the
-    // exchange client might inline close the exchange source from a background
-    // thread of the exchange source, and the close needs to wait for this
-    // background thread to complete first.
-    VELOX_CHECK_NULL(dynamic_cast<const folly::InlineLikeExecutor*>(executor_));
-    VELOX_CHECK_GE(
-        destination, 0, "Exchange client destination must not be negative");
-  }
+      bool lazyFetching = false);
 
-  ~InMemoryExchangeClient();
+  ~InMemoryExchangeClient() override;
 
+  /// Builds the registry entry for the built-in in-memory transport, pairing
+  /// this client with the stock Exchange and MergeExchange operators.
+  /// ExchangeTransportRegistry::global() registers it under kInMemory.
+  static std::shared_ptr<ExchangeTransportEntry> makeDefaultTransportEntry();
+
+  /// Memory pool the received pages are allocated from.
   memory::MemoryPool* pool() const {
     return pool_;
   }
 
-  // Creates an exchange source and starts fetching data from the specified
-  // upstream task. If 'close' has been called already, creates an exchange
-  // source and immediately closes it to notify the upstream task that data is
-  // no longer needed. Repeated calls with the same 'taskId' are ignored.
-  void addRemoteTaskId(const std::string& remoteTaskId);
+  void addRemoteTaskId(const std::string& remoteTaskId) override;
 
-  void noMoreRemoteTasks();
+  void noMoreRemoteTasks() override;
 
-  // Closes exchange sources.
-  void close();
+  void close() override;
 
-  // Returns runtime statistics aggregated across all of the exchange sources.
-  // InMemoryExchangeClient is expected to report background CPU time by
-  // including a runtime metric named Operator::kBackgroundCpuTimeNanos.
-  folly::F14FastMap<std::string, RuntimeMetric> stats();
+  folly::F14FastMap<std::string, RuntimeMetric> stats() override;
 
+  std::string toString() const override;
+
+  folly::dynamic toJson() const override;
+
+  /// Queue the received pages are buffered in. Part of the in-memory data
+  /// plane, used by the Exchange operator and by MergeExchangeSource.
   const std::shared_ptr<ExchangeQueue>& queue() const {
     return queue_;
   }
@@ -115,14 +105,12 @@ class InMemoryExchangeClient
   std::vector<std::unique_ptr<SerializedPageBase>>
   next(int consumerId, uint32_t maxBytes, bool* atEnd, ContinueFuture* future);
 
-  std::string toString() const;
-
-  folly::dynamic toJson() const;
-
+  /// Max wait for a data-size request to a producer.
   std::chrono::seconds requestDataSizesMaxWaitSec() const {
     return requestDataSizesMaxWaitSec_;
   }
 
+  /// Ids of the upstream tasks added so far.
   const std::unordered_set<std::string>& getRemoteTaskIdList() const {
     return remoteTaskIds_;
   }
@@ -163,8 +151,8 @@ class InMemoryExchangeClient
   std::vector<RequestSpec> pickupSingleSourceToRequestLocked();
   void request(std::vector<RequestSpec>&& requestSpecs);
 
-  /// Returns true if skip request data size optimization is enabled for single
-  /// source exchanges.
+  // Returns true if skip request data size optimization is enabled for single
+  // source exchanges.
   bool skipRequestDataSizeWithSingleSource() const {
     return skipRequestDataSizeWithSingleSource_ && queue_->hasNoMoreSources() &&
         sources_.size() == 1;
