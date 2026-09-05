@@ -41,10 +41,6 @@ void UcxExchangeQueue::enqueueLocked(
     std::vector<ContinuePromise>& promises) {
   if (data == nullptr) {
     ++numCompleted_;
-    VLOG(2) << "[EX-QUEUE] source completed (null enqueued)"
-            << " numCompleted=" << numCompleted_
-            << " numSources=" << numSources_
-            << " noMoreSources=" << noMoreSources_;
     auto completedPromises = checkCompleteLocked();
     promises.reserve(promises.size() + completedPromises.size());
     for (auto& promise : completedPromises) {
@@ -55,29 +51,12 @@ void UcxExchangeQueue::enqueueLocked(
 
   auto dataSize = data->gpuDataSize();
   totalBytes_ += dataSize;
-  if (peakBytes_ < totalBytes_) {
-    peakBytes_ = totalBytes_;
-  }
 
   ++receivedTables_;
   receivedBytes_ += dataSize;
 
   queue_.push_back(std::move(data));
 
-  // High-water-mark alerts: log when queue size crosses thresholds.
-  auto newSize = static_cast<int64_t>(queue_.size());
-  if (newSize > peakSize_) {
-    if ((peakSize_ < 100 && newSize >= 100) ||
-        (peakSize_ < 1000 && newSize >= 1000) ||
-        (peakSize_ < 10000 && newSize >= 10000)) {
-      VLOG(1) << "[EX-QUEUE] high water mark: queueSize=" << newSize
-              << " peakBytes=" << peakBytes_
-              << " receivedTables=" << receivedTables_;
-    }
-    peakSize_ = newSize;
-  }
-
-  size_t wokenConsumers = 0;
   while (!promises_.empty()) {
     VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
     const int32_t unblockedConsumers = numberOfConsumers_ - promises_.size();
@@ -89,12 +68,63 @@ void UcxExchangeQueue::enqueueLocked(
     auto it = promises_.begin();
     promises.push_back(std::move(it->second));
     promises_.erase(it);
-    ++wokenConsumers;
   }
-  if (wokenConsumers > 0) {
-    VLOG(2) << "[EX-QUEUE] waking " << wokenConsumers << " consumers"
-            << " queueSize=" << queue_.size();
+}
+
+bool UcxExchangeQueue::tryReserveReceiveBytesLocked(uint64_t bytes) {
+  if (receiveHighWaterBytes_ > 0) {
+    maybeGrowReceivePrefetchLimitLocked();
+    const auto queuedBytes = queuedReceiveBytesLocked();
+    const auto receiveLimit = receivePrefetchByteLimitLocked();
+    if (queuedBytes > 0 &&
+        (bytes > receiveLimit || queuedBytes > receiveLimit - bytes)) {
+      return false;
+    }
   }
+
+  reservedBytes_ += bytes;
+  return true;
+}
+
+void UcxExchangeQueue::releaseReceiveBytesLocked(uint64_t bytes) {
+  if (reservedBytes_ < bytes) {
+    reservedBytes_ = 0;
+  } else {
+    reservedBytes_ -= bytes;
+  }
+  maybeGrowReceivePrefetchLimitLocked();
+}
+
+void UcxExchangeQueue::releaseInFlightReceiveBytesLocked(uint64_t bytes) {
+  if (inFlightBytes_ < bytes) {
+    inFlightBytes_ = 0;
+  } else {
+    inFlightBytes_ -= bytes;
+  }
+
+  maybeGrowReceivePrefetchLimitLocked();
+}
+
+bool UcxExchangeQueue::recordReceiveAllocationPressureLocked(
+    uint64_t attemptedBytes) {
+  if (receiveHighWaterBytes_ == 0) {
+    return false;
+  }
+
+  const auto retainedBytes = retainedReceiveBytesLocked();
+  if (retainedBytes == 0) {
+    return false;
+  }
+
+  const auto defaultLimit = defaultReceivePrefetchByteLimitLocked();
+  const auto pressureBytes = retainedBytes + attemptedBytes;
+  const auto reducedLimit = pressureBytes - pressureBytes / 8;
+  const auto minimumLimit =
+      std::max<uint64_t>(receiveHighWaterBytes_, attemptedBytes);
+  receivePrefetchByteLimit_ =
+      std::min<uint64_t>(defaultLimit, std::max(minimumLimit, reducedLimit));
+  receivePrefetchLimitActive_ = true;
+  return true;
 }
 
 void UcxExchangeQueue::addPromiseLocked(
@@ -133,11 +163,6 @@ PackedTableWithStreamPtr UcxExchangeQueue::dequeueLocked(
     if (atEnd_) {
       *atEnd = true;
     } else {
-      VLOG(2) << "[EX-QUEUE] consumer=" << consumerId
-              << " blocked (empty queue, waiting for data)"
-              << " numSources=" << numSources_
-              << " numCompleted=" << numCompleted_
-              << " waitingConsumers=" << (promises_.size() + 1);
       addPromiseLocked(consumerId, future, stalePromise);
     }
     return data;
@@ -145,7 +170,12 @@ PackedTableWithStreamPtr UcxExchangeQueue::dequeueLocked(
 
   data = std::move(queue_.front());
   queue_.pop_front();
-  totalBytes_ -= data->gpuDataSize();
+  const auto dataSize = static_cast<int64_t>(data->gpuDataSize());
+  VELOX_CHECK_GE(totalBytes_, dataSize);
+  totalBytes_ -= dataSize;
+  if (tracksInFlightReceiveBytes()) {
+    inFlightBytes_ += dataSize;
+  }
 
   return data;
 }
@@ -162,6 +192,8 @@ void UcxExchangeQueue::setError(std::string_view error) {
     // NOTE: clear the serialized page queue as we won't consume from an
     // errored queue.
     queue_.clear();
+    totalBytes_ = 0;
+    reservedBytes_ = 0;
     promises = clearAllPromisesLocked();
   }
   clearPromises(promises);

@@ -22,6 +22,7 @@
 
 #include <cuda/memory_resource>
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
@@ -34,6 +35,19 @@ extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
 /// Returns the memory resource designated for output vector allocations.
 rmm::device_async_resource_ref get_output_mr();
 
+struct CudfDeviceMemoryInfo {
+  uint64_t freeBytes{0};
+  uint64_t totalBytes{0};
+  uint64_t poolReservedBytes{0};
+  uint64_t poolUsedBytes{0};
+  uint64_t poolReusableBytes{0};
+  bool hasPoolStats{false};
+};
+
+[[nodiscard]] std::optional<CudfDeviceMemoryInfo> currentDeviceMemoryInfo();
+
+void clearCurrentDeviceMemoryInfo();
+
 /**
  * @brief Creates a memory resource based on the given mode.
  *
@@ -42,7 +56,10 @@ rmm::device_async_resource_ref get_output_mr();
  * resource.
  */
 [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
-createMemoryResource(std::string_view mode, int percent);
+createMemoryResource(
+    std::string_view mode,
+    int percent,
+    bool trackAsCurrent = false);
 
 /**
  * @brief Returns the global CUDA stream pool used by cudf.

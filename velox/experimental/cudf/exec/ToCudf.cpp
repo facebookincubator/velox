@@ -105,8 +105,8 @@ bool CompileState::compile(bool allowCpuFallback) {
                 adapter->properties(op, planNode, ctx);
           }
         }
-        if (isAnyOf<CudfOperator>(op)) {
-          // CudfOperator is always fully GPU compatible
+        if (isAnyOf<CudfOperator, CudfOperatorBase>(op)) {
+          // Cudf operators are always fully GPU compatible
           // (runs on GPU, accepts GPU input, produces GPU output).
           props.canRunOnGPU = true;
           props.acceptsGpuInput = true;
@@ -189,8 +189,9 @@ bool CompileState::compile(bool allowCpuFallback) {
         isPureCpuOperator = false;
       }
     } else {
-      // special case for CudfOperator
-      if (isAnyOf<CudfOperator>(oper)) {
+      // Special case for cuDF operators that were inserted by an earlier
+      // DriverAdapter pass.
+      if (isAnyOf<CudfOperator, CudfOperatorBase>(oper)) {
         isPureCpuOperator = false;
       } else {
         // CPU operator without adapter
@@ -311,7 +312,7 @@ void registerCudf() {
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
   auto mr = cudf_velox::createMemoryResource(
-      mrMode, CudfConfig::getInstance().memoryPercent);
+      mrMode, CudfConfig::getInstance().memoryPercent, true);
   cudf::set_current_device_resource(mr);
   mr_ = std::move(mr);
 
@@ -345,6 +346,7 @@ void registerCudf() {
 void unregisterCudf() {
   output_mr_.reset();
   mr_.reset();
+  clearCurrentDeviceMemoryInfo();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
