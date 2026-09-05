@@ -249,6 +249,13 @@ struct Metadata {
   /// regardless of input size.
   bool alwaysSingleBlock{false};
 
+  /// If true, the grid is sized by the sum of the op's input element counts
+  /// rather than the largest one. Set this when an op's work is the total over
+  /// a tensor list, not the largest member: sizing by the largest gives a grid
+  /// that ignores the list length, so the op runs far fewer blocks than it has
+  /// independent work.
+  bool gridSizeSumsInputs{false};
+
   /// If true, the op reads tensor metadata (shape, size) rather than
   /// computing on tensor data. When used as a size arg producer, it runs as
   /// a standalone rather than a fused op.
@@ -438,6 +445,19 @@ struct Metadata {
   /// types appear in one translation unit.
   std::vector<std::pair<int32_t, std::string>> dynamicSharedDecls;
 
+  /// If non-zero, the kernel containing this node is compiled with
+  /// __launch_bounds__ for at least this many blocks per SM. Set it on an op
+  /// whose device function the compiler would otherwise give so many registers
+  /// that it lowers the occupancy of every other op sharing the kernel.
+  int32_t minBlocksPerSm{0};
+
+  /// If set, returns the bytes of dynamic (extern __shared__) shared memory
+  /// this node's device function needs. The kernel op takes the max over its
+  /// nodes and the launch passes that as the kernel's dynamic shared memory
+  /// size, so an op that needs a large scratch buffer only costs occupancy in
+  /// the launches that contain it.
+  std::function<int64_t(NodeCP)> dynamicSharedMemory;
+
   /// Ordinal value meaning the type comes from the node's dtype attribute.
   static constexpr int32_t kTypeFromDtype = -1;
 
@@ -614,6 +634,7 @@ class MetadataBuilder {
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
   MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
+  MetadataBuilder& gridSizeSumsInputs(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
       std::function<nativert::Node*(NodeCP, WaveGraph*)> func);
@@ -663,6 +684,8 @@ class MetadataBuilder {
       std::vector<std::pair<std::string, std::string>> decls);
   MetadataBuilder& dynamicSharedDecls(
       std::vector<std::pair<int32_t, std::string>> decls);
+  MetadataBuilder& dynamicSharedMemory(std::function<int64_t(NodeCP)> func);
+  MetadataBuilder& minBlocksPerSm(int32_t blocks);
   MetadataBuilder& typeTemplateParams(std::vector<int32_t> params);
   MetadataBuilder& hasBlockSizeTemplateParam(bool val = true);
   MetadataBuilder& hasDtypeTemplateParam(bool val = true);
