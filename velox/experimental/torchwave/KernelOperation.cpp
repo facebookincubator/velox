@@ -360,6 +360,52 @@ bool hasAlwaysSingleBlock(
   return false;
 }
 
+int64_t maxDynamicSharedMemory(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  int64_t bytes = 0;
+  auto* meta = Registry::metadata(node->target());
+  if (meta && meta->dynamicSharedMemory) {
+    bytes = meta->dynamicSharedMemory(node);
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      bytes =
+          std::max(bytes, maxDynamicSharedMemory(producer, inputs, visited));
+    }
+  }
+  return bytes;
+}
+
+int32_t maxMinBlocksPerSm(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  auto* meta = Registry::metadata(node->target());
+  int32_t blocks = meta ? meta->minBlocksPerSm : 0;
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      blocks = std::max(blocks, maxMinBlocksPerSm(producer, inputs, visited));
+    }
+  }
+  return blocks;
+}
+
 float sumNodeCosts(
     NodeCP node,
     const std::unordered_set<ValueCP>& inputs,
@@ -574,6 +620,13 @@ KernelOperation::KernelOperation(
   // Check if any node in the subgraph has alwaysSingleBlock set.
   std::unordered_set<NodeCP> asbVisited;
   alwaysSingleBlock_ = hasAlwaysSingleBlock(sg.root, inputs_, asbVisited);
+
+  std::unordered_set<NodeCP> dynSharedVisited;
+  dynamicSharedBytes_ =
+      maxDynamicSharedMemory(sg.root, inputs_, dynSharedVisited);
+
+  std::unordered_set<NodeCP> minBlocksVisited;
+  minBlocksPerSm_ = maxMinBlocksPerSm(sg.root, inputs_, minBlocksVisited);
 
   for (size_t oi = 0; oi < outputValues.size(); ++oi) {
     auto* value = outputValues[oi];

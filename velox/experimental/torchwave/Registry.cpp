@@ -490,6 +490,17 @@ MetadataBuilder& MetadataBuilder::dynamicSharedDecls(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::dynamicSharedMemory(
+    std::function<int64_t(NodeCP)> func) {
+  md_.dynamicSharedMemory = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
+  md_.minBlocksPerSm = blocks;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::typeTemplateParams(
     std::vector<int32_t> params) {
   md_.typeTemplateParams = std::move(params);

@@ -2045,6 +2045,10 @@ void setIsCg(bool on) {
   WaveConfig::get().isCg = on;
 }
 
+void setSinglePassSelect(bool on) {
+  WaveConfig::get().singlePassSelect = on;
+}
+
 void setKernelCacheDir(const std::string& dir) {
   WaveConfig::get().kernelCacheDir = dir;
 }
