@@ -293,6 +293,42 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, strposColumnStringConstantSubstringUsesCudf) {
+  auto input = makeRowVector(
+      {"s"},
+      {makeFlatVector<std::string>(
+          {"aws managed database", "no match here", "database services"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, 'database') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposColumnStringColumnSubstringUsesCudf) {
+  auto input = makeRowVector(
+      {"s", "sub"},
+      {makeFlatVector<std::string>({"alpha beta", "gamma", "delta epsilon"}),
+       makeFlatVector<std::string>({"beta", "x", "epsilon"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, sub) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
 // Test supported aggregation should use CUDF
 TEST_F(ToCudfSelectionTest, supportedAggregationUsesCudf) {
   auto vectors = makeVectors(rowType_, 10, 100);
