@@ -46,7 +46,12 @@
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
+#include <cudf/column/column_factories.hpp>
 #include <cudf/io/parquet.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/utilities/error.hpp>
+
+#include <cuda_runtime.h>
 
 #include <fmt/ranges.h>
 
@@ -68,6 +73,54 @@ struct StatsFilterMetrics {
   std::optional<cudf::size_type> rowGroupsAfterStats;
   cudf::size_type outputRows{0};
 };
+
+void writeDecimal32Parquet(
+    const std::string& filePath,
+    const std::vector<int32_t>& decimalValues,
+    const std::vector<int64_t>& ids) {
+  VELOX_CHECK_EQ(decimalValues.size(), ids.size());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto decimals = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::DECIMAL32, numeric::scale_type{-2}},
+      decimalValues.size(),
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  auto idColumn = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT64},
+      ids.size(),
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      decimals->mutable_view().data<int32_t>(),
+      decimalValues.data(),
+      decimalValues.size() * sizeof(int32_t),
+      cudaMemcpyHostToDevice,
+      stream.value()));
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      idColumn->mutable_view().data<int64_t>(),
+      ids.data(),
+      ids.size() * sizeof(int64_t),
+      cudaMemcpyHostToDevice,
+      stream.value()));
+  stream.synchronize();
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(std::move(decimals));
+  columns.push_back(std::move(idColumn));
+  auto table = cudf::table{std::move(columns)};
+  auto metadata = cudf::io::table_input_metadata(table.view());
+  metadata.column_metadata[0].set_name("c0").set_decimal_precision(5);
+  metadata.column_metadata[1].set_name("c1");
+  auto options = cudf::io::parquet_writer_options::builder(
+                     cudf::io::sink_info(filePath), table.view())
+                     .metadata(metadata)
+                     .build();
+  cudf::io::write_parquet(options, stream);
+}
 
 StatsFilterMetrics readParquetWithStatsFilter(
     const std::string& filePath,
@@ -928,4 +981,63 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
                {makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
                 makeArrayVector({0, 2, 4}, listElements)})})});
   assertDecimalScanRoundTrip(vector, rowType);
+}
+
+TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(5, 2), BIGINT()});
+  auto decimal32Vector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({100, -500, -700}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({1, 2, 3})});
+  auto decimal64Vector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({200, -500, -800}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({4, 5, 6})});
+
+  auto decimal32Path = TempFilePath::create();
+  auto decimal64Path = TempFilePath::create();
+  writeDecimal32Parquet(decimal32Path->getPath(), {100, -500, -700}, {1, 2, 3});
+  writeToFile(decimal64Path->getPath(), {decimal64Vector});
+  createDuckDbTable({decimal32Vector, decimal64Vector});
+
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add(
+                         "c0",
+                         std::make_unique<common::BigintRange>(
+                             int64_t{-500},
+                             int64_t{-500},
+                             /*nullAllowed*/ false))
+                     .build();
+  auto tableHandle =
+      makeTableHandle("parquet_table", rowType, std::move(filters), nullptr);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  const auto expected =
+      "SELECT c0, c1 FROM tmp "
+      "WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))";
+  for (const bool useExperimentalReader : {false, true}) {
+    auto config = std::unordered_map<std::string, std::string>{
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseExperimentalCudfReader,
+         useExperimentalReader ? "true" : "false"}};
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(std::move(config)));
+
+    for (const auto& paths :
+         {std::vector{decimal32Path, decimal64Path},
+          std::vector{decimal64Path, decimal32Path}}) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .splits(makeCudfHiveConnectorSplits(paths))
+          .assertResults(expected);
+    }
+  }
 }
