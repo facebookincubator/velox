@@ -60,8 +60,10 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
         },
         [](const core::TypedExprPtr& expr,
            const RowTypePtr& row,
-           memory::MemoryPool* pool) {
-          return std::make_shared<cudf_velox::ASTExpression>(expr, row, pool);
+           memory::MemoryPool* pool,
+           const cudf_velox::CudfDateTimeContext& context) {
+          return std::make_shared<cudf_velox::ASTExpression>(
+              expr, row, pool, context);
         },
         /*overwrite=*/true);
 
@@ -73,8 +75,10 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
         },
         [](const core::TypedExprPtr& expr,
            const RowTypePtr& row,
-           memory::MemoryPool* pool) {
-          return std::make_shared<cudf_velox::JitExpression>(expr, row, pool);
+           memory::MemoryPool* pool,
+           const cudf_velox::CudfDateTimeContext& context) {
+          return std::make_shared<cudf_velox::JitExpression>(
+              expr, row, pool, context);
         },
         /*overwrite=*/true);
   }

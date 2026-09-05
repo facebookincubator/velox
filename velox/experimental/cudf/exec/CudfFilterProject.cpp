@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -173,6 +172,12 @@ void CudfFilterProject::initialize() {
   const auto inputType = project_ ? project_->sources()[0]->outputType()
                                   : filter_->sources()[0]->outputType();
 
+  // Capture the session timezone so timezone-aware GPU functions (date/time
+  // extraction, the TIMESTAMP WITH TIME ZONE family, temporal casts) match the
+  // CPU path.
+  const auto exprContext =
+      contextFromConfig(operatorCtx_->driverCtx()->queryConfig());
+
   // convert to AST
   if (CudfConfig::getInstance().debugEnabled) {
     int i = 0;
@@ -187,11 +192,14 @@ void CudfFilterProject::initialize() {
   // lifetime.
   auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
   auto* const pool = operatorCtx_->pool();
-  const auto optimizeAndCompile =
-      [inputType, queryCtx, pool](const core::TypedExprPtr& expr) {
-        return createCudfExpression(
-            expression::optimize(expr, queryCtx, pool), inputType, pool);
-      };
+  const auto optimizeAndCompile = [inputType, queryCtx, pool, &exprContext](
+                                      const core::TypedExprPtr& expr) {
+    return createCudfExpression(
+        expression::optimize(expr, queryCtx, pool),
+        inputType,
+        pool,
+        exprContext);
+  };
   if (hasFilter_) {
     // First expr is Filter, rest are Project.
     filterEvaluator_ = optimizeAndCompile(allExprs.front());
