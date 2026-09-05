@@ -104,7 +104,7 @@ __device__ __forceinline__ void sumReduce(
   T finalSum;
   if (threadIdx.x < kWarpThreads) {
     finalSum = Reduce8().reduce(
-        threadIdx.x < kWarpThreads ? warpSum[threadIdx.x] : 0,
+        threadIdx.x < kNumWarps ? warpSum[threadIdx.x] : 0,
         [](T x, T y) { return x + y; });
     if (threadIdx.x == 0) {
       if (anyAtAll) {

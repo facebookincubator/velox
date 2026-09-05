@@ -265,9 +265,7 @@ class GpuDecoderTest : public ::testing::Test {
   void
   fillRows(GpuDecode* op, int32_t* rows, int32_t valuesPerOp, float everyNth) {
     int32_t opIdx = op->nthBlock;
-    int32_t i = 0;
 
-    auto numBlocks = valuesPerOp / kBlockSize;
     for (auto block = 0; block < op->numRowsPerThread; ++block) {
       int32_t rowIdx = opIdx * valuesPerOp + (block * kBlockSize);
       int32_t row = rowIdx;

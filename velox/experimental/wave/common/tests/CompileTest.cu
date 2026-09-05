@@ -89,12 +89,12 @@ void __global__ add3(KernelParams params) {
   }
 }
 
-TEST_F(CompileTest, module) {
+TEST_F(CompileTest, compiledModule) {
   KernelSpec spec = KernelSpec{
       kernelText,
       {"facebook::velox::wave::add1", "facebook::velox::wave::add2"},
       "/tmp/add1.cu"};
-  auto module = CompiledModule::create(spec);
+  auto compiledModule = CompiledModule::create(spec);
   int32_t* ptr;
   testCuCheck(cuMemAllocManaged(
       reinterpret_cast<CUdeviceptr*>(&ptr),
@@ -106,10 +106,10 @@ TEST_F(CompileTest, module) {
   auto impl = std::make_unique<StreamImpl>();
   testCuCheck(cuStreamCreate((CUstream*)&impl->stream, CU_STREAM_DEFAULT));
   auto stream = std::make_unique<Stream>(std::move(impl));
-  module->launch(0, 1, 256, 0, stream.get(), &recordPtr);
+  compiledModule->launch(0, 1, 256, 0, stream.get(), &recordPtr);
   testCuCheck(cuStreamSynchronize((CUstream)stream->stream()->stream));
   EXPECT_EQ(1, ptr[0]);
-  auto info = module->info(0);
+  auto info = compiledModule->info(0);
   EXPECT_EQ(1024, info.maxThreadsPerBlock);
 
   // See if runtime API kernel works on driver API stream.
@@ -119,7 +119,7 @@ TEST_F(CompileTest, module) {
   EXPECT_EQ(4, ptr[0]);
 
   auto stream2 = std::make_unique<Stream>();
-  module->launch(1, 1, 256, 0, stream2.get(), &recordPtr);
+  compiledModule->launch(1, 1, 256, 0, stream2.get(), &recordPtr);
   stream2->wait();
   EXPECT_EQ(6, ptr[0]);
 }
@@ -173,11 +173,11 @@ TEST_F(CompileTest, scan) {
       {"facebook::velox::wave::scanKernel32",
        "facebook::velox::wave::scanKernel8"},
       "scans.cu"};
-  auto module = CompiledModule::create(spec);
+  auto compiledModule = CompiledModule::create(spec);
   auto stream = std::make_unique<Stream>();
   auto rawInts = ints->as<int32_t>();
   void* params = &rawInts;
-  module->launch(0, 1, 32, 0, stream.get(), &params);
+  compiledModule->launch(0, 1, 32, 0, stream.get(), &params);
   stream->wait();
   int32_t sum = 0;
   for (auto i = 0; i < 32; ++i) {
@@ -189,7 +189,7 @@ TEST_F(CompileTest, scan) {
   for (auto i = 0; i < 32; ++i) {
     rawInts[i] = i;
   }
-  module->launch(1, 1, 32, 0, stream.get(), &params);
+  compiledModule->launch(1, 1, 32, 0, stream.get(), &params);
   stream->wait();
   sum = 0;
   for (auto i = 0; i < 8; ++i) {
@@ -220,12 +220,13 @@ TEST_F(CompileTest, reduce) {
 
   KernelSpec spec = {
       text, {"facebook::velox::wave::reduceKernel32"}, "reduces.cu"};
-  auto module = CompiledModule::create(spec);
+  auto compiledModule = CompiledModule::create(spec);
   auto ptr1 = ints->as<int32_t>();
   auto ptr2 = result->as<int32_t>();
   auto stream = std::make_unique<Stream>();
   int32_t** arrays[2] = {&ptr1, &ptr2};
-  module->launch(0, 1, 32, 0, stream.get(), reinterpret_cast<void**>(arrays));
+  compiledModule->launch(
+      0, 1, 32, 0, stream.get(), reinterpret_cast<void**>(arrays));
   stream->wait();
   int32_t sum = 0;
   for (auto i = 0; i < 32; ++i) {
