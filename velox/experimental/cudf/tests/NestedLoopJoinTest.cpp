@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -182,6 +183,41 @@ TEST_F(CudfNestedLoopJoinTest, innerJoinWithFilter) {
                   .planNode();
 
   assertQuery(plan, "SELECT t.c0, u.c0 FROM t INNER JOIN u ON t.c0 < u.c0");
+}
+
+// A null IN-list join filter must materialize its all-null result column on the
+// side the IN operand references, not unconditionally on the probe side. Here
+// the probe side has zero columns and the condition references the build column
+// `u_c0`, so anchoring the fill column to the probe side would fail during AST
+// construction.
+TEST_F(CudfNestedLoopJoinTest, nullInFilterWithZeroColumnProbe) {
+  auto probeData = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto buildData = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto nullInList =
+      BaseVector::createNullConstant(ARRAY(INTEGER()), 1, pool_.get());
+  auto joinCondition = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_c0"),
+          std::make_shared<core::ConstantTypedExpr>(nullInList),
+      },
+      "in");
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto probe = PlanBuilder(planNodeIdGenerator).values({probeData}).project({});
+  auto build = PlanBuilder(planNodeIdGenerator)
+                   .values({buildData})
+                   .project({"c0 AS u_c0"})
+                   .planNode();
+  auto plan = std::make_shared<core::NestedLoopJoinNode>(
+      planNodeIdGenerator->next(),
+      core::JoinType::kInner,
+      joinCondition,
+      probe.planNode(),
+      build,
+      ROW({"u_c0"}, {INTEGER()}));
+
+  AssertQueryBuilder(plan).assertEmptyResults();
 }
 
 // Test 6: Multiple batches (tests streaming behavior)
