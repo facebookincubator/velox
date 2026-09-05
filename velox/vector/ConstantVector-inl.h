@@ -25,7 +25,8 @@ std::unique_ptr<SimpleVector<uint64_t>> ConstantVector<T>::hashAll() const {
       BIGINT(),
       this->hashValueAt(0),
       SimpleVectorStats<uint64_t>{}, /* stats */
-      sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /* representedBytes */);
 }
 
 } // namespace facebook::velox

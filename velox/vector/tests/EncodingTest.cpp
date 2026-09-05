@@ -19,17 +19,14 @@
 #include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook;
-using namespace facebook::velox;
-using namespace facebook::velox::test;
+namespace facebook::velox::test {
 
-class EncodingTest : public testing::Test, public velox::test::VectorTestBase {
+class EncodingTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     if (!isRegisteredVectorSerde()) {
-      facebook::velox::serializer::presto::PrestoVectorSerde::
-          registerVectorSerde();
+      serializer::presto::PrestoVectorSerde::registerVectorSerde();
     }
   }
 
@@ -196,3 +193,5 @@ TEST_F(EncodingTest, basic) {
   checkTypeEncoding<TypeKind::VARCHAR>(VARCHAR());
   checkTypeEncoding<TypeKind::TIMESTAMP>(TIMESTAMP());
 }
+
+} // namespace facebook::velox::test
