@@ -1278,6 +1278,531 @@ __device__ void masked_select_cg(
   opBarrier(block, bar2);
 }
 
+// --- Single-pass (decoupled look-back) scan and stream compaction ---
+//
+// The head/add_sizes/final split above reads the input twice: once to reduce
+// each block's partition and once to scan it. The variants below read it once.
+// A tile publishes its own sum the moment it has it, then walks back over its
+// predecessors' descriptors to turn that sum into an inclusive prefix, so the
+// dependency between tiles is carried in the descriptors rather than in a
+// second pass.
+//
+// Tiles are assigned to blocks by a grid-strided loop: block b owns tiles b,
+// b + numBlocksInOp, ... Tile t waits on tile t - 1, whose owner is block
+// b - 1 (or block numBlocksInOp - 1 on the previous iteration), so every block
+// of the op must be resident or the wait never ends. The ops declare a barrier,
+// which is what makes the launch cooperative.
+
+// States of a tile descriptor. A tile moves kTileEmpty -> kTileAggregate ->
+// kTilePrefix, and the first tile goes straight to kTilePrefix.
+enum : int32_t {
+  kTileEmpty = 0,
+  kTileAggregate = 1,
+  kTilePrefix = 2,
+};
+
+// Elements a thread of the single-pass prefix sum handles per tile, so a tile
+// is kScanItemsPerThread * blockSize elements. The host sizes the look-back
+// state from the same figure (lookbackStateShape in Builtins.cpp), so the two
+// must change together.
+constexpr int32_t kScanItemsPerThread = 8;
+
+// Per-tile look-back descriptors carved out of one int32 buffer: a status flag,
+// the tile's own sum, and the inclusive prefix through it. The aggregate and
+// the prefix are separate arrays on purpose -- a reader that has seen
+// kTileAggregate must still find the aggregate after the owner has published
+// its prefix, which one shared value slot would have overwritten.
+template <typename T>
+struct LookbackState {
+  int32_t* flags;
+  T* aggregates;
+  T* prefixes;
+
+  // int32 words the descriptors of 'numTiles' tiles occupy. The flag array is
+  // rounded up to an even word count so the T arrays behind it stay 8-byte
+  // aligned. Mirrored on the host by lookbackStateShape() in Builtins.cpp; the
+  // two must change together.
+  static __host__ __device__ int32_t numWords(int32_t numTiles) {
+    return roundUpPwr2(numTiles, 2) +
+        2 * numTiles * static_cast<int32_t>(sizeof(T) / sizeof(int32_t));
+  }
+
+  __device__ void init(int32_t* base, int32_t numTiles) {
+    flags = base;
+    aggregates = reinterpret_cast<T*>(base + roundUpPwr2(numTiles, 2));
+    prefixes = aggregates + numTiles;
+  }
+
+  // Publishes this tile's own sum. The fence is the release side of the
+  // handshake: the value must be visible to any block that observes the flag.
+  __device__ void publishAggregate(int32_t tile, T value) {
+    aggregates[tile] = value;
+    __threadfence();
+    reinterpret_cast<volatile int32_t*>(flags)[tile] = kTileAggregate;
+  }
+
+  __device__ void publishPrefix(int32_t tile, T value) {
+    prefixes[tile] = value;
+    __threadfence();
+    reinterpret_cast<volatile int32_t*>(flags)[tile] = kTilePrefix;
+  }
+};
+
+// Exclusive prefix of 'tile', i.e. the sum of every tile before it. Called by
+// all 32 lanes of one warp with the same 'tile'; the result is returned in
+// lane 0. The warp inspects 32 predecessors at a time and stops at the closest
+// one that has published a prefix, since that prefix already covers everything
+// before it. Lanes below tile 0 stand in for a published prefix of zero, which
+// is what ends the walk at the start of the array.
+template <typename T>
+__device__ inline T lookbackExclusive(LookbackState<T>& state, int32_t tile) {
+  // Signed, because a lane walks back past the start of the array and the tile
+  // index it forms goes negative there. The narrowing is safe: the lane is
+  // masked to the warp width, not a thread index into the data.
+  const int32_t lane = static_cast<int32_t>(threadIdx.x) & (kWarpThreads - 1);
+  auto* flags = reinterpret_cast<volatile int32_t*>(state.flags);
+  T exclusive = T(0);
+  for (int32_t predecessor = tile - 1 - lane;; predecessor -= kWarpThreads) {
+    int32_t flag;
+    do {
+      flag = predecessor < 0 ? kTilePrefix : flags[predecessor];
+    } while (__any_sync(0xffffffff, flag == kTileEmpty));
+    // Acquire side of the handshake in publish*: seeing the flag does not by
+    // itself order the read of the value it guards.
+    __threadfence();
+    T value = T(0);
+    if (predecessor >= 0) {
+      value = flag == kTilePrefix ? state.prefixes[predecessor]
+                                  : state.aggregates[predecessor];
+    }
+    const uint32_t prefixMask = __ballot_sync(0xffffffff, flag == kTilePrefix);
+    const int32_t last = prefixMask
+        ? (__ffs(static_cast<int32_t>(prefixMask)) - 1)
+        : (kWarpThreads - 1);
+    if (lane > last) {
+      value = T(0);
+    }
+    for (int32_t offset = kWarpThreads / 2; offset > 0; offset >>= 1) {
+      value += __shfl_xor_sync(0xffffffff, value, offset);
+    }
+    exclusive += value;
+    if (prefixMask) {
+      return exclusive;
+    }
+  }
+}
+
+// Clears the descriptors of the tiles this block owns and waits for every other
+// block of the op to have done the same, so no look-back can read a stale flag.
+// Every block must reach the barrier, including one that owns no tile.
+template <typename T>
+__device__ inline void initLookback(
+    LookbackState<T>& state,
+    uint32_t numTiles,
+    int32_t bar,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    for (uint32_t tile = block.blockInOp; tile < numTiles;
+         tile += block.numBlocksInOp) {
+      state.flags[tile] = kTileEmpty;
+    }
+  }
+  opBarrier(block, bar);
+}
+
+// Single-pass prefix sum. kExclusive selects between the inclusive form
+// (out[i] = sum(in[0..i]), same length as the input) and the exclusive form
+// (out[0] = 0, out[i + 1] = sum(in[0..i]), one element longer), matching
+// cumsum and exclusive_sum respectively.
+// A tile is kBlockSize * kItemsPerThread elements, processed as
+// kItemsPerThread block-wide scans of kBlockSize consecutive elements each. The
+// runs stay coalesced -- a thread's items are kBlockSize apart, not adjacent --
+// so widening a tile costs nothing in memory behaviour and only kItemsPerThread
+// registers, while it divides the number of look-back handshakes, which is what
+// the single pass spends its time on.
+template <
+    int32_t kBlockSize,
+    typename TIn,
+    typename TOut,
+    bool kExclusive,
+    int32_t kItemsPerThread = 1>
+__device__ void scan_single_pass(
+    Tensor* input,
+    Tensor* output,
+    Tensor* stateBuffer,
+    void* temp,
+    uint32_t& size,
+    uint32_t& numTiles,
+    TOut& runTotal,
+    TOut& tileExclusive,
+    int32_t bar0,
+    BlockInfo& block) {
+  constexpr int32_t kTileSize = kBlockSize * kItemsPerThread;
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    numTiles = (size + kTileSize - 1) / kTileSize;
+  }
+  __syncthreads();
+  LookbackState<TOut> state;
+  state.init(storage<int32_t>(stateBuffer), static_cast<int32_t>(numTiles));
+  initLookback(state, numTiles, bar0, block);
+
+  TIn* in = storage<TIn>(input);
+  TOut* out = storage<TOut>(output);
+  if (kExclusive && block.blockInOp == 0 && threadIdx.x == 0) {
+    out[0] = TOut(0);
+  }
+  for (uint32_t tile = block.blockInOp; tile < numTiles;
+       tile += block.numBlocksInOp) {
+    const uint32_t base = tile * kTileSize;
+    // Inclusive sum of each of this thread's items within the tile, and the
+    // tile's total. 'tileTotal' is a register rather than shared because every
+    // thread runs the same accumulation over the shared per-run totals.
+    TOut partial[kItemsPerThread];
+    TOut tileTotal = TOut(0);
+#pragma unroll
+    for (int32_t item = 0; item < kItemsPerThread; ++item) {
+      const uint32_t idx = base + item * kBlockSize + threadIdx.x;
+      // Honor the input's stride: a non-contiguous input (e.g. a select column
+      // view) must be read through indexToOffset, not as flat storage.
+      const TOut value = (idx < size)
+          ? static_cast<TOut>(in[complexIdx(input->contiguous, input, idx)])
+          : TOut(0);
+      // Separates the previous scan's read of 'temp' from this one's write.
+      __syncthreads();
+      partial[item] = tileTotal +
+          facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
+                          value, &runTotal, static_cast<TOut*>(temp));
+      tileTotal += runTotal;
+    }
+    if (threadIdx.x < kWarpThreads) {
+      if (tile == 0) {
+        if (threadIdx.x == 0) {
+          state.publishPrefix(0, tileTotal);
+          tileExclusive = TOut(0);
+        }
+      } else {
+        if (threadIdx.x == 0) {
+          state.publishAggregate(static_cast<int32_t>(tile), tileTotal);
+        }
+        __syncwarp();
+        const TOut exclusive =
+            lookbackExclusive(state, static_cast<int32_t>(tile));
+        if (threadIdx.x == 0) {
+          state.publishPrefix(
+              static_cast<int32_t>(tile), exclusive + tileTotal);
+          tileExclusive = exclusive;
+        }
+      }
+    }
+    // Publishes tileExclusive to the whole block.
+    __syncthreads();
+    const TOut tileBase = tileExclusive;
+#pragma unroll
+    for (int32_t item = 0; item < kItemsPerThread; ++item) {
+      const uint32_t idx = base + item * kBlockSize + threadIdx.x;
+      if (idx < size) {
+        out[kExclusive ? idx + 1 : idx] = tileBase + partial[item];
+      }
+    }
+  }
+}
+
+template <
+    int32_t kBlockSize,
+    typename TIn,
+    typename TOut,
+    int32_t dim = 0,
+    int32_t kItemsPerThread = kScanItemsPerThread>
+__device__ void cumsum_1pass(
+    Tensor* input,
+    Tensor* output,
+    Tensor* stateBuffer,
+    void* temp,
+    uint32_t& size,
+    uint32_t& numTiles,
+    TOut& runTotal,
+    TOut& tileExclusive,
+    int32_t bar0,
+    int32_t bar1,
+    BlockInfo& block) {
+  static_assert(dim == 0, "Only dim 0 is supported");
+  scan_single_pass<kBlockSize, TIn, TOut, false, kItemsPerThread>(
+      input,
+      output,
+      stateBuffer,
+      temp,
+      size,
+      numTiles,
+      runTotal,
+      tileExclusive,
+      bar0,
+      block);
+  // Every block writes part of the output, so a consumer that stays in this
+  // kernel needs it fenced. In multi-block mode scanOutputReturnBarrier ends
+  // the launch instead and this barrier is a no-op cost of one counter.
+  opBarrier(block, bar1);
+}
+
+template <
+    int32_t kBlockSize,
+    typename TIn,
+    typename TOut,
+    int32_t kItemsPerThread = kScanItemsPerThread>
+__device__ void exclusive_sum_1pass(
+    Tensor* input,
+    Tensor* output,
+    Tensor* stateBuffer,
+    void* temp,
+    uint32_t& size,
+    uint32_t& numTiles,
+    TOut& runTotal,
+    TOut& tileExclusive,
+    int32_t bar0,
+    int32_t bar1,
+    BlockInfo& block) {
+  scan_single_pass<kBlockSize, TIn, TOut, true, kItemsPerThread>(
+      input,
+      output,
+      stateBuffer,
+      temp,
+      size,
+      numTiles,
+      runTotal,
+      tileExclusive,
+      bar0,
+      block);
+  // See cumsum_1pass.
+  opBarrier(block, bar1);
+}
+
+// Single-pass stream compaction, one flag per lane. A lane that has a set flag
+// writes its own element at the offset the block scan gives it, so a tile of
+// kBlockSize elements produces one store per selected lane and needs no
+// staging buffer. The stores of a warp are in increasing order and dense apart
+// from the gaps the cleared flags leave.
+template <int32_t kBlockSize, typename T>
+__device__ void masked_select_1pass_lane(
+    Tensor* input,
+    Tensor* mask,
+    Tensor* output,
+    Tensor* stateBuffer,
+    void* temp,
+    uint32_t& size,
+    uint32_t& numTiles,
+    int32_t& tileTotal,
+    int32_t& tileExclusive,
+    int32_t bar0,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    numTiles = (size + kBlockSize - 1) / kBlockSize;
+  }
+  __syncthreads();
+  LookbackState<int32_t> state;
+  state.init(storage<int32_t>(stateBuffer), static_cast<int32_t>(numTiles));
+  initLookback(state, numTiles, bar0, block);
+
+  // An empty input leaves the loop below with no iteration, so nothing would
+  // write the length and the output would keep its reserved upper bound.
+  if (numTiles == 0) {
+    if (block.blockInOp == 0 && threadIdx.x == 0) {
+      output->dims[0] = 0;
+    }
+    return;
+  }
+  T* in = storage<T>(input);
+  bool* flags = storage<bool>(mask);
+  T* out = storage<T>(output);
+  for (uint32_t tile = block.blockInOp; tile < numTiles;
+       tile += block.numBlocksInOp) {
+    const uint32_t idx = tile * kBlockSize + threadIdx.x;
+    const bool flag = idx < size && flags[idx];
+    const int32_t inclusive =
+        facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
+            static_cast<int32_t>(flag),
+            &tileTotal,
+            static_cast<int32_t*>(temp));
+    if (threadIdx.x < kWarpThreads) {
+      if (tile == 0) {
+        if (threadIdx.x == 0) {
+          state.publishPrefix(0, tileTotal);
+          tileExclusive = 0;
+        }
+      } else {
+        if (threadIdx.x == 0) {
+          state.publishAggregate(static_cast<int32_t>(tile), tileTotal);
+        }
+        __syncwarp();
+        const int32_t exclusive =
+            lookbackExclusive(state, static_cast<int32_t>(tile));
+        if (threadIdx.x == 0) {
+          state.publishPrefix(
+              static_cast<int32_t>(tile), exclusive + tileTotal);
+          tileExclusive = exclusive;
+        }
+      }
+    }
+    __syncthreads();
+    if (flag) {
+      out[tileExclusive + inclusive - 1] = in[idx];
+    }
+    if (tile == numTiles - 1 && threadIdx.x == 0) {
+      output->dims[0] = tileExclusive + tileTotal;
+    }
+  }
+}
+
+// Single-pass stream compaction, kItemsPerThread flags per lane, staging the
+// selected elements through 'shared'. A thread reads a contiguous run of flags
+// and values, so both loads vectorize, and packs the elements it keeps into the
+// tile's slot of the staging buffer -- no destination index is ever
+// materialized. The tile is then copied out with one contiguous, fully
+// coalesced store per lane, which is what a per-lane scatter cannot give when
+// the selectivity leaves gaps. 'shared' must hold kBlockSize * kItemsPerThread
+// elements of T.
+template <int32_t kBlockSize, typename T, int32_t kItemsPerThread>
+__device__ void masked_select_1pass_shared(
+    Tensor* input,
+    Tensor* mask,
+    Tensor* output,
+    Tensor* stateBuffer,
+    T* shared,
+    void* temp,
+    uint32_t& size,
+    uint32_t& numTiles,
+    int32_t& tileTotal,
+    int32_t& tileExclusive,
+    int32_t bar0,
+    BlockInfo& block) {
+  constexpr int32_t kTileSize = kBlockSize * kItemsPerThread;
+  if (threadIdx.x == 0) {
+    size = numEl(*input);
+    numTiles = (size + kTileSize - 1) / kTileSize;
+  }
+  __syncthreads();
+  LookbackState<int32_t> state;
+  state.init(storage<int32_t>(stateBuffer), static_cast<int32_t>(numTiles));
+  initLookback(state, numTiles, bar0, block);
+
+  if (numTiles == 0) {
+    if (block.blockInOp == 0 && threadIdx.x == 0) {
+      output->dims[0] = 0;
+    }
+    return;
+  }
+  T* in = storage<T>(input);
+  bool* flags = storage<bool>(mask);
+  T* out = storage<T>(output);
+  for (uint32_t tile = block.blockInOp; tile < numTiles;
+       tile += block.numBlocksInOp) {
+    const uint32_t base = tile * kTileSize + threadIdx.x * kItemsPerThread;
+    bool flagItems[kItemsPerThread];
+    int32_t threadCount = 0;
+#pragma unroll
+    for (int32_t i = 0; i < kItemsPerThread; ++i) {
+      flagItems[i] = (base + i) < size && flags[base + i];
+      threadCount += static_cast<int32_t>(flagItems[i]);
+    }
+    const int32_t threadExclusive =
+        facebook::velox::wave::exclusiveSum<int32_t, kBlockSize>(
+            threadCount, &tileTotal, static_cast<int32_t*>(temp));
+    int32_t slot = threadExclusive;
+#pragma unroll
+    for (int32_t i = 0; i < kItemsPerThread; ++i) {
+      if (flagItems[i]) {
+        shared[slot++] = in[base + i];
+      }
+    }
+    if (threadIdx.x < kWarpThreads) {
+      if (tile == 0) {
+        if (threadIdx.x == 0) {
+          state.publishPrefix(0, tileTotal);
+          tileExclusive = 0;
+        }
+      } else {
+        if (threadIdx.x == 0) {
+          state.publishAggregate(static_cast<int32_t>(tile), tileTotal);
+        }
+        __syncwarp();
+        const int32_t exclusive =
+            lookbackExclusive(state, static_cast<int32_t>(tile));
+        if (threadIdx.x == 0) {
+          state.publishPrefix(
+              static_cast<int32_t>(tile), exclusive + tileTotal);
+          tileExclusive = exclusive;
+        }
+      }
+    }
+    // Publishes tileExclusive and the staged elements to the whole block.
+    __syncthreads();
+    for (int32_t i = static_cast<int32_t>(threadIdx.x); i < tileTotal;
+         i += kBlockSize) {
+      out[tileExclusive + i] = shared[i];
+    }
+    if (tile == numTiles - 1 && threadIdx.x == 0) {
+      output->dims[0] = tileExclusive + tileTotal;
+    }
+    // The next iteration overwrites the staging buffer and 'temp'.
+    __syncthreads();
+  }
+}
+
+// Staging buffer of the registered single-pass stream compaction, declared as a
+// __shared__ variable of the kernel that contains the op. It is untyped and
+// sized for the widest supported element because the shared declaration is
+// spelled once at registration, before the op's dtype is known.
+template <int32_t kStagingBlockSize>
+struct SelectStaging {
+  static constexpr int32_t kWidestElement = 8;
+  __align__(
+      16) char data[kStagingBlockSize * kScanItemsPerThread * kWidestElement];
+};
+
+// Registered entry point of the single-pass stream compaction: the staging form
+// above at kScanItemsPerThread flags per thread. kStagingBlockSize comes from
+// the shared declaration, which the host spells from WaveConfig::blockSize, so
+// the assert catches a kernel compiled at a block size the declaration was not
+// sized for.
+template <int32_t kBlockSize, typename T, int32_t kStagingBlockSize>
+__device__ void masked_select_1pass(
+    Tensor* input,
+    Tensor* mask,
+    Tensor* output,
+    Tensor* stateBuffer,
+    SelectStaging<kStagingBlockSize>& staging,
+    void* temp,
+    uint32_t& size,
+    uint32_t& numTiles,
+    int32_t& tileTotal,
+    int32_t& tileExclusive,
+    int32_t bar0,
+    int32_t bar1,
+    BlockInfo& block) {
+  static_assert(
+      kStagingBlockSize >= kBlockSize,
+      "SelectStaging is sized for a smaller block than the kernel uses");
+  static_assert(
+      sizeof(T) <= SelectStaging<kStagingBlockSize>::kWidestElement,
+      "SelectStaging is sized for a narrower element than the op selects");
+  masked_select_1pass_shared<kBlockSize, T, kScanItemsPerThread>(
+      input,
+      mask,
+      output,
+      stateBuffer,
+      reinterpret_cast<T*>(staging.data),
+      temp,
+      size,
+      numTiles,
+      tileTotal,
+      tileExclusive,
+      bar0,
+      block);
+  // The selected elements and the output length are written by every block, so
+  // an in-kernel consumer needs them fenced, as in masked_select_cg.
+  opBarrier(block, bar1);
+}
+
 // Single-block nonzero for 1D input. Returns indices where input != 0.
 template <int32_t kBlockSize, typename T>
 __device__ void nonzero1d(
