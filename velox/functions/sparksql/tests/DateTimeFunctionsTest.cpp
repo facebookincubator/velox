@@ -59,6 +59,12 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
     });
   }
 
+  void enableAnsiMode() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+    });
+  }
+
   template <typename TOutput, typename TValue>
   std::optional<TOutput> evaluateDateFuncOnce(
       const std::string& expr,
@@ -316,10 +322,10 @@ TEST_F(DateTimeFunctionsTest, unixTimestampCustomFormat) {
       1670831131,
       unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd' HH:mm:ss"));
 
-  // Invalid format returns null (unclosed quoted literal).
-  EXPECT_EQ(
-      std::nullopt,
-      unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
+  // Invalid format pattern throws (unclosed quoted literal).
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"),
+      "No closing single quote for literal");
 
   setQueryTimeZone("America/Chicago");
   // Verify the gap time 2024-03-10 02:01:58 is correctly handled.
@@ -374,6 +380,84 @@ TEST_F(DateTimeFunctionsTest, toUnixTimestamp) {
 
   // to_unix_timestamp does not provide an overoaded without any parameters.
   EXPECT_THROW(evaluateOnce<int64_t>("to_unix_timestamp()"), VeloxUserError);
+}
+
+TEST_F(DateTimeFunctionsTest, unixTimestampAnsiErrors) {
+  enableAnsiMode();
+
+  const auto unixTimestamp = [&](std::optional<StringView> dateStr) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0)", dateStr);
+  };
+  const auto toUnixTimestamp = [&](std::optional<StringView> dateStr) {
+    return evaluateOnce<int64_t>("to_unix_timestamp(c0)", dateStr);
+  };
+  const auto unixTimestampFmt = [&](std::optional<StringView> dateStr,
+                                    std::optional<StringView> formatStr) {
+    return evaluateOnce<int64_t>("unix_timestamp(c0, c1)", dateStr, formatStr);
+  };
+  const auto toUnixTimestampFmt = [&](std::optional<StringView> dateStr,
+                                      std::optional<StringView> formatStr) {
+    return evaluateOnce<int64_t>(
+        "to_unix_timestamp(c0, c1)", dateStr, formatStr);
+  };
+
+  // Valid inputs, both function names.
+  EXPECT_EQ(0, unixTimestamp("1970-01-01 00:00:00"));
+  EXPECT_EQ(0, toUnixTimestamp("1970-01-01 00:00:00"));
+  EXPECT_EQ(0, unixTimestampFmt("1970-01-01", "yyyy-MM-dd"));
+  EXPECT_EQ(0, toUnixTimestampFmt("1970-01-01", "yyyy-MM-dd"));
+
+  // Parse failure throws under ANSI, both function names.
+  VELOX_ASSERT_USER_THROW(
+      unixTimestamp("malformed input"), "Invalid date format");
+  VELOX_ASSERT_USER_THROW(
+      toUnixTimestamp("malformed input"), "Invalid date format");
+  VELOX_ASSERT_USER_THROW(
+      unixTimestampFmt("malformed input", "yyyy-MM-dd"), "Invalid date format");
+  VELOX_ASSERT_USER_THROW(
+      toUnixTimestampFmt("malformed input", "yyyy-MM-dd"),
+      "Invalid date format");
+
+  // Invalid format pattern throws, both function names.
+  VELOX_ASSERT_USER_THROW(
+      unixTimestampFmt("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"),
+      "No closing single quote for literal");
+  VELOX_ASSERT_USER_THROW(
+      toUnixTimestampFmt(
+          "2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"),
+      "No closing single quote for literal");
+
+  // Legacy formatter: same pattern returns NULL instead.
+  enableLegacyFormatter();
+  EXPECT_EQ(
+      std::nullopt,
+      unixTimestampFmt("2022-12-12 asd 07:45:31", "yyyy-MM-dd 'asd HH:mm:ss"));
+}
+
+TEST_F(DateTimeFunctionsTest, tryUnixTimestampAnsi) {
+  enableAnsiMode();
+
+  // TRY swallows the ANSI error, both function names.
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "try(unix_timestamp(c0))",
+          std::optional<StringView>("malformed input")),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "try(to_unix_timestamp(c0))",
+          std::optional<StringView>("malformed input")),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "try(unix_timestamp(c0))",
+          std::optional<StringView>("1970-01-01 00:00:00")),
+      0);
+  EXPECT_EQ(
+      evaluateOnce<int64_t>(
+          "try(to_unix_timestamp(c0))",
+          std::optional<StringView>("1970-01-01 00:00:00")),
+      0);
 }
 
 TEST_F(DateTimeFunctionsTest, makeDate) {

@@ -512,19 +512,30 @@ These functions support TIMESTAMP and DATE input types.
 .. spark:function:: unix_timestamp(string) -> bigint
    :noindex:
 
+    *(ANSI compliant)*
+
     Returns the UNIX timestamp of time specified by ``string``. Assumes the
-    format ``yyyy-MM-dd HH:mm:ss``. Returns null if ``string`` does not match
-    ``format``.
+    format ``yyyy-MM-dd HH:mm:ss``. When ``spark.ansi_enabled`` is true, a
+    ``string`` that does not match the format throws an error; otherwise it
+    returns NULL. ::
+
+        SELECT unix_timestamp('invalid'); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 .. spark:function:: unix_timestamp(string, format) -> bigint
    :noindex:
+
+    *(ANSI compliant)*
 
     Returns the UNIX timestamp of time specified by ``string`` using the
     format described in the ``format`` string. The format follows Spark's
     `Datetime patterns for formatting and parsing
     <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
-    Returns null if ``string`` does not match ``format`` or if ``format``
-    is invalid.
+    Returns NULL if ``format`` is invalid, regardless of ANSI mode. When
+    ``spark.ansi_enabled`` is true, a ``string`` that does not match a valid
+    ``format`` throws an error; otherwise it returns NULL. ::
+
+        SELECT unix_timestamp('invalid', 'yyyy-MM-dd'); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+        SELECT unix_timestamp('2024-10-01', 'invalid-format'); -- NULL (both ANSI settings)
 
 .. spark:function:: unix_timestamp(timestamp) -> bigint
 
