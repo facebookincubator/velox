@@ -49,6 +49,8 @@
 #include <cudf/io/parquet.hpp>
 
 #include <fmt/ranges.h>
+#include <folly/synchronization/Baton.h>
+#include <folly/synchronization/Latch.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -319,7 +321,10 @@ TEST_P(TableScanTestParameterized, allColumns) {
   }
 }
 
-TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
+// Reads several splits of a multi-row-group file with chunk and pass read
+// limits small enough that each split is read as multiple row group passes,
+// each yielding multiple table chunks.
+TEST_P(TableScanTestParameterized, allColumnsWithRowGroupPasses) {
   auto vectors = makeVectors(10, 1'000);
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
@@ -335,11 +340,14 @@ TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
   auto splits = makeCudfHiveConnectorSplits(
       {filePath, filePath, filePath, filePath, filePath});
 
-  auto useBufferedInput = GetParam();
+  const bool useBufferedInput = GetParam();
   auto config = std::unordered_map<std::string, std::string>{
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-           kUseExperimentalCudfReader,
-       "true"},
+           kMaxChunkReadLimit,
+       "8192"},
+      {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+           kMaxPassReadLimit,
+       "32768"},
       {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
            kUseBufferedInput,
        useBufferedInput ? "true" : "false"}};
@@ -352,20 +360,181 @@ TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
                   .splits(splits)
                   .assertResults(duckDbSql);
 
-  // A quick sanity check for memory usage reporting. Check that peak
-  // total memory usage for the project node is > 0.
   auto planStats = toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
+  auto it = planStats.find(plan->id());
   ASSERT_TRUE(it != planStats.end());
-  // TODO (dm): enable this test once we start to track gpu memory
-  // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+
+  // Reading in chunks must not change the number of rows returned.
+  const auto& scanStats = it->second.operatorStatsFor("TableScan");
+  EXPECT_EQ(scanStats.outputRows, 5 * 10 * 1'000);
+
+  // Splitting the read into chunks must produce more than one output vector
+  // per split.
+  EXPECT_GT(scanStats.outputVectors, splits.size());
 
   //  Verifies there is no dynamic filter stats.
   ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+}
 
-  // TODO: We are not writing any customStats yet so disable this check
-  // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+// Splits prepared in the background by the preloader must produce the same
+// results as splits prepared on the driver thread.
+TEST_F(TableScanTest, preloadSplits) {
+  auto filePaths = makeFilePaths(10);
+  auto vectors = makeVectors(10, 1'000);
+  for (auto i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto plan = tableScanNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "10")
+                  .splits(makeCudfHiveConnectorSplits(filePaths))
+                  .assertResults("SELECT * FROM tmp");
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
+  EXPECT_EQ(
+      customStats.at(std::string(TableScan::kPreloadedSplits)).sum,
+      filePaths.size());
+}
+
+// A busy IO thread pool never runs the queued preload tasks, so every split is
+// prepared inline by the driver that comes to read it.
+TEST_F(TableScanTest, preloadingSplitClose) {
+  auto filePaths = makeFilePaths(20);
+  auto vectors = makeVectors(20, 100);
+  for (auto i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  auto* ioExecutor = ioExecutor_.get();
+  folly::Latch latch(ioExecutor->numThreads());
+  std::vector<folly::Baton<>> batons(ioExecutor->numThreads());
+  // Simulate a busy IO thread pool by blocking all its threads.
+  for (auto& baton : batons) {
+    ioExecutor->add([&]() {
+      baton.wait();
+      latch.count_down();
+    });
+  }
+
+  ASSERT_EQ(Task::numRunningTasks(), 0);
+  auto plan = tableScanNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "4")
+                  .splits(makeCudfHiveConnectorSplits(filePaths))
+                  .assertResults("SELECT * FROM tmp");
+
+  auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GT(
+      planStats.at(plan->id())
+          .customStats.at(std::string(TableScan::kPreloadedSplits))
+          .sum,
+      1);
+
+  task.reset();
+  // Once all task references are cleared, all the tasks should be destroyed.
+  ASSERT_EQ(Task::numRunningTasks(), 0);
+  // Unblock the IO thread pool.
+  for (auto& baton : batons) {
+    baton.post();
+  }
+  latch.wait();
+}
+
+// A query that stops early leaves the splits the preloader has already prepared
+// unread, so their readers are destroyed with the fetch of their first row
+// group pass outstanding.
+TEST_F(TableScanTest, abandonPreloadedSplits) {
+  auto filePaths = makeFilePaths(10);
+  auto vectors = makeVectors(10, 1'000);
+  for (auto i = 0; i < vectors.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+  }
+  createDuckDbTable(vectors);
+
+  // The limit is reached partway into the second split, so the splits the
+  // preloader prepared behind it are never read. Which rows are returned is
+  // unspecified, so only the row count can be asserted.
+  constexpr int32_t kLimit = 1'500;
+  core::PlanNodeId scanNodeId;
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType_)
+                  .tableHandle(makeTableHandle())
+                  .endTableScan()
+                  .capturePlanNodeId(scanNodeId)
+                  .limit(0, kLimit, false)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "8")
+                    .splits(makeCudfHiveConnectorSplits(filePaths))
+                    .copyResults(pool_.get(), task);
+  EXPECT_EQ(result->size(), kLimit);
+
+  // The first split is read before the preloader runs, so only the splits
+  // after it are preloaded. The stat counts the preloaded splits that were
+  // read, so it confirms preloading was on but cannot measure how many were
+  // abandoned.
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(scanNodeId).customStats;
+  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
+  EXPECT_GE(customStats.at(std::string(TableScan::kPreloadedSplits)).sum, 1);
+
+  task.reset();
+  ASSERT_EQ(Task::numRunningTasks(), 0);
+}
+
+// A filter that no row group can satisfy prunes every row group of the split,
+// leaving no row group passes to read.
+TEST_F(TableScanTest, filterPrunesAllRowGroups) {
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  // One row group per vector, all holding values well below the filter bound.
+  std::vector<RowVectorPtr> vectors = {
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}),
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}),
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({7, 8, 9})}),
+  };
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  constexpr int64_t kUnmatchedValue = 1'000;
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c0",
+              std::make_unique<common::BigintRange>(
+                  kUnmatchedValue, kUnmatchedValue, false))
+          .build();
+
+  auto tableHandle = makeTableHandle(
+      "parquet_table", rowType, std::move(subfieldFilters), nullptr);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .assertResults(
+              fmt::format("SELECT c0 FROM tmp WHERE c0 = {}", kUnmatchedValue));
+
+  auto planStats = toPlanStats(task->taskStats());
+  EXPECT_EQ(planStats.at(plan->id()).outputRows, 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(

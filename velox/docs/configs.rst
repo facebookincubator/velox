@@ -1602,11 +1602,6 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - bool
      - true
      - Whether to use BufferedInput for CudfHiveDataSource (can use AsyncDataCache when HiveConfig file handle cache is enabled).
-   * - cudf.hive.use-experimental-reader
-     - cudf.hive.use_experimental_reader
-     - bool
-     - false
-     - Whether to use the experimental cuDF Parquet reader (Hybrid Scan) for highly selective filters. When enabled, uses `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_.
    * - parquet.reader.use-pandas-metadata
      - parquet.reader.use_pandas_metadata
      - bool
@@ -1631,12 +1626,12 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - parquet.reader.chunk_read_limit
      - integer
      - 0
-     - Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to ``chunk_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+     - Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to ``chunk_read_limit`` in ``setup_chunking_for_all_columns`` of `libcudf hybrid_scan_multifile <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile>`_.
    * - parquet.reader.pass-read-limit
      - parquet.reader.pass_read_limit
      - integer
      - 0
-     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. Affects how many row groups can be read at a time by limiting decompression space. Maps to ``pass_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. When preloading is enabled, the first column chunk pass is fetched for up to ``max_split_preload_per_driver`` additional splits per driver. Budget this limit against the number of passes held at once rather than against a single pass. Maps to ``pass_read_limit`` in ``construct_row_group_passes`` and ``setup_chunking_for_all_columns`` of `libcudf hybrid_scan_multifile <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile>`_.
    * - parquet.reader.convert-strings-to-categories
      - parquet.reader.convert_strings_to_categories
      - bool
