@@ -256,7 +256,91 @@ TEST_F(PlanNodeSerdeTest, exchange) {
                         serdeKind)
                     .planNode();
     testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .exchange(
+                   ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
+    testSerde(plan);
   }
+}
+
+TEST_F(PlanNodeSerdeTest, exchangeTransportKindDefaultsWhenMissing) {
+  // Plans serialized before ExchangeNode carried a transport have no
+  // 'transportKind' field; deserialization must default it to in-memory.
+  auto plan = PlanBuilder()
+                  .exchange(
+                      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                      "Presto",
+                      std::string{core::TransportKind::kUcx})
+                  .planNode();
+
+  auto serialized = plan->serialize();
+  ASSERT_EQ(serialized.count("transportKind"), 1);
+  serialized.erase("transportKind");
+
+  const auto copy =
+      velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+  const auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(copy);
+  ASSERT_NE(exchangeNode, nullptr);
+  ASSERT_EQ(
+      exchangeNode->transportKind(),
+      std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(PlanNodeSerdeTest, mergeExchangeTransportKindDefaultsWhenMissing) {
+  auto plan = PlanBuilder()
+                  .mergeExchange(
+                      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                      {"a DESC", "b NULLS FIRST"},
+                      "Presto",
+                      std::string{core::TransportKind::kUcx})
+                  .planNode();
+
+  auto serialized = plan->serialize();
+  ASSERT_EQ(serialized.count("transportKind"), 1);
+  serialized.erase("transportKind");
+
+  const auto copy =
+      velox::ISerializable::deserialize<core::PlanNode>(serialized, pool());
+  const auto mergeExchangeNode =
+      std::dynamic_pointer_cast<const core::MergeExchangeNode>(copy);
+  ASSERT_NE(mergeExchangeNode, nullptr);
+  ASSERT_EQ(
+      mergeExchangeNode->transportKind(),
+      std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(PlanNodeSerdeTest, exchangeTransportKindDefaultsInLegacyConstructor) {
+  // The pre-existing constructor, kept for source compatibility with callers
+  // built before ExchangeNode carried a transport, must keep defaulting to
+  // in-memory.
+  const core::ExchangeNode node(
+      "exchangeNodeId",
+      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+      "Presto");
+  ASSERT_EQ(node.transportKind(), std::string{core::TransportKind::kInMemory});
+}
+
+TEST_F(
+    PlanNodeSerdeTest,
+    mergeExchangeTransportKindDefaultsInLegacyConstructor) {
+  const std::vector<core::FieldAccessTypedExprPtr> sortingKeys = {
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")};
+  const std::vector<core::SortOrder> sortingOrders = {
+      core::SortOrder(true, true)};
+
+  const core::MergeExchangeNode node(
+      "mergeExchangeNodeId",
+      ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+      sortingKeys,
+      sortingOrders,
+      "Presto");
+  ASSERT_EQ(node.transportKind(), std::string{core::TransportKind::kInMemory});
 }
 
 TEST_F(PlanNodeSerdeTest, filter) {
@@ -340,6 +424,16 @@ TEST_F(PlanNodeSerdeTest, mergeExchange) {
                         {"a DESC", "b NULLS FIRST"},
                         serdeKind)
                     .planNode();
+    testSerde(plan);
+
+    // Round-trips a non-default transport annotation on the node.
+    plan = PlanBuilder()
+               .mergeExchange(
+                   ROW({"a", "b", "c"}, {BIGINT(), DOUBLE(), VARCHAR()}),
+                   {"a DESC", "b NULLS FIRST"},
+                   serdeKind,
+                   std::string{core::TransportKind::kUcx})
+               .planNode();
     testSerde(plan);
   }
 }

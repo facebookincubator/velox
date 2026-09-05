@@ -2150,7 +2150,8 @@ class TestCustomExchange : public exec::Exchange {
             std::make_shared<core::ExchangeNode>(
                 customExchangeNode->id(),
                 customExchangeNode->outputType(),
-                customExchangeNode->serdeKind()),
+                customExchangeNode->serdeKind(),
+                std::string{core::TransportKind::kInMemory}),
             std::move(exchangeClient)) {}
 
   RowVectorPtr getOutput() override {
