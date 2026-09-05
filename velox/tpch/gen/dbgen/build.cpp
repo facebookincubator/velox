@@ -44,15 +44,15 @@ namespace facebook::velox::tpch::dbgen {
 #define JDAY_BASE 8035 /* start from 1/1/70 a la unix */
 #define JMNTH_BASE (-70 * 12) /* start from 1/1/70 a la unix */
 #define JDAY(date) ((date) - STARTDATE + JDAY_BASE + 1)
-#define PART_SUPP_BRIDGE(tgt, p, s)                                \
-  {                                                                \
-    DSS_HUGE tot_scnt = ctx->tdefs[SUPP].base * ctx->scale_factor; \
-    tgt = (p +                                                     \
-           s *                                                     \
-               (tot_scnt / SUPP_PER_PART +                         \
-                static_cast<long>((p - 1) / tot_scnt))) %          \
-            tot_scnt +                                             \
-        1;                                                         \
+#define PART_SUPP_BRIDGE(tgt, p, s)                        \
+  {                                                        \
+    DSS_HUGE tot_scnt = SCALED_VAL(ctx->tdefs[SUPP].base); \
+    tgt = (p +                                             \
+           s *                                             \
+               (tot_scnt / SUPP_PER_PART +                 \
+                static_cast<long>((p - 1) / tot_scnt))) %  \
+            tot_scnt +                                     \
+        1;                                                 \
   }
 #define V_STR(avg, seed, tgt)            \
   tpch_a_rnd(                            \
@@ -187,7 +187,7 @@ long mk_order(DSS_HUGE index, order_t* o, DBGenContext* ctx, long upd_num) {
   RANDOM(
       clk_num,
       1,
-      MAX((ctx->scale_factor * O_CLRK_SCL), O_CLRK_SCL),
+      static_cast<DSS_HUGE>(MAX((ctx->scale_factor * O_CLRK_SCL), O_CLRK_SCL)),
       &ctx->Seed[O_CLRK_SD]);
   sprintf(o->clerk, orderSzFormat, O_CLRK_TAG, clk_num);
   TEXT(O_CMNT_LEN, &ctx->Seed[O_CMNT_SD], o->comment);
