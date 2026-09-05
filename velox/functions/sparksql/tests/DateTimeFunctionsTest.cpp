@@ -59,6 +59,12 @@ class DateTimeFunctionsTest : public SparkFunctionBaseTest {
     });
   }
 
+  void enableAnsiMode() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+    });
+  }
+
   template <typename TOutput, typename TValue>
   std::optional<TOutput> evaluateDateFuncOnce(
       const std::string& expr,
@@ -398,6 +404,59 @@ TEST_F(DateTimeFunctionsTest, makeDate) {
 
   EXPECT_EQ(makeDate(2023, 2, 29), std::nullopt);
   EXPECT_EQ(makeDate(2023, 3, 29), parseDate("2023-03-29"));
+}
+
+TEST_F(DateTimeFunctionsTest, makeDateAnsiErrors) {
+  enableAnsiMode();
+
+  const auto makeDate = [&](std::optional<int32_t> year,
+                            std::optional<int32_t> month,
+                            std::optional<int32_t> day) {
+    return evaluateOnce<int32_t>("make_date(c0, c1, c2)", year, month, day);
+  };
+
+  // Valid inputs are unaffected by ANSI mode.
+  EXPECT_EQ(makeDate(1920, 1, 25), parseDate("1920-01-25"));
+  EXPECT_EQ(makeDate(-10, 1, 30), parseDate("-0010-01-30"));
+  EXPECT_EQ(makeDate(2023, 3, 31), parseDate("2023-03-31"));
+  EXPECT_EQ(makeDate(2023, 3, 29), parseDate("2023-03-29"));
+
+  // Under ANSI mode, invalid inputs throw instead of returning NULL.
+  constexpr const int32_t kJodaMaxYear{292278994};
+  VELOX_ASSERT_USER_THROW(
+      makeDate(kMax, 12, 15), "Date out of range: 2147483647-12-15");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(kJodaMaxYear - 10, 12, 15),
+      fmt::format("Date out of range: {}-12-15", kJodaMaxYear - 10));
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2021, 13, 1), "Date out of range: 2021-13-1");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2022, 3, 35), "Date out of range: 2022-3-35");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2023, 4, 31), "Date out of range: 2023-4-31");
+  VELOX_ASSERT_USER_THROW(
+      makeDate(2023, 2, 29), "Date out of range: 2023-2-29");
+}
+
+TEST_F(DateTimeFunctionsTest, tryMakeDateAnsi) {
+  enableAnsiMode();
+
+  // The generic TRY special form swallows the ANSI error and returns NULL,
+  // regardless of the ANSI setting.
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(make_date(c0, c1, c2))",
+          std::optional<int32_t>(2021),
+          std::optional<int32_t>(13),
+          std::optional<int32_t>(1)),
+      std::nullopt);
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(make_date(c0, c1, c2))",
+          std::optional<int32_t>(2023),
+          std::optional<int32_t>(3),
+          std::optional<int32_t>(31)),
+      parseDate("2023-03-31"));
 }
 
 TEST_F(DateTimeFunctionsTest, lastDay) {

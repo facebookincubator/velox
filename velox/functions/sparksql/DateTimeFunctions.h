@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
@@ -486,6 +487,15 @@ template <typename T>
 struct MakeDateFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*year*/,
+      const int32_t* /*month*/,
+      const int32_t* /*day*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Date>& result,
       const int32_t year,
@@ -493,15 +503,21 @@ struct MakeDateFunction {
       const int32_t day) {
     Expected<int64_t> expected = util::daysSinceEpochFromDate(year, month, day);
     if (expected.hasError()) {
+      nullOrUserFail(ansiEnabled_, "{}", expected.error().message());
       return false;
     }
     int64_t daysSinceEpoch = expected.value();
     if (daysSinceEpoch != static_cast<int32_t>(daysSinceEpoch)) {
+      nullOrUserFail(
+          ansiEnabled_, "Date out of range: {}-{}-{}", year, month, day);
       return false;
     }
     result = daysSinceEpoch;
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
