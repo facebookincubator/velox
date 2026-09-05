@@ -14,24 +14,23 @@
  * limitations under the License.
  */
 
-#pragma once
+#include "velox/expression/rpc/AsyncRPCFunction.h"
 
-#include <memory>
-#include <string>
-#include <vector>
-
-#include "velox/expression/FunctionSignature.h"
+#include "velox/common/EnumDefine.h"
 
 namespace facebook::velox::exec::rpc {
 
-/// Registers a stub Velox vector function for an RPC function.
-/// The stub has the correct signature but throws on direct execution.
-/// This makes the function discoverable via the /v1/functions sidecar endpoint.
-///
-/// @param name Full 3-part Velox name (e.g., "native.rpc.my_rpc_function")
-/// @param signatures Function signatures (arg types, return type)
-void registerRPCFunctionStub(
-    const std::string& name,
-    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures);
+namespace {
+const auto& rpcDispatchPathNames() {
+  static const folly::F14FastMap<RpcDispatchPath, std::string_view> kNames = {
+      {RpcDispatchPath::kPerRow, "PER_ROW"},
+      {RpcDispatchPath::kNativeBatch, "NATIVE_BATCH"},
+      {RpcDispatchPath::kAsyncJob, "ASYNC_JOB"},
+  };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(RpcDispatchPath, rpcDispatchPathNames)
 
 } // namespace facebook::velox::exec::rpc

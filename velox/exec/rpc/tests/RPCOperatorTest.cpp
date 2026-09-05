@@ -204,9 +204,9 @@ TEST_F(RPCOperatorTest, basicPerRow) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["hello world"], "Response for: hello world");
-  EXPECT_EQ(rows["test prompt"], "Response for: test prompt");
-  EXPECT_EQ(rows["third row"], "Response for: third row");
+  EXPECT_EQ(rows["hello world"], "demo: hello world");
+  EXPECT_EQ(rows["test prompt"], "demo: test prompt");
+  EXPECT_EQ(rows["third row"], "demo: third row");
 }
 
 // kPerRow output is sized from QueryConfig::preferredOutputBatchRows: 50 rows
@@ -252,7 +252,7 @@ TEST_F(RPCOperatorTest, nullInput) {
     } else {
       EXPECT_EQ(prompts->valueAt(i).str(), "valid prompt");
       EXPECT_FALSE(results->isNullAt(i));
-      EXPECT_EQ(results->valueAt(i).str(), "Response for: valid prompt");
+      EXPECT_EQ(results->valueAt(i).str(), "demo: valid prompt");
     }
   }
 }
@@ -287,12 +287,12 @@ TEST_F(RPCOperatorTest, multipleColumns) {
   auto i1 = rowIndex["question one"];
   EXPECT_EQ(ids->valueAt(i1), 100);
   EXPECT_EQ(extras->valueAt(i1), 1.5);
-  EXPECT_EQ(results->valueAt(i1).str(), "Response for: question one");
+  EXPECT_EQ(results->valueAt(i1).str(), "demo: question one");
 
   auto i2 = rowIndex["question two"];
   EXPECT_EQ(ids->valueAt(i2), 200);
   EXPECT_EQ(extras->valueAt(i2), 2.5);
-  EXPECT_EQ(results->valueAt(i2).str(), "Response for: question two");
+  EXPECT_EQ(results->valueAt(i2).str(), "demo: question two");
 }
 
 // ============================================================
@@ -844,17 +844,26 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
       : latency_(latency), executor_(std::move(executor)) {}
 
-  void initialize(
-      const core::QueryConfig&,
-      const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
-
   std::string name() const override {
     return "slow_batch_rpc";
   }
 
   TypePtr resultType() const override {
     return VARCHAR();
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    dispatchPath_ = instruction == RPCStreamingMode::kBatch
+        ? RpcDispatchPath::kNativeBatch
+        : RpcDispatchPath::kPerRow;
+  }
+
+  RpcDispatchPath dispatchPath() const override {
+    return dispatchPath_;
   }
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -884,7 +893,7 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     for (int32_t i = 0; i < n; ++i) {
       RPCResponse response;
       response.rowId = i;
-      response.result = "ok";
+      response.payload = makeTextPayload("ok");
       responses.push_back(std::move(response));
     }
     // Complete after `latency_` on the transport executor (NOT the driver
@@ -903,10 +912,42 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
     return pending_;
   }
 
+ protected:
+  RpcDispatchPath dispatchPath_{RpcDispatchPath::kPerRow};
+
  private:
   const std::chrono::milliseconds latency_;
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_;
   int32_t pending_{0};
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
+};
+
+// A batch function that can only answer once initialize() has run, like the
+// production functions: they resolve their backend from query config and
+// constant arguments there, and the path they can serve follows from it.
+class LateResolvingRPCFunction : public SlowBatchRPCFunction {
+ public:
+  using SlowBatchRPCFunction::SlowBatchRPCFunction;
+
+  std::string name() const override {
+    return "late_resolving_rpc";
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    // Resolving the backend and the path it implies in one call is the order
+    // the production functions use, and the reason both live in initialize().
+    dispatchPath_ = instruction == RPCStreamingMode::kBatch
+        ? RpcDispatchPath::kNativeBatch
+        : RpcDispatchPath::kPerRow;
+  }
 };
 
 } // namespace
@@ -996,9 +1037,37 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
     rows[prompts->valueAt(i).str()] = results->valueAt(i).str();
   }
 
-  EXPECT_EQ(rows["OVERLOAD one"], "Response for: OVERLOAD one");
-  EXPECT_EQ(rows["OVERLOAD two"], "Response for: OVERLOAD two");
-  EXPECT_EQ(rows["normal three"], "Response for: normal three");
+  EXPECT_EQ(rows["OVERLOAD one"], "demo: OVERLOAD one");
+  EXPECT_EQ(rows["OVERLOAD two"], "demo: OVERLOAD two");
+  EXPECT_EQ(rows["normal three"], "demo: normal three");
+}
+
+// A BATCH query reaches the function as an instruction, and the function
+// resolves it against the backend it settled in the same call. Nothing can ask
+// before the backend exists, so a batch query cannot silently degrade to
+// per-row.
+TEST_F(RPCOperatorTest, batchInstructionReachesTheFunction) {
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  std::shared_ptr<LateResolvingRPCFunction> function;
+  AsyncRPCFunctionRegistry::registerFunction(
+      "late_resolving_rpc", [&function, rpcExecutor]() {
+        function = std::make_shared<LateResolvingRPCFunction>(
+            std::chrono::milliseconds{0}, rpcExecutor);
+        return function;
+      });
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "late_resolving_rpc");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  ASSERT_NE(function, nullptr);
+  EXPECT_EQ(function->dispatchPath(), RpcDispatchPath::kNativeBatch);
 }
 
 } // namespace facebook::velox::exec::rpc

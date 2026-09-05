@@ -43,7 +43,8 @@ class DemoRPCFunctionTest : public testing::Test {
     pool_ = memory::memoryManager()->addLeafPool();
 
     // Follow the lifecycle: initialize() before any dispatch.
-    function_->initialize(core::QueryConfig{{}}, {}, {});
+    function_->initialize(
+        core::QueryConfig{{}}, {}, {}, RPCStreamingMode::kPerRow);
   }
 
   std::shared_ptr<DemoAsyncRPCFunction> function_;
@@ -84,9 +85,10 @@ TEST_F(DemoRPCFunctionTest, endToEnd) {
   auto* flat = result->asFlatVector<StringView>();
   EXPECT_FALSE(flat->isNullAt(0));
   EXPECT_FALSE(flat->isNullAt(1));
-  // MockRPCClient returns "Response for: <payload>".
-  EXPECT_EQ(flat->valueAt(0).str(), "Response for: hello world");
-  EXPECT_EQ(flat->valueAt(1).str(), "Response for: test prompt");
+  // Output must depend on the input: a dispatch that dropped or misrouted a
+  // row cannot produce these.
+  EXPECT_EQ(flat->valueAt(0).str(), "demo: hello world");
+  EXPECT_EQ(flat->valueAt(1).str(), "demo: test prompt");
 }
 
 TEST_F(DemoRPCFunctionTest, nullInput) {
@@ -119,7 +121,7 @@ TEST_F(DemoRPCFunctionTest, errorResponse) {
   std::vector<RPCResponse> responses;
   RPCResponse ok;
   ok.rowId = 0;
-  ok.result = "good result";
+  ok.payload = makeTextPayload("good result");
   responses.push_back(std::move(ok));
 
   RPCResponse err;

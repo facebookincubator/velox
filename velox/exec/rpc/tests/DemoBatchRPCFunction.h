@@ -59,7 +59,8 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& queryConfig,
       const std::vector<TypePtr>& inputTypes,
-      const std::vector<VectorPtr>& constantInputs) override;
+      const std::vector<VectorPtr>& constantInputs,
+      RPCStreamingMode instruction) override;
 
   std::string name() const override {
     return "demo_batch_rpc";
@@ -69,6 +70,15 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  /// Exercises the native-batch path (accumulateBatch/flushBatch) in tests.
+  RpcDispatchPath dispatchPath() const override {
+    return dispatchPath_;
+  }
+
+ protected:
+  RpcDispatchPath dispatchPath_{RpcDispatchPath::kPerRow};
+
+ public:
   /// With failOnError=true, mimics the meta_ai_on_error='fail' policy: any
   /// errored response hard-fails the query (VELOX_USER_FAIL) instead of NULLing
   /// the row. Otherwise defers to the base (errors -> NULL).

@@ -106,8 +106,14 @@ void RPCOperator::initialize() {
 
   // Initialize the function with query config, argument types, and constants.
   // The function creates/caches its own transport and clients internally.
+  // The instruction goes in with everything else the function needs: it
+  // resolves its backend and how it will serve the instruction on that backend
+  // in one place, and the framework never learns which path it picked.
   function_->initialize(
-      operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
+      operatorCtx_->driverCtx()->queryConfig(),
+      inputTypes,
+      constantInputs,
+      rpcNode_->streamingMode());
 
   tierKey_ = function_->tierKey();
 
@@ -145,7 +151,9 @@ void RPCOperator::initialize() {
                  << ", operatorId=" << operatorId() << ", streamingMode="
                  << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
                          ? "BATCH"
-                         : "PER_ROW");
+                         : "PER_ROW")
+                 << ", dispatchPath="
+                 << RpcDispatchPathName::toName(function_->dispatchPath());
 
   if (!argumentSources_.empty()) {
     RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()
@@ -977,6 +985,19 @@ void RPCOperator::initOutputProjections() {
       }
     }
   }
+
+  // The framework owns the destination type; the function owns the mapping
+  // onto it. Nothing checked they agree, so a function wired to a node
+  // declaring a different type produced a RowVector whose child disagreed
+  // with its own declared type, and the failure surfaced downstream.
+  const auto& declaredType = outputType->childAt(rpcResultOutputChannel_);
+  VELOX_CHECK(
+      declaredType->equivalent(*function_->resultType()),
+      "RPC function '{}' returns {} but the plan declares column '{}' as {}",
+      function_->name(),
+      function_->resultType()->toString(),
+      outputColumn,
+      declaredType->toString());
 
   RPC_OP_VLOG(1) << "initOutputProjections: rpcResultChannel="
                  << rpcResultOutputChannel_ << ", passthroughProjections="

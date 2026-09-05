@@ -46,13 +46,18 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
       }
     }
   }
-  return AsyncRPCFunction::buildOutput(responses, pool);
+  return buildTextOutput(responses, pool);
 }
 
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {}
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    RPCStreamingMode instruction) {
+  dispatchPath_ = instruction == RPCStreamingMode::kBatch
+      ? RpcDispatchPath::kNativeBatch
+      : RpcDispatchPath::kPerRow;
+}
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
 DemoBatchRPCFunction::dispatchPerRow(
@@ -127,7 +132,8 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
     } else if (failingRowIndices_.count(startOffset + i)) {
       response.error = "simulated_failure";
     } else {
-      response.result = "Batch response for: " + toFlush[i].prompt;
+      response.payload =
+          makeTextPayload("Batch response for: " + toFlush[i].prompt);
     }
     responses.push_back(std::move(response));
   }

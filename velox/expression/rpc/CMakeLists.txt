@@ -14,11 +14,15 @@
 
 velox_install_library_headers()
 
-velox_add_library(velox_async_rpc_function INTERFACE AsyncRPCFunction.h)
+velox_add_library(velox_async_rpc_function AsyncRPCFunction.cpp HEADERS AsyncRPCFunction.h)
 
 velox_link_libraries(
   velox_async_rpc_function
-  INTERFACE velox_rpc_types velox_core velox_type velox_vector Folly::folly
+  velox_rpc_types
+  velox_core
+  velox_type
+  velox_vector
+  Folly::folly
 )
 
 velox_add_library(velox_rpc_function_stubs RPCFunctionStubs.cpp HEADERS RPCFunctionStubs.h)

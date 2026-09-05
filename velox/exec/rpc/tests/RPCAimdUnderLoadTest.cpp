@@ -25,10 +25,10 @@
 /// process-global rate-limiter cap backed off below its ceiling, and the cap
 /// then recovered upward once the burst cleared.
 ///
-/// The burst is injected deterministically: MockRPCClient tags a fixed window
-/// of call ordinals with errorKind=kRateLimited (see
-/// MockRPCClient::ErrorBurst), and PER_ROW dispatch preserves row order, so the
-/// burst lands on a known, timing-independent slice of rows. The whole
+/// The burst is injected deterministically: ResponseSimulator tags a fixed
+/// window of call ordinals with errorKind=kRateLimited (see
+/// ResponseSimulator::ErrorBurst), and PER_ROW dispatch preserves row order, so
+/// the burst lands on a known, timing-independent slice of rows. The whole
 /// trajectory is captured in a single close()-time stats snapshot: numShrinks>0
 /// proves the window dipped; rpcRateLimiterMinCap lands on every query, so it
 /// is the value, not its presence, that proves the limiter backed off -- a
@@ -38,11 +38,11 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/rpc/clients/MockRPCClient.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/rpc/RPCOperator.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
+#include "velox/exec/rpc/tests/ResponseSimulator.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -53,17 +53,21 @@ namespace facebook::velox::exec::rpc {
 namespace {
 
 using namespace facebook::velox::exec::test;
-using velox::rpc::MockRPCClient;
+using exec::rpc::test::ResponseSimulator;
 using velox::rpc::RPCErrorKind;
-using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
 
-// A PER_ROW RPC function backed by a MockRPCClient that rejects a
-// deterministic window of requests with rate-limit errors. It classifies
-// rate-limit/timeout failures as backend overload (kError -> both controllers
-// back off) and clean drains as kSuccess (feed the RTT gradient / drive
-// rate-limiter recovery), exactly as a production congestion policy would.
-class BurstRPCFunction : public AsyncRPCFunction {
+// What the two burst harnesses share: a ResponseSimulator that fails a
+// deterministic window of call ordinals, the backend key, and the overload
+// classifier. Only the dispatch shape differs, so only that is left to the
+// subclasses -- a contract change on AsyncRPCFunction is then absorbed here
+// once instead of in both.
+//
+// The classifier treats rate-limit/timeout as backend overload (kError -> both
+// controllers back off) and a clean drain as kSuccess (feeds the RTT gradient
+// and drives rate-limiter recovery), exactly as a production congestion policy
+// would.
+class BurstFunctionBase : public AsyncRPCFunction {
  public:
   struct Config {
     // Requests with call ordinal in [burstFirstCall, burstLastCall) are failed.
@@ -75,33 +79,72 @@ class BurstRPCFunction : public AsyncRPCFunction {
     std::string tier{"layer2.test.tier"};
   };
 
-  explicit BurstRPCFunction(Config config) : config_{std::move(config)} {}
+  explicit BurstFunctionBase(Config config) : config_{std::move(config)} {}
 
   void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) override {
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) override {
     // Call ordinals are what pin the burst to rows [kWarmupRows,
     // kWarmupRows + kBurstRows). A second initialize() would install a fresh
     // client whose ordinals restart at 0 and silently move the burst, so
     // require exactly one.
-    VELOX_CHECK_NULL(client_, "initialize() must be called at most once");
-    client_ =
-        std::make_shared<MockRPCClient>(config_.latency, /*errorRate=*/0.0);
-    client_->setErrorBurst(
+    VELOX_CHECK_NULL(simulator_, "initialize() must be called at most once");
+    simulator_ =
+        std::make_shared<ResponseSimulator>(config_.latency, /*errorRate=*/0.0);
+    simulator_->setErrorBurst(
         {config_.burstFirstCall, config_.burstLastCall, config_.burstKind});
-  }
-
-  std::string name() const override {
-    return "burst_rpc";
   }
 
   TypePtr resultType() const override {
     return VARCHAR();
   }
 
+  /// Per-row only: it has no multi-row call to make.
+  RpcDispatchPath dispatchPath() const override {
+    return RpcDispatchPath::kPerRow;
+  }
+
   std::string tierKey() const override {
     return config_.tier;
+  }
+
+  // Overload classifier: rate-limit / timeout failures are backend overload
+  // (kError). A null-input error is a user error and must NOT move the window
+  // (folded into kSuccess/kNone below since it is not rate-limit/timeout). A
+  // clean drain feeds its RTT to the gradient and drives rate-limiter recovery.
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    for (const auto& response : responses) {
+      if (response.hasError() &&
+          (response.errorKind == RPCErrorKind::kRateLimited ||
+           response.errorKind == RPCErrorKind::kTimeout)) {
+        return CongestionSignal::kError;
+      }
+    }
+    return responses.empty() ? CongestionSignal::kNone
+                             : CongestionSignal::kSuccess;
+  }
+
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
+
+ protected:
+  Config config_;
+  std::shared_ptr<ResponseSimulator> simulator_;
+};
+
+// PER_ROW: one call per row, so the burst window maps 1:1 onto row indices.
+class BurstRPCFunction : public BurstFunctionBase {
+ public:
+  using BurstFunctionBase::BurstFunctionBase;
+
+  std::string name() const override {
+    return "burst_rpc";
   }
 
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
@@ -126,42 +169,29 @@ class BurstRPCFunction : public AsyncRPCFunction {
             row,
             folly::makeSemiFuture<RPCResponse>(RPCResponse{
                 .rowId = row,
-                .result = "",
-                .metadata = {},
+                .payload = nullptr,
                 .error = "null_input",
                 .errorKind = RPCErrorKind::kNullInput}));
         return;
       }
-      RPCRequest request;
-      request.rowId = row;
-      request.originalRowIndex = row;
-      request.payload = promptVector->valueAt(row).str();
-      results.emplace_back(row, client_->call(request));
+      std::string prompt = promptVector->valueAt(row).str();
+      results.emplace_back(
+          row,
+          simulator_->nextCall().deferValue(
+              [prompt = std::move(prompt)](RPCErrorKind kind) {
+                RPCResponse response;
+                if (kind != RPCErrorKind::kNone) {
+                  response.error = "simulated backend overload";
+                  response.errorKind = kind;
+                  return response;
+                }
+                response.payload = makeTextPayload("burst: " + prompt);
+                return response;
+              }));
     });
 
     return results;
   }
-
-  // Overload classifier: rate-limit / timeout failures are backend overload
-  // (kError). A null-input error is a user error and must NOT move the window
-  // (folded into kSuccess/kNone below since it is not rate-limit/timeout). A
-  // clean drain feeds its RTT to the gradient and drives rate-limiter recovery.
-  CongestionSignal evaluateCongestion(
-      const std::vector<RPCResponse>& responses) const override {
-    for (const auto& response : responses) {
-      if (response.hasError() &&
-          (response.errorKind == RPCErrorKind::kRateLimited ||
-           response.errorKind == RPCErrorKind::kTimeout)) {
-        return CongestionSignal::kError;
-      }
-    }
-    return responses.empty() ? CongestionSignal::kNone
-                             : CongestionSignal::kSuccess;
-  }
-
- private:
-  Config config_;
-  std::shared_ptr<MockRPCClient> client_;
 };
 
 // The BATCH counterpart of BurstRPCFunction. BATCH reserves one rate-limiter
@@ -169,36 +199,20 @@ class BurstRPCFunction : public AsyncRPCFunction {
 // drives is per batch, not per row -- the reason this needs its own harness
 // rather than reusing the PER_ROW burst above.
 //
-// MockRPCClient::setErrorBurst fails a contiguous run of request ordinals, and
-// callBatch() consumes one ordinal per row, so the burst still lands on a
+// ResponseSimulator::setErrorBurst fails a contiguous run of call ordinals, and
+// nextBatch() consumes one ordinal per row, so the burst still lands on a
 // deterministic row range.
-class BurstBatchRPCFunction : public AsyncRPCFunction {
+class BurstBatchRPCFunction : public BurstFunctionBase {
  public:
-  using Config = BurstRPCFunction::Config;
+  using BurstFunctionBase::BurstFunctionBase;
 
-  explicit BurstBatchRPCFunction(Config config) : config_{std::move(config)} {}
-
-  void initialize(
-      const core::QueryConfig& /*queryConfig*/,
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) override {
-    VELOX_CHECK_NULL(client_, "initialize() must be called at most once");
-    client_ =
-        std::make_shared<MockRPCClient>(config_.latency, /*errorRate=*/0.0);
-    client_->setErrorBurst(
-        {config_.burstFirstCall, config_.burstLastCall, config_.burstKind});
+  /// Batch only: the whole point of this harness is the multi-row call.
+  RpcDispatchPath dispatchPath() const override {
+    return RpcDispatchPath::kNativeBatch;
   }
 
   std::string name() const override {
     return "burst_batch_rpc";
-  }
-
-  TypePtr resultType() const override {
-    return VARCHAR();
-  }
-
-  std::string tierKey() const override {
-    return config_.tier;
   }
 
   // Pure virtual on the base. BATCH never routes here; failing loudly beats
@@ -231,42 +245,36 @@ class BurstBatchRPCFunction : public AsyncRPCFunction {
     const auto count = maxRows > 0
         ? std::min<int32_t>(maxRows, static_cast<int32_t>(pending_.size()))
         : static_cast<int32_t>(pending_.size());
-    std::vector<RPCRequest> requests;
-    requests.reserve(count);
-    for (int32_t i = 0; i < count; ++i) {
-      RPCRequest request;
-      // Batch-position rowId: the operator scatters responses back by it.
-      request.rowId = i;
-      request.originalRowIndex = i;
-      request.payload = pending_[i];
-      requests.push_back(std::move(request));
-    }
+    std::vector<std::string> prompts(
+        pending_.begin(), pending_.begin() + count);
     pending_.erase(pending_.begin(), pending_.begin() + count);
-    return client_->callBatch(requests);
+    // The simulator decides only whether each call fails; the function owns
+    // the response it builds from that verdict.
+    return simulator_->nextBatch(count).deferValue(
+        [prompts = std::move(prompts)](std::vector<RPCErrorKind> kinds) {
+          std::vector<RPCResponse> responses;
+          responses.reserve(kinds.size());
+          for (size_t i = 0; i < kinds.size(); ++i) {
+            RPCResponse response;
+            // Batch-position rowId: the operator scatters responses by it.
+            response.rowId = static_cast<int64_t>(i);
+            if (kinds[i] != RPCErrorKind::kNone) {
+              response.error = "simulated backend overload";
+              response.errorKind = kinds[i];
+            } else {
+              response.payload = makeTextPayload("burst: " + prompts[i]);
+            }
+            responses.push_back(std::move(response));
+          }
+          return responses;
+        });
   }
 
   int32_t pendingBatchSize() const override {
     return static_cast<int32_t>(pending_.size());
   }
 
-  // Same classification as the PER_ROW burst: rate-limit / timeout is backend
-  // overload, a clean drain drives recovery.
-  CongestionSignal evaluateCongestion(
-      const std::vector<RPCResponse>& responses) const override {
-    for (const auto& response : responses) {
-      if (response.hasError() &&
-          (response.errorKind == RPCErrorKind::kRateLimited ||
-           response.errorKind == RPCErrorKind::kTimeout)) {
-        return CongestionSignal::kError;
-      }
-    }
-    return responses.empty() ? CongestionSignal::kNone
-                             : CongestionSignal::kSuccess;
-  }
-
  private:
-  Config config_;
-  std::shared_ptr<MockRPCClient> client_;
   std::vector<std::string> pending_;
 };
 
@@ -438,7 +446,9 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   //     ceiling. rpcRateLimiterMinCap lands on every query, so presence alone
   //     says nothing about backoff; the value below the ceiling is the claim.
   const int64_t minCap = statSum(RPCOperator::kRpcRateLimiterMinCap);
-  ASSERT_NE(minCap, -1) << "the low-water stat must be emitted on every query";
+  ASSERT_GT(minCap, 0)
+      << "the low-water stat must be emitted, and a zero cap would mean the "
+         "backend stalled outright rather than backed off";
   EXPECT_LT(minCap, kMaxLimit) << "cap should have dipped below its ceiling";
 
   // (4) After the burst, the clean success stream drove AIMD additive recovery:
@@ -502,7 +512,9 @@ TEST_F(RPCAimdUnderLoadTest, batchRateLimiterBacksOffThenRecovers) {
 
   // Overload drove the backend's cap below its ceiling.
   const int64_t minCap = statSum(RPCOperator::kRpcRateLimiterMinCap);
-  ASSERT_NE(minCap, -1) << "the low-water stat must be emitted on every query";
+  ASSERT_GT(minCap, 0)
+      << "the low-water stat must be emitted, and a zero cap would mean the "
+         "backend stalled outright rather than backed off";
   EXPECT_LT(minCap, kMaxLimit) << "cap should have dipped below its ceiling";
 
   // And the clean batches after the burst recovered it. This is the assertion
