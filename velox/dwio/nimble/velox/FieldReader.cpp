@@ -1053,7 +1053,8 @@ class LegacyStringFieldReader final : public FieldReader {
     size_t currentOffset = 0;
     if (!hasNulls) {
       for (uint32_t i = 0; i < rowCount; ++i) {
-        std::copy(buffer_[i].data(), buffer_[i].end(), dataPtr + currentOffset);
+        std::copy(
+            buffer_[i].begin(), buffer_[i].end(), dataPtr + currentOffset);
         valuesPtr[i] =
             velox::StringView(dataPtr + currentOffset, buffer_[i].length());
         currentOffset += buffer_[i].length();
@@ -1062,7 +1063,7 @@ class LegacyStringFieldReader final : public FieldReader {
       for (uint32_t i = 0; i < rowCount; ++i) {
         if (!vector->isNullAt(i)) {
           std::copy(
-              buffer_[i].data(), buffer_[i].end(), dataPtr + currentOffset);
+              buffer_[i].begin(), buffer_[i].end(), dataPtr + currentOffset);
           valuesPtr[i] =
               velox::StringView(dataPtr + currentOffset, buffer_[i].length());
           currentOffset += buffer_[i].length();
