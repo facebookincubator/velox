@@ -729,10 +729,16 @@ bool viewHasDynamicShapeArgs(NodeCP node, const ValueTypes& /*types*/) {
 // Consulting the consumer's isStandalone cannot recurse back here: a getter
 // takes a tensor and yields a scalar, so a getter is never the user of a
 // getter.
-// Unused while the isStandaloneFunc call sites below are disabled.
-[[maybe_unused]] bool metadataGetterIsAlone(
-    NodeCP node,
-    const ValueTypes& types) {
+//
+// A getter left fused when it is alone costs a whole thread block that reads
+// one field and exits. That block is charged against the launch's slowest
+// block, so a handful of them drag a step's reported balance down and the
+// packer has nothing it can do about it -- there is no block count at which a
+// no-op op balances.
+bool metadataGetterIsAlone(NodeCP node, const ValueTypes& types) {
+  if (!WaveConfig::get().metadataGetterStandalone) {
+    return false;
+  }
   if (node->outputs().empty() || node->outputs()[0] == nullptr) {
     return false;
   }
@@ -1812,7 +1818,10 @@ void registerBuiltins() {
         .numArgs(1)
         .ignoreAttrs({"self", "non_blocking"})
         .argumentMeta({{}, {.isRegister = true}, {}})
-        .returnMeta({{.isRegister = true, .reserveShape = selfShape}})
+        .returnMeta(
+            {{.isRegister = true,
+              .reserveShape = selfShape,
+              .shapeFromInput = 0}})
         .normalize(resolveDtypeFromInputExact)
         .rankArgument(0)
         .outputConstraints(selfRankContiguous)
@@ -1860,7 +1869,10 @@ void registerBuiltins() {
         .hasDtypeTemplateParam()
         .ignoreAttrs({"self", "non_blocking"})
         .argumentMeta({{}, {.isRegister = true}})
-        .returnMeta({{.isRegister = false, .reserveShape = selfShape}})
+        .returnMeta(
+            {{.isRegister = false,
+              .reserveShape = selfShape,
+              .shapeFromInput = 0}})
         .normalize(resolveDtypeFromInputExact)
         .rankArgument(0)
         .outputConstraints(selfRankContiguous)
@@ -1965,7 +1977,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
       .hasDtypeTemplateParam()
@@ -1985,7 +1998,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
       .hasDtypeTemplateParam()
@@ -2086,7 +2100,7 @@ void registerBuiltins() {
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
       .metadataOnly()
-      // TEMP-AB-DISABLED .isStandaloneFunc(metadataGetterIsAlone)
+      .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -2099,7 +2113,7 @@ void registerBuiltins() {
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
       .metadataOnly()
-      // TEMP-AB-DISABLED .isStandaloneFunc(metadataGetterIsAlone)
+      .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -3837,7 +3851,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(
           singlePass ? makeCumsumSinglePassVariant : makeCumsumVariant)
@@ -3925,7 +3940,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .argumentMeta(
           {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
-      .returnMeta({{.isRegister = false, .reserveShape = inputShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_final")
@@ -3963,7 +3981,10 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .singleBlockIfFused()
-      .returnMeta({{.isRegister = false, .reserveShape = inputShapePlusOne}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(
           singlePass ? makeExclusiveSumSinglePassVariant
@@ -4054,7 +4075,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .argumentMeta(
           {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
-      .returnMeta({{.isRegister = false, .reserveShape = inputShapePlusOne}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum_final")
@@ -4092,7 +4116,10 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .singleBlockIfFused()
-      .returnMeta({{.isRegister = false, .reserveShape = inputShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .headerFile(kScanHeader)
       .deviceFunc("lengths_to_offsets")
@@ -4162,7 +4189,9 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShape},
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
@@ -4196,7 +4225,9 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShapePlusOne},
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
@@ -4231,6 +4262,7 @@ void registerBuiltins() {
       .returnMeta(
           {{.isRegister = false,
             .reserveShape = inputShape,
+            .shapeFromInput = 0,
             .shapeSetOnDevice = true},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .headerFile(kScanHeader)
@@ -4270,7 +4302,9 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShape},
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0},
            {.isRegister = false, .reserveShape = lookbackStateShape}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
@@ -4316,7 +4350,9 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShapePlusOne},
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0},
            {.isRegister = false, .reserveShape = lookbackStateShape}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
@@ -4366,6 +4402,7 @@ void registerBuiltins() {
       .returnMeta(
           {{.isRegister = false,
             .reserveShape = inputShape,
+            .shapeFromInput = 0,
             .shapeSetOnDevice = true},
            {.isRegister = false, .reserveShape = lookbackStateShape}})
       .headerFile(kScanHeader)
@@ -4620,7 +4657,9 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShape},
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0},
            {.neededOnHost = true}})
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_head")
@@ -5985,7 +6024,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
       .hasDtypeTemplateParam()

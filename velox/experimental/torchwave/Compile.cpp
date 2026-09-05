@@ -945,6 +945,29 @@ static bool setsSizeOnDevice(NodeCP producer) {
   return false;
 }
 
+// True when the node's extent is only known once its reserve function has run,
+// so nothing upstream of that can compute it. A reserve that just returns an
+// input's shape (ArgumentMeta::shapeFromInput) does not count -- that extent is
+// the input's, and whoever needs it can read the input instead.
+static bool sizeNeedsReserve(NodeCP producer) {
+  const auto* meta = nodeMeta(producer);
+  // An elementwise output has the extent of its inputs whatever its reserve
+  // does with it, so there is never anything to wait for. Same exclusion
+  // setsSizeOnDevice makes, and for the same reason.
+  if (!meta || meta->elementwise) {
+    return false;
+  }
+  // More than one output means the op is half of a split (a head feeding a
+  // final), whose two parts are placed as a pair. Ending the kernel between
+  // them is not this pass's to do -- inputFromPreviousKernel already arranges
+  // where they break -- and doing it anyway produces wrong values.
+  if (meta->returnMeta.size() != 1) {
+    return false;
+  }
+  const auto& ret = meta->returnMeta.front();
+  return ret.reserveShape != nullptr && ret.shapeFromInput < 0;
+}
+
 // True when a node other than 'reader' overwrites 'value' in place (it is that
 // node's mutatesArg "self"). Such a write is invisible to a producer walk: the
 // writer's own output is a different value, so 'value' still names whoever
@@ -1181,7 +1204,7 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
       const bool parallelFill = concatFillsInParallel(node, types_);
       for (const auto& listInput : producer->inputs()) {
         if (hostShapes) {
-          breakDeviceSizedProducers(listInput.value);
+          breakUnmeasurableProducers(listInput.value);
         }
         if (parallelFill) {
           breakConcatOperandIntoOwnKernel(listInput.value, node->outputs()[0]);
@@ -1308,19 +1331,26 @@ void CompileCtx::pushdownFused(NodeCP node) {
   placed_.insert(node);
 }
 
-void CompileCtx::breakDeviceSizedProducers(ValueCP value) {
+void CompileCtx::breakUnmeasurableProducers(ValueCP value) {
   auto* producer = value->producer();
   if (!producer || placed_.count(producer) ||
       (inputs_ && inputs_->count(producer))) {
     return;
   }
-  // Post-order: the innermost device-sized op ends its kernel first, so the ops
-  // above it read a host tensor that already carries the real extent and can
-  // stay fused with the concat.
+  // Post-order: the innermost one ends its kernel first, so the ops above it
+  // read a host tensor that already carries the real extent and can stay fused
+  // with the concat.
   for (const auto& input : producer->inputs()) {
-    breakDeviceSizedProducers(input.value);
+    breakUnmeasurableProducers(input.value);
   }
-  if (setsSizeOnDevice(producer)) {
+  // Two ways an operand's extent can be out of reach when the concat lays its
+  // result out: the device settles it, or only the producer's own reserve
+  // knows it. Either way the concat cannot place a single operand until this
+  // one is measurable, because the layout needs every extent at one point --
+  // so the producer ends its kernel here and the value is materialized in an
+  // earlier step, where it becomes an ordinary frame tensor the host can
+  // measure and the concat can hand a view of its band.
+  if (setsSizeOnDevice(producer) || sizeNeedsReserve(producer)) {
     breakProducerIntoOwnKernel(producer);
   }
 }
