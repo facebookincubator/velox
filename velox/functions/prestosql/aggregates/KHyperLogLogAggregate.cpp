@@ -34,6 +34,10 @@ template <TypeKind TJoinKeyKind>
 std::unique_ptr<exec::Aggregate> dispatchOnUiiType(
     TypeKind uiiKind,
     const TypePtr& resultType) {
+  if (uiiKind == TypeKind::UNKNOWN) {
+    return createKHyperLogLogAggregate<TJoinKeyKind, TypeKind::UNKNOWN>(
+        resultType);
+  }
   return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
       createKHyperLogLogAggregate, TJoinKeyKind, uiiKind, resultType);
 }
@@ -47,6 +51,7 @@ std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
 
   // Register all physical types for both JoinKey and UII.
   std::vector<std::string> inputTypes = {
+      "unknown",
       "boolean",
       "tinyint",
       "smallint",
@@ -91,7 +96,7 @@ std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
         auto uiiKind = argTypes[1]->kind();
 
         // First dispatch on JoinKey type, then on UII type.
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
             dispatchOnUiiType, joinKeyKind, uiiKind, resultType);
       },
       withCompanionFunctions,

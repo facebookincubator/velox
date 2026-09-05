@@ -46,7 +46,8 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
       "tdigest(double)",
       "qdigest(bigint)",
       "qdigest(real)",
-      "qdigest(double)"};
+      "qdigest(double)",
+      "unknown"};
   signatures.reserve(inputTypes.size());
   for (const auto& inputType : inputTypes) {
     signatures.push_back(
@@ -87,15 +88,19 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
           return std::make_unique<MergeKHyperLogLogAggregate>(resultType);
         }
         if (argTypes[0]->isUnknown()) {
-          return std::make_unique<HyperLogLogAggregate<UnknownValue, true>>(
-              resultType, hllAsRawInput, defaultError);
+          // merge() on UNKNOWN type receives all-NULL inputs (not serialized
+          // HLL objects), so hllAsRawInput and HllAsFinalResult must both be
+          // false. The aggregate will return NULL for every group via
+          // extractValues.
+          return std::make_unique<HyperLogLogAggregate<UnknownValue, false>>(
+              resultType, false, defaultError);
         }
         if (exec::isPartialInput(step) && argTypes[0]->isTinyint()) {
           // This condition only applies to approx_distinct(boolean).
           return std::make_unique<HyperLogLogAggregate<bool, false>>(
               resultType, hllAsRawInput, defaultError);
         }
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
             createHyperLogLogAggregate,
             argTypes[0]->kind(),
             resultType,

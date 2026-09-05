@@ -592,7 +592,7 @@ void registerHistogramAggregate(
             exec::isRawInput(step) ? argTypes[0] : argTypes[0]->childAt(0);
 
         if (inputType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
               createHistogramAggregateWithCustomCompare,
               inputType->kind(),
               resultType);

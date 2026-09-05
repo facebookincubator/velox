@@ -112,7 +112,7 @@ std::vector<exec::AggregateRegistrationResult> registerApproxDistinct(
           return std::make_unique<HyperLogLogAggregate<bool, false>>(
               resultType, hllAsRawInput, defaultError);
         }
-        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+        return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
             createHyperLogLogAggregate,
             argTypes[0]->kind(),
             resultType,

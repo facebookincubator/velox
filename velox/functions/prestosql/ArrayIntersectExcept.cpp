@@ -665,14 +665,14 @@ std::shared_ptr<exec::VectorFunction> createArrayIntersect(
     const core::QueryConfig& /*config*/) {
   if (inputArgs.size() == 1) {
     auto elementType = inputArgs.front().type->childAt(0)->childAt(0);
-    return VELOX_DYNAMIC_TYPE_DISPATCH(
+    return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
         createArraysIntersectSingleParam, elementType->kind(), elementType);
   }
 
   validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
-  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
       createTypedArraysIntersectExcept,
       /* isIntersect */ true,
       elementType->kind(),
@@ -687,7 +687,7 @@ std::shared_ptr<exec::VectorFunction> createArrayExcept(
   validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
-  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_ALL(
       createTypedArraysIntersectExcept,
       /* isIntersect */ false,
       elementType->kind(),
@@ -765,7 +765,7 @@ std::shared_ptr<exec::VectorFunction> createArraysOverlapFunction(
   validateMatchingArrayTypes(inputArgs, name, 2);
   auto elementType = inputArgs.front().type->childAt(0);
 
-  return VELOX_DYNAMIC_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
       createTypedArraysOverlap, elementType->kind(), inputArgs);
 }
 } // namespace

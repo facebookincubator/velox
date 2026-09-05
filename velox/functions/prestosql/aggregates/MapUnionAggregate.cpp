@@ -113,7 +113,7 @@ void registerMapUnionAggregate(
         const auto keyType = resultType->childAt(0);
 
         if (keyType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
               createMapUnionAggregateWithCustomCompare,
               keyType->kind(),
               resultType);
