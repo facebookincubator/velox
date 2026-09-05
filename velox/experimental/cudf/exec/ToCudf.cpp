@@ -310,15 +310,19 @@ void registerCudf() {
   cudaFree(nullptr); // Initialize CUDA context at startup
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto mr = cudf_velox::createMemoryResource(
+  auto base = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
-  cudf::set_current_device_resource(mr);
-  mr_ = std::move(mr);
+  // Wrap the device resource in a statistics adaptor so that
+  // cudfAllocatedBytes() can report live device memory.
+  statsMr_.emplace(std::move(base));
+  mr_ = statsMr_.value();
+  cudf::set_current_device_resource(mr_.value());
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    output_mr_ = cudf_velox::createMemoryResource(
-        outputMrMode, CudfConfig::getInstance().memoryPercent);
+    outputStatsMr_.emplace(cudf_velox::createMemoryResource(
+        outputMrMode, CudfConfig::getInstance().memoryPercent));
+    output_mr_ = outputStatsMr_.value();
   } else {
     output_mr_ = mr_;
   }
@@ -343,8 +347,12 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  // Reset the any_resource copies before the adaptors they were copied from,
+  // so that the wrapped upstream resources are released here.
   output_mr_.reset();
   mr_.reset();
+  outputStatsMr_.reset();
+  statsMr_.reset();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
