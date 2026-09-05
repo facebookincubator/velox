@@ -45,6 +45,35 @@ class SumAggregateBase
     return 1;
   }
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 1);
+    if constexpr (std::is_same_v<TInput, TAccumulator>) {
+      this->singleInputAsIntermediate(rows, args, result);
+      return;
+    }
+
+    auto* vector = result->asFlatVector<TAccumulator>();
+    auto* rawNulls = vector->mutableRawNulls();
+    bits::fillBits(rawNulls, 0, rows.size(), bits::kNull);
+    auto* rawValues = vector->mutableRawValues();
+
+    DecodedVector decoded(*args[0], rows);
+    rows.applyToSelected([&](vector_size_t row) {
+      if (!decoded.isNullAt(row)) {
+        bits::clearNull(rawNulls, row);
+        rawValues[row] =
+            static_cast<TAccumulator>(decoded.valueAt<TInput>(row));
+      }
+    });
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::template doExtractValues<ResultType>(

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/AggregateUtil.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -719,6 +720,64 @@ TEST_F(SumAggregationTest, dummySum) {
       std::move(child));
 
   assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");
+}
+
+TEST_F(SumAggregationTest, abandonPartialAggregation) {
+  constexpr int32_t kNumBatches = 3;
+  constexpr vector_size_t kBatchSize = 100;
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "i", "b", "r", "m"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int32_t>(
+             kBatchSize,
+             folly::identity,
+             [](auto row) { return row % 5 == 0; }),
+         makeFlatVector<int64_t>(
+             kBatchSize,
+             folly::identity,
+             [](auto row) { return row % 11 == 0; }),
+         makeFlatVector<float>(
+             kBatchSize,
+             folly::identity,
+             [](auto row) { return row % 7 == 0; }),
+         makeFlatVector<bool>(
+             kBatchSize, [](auto row) { return row % 3 != 0; })}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"k"},
+                      {"spark_sum(i)", "spark_sum(b)", "spark_sum(r)"},
+                      {"m", "m", "m"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults(
+              "SELECT k, sum(i) FILTER (WHERE m), "
+              "sum(b) FILTER (WHERE m), "
+              "sum(r) FILTER (WHERE m) FROM tmp GROUP BY k");
+
+  const auto stats = exec::toPlanStats(task->taskStats());
+  EXPECT_LT(
+      0,
+      stats.at(partialNodeId)
+          .customStats.at("abandonedPartialAggregationRows")
+          .sum);
+  EXPECT_GT(
+      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      0);
 }
 
 } // namespace
