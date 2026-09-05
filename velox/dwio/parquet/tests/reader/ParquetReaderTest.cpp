@@ -686,6 +686,40 @@ TEST_F(ParquetReaderTest, parseSampleEmptyRange) {
   EXPECT_EQ(readerBundle.rowReader->next(1000, result), 0);
 }
 
+// zero_column.parquet: 2 row groups of 10 rows each, 0 column chunks.
+// Represents an Iceberg V3 all-unknown table written by Java Presto/Iceberg,
+// where every column is pruned from the Parquet schema.
+TEST_F(ParquetReaderTest, zeroColumnRowGroups) {
+  const auto emptySchema = ROW({}, {});
+
+  // The file has 20 rows in metadata.
+  auto reader = createReader("zero_column.parquet");
+  EXPECT_EQ(reader->numberOfRows(), 20ULL);
+
+  // Split at offset 0 includes both zero-column row groups: 20 rows total.
+  {
+    auto readerBundle = readerBuilder("zero_column.parquet", emptySchema)
+                            .byteRange(0, 1000)
+                            .build();
+    VectorPtr result;
+    uint64_t total{0};
+    uint64_t rows{0};
+    while ((rows = readerBundle.rowReader->next(1000, result)) > 0) {
+      total += rows;
+    }
+    EXPECT_EQ(total, 20ULL);
+  }
+
+  // Split at offset > 0 excludes all zero-column row groups: 0 rows.
+  {
+    auto readerBundle = readerBuilder("zero_column.parquet", emptySchema)
+                            .byteRange(1, 1000)
+                            .build();
+    VectorPtr result;
+    EXPECT_EQ(readerBundle.rowReader->next(1000, result), 0ULL);
+  }
+}
+
 TEST_F(ParquetReaderTest, parseReadAsLowerCase) {
   // upper.parquet holds two columns (A: BIGINT, b: BIGINT) and
   // 2 rows.

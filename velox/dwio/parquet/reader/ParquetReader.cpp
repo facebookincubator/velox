@@ -486,6 +486,29 @@ void ReaderBase::initializeSchema() {
     VELOX_UNSUPPORTED("Encrypted Parquet files are not supported");
   }
 
+  // Zero-column schema: only the root element, no leaf columns.
+  // Valid for an Iceberg V3 all-unknown table where every column was pruned
+  // from the Parquet file by the writer (e.g. Java Presto/Iceberg).
+  if (fileMetaData_->schema()->size() == 1) {
+    schema_ = ROW({}, {});
+    const auto& rootName = *(*fileMetaData_->schema())[0].name();
+    schemaWithId_ = std::make_unique<ParquetTypeWithId>(
+        schema_,
+        std::vector<std::unique_ptr<dwio::common::TypeWithId>>{},
+        0,
+        0,
+        ParquetTypeWithId::kNonLeaf,
+        rootName,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        0,
+        0,
+        false,
+        false);
+    return;
+  }
+
   VELOX_CHECK_GT(
       fileMetaData_->schema()->size(),
       1,
@@ -1646,7 +1669,19 @@ class ParquetRowReader::Impl {
     // because skippedStrides_ is only bumped for in-range exclusions.
     std::vector<bool> rowGroupInRange(rowGroups_.size());
     for (auto i = 0; i < rowGroups_.size(); ++i) {
-      VELOX_CHECK_GT(rowGroups_[i].columns()->size(), 0);
+      const bool isEmpty =
+          apache::thrift::can_throw(*rowGroups_[i].num_rows()) == 0;
+      if (rowGroups_[i].columns()->empty()) {
+        // Zero-column row group from an Iceberg V3 all-UNKNOWN table: no
+        // column data pages, so no file offset can be derived from column
+        // chunks. Assign to the split at offset 0 so each row group is
+        // emitted by exactly one split.
+        rowGroupInRange[i] = (options_.offset() == 0);
+        if (!rowGroupInRange[i] || isEmpty) {
+          bits::setBit(res.filterResult.data(), i);
+        }
+        continue;
+      }
       const auto fileOffset =
           (rowGroups_[i].file_offset() &&
            apache::thrift::can_throw(*rowGroups_[i].file_offset()) != 0)
@@ -1665,8 +1700,6 @@ class ParquetRowReader::Impl {
       VELOX_CHECK_GT(fileOffset, 0);
       rowGroupInRange[i] =
           (fileOffset >= options_.offset() && fileOffset < options_.limit());
-      const bool isEmpty =
-          apache::thrift::can_throw(*rowGroups_[i].num_rows()) == 0;
       if (!rowGroupInRange[i] || isEmpty) {
         bits::setBit(res.filterResult.data(), i);
       }
