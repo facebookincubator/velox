@@ -2049,6 +2049,10 @@ void setSinglePassSelect(bool on) {
   WaveConfig::get().singlePassSelect = on;
 }
 
+void setFoldSharedChains(bool on) {
+  WaveConfig::get().foldSharedChains = on;
+}
+
 void setKernelCacheDir(const std::string& dir) {
   WaveConfig::get().kernelCacheDir = dir;
 }
