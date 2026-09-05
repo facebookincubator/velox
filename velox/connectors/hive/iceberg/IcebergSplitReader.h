@@ -29,6 +29,12 @@ namespace facebook::velox::connector::hive::iceberg {
 struct HiveIcebergSplit;
 struct IcebergDeleteFile;
 
+using IcebergNameMapping =
+    std::unordered_map<int32_t, std::vector<std::string>>;
+
+std::shared_ptr<const IcebergNameMapping> parseDefaultNameMapping(
+    const FileTableHandle& tableHandle);
+
 class IcebergSplitReader : public FileSplitReader {
  public:
   IcebergSplitReader(
@@ -44,7 +50,9 @@ class IcebergSplitReader : public FileSplitReader {
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      std::shared_ptr<ColumnHandleMap> columnHandles);
+      std::shared_ptr<ColumnHandleMap> columnHandles,
+      std::optional<std::shared_ptr<const IcebergNameMapping>> nameMapping =
+          std::nullopt);
 
   ~IcebergSplitReader() override = default;
 
@@ -213,5 +221,6 @@ class IcebergSplitReader : public FileSplitReader {
   /// Column handles map shared with IcebergDataSource.
   /// Used for accessing column metadata including initial-default values.
   std::shared_ptr<ColumnHandleMap> columnHandles_;
+  const std::shared_ptr<const IcebergNameMapping> nameMapping_;
 };
 } // namespace facebook::velox::connector::hive::iceberg

@@ -42,6 +42,11 @@ IcebergDataSource::IcebergDataSource(
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
+  if (icebergSplit->fileFormat == dwio::common::FileFormat::PARQUET &&
+      !nameMappingParsed_) {
+    nameMapping_ = parseDefaultNameMapping(*tableHandle_);
+    nameMappingParsed_ = true;
+  }
 
   auto reader = std::make_unique<IcebergSplitReader>(
       icebergSplit,
@@ -56,7 +61,8 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_,
-      columnHandles_);
+      columnHandles_,
+      std::optional{nameMapping_});
 
   return reader;
 }

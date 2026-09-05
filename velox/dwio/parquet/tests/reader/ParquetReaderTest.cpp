@@ -331,6 +331,107 @@ TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
       outputType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, parquetFieldIdRequiresNameMapping) {
+  const auto physicalType = ROW({"data", "id"}, {VARCHAR(), BIGINT()});
+  auto data = makeRowVector(
+      physicalType->names(),
+      {makeFlatVector<std::string>({"a", "b"}),
+       makeFlatVector<int64_t>({10, 20})});
+  auto* sink = write(data);
+
+  const auto outputType = ROW({"id", "data"}, {BIGINT(), VARCHAR()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds({ParquetFieldId{10, {}}, ParquetFieldId{20, {}}});
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  EXPECT_EQ(readerBundle.reader->typeWithId()->size(), 0);
+}
+
+TEST_F(ParquetReaderTest, parquetFieldIdDefaultNameMappingFallback) {
+  const auto nestedWriteType =
+      ROW({"legacy_label", "legacy_amount"}, {VARCHAR(), BIGINT()});
+  const auto physicalType =
+      ROW({"legacy_id", "legacy_nested", "legacy_ignored"},
+          {BIGINT(), nestedWriteType, BOOLEAN()});
+  auto data = makeRowVector(
+      physicalType->names(),
+      {makeFlatVector<int64_t>({10, 20}),
+       makeRowVector(
+           nestedWriteType->names(),
+           {makeFlatVector<std::string>({"a", "b"}),
+            makeFlatVector<int64_t>({100, 200})}),
+       makeFlatVector<bool>({true, false})});
+
+  auto* sink = write(data);
+
+  const auto nestedReadType = ROW({"label", "amount"}, {VARCHAR(), BIGINT()});
+  const auto outputType = ROW({"nested", "id"}, {nestedReadType, BIGINT()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds({
+      ParquetFieldId{2, {ParquetFieldId{20, {}}, ParquetFieldId{21, {}}}},
+      ParquetFieldId{1, {}},
+  });
+
+  auto strictReaderBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  EXPECT_EQ(strictReaderBundle.reader->typeWithId()->size(), 0);
+
+  readerOptions.setFieldIds({
+      ParquetFieldId{
+          2,
+          {ParquetFieldId{20, {}, {"legacy_label"}},
+           ParquetFieldId{21, {}, {"legacy_amount"}}},
+          {"legacy_nested"}},
+      ParquetFieldId{1, {}, {"legacy_id"}},
+  });
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeRowVector(
+           nestedReadType->names(),
+           {makeFlatVector<std::string>({"a", "b"}),
+            makeFlatVector<int64_t>({100, 200})}),
+       makeFlatVector<int64_t>({10, 20})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+}
+
+TEST_F(ParquetReaderTest, parquetFieldIdNameMappingRejectsMixedIdSchema) {
+  const auto physicalType = ROW({"legacy_id", "data"}, {BIGINT(), VARCHAR()});
+  auto data = makeRowVector(
+      physicalType->names(),
+      {makeFlatVector<int64_t>({10, 20}),
+       makeFlatVector<std::string>({"a", "b"})});
+  ParquetWriterOptions writerOptions;
+  // A negative ID is omitted from the physical Parquet schema.
+  writerOptions.parquetFieldIds = {
+      ParquetFieldId{-1, {}}, ParquetFieldId{2, {}}};
+  auto* sink = write(data, writerOptions);
+
+  const auto outputType = ROW({"id", "data"}, {BIGINT(), VARCHAR()});
+  auto readerOptions = makeDefaultReaderOptions();
+  readerOptions.setFileSchema(outputType);
+  readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+  readerOptions.setFieldIds(
+      {ParquetFieldId{1, {}, {"legacy_id"}}, ParquetFieldId{2, {}, {"data"}}});
+
+  auto readerBundle =
+      readerBuilder(*sink, outputType).options(readerOptions).build();
+  auto expected = makeRowVector(
+      outputType->names(),
+      {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
+       makeFlatVector<std::string>({"a", "b"})});
+  assertReadWithReaderAndExpected(
+      outputType, *readerBundle.rowReader, expected, *leafPool_);
+}
+
 TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
   auto data = makeRowVector(
       {"nested"},

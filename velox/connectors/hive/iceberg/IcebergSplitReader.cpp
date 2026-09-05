@@ -17,8 +17,11 @@
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 #include <algorithm>
+#include <limits>
+#include <string_view>
 
 #include <folly/ScopeGuard.h>
+#include <folly/json.h>
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -81,6 +84,89 @@ void fillNullsWithInt64(
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
+constexpr const char* kDefaultNameMappingProperty =
+    "schema.name-mapping.default";
+
+void collectFallbackNames(
+    const folly::dynamic& fields,
+    IcebergNameMapping& fallbackNames) {
+  VELOX_USER_CHECK(
+      fields.isArray(),
+      "Iceberg table property '{}' must be a JSON array",
+      kDefaultNameMappingProperty);
+  for (const auto& field : fields) {
+    VELOX_USER_CHECK(
+        field.isObject(),
+        "Entries in Iceberg table property '{}' must be JSON objects",
+        kDefaultNameMappingProperty);
+    const auto* names = field.get_ptr("names");
+    VELOX_USER_CHECK(
+        names != nullptr && names->isArray(),
+        "Each entry in Iceberg table property '{}' must contain a names array",
+        kDefaultNameMappingProperty);
+
+    std::vector<std::string> parsedNames;
+    parsedNames.reserve(names->size());
+    for (const auto& name : *names) {
+      VELOX_USER_CHECK(
+          name.isString(),
+          "Names in Iceberg table property '{}' must be strings",
+          kDefaultNameMappingProperty);
+      parsedNames.push_back(name.asString());
+    }
+
+    if (const auto* fieldId = field.get_ptr("field-id")) {
+      VELOX_USER_CHECK(
+          fieldId->isInt(),
+          "field-id in Iceberg table property '{}' must be an integer",
+          kDefaultNameMappingProperty);
+      const auto id = fieldId->asInt();
+      VELOX_USER_CHECK(
+          id > 0 && id <= std::numeric_limits<int32_t>::max(),
+          "field-id in Iceberg table property '{}' must be a positive 32-bit integer",
+          kDefaultNameMappingProperty);
+      const auto [_, inserted] = fallbackNames.emplace(
+          static_cast<int32_t>(id), std::move(parsedNames));
+      VELOX_USER_CHECK(
+          inserted,
+          "Duplicate field-id {} in Iceberg table property '{}'",
+          id,
+          kDefaultNameMappingProperty);
+    }
+
+    if (const auto* children = field.get_ptr("fields")) {
+      collectFallbackNames(*children, fallbackNames);
+    }
+  }
+}
+
+IcebergNameMapping parseDefaultNameMappingJson(std::string_view json) {
+  folly::dynamic fields;
+  try {
+    fields = folly::parseJson(json);
+  } catch (const std::exception& e) {
+    VELOX_USER_FAIL(
+        "Failed to parse Iceberg table property '{}': {}",
+        kDefaultNameMappingProperty,
+        e.what());
+  }
+  IcebergNameMapping fallbackNames;
+  collectFallbackNames(fields, fallbackNames);
+  return fallbackNames;
+}
+
+void applyFallbackNames(
+    const IcebergNameMapping& fallbackNames,
+    dwio::common::ParquetFieldId& fieldId) {
+  if (const auto it = fallbackNames.find(fieldId.fieldId);
+      it != fallbackNames.end()) {
+    fieldId.fallbackNames = it->second;
+  }
+  for (auto& child : fieldId.children) {
+    applyFallbackNames(fallbackNames, child);
+  }
+}
+
 // Indexes IcebergColumnHandles by their underlying data-column name.
 // Covers output-projected handles (columnHandles) and, when tableHandle is
 // non-null, filter-only handles (tableHandle->filterColumnHandles()) too.
@@ -129,6 +215,17 @@ bool shouldSkipBySequenceNumber(
 
 } // namespace
 
+std::shared_ptr<const IcebergNameMapping> parseDefaultNameMapping(
+    const FileTableHandle& tableHandle) {
+  const auto& tableParameters = tableHandle.tableParameters();
+  const auto it = tableParameters.find(kDefaultNameMappingProperty);
+  if (it == tableParameters.end()) {
+    return nullptr;
+  }
+  return std::make_shared<const IcebergNameMapping>(
+      parseDefaultNameMappingJson(it->second));
+}
+
 IcebergSplitReader::IcebergSplitReader(
     const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
     const FileTableHandlePtr& tableHandle,
@@ -142,7 +239,8 @@ IcebergSplitReader::IcebergSplitReader(
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
-    std::shared_ptr<ColumnHandleMap> columnHandles)
+    std::shared_ptr<ColumnHandleMap> columnHandles,
+    std::optional<std::shared_ptr<const IcebergNameMapping>> nameMapping)
     : FileSplitReader(
           icebergSplit,
           tableHandle,
@@ -160,7 +258,12 @@ IcebergSplitReader::IcebergSplitReader(
       baseReadOffset_(0),
       splitOffset_(0),
       deleteBitmap_(nullptr),
-      columnHandles_(std::move(columnHandles)) {}
+      columnHandles_(std::move(columnHandles)),
+      nameMapping_(
+          nameMapping.has_value() ? std::move(nameMapping.value())
+              : icebergSplit->fileFormat == dwio::common::FileFormat::PARQUET
+              ? parseDefaultNameMapping(*tableHandle)
+              : nullptr) {}
 
 void IcebergSplitReader::configureBaseReaderOptions() {
   FileSplitReader::configureBaseReaderOptions();
@@ -168,6 +271,11 @@ void IcebergSplitReader::configureBaseReaderOptions() {
   if (fileFormat == dwio::common::FileFormat::PARQUET) {
     auto fieldIds = buildFieldIds();
     if (!fieldIds.empty()) {
+      if (nameMapping_) {
+        for (auto& fieldId : fieldIds) {
+          applyFallbackNames(*nameMapping_, fieldId);
+        }
+      }
       baseReaderOpts_.setColumnMappingMode(
           dwio::common::ColumnMappingMode::kParquetFieldId);
       baseReaderOpts_.setFieldIds(std::move(fieldIds));
