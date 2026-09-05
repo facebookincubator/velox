@@ -171,6 +171,7 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
+    cudf::data_type readerTimestampType,
     cudf::ast::expression const* subfieldFilterExpr)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
@@ -188,6 +189,7 @@ CudfSplitReader::CudfSplitReader(
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
+      readerTimestampType_(readerTimestampType),
       baseReaderOpts_(pool_),
       subfieldFilterExpr_(subfieldFilterExpr),
       pushdownFilterExpr_(subfieldFilterExpr) {
@@ -452,7 +454,7 @@ void CudfSplitReader::setupReaderOptions() {
           .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
-          .timestamp_type(cudfHiveConfig_->timestampType())
+          .timestamp_type(readerTimestampType_)
           .build();
 
   // Set skip_bytes and num_bytes if available

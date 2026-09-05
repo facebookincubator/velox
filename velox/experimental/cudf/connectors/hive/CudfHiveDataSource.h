@@ -108,6 +108,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   bool useExperimentalCudfReader_;
 
+  cudf::data_type configuredTimestampType_;
+  cudf::data_type readerTimestampType_;
+
   // Cached combined subfield filter expression owned by 'subfieldTree_'.
   cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
