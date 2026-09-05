@@ -69,6 +69,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   add_executable(
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
+    IcebergEqualityDeleteWriterTest.cpp
     IcebergInsertTest.cpp
     IcebergParquetStatsTest.cpp
     IcebergSessionCredentialsE2ETest.cpp

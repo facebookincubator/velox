@@ -79,6 +79,7 @@ IcebergInsertTableHandlePtr makeDeletionVectorHandleWithExisting(
       /*compressionKind=*/std::nullopt,
       /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
       IcebergInsertTableHandle::WriteKind::kDeletionVector,
+      /*equalityFieldIds=*/std::vector<int32_t>{},
       std::move(existingDeletionVectors));
 }
 
