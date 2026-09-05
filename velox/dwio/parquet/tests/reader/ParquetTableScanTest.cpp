@@ -29,6 +29,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/type/Filter.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -2288,6 +2289,8 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
   auto keyAt = [](int32_t keyIndex) {
     return HugeInt::build(/*hi=*/keyIndex + 1, kLowBits);
   };
+  const auto minScanKey = keyAt(3);
+  const auto maxScanKey = keyAt(9);
 
   constexpr vector_size_t kNumRows = 20;
   std::vector<int128_t> factKeys;
@@ -2313,6 +2316,9 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
                buildKeyIndexes.begin(), buildKeyIndexes.end(), keyIndex) !=
         buildKeyIndexes.end();
   };
+  auto passesScanFilter = [&](int128_t key) {
+    return key >= minScanKey && key <= maxScanKey;
+  };
 
   auto fact = makeRowVector(
       {"k", "payload"},
@@ -2332,7 +2338,7 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
   std::vector<int64_t> expectedBuildPayloads;
   for (auto row = 0; row < kNumRows; ++row) {
     const auto keyIndex = row % 10;
-    if (containsBuildKeyIndex(keyIndex)) {
+    if (containsBuildKeyIndex(keyIndex) && passesScanFilter(factKeys[row])) {
       expectedKeys.push_back(factKeys[row]);
       expectedPayloads.push_back(payloads[row]);
       expectedBuildPayloads.push_back(100 + keyIndex);
@@ -2354,7 +2360,14 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinId;
   auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(asRowType(fact->type()))
+                  .startTableScan()
+                  .outputType(asRowType(fact->type()))
+                  .subfieldFiltersMap(
+                      common::test::singleSubfieldFilter(
+                          "k",
+                          std::make_unique<common::HugeintRange>(
+                              minScanKey, maxScanKey, /*nullAllowed=*/false)))
+                  .endTableScan()
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"k"},
