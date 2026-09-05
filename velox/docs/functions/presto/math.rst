@@ -60,6 +60,10 @@ Mathematical Functions
     Returns the `cosine similarity <https://en.wikipedia.org/wiki/Cosine_similarity>`_ between the vectors represented as array(real).
     If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
 
+    .. note::
+
+        This overload is only registered when Velox is built with ``VELOX_ENABLE_FAISS=ON``, which is off by default.
+
 .. function:: l2_squared(array(real), array(real)) -> real
 
     Returns the squared `Euclidean distance <https://en.wikipedia.org/wiki/Euclidean_distance>`_ between the vectors represented as array(real).
@@ -73,11 +77,19 @@ Mathematical Functions
 
         SELECT l2_squared(ARRAY[], ARRAY[]); -- NaN
 
+    .. note::
+
+        This function is only registered when Velox is built with ``VELOX_ENABLE_FAISS=ON``, which is off by default.
+
 .. function:: l2_squared(array(double), array(double)) -> double
    :noindex:
 
     Returns the squared `Euclidean distance <https://en.wikipedia.org/wiki/Euclidean_distance>`_ between the vectors represented as array(double).
     If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.
+
+    .. note::
+
+        This overload is only registered when Velox is built with ``VELOX_ENABLE_FAISS=ON``, which is off by default.
 
 .. function:: dot_product(array(real), array(real)) -> real
    :noindex:
@@ -92,6 +104,10 @@ Mathematical Functions
         SELECT dot_product(ARRAY[], ARRAY[2, 3]); -- Throws VeloxUserError
 
         SELECT dot_product(ARRAY[], ARRAY[]); -- NaN
+
+    .. note::
+
+        This overload is only registered when Velox is built with ``VELOX_ENABLE_FAISS=ON``, which is off by default.
 
 .. function:: dot_product(array(double), array(double)) -> double
    :noindex:
