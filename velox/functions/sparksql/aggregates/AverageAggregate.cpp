@@ -30,6 +30,53 @@ class AverageAggregate
   explicit AverageAggregate(TypePtr resultType)
       : AverageAggregateBase<TInput, TAccumulator, TResult>(resultType) {}
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    VELOX_CHECK_EQ(args.size(), 1);
+    auto* rowVector = result->as<RowVector>();
+    rowVector->clearAllNulls();
+
+    if (rows.isAllSelected() && !args[0]->mayHaveNulls()) {
+      rowVector->childAt(1) = BaseVector::createConstant(
+          BIGINT(), int64_t{1}, rows.size(), this->allocator_->pool());
+      if constexpr (std::is_same_v<TInput, TAccumulator>) {
+        rowVector->childAt(0) = args[0];
+      } else {
+        auto* sumVector = rowVector->childAt(0)->asFlatVector<TAccumulator>();
+        sumVector->clearAllNulls();
+        auto* rawSums = sumVector->mutableRawValues();
+        DecodedVector decoded(*args[0], rows);
+        for (vector_size_t row = 0; row < rows.size(); ++row) {
+          rawSums[row] = TAccumulator(decoded.valueAt<TInput>(row));
+        }
+      }
+      return;
+    }
+
+    auto* sumVector = rowVector->childAt(0)->asFlatVector<TAccumulator>();
+    auto* countVector = rowVector->childAt(1)->asFlatVector<int64_t>();
+    sumVector->clearAllNulls();
+    countVector->clearAllNulls();
+    auto* rawSums = sumVector->mutableRawValues();
+    auto* rawCounts = countVector->mutableRawValues();
+    std::fill_n(rawSums, rows.size(), TAccumulator{0});
+    std::fill_n(rawCounts, rows.size(), 0);
+
+    DecodedVector decoded(*args[0], rows);
+    rows.applyToSelected([&](vector_size_t row) {
+      if (!decoded.isNullAt(row)) {
+        rawSums[row] = TAccumulator(decoded.valueAt<TInput>(row));
+        rawCounts[row] = 1;
+      }
+    });
+  }
+
   void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto rowVector = (*result)->as<RowVector>();

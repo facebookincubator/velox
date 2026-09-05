@@ -22,7 +22,7 @@
 #include "folly/Random.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/tests/WriterTestUtils.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/Writer.h"
@@ -149,7 +149,7 @@ TEST_F(WriterChunkingFuzzTest, fuzzComplex) {
         writer.close();
 
         velox::InMemoryReadFile readFile(file);
-        nimble::VeloxReader reader(&readFile, *leafPool_);
+        nimble::BatchReader reader(&readFile, *leafPool_);
         validateChunkSize(
             reader,
             writerOptions.minStreamChunkRawSize,

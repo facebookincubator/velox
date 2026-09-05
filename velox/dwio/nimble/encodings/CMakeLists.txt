@@ -89,6 +89,7 @@ add_library(
   SubIntSplitCostModels.h
   SubIntSplitConfig.h
   SparseBoolEncoding.h
+  SliceEncoding.h
   SimdForBitpackEncoding.h
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h

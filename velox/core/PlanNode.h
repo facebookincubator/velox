@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 
 #include <utility>
 
@@ -57,12 +58,22 @@ struct TransportKind {
 /// Generic representation of InsertTable
 struct InsertTableHandle {
  public:
+  /// @param notNullColumns Throws a user error if any name is empty.
+  InsertTableHandle(
+      const std::string& connectorId,
+      const connector::ConnectorInsertTableHandlePtr&
+          connectorInsertTableHandle,
+      folly::F14FastSet<std::string> notNullColumns);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Legacy constructor. Prefer the overload above, which takes the NOT NULL
+  /// columns. Removed once all callers have migrated.
   InsertTableHandle(
       const std::string& connectorId,
       const connector::ConnectorInsertTableHandlePtr&
           connectorInsertTableHandle)
-      : connectorId_(connectorId),
-        connectorInsertTableHandle_(connectorInsertTableHandle) {}
+      : InsertTableHandle(connectorId, connectorInsertTableHandle, {}) {}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -73,12 +84,19 @@ struct InsertTableHandle {
     return connectorInsertTableHandle_;
   }
 
+  /// Target columns that must not contain nulls. Empty if unconstrained.
+  const folly::F14FastSet<std::string>& notNullColumns() const {
+    return notNullColumns_;
+  }
+
  private:
   // Connector ID
   const std::string connectorId_;
 
   // Write request to a DataSink of that connector type
   const connector::ConnectorInsertTableHandlePtr connectorInsertTableHandle_;
+
+  const folly::F14FastSet<std::string> notNullColumns_;
 };
 
 class SortOrder {
@@ -1559,7 +1577,8 @@ class TableWriteNode : public PlanNode {
   ///   - grouping keys must be a subset of 'columns' (partition columns).
   ///   - grouping keys must not contain duplicates.
   /// @param insertTableHandle Connector-specific handle identifying the
-  /// target table and write operation.
+  /// target table and write operation. Its notNullColumns() must be a subset
+  /// of 'columnNames'.
   /// @param hasPartitioningScheme Whether a partitioning scheme is configured
   /// for shuffles. Controls which query config determines the number of
   /// writer operator instances: 'task_partitioned_writer_count' if true,
@@ -4864,7 +4883,9 @@ class UnnestNode : public PlanNode {
   /// or MAP.
   /// @param unnestNames Names to use for unnested outputs: one name for each
   /// array (element); two names for each map (key and value). The output
-  /// names must appear in the same order as unnestVariables.
+  /// names must appear in the same order as unnestVariables. A std::nullopt
+  /// entry prunes the corresponding output column (not emitted, not
+  /// materialized).
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
   /// @param markerName Optional name for column which indicates whether an
@@ -4881,7 +4902,7 @@ class UnnestNode : public PlanNode {
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
+      std::vector<std::optional<std::string>> unnestNames,
       std::optional<std::string> ordinalityName,
       std::optional<std::string> markerName,
       const PlanNodePtr& source);
@@ -4890,11 +4911,34 @@ class UnnestNode : public PlanNode {
       const PlanNodeId& id,
       std::vector<FieldAccessTypedExprPtr> replicateVariables,
       std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
+      std::vector<std::optional<std::string>> unnestNames,
       std::optional<std::string> ordinalityName,
       std::optional<std::string> markerName,
       std::optional<bool> splitOutput,
       const PlanNodePtr& source);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated. Use the std::vector<std::optional<std::string>> overload.
+  UnnestNode(
+      const PlanNodeId& id,
+      std::vector<FieldAccessTypedExprPtr> replicateVariables,
+      std::vector<FieldAccessTypedExprPtr> unnestVariables,
+      std::vector<std::string> unnestNames,
+      std::optional<std::string> ordinalityName,
+      std::optional<std::string> markerName,
+      const PlanNodePtr& source)
+      : UnnestNode(
+            id,
+            std::move(replicateVariables),
+            std::move(unnestVariables),
+            std::vector<std::optional<std::string>>(
+                unnestNames.begin(),
+                unnestNames.end()),
+            std::move(ordinalityName),
+            std::move(markerName),
+            std::nullopt,
+            source) {}
+#endif
 
   class Builder {
    public:
@@ -4929,7 +4973,7 @@ class UnnestNode : public PlanNode {
       return *this;
     }
 
-    Builder& unnestNames(std::vector<std::string> unnestNames) {
+    Builder& unnestNames(std::vector<std::optional<std::string>> unnestNames) {
       unnestNames_ = std::move(unnestNames);
       return *this;
     }
@@ -4981,7 +5025,7 @@ class UnnestNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> replicateVariables_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> unnestVariables_;
-    std::optional<std::vector<std::string>> unnestNames_;
+    std::optional<std::vector<std::optional<std::string>>> unnestNames_;
     std::optional<std::string> ordinalityName_;
     std::optional<std::string> markerName_;
     std::optional<PlanNodePtr> source_;
@@ -5014,7 +5058,7 @@ class UnnestNode : public PlanNode {
     return unnestVariables_;
   }
 
-  const std::vector<std::string>& unnestNames() const {
+  const std::vector<std::optional<std::string>>& unnestNames() const {
     return unnestNames_;
   }
 
@@ -5051,7 +5095,7 @@ class UnnestNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr> replicateVariables_;
   const std::vector<FieldAccessTypedExprPtr> unnestVariables_;
-  const std::vector<std::string> unnestNames_;
+  const std::vector<std::optional<std::string>> unnestNames_;
   const std::optional<std::string> ordinalityName_;
   const std::optional<std::string> markerName_;
   const std::optional<bool> splitOutput_;

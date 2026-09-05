@@ -14,39 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/nimble/encodings/EncodingSliceFactory.h"
-
-#include <algorithm>
-#include <memory>
-#include <random>
-#include <span>
-#include <string_view>
-#include <type_traits>
-#include <vector>
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 
 #include <gtest/gtest.h>
+
+#include <vector>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
-#include "velox/dwio/nimble/encodings/ConstantEncoding.h"
-#include "velox/dwio/nimble/encodings/DeltaEncoding.h"
-#include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
-#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/ForEncoding.h"
-#include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
-#include "velox/dwio/nimble/encodings/NullableEncoding.h"
-#include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
-#include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
-#include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
-#include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
@@ -72,593 +53,563 @@ class SliceEncodingTest : public ::testing::Test {
     return result;
   }
 
-  template <typename EncodingType>
-  nimble::Vector<typename EncodingType::cppDataType> makeValuesForEncoding() {
-    using DataType = typename EncodingType::cppDataType;
-    if constexpr (std::is_same_v<
-                      EncodingType,
-                      nimble::ConstantEncoding<DataType>>) {
-      return makeVector<DataType>(
-          {static_cast<DataType>(7),
-           static_cast<DataType>(7),
-           static_cast<DataType>(7),
-           static_cast<DataType>(7),
-           static_cast<DataType>(7),
-           static_cast<DataType>(7)});
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::MainlyConstantEncoding<DataType>>) {
-      return makeVector<DataType>(
-          {static_cast<DataType>(10),
-           static_cast<DataType>(10),
-           static_cast<DataType>(12),
-           static_cast<DataType>(10),
-           static_cast<DataType>(14),
-           static_cast<DataType>(10)});
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::HuffmanEncoding<DataType>>) {
-      return makeVector<DataType>(
-          {static_cast<DataType>(10),
-           static_cast<DataType>(11),
-           static_cast<DataType>(10),
-           static_cast<DataType>(12),
-           static_cast<DataType>(10),
-           static_cast<DataType>(13)});
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::ALPEncoding<DataType>>) {
-      return makeVector<DataType>(
-          {static_cast<DataType>(1.25),
-           static_cast<DataType>(2.5),
-           static_cast<DataType>(3.75),
-           static_cast<DataType>(4.0),
-           static_cast<DataType>(5.125),
-           static_cast<DataType>(6.25)});
-    } else {
-      return makeVector<DataType>(
-          {static_cast<DataType>(10),
-           static_cast<DataType>(11),
-           static_cast<DataType>(12),
-           static_cast<DataType>(13),
-           static_cast<DataType>(14),
-           static_cast<DataType>(15)});
-    }
-  }
-
-  template <typename EncodingType>
-  nimble::Vector<typename EncodingType::cppDataType>
-  makeRandomValuesForEncoding(std::mt19937& rng, uint32_t rowCount) {
-    using DataType = typename EncodingType::cppDataType;
-    nimble::Vector<DataType> values{pool_.get()};
-    values.reserve(rowCount);
-
-    const auto nextIntegerValue = [&] {
-      return static_cast<DataType>(
-          std::uniform_int_distribution<uint32_t>{0, 1024}(rng));
-    };
-
-    if constexpr (std::is_same_v<
-                      EncodingType,
-                      nimble::ConstantEncoding<DataType>>) {
-      const auto value = nextIntegerValue();
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        values.push_back(value);
-      }
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::MainlyConstantEncoding<DataType>>) {
-      const auto commonValue = nextIntegerValue();
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        values.push_back(i % 5 == 2 ? nextIntegerValue() : commonValue);
-      }
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::HuffmanEncoding<DataType>>) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        values.push_back(
-            static_cast<DataType>(
-                std::uniform_int_distribution<uint32_t>{0, 7}(rng)));
-      }
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::PFOREncoding<DataType>>) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        values.push_back(
-            static_cast<DataType>(
-                std::uniform_int_distribution<uint32_t>{0, 15}(rng)));
-      }
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::ALPEncoding<DataType>>) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        values.push_back(
-            static_cast<DataType>(
-                std::uniform_int_distribution<uint32_t>{0, 4096}(rng) / 4.0));
-      }
-    } else if constexpr (std::is_same_v<
-                             EncodingType,
-                             nimble::RLEEncoding<DataType>>) {
-      while (values.size() < rowCount) {
-        const auto value = nextIntegerValue();
-        const auto runLength =
-            std::uniform_int_distribution<uint32_t>{1, 8}(rng);
-        for (uint32_t i = 0; i < runLength && values.size() < rowCount; ++i) {
-          values.push_back(value);
-        }
-      }
-    } else {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        values.push_back(nextIntegerValue());
-      }
-    }
-
-    return values;
-  }
-
   std::unique_ptr<nimble::Encoding> createEncoding(std::string_view encoded) {
-    return nimble::EncodingFactory{}.create(
-        *pool_, encoded, [&](uint32_t totalLength) {
-          auto& buffer = stringBuffers_.emplace_back(
-              velox::AlignedBuffer::allocate<char>(totalLength, pool_.get()));
-          return buffer->asMutable<void>();
+    return createEncoding(encoded, nimble::Encoding::Options{});
+  }
+
+  // Reads the encoded blob with the given options. Matches the options used
+  // at write time -- required when useVarintRowCount is set, otherwise the
+  // outer prefix parses wrong and any nested construction cascades.
+  std::unique_ptr<nimble::Encoding> createEncoding(
+      std::string_view encoded,
+      const nimble::Encoding::Options& options) {
+    return nimble::EncodingFactory{options}.create(
+        *pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
         });
   }
 
   std::string_view
   slice(std::string_view encoded, uint32_t offset, uint32_t length) {
+    return slice(encoded, offset, length, nimble::Encoding::Options{});
+  }
+
+  // Slices the encoded blob with the given options. Matches the options used
+  // at write time -- required when a per-encoding option (e.g.
+  // useVarintRowCount) must be honoured through the factory dispatch.
+  std::string_view slice(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      const nimble::Encoding::Options& options) {
     return nimble::EncodingFactory::slice(
-        encoded, offset, length, *buffer_, nimble::Encoding::Options{});
+        encoded, offset, length, *buffer_, options);
   }
 
   template <typename T>
-  std::vector<T>
-  stdVector(const nimble::Vector<T>& values, uint32_t offset, uint32_t length) {
-    return std::vector<T>(
-        values.begin() + offset, values.begin() + offset + length);
-  }
-
-  template <typename EncodingType, typename T>
-  void expectSliceMaterializes(
-      std::string_view name,
-      nimble::EncodingType expectedEncodingType,
-      const nimble::Vector<T>& values,
-      uint32_t offset,
-      uint32_t length) {
-    SCOPED_TRACE(name);
-    const auto encoded =
-        nimble::test::Encoder<EncodingType>::encode(*buffer_, values);
-
-    const auto sliced = slice(encoded, offset, length);
-    EXPECT_NE(sliced.data(), encoded.data());
-
-    auto encoding = createEncoding(sliced);
-
-    EXPECT_EQ(encoding->encodingType(), expectedEncodingType);
-    EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
-    EXPECT_EQ(encoding->rowCount(), length);
-
-    nimble::Vector<T> output{pool_.get(), length};
-    encoding->materialize(length, output.data());
-
-    EXPECT_EQ(
-        std::vector<T>(output.begin(), output.end()),
-        stdVector(values, offset, length));
-  }
-
-  template <typename EncodingType, typename T>
-  void expectFactorySliceMaterializes(
-      const nimble::Vector<T>& values,
-      uint32_t offset,
-      uint32_t length) {
-    const auto encoded =
-        nimble::test::Encoder<EncodingType>::encode(*buffer_, values);
-    const auto sliced = slice(encoded, offset, length);
-    auto encoding = createEncoding(sliced);
-
-    auto expectedEncodingType =
-        nimble::test::Encoder<EncodingType>::encodingType();
-    if constexpr (std::is_same_v<
-                      EncodingType,
-                      nimble::MainlyConstantEncoding<T>>) {
-      const auto fullRange = offset == 0 && length == values.size();
-      bool onlyCommonRows{true};
-      for (uint32_t row = offset; row < offset + length; ++row) {
-        onlyCommonRows &= row % 5 != 2;
-      }
-      if (!fullRange && onlyCommonRows) {
-        expectedEncodingType = nimble::EncodingType::Constant;
-      }
-    }
-
-    EXPECT_EQ(encoding->encodingType(), expectedEncodingType);
-    EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
-    EXPECT_EQ(encoding->rowCount(), length);
-
-    nimble::Vector<T> output{pool_.get(), length};
-    encoding->materialize(length, output.data());
-
-    EXPECT_EQ(
-        std::vector<T>(output.begin(), output.end()),
-        stdVector(values, offset, length));
-  }
-
-  template <typename EncodingType>
-  void expectBoolSliceMaterializes(
-      std::string_view name,
-      nimble::EncodingType expectedEncodingType,
-      const nimble::Vector<bool>& values,
-      uint32_t offset,
-      uint32_t length) {
-    SCOPED_TRACE(name);
-    const auto encoded =
-        nimble::test::Encoder<EncodingType>::encode(*buffer_, values);
-
-    const auto sliced = slice(encoded, offset, length);
-    EXPECT_NE(sliced.data(), encoded.data());
-
-    auto encoding = createEncoding(sliced);
-
-    EXPECT_EQ(encoding->encodingType(), expectedEncodingType);
-    EXPECT_EQ(encoding->dataType(), nimble::DataType::Bool);
-    EXPECT_EQ(encoding->rowCount(), length);
-
-    nimble::Vector<bool> output{pool_.get(), length};
-    encoding->materialize(length, output.data());
-
-    EXPECT_EQ(
-        std::vector<bool>(output.begin(), output.end()),
-        stdVector(values, offset, length));
+  std::vector<T> materialize(nimble::Encoding& encoding, uint32_t rowCount) {
+    nimble::Vector<T> output{pool_.get(), rowCount};
+    encoding.materialize(rowCount, output.data());
+    return std::vector<T>(output.begin(), output.end());
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<nimble::Buffer> buffer_;
-  std::vector<velox::BufferPtr> stringBuffers_;
 };
 
-template <typename Encoding>
-struct SliceEncodingConfig {
-  using EncodingType = Encoding;
-};
-
-using SliceEncodingTypes = ::testing::Types<
-    SliceEncodingConfig<nimble::TrivialEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::DictionaryEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::FixedBitWidthEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::VarintEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::RLEEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::ConstantEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::MainlyConstantEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::DeltaEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::BlockBitPackingEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::PFOREncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::SimdForBitpackEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::HuffmanEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::ForEncoding<uint32_t>>,
-    SliceEncodingConfig<nimble::ALPEncoding<double>>>;
-
-template <typename Config>
-class SliceEncodingTypedTest : public SliceEncodingTest {};
-
-TYPED_TEST_CASE(SliceEncodingTypedTest, SliceEncodingTypes);
-
-TYPED_TEST(SliceEncodingTypedTest, materializesRange) {
-  using EncodingType = typename TypeParam::EncodingType;
-  const auto values = this->template makeValuesForEncoding<EncodingType>();
-  constexpr uint32_t offset{1};
-  constexpr uint32_t length{3};
-
-  this->template expectSliceMaterializes<EncodingType>(
-      nimble::toString(nimble::test::Encoder<EncodingType>::encodingType()),
-      nimble::test::Encoder<EncodingType>::encodingType(),
-      values,
-      offset,
-      length);
-}
-
-TYPED_TEST(SliceEncodingTypedTest, rejectsZeroLengthRange) {
-  using EncodingType = typename TypeParam::EncodingType;
-  const auto values = this->template makeValuesForEncoding<EncodingType>();
+TEST_F(SliceEncodingTest, wrapsWithoutSlicing) {
+  const auto values = makeVector<int32_t>({10, 10, 12, 10, 14, 10});
   const auto encoded =
-      nimble::test::Encoder<EncodingType>::encode(*this->buffer_, values);
-
-  NIMBLE_ASSERT_THROW(this->slice(encoded, /*offset=*/0, /*length=*/0), "");
-}
-
-TEST_F(SliceEncodingTest, dictionaryRejectsZeroLengthRange) {
-  const auto values = makeVector<uint32_t>({10, 11, 10, 12});
-  const auto encoded =
-      nimble::test::Encoder<nimble::DictionaryEncoding<uint32_t>>::encode(
+      nimble::test::Encoder<nimble::MainlyConstantEncoding<int32_t>>::encode(
           *buffer_, values);
 
-  NIMBLE_ASSERT_THROW(
-      slice(encoded, /*offset=*/1, /*length=*/0), "Cannot slice zero rows.");
-}
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, {});
 
-TYPED_TEST(SliceEncodingTypedTest, materializesRandomRanges) {
-  using EncodingType = typename TypeParam::EncodingType;
-  constexpr uint32_t kIterations{64};
-  std::mt19937 rng{
-      0x5eed0000u +
-      static_cast<uint32_t>(
-          nimble::test::Encoder<EncodingType>::encodingType())};
+  // The payload still carries every source row, so it is larger than the
+  // source rather than smaller: the slice was recorded, not performed.
+  EXPECT_GT(wrapped.size(), encoded.size());
 
-  for (uint32_t iteration = 0; iteration < kIterations; ++iteration) {
-    SCOPED_TRACE(testing::Message() << "iteration=" << iteration);
-    constexpr bool kRequiresAtLeastTwoRows = std::is_same_v<
-        EncodingType,
-        nimble::HuffmanEncoding<typename EncodingType::cppDataType>>;
-    const auto rowCount = std::uniform_int_distribution<uint32_t>{
-        kRequiresAtLeastTwoRows ? 2U : 1U, 128}(rng);
-    const auto values =
-        this->template makeRandomValuesForEncoding<EncodingType>(rng, rowCount);
-    const auto offset = std::uniform_int_distribution<uint32_t>{
-        0, rowCount - (kRequiresAtLeastTwoRows ? 2U : 1U)}(rng);
-    const auto length = std::uniform_int_distribution<uint32_t>{
-        kRequiresAtLeastTwoRows ? 2U : 1U, rowCount - offset}(rng);
-
-    SCOPED_TRACE(
-        testing::Message() << "rowCount=" << rowCount << ", offset=" << offset
-                           << ", length=" << length);
-    this->template expectFactorySliceMaterializes<EncodingType>(
-        values, offset, length);
-  }
-}
-
-TEST_F(SliceEncodingTest, materializesNumericRange) {
-  const auto values = makeVector<int32_t>({10, 11, 12, 13, 14, 15});
-  const auto encoded =
-      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/2, /*length=*/3);
-  EXPECT_NE(sliced.data(), encoded.data());
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Trivial);
+  auto encoding = createEncoding(wrapped);
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Slice);
   EXPECT_EQ(encoding->dataType(), nimble::DataType::Int32);
-  EXPECT_EQ(encoding->rowCount(), 3);
+  // The row count is the slice length, not the source's.
+  EXPECT_EQ(encoding->rowCount(), 4);
 
-  nimble::Vector<int32_t> output{pool_.get(), 3};
-  encoding->materialize(3, output.data());
-
-  const std::vector<int32_t> expected{12, 13, 14};
-  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
+  const std::vector<int32_t> expected{10, 12, 10, 14};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 4), expected);
 }
 
-TEST_F(SliceEncodingTest, fullRangeCopiesToOutputBuffer) {
-  const auto values = makeVector<int32_t>({10, 11, 12, 13});
-  const auto encoded =
-      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/0, /*length=*/4);
-
-  EXPECT_NE(sliced.data(), encoded.data());
-  EXPECT_EQ(sliced, encoded);
-}
-
-TEST_F(SliceEncodingTest, materializesAfterSkip) {
-  const auto values = makeVector<int32_t>({10, 11, 12, 13, 14, 15});
-  const auto encoded =
-      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/4);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-  encoding->skip(2);
-
-  nimble::Vector<int32_t> output{pool_.get(), 2};
-  encoding->materialize(2, output.data());
-
-  const std::vector<int32_t> expected{13, 14};
-  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
-}
-
-TEST_F(SliceEncodingTest, materializesStringRange) {
-  const auto values =
-      makeVector<std::string_view>({"alpha", "beta", "gamma", "delta"});
-  const auto encoded =
-      nimble::test::Encoder<nimble::TrivialEncoding<std::string_view>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/2);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  EXPECT_NE(sliced.find("beta"), std::string_view::npos);
-  EXPECT_NE(sliced.find("gamma"), std::string_view::npos);
-  EXPECT_EQ(sliced.find("alpha"), std::string_view::npos);
-  EXPECT_EQ(sliced.find("delta"), std::string_view::npos);
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Trivial);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::String);
-  EXPECT_EQ(encoding->rowCount(), 2);
-
-  nimble::Vector<std::string_view> output{pool_.get(), 2};
-  encoding->materialize(2, output.data());
-
-  const std::vector<std::string_view> expected{"beta", "gamma"};
-  EXPECT_EQ(
-      std::vector<std::string_view>(output.begin(), output.end()), expected);
-}
-
-TEST_F(SliceEncodingTest, materializesBoolBits) {
-  const auto values = makeVector<bool>({true, false, true, true, false});
-  const auto encoded =
-      nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/3);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Trivial);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Bool);
-  EXPECT_EQ(encoding->rowCount(), 3);
-
-  uint64_t bits{0};
-  encoding->materializeBoolsAsBits(/*rowCount=*/3, &bits, /*begin=*/0);
-
-  EXPECT_FALSE(velox::bits::isBitSet(&bits, 0));
-  EXPECT_TRUE(velox::bits::isBitSet(&bits, 1));
-  EXPECT_TRUE(velox::bits::isBitSet(&bits, 2));
-}
-
-TEST_F(SliceEncodingTest, materializesConstantRangeWithoutWrapper) {
-  const auto values = makeVector<int32_t>({7, 7, 7, 7, 7});
-  const auto encoded =
-      nimble::test::Encoder<nimble::ConstantEncoding<int32_t>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/2, /*length=*/2);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Constant);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Int32);
-  EXPECT_EQ(encoding->rowCount(), 2);
-
-  nimble::Vector<int32_t> output{pool_.get(), 2};
-  encoding->materialize(2, output.data());
-
-  const std::vector<int32_t> expected{7, 7};
-  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
-}
-
-TEST_F(SliceEncodingTest, materializesRleRangeWithoutWrapper) {
-  const auto values = makeVector<int32_t>({10, 10, 11, 11, 11, 12, 12});
-  const auto encoded =
-      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
-          *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/5);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::RLE);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Int32);
-  EXPECT_EQ(encoding->rowCount(), 5);
-
-  nimble::Vector<int32_t> output{pool_.get(), 5};
-  encoding->materialize(5, output.data());
-
-  const std::vector<int32_t> expected{10, 11, 11, 11, 12};
-  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
-}
-
-TEST_F(SliceEncodingTest, materializesRleBoolRangeWithoutWrapper) {
-  const auto values = makeVector<bool>({false, false, true, true, true, false});
-  const auto encoded = nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
-      *buffer_, values);
-
-  const auto sliced = slice(encoded, /*offset=*/2, /*length=*/3);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::RLE);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Bool);
-  EXPECT_EQ(encoding->rowCount(), 3);
-
-  uint64_t bits{0};
-  encoding->materializeBoolsAsBits(/*rowCount=*/3, &bits, /*begin=*/0);
-
-  EXPECT_TRUE(velox::bits::isBitSet(&bits, 0));
-  EXPECT_TRUE(velox::bits::isBitSet(&bits, 1));
-  EXPECT_TRUE(velox::bits::isBitSet(&bits, 2));
-}
-
-TEST_F(SliceEncodingTest, materializesFixedBitWidthRangeWithoutWrapper) {
+TEST_F(SliceEncodingTest, wrapsZeroOffset) {
   const auto values = makeVector<int32_t>({10, 11, 12, 13, 14});
   const auto encoded =
-      nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
           *buffer_, values);
 
-  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/3);
-  EXPECT_NE(sliced.data(), encoded.data());
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/0, /*length=*/3, *buffer_, {});
 
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::FixedBitWidth);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Int32);
+  auto encoding = createEncoding(wrapped);
   EXPECT_EQ(encoding->rowCount(), 3);
 
-  nimble::Vector<int32_t> output{pool_.get(), 3};
-  encoding->materialize(3, output.data());
-
-  const std::vector<int32_t> expected{11, 12, 13};
-  EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
+  const std::vector<int32_t> expected{10, 11, 12};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
 }
 
-TEST_F(SliceEncodingTest, materializesCompressedTrivialRangeWithoutWrapper) {
-  nimble::Vector<uint32_t> values{pool_.get()};
-  values.resize(1024);
-  std::fill(values.begin(), values.end(), 42);
-  const auto encoded =
-      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
-          *buffer_, values, nimble::CompressionType::Zstd);
-
-  const auto sliced = slice(encoded, /*offset=*/128, /*length=*/3);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Trivial);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Uint32);
-  EXPECT_EQ(encoding->rowCount(), 3);
-
-  nimble::Vector<uint32_t> output{pool_.get(), 3};
-  encoding->materialize(3, output.data());
-
-  const std::vector<uint32_t> expected{42, 42, 42};
-  EXPECT_EQ(std::vector<uint32_t>(output.begin(), output.end()), expected);
-}
-
-TEST_F(SliceEncodingTest, materializesNativeSliceForBoolEncoding) {
-  expectBoolSliceMaterializes<nimble::SparseBoolEncoding>(
-      "SparseBool",
-      nimble::EncodingType::SparseBool,
-      makeVector<bool>({false, true, false, false, true, false}),
-      /*offset=*/1,
-      /*length=*/3);
-}
-
-TEST_F(SliceEncodingTest, materializesNativeSliceForNullableEncoding) {
-  const auto values = makeVector<uint32_t>({10, 11, 12, 13, 14, 15});
-  const auto nulls = makeVector<bool>({true, true, true, true, true, true});
-  const auto encoded =
-      nimble::test::Encoder<nimble::NullableEncoding<uint32_t>>::encodeNullable(
-          *buffer_, values, nulls);
-
-  const auto sliced = slice(encoded, /*offset=*/2, /*length=*/3);
-  EXPECT_NE(sliced.data(), encoded.data());
-
-  auto encoding = createEncoding(sliced);
-
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Nullable);
-  EXPECT_EQ(encoding->dataType(), nimble::DataType::Uint32);
-  EXPECT_EQ(encoding->rowCount(), 3);
-
-  nimble::Vector<uint32_t> output{pool_.get(), 3};
-  encoding->materialize(3, output.data());
-
-  const std::vector<uint32_t> expected{12, 13, 14};
-  EXPECT_EQ(std::vector<uint32_t>(output.begin(), output.end()), expected);
-}
-
-TEST_F(SliceEncodingTest, rejectsOutOfRangeSlice) {
+TEST_F(SliceEncodingTest, wrapsFullRange) {
   const auto values = makeVector<int32_t>({10, 11, 12});
   const auto encoded =
       nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
           *buffer_, values);
 
-  NIMBLE_ASSERT_THROW(slice(encoded, /*offset=*/2, /*length=*/2), "");
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/0, /*length=*/3, *buffer_, {});
+
+  auto encoding = createEncoding(wrapped);
+  EXPECT_EQ(encoding->rowCount(), 3);
+
+  const std::vector<int32_t> expected{10, 11, 12};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, wrapsRle) {
+  const auto values = makeVector<int32_t>({10, 10, 11, 11, 11, 12, 12});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/5, *buffer_, {});
+
+  auto encoding = createEncoding(wrapped);
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Slice);
+  EXPECT_EQ(encoding->rowCount(), 5);
+
+  const std::vector<int32_t> expected{10, 11, 11, 11, 12};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 5), expected);
+}
+
+TEST_F(SliceEncodingTest, wrapsBoolRle) {
+  // Bool is the null-stream case: StreamSlicer reads a sliced bool stream back
+  // through skip() + materializeBoolsAsBits() before any consumer sees it, so
+  // the wrapper has to honour both against the slice rather than the source.
+  const auto values =
+      makeVector<bool>({false, false, true, true, true, false, true});
+  const auto encoded = nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+      *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<bool>::wrap(
+      encoded, /*offset=*/2, /*length=*/4, *buffer_, {});
+
+  auto encoding = createEncoding(wrapped);
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Slice);
+  EXPECT_EQ(encoding->dataType(), nimble::DataType::Bool);
+  EXPECT_EQ(encoding->rowCount(), 4);
+
+  uint64_t bits{0};
+  encoding->materializeBoolsAsBits(/*rowCount=*/4, &bits, /*begin=*/0);
+  EXPECT_TRUE(velox::bits::isBitSet(&bits, 0));
+  EXPECT_TRUE(velox::bits::isBitSet(&bits, 1));
+  EXPECT_TRUE(velox::bits::isBitSet(&bits, 2));
+  EXPECT_FALSE(velox::bits::isBitSet(&bits, 3));
+}
+
+// --- Deferred RLE run slicing ---------------------------------------------
+//
+// A slice that starts or ends mid-run keeps the boundary runs whole and wraps
+// the result, instead of trimming the two boundary lengths and re-encoding.
+
+TEST_F(SliceEncodingTest, deferredRleMatchesSourceRows) {
+  // 5 runs: 10x3, 11x2, 12x4, 13x1, 14x3 over 13 rows. Sweep every non-empty
+  // range so aligned, mid-run, single-run and full-range cases are all covered
+  // and each must reproduce the source rows exactly.
+  const auto values =
+      makeVector<int32_t>({10, 10, 10, 11, 11, 12, 12, 12, 12, 13, 14, 14, 14});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+
+      auto encoding = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(encoding->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> output{pool_.get(), length};
+      encoding->materialize(length, output.data());
+      ASSERT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredRleWrapsOnlyWhenMidRun) {
+  // Runs: 10x3 [0,3), 11x2 [3,5), 12x4 [5,9), 13x1 [9,10). The length-1 run
+  // covers the aligned single-run edge case; the 10x3 run covers the mid-run
+  // subcases (front only, back only, both boundaries in the same run).
+  const auto values =
+      makeVector<int32_t>({10, 10, 10, 11, 11, 12, 12, 12, 12, 13});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  struct Case {
+    const char* name;
+    uint32_t offset;
+    uint32_t length;
+    nimble::EncodingType expectedType;
+  };
+  for (const auto& testCase : {
+           Case{"alignedSingleRun", 3, 2, nimble::EncodingType::RLE},
+           Case{"alignedMultiRun", 3, 6, nimble::EncodingType::RLE},
+           Case{"alignedSingleRowRun", 9, 1, nimble::EncodingType::RLE},
+           Case{"alignedFullRange", 0, 10, nimble::EncodingType::RLE},
+           Case{"midRunAcrossRuns", 4, 3, nimble::EncodingType::Slice},
+           Case{
+               "midRunInsideSingleRunFrontAndBack",
+               1,
+               1,
+               nimble::EncodingType::Slice},
+           Case{
+               "midRunInsideSingleRunBackOnly",
+               0,
+               2,
+               nimble::EncodingType::Slice},
+           Case{
+               "midRunInsideSingleRunFrontOnly",
+               1,
+               2,
+               nimble::EncodingType::Slice},
+       }) {
+    SCOPED_TRACE(testCase.name);
+    auto encoding =
+        createEncoding(slice(encoded, testCase.offset, testCase.length));
+    EXPECT_EQ(encoding->encodingType(), testCase.expectedType);
+    EXPECT_EQ(encoding->rowCount(), testCase.length);
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredRleHandlesBool) {
+  // Bool RLE is the FlatMap in-map and null-stream case, and the one the
+  // MainlyConstant isCommon child hits.
+  const auto values =
+      makeVector<bool>({false, false, true, true, true, false, true, true});
+  const auto encoded = nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+      *buffer_, values);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      auto encoding = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(encoding->rowCount(), length);
+
+      uint64_t bits{0};
+      encoding->materializeBoolsAsBits(length, &bits, /*begin=*/0);
+      for (uint32_t i = 0; i < length; ++i) {
+        ASSERT_EQ(velox::bits::isBitSet(&bits, i), values[offset + i])
+            << "offset=" << offset << " length=" << length << " row=" << i;
+      }
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, boolSkipIsRelativeToSlice) {
+  const auto values =
+      makeVector<bool>({false, false, true, true, true, false, true});
+  const auto encoded = nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+      *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<bool>::wrap(
+      encoded, /*offset=*/2, /*length=*/4, *buffer_, {});
+
+  auto encoding = createEncoding(wrapped);
+  encoding->skip(2);
+
+  uint64_t bits{0};
+  encoding->materializeBoolsAsBits(/*rowCount=*/2, &bits, /*begin=*/0);
+  EXPECT_TRUE(velox::bits::isBitSet(&bits, 0));
+  EXPECT_FALSE(velox::bits::isBitSet(&bits, 1));
+}
+
+// --- Deferred BlockBitPacking partial-block slicing ----------------------
+//
+// A slice that starts or ends inside a block keeps the boundary blocks whole
+// and wraps the result, instead of unpack+re-packing the partial rows into
+// byte-aligned slots.
+
+// Builds a BlockBitPacking source with several blocks whose bit widths vary --
+// two normal blocks, one constant block (bitWidth == 0), and one raw block
+// (bitWidth == kRawBlockBitWidth). blockSize is 8 so tests cover both aligned
+// and misaligned boundaries across every mode.
+nimble::Vector<int32_t> makeBlockBitPackingSource(
+    velox::memory::MemoryPool* pool) {
+  nimble::Vector<int32_t> values{pool};
+  // Block 0: narrow range [1000..1007], bit-packed at bitWidth=3.
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(1000 + i);
+  }
+  // Block 1: constant 5 -> bitWidth == 0.
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(5);
+  }
+  // Block 2: full 32-bit range -> raw block (bitWidth == 255).
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(
+        i == 3 ? std::numeric_limits<int32_t>::max()
+               : (i == 5 ? std::numeric_limits<int32_t>::min() : i * 100));
+  }
+  // Block 3: narrow again, bit-packed.
+  for (int32_t i = 0; i < 8; ++i) {
+    values.push_back(2000 + i);
+  }
+  return values;
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingMatchesSourceRows) {
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  // blockSize=8, four blocks -- sweep every non-empty range so aligned,
+  // partial-front, partial-back and single-block-interior cases are all
+  // covered against a raw block, a constant block, and two bit-packed ones.
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+
+      auto encoding = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(encoding->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> output{pool_.get(), length};
+      encoding->materialize(length, output.data());
+      ASSERT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapsOnlyWhenPartial) {
+  // Four blocks of 8 rows each. Block-aligned slices come back as a plain
+  // BlockBitPacking; any partial boundary -- front, back, both, or a
+  // single-block interior -- comes back wrapped in a SliceEncoding.
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  struct Case {
+    const char* name;
+    uint32_t offset;
+    uint32_t length;
+    nimble::EncodingType expectedType;
+  };
+  for (const auto& testCase : {
+           Case{
+               "alignedSingleBlock",
+               8,
+               8,
+               nimble::EncodingType::BlockBitPacking},
+           Case{
+               "alignedMultiBlock",
+               8,
+               16,
+               nimble::EncodingType::BlockBitPacking},
+           Case{
+               "alignedFullSource",
+               0,
+               32,
+               nimble::EncodingType::BlockBitPacking},
+           Case{"partialFrontOnly", 3, 5, nimble::EncodingType::Slice},
+           Case{"partialBackOnly", 0, 5, nimble::EncodingType::Slice},
+           Case{"partialAcrossBlocks", 10, 10, nimble::EncodingType::Slice},
+           Case{"partialInsideSingleBlock", 1, 3, nimble::EncodingType::Slice},
+       }) {
+    SCOPED_TRACE(testCase.name);
+    auto encoding =
+        createEncoding(slice(encoded, testCase.offset, testCase.length));
+    EXPECT_EQ(encoding->encodingType(), testCase.expectedType);
+    EXPECT_EQ(encoding->rowCount(), testCase.length);
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapperTrimsToLength) {
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  // Partial slice starting mid-block: the wrapped BlockBitPacking covers 2
+  // full blocks (block 0 + block 1 = 16 rows) and the wrapper trims to
+  // length=10.
+  auto partial = createEncoding(slice(encoded, 3, 10));
+  EXPECT_EQ(partial->rowCount(), 10);
+
+  const std::vector<int32_t> expected(
+      values.begin() + 3, values.begin() + 3 + 10);
+  nimble::Vector<int32_t> out{pool_.get(), 10};
+  partial->materialize(10, out.data());
+  EXPECT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected);
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesInt64) {
+  // Same shape as the int32 test above; the write path is templated over
+  // the physical type, so exercise the 8-byte payload memcpy too.
+  nimble::Vector<int64_t> values{pool_.get()};
+  for (int64_t i = 0; i < 8; ++i) {
+    values.push_back(int64_t{1'000'000'000} + i); // bit-packed narrow range
+  }
+  for (int64_t i = 0; i < 8; ++i) {
+    values.push_back(int64_t{-42}); // constant, bitWidth == 0
+  }
+  for (int64_t i = 0; i < 8; ++i) {
+    values.push_back(
+        i == 3 ? std::numeric_limits<int64_t>::max()
+               : (i == 5 ? std::numeric_limits<int64_t>::min()
+                         : int64_t{1} << (16 + i))); // raw, bitWidth == 255
+  }
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int64_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int64_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int64_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int64_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesPartialLastBlock) {
+  // 30 rows with blockSize=8 -> four blocks, the last with only 6 rows.
+  // Sweep exercises blockRowCount(source, source.numBlocks-1) < blockSize
+  // -- the partial last block's row count must propagate into the wrapped
+  // encoding's rowCount when a slice touches it.
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (int32_t i = 0; i < 30; ++i) {
+    values.push_back(500 + i);
+  }
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesShortSource) {
+  // Source shorter than one block -> source.firstBlockRows < blockSize and
+  // source.numBlocks == 1. Verifies the write path propagates a partial
+  // firstBlockRows into the emitted encoding's header field verbatim.
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (int32_t i = 0; i < 6; ++i) {
+    values.push_back(7000 + i);
+  }
+  nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(slice(encoded, offset, length));
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesVarintRowCount) {
+  // Production StreamSlicer sets useVarintRowCount=true; the write path
+  // stamps the emitted encoding's prefix with the flag, so exercise that.
+  const auto values = makeBlockBitPackingSource(pool_.get());
+  nimble::Encoding::Options writeOptions{
+      .useVarintRowCount = true, .blockBitPackingBlockSize = 8};
+  const auto encoded =
+      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+          *buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          writeOptions);
+
+  const nimble::Encoding::Options varintOptions{.useVarintRowCount = true};
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      const std::vector<int32_t> expected(
+          values.begin() + offset, values.begin() + offset + length);
+      auto deferred = createEncoding(
+          slice(encoded, offset, length, varintOptions), varintOptions);
+      ASSERT_EQ(deferred->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      nimble::Vector<int32_t> out{pool_.get(), length};
+      deferred->materialize(length, out.data());
+      ASSERT_EQ(std::vector<int32_t>(out.begin(), out.end()), expected)
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
+TEST_F(SliceEncodingTest, resetReturnsToSliceStart) {
+  const auto values = makeVector<int32_t>({10, 10, 12, 10, 14, 10});
+  const auto encoded =
+      nimble::test::Encoder<nimble::MainlyConstantEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, {});
+
+  auto encoding = createEncoding(wrapped);
+
+  // reset() must return to the slice start, not to the source's row zero.
+  const std::vector<int32_t> expected{10, 12, 10, 14};
+  for (int pass = 0; pass < 2; ++pass) {
+    EXPECT_EQ(materialize<int32_t>(*encoding, 4), expected) << "pass " << pass;
+    encoding->reset();
+  }
+}
+
+TEST_F(SliceEncodingTest, skipsWithinSlice) {
+  const auto values = makeVector<int32_t>({10, 11, 12, 13, 14, 15});
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/2, /*length=*/4, *buffer_, {});
+
+  auto encoding = createEncoding(wrapped);
+  encoding->skip(1);
+
+  const std::vector<int32_t> expected{13, 14, 15};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
 }

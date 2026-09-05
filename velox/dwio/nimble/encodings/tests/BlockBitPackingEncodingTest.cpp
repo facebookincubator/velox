@@ -302,9 +302,14 @@ TEST_F(BlockBitPackingEncodingTest, compressionRoundTrip) {
 TEST_F(BlockBitPackingEncodingTest, slice) {
   using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
+  // Ranges whose boundaries sit inside a block come back wrapped in a
+  // SliceEncoding; ranges that hit block boundaries stay a plain
+  // BlockBitPacking. The last range covers exactly the partial trailing block
+  // (137 rows).
   struct Range {
     uint32_t offset;
     uint32_t length;
+    nimble::EncodingType expectedType;
   };
 
   std::vector<uint32_t> input(blockSize * 3 + 137);
@@ -322,11 +327,18 @@ TEST_F(BlockBitPackingEncodingTest, slice) {
   const auto encoded = nimble::test::Encoder<Enc>::encode(*buffer_, values);
 
   for (const auto range :
-       {Range{/*offset=*/0, /*length=*/128},
-        Range{/*offset=*/blockSize - 13, /*length=*/64},
-        Range{/*offset=*/blockSize + 17, /*length=*/blockSize + 29},
+       {Range{/*offset=*/0,
+              /*length=*/128,
+              nimble::EncodingType::Slice},
+        Range{/*offset=*/blockSize - 13,
+              /*length=*/64,
+              nimble::EncodingType::Slice},
+        Range{/*offset=*/blockSize + 17,
+              /*length=*/blockSize + 29,
+              nimble::EncodingType::Slice},
         Range{/*offset=*/static_cast<uint32_t>(input.size() - 137),
-              /*length=*/137}}) {
+              /*length=*/137,
+              nimble::EncodingType::BlockBitPacking}}) {
     SCOPED_TRACE(
         testing::Message() << "offset=" << range.offset
                            << " length=" << range.length);
@@ -334,14 +346,10 @@ TEST_F(BlockBitPackingEncodingTest, slice) {
     const auto sliced = nimble::EncodingFactory::slice(
         encoded, range.offset, range.length, sliceBuffer);
 
-    EXPECT_EQ(
-        nimble::EncodingPrefix::encodingType(sliced),
-        nimble::EncodingType::BlockBitPacking);
-    EXPECT_EQ(
-        nimble::EncodingPrefix::readRowCount(sliced, /*useVarint=*/false),
-        range.length);
+    EXPECT_EQ(nimble::EncodingPrefix::encodingType(sliced), range.expectedType);
 
     auto encoding = nimble::EncodingFactory{}.create(*pool_, sliced, nullptr);
+    EXPECT_EQ(encoding->rowCount(), range.length);
     std::vector<uint32_t> output(range.length);
     encoding->materialize(range.length, output.data());
     const std::vector<uint32_t> expected{
@@ -489,8 +497,11 @@ TEST_F(BlockBitPackingEncodingTest, sliceCompressedSource) {
   const auto encoded = nimble::test::Encoder<Enc>::encode(
       *buffer_, values, nimble::CompressionType::Zstd);
 
-  constexpr uint32_t kOffset{31};
-  constexpr uint32_t kLength{blockSize + 7};
+  // Block-aligned so the slice stays a plain BlockBitPacking rather than
+  // coming back wrapped in a SliceEncoding -- the compression-type byte read
+  // below is only meaningful at the BlockBitPacking header offset.
+  constexpr uint32_t kOffset{0};
+  constexpr uint32_t kLength{blockSize};
   nimble::Buffer sliceBuffer{*pool_};
   const auto sliced =
       nimble::EncodingFactory::slice(encoded, kOffset, kLength, sliceBuffer);

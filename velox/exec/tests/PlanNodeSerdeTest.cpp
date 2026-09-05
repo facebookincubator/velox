@@ -635,6 +635,19 @@ TEST_F(PlanNodeSerdeTest, unnest) {
              .unnest({"c0"}, {"c1"}, "ordinal", "emptyUnnestValue")
              .planNode();
   testSerde(plan);
+
+  // A std::nullopt unnest name (pruned column) must round-trip through serde:
+  // prune the array element and the map value, keep the map key.
+  plan = PlanBuilder()
+             .values({data})
+             .unnest(
+                 {"c0"},
+                 {"c1", "c2"},
+                 std::vector<std::optional<std::string>>{
+                     std::nullopt, "c2_k", std::nullopt},
+                 "ordinal")
+             .planNode();
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, values) {
@@ -777,6 +790,17 @@ TEST_F(PlanNodeSerdeTest, write) {
              .values(data_)
              .tableWrite("targetDirectory")
              .planNode();
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, writeWithNotNullColumns) {
+  auto plan = PlanBuilder(pool_.get())
+                  .values(data_)
+                  .startTableWriter()
+                  .outputDirectoryPath("targetDirectory")
+                  .notNullColumns({"c0", "c2"})
+                  .endTableWriter()
+                  .planNode();
   testSerde(plan);
 }
 

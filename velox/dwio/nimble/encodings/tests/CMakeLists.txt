@@ -39,6 +39,7 @@ add_executable(
   DictionaryEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
+  EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp

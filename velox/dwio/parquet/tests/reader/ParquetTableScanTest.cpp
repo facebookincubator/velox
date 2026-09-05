@@ -1397,6 +1397,184 @@ TEST_F(ParquetTableScanTest, testColumnNotExists) {
       "SELECT a, b, NULL, NULL, NULL FROM tmp");
 }
 
+// The filters reference whole structs without projecting or filtering their
+// children. The first struct has a repeated branch before a scalar sibling;
+// the second has scalar children only.
+TEST_F(ParquetTableScanTest, structFilterByIndex) {
+  const auto id = makeFlatVector<int64_t>({1, 2, 3});
+  const auto detailElements = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({"Janet", "John", "Susan"}),
+          makeFlatVector<std::string>({"Jones", "Smith", "Lee"}),
+      });
+  const auto details =
+      makeArrayVector(std::vector<vector_size_t>{0, 2, 2}, detailElements);
+  const auto name = makeRowVector(
+      {"details", "suffix"},
+      {
+          // A repeated branch appears first in schema order, but a scalar
+          // sibling can provide the struct's levels with less added I/O.
+          details,
+          makeFlatVector<std::string>({"Jr.", "Sr.", "III"}),
+      },
+      [](auto row) { return row == 1; });
+  const auto nickname = makeRowVector(
+      {"value", "suffix"},
+      {
+          makeFlatVector<std::string>({"Jan", "Johnny", "Sue"}),
+          makeFlatVector<std::string>({"J.", "S.", "L."}),
+      },
+      [](auto row) { return row == 2; });
+  const auto address = makeFlatVector<std::string>(
+      {"123 Main Street", "567 Maple Drive", "789 Oak Avenue"});
+  const auto vector = makeRowVector(
+      {"id", "name", "nickname", "address"}, {id, name, nickname, address});
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/2, DefaultFlushPolicy::kDefaultBytesInRowGroup);
+  };
+  ParquetWriterOptions options;
+  const auto file = TempFilePath::create();
+  // Split the three rows across two row groups to verify that the hidden leaf
+  // reader is enqueued and repositioned when the row group changes.
+  writeToParquetFile(
+      file->getPath(), {vector}, std::move(writerOptions), options);
+
+  const auto dataColumns = vector->rowType();
+  const auto outputType = ROW("id", BIGINT());
+  const auto plan = PlanBuilder()
+                        .tableScan(
+                            outputType,
+                            {},
+                            "not(is_null(name)) AND not(is_null(nickname))",
+                            dataColumns)
+                        .planNode();
+  const auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+  AssertQueryBuilder(plan)
+      .split(makeSplit(file->getPath()))
+      .assertResults(expected);
+}
+
+// A MAP is the only physical child of a struct with no projected fields. Two
+// entries in the first row must not shift the following null struct, and an
+// empty map must still leave its enclosing struct non-null.
+TEST_F(ParquetTableScanTest, mapStructFilterByIndex) {
+  const auto id = makeFlatVector<int64_t>({1, 2, 3, 4});
+  const auto name = makeRowVector(
+      {"lookup"},
+      {
+          // The MAP supplies repetition and definition levels for the
+          // enclosing struct.
+          makeMapVector(
+              {0, 2, 2, 2},
+              makeFlatVector<int64_t>({10, 20, 30}),
+              makeFlatVector<bool>({true, false, true})),
+      },
+      [](auto row) { return row == 1; });
+  const auto vector = makeRowVector({"id", "name"}, {id, name});
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/2, DefaultFlushPolicy::kDefaultBytesInRowGroup);
+  };
+  const auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {vector}, std::move(writerOptions), {});
+
+  const auto outputType = ROW("id", BIGINT());
+  const auto plan =
+      PlanBuilder()
+          .tableScan(outputType, {}, "not(is_null(name))", vector->rowType())
+          .planNode();
+  const auto expected =
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3, 4})});
+  AssertQueryBuilder(plan)
+      .split(makeSplit(file->getPath()))
+      .assertResults(expected);
+}
+
+// ARRAY elements and MAP values are structs with no projected fields. Recursive
+// row-group setup must follow each struct's synthetic rep/def source through
+// the repeated reader to preserve element and value nullness.
+TEST_F(ParquetTableScanTest, structElementsByName) {
+  const auto id = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+  const auto names = makeRowVector(
+      {"first", "last"},
+      {
+          makeFlatVector<std::string>({
+              "Janet",
+              "John",
+              "Susan",
+              "Martha",
+              "Alex",
+          }),
+          makeFlatVector<std::string>({
+              "Jones",
+              "Smith",
+              "Lee",
+              "Taylor",
+              "Wong",
+          }),
+      },
+      [](auto row) { return row == 1 || row == 4; });
+  // Rows cover multiple elements, empty collections, a null collection, and
+  // null struct elements or values. The final row is in its own row group.
+  const std::vector<vector_size_t> offsets = {0, 2, 2, 2, 2};
+  const auto vector = makeRowVector(
+      {"id", "names", "lookup"},
+      {
+          id,
+          makeArrayVector(offsets, names, {3}),
+          vectorMaker_.mapVector(
+              offsets, makeFlatVector<int64_t>({1, 2, 3, 4, 5}), names, {3}),
+      });
+
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.flushPolicyFactory = []() {
+    return std::make_unique<DefaultFlushPolicy>(
+        /*rowsInRowGroup=*/2, DefaultFlushPolicy::kDefaultBytesInRowGroup);
+  };
+  ParquetWriterOptions options;
+  const auto file = TempFilePath::create();
+  writeToParquetFile(
+      file->getPath(), {vector}, std::move(writerOptions), options);
+
+  const auto emptyRowType = ROW({}, {});
+  const auto outputType =
+      ROW({"id", "names", "lookup"},
+          {BIGINT(), ARRAY(emptyRowType), MAP(BIGINT(), emptyRowType)});
+  const auto plan = PlanBuilder()
+                        .startTableScan()
+                        .outputType(outputType)
+                        .dataColumns(outputType)
+                        .endTableScan()
+                        .planNode();
+
+  const auto emptyRows = makeRowVector(emptyRowType, 5);
+  setNulls(emptyRows, [](auto row) { return row == 1 || row == 4; });
+  const auto expected = makeRowVector(
+      {"id", "names", "lookup"},
+      {
+          id,
+          makeArrayVector(offsets, emptyRows, {3}),
+          vectorMaker_.mapVector(
+              offsets,
+              makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+              emptyRows,
+              {3}),
+      });
+  AssertQueryBuilder(plan)
+      // Force multiple reads within each row group so preset nulls and lengths
+      // are consumed and refreshed without a row-group transition.
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+      .connectorSessionProperty(
+          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+      .split(makeSplit(file->getPath()))
+      .assertResults(expected);
+}
+
 TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
   vector_size_t kSize = 100;
   auto valuesVector = makeRowVector(
@@ -2431,6 +2609,53 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
 
   task.reset();
   waitForAllTasksToBeDeleted();
+}
+
+TEST_F(ParquetTableScanTest, structSkipNulls) {
+  constexpr vector_size_t kNumRows = 500;
+
+  auto id = makeFlatVector<int64_t>(
+      kNumRows, [](auto row) { return static_cast<int64_t>(row); });
+  // A struct that is null for every row -- read for its null-ness only.
+  auto structColumn = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      },
+      [](vector_size_t /*row*/) { return true; });
+
+  auto data = makeRowVector({"id", "s"}, {id, structColumn});
+  auto dataType = asRowType(data->type());
+
+  auto filePath = TempFilePath::create();
+  ParquetWriterOptions options;
+  writeToParquetFile(filePath->getPath(), {data}, options);
+  loadData(dataType, data);
+
+  parse::ParseOptions parseOptions;
+  parseOptions.parseDecimalAsDouble = false;
+  auto plan = PlanBuilder(pool_.get())
+                  .setParseOptions(parseOptions)
+                  .tableScan(
+                      dataType,
+                      {"id >= 200", "s IS NULL"},
+                      /*remainingFilter=*/"",
+                      /*dataColumns=*/nullptr,
+                      /*assignments=*/{})
+                  .planNode();
+
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits = {
+      makeSplit(filePath->getPath())};
+
+  // Small read batch: the leading rows (id < 200) fill whole batches that
+  // 'id >= 200' filters out entirely, so the nulls-only 's' column lags and is
+  // then skipped forward.
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "64")
+      .config(core::QueryConfig::kMaxOutputBatchRows, "64")
+      .splits(splits)
+      .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
 }
 
 int main(int argc, char** argv) {

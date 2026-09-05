@@ -71,6 +71,220 @@ TEST_P(UnnestTest, basicArray) {
   assertQuery(params, "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
 }
 
+TEST_P(UnnestTest, skipArrayElement) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeArrayVector<int32_t>({{10, 11, 12}, {20, 21}}),
+  });
+
+  // Prune the array element: only the replicated column is emitted, one row per
+  // array element.
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .unnest(
+                      {"c0"},
+                      {"c1"},
+                      std::vector<std::optional<std::string>>{std::nullopt})
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+}
+
+TEST_P(UnnestTest, skipMapValue) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<int32_t, double>({{{10, 1.5}, {11, 2.5}}, {{20, 3.5}}}),
+  });
+
+  // Keep only the map key; prune the value.
+  auto plan =
+      PlanBuilder()
+          .values({vector})
+          .unnest(
+              {"c0"},
+              {"c1"},
+              std::vector<std::optional<std::string>>{"c1_k", std::nullopt})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"c0", "c1_k"},
+      {makeFlatVector<int64_t>({1, 1, 2}),
+       makeFlatVector<int32_t>({10, 11, 20})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+}
+
+TEST_P(UnnestTest, skipMapKey) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<int32_t, double>({{{10, 1.5}, {11, 2.5}}, {{20, 3.5}}}),
+  });
+
+  // Keep only the map value; prune the key.
+  auto plan =
+      PlanBuilder()
+          .values({vector})
+          .unnest(
+              {"c0"},
+              {"c1"},
+              std::vector<std::optional<std::string>>{std::nullopt, "c1_v"})
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"c0", "c1_v"},
+      {makeFlatVector<int64_t>({1, 1, 2}),
+       makeFlatVector<double>({1.5, 2.5, 3.5})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+}
+
+TEST_P(UnnestTest, skipMixedArrayAndMap) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeArrayVector<int32_t>({{10, 11}, {20}}),
+      makeMapVector<int32_t, double>({{{100, 1.5}, {101, 2.5}}, {{200, 3.5}}}),
+  });
+
+  // Prune the array element and the map value; keep only the map key.
+  auto plan = PlanBuilder()
+                  .values({vector})
+                  .unnest(
+                      {"c0"},
+                      {"c1", "c2"},
+                      std::vector<std::optional<std::string>>{
+                          std::nullopt, "c2_k", std::nullopt})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"c0", "c2_k"},
+      {makeFlatVector<int64_t>({1, 1, 2}),
+       makeFlatVector<int32_t>({100, 101, 200})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+}
+
+TEST_P(UnnestTest, skipAllArrayToCount) {
+  auto vector = makeRowVector({
+      makeArrayVector<int32_t>({{10, 11, 12}, {20, 21}, {}}),
+  });
+
+  // Prune the only output column with no replicated/ordinality/marker columns:
+  // the unnest output type is empty, but cardinality is preserved. count(1)
+  // over it must equal the total number of array elements.
+  auto plan =
+      PlanBuilder()
+          .values({vector})
+          .unnest(
+              {}, {"c0"}, std::vector<std::optional<std::string>>{std::nullopt})
+          .singleAggregation({}, {"count(1)"})
+          .planNode();
+
+  auto expected =
+      makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{5})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+}
+
+TEST_P(UnnestTest, skipMapKeyWithOrdinalityAndMarker) {
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeMapVector<int32_t, double>({{{10, 1.5}, {11, 2.5}}, {{20, 3.5}}}),
+  });
+
+  // Prune the map key while emitting the value, ordinality and marker columns.
+  // Exercises output-column index bookkeeping when a map column is partially
+  // pruned but trailing ordinality/marker columns remain.
+  auto plan =
+      PlanBuilder()
+          .values({vector})
+          .unnest(
+              {"c0"},
+              {"c1"},
+              std::vector<std::optional<std::string>>{std::nullopt, "c1_v"},
+              "ord",
+              "marker")
+          .planNode();
+
+  auto expected = makeRowVector(
+      {"c0", "c1_v", "ord", "marker"},
+      {makeFlatVector<int64_t>({1, 1, 2}),
+       makeFlatVector<double>({1.5, 2.5, 3.5}),
+       makeFlatVector<int64_t>({1, 2, 1}),
+       makeFlatVector<bool>({true, true, true})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+}
+
+TEST_P(UnnestTest, skipArrayOfRowElement) {
+  // ARRAY(ROW(...)) unnests to a single ROW-typed column. Keeping the name
+  // emits that column; a nullopt name prunes it while preserving cardinality.
+  auto elements = makeRowVector({
+      makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+      makeFlatVector<std::string>({"x", "y", "z", "p", "q"}),
+  });
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>({1, 2}),
+      makeArrayVector({0, 3}, elements),
+  });
+
+  // Keep: the ROW element is emitted as one ROW(BIGINT, VARCHAR) column.
+  auto keepPlan =
+      PlanBuilder()
+          .values({vector})
+          .unnest({"c0"}, {"c1"}, std::vector<std::optional<std::string>>{"e"})
+          .planNode();
+  auto keepExpected = makeRowVector(
+      {"c0", "e"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+       makeRowVector({
+           makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
+           makeFlatVector<std::string>({"x", "y", "z", "p", "q"}),
+       })});
+  AssertQueryBuilder(keepPlan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(keepExpected);
+
+  // Prune: the ROW column is dropped entirely; only the replicated column
+  // remains, with cardinality preserved.
+  auto skipPlan = PlanBuilder()
+                      .values({vector})
+                      .unnest(
+                          {"c0"},
+                          {"c1"},
+                          std::vector<std::optional<std::string>>{std::nullopt})
+                      .planNode();
+  auto skipExpected =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+  AssertQueryBuilder(skipPlan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(skipExpected);
+}
+
 TEST_P(UnnestTest, arrayWithIdentityMap) {
   struct {
     int32_t vectorSize;
@@ -1046,7 +1260,7 @@ TEST_P(UnnestTest, splitOutputNodeOverride) {
         planNodeIdGenerator->next(),
         std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
         unnestFields,
-        std::vector<std::string>{"s_e"},
+        std::vector<std::optional<std::string>>{"s_e"},
         std::nullopt,
         std::nullopt,
         testData.nodeSplitOutput,

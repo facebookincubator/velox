@@ -961,9 +961,9 @@ TEST_P(TestColumnReader, testIntegerRLEv2) {
   EXPECT_CALL(
       streams_, getStreamOrcProxy(2, proto::orc::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), count + 1);
-          }));
+          });
   // col_2's DATA stream
   EXPECT_CALL(
       streams_, getStreamOrcProxy(3, proto::orc::Stream_Kind_DATA, true))
@@ -5061,15 +5061,15 @@ TEST_P(SchemaMismatchTest, testBoolean) {
   auto nulls = folly::make_array<char>(0x7f, 0x55);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
-          }));
+          });
   auto data = folly::make_array<char>(0x7f, 0xaa);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), data.size());
-          }));
+          });
 
   auto size = 100;
   runTest<bool, int8_t>(size);
@@ -5093,9 +5093,9 @@ TEST_P(SchemaMismatchTest, testByte) {
   auto nulls = folly::make_array<char>(0x7f, 0x55);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
-          }));
+          });
 
   constexpr auto round = 10;
   constexpr auto batch = 8;
@@ -5109,9 +5109,9 @@ TEST_P(SchemaMismatchTest, testByte) {
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), data.size());
-          }));
+          });
 
   auto size = 100;
   runTest<int8_t, int16_t>(size);
@@ -5134,18 +5134,18 @@ TEST_P(SchemaMismatchTest, testIntDirect) {
   auto nulls = folly::make_array<char>(0x7f, 0x55);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
-          }));
+          });
 
   // increasing values
   std::array<char, 1024> data;
   writeRange(data.data(), 0, 256);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), data.size());
-          }));
+          });
 
   auto size = 100;
   runTest<int16_t, int32_t>(size);
@@ -5175,9 +5175,9 @@ TEST_P(SchemaMismatchTest, testIntDict) {
   auto nulls = folly::make_array<char>(0x7f, 0x55);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
-          }));
+          });
 
   std::array<char, 1024> data;
   std::vector<uint64_t> v;
@@ -5188,9 +5188,9 @@ TEST_P(SchemaMismatchTest, testIntDict) {
   auto count = writeVuLongs(data.data() + 1, v);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(data.data(), count + 1);
-          }));
+          });
 
   EXPECT_CALL(
       streams_, getStreamProxy(1, proto::Stream_Kind_IN_DICTIONARY, false))
@@ -5233,9 +5233,9 @@ TEST_P(SchemaMismatchTest, testFloat) {
   auto nulls = folly::make_array<char>(0x7f, 0x55);
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_PRESENT, false))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(nulls.data(), nulls.size());
-          }));
+          });
   constexpr auto size = 100;
   std::array<float, size> data;
   for (auto i = 0; i < size; ++i) {
@@ -5243,11 +5243,11 @@ TEST_P(SchemaMismatchTest, testFloat) {
   }
   EXPECT_CALL(streams_, getStreamProxy(1, proto::Stream_Kind_DATA, true))
       .WillRepeatedly(
-          Invoke([&](auto /* unused */, auto /* unused */, auto /* unused */) {
+          [&](auto /* unused */, auto /* unused */, auto /* unused */) {
             return new SeekableArrayInputStream(
                 reinterpret_cast<char*>(data.data()),
                 data.size() * sizeof(float));
-          }));
+          });
 
   runTest<float, double>(size);
 }

@@ -23,6 +23,9 @@ target_link_libraries(
   nimble_serializer
   nimble_stream_data_writer
   nimble_velox_common
+  nimble_shared_dictionary_test_utils
+  nimble_velox_shared_dictionary_config
+  nimble_encodings
   nimble_writer
   nimble_velox_selective
   nimble_velox_schema_utils

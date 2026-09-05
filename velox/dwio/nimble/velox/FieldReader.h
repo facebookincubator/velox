@@ -60,22 +60,27 @@ struct FieldReaderParams {
   /// Executor for parallel decoding of child fields.
   folly::Executor* decodeExecutor{nullptr};
 
-  /// Maximum number of parallel coroutine tasks for child field decoding.
-  /// Children are grouped into this many batches, each decoded sequentially
-  /// within a single coroutine task. 0 disables parallel decoding.
+  /// Maximum planned decode parallelism across the field reader tree. Nested
+  /// scalar stream counts determine how many child-field tasks to create. 0
+  /// disables parallel decoding.
   uint32_t maxDecodeParallelism{0};
 
-  /// Minimum number of child streams per parallel decode task. Ensures each
-  /// coroutine task has enough work to amortize threading overhead.
-  uint32_t minStreamsPerDecodeUnit{1};
+  /// Minimum number of nested scalar streams per planned decode task. Ensures
+  /// each coroutine task has enough work to amortize threading overhead.
+  uint32_t minStreamsPerDecodeTask{1};
+
+  /// Optional leaf pools distributed round-robin among independently decoded
+  /// row children and FlatMap-as-struct values. When provided, the pool count
+  /// must match maxDecodeParallelism. The caller must keep the pools alive
+  /// while returned vectors exist.
+  std::vector<velox::memory::MemoryPool*> decodePools;
 };
 
 class FieldReader {
  public:
   struct Options {
     folly::Executor* decodeExecutor{nullptr};
-    uint32_t maxDecodeParallelism{0};
-    uint32_t minStreamsPerDecodeUnit{1};
+    uint32_t numDecodeTasks{1};
   };
 
   FieldReader(
@@ -101,28 +106,19 @@ class FieldReader {
   virtual std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize()
       const = 0;
 
-  /// Place the next 'count' rows of data into the passed in output vector.
+  /// Places the next 'count' rows of data into the passed output vector.
+  /// Parent readers co_await child readers, allowing nested decoding to yield
+  /// executor threads instead of blocking them.
   ///
   /// NOTE: scatterBitmap is not for external selectivity. External callers must
-  /// leave scatterBitmap nullptr
-  virtual void next(
+  /// leave scatterBitmap nullptr.
+  virtual folly::coro::Task<void> co_next(
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap = nullptr) = 0;
 
-  /// Coroutine version of next(). Used for parallel decoding: parent readers
-  /// co_await children's co_next() via collectAllRange, yielding their thread
-  /// back to the executor. This prevents deadlock from nested parallelism.
-  /// Default implementation wraps the synchronous next() call.
-  virtual folly::coro::Task<void> co_next(
-      uint32_t count,
-      velox::VectorPtr& output,
-      const velox::bits::Bitmap* scatterBitmap = nullptr) {
-    next(count, output, scatterBitmap);
-    co_return;
-  }
-
-  virtual void skip(uint32_t count) = 0;
+  /// Advances past count rows without materializing output.
+  virtual folly::coro::Task<void> co_skip(uint32_t count) = 0;
 
   /// Called at the end of stripe
   virtual void reset();
@@ -137,23 +133,11 @@ class FieldReader {
       uint32_t count,
       velox::VectorPtr& output) const;
 
-  // Computes the number of parallel decode tasks based on max parallelism and
-  // minimum streams per task. The result is clamped to [1, numStreamChildren].
-  uint32_t computeParallelDecodeTaskCount(uint32_t numStreamChildren) const;
-
-  // Returns true if child fields should be decoded in parallel.
-  // Requires at least 2 parallel tasks to justify coroutine/executor overhead.
-  bool parallelDecodeEnabled(uint32_t numChildren) const {
-    return decodeExecutor_ != nullptr &&
-        computeParallelDecodeTaskCount(numChildren) > 1;
-  }
-
   velox::memory::MemoryPool* const pool_;
   const velox::TypePtr type_;
   Decoder* const decoder_;
   folly::Executor* const decodeExecutor_;
-  const uint32_t maxDecodeParallelism_;
-  const uint32_t minStreamsPerDecodeUnit_;
+  const uint32_t numDecodeTasks_;
 };
 
 class FieldReaderFactory {

@@ -55,10 +55,10 @@ class SharedDictionaryTestResolver final : public ExternalDictionaryResolver {
 };
 
 struct SharedDictionarySelectionPolicyOptions {
-  // Force int32 streams toward Dictionary encoding before shared-dictionary
-  // wrapping. Integration tests disable this when they need a mixed direct and
-  // shared-dictionary stripe sequence.
-  bool forceDictionaryForInt32{true};
+  // Force eligible shared-dictionary streams toward Dictionary encoding before
+  // shared-dictionary wrapping. Integration tests disable this when they need a
+  // mixed direct and shared-dictionary stripe sequence.
+  bool forceDictionaryForSharedTypes{true};
 };
 
 /// Installs the shared-dictionary selection policy on writer options.

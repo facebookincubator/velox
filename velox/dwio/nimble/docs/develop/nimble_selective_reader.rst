@@ -35,12 +35,12 @@ selective_nimble_reader_enabled = true
         ├── FileSplitReader
             ├── SelectiveNimbleReader (dwio::common::Reader)
             │
-            │   createReader(): uses VeloxReader temporarily to extract schema/type
+            │   createReader(): uses BatchReader temporarily to extract schema/type
             │   createRowReader(): builds SelectiveNimbleRowReader
             │
             └── SelectiveNimbleRowReader (dwio::common::RowReader)
                   │   next() → own column reader tree
-                  └── TabletReader (direct, no VeloxReader in the loop)
+                  └── TabletReader (direct, no BatchReader in the loop)
 
 Batch Path
 
@@ -56,7 +56,7 @@ selective_nimble_reader_enabled = false
             │   createRowReader(): builds NimbleRowReader
             │
             └── NimbleRowReader (dwio::common::RowReader)
-                  ├── VeloxReader.next()
+                  ├── BatchReader.next()
                   │     ├── FieldReader tree
                   │     └── TabletReader
 
