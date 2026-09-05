@@ -32,7 +32,10 @@ int main(int argc, char** argv) {
   // Signal handler required for ThreadDebugInfoTest
   facebook::velox::process::addDefaultFatalSignalHandler();
   folly::Init init(&argc, &argv, false);
-  facebook::velox::cudf_velox::CudfConfig::getInstance().exchangeLogLevel =
-      FLAGS_exchange_log_level;
+  auto& cudfConfig = facebook::velox::cudf_velox::CudfConfig::getInstance();
+  // Enable the UCX exchange so the Communicator initializes under test;
+  // production code enables it via the "cudf.exchange" session config.
+  cudfConfig.exchange = true;
+  cudfConfig.exchangeLogLevel = FLAGS_exchange_log_level;
   return RUN_ALL_TESTS();
 }
