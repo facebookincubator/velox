@@ -137,9 +137,11 @@ void traverseEncodings(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::SimdForBitpack:
-    // SubIntSplit integration is disabled; treat it as having no nested
-    // encoding to traverse.
+#ifndef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // SubIntSplit integration is disabled in non-experimental builds; treat
+    // it as having no nested encoding to traverse.
     case EncodingType::SubIntSplit:
+#endif
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
     case EncodingType::Slice: {
@@ -416,6 +418,34 @@ void traverseEncodings(
           visitor);
       break;
     }
+    // SubIntSplit integration (re-enabled for
+    // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::SubIntSplit: {
+      const char* pos = stream.data() + dataOffset;
+      const uint8_t splitCount = encoding::read<uint8_t>(pos);
+      encoding::read<uint8_t>(pos); // reserved
+
+      std::vector<uint32_t> sectionBytes(splitCount);
+      for (uint8_t s = 0; s < splitCount; ++s) {
+        encoding::read<uint8_t>(pos); // bitStart
+        encoding::read<uint8_t>(pos); // bitEnd
+        sectionBytes[s] = encoding::readUint32(pos);
+      }
+
+      for (uint8_t s = 0; s < splitCount; ++s) {
+        traverseEncodings(
+            {pos, sectionBytes[s]},
+            level + 1,
+            s,
+            folly::to<std::string>("Section", static_cast<int>(s)),
+            useVarintRowCount,
+            visitor);
+        pos += sectionBytes[s];
+      }
+      break;
+    }
+#endif
     case EncodingType::Sentinel: {
       const char* pos = stream.data() + dataOffset + 8;
       traverseEncodings(

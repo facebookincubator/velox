@@ -267,6 +267,29 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         nestedEncodingReadFactors.emplace_back(entry);
       }
     }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    // SubIntSplit decomposes its input into bit-range segments, each
+    // independently re-encoded via encodeNested(). Segments often look very
+    // different from the original column (narrow, possibly skewed
+    // residuals), so offer additional integer-compression candidates here
+    // that aren't part of the global default read factors. This only affects
+    // direct children of a SubIntSplit node: recursion is bounded because a
+    // child's own encodingType (e.g. PFOR) -- not SubIntSplit -- is what gets
+    // passed to *its* children's createImpl.
+    if (parentEncodingType == EncodingType::SubIntSplit) {
+      for (const auto& pair :
+           {std::pair{EncodingType::PFOR, 0.9f},
+            std::pair{EncodingType::SimdForBitpack, 0.9f},
+            std::pair{EncodingType::BlockBitPacking, 0.9f},
+            std::pair{EncodingType::Delta, 0.85f},
+            std::pair{EncodingType::FOR, 0.85f},
+            std::pair{EncodingType::FrequencyPartition, 0.85f},
+            std::pair{EncodingType::Huffman, 0.85f},
+            std::pair{EncodingType::DeltaBlock, 0.85f}}) {
+        nestedEncodingReadFactors.push_back(pair);
+      }
+    }
+#endif
     UNIQUE_PTR_FACTORY(
         nestedDataType,
         ManualEncodingSelectionPolicy,

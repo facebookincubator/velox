@@ -34,7 +34,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 // Frame of Reference encoding. Divides data into fixed-size frames, storing
 // a reference value per frame and bit-packing the exceptions (value - ref).
@@ -91,6 +90,56 @@ class ForEncoding final
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Statistics-only size estimate for general encoding selection (e.g. as a
+  /// SubIntSplit segment candidate), where only `Statistics<physicalType>` --
+  /// not the raw values -- is available. The local (per-frame) bit width is
+  /// estimated from the average step size scaled to the frame size -- a
+  /// random-walk heuristic where the local range over a frame of
+  /// `kFrameSize` steps grows roughly with avgAbsDelta -- capped by the
+  /// overall range. Per-frame metadata streams are estimated as Trivial,
+  /// matching encode()'s frame size of 128.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics) {
+    if (rowCount == 0) {
+      return EncodingPrefix::kFixedPrefixSize;
+    }
+    constexpr uint32_t kFrameSize = 128;
+    const auto numFrames =
+        static_cast<uint32_t>(velox::bits::divRoundUp(rowCount, kFrameSize));
+
+    const auto fullRange =
+        static_cast<uint64_t>(statistics.max() - statistics.min());
+    const double avgAbsDelta = rowCount > 1
+        ? static_cast<double>(fullRange) / static_cast<double>(rowCount - 1)
+        : 0.0;
+    const double localRange = std::min(
+        static_cast<double>(fullRange),
+        avgAbsDelta * static_cast<double>(kFrameSize) / 2.0);
+    const uint8_t localBits = localRange < 1.0
+        ? uint8_t{0}
+        : static_cast<uint8_t>(
+              velox::bits::bitsRequired(static_cast<uint64_t>(localRange)));
+
+    const uint64_t packedSize = FixedBitArray::bufferSize(rowCount, localBits);
+    const uint64_t bitWidthsSize =
+        TrivialEncoding<uint8_t>::estimateSize(numFrames);
+    const uint64_t referencesSize =
+        TrivialEncoding<physicalType>::estimateSize(numFrames);
+    const uint64_t bitOffsetsSize =
+        TrivialEncoding<uint64_t>::estimateSize(numFrames);
+
+    // EncodingPrefix::kFixedPrefixSize(6) + FOR-specific fixed fields
+    // (compressionType + frameSize + numFrames + enableBitOffsets = 10),
+    // plus each of the four sub-streams' 4-byte size prefix.
+    constexpr uint64_t kForSpecificFixedFieldsSize = 10;
+    return EncodingPrefix::kFixedPrefixSize + kForSpecificFixedFieldsSize + 4 +
+        bitWidthsSize + 4 + referencesSize + 4 + bitOffsetsSize + 4 +
+        packedSize;
+  }
+#endif
 
   std::string debugString(int offset) const final;
 

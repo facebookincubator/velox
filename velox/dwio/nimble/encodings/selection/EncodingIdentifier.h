@@ -68,6 +68,11 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier ExceptionValues = 2;
   };
 
+  struct SubIntSplit {
+    // No named constants: section identifiers are the section index itself
+    // (0..splitCount-1, max 64), used directly by callers.
+  };
+
   struct FrequencyPartition {
     // Partition metadata
     // Eventually we may want to allow for non-power-of-two bit partitions, but
