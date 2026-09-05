@@ -56,6 +56,18 @@ function install_folly {
   if [[ ${VELOX_BUILD_SHARED} != "ON" ]]; then
     FOLLY_FLAGS+=(-DGFLAGS_SHARED=FALSE)
   fi
+  # folly compiles blake3 calls whenever <blake3.h> is on the include path, but
+  # its CMake never links blake3. On macOS the header always resolves through
+  # brew, so a shared folly fails to link without this. Linux installs no
+  # blake3, so the calls compile out there.
+  if [[ ${VELOX_BUILD_SHARED} == "ON" && "$(uname)" == "Darwin" ]]; then
+    local BLAKE3_LDFLAGS
+    BLAKE3_LDFLAGS="-L$(brew --prefix)/lib -lblake3"
+    FOLLY_FLAGS+=(
+      "-DCMAKE_EXE_LINKER_FLAGS=${BLAKE3_LDFLAGS}"
+      "-DCMAKE_SHARED_LINKER_FLAGS=${BLAKE3_LDFLAGS}"
+    )
+  fi
   cmake_install_dir folly "${FOLLY_FLAGS[@]}"
 }
 
