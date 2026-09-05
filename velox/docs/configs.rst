@@ -1346,6 +1346,10 @@ These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apa
      - A custom OAuth credential provider, if specified, will be used to create the client in favor of other
        authentication mechanisms.
        The provider must be registered using "registerGcsOAuthCredentialsProvider" before it can be used.
+   * - gcs.user-agent
+     - string
+     -
+     - Custom user agent product string to include in GCS requests. "velox" is appended by default unless already present in the string.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
