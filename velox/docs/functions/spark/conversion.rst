@@ -40,6 +40,17 @@ behavior for supported cast pairs regardless of the session ANSI setting.
 ``spark_legacy_cast`` applies non-ANSI Spark cast behavior regardless of the
 session ANSI setting.
 
+String boundary trimming
+------------------------
+
+Spark-compatible casts trim leading and trailing string bytes before parsing,
+but the exact trim set depends on the target type. Casts to integral types,
+BOOLEAN, DATE, TIMESTAMP, TIMESTAMP_NTZ, and TIME use Spark UTF8String-style
+trimming, which removes boundary bytes ``0x00`` through ``0x20`` and ``0x7F``.
+Casts to REAL, DOUBLE, and DECIMAL use Java ``String.trim``-style trimming,
+which removes boundary characters ``<= U+0020``. Unicode spaces such as
+``U+2000`` are not trimmed by either path.
+
 Cast from UNKNOWN Type
 ----------------------
 
@@ -101,6 +112,9 @@ Casting a string to an integral type is allowed if the string represents a numbe
 Casting from strings that represent floating-point numbers truncates the
 decimal part of the input value when ANSI mode is disabled; throws an
 error otherwise.
+
+Leading and trailing string bytes are trimmed using Spark UTF8String-style
+trimming before parsing.
 
 Casting from other invalid strings returns NULL when ANSI mode is disabled;
 throws an error otherwise.
@@ -196,6 +210,8 @@ target type produce ``Infinity`` rather than an error, matching Spark.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled; throws an
 error otherwise.
+Leading and trailing string characters are trimmed using Java
+``String.trim``-style trimming before parsing.
 
 Valid examples
 
@@ -230,6 +246,8 @@ The strings `t, f, y, n, 1, 0, yes, no, true, false` and their upper case
 equivalents are allowed to be cast to boolean.
 Casting from invalid strings throws an error when ANSI mode is enabled,
 or returns NULL when ANSI mode is disabled.
+Leading and trailing string bytes are trimmed using Spark UTF8String-style
+trimming before parsing.
 
 Valid examples
 
@@ -350,7 +368,8 @@ For the last two patterns, the trailing ``*`` can represent none or any sequence
   * "1970-01-01 123"
   * "1970-01-01 (BC)"
 
-All leading and trailing UTF8 white-spaces will be trimmed before cast.
+Leading and trailing string bytes are trimmed using Spark UTF8String-style
+trimming before cast.
 
 When ANSI mode is enabled, casting from invalid input values throws an error.
 When ANSI mode is disabled, casting from invalid input values returns NULL.
@@ -414,7 +433,8 @@ Supported format is ``H:m[:s[.SSSSSS]]`` where:
   * ``s`` is an optional second (0-59); omitted seconds default to zero
   * ``SSSSSS`` is optional fractional seconds (0-999999, up to microseconds)
 
-All leading and trailing UTF8 white-spaces are trimmed before casting.
+Leading and trailing string bytes are trimmed using Spark UTF8String-style
+trimming before casting.
 Velox represents Spark ``TIME`` using ``TIME MICRO UTC``, whose values are
 stored as microseconds since midnight (0 to 86,399,999,999).
 
@@ -452,7 +472,8 @@ From varchar
 *(ANSI compliant)*
 
 Casting varchar to a decimal of given precision and scale is allowed.
-The behavior is similar with Presto except Spark allows leading and trailing white-spaces in input varchars.
+The behavior is similar with Presto except Spark allows leading and trailing
+characters trimmed by Java ``String.trim`` in input varchars.
 
 When ANSI mode is enabled, casting from an invalid input value or a value that
 overflows the target precision and scale throws an error. Otherwise, such casts
@@ -695,8 +716,9 @@ Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
 separators, fractional seconds, and leading or trailing spaces. Both ``' '``
 and ``'T'`` date-time separators must be followed immediately by a digit.
-Outer whitespace is trimmed before the parser runs, so a bare trailing
-separator such as ``"2015-03-18 "`` is handled as a date-only value.
+Leading and trailing string bytes are trimmed using Spark UTF8String-style
+trimming before the parser runs, so a bare trailing separator such as
+``"2015-03-18 "`` is handled as a date-only value.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
@@ -778,7 +800,8 @@ Casting a string to timestamp_utc parses the input as a local timestamp,
 not subject to session timezone adjustment.
 Any timezone suffix in the string is accepted but ignored — only the
 parsed timestamp is stored.
-Leading and trailing whitespace is stripped before parsing.
+Leading and trailing string bytes are trimmed using Spark UTF8String-style
+trimming before parsing.
 
 Valid examples
 
