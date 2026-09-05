@@ -206,11 +206,30 @@ class CompileCtx {
 
   void emitCode(std::string_view text);
 
+  /// Appends text at translation-unit scope, ahead of the kernel function and
+  /// inside namespace torch::wave. For an op that codegens something its own
+  /// call names -- a type, a constant table -- rather than passes as data.
+  void emitHelperCode(std::string_view text);
+
+  /// A number unique within this translation unit, for naming what
+  /// emitHelperCode declares. Two congruent nodes share one KernelOperation
+  /// and so ask once, but two different ones may want the same declaration
+  /// under different names.
+  int32_t nextHelperId() {
+    return helperId_++;
+  }
+
   void emitBarrier();
 
   /// Returns true if 'node' reads any input whose producer ran earlier in the
   /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
+
+  /// Returns true if reading 'operand' from memory needs a barrier first:
+  /// something earlier in this same kernel writes the storage it names and no
+  /// barrier has separated the two. 'consumer' is the node about to read it,
+  /// which is not counted as a writer of its own input.
+  bool valueNeedsBarrier(ValueCP operand, NodeCP consumer);
 
   void addInclude(std::string_view header);
 
@@ -283,10 +302,14 @@ class CompileCtx {
   void pushdownFused(NodeCP node);
 
   /// Ends the kernel of every op in 'value's producer chain whose output extent
-  /// is computed on device, so the extent is read back to the host before the
-  /// consuming launch sizes its outputs. Used for a rank > 1 cat / stack, which
-  /// must know every operand's shape on the host to lay the result out.
-  void breakDeviceSizedProducers(ValueCP value);
+  /// the host cannot work out ahead of the launch -- settled on device, or
+  /// known only to the producer's own reserve function -- so the value is
+  /// materialized in an earlier step and its extent is an ordinary frame
+  /// tensor's by the time the consuming launch sizes its outputs. Used for a
+  /// cat / stack that must lay its result out on the host: it needs every
+  /// operand's extent at one point, so one unmeasurable operand would refuse
+  /// the whole concat.
+  void breakUnmeasurableProducers(ValueCP value);
 
   /// Places 'producer' and its own inputs, then emits 'producer' as its own
   /// kernel launch so a consumer reads its output as a materialized border
@@ -513,6 +536,9 @@ class CompileCtx {
 
   // Sequential counter for out-of-line elementwise helper functions.
   int32_t outOfLineCounter_{0};
+
+  // Sequential counter handed out by nextHelperId.
+  int32_t helperId_{0};
 
   // Maps each helper function name to the set of bN variable indices it
   // requires (directly or transitively via called helpers).

@@ -197,6 +197,45 @@ bool hasShapeOnDeviceInChain(
   return false;
 }
 
+// Returns true if any node in the producer chain of 'node' (stopping at
+// subgraphInputs) sizes a return with a reserve function whose answer cannot be
+// known before it runs. See ConcatInputInfo::hasReserveInChain. The walk stops
+// at subgraph inputs on purpose: an earlier kernel's output is in the frame by
+// the time the group is carved, however its shape was arrived at.
+//
+// A reserve that returns the shape of one of its inputs (ArgumentMeta::
+// shapeFromInput -- ones_like and the rest of the *_like factories, _to_copy,
+// cumsum) is not such a reserve: its answer is that input's extent, which the
+// recursion below reaches on its own. Treating it as opaque used to refuse the
+// whole concat, since one operand unmeasurable at every point leaves no point
+// where all of them are.
+bool hasReserveShapeInChain(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return false;
+  }
+  auto* meta = Registry::metadata(node->target());
+  if (meta) {
+    for (const auto& rm : meta->returnMeta) {
+      if (rm.reserveShape != nullptr && rm.shapeFromInput < 0) {
+        return true;
+      }
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    if (subgraphInputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer && hasReserveShapeInChain(producer, subgraphInputs, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // The launch-time shape of one operand, coerced to 'rank' dimensions.
 std::vector<Dim> concatInputShape(
     const ConcatInputInfo& info,
@@ -391,6 +430,13 @@ void concatSetOutputs(
           hasShapeOnDeviceInChain(elem->producer(), subgraphInputs, visited);
     }
 
+    std::unordered_set<NodeCP> reserveVisited;
+    bool hasReserveInChain = false;
+    if (elem->producer() != nullptr) {
+      hasReserveInChain = hasReserveShapeInChain(
+          elem->producer(), subgraphInputs, reserveVisited);
+    }
+
     bool elemIsView = desc.viewNode != nullptr;
     if (!elemIsView && elem->producer()) {
       auto* producerMeta = Registry::metadata(elem->producer()->target());
@@ -420,6 +466,7 @@ void concatSetOutputs(
          .sizeExpr = std::move(inputSizeExpr),
          .reserveShape = std::move(catReserve),
          .hasShapeOnDevice = hasSod,
+         .hasReserveInChain = hasReserveInChain,
          .mayWriteStrided = producerMayWriteStrided(elem),
          .isSubgraphInput = false,
          .isView = elemIsView});
@@ -643,8 +690,16 @@ void insertConcatOperandCopies(
           {{"self", const_cast<nativert::Value*>(operand)}});
       graph->insertBefore(clone, mutableListPack);
       auto* copied = waveGraph.newTensorValue(clone, "cat_copy", resultDtype);
+      // newTensorValue records the dtype but no shape, and a value of unknown
+      // rank makes concatIsStandalone give up on the whole cat -- it needs
+      // every element to have the same known rank. A clone has its source's
+      // rank and, being a fresh dense buffer, is contiguous.
+      auto& constraint = types.constraints.at(copied->id());
+      constraint.rank = types.rank(operand);
+      constraint.contiguity = Contiguity::kContiguous;
       input.value = copied;
       copied->addUser(mutableListPack);
+      waveGraph.markConcatFillClone(copied);
     }
     const_cast<nativert::Value*>(operand)->eraseUser(mutableListPack);
   }

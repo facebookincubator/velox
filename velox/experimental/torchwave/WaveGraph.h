@@ -285,6 +285,15 @@ class WaveGraph {
       std::string_view name,
       c10::ScalarType dtype);
 
+  /// Like newScalarValue, but not recorded for duplication. For a scalar that
+  /// other nodes read: a recorded value is per-op scratch, and congruent nodes
+  /// share one ProjectOperation, so every invocation after the first is bound
+  /// to a private duplicate while the readers still name the original.
+  nativert::Value* newSharedScalarValue(
+      nativert::Node* node,
+      std::string_view name,
+      c10::ScalarType dtype);
+
   /// Adds a TensorList output to 'node' with the given name and registers it in
   /// idToValue_. No TensorMeta is created (a list has no element-level meta);
   /// element values are obtained via Value::getListElements().
@@ -295,6 +304,20 @@ class WaveGraph {
 
   /// Returns true if 'value' was created by newTensorValue or newScalarValue.
   bool isCreatedValue(ValueCP value) const;
+
+  /// Records that 'value' is the output of a clone a wide cat inserted so the
+  /// operand has a buffer of its own to fill. Such a clone looks pointless in
+  /// isolation -- nobody writes it and its source is read-only -- and the
+  /// read-only clone elision would drop it, which is exactly what must not
+  /// happen: the concat's allocation group carves the clone into the region of
+  /// the result the operand occupies, so its producer writes the band directly
+  /// instead of the concat copying it in through a serial offset walk.
+  void markConcatFillClone(ValueCP value);
+
+  /// The clone outputs markConcatFillClone recorded.
+  const folly::F14FastSet<ValueCP>& concatFillClones() const {
+    return concatFillClones_;
+  }
 
   /// Creates a new Value with the same type and dtype as 'original', attached
   /// to an internal placeholder node. Registers it in idToValue_.
@@ -318,20 +341,13 @@ class WaveGraph {
     return idToValue_;
   }
 
-  /// Fills in missing attribute defaults from FunctionSchema and creates
-  /// multiKernelVariants_ for nodes that have one.
+  /// Fills in missing attribute defaults from FunctionSchema.
   void normalizeAndAnnotateGraph();
 
   /// Propagates constraints for the outputs of 'node' using the shared
   /// Optimizer instance. The optimizer's visited set ensures main-graph
   /// nodes are not re-traversed.
   void optimizeNode(const nativert::Node* node);
-
-  /// Returns the multikernel variant subgraph for 'node', or nullptr if none.
-  const Subgraph* multiKernelVariant(NodeCP node) const {
-    auto it = multiKernelVariants_.find(node);
-    return it != multiKernelVariants_.end() ? &it->second : nullptr;
-  }
 
   /// Returns a unique name by appending _NN to the given name.
   std::string uniqueName(std::string_view name) {
@@ -466,6 +482,10 @@ class WaveGraph {
   // Pre-built map from Value::id() to Value* for fast lookups.
   IdToValueMap idToValue_;
 
+  // Clone outputs a wide cat inserted to fill its regions in parallel. See
+  // markConcatFillClone.
+  folly::F14FastSet<ValueCP> concatFillClones_;
+
   // Owns TensorMeta objects created by newTensorValue so pointers in
   // types_.types remain valid.
   std::vector<std::unique_ptr<nativert::TensorMeta>> metaStorage_;
@@ -476,11 +496,6 @@ class WaveGraph {
 
   // Placeholder node used by duplicateValue to attach new Values.
   nativert::Node* placeholderNode_{nullptr};
-
-  // For nodes that have a multikernel implementation, like multiblock
-  // reduction, this gives the subgraph to substitute for the Node when
-  // generating the multiblock case of a ProjectOperation.
-  std::unordered_map<NodeCP, Subgraph> multiKernelVariants_;
 
   // Counter for generating unique value names via uniqueName().
   int32_t nextValueId_{0};

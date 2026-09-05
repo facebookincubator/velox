@@ -33,7 +33,16 @@ namespace torch::wave {
 /// before partitioning: ParallelNodes::rewriteInPlace walks one ProjectNode
 /// layer at a time and cannot see a source whose clones land in different
 /// layers. Returns the number elided.
-int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
+/// Drops clones nobody writes, whose source is never mutated and which do not
+/// escape as graph outputs, then merges the identical ones that remain.
+/// 'keep' names clone outputs that must survive both halves: a wide cat's fill
+/// clones exist precisely so each operand has a buffer of its own for the
+/// allocation group to carve into the result, which is invisible here -- they
+/// read as pointless read-only copies.
+int64_t elideReadOnlyClones(
+    nativert::Graph& graph,
+    const ValueTypes& types,
+    const folly::F14FastSet<ValueCP>& keep = {});
 
 /// Merges nodes that compute the same value from the same operands, to a
 /// fixpoint: merging two nodes can make their consumers congruent in turn. Only
@@ -44,6 +53,14 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 /// before duplicateMetadataOps, whose duplicates this would otherwise undo.
 /// Returns the number of nodes merged away.
 int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types);
+
+/// Rewrites ops that produce a TensorList into per-tensor form, by calling each
+/// op's own Metadata::decompose rule. One traversal serves every op, so a new
+/// decomposition is a rule on the op rather than another pass over the graph.
+/// Call after commonSubexpressions -- decomposition multiplies the node count,
+/// and CSE is cheaper on the bundled form -- and before partitioning, which is
+/// what the per-tensor nodes exist to inform. Returns the number rewritten.
+int64_t decomposeListOps(nativert::Graph& graph, WaveGraph& waveGraph);
 
 /// Rematerializes each multiply-used metadata getter (sym_size / sym_numel) at
 /// its use sites, so it stops being a shared value the partitioner has to

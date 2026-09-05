@@ -163,7 +163,7 @@ DEFINE_bool(
     "With --enable_reuse, run the pre-partition read-only clone elision pass");
 DEFINE_bool(
     free_intermediates,
-    false,
+    true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
 DEFINE_bool(
     step_last_use,
@@ -175,7 +175,7 @@ DEFINE_bool(
     "Drain both streams at the end of every step, so freed buffers are back in the allocator before the next step allocates (serializes the pipeline; for measuring peak memory)");
 DEFINE_bool(
     defer_d2h,
-    false,
+    true,
     "Do not wait for a step's device-to-host transfer at the step that issues it; parse its pinned buffer at the first later step that reads one of the returned values");
 DEFINE_bool(
     run_ahead,
@@ -198,6 +198,14 @@ DEFINE_bool(
     false,
     "Rematerialize each multiply-used sym_size / sym_numel at its use sites before partitioning, so it stops being a top-level output of a ProjectNode");
 DEFINE_bool(
+    config_per_op,
+    false,
+    "Alongside each composite kernel, compile one single-op kernel per op it "
+    "contains (<composite>_op_<opCode>) and log its register / shared / local "
+    "memory and occupancy after graph construction. Diagnostic only: the "
+    "per-op kernels are never launched for results, they resolve the occupancy "
+    "numbers to a single op instead of the fused whole");
+DEFINE_bool(
     input_contiguous,
     false,
     "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
@@ -209,6 +217,18 @@ DEFINE_bool(
     cse_views,
     false,
     "Before partitioning, merge view nodes that produce the same value from the same operands");
+DEFINE_bool(
+    decompose_lists,
+    true,
+    "Before partitioning, split a list-producing op into one node per tensor so each column is costed and given blocks on its own, and fold chains of them where the op supports it");
+DEFINE_bool(
+    metadata_getter_standalone,
+    true,
+    "Run a lone aten.sym_size/sym_numel as a host-side shortcut standalone rather than a fused kernel op that spends a whole block reading one field");
+DEFINE_bool(
+    fold_shared_chains,
+    true,
+    "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
 DEFINE_bool(
     mk_select,
     false,
@@ -229,6 +249,38 @@ DEFINE_bool(
     parallel_concat_fill,
     false,
     "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
+DEFINE_bool(
+    order_blocks_by_cost,
+    false,
+    "Emit a step's blocks in descending projected latency instead of in op order, so the ops expected to run longest start first and the cheap ones backfill SMs as those retire");
+DEFINE_bool(
+    partition_launches,
+    true,
+    "Split a badly balanced or occupancy-starved step into several kernel launches, each packed to about one wave at the occupancy its own ops allow");
+DEFINE_int32(
+    max_launch_waves,
+    3,
+    "Most launches --partition_launches may split one step into, and the multiple of one wave the block array is reserved for");
+DEFINE_double(
+    launch_skew_threshold,
+    1.3,
+    "Step makespan over that of a perfectly balanced, fully occupied one, at and above which --partition_launches splits a step");
+DEFINE_double(
+    min_block_us,
+    100.0,
+    "GPU microseconds a block should be worth before --partition_launches opens one, converted to cost units with the thread-block clocks the step's previous execution measured");
+DEFINE_bool(
+    quantum_grid,
+    false,
+    "Size a step's blocks against a per-block work quantum and round the total up to whole waves, instead of handing out one wave's worth pro rata and trimming");
+DEFINE_bool(
+    tw_single_pass,
+    false,
+    "Register one decoupled look-back implementation of cumsum, exclusive sum and masked_select instead of the single-block, multi-kernel and cooperative-grid variants");
+DEFINE_bool(
+    tw_single_pass_select,
+    false,
+    "Expand fb.masked_select_jagged to its single-pass look-back form instead of the barrier-based cooperative-grid one. Only has an effect in cooperative-grid mode");
 
 namespace torch::wave {
 
@@ -293,11 +345,30 @@ void deepFlattenIValue(
   }
 }
 
+void fillFrameFromUserInputs(
+    const nativert::Graph& graph,
+    nativert::ExecutionFrame& frame,
+    const std::vector<c10::IValue>& inputs);
+
 void fillFrameInputs(
     const nativert::Graph& graph,
     nativert::ExecutionFrame& frame,
     std::vector<c10::IValue> inputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // The two lists are not the same for every model. graph.userInputs() carries
+  // one entry per placeholder, including the ones the signature omits -- the
+  // ROO preproc has 315 of them, string constants the export kept -- and only
+  // that list aligns positionally with an already-flat external inputs file.
+  // Prefer it when the counts say it is the one the caller flattened against;
+  // keying off the signature there silently shifts every input past the first
+  // omitted leaf, which surfaces far away as an int reaching an op that wanted
+  // a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      inputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, inputs);
+    return;
+  }
   // Flatten one level to handle Objects/Tuples wrapping the actual inputs.
   std::vector<c10::IValue> flat;
   for (auto& v : inputs) {
@@ -319,11 +390,25 @@ void fillFrameInputs(
     }
     flat = std::move(next);
   }
+  if (flat.size() != userInputNames.size()) {
+    LOG(WARNING) << "fillFrameInputs: " << flat.size() << " inputs for "
+                 << userInputNames.size()
+                 << " user inputs; the alignment below will be wrong";
+  }
+  // One leaf per name, whether or not the name has a value in the graph. A
+  // placeholder the export kept but nothing reads -- the ROO preproc has 315
+  // of them, string constants that carry no graph value -- still occupies a
+  // position in the flattened inputs. Skipping the name without consuming its
+  // leaf shifts every input after it, which surfaces far away as an int
+  // arriving where an op wanted a tensor.
   size_t flatIdx = 0;
   for (const auto& name : userInputNames) {
-    auto* value = graph.tryGetValue(name);
-    if (value && flatIdx < flat.size()) {
-      frame.setIValue(value->id(), std::move(flat[flatIdx++]));
+    if (flatIdx >= flat.size()) {
+      break;
+    }
+    auto item = std::move(flat[flatIdx++]);
+    if (auto* value = graph.tryGetValue(name)) {
+      frame.setIValue(value->id(), std::move(item));
     }
   }
 }
@@ -640,17 +725,31 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().runAhead = FLAGS_run_ahead;
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
+  WaveConfig::get().configPerOp = FLAGS_config_per_op;
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
+  WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
+  WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
+  WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
   WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
   WaveConfig::get().enableLifetimeAllocGroup =
       FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
+  WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
+  WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
+  WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
+  WaveConfig::get().launchSkewThreshold =
+      static_cast<float>(FLAGS_launch_skew_threshold);
+  WaveConfig::get().minBlockUs = static_cast<float>(FLAGS_min_block_us);
+  WaveConfig::get().quantumGrid = FLAGS_quantum_grid;
+  // Read by registerBuiltins(), which initialize() calls below.
+  WaveConfig::get().singlePass = FLAGS_tw_single_pass;
+  WaveConfig::get().singlePassSelect = FLAGS_tw_single_pass_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -853,6 +952,19 @@ void ExecutorTestBase::fillWaveFrame(
     nativert::ExecutionFrame& frame,
     const std::vector<c10::IValue>& deviceInputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // graph.userInputs() carries one entry per placeholder, including the ones
+  // the signature omits -- the ROO preproc has 315 of them, string constants
+  // the export kept -- and only that list aligns positionally with an
+  // already-flat external inputs file. Keying off the signature there consumes
+  // no leaf for an omitted placeholder, so every input past the first one is
+  // read from the wrong index and surfaces far away as an int reaching an op
+  // that wanted a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      deviceInputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, deviceInputs);
+    return;
+  }
   // Flatten to match user input count.
   std::vector<c10::IValue> flat;
   for (const auto& v : deviceInputs) {
@@ -1432,6 +1544,17 @@ std::vector<c10::IValue> ExecutorTestBase::runNativertReferenceWithInputs(
   stripDataAsserts(graph);
   applySyntheticGraphRewrites(graph);
   setGraphDevice(&graph, true);
+  // Everything above runs on the wave graph too, so up to here the two number
+  // their Values identically. The two passes below do NOT -- wave resolves
+  // cpuOnly arguments itself at runtime and keeps its own concat -- and every
+  // Value they mint takes an id past the loaded graph's last. That is exactly
+  // where the wave graph, whose id counter never advanced, starts numbering
+  // the Values ITS rewrites create. So an id at or above this boundary names
+  // one value in the reference and a different one in wave, and comparing
+  // them is comparing two unrelated tensors: on the ROO train graph a
+  // tensor_split indices copy, int64[10], against a repeat_interleave prefix,
+  // int32[1024]. Recorded here and enforced in dropUnsharedReferenceValues.
+  numSharedReferenceValues_ = static_cast<int32_t>(graph.numValues());
   rewriteGpuIncompatibleOps(graph);
   insertCpuOnlyCopies(graph);
 
@@ -1534,6 +1657,28 @@ void ExecutorTestBase::executeAndCompareWave(
                            << " output(s) differ from the nativert reference";
 }
 
+int32_t ExecutorTestBase::dropUnsharedReferenceValues(
+    std::unordered_map<int32_t, c10::IValue>& refFrame) const {
+  if (numSharedReferenceValues_ < 0) {
+    return 0;
+  }
+  int32_t dropped = 0;
+  for (auto it = refFrame.begin(); it != refFrame.end();) {
+    if (it->first >= numSharedReferenceValues_) {
+      it = refFrame.erase(it);
+      ++dropped;
+    } else {
+      ++it;
+    }
+  }
+  if (dropped > 0) {
+    LOG(INFO) << "reference frame: dropped " << dropped
+              << " value(s) at or above id " << numSharedReferenceValues_
+              << ", which the reference graph has and the wave graph does not";
+  }
+  return dropped;
+}
+
 void ExecutorTestBase::runWaveWithInputs(
     ModelFixture& fixture,
     std::vector<c10::IValue> inputs,
@@ -1542,6 +1687,7 @@ void ExecutorTestBase::runWaveWithInputs(
   std::unordered_map<int32_t, c10::IValue> refFrame;
   if (!refFramePath.empty()) {
     refFrame = loadReferenceFrame(refFramePath);
+    dropUnsharedReferenceValues(refFrame);
     WaveConfig::get().referenceFrame = &refFrame;
   }
 
@@ -1593,6 +1739,7 @@ void ExecutorTestBase::runSyntheticSweep(
   // Load the reference frame once. Verification only reads it and executions
   // are serial, so all configs share this single map.
   auto refFrame = loadReferenceFrame(refFramePath);
+  dropUnsharedReferenceValues(refFrame);
 
   struct SweepConfig {
     const char* name{};
@@ -1644,6 +1791,17 @@ void ExecutorTestBase::runSyntheticSweep(
     stripDataAsserts(*fixture->model.graph);
     applySyntheticGraphRewrites(*fixture->model.graph);
     setGraphDevice(fixture->model.graph.get(), true);
+    // The same prep the reference had when it recorded the boundary, so the
+    // two must agree on the Value count here. If they ever do not, every id
+    // past the first divergence names a different value in each graph and the
+    // whole intermediates check is silently comparing unrelated tensors --
+    // which reads as one arbitrary tensor mismatch, not as the id-space bug it
+    // is. Fail as itself instead.
+    ASSERT_EQ(
+        static_cast<int32_t>(fixture->model.graph->numValues()),
+        numSharedReferenceValues_)
+        << "reference and wave graphs disagree on their Value count, so the "
+           "reference frame's ids no longer name the same values";
 
     auto ctx = fixture->makeModelContext();
     auto cfg = std::make_shared<WaveConfig>(baseConfig);

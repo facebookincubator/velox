@@ -214,6 +214,13 @@ class CompositeKernel {
   /// default KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
 
+  /// Blocks of this kernel that stay resident on one SM at 'dynamicSharedBytes'
+  /// of dynamic shared memory, as the driver computes it. 0 when there is no
+  /// compiled kernel to ask. Sizing a cooperative launch by anything else risks
+  /// a grid the driver will refuse, so the launch partitioner reads this rather
+  /// than dividing KernelInfo's zero-shared figure down.
+  int32_t occupancy(int32_t numThreads, int32_t dynamicSharedBytes) const;
+
   std::string toString(Listing mode = kExprs) const;
 
   const std::string& entryPoint() const {
@@ -226,16 +233,33 @@ class CompositeKernel {
 
   void warmup();
 
+  /// Waits for the per-op diagnostic kernels queued under
+  /// WaveConfig::configPerOp and returns each one's entry point and occupancy,
+  /// in the order the ops appear in this kernel. Empty when configPerOp is off
+  /// or no GPU is present.
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+  perOpKernelInfo();
+
   const std::vector<std::unique_ptr<KernelOperation>>& kernelOps() const {
     return kernelOpStorage_;
   }
 
  private:
+  /// One single-op kernel built beside the composite when configPerOp is set.
+  /// Diagnostic only: never launched for results, only warmed up so its
+  /// occupancy can be read.
+  struct PerOpKernel {
+    int32_t opCode{0};
+    std::string entryPoint;
+    std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
+  };
+
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
   std::string entryPoint_;
   std::string text_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
+  std::vector<PerOpKernel> perOpKernels_;
 };
 
 /// Records the grid variant (single-block vs multi-block) chosen for a

@@ -386,6 +386,19 @@ class KernelOperation {
     return alwaysSingleBlock_;
   }
 
+  /// Bytes of dynamic shared memory this op needs, i.e. the max over its
+  /// nodes' Metadata::dynamicSharedMemory. A launch passes the max over its
+  /// ops as the kernel's dynamic shared memory size.
+  int64_t dynamicSharedBytes() const {
+    return dynamicSharedBytes_;
+  }
+
+  /// Blocks per SM this op wants the containing kernel compiled for, i.e. the
+  /// max over its nodes' Metadata::minBlocksPerSm. Zero means no constraint.
+  int32_t minBlocksPerSm() const {
+    return minBlocksPerSm_;
+  }
+
   void setAlwaysSingleBlock(bool value) {
     alwaysSingleBlock_ = value;
   }
@@ -540,6 +553,12 @@ class KernelOperation {
 
   // True if any node in the subgraph has alwaysSingleBlock set in its metadata.
   bool alwaysSingleBlock_{false};
+
+  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph.
+  int64_t dynamicSharedBytes_{0};
+
+  // Max Metadata::minBlocksPerSm over the nodes in the subgraph.
+  int32_t minBlocksPerSm_{0};
 
   // True if this kernel is present in both grid_ and singleBlockGrid_ (both
   // grids have a kernel at the corresponding position).
