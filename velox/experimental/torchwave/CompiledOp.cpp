@@ -1584,6 +1584,71 @@ CompositeKernel::CompositeKernel(
     }
   }
 
+  // Diagnostic: one single-case kernel per op, queued alongside the composite
+  // below so the two compile concurrently. Each is the composite's preamble
+  // with a switch holding only this op's case, so its register / shared /
+  // local-memory footprint is that op's alone. Nothing launches them for
+  // results; WaveGraph warms them up once at the end of graph construction and
+  // logs their occupancy next to the composite's.
+  if (WaveConfig::get().configPerOp && facebook::velox::wave::currentDevice()) {
+    std::stringstream includeHeader;
+    includeHeader << "#include \"velox/experimental/torchwave/Core.cuh\"\n";
+    for (const auto& inc : includes) {
+      includeHeader << "#include \"" << inc << "\"\n";
+    }
+    auto headerStr = includeHeader.str();
+
+    for (const auto& kop : kernelOpStorage_) {
+      auto opName = kernelName + "_op_" + std::to_string(kop->opCode());
+      auto opEntry = "torch::wave::" + opName;
+      auto opFile = "/tmp/" + opName + ".cu";
+
+      std::stringstream os;
+      os << headerStr << "\nnamespace torch::wave {\n\n";
+      if (!kop->helperCode().empty()) {
+        os << kop->helperCode();
+      }
+      os << "__global__ void " << opName << "(TorchWaveParams params) {\n"
+         << "  ENTRY;\n";
+      for (const auto& decl : kop->sharedDeclarations()) {
+        os << decl;
+      }
+      os << "  switch (blockInfo.op) {\n"
+         << "    case " << kop->opCode() << ": {\n"
+         << kop->code() << "      break;\n"
+         << "    }\n"
+         << "  }\n"
+         << "  LEAVE();\n"
+         << "}\n\n"
+         << "} // namespace torch::wave\n";
+      auto opText = os.str();
+      {
+        std::ofstream out(opFile);
+        out << opText;
+      }
+
+      PerOpKernel perOp;
+      perOp.opCode = kop->opCode();
+      perOp.entryPoint = opEntry;
+      // Deliberately not the KernelFsCache: these are throwaway diagnostics and
+      // must not compete with the composite for the on-disk cache.
+      perOp.kernel = facebook::velox::wave::CompiledKernel::getKernel(
+          opText,
+          [code = opText,
+           opEntry,
+           opFile]() -> facebook::velox::wave::KernelSpec {
+            facebook::velox::wave::KernelSpec spec;
+            spec.code = code;
+            spec.entryPoints = {opEntry};
+            spec.filePath = opFile;
+            spec.numHeaders = 0;
+            spec.headers = nullptr;
+            return spec;
+          });
+      perOpKernels_.push_back(std::move(perOp));
+    }
+  }
+
   // Only compile the kernel if a GPU is available. The one-time
   // NVRTC/system-header initialization (CompiledKernel::initialize()) is run
   // eagerly on the main thread by torch::wave::initialize() before any kernel
@@ -1626,6 +1691,31 @@ void CompositeKernel::warmup() {
   facebook::velox::wave::Stream stream;
   kernel_->launch(0, 1, 1, 0, &stream, args);
   stream.wait();
+}
+
+std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+CompositeKernel::perOpKernelInfo() {
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>> result;
+  result.reserve(perOpKernels_.size());
+  for (auto& perOp : perOpKernels_) {
+    if (!perOp.kernel) {
+      continue;
+    }
+    // The launch is the sync point with the queued compile, exactly as
+    // warmup() is for the composite. blockInfo.op is kDebugNoOp, which matches
+    // no case, so the body does nothing.
+    TorchWaveParams params{};
+    memset(&params, 0, sizeof(params));
+    params.info = nullptr;
+    params.debugInfo = nullptr;
+    params.inlineInfo[0].op = kDebugNoOp;
+    void* args[] = {&params};
+    facebook::velox::wave::Stream stream;
+    perOp.kernel->launch(0, 1, 1, 0, &stream, args);
+    stream.wait();
+    result.emplace_back(perOp.entryPoint, perOp.kernel->info(0));
+  }
+  return result;
 }
 
 facebook::velox::wave::KernelInfo CompositeKernel::kernelInfo() const {

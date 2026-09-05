@@ -226,16 +226,33 @@ class CompositeKernel {
 
   void warmup();
 
+  /// Waits for the per-op diagnostic kernels queued under
+  /// WaveConfig::configPerOp and returns each one's entry point and occupancy,
+  /// in the order the ops appear in this kernel. Empty when configPerOp is off
+  /// or no GPU is present.
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+  perOpKernelInfo();
+
   const std::vector<std::unique_ptr<KernelOperation>>& kernelOps() const {
     return kernelOpStorage_;
   }
 
  private:
+  // One single-op kernel built beside the composite when configPerOp is set.
+  // Diagnostic only: never launched for results, only warmed up so its
+  // occupancy can be read.
+  struct PerOpKernel {
+    int32_t opCode{0};
+    std::string entryPoint;
+    std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
+  };
+
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
   std::string entryPoint_;
   std::string text_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
+  std::vector<PerOpKernel> perOpKernels_;
 };
 
 /// Records the grid variant (single-block vs multi-block) chosen for a

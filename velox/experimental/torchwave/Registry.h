@@ -249,6 +249,13 @@ struct Metadata {
   /// regardless of input size.
   bool alwaysSingleBlock{false};
 
+  /// If true, the grid is sized by the sum of the op's input element counts
+  /// rather than the largest one. Set this when an op's work is the total over
+  /// a tensor list, not the largest member: sizing by the largest gives a grid
+  /// that ignores the list length, so the op runs far fewer blocks than it has
+  /// independent work.
+  bool gridSizeSumsInputs{false};
+
   /// If true, the op reads tensor metadata (shape, size) rather than
   /// computing on tensor data. When used as a size arg producer, it runs as
   /// a standalone rather than a fused op.
@@ -627,6 +634,7 @@ class MetadataBuilder {
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
   MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
+  MetadataBuilder& gridSizeSumsInputs(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
       std::function<nativert::Node*(NodeCP, WaveGraph*)> func);
