@@ -24,6 +24,8 @@
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
@@ -339,6 +341,14 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+  if (CudfConfig::getInstance().gpuSfiExpressionEnabled) {
+    // Order matters: the evaluator's canEvaluate() answers by looking the call
+    // up in this registry, so an evaluator registered before the functions
+    // would claim nothing.
+    gpu_sfi::registerPrestoGpuFunctions(prefix);
+    registerGpuSfiEvaluator(CudfConfig::getInstance().gpuSfiExpressionPriority);
+  }
+
   isCudfRegistered = true;
 }
 
@@ -411,6 +421,18 @@ void CudfConfig::initialize(
   if (config.find(kCudfAstExpressionPriority) != config.end()) {
     astExpressionPriority =
         folly::to<int32_t>(config[kCudfAstExpressionPriority]);
+  }
+  if (config.find(kCudfJitExpressionPriority) != config.end()) {
+    jitExpressionPriority =
+        folly::to<int32_t>(config[kCudfJitExpressionPriority]);
+  }
+  if (config.find(kCudfGpuSfiExpressionEnabled) != config.end()) {
+    gpuSfiExpressionEnabled =
+        folly::to<bool>(config[kCudfGpuSfiExpressionEnabled]);
+  }
+  if (config.find(kCudfGpuSfiExpressionPriority) != config.end()) {
+    gpuSfiExpressionPriority =
+        folly::to<int32_t>(config[kCudfGpuSfiExpressionPriority]);
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
