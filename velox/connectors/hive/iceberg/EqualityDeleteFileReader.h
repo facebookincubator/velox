@@ -26,6 +26,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/dwio/common/Reader.h"
+#include "velox/type/Subfield.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -40,9 +41,6 @@ namespace facebook::velox::connector::hive::iceberg {
 /// require reading the base data first, then probing each row against the
 /// delete set. The reader eagerly loads all delete key tuples from the file
 /// into an in-memory hash set during construction.
-///
-/// The equality delete column names are resolved from equalityFieldIds via
-/// the table schema provided by the caller.
 class EqualityDeleteFileReader {
  public:
   /// Constructs a reader for a single equality delete file.
@@ -54,10 +52,9 @@ class EqualityDeleteFileReader {
   /// @param deleteFile Metadata about the equality delete file. Must have
   ///   content == FileContent::kEqualityDeletes and non-empty
   ///   equalityFieldIds.
-  /// @param equalityColumnNames Ordered column names corresponding to
+  /// @param tableSchema Iceberg table schema containing the equality fields.
+  /// @param equalityFields Ordered Subfields corresponding to
   ///   equalityFieldIds, resolved by the caller from the table schema.
-  /// @param equalityColumnTypes Ordered column types corresponding to
-  ///   equalityFieldIds.
   /// @param baseFilePath Path of the base data file being read.
   /// @param fileHandleFactory Factory for creating file handles.
   /// @param connectorQueryCtx Query context for memory and config.
@@ -69,8 +66,8 @@ class EqualityDeleteFileReader {
   /// @param connectorId Connector identifier.
   EqualityDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
-      const std::vector<std::string>& equalityColumnNames,
-      const std::vector<TypePtr>& equalityColumnTypes,
+      const RowTypePtr& tableSchema,
+      const std::vector<common::Subfield>& equalityFields,
       const std::string& baseFilePath,
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -103,16 +100,8 @@ class EqualityDeleteFileReader {
   }
 
  private:
-  // Resolves column indices for the given row type, caching the result in
-  // outputColumnIndices_ for reuse across rows.
-  const std::vector<column_index_t>& resolveOutputColumnIndices(
-      const RowVectorPtr& row) const;
-
   // Hashes a single row's equality delete columns into a uint64_t key.
-  uint64_t hashRow(
-      const RowVectorPtr& row,
-      vector_size_t index,
-      const std::vector<column_index_t>& colIndices) const;
+  uint64_t hashRow(const RowVectorPtr& row, vector_size_t index) const;
 
   // Checks whether two rows are equal on all equality delete columns.
   bool equalRows(
@@ -121,16 +110,7 @@ class EqualityDeleteFileReader {
       const RowVectorPtr& right,
       vector_size_t rightIndex) const;
 
-  // Column names and types for equality delete comparison.
-  std::vector<std::string> equalityColumnNames_;
-  std::vector<TypePtr> equalityColumnTypes_;
-
-  // Column indices in the delete file output vector.
-  std::vector<column_index_t> deleteColumnIndices_;
-
-  // Cached column indices for the output (probe) row type. Resolved lazily
-  // on first applyDeletes() call to avoid repeated name lookups per row.
-  mutable std::vector<column_index_t> outputColumnIndices_;
+  std::vector<common::Subfield> equalityFields_;
 
   // All rows read from the equality delete file, stored for equality
   // comparison during probing.
