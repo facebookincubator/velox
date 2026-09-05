@@ -119,7 +119,11 @@ if(VELOX_ENABLE_BENCHMARKS)
   )
 endif()
 
-add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
+add_executable(
+  velox_dwio_parquet_table_scan_test
+  ParquetSchemaEvolutionTest.cpp
+  ParquetTableScanTest.cpp
+)
 add_test(
   NAME velox_dwio_parquet_table_scan_test
   COMMAND velox_dwio_parquet_table_scan_test

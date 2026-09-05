@@ -50,7 +50,8 @@ class ParquetReaderTest : public ParquetTestBase {
         splitStats,
         reader.fileMetaData(),
         readerOptions.sessionTimezone(),
-        TimestampPrecision::kMilliseconds);
+        TimestampPrecision::kMilliseconds,
+        /*nullStructIfAllFieldsMissing=*/false);
     auto rootReader = ParquetColumnReader::build(
         makeColumnReaderOptions(readerOptions),
         reader.rowType(),
