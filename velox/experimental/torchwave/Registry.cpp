@@ -305,6 +305,11 @@ MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::gridSizeSumsInputs(bool val) {
+  md_.gridSizeSumsInputs = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::metadataGetter(bool val) {
   md_.isMetadataGetter = val;
   return *this;
@@ -487,6 +492,17 @@ MetadataBuilder& MetadataBuilder::sharedDecls(
 MetadataBuilder& MetadataBuilder::dynamicSharedDecls(
     std::vector<std::pair<int32_t, std::string>> decls) {
   md_.dynamicSharedDecls = std::move(decls);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::dynamicSharedMemory(
+    std::function<int64_t(NodeCP)> func) {
+  md_.dynamicSharedMemory = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
+  md_.minBlocksPerSm = blocks;
   return *this;
 }
 

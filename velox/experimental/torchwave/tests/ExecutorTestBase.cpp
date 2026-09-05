@@ -198,6 +198,14 @@ DEFINE_bool(
     false,
     "Rematerialize each multiply-used sym_size / sym_numel at its use sites before partitioning, so it stops being a top-level output of a ProjectNode");
 DEFINE_bool(
+    config_per_op,
+    false,
+    "Alongside each composite kernel, compile one single-op kernel per op it "
+    "contains (<composite>_op_<opCode>) and log its register / shared / local "
+    "memory and occupancy after graph construction. Diagnostic only: the "
+    "per-op kernels are never launched for results, they resolve the occupancy "
+    "numbers to a single op instead of the fused whole");
+DEFINE_bool(
     input_contiguous,
     false,
     "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
@@ -229,6 +237,14 @@ DEFINE_bool(
     parallel_concat_fill,
     false,
     "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
+DEFINE_bool(
+    tw_single_pass,
+    false,
+    "Register one decoupled look-back implementation of cumsum, exclusive sum and masked_select instead of the single-block, multi-kernel and cooperative-grid variants");
+DEFINE_bool(
+    tw_single_pass_select,
+    false,
+    "Expand fb.masked_select_jagged to its single-pass look-back form instead of the barrier-based cooperative-grid one. Only has an effect in cooperative-grid mode");
 
 namespace torch::wave {
 
@@ -293,11 +309,30 @@ void deepFlattenIValue(
   }
 }
 
+void fillFrameFromUserInputs(
+    const nativert::Graph& graph,
+    nativert::ExecutionFrame& frame,
+    const std::vector<c10::IValue>& inputs);
+
 void fillFrameInputs(
     const nativert::Graph& graph,
     nativert::ExecutionFrame& frame,
     std::vector<c10::IValue> inputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // The two lists are not the same for every model. graph.userInputs() carries
+  // one entry per placeholder, including the ones the signature omits -- the
+  // ROO preproc has 315 of them, string constants the export kept -- and only
+  // that list aligns positionally with an already-flat external inputs file.
+  // Prefer it when the counts say it is the one the caller flattened against;
+  // keying off the signature there silently shifts every input past the first
+  // omitted leaf, which surfaces far away as an int reaching an op that wanted
+  // a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      inputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, inputs);
+    return;
+  }
   // Flatten one level to handle Objects/Tuples wrapping the actual inputs.
   std::vector<c10::IValue> flat;
   for (auto& v : inputs) {
@@ -319,11 +354,25 @@ void fillFrameInputs(
     }
     flat = std::move(next);
   }
+  if (flat.size() != userInputNames.size()) {
+    LOG(WARNING) << "fillFrameInputs: " << flat.size() << " inputs for "
+                 << userInputNames.size()
+                 << " user inputs; the alignment below will be wrong";
+  }
+  // One leaf per name, whether or not the name has a value in the graph. A
+  // placeholder the export kept but nothing reads -- the ROO preproc has 315
+  // of them, string constants that carry no graph value -- still occupies a
+  // position in the flattened inputs. Skipping the name without consuming its
+  // leaf shifts every input after it, which surfaces far away as an int
+  // arriving where an op wanted a tensor.
   size_t flatIdx = 0;
   for (const auto& name : userInputNames) {
-    auto* value = graph.tryGetValue(name);
-    if (value && flatIdx < flat.size()) {
-      frame.setIValue(value->id(), std::move(flat[flatIdx++]));
+    if (flatIdx >= flat.size()) {
+      break;
+    }
+    auto item = std::move(flat[flatIdx++]);
+    if (auto* value = graph.tryGetValue(name)) {
+      frame.setIValue(value->id(), std::move(item));
     }
   }
 }
@@ -640,6 +689,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().runAhead = FLAGS_run_ahead;
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
+  WaveConfig::get().configPerOp = FLAGS_config_per_op;
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
@@ -651,6 +701,9 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableLifetimeAllocGroup =
       FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
+  // Read by registerBuiltins(), which initialize() calls below.
+  WaveConfig::get().singlePass = FLAGS_tw_single_pass;
+  WaveConfig::get().singlePassSelect = FLAGS_tw_single_pass_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -853,6 +906,19 @@ void ExecutorTestBase::fillWaveFrame(
     nativert::ExecutionFrame& frame,
     const std::vector<c10::IValue>& deviceInputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // graph.userInputs() carries one entry per placeholder, including the ones
+  // the signature omits -- the ROO preproc has 315 of them, string constants
+  // the export kept -- and only that list aligns positionally with an
+  // already-flat external inputs file. Keying off the signature there consumes
+  // no leaf for an omitted placeholder, so every input past the first one is
+  // read from the wrong index and surfaces far away as an int reaching an op
+  // that wanted a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      deviceInputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, deviceInputs);
+    return;
+  }
   // Flatten to match user input count.
   std::vector<c10::IValue> flat;
   for (const auto& v : deviceInputs) {
