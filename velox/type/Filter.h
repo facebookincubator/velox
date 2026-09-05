@@ -54,6 +54,8 @@ enum class FilterKind {
   kTimestampRange,
   kHugeintValuesUsingHashTable,
   kBigintValuesUsingBloomFilter,
+  /// Filter implemented outside Velox using the UserDefinedFilter API.
+  kUserDefined,
 };
 
 VELOX_DECLARE_ENUM_NAME(FilterKind);
@@ -90,6 +92,9 @@ class Filter : public velox::ISerializable {
   std::string_view kindName() const {
     return FilterKindName::toName(kind_);
   }
+
+  /// Stable name used to select the deserializer.
+  virtual std::string_view serializedName() const = 0;
 
   bool is(FilterKind kind) const {
     return kind_ == kind;
@@ -327,10 +332,32 @@ class Filter : public velox::ISerializable {
   const FilterKind kind_;
 };
 
-/// TODO Check if this filter is needed. This should not be passed down.
-class AlwaysFalse final : public Filter {
+/// Base class for filters implemented by Velox.
+class BuiltInFilter : public Filter {
+ protected:
+  BuiltInFilter(bool deterministic, bool nullAllowed, FilterKind kind)
+      : Filter(deterministic, nullAllowed, kind) {}
+
  public:
-  AlwaysFalse() : Filter(true, false, FilterKind::kAlwaysFalse) {}
+  std::string_view serializedName() const final {
+    return kindName();
+  }
+};
+
+/// Base class for filters implemented outside Velox.
+class UserDefinedFilter : public Filter {
+ protected:
+  UserDefinedFilter(bool deterministic, bool nullAllowed)
+      : Filter(deterministic, nullAllowed, FilterKind::kUserDefined) {}
+
+ public:
+  virtual std::string_view serializedName() const override = 0;
+};
+
+/// TODO Check if this filter is needed. This should not be passed down.
+class AlwaysFalse final : public BuiltInFilter {
+ public:
+  AlwaysFalse() : BuiltInFilter(true, false, FilterKind::kAlwaysFalse) {}
 
   folly::dynamic serialize() const override;
 
@@ -415,9 +442,9 @@ class AlwaysFalse final : public Filter {
 };
 
 /// TODO Check if this filter is needed. This should not be passed down.
-class AlwaysTrue final : public Filter {
+class AlwaysTrue final : public BuiltInFilter {
  public:
-  AlwaysTrue() : Filter(true, true, FilterKind::kAlwaysTrue) {}
+  AlwaysTrue() : BuiltInFilter(true, true, FilterKind::kAlwaysTrue) {}
 
   std::unique_ptr<Filter> clone(
       std::optional<bool> nullAllowed = std::nullopt) const final {
@@ -502,9 +529,9 @@ class AlwaysTrue final : public Filter {
 };
 
 /// Returns true if the value is null. Supports all data types.
-class IsNull final : public Filter {
+class IsNull final : public BuiltInFilter {
  public:
-  IsNull() : Filter(true, true, FilterKind::kIsNull) {}
+  IsNull() : BuiltInFilter(true, true, FilterKind::kIsNull) {}
 
   folly::dynamic serialize() const override;
 
@@ -590,9 +617,9 @@ class IsNull final : public Filter {
 };
 
 /// Returns true if the value is not null. Supports all data types.
-class IsNotNull final : public Filter {
+class IsNotNull final : public BuiltInFilter {
  public:
-  IsNotNull() : Filter(true, false, FilterKind::kIsNotNull) {}
+  IsNotNull() : BuiltInFilter(true, false, FilterKind::kIsNotNull) {}
 
   folly::dynamic serialize() const override;
 
@@ -679,13 +706,14 @@ class IsNotNull final : public Filter {
 
 /// Tests whether boolean value is true or false or integral value is zero or
 /// not. Support boolean and integral data types.
-class BoolValue final : public Filter {
+class BoolValue final : public BuiltInFilter {
  public:
   /// @param value The boolean value that passes the filter. If true, integral
   /// values that are not zero are passing as well.
   /// @param nullAllowed Null values are passing the filter if true.
   BoolValue(bool value, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBoolValue), value_(value) {}
+      : BuiltInFilter(true, nullAllowed, FilterKind::kBoolValue),
+        value_(value) {}
 
   folly::dynamic serialize() const override;
 
@@ -732,13 +760,13 @@ class BoolValue final : public Filter {
 /// ranges, e.g. c >= 10, c <= 34, c BETWEEN 10 and 34. Open ranges can be
 /// implemented by using the value to the left or right of the end of the range,
 /// e.g. a < 10 is equivalent to a <= 9.
-class BigintRange final : public Filter {
+class BigintRange final : public BuiltInFilter {
  public:
   /// @param lower Lower end of the range, inclusive.
   /// @param upper Upper end of the range, inclusive.
   /// @param nullAllowed Null values are passing the filter if true.
   BigintRange(int64_t lower, int64_t upper, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBigintRange),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kBigintRange),
         lower_(lower),
         upper_(upper),
         lower32_(std::max<int64_t>(lower, std::numeric_limits<int32_t>::min())),
@@ -854,13 +882,13 @@ class BigintRange final : public Filter {
   const bool inInt16Range_;
 };
 
-class NegatedBigintRange final : public Filter {
+class NegatedBigintRange final : public BuiltInFilter {
  public:
   /// @param lower Lowest value in the rejected range, inclusive.
   /// @param upper Highest value in the range, inclusive.
   /// @param nullAllowed Null values are passing the filter if true.
   NegatedBigintRange(int64_t lower, int64_t upper, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kNegatedBigintRange),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kNegatedBigintRange),
         nonNegated_(std::make_unique<BigintRange>(lower, upper, !nullAllowed)) {
   }
 
@@ -927,13 +955,13 @@ class NegatedBigintRange final : public Filter {
   std::unique_ptr<BigintRange> nonNegated_;
 };
 
-class HugeintRange final : public Filter {
+class HugeintRange final : public BuiltInFilter {
  public:
   /// @param lower Lowest value in the rejected range, inclusive.
   /// @param upper Highest value in the range, inclusive.
   /// @param nullAllowed Null values are passing the filter if true.
   HugeintRange(const int128_t& lower, const int128_t& upper, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kHugeintRange),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kHugeintRange),
         lower_(lower),
         upper_(upper) {}
 
@@ -991,7 +1019,7 @@ class HugeintRange final : public Filter {
 
 /// IN-list filter for integral data types. Implemented as a hash table. Good
 /// for large number of values that do not fit within a small range.
-class BigintValuesUsingHashTable final : public Filter {
+class BigintValuesUsingHashTable final : public BuiltInFilter {
  public:
   /// @param min Minimum value.
   /// @param max Maximum value.
@@ -1007,7 +1035,7 @@ class BigintValuesUsingHashTable final : public Filter {
   BigintValuesUsingHashTable(
       const BigintValuesUsingHashTable& other,
       bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
+      : BuiltInFilter(true, nullAllowed, other.kind()),
         min_(other.min_),
         max_(other.max_),
         hashTable_(other.hashTable_),
@@ -1172,7 +1200,7 @@ class BigintValuesUsingHashTable final : public Filter {
 };
 
 /// IN-list filter for int128_t data type, implemented as a hash table.
-class HugeintValuesUsingHashTable final : public Filter {
+class HugeintValuesUsingHashTable final : public BuiltInFilter {
  public:
   HugeintValuesUsingHashTable(
       const int128_t& min,
@@ -1183,7 +1211,7 @@ class HugeintValuesUsingHashTable final : public Filter {
   HugeintValuesUsingHashTable(
       const HugeintValuesUsingHashTable& other,
       bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
+      : BuiltInFilter(true, nullAllowed, other.kind()),
         min_(other.min_),
         max_(other.max_),
         values_(other.values_) {}
@@ -1228,7 +1256,7 @@ class HugeintValuesUsingHashTable final : public Filter {
 
 /// IN-list filter for integral data types. Implemented as a bitmask. Offers
 /// better performance than the hash table when the range of values is small.
-class BigintValuesUsingBitmask final : public Filter {
+class BigintValuesUsingBitmask final : public BuiltInFilter {
  public:
   /// @param min Minimum value.
   /// @param max Maximum value.
@@ -1244,7 +1272,7 @@ class BigintValuesUsingBitmask final : public Filter {
   BigintValuesUsingBitmask(
       const BigintValuesUsingBitmask& other,
       bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kBigintValuesUsingBitmask),
         bitmask_(other.bitmask_),
         min_(other.min_),
         max_(other.max_) {}
@@ -1295,14 +1323,17 @@ class BigintValuesUsingBitmask final : public Filter {
   const int64_t max_;
 };
 
-class BigintValuesUsingBloomFilter final : public Filter {
+class BigintValuesUsingBloomFilter final : public BuiltInFilter {
  public:
   static int64_t numBlocks(int64_t capacity) {
     return SplitBlockBloomFilter::numBlocks(capacity, 0.01);
   }
 
   BigintValuesUsingBloomFilter(int64_t capacity, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+      : BuiltInFilter(
+            true,
+            nullAllowed,
+            FilterKind::kBigintValuesUsingBloomFilter),
         blocks_(numBlocks(capacity)),
         filter_(blocks_) {}
 
@@ -1366,7 +1397,10 @@ class BigintValuesUsingBloomFilter final : public Filter {
   BigintValuesUsingBloomFilter(
       bool nullAllowed,
       std::vector<SplitBlockBloomFilter::Block> blocks)
-      : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
+      : BuiltInFilter(
+            true,
+            nullAllowed,
+            FilterKind::kBigintValuesUsingBloomFilter),
         blocks_(std::move(blocks)),
         filter_(blocks_) {}
 
@@ -1376,7 +1410,7 @@ class BigintValuesUsingBloomFilter final : public Filter {
 
 // NOT IN-list filter for integral data types. Implemented as a hash table. Good
 // for large number of rejected values that do not fit within a small range.
-class NegatedBigintValuesUsingHashTable final : public Filter {
+class NegatedBigintValuesUsingHashTable final : public BuiltInFilter {
  public:
   /// @param min Minimum rejected value.
   /// @param max Maximum rejected value.
@@ -1392,7 +1426,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
   NegatedBigintValuesUsingHashTable(
       const NegatedBigintValuesUsingHashTable& other,
       bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
+      : BuiltInFilter(true, nullAllowed, other.kind()),
         nonNegated_(
             std::make_unique<BigintValuesUsingHashTable>(*other.nonNegated_)) {}
 
@@ -1461,7 +1495,7 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
 
 /// NOT IN-list filter for integral data types. Implemented as a bitmask. Offers
 /// better performance than the hash table when the range of values is small.
-class NegatedBigintValuesUsingBitmask final : public Filter {
+class NegatedBigintValuesUsingBitmask final : public BuiltInFilter {
  public:
   /// @param min Minimum REJECTED value.
   /// @param max Maximum REJECTED value.
@@ -1476,7 +1510,7 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
   NegatedBigintValuesUsingBitmask(
       const NegatedBigintValuesUsingBitmask& other,
       bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
+      : BuiltInFilter(true, nullAllowed, other.kind()),
         min_(other.min_),
         max_(other.max_),
         nonNegated_(
@@ -1528,7 +1562,7 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
 };
 
 /// Base class for range filters on floating point and string data types.
-class AbstractRange : public Filter {
+class AbstractRange : public BuiltInFilter {
  public:
   bool lowerUnbounded() const {
     return lowerUnbounded_;
@@ -1556,7 +1590,7 @@ class AbstractRange : public Filter {
       bool upperExclusive,
       bool nullAllowed,
       FilterKind kind)
-      : Filter(true, nullAllowed, kind),
+      : BuiltInFilter(true, nullAllowed, kind),
         lowerUnbounded_(lowerUnbounded),
         lowerExclusive_(lowerUnbounded ? true : lowerExclusive),
         upperUnbounded_(upperUnbounded),
@@ -1748,6 +1782,8 @@ class FloatingPointRange final : public AbstractRange {
             upperExclusive,
             bothNullAllowed);
       }
+      case FilterKind::kUserDefined:
+        return other->mergeWith(this);
       default:
         VELOX_UNREACHABLE();
     }
@@ -2053,7 +2089,7 @@ class BytesRange final : public AbstractRange {
 };
 
 // Negated range filter for strings
-class NegatedBytesRange final : public Filter {
+class NegatedBytesRange final : public BuiltInFilter {
  public:
   /// @param lower Lower end of the rejected range.
   /// @param lowerUnbounded True if lower end is "negative infinity" in which
@@ -2074,7 +2110,7 @@ class NegatedBytesRange final : public Filter {
       bool upperUnbounded,
       bool upperExclusive,
       bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kNegatedBytesRange) {
+      : BuiltInFilter(true, nullAllowed, FilterKind::kNegatedBytesRange) {
     nonNegated_ = std::make_unique<BytesRange>(
         std::move(lower),
         lowerUnbounded,
@@ -2086,7 +2122,7 @@ class NegatedBytesRange final : public Filter {
   }
 
   NegatedBytesRange(const NegatedBytesRange& other, bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
+      : BuiltInFilter(true, nullAllowed, other.kind()),
         nonNegated_(std::make_unique<BytesRange>(*other.nonNegated_)) {}
 
   folly::dynamic serialize() const override;
@@ -2175,7 +2211,7 @@ class NegatedBytesRange final : public Filter {
 /// Open ranges can be implemented by using the value to the left
 /// or right of the end of the range, e.g. a < timestamp '2023-07-19
 /// 17:00:00.777' is equivalent to a <= timestamp '2023-07-19 17:00:00.776'.
-class TimestampRange : public Filter {
+class TimestampRange : public BuiltInFilter {
  public:
   /// @param lower Lower end of the range, inclusive.
   /// @param upper Upper end of the range, inclusive.
@@ -2184,7 +2220,7 @@ class TimestampRange : public Filter {
       const Timestamp& lower,
       const Timestamp& upper,
       bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kTimestampRange),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kTimestampRange),
         lower_(lower),
         upper_(upper),
         singleValue_(lower_ == upper) {}
@@ -2249,13 +2285,13 @@ class TimestampRange : public Filter {
 };
 
 /// IN-list filter for string data type.
-class BytesValues final : public Filter {
+class BytesValues final : public BuiltInFilter {
  public:
   /// @param values List of values that pass the filter. Must contain at least
   /// one entry.
   /// @param nullAllowed Null values are passing the filter if true.
   BytesValues(const std::vector<std::string>& values, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBytesValues) {
+      : BuiltInFilter(true, nullAllowed, FilterKind::kBytesValues) {
     VELOX_CHECK(!values.empty(), "values must not be empty");
 
     for (const auto& value : values) {
@@ -2268,7 +2304,7 @@ class BytesValues final : public Filter {
   }
 
   BytesValues(const BytesValues& other, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kBytesValues),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kBytesValues),
         lower_(other.lower_),
         upper_(other.upper_),
         values_(other.values_),
@@ -2319,7 +2355,7 @@ class BytesValues final : public Filter {
 /// Represents a combination of two of more range filters on integral types with
 /// OR semantics. The filter passes if at least one of the contained filters
 /// passes.
-class BigintMultiRange final : public Filter {
+class BigintMultiRange final : public BuiltInFilter {
  public:
   /// @param ranges List of range filters. Must contain at least two entries.
   /// Ranges must be sorted in ascending order and must not overlap.
@@ -2358,19 +2394,19 @@ class BigintMultiRange final : public Filter {
 };
 
 /// NOT IN-list filter for string data type.
-class NegatedBytesValues final : public Filter {
+class NegatedBytesValues final : public BuiltInFilter {
  public:
   /// @param values List of values that fail the filter. Must contain at least
   /// one entry.
   /// @param nullAllowed Null values are passing the filter if true.
   NegatedBytesValues(const std::vector<std::string>& values, bool nullAllowed)
-      : Filter(true, nullAllowed, FilterKind::kNegatedBytesValues) {
+      : BuiltInFilter(true, nullAllowed, FilterKind::kNegatedBytesValues) {
     VELOX_CHECK(!values.empty(), "values must not be empty");
     nonNegated_ = std::make_unique<BytesValues>(values, !nullAllowed);
   }
 
   NegatedBytesValues(const NegatedBytesValues& other, bool nullAllowed)
-      : Filter(true, nullAllowed, other.kind()),
+      : BuiltInFilter(true, nullAllowed, other.kind()),
         nonNegated_(std::make_unique<BytesValues>(*other.nonNegated_)) {}
 
   folly::dynamic serialize() const override;
@@ -2417,7 +2453,7 @@ class NegatedBytesValues final : public Filter {
 /// Represents a combination of two of more filters with
 /// OR semantics. The filter passes if at least one of the contained filters
 /// passes.
-class MultiRange final : public Filter {
+class MultiRange final : public BuiltInFilter {
  public:
   /// @param ranges List of range filters. Must contain at least two entries.
   /// All entries must support the same data types.
@@ -2429,7 +2465,7 @@ class MultiRange final : public Filter {
       std::vector<std::unique_ptr<Filter>> filters,
       bool nullAllowed,
       bool nanAllowed = false)
-      : Filter(true, nullAllowed, FilterKind::kMultiRange),
+      : BuiltInFilter(true, nullAllowed, FilterKind::kMultiRange),
         filters_(std::move(filters)) {}
 
   folly::dynamic serialize() const override;
