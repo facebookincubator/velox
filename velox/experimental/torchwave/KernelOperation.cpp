@@ -1120,7 +1120,14 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       leafIds.push_back(value->id());
     }
   }
-  return SizeExpr{SizeShortcut::kMax, std::move(leafIds), {}};
+  // An op whose work spans a whole tensor list is sized by the total, not the
+  // largest member; kMax would size its grid off one list element and starve
+  // it of blocks. See Metadata::gridSizeSumsInputs.
+  const auto* meta = expr_ ? Registry::metadata(expr_->target()) : nullptr;
+  auto shortcut = (meta != nullptr && meta->gridSizeSumsInputs)
+      ? SizeShortcut::kSum
+      : SizeShortcut::kMax;
+  return SizeExpr{shortcut, std::move(leafIds), {}};
 }
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {

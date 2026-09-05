@@ -305,6 +305,11 @@ MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::gridSizeSumsInputs(bool val) {
+  md_.gridSizeSumsInputs = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::metadataGetter(bool val) {
   md_.isMetadataGetter = val;
   return *this;
