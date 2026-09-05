@@ -621,6 +621,12 @@ class RowContainer {
            reinterpret_cast<uintptr_t>(range.data()));
       auto row = iter->rowOffset;
       while (row + rowSize <= limit) {
+#if defined(__x86_64__)
+        // Increase memory run-ahead in this batched producer-consumer scan by
+        // prefetching 2 KiB ahead; an x86 distance sweep found 2 KiB best. The
+        // hint may address past the range end, which is harmless.
+        __builtin_prefetch(data + row + 2'048);
+#endif
         rows[count++] = data + row +
             (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
         VELOX_DCHECK_EQ(
