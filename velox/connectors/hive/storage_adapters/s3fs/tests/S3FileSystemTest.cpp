@@ -16,9 +16,11 @@
 
 #include <aws/core/auth/AWSCredentials.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
+#include <sys/stat.h>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/RegisterS3FileSystem.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3AccessToken.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3WriteFile.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/tests/S3Test.h"
 
@@ -54,6 +56,45 @@ class MyCredentialsProvider : public Aws::Auth::AWSCredentialsProvider {
   }
 };
 
+/// Hands out one credential set for the paths under 'prefix', nothing for
+/// anything else. Models an engine that resolves prefix-scoped credentials,
+/// e.g. per-table credentials vended by an Iceberg REST catalog.
+class PrefixTokenProvider : public TokenProvider {
+ public:
+  PrefixTokenProvider(
+      std::string prefix,
+      std::string accessKey,
+      std::string secretKey)
+      : prefix_(std::move(prefix)),
+        accessKey_(std::move(accessKey)),
+        secretKey_(std::move(secretKey)) {}
+
+  bool equals(const TokenProvider& other) const override {
+    const auto* typedOther = dynamic_cast<const PrefixTokenProvider*>(&other);
+    return typedOther != nullptr && typedOther->prefix_ == prefix_ &&
+        typedOther->accessKey_ == accessKey_ &&
+        typedOther->secretKey_ == secretKey_;
+  }
+
+  size_t hash() const override {
+    return std::hash<std::string>()(prefix_ + accessKey_);
+  }
+
+  std::shared_ptr<AccessToken> getToken(
+      const AccessTokenKey& key) const override {
+    const auto* s3Key = dynamic_cast<const S3AccessTokenKey*>(&key);
+    if (s3Key == nullptr || s3Key->path().rfind(prefix_, 0) != 0) {
+      return nullptr;
+    }
+    return std::make_shared<S3AccessToken>(accessKey_, secretKey_);
+  }
+
+ private:
+  const std::string prefix_;
+  const std::string accessKey_;
+  const std::string secretKey_;
+};
+
 } // namespace
 
 TEST_F(S3FileSystemTest, writeAndRead) {
@@ -73,6 +114,81 @@ TEST_F(S3FileSystemTest, writeAndRead) {
   filesystems::S3FileSystem s3fs(bucketName, s3Config);
   auto readFile = s3fs.openFileForRead(s3File);
   readData(readFile.get());
+}
+
+TEST_F(S3FileSystemTest, tokenProviderCredentials) {
+  const char* bucketName = "tokens";
+  const char* file = "test.txt";
+  const auto filename = localPath(bucketName) + "/" + file;
+  const auto s3File = s3URI(bucketName, file);
+  addBucket(bucketName);
+  {
+    LocalWriteFile writeFile(filename);
+    writeData(&writeFile);
+  }
+
+  // The file system's own credentials are wrong on purpose: only credentials
+  // coming from a TokenProvider can read this bucket.
+  auto hiveConfig = minioServer_->hiveConfig(
+      {{"hive.s3.aws-access-key", "wrong-access-key"},
+       {"hive.s3.aws-secret-key", "wrong-secret-key"}});
+  filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
+
+  // No token provider: the configured (wrong) credentials are used.
+  VELOX_ASSERT_THROW(
+      s3fs.openFileForRead(s3File), "Failed to get metadata for S3 object");
+
+  // A provider that covers this path: its credentials are used.
+  FileOptions options;
+  options.tokenProvider = std::make_shared<PrefixTokenProvider>(
+      fmt::format("{}/", bucketName), kMinioAccessKey, kMinioSecretKey);
+  auto readFile = s3fs.openFileForRead(s3File, options);
+  readData(readFile.get());
+
+  // A provider that does not cover this path resolves no token, so the
+  // configured (wrong) credentials are used again.
+  FileOptions otherOptions;
+  otherOptions.tokenProvider = std::make_shared<PrefixTokenProvider>(
+      "some-other-bucket/", kMinioAccessKey, kMinioSecretKey);
+  VELOX_ASSERT_THROW(
+      s3fs.openFileForRead(s3File, otherOptions),
+      "Failed to get metadata for S3 object");
+}
+
+TEST_F(S3FileSystemTest, tokenProviderCredentialsPerPath) {
+  const char* bucketName = "multitable";
+  const char* readableFile = "readable/test.txt";
+  const char* deniedFile = "denied/test.txt";
+  addBucket(bucketName);
+  ::mkdir((localPath(bucketName) + "/readable").c_str(), S_IRWXU | S_IRWXG);
+  ::mkdir((localPath(bucketName) + "/denied").c_str(), S_IRWXU | S_IRWXG);
+  {
+    LocalWriteFile writeFile(localPath(bucketName) + "/" + readableFile);
+    writeData(&writeFile);
+  }
+  {
+    LocalWriteFile writeFile(localPath(bucketName) + "/" + deniedFile);
+    writeData(&writeFile);
+  }
+
+  auto hiveConfig = minioServer_->hiveConfig(
+      {{"hive.s3.aws-access-key", "wrong-access-key"},
+       {"hive.s3.aws-secret-key", "wrong-secret-key"}});
+  filesystems::S3FileSystem s3fs(bucketName, hiveConfig);
+
+  // One provider, two prefixes in the same bucket: only the covered prefix
+  // gets working credentials, which is what per-table credentials require.
+  FileOptions options;
+  options.tokenProvider = std::make_shared<PrefixTokenProvider>(
+      fmt::format("{}/readable/", bucketName),
+      kMinioAccessKey,
+      kMinioSecretKey);
+  auto readFile =
+      s3fs.openFileForRead(s3URI(bucketName, readableFile), options);
+  readData(readFile.get());
+  VELOX_ASSERT_THROW(
+      s3fs.openFileForRead(s3URI(bucketName, deniedFile), options),
+      "Failed to get metadata for S3 object");
 }
 
 TEST_F(S3FileSystemTest, invalidCredentialsConfig) {
