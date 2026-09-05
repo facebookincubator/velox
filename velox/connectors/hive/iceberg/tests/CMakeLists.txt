@@ -41,6 +41,7 @@ endif()
 if(NOT VELOX_DISABLE_GOOGLETEST)
   add_executable(
     velox_hive_iceberg_test
+    IcebergDeletionVectorReadTest.cpp
     IcebergPositionalDeleteTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
