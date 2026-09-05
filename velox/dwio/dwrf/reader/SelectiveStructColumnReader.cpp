@@ -64,10 +64,11 @@ SelectiveStructColumnReader::SelectiveStructColumnReader(
   // A reader tree may be constructed while the ScanSpec is being used
   // for another read. This happens when the next stripe is being
   // prepared while the previous one is reading.
-  auto& childSpecs = scanSpec.stableChildren();
+  const auto stableChildren = scanSpec.stableChildren();
+  const auto& childSpecs = *stableChildren;
   const auto& rowType = requestedType_->asRow();
   for (auto i = 0; i < childSpecs.size(); ++i) {
-    auto* childSpec = childSpecs[i];
+    const auto& childSpec = childSpecs[i];
     if (childSpec->isConstant() || isChildMissing(*childSpec)) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;

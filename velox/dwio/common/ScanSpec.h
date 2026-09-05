@@ -181,12 +181,18 @@ class ScanSpec {
     return children_;
   }
 
-  /// Returns 'children in a stable order. May be used for parallel
+  /// Snapshot of the children in a stable order. Keeps both the vector and
+  /// the specs in it alive, so it may outlive the spec it came from.
+  using StableChildren =
+      std::shared_ptr<const std::vector<std::shared_ptr<ScanSpec>>>;
+
+  /// Returns 'children' in a stable order. May be used for parallel
   /// construction and read-ahead of reader trees while the main user
   /// of 'this' is running. 'children_' may be reordered while running
   /// but the tree being constructed must see a single, unchanging
-  /// order.
-  const std::vector<ScanSpec*>& stableChildren();
+  /// order. A snapshot never changes once returned; a child added later
+  /// appears only in later snapshots, at the end.
+  StableChildren stableChildren();
 
   /// Returns a read sequence number. This can b used for tagging
   /// lazy vectors with a generation number so that we can check that
@@ -200,6 +206,11 @@ class ScanSpec {
 
   /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
   /// any intermediate level.
+  ///
+  /// Concurrent calls are safe against each other; exactly one child is
+  /// created per name. They are not safe against a concurrent read: an add
+  /// appends to 'children_' and 'childByFieldName_', which every reader walks
+  /// without taking 'mutex_'.
   ScanSpec* getOrCreateChild(const std::string& name);
 
   /// Returns the ScanSpec corresponding to 'subfield'. Creates it if
@@ -346,27 +357,21 @@ class ScanSpec {
     return deltaUpdate_;
   }
 
-  void setDeltaUpdate(dwio::common::DeltaColumnUpdater* update) {
-    deltaUpdate_ = update;
-    enableFilterInSubTree(update == nullptr);
-  }
+  /// Sets the updater that produces the final values of this column, taking
+  /// filtering on it away from the readers while one is set.
+  void setDeltaUpdate(dwio::common::DeltaColumnUpdater* update);
 
-  void resetDeltaUpdates() {
-    for (auto& child : children_) {
-      // Only top level columns can have delta updates.
-      if (child->deltaUpdate_) {
-        child->setDeltaUpdate(nullptr);
-      }
-    }
-  }
+  /// Clears the delta update of every top level column, re-enabling filtering
+  /// on the ones that had one.
+  void resetDeltaUpdates();
 
   /// Apply filter to the first `size' rows of input `vector' and set the passed
   /// bits in `result'.  `size' is usually the size of top most RowVector, since
   /// the child could be larger in some suboptimal/corrupted cases and we do not
   /// want to crash the process for it.
   ///
-  /// This method is used by non-selective reader and delta update, so it
-  /// ignores the filterDisabled_ state.
+  /// Used by the non-selective reader, by delta update, and by readers that
+  /// synthesize values after the read, so it ignores the filterDisabled_ state.
   void applyFilter(
       const BaseVector& vector,
       vector_size_t size,
@@ -475,7 +480,15 @@ class ScanSpec {
  private:
   void reorder();
 
+  // Enables or disables filtering by this spec and its descendants.
   void enableFilterInSubTree(bool value);
+
+  // Resets the memoized hasFilter() of this spec and of every ancestor. Only
+  // those can be stale after filtering is turned on or off here, or after a
+  // filter moves in: an ancestor memoizes what its children report, while a
+  // descendant memoizes nothing while filtering is disabled, because
+  // hasFilter() answers from 'filterDisabled_' before it reads the memo.
+  void resetHasFilterUpToRoot();
 
   bool compareTimeToDropValue(
       const std::shared_ptr<ScanSpec>& x,
@@ -483,7 +496,9 @@ class ScanSpec {
 
   bool disableStatsBasedFilterReorder_{false};
 
-  // Serializes stableChildren().
+  // Serializes the writers of 'children_', 'childByFieldName_', 'stableOrder_'
+  // and 'stableChildren_'. Readers of the first two do not take it, so adds are
+  // safe against each other but not against a concurrent read.
   std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
@@ -528,10 +543,17 @@ class ScanSpec {
 
   std::vector<std::shared_ptr<ScanSpec>> children_;
 
-  // Read-only copy of children, not subject to reordering. Used when
-  // asynchronously constructing reader trees for read-ahead, while
-  // 'children_' is reorderable by a running scan.
-  std::vector<ScanSpec*> stableChildren_;
+  // Containing spec, nullptr for the root. reorder() permutes 'children_'
+  // without moving the specs, so this stays valid.
+  ScanSpec* parent_{nullptr};
+
+  // Children in the order they were added, never reordered. Not handed out;
+  // 'stableChildren_' publishes a copy.
+  std::vector<std::shared_ptr<ScanSpec>> stableOrder_;
+
+  // Snapshot of 'stableOrder_' handed to reader trees. Never written to once
+  // published: an add drops it and the next stableChildren() republishes.
+  StableChildren stableChildren_;
 
   folly::F14FastMap<std::string, ScanSpec*> childByFieldName_;
 
