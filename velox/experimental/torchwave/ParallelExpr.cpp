@@ -1466,6 +1466,36 @@ int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types) {
   return merged;
 }
 
+int64_t decomposeListOps(nativert::Graph& graph, WaveGraph& waveGraph) {
+  // Snapshot: a rule rewrites the node it is given and may add nodes, and a
+  // live walk would visit the replacements.
+  std::vector<NodeCP> nodes;
+  nodes.reserve(graph.nodes().size());
+  for (const auto& node : graph.nodes()) {
+    nodes.push_back(&node);
+  }
+
+  int64_t rewritten = 0;
+  for (NodeCP node : nodes) {
+    if (isDeadNode(node)) {
+      continue;
+    }
+    const Metadata* meta = Registry::metadata(node->target());
+    if (meta == nullptr || !meta->decompose) {
+      continue;
+    }
+    if (meta->decompose(node, waveGraph)) {
+      ++rewritten;
+    }
+  }
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && rewritten > 0) {
+    LOG(INFO) << "pre-partition decomposition: rewrote " << rewritten
+              << " node(s)";
+  }
+  return rewritten;
+}
+
 namespace {
 
 // The ScalarType newScalarValue needs to reproduce a scalar Value's type kind,

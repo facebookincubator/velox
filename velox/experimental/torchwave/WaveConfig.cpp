@@ -88,6 +88,8 @@ std::string WaveConfig::toString() const {
   addBool("inputContiguous", &WaveConfig::inputContiguous);
   addBool("cseCompute", &WaveConfig::cseCompute);
   addBool("cseViews", &WaveConfig::cseViews);
+  addBool("decomposeLists", &WaveConfig::decomposeLists);
+  addBool("foldSharedChains", &WaveConfig::foldSharedChains);
   addBool("mkSelect", &WaveConfig::mkSelect);
   addBool("stepLastUse", &WaveConfig::stepLastUse);
   addBool("syncEachStep", &WaveConfig::syncEachStep);
