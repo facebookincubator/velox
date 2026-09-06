@@ -18,7 +18,9 @@ import argparse
 import os
 
 import torch
-from velox.experimental.torchwave.tests.cat_alloc_group_test import CatAllocGroupTest
+from velox.experimental.torchwave.tests.cat_strided_band_test import (
+    CatStridedBandTest,
+)
 
 
 def main() -> None:
@@ -30,43 +32,26 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     torch.manual_seed(1)
-    # Varied per-segment repeat counts, so the operands differ in length and a
-    # wrong offset in the concat layout shows up as a shifted result.
-    reps = torch.arange(64, dtype=torch.long) % 3 + 1
-    mreps = torch.arange(4, dtype=torch.long) % 2 + 1
-    inputs = (
-        torch.arange(0, 64, dtype=torch.long),
-        torch.arange(100, 164, dtype=torch.long),
-        torch.arange(200, 264, dtype=torch.long),
-        torch.arange(300, 364, dtype=torch.long),
-        torch.arange(400, 464, dtype=torch.long),
-        torch.arange(500, 564, dtype=torch.long),
-        reps,
-        torch.arange(900, 932, dtype=torch.long),
-        torch.randn(4, 8),
-        torch.randn(4, 8),
-        torch.randn(4, 8),
-        mreps,
-        torch.arange(600, 664, dtype=torch.long),
-        torch.arange(700, 764, dtype=torch.long),
-        torch.arange(800, 864, dtype=torch.long),
+    inputs = tuple(torch.randn(4, 6) for _ in range(9)) + tuple(
+        torch.randn(2, 3, 4) for _ in range(3)
     )
 
-    module = CatAllocGroupTest()
+    module = CatStridedBandTest()
     results = module(*inputs)
     print(f"Eager results ({len(results)} outputs):")
     for i, r in enumerate(results):
         print(f"  [{i}] shape={tuple(r.shape)}, dtype={r.dtype}")
 
-    results_path = os.path.join(output_dir, "cat_alloc_group_test_results.pt")
+    results_path = os.path.join(output_dir, "cat_strided_band_test_results.pt")
     torch.save(list(results), results_path)
     print(f"Saved results to {results_path}")
 
     with torch.no_grad():
         exported_program = torch.export.export(module, inputs, strict=False)
     print(f"Export successful, graph has {len(exported_program.graph.nodes)} nodes")
+    print(exported_program.graph)
 
-    pt2_path = os.path.join(output_dir, "cat_alloc_group_test.pt2")
+    pt2_path = os.path.join(output_dir, "cat_strided_band_test.pt2")
     torch.export.save(exported_program, pt2_path)
     print(f"Saved .pt2 to {pt2_path} ({os.path.getsize(pt2_path)} bytes)")
 
