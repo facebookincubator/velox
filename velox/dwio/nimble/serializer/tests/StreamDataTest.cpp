@@ -48,256 +48,47 @@ using namespace facebook::velox;
 // StreamData
 // ---------------------------------------------------------------------------
 
-// StreamData decompresses whole legacy streams; the chunk-level paths belong
-// to StreamDataParser and are covered in StreamDataParserTest.
-class StreamDataZstdTest : public ::testing::Test {
+class StreamDataTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   void SetUp() override {
-    pool_ = memory::memoryManager()->addLeafPool("stream_data_zstd_test");
+    pool_ = memory::memoryManager()->addLeafPool("stream_data_test");
   }
-  static std::string buildLegacyCompressedData(std::string_view payload) {
-    std::string result;
-    result.push_back(static_cast<char>(CompressionType::Zstd));
-    const auto maxSize = ZSTD_compressBound(payload.size());
-    const auto offset = result.size();
-    result.resize(offset + maxSize);
-    const auto compressedSize = ZSTD_compress(
-        result.data() + offset, maxSize, payload.data(), payload.size(), 1);
-    NIMBLE_CHECK(!ZSTD_isError(compressedSize));
-    result.resize(offset + compressedSize);
-    return result;
-  }
+
   std::shared_ptr<memory::MemoryPool> pool_;
-  BufferPtr decompressionBuffer_;
 };
 
-TEST_F(StreamDataZstdTest, streamDataLegacyZstdWithDCtx) {
-  const std::vector<int32_t> expected = {10, 20, 30, 40};
-  std::string_view payload(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-  auto compressed = buildLegacyCompressedData(payload);
-
+TEST_F(StreamDataTest, zeroCountDecodeIsNoOp) {
+  // Empty streams are omitted from the payload, so they never carry an
+  // encoding. A zero-count decode of such a stream must be a no-op rather than
+  // throwing on the missing encoding.
   std::vector<BufferPtr> stringBuffers;
   serde::StreamData sd(
-      ScalarKind::Int32,
-      compressed,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
+      /*data=*/{}, stringBuffers, pool_.get(), serde::StreamData::Options{});
+  ASSERT_FALSE(sd.hasEncoding());
 
-  std::vector<int32_t> output(expected.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output.data()), output.size() * sizeof(int32_t));
-  EXPECT_EQ(output, expected);
-}
-
-TEST_F(StreamDataZstdTest, streamDataLegacyDecodeFails) {
-  const std::vector<int32_t> expected = {10, 20, 30, 40};
-  std::string_view payload(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-  auto compressed = buildLegacyCompressedData(payload);
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      compressed,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output(expected.size());
-  NIMBLE_ASSERT_THROW(
-      sd.decode(
-          output.data(),
-          /*offset=*/0,
-          static_cast<uint32_t>(output.size()),
-          sizeof(int32_t)),
-      "Legacy StreamData must be decoded through copyTo() or decodeStrings()");
-}
-
-TEST_F(StreamDataZstdTest, streamDataZeroCountDecodeIsNoOp) {
-  const std::vector<int32_t> expected = {10, 20, 30, 40};
-  std::string_view payload(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-  auto compressed = buildLegacyCompressedData(payload);
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      compressed,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  // A zero-count decode must be a no-op even for a stream with no encoding
-  // (legacy/empty stream), rather than throwing.
   const auto result =
       sd.decode(/*output=*/nullptr, /*offset=*/0, /*count=*/0, sizeof(int32_t));
   EXPECT_EQ(result.numOutputRows, 0);
   EXPECT_EQ(result.nonNullOutputRows, 0);
 }
 
-TEST_F(StreamDataZstdTest, streamDataDCtxReusedAcrossReset) {
-  const std::vector<int32_t> values1 = {1, 2, 3};
-  std::string_view payload1(
-      reinterpret_cast<const char*>(values1.data()),
-      values1.size() * sizeof(int32_t));
-  auto compressed1 = buildLegacyCompressedData(payload1);
-
-  const std::vector<int32_t> values2 = {100, 200};
-  std::string_view payload2(
-      reinterpret_cast<const char*>(values2.data()),
-      values2.size() * sizeof(int32_t));
-  auto compressed2 = buildLegacyCompressedData(payload2);
-
+TEST_F(StreamDataTest, decodeWithoutEncodingThrows) {
   std::vector<BufferPtr> stringBuffers;
   serde::StreamData sd(
-      ScalarKind::Int32,
-      compressed1,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
+      /*data=*/{}, stringBuffers, pool_.get(), serde::StreamData::Options{});
 
-  std::vector<int32_t> output1(values1.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output1.data()),
-      output1.size() * sizeof(int32_t));
-  EXPECT_EQ(output1, values1);
-
-  // Recreate with new data; decompression buffer storage is external and
-  // persists across StreamData lifetimes.
-  serde::StreamData sd2(
-      ScalarKind::Int32,
-      compressed2,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output2(values2.size());
-  sd2.copyTo(
-      reinterpret_cast<char*>(output2.data()),
-      output2.size() * sizeof(int32_t));
-  EXPECT_EQ(output2, values2);
-}
-
-class StreamDataLz4Test : public ::testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
-
-  void SetUp() override {
-    pool_ = memory::memoryManager()->addLeafPool("stream_data_lz4_test");
-  }
-  static std::string buildLegacyLZ4CompressedData(std::string_view payload) {
-    std::string result;
-    result.push_back(static_cast<char>(CompressionType::Lz4));
-
-    const auto origSize = static_cast<uint32_t>(payload.size());
-    result.resize(result.size() + sizeof(uint32_t));
-    auto* sizePos = result.data() + 1;
-    encoding::writeUint32(origSize, sizePos);
-
-    const auto maxSize = LZ4_compressBound(static_cast<int>(payload.size()));
-    const auto offset = result.size();
-    result.resize(offset + maxSize);
-    const auto compressedSize = LZ4_compress_default(
-        payload.data(),
-        result.data() + offset,
-        static_cast<int>(payload.size()),
-        maxSize);
-    NIMBLE_CHECK_GT(compressedSize, 0, "LZ4 compression failed");
-    result.resize(offset + compressedSize);
-    return result;
-  }
-  std::shared_ptr<memory::MemoryPool> pool_;
-  BufferPtr decompressionBuffer_;
-};
-
-TEST_F(StreamDataLz4Test, streamDataLegacyLZ4) {
-  const std::vector<int32_t> expected = {10, 20, 30, 40, 50};
-  std::string_view payload(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-  auto compressed = buildLegacyLZ4CompressedData(payload);
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      compressed,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output(expected.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output.data()),
-      static_cast<uint32_t>(output.size() * sizeof(int32_t)));
-  EXPECT_EQ(output, expected);
-}
-
-TEST_F(StreamDataLz4Test, streamDataLZ4ReusedAcrossReset) {
-  const std::vector<int32_t> values1 = {1, 2, 3};
-  std::string_view payload1(
-      reinterpret_cast<const char*>(values1.data()),
-      values1.size() * sizeof(int32_t));
-  auto compressed1 = buildLegacyLZ4CompressedData(payload1);
-
-  const std::vector<int32_t> values2 = {100, 200};
-  std::string_view payload2(
-      reinterpret_cast<const char*>(values2.data()),
-      values2.size() * sizeof(int32_t));
-  auto compressed2 = buildLegacyLZ4CompressedData(payload2);
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      compressed1,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output1(values1.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output1.data()),
-      static_cast<uint32_t>(output1.size() * sizeof(int32_t)));
-  EXPECT_EQ(output1, values1);
-
-  serde::StreamData sd2(
-      ScalarKind::Int32,
-      compressed2,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output2(values2.size());
-  sd2.copyTo(
-      reinterpret_cast<char*>(output2.data()),
-      static_cast<uint32_t>(output2.size() * sizeof(int32_t)));
-  EXPECT_EQ(output2, values2);
+  std::vector<int32_t> output(4);
+  NIMBLE_ASSERT_THROW(
+      sd.decode(
+          output.data(),
+          /*offset=*/0,
+          static_cast<uint32_t>(output.size()),
+          sizeof(int32_t)),
+      "StreamData has no encoding to decode");
 }
 
 // ---------------------------------------------------------------------------
@@ -401,8 +192,8 @@ TEST_F(StreamDataParserHeaderTest, readsStreamRowCountEncodingByVersion) {
 
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(toString(testCase.version));
-    DeserializerOptions options{.hasHeader = true};
-    StreamDataParser parser{pool_.get(), options};
+    DeserializerOptions options{};
+    StreamDataParser parser{pool_.get()};
 
     EXPECT_EQ(parser.initialize(testCase.buffer), kRowCount);
     EXPECT_EQ(parser.version(), testCase.version);
@@ -501,8 +292,8 @@ class TabletChunkStripTest : public ::testing::Test {
         buildTabletBuffer(rowCount, streams, streamHasChunkHeader);
 
     // Parse via StreamDataParser.
-    DeserializerOptions options{.hasHeader = true};
-    StreamDataParser reader(pool_.get(), options);
+    DeserializerOptions options{};
+    StreamDataParser reader(pool_.get());
     auto actualRows = reader.initialize(std::string_view(buffer));
     EXPECT_EQ(actualRows, rowCount);
 
@@ -690,8 +481,8 @@ TEST_F(TabletChunkStripTest, streamViewsRemainStable) {
     const auto secondBatch = buildTabletBuffer(
         20, testCase.secondStreams, /*streamHasChunkHeader=*/true);
 
-    DeserializerOptions options{.hasHeader = true};
-    StreamDataParser reader(pool_.get(), options);
+    DeserializerOptions options{};
+    StreamDataParser reader(pool_.get());
 
     std::vector<std::pair<uint32_t, std::string_view>> views;
     EXPECT_EQ(reader.initialize(firstBatch), 10);
@@ -799,8 +590,6 @@ class ZstdDCtxReuseTest : public TabletChunkStripTest {
         parseTablet(rowCount, result, /*streamHasChunkHeader=*/false), result);
     return result;
   }
-
-  BufferPtr decompressionBuffer_;
 };
 
 TEST_F(ZstdDCtxReuseTest, streamDataParserCompressedChunkWithDCtx) {
@@ -913,8 +702,7 @@ class StreamDataParserTabletTest : public ::testing::Test {
   }
   void expectInitializeThrows(const std::string& buf) {
     DeserializerOptions options;
-    options.hasHeader = true;
-    StreamDataParser reader{pool_.get(), options};
+    StreamDataParser reader{pool_.get()};
     EXPECT_THROW(
         reader.initialize(std::string_view(buf.data(), buf.size())),
         NimbleInternalError);
@@ -953,81 +741,6 @@ TEST_F(StreamDataParserTabletTest, rejectsTruncatedResumeKey) {
   buf.push_back(0x04); // resumeKeyLength = 4 → declares 3 key bytes
   buf.push_back('a'); // only 1 key byte present
   expectInitializeThrows(buf);
-}
-
-// kLegacy is still a live wire format: StreamDataParser::iterateStreams reads
-// it via the inline [size:u32][data] branch rather than a trailer. A kLegacy
-// blob is [rowCount:u32] followed by those inline-sized streams, and carries no
-// header byte, so the parser falls back to its default kLegacy version.
-class StreamDataParserLegacyTest : public ::testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
-
-  void SetUp() override {
-    pool_ = memory::memoryManager()->addLeafPool("stream_data_parser_legacy");
-  }
-
-  static std::string buildLegacyBlob(
-      uint32_t rowCount,
-      const std::vector<std::string>& streams) {
-    std::string buffer(sizeof(uint32_t), '\0');
-    auto* pos = buffer.data();
-    encoding::writeUint32(rowCount, pos);
-    for (const auto& stream : streams) {
-      const auto offset = buffer.size();
-      buffer.resize(offset + sizeof(uint32_t) + stream.size());
-      auto* streamPos = buffer.data() + offset;
-      encoding::writeUint32(static_cast<uint32_t>(stream.size()), streamPos);
-      std::memcpy(streamPos, stream.data(), stream.size());
-    }
-    return buffer;
-  }
-
-  std::vector<std::pair<uint32_t, std::string>> parse(const std::string& blob) {
-    DeserializerOptions options{.hasHeader = false};
-    serde::StreamDataParser parser{pool_.get(), options};
-    rowCount_ = parser.initialize(blob);
-    version_ = parser.version();
-    std::vector<std::pair<uint32_t, std::string>> result;
-    parser.iterateStreams([&](uint32_t offset, std::string_view data) {
-      result.emplace_back(offset, std::string{data});
-    });
-    return result;
-  }
-
-  uint32_t rowCount_{0};
-  SerializationVersion version_{SerializationVersion::kSerialization};
-  std::shared_ptr<memory::MemoryPool> pool_;
-};
-
-TEST_F(StreamDataParserLegacyTest, readsInlineSizedStreams) {
-  const std::vector<std::pair<uint32_t, std::string>> expected = {
-      {0, "alpha"}, {1, "b"}, {2, "gamma-payload"}};
-
-  const auto actual =
-      parse(buildLegacyBlob(7, {"alpha", "b", "gamma-payload"}));
-
-  EXPECT_EQ(actual, expected);
-  EXPECT_EQ(rowCount_, 7);
-  EXPECT_EQ(version_, SerializationVersion::kLegacy);
-}
-
-TEST_F(StreamDataParserLegacyTest, skipsEmptyStreamsButKeepsOffsets) {
-  // Empty slots are not handed to the callback, yet the offsets of the streams
-  // after them must still reflect their position in the blob.
-  const std::vector<std::pair<uint32_t, std::string>> expected = {
-      {1, "second"}, {3, "fourth"}};
-
-  const auto actual = parse(buildLegacyBlob(2, {"", "second", "", "fourth"}));
-
-  EXPECT_EQ(actual, expected);
-}
-
-TEST_F(StreamDataParserLegacyTest, readsEmptyBlob) {
-  EXPECT_TRUE(parse(buildLegacyBlob(0, {})).empty());
-  EXPECT_EQ(rowCount_, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,9 +837,7 @@ std::vector<std::string_view> parseStreams(
     SerializationVersion version,
     memory::MemoryPool* pool) {
   NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null");
-  NIMBLE_CHECK(
-      nonLegacyFormat(version) && !isTabletVersion(version),
-      "Unexpected serialization version");
+  NIMBLE_CHECK(!isTabletVersion(version), "Unexpected serialization version");
 
   auto [streamIds, streamSizes] = usesLegacyTrailer(version)
       ? legacy::readLegacyTrailerStreamMetadata(end)
@@ -1187,14 +898,7 @@ class WriteHeaderTest : public ::testing::Test {
     auto actualVersion = static_cast<SerializationVersion>(*pos++);
     EXPECT_EQ(actualVersion, expectedVersion);
 
-    // Read row count. Non-legacy formats use varint; kLegacy uses u32.
-    uint32_t actualRowCount;
-    if (usesVarintRowCount(expectedVersion)) {
-      actualRowCount = varint::readVarint32(&pos);
-    } else {
-      actualRowCount = encoding::readUint32(pos);
-    }
-    EXPECT_EQ(actualRowCount, expectedRowCount);
+    EXPECT_EQ(varint::readVarint32(&pos), expectedRowCount);
 
     // Skip the flags byte for versions that carry one (no nulls expected here).
     if (usesCompactHeaderFlags(expectedVersion)) {
@@ -1205,7 +909,7 @@ class WriteHeaderTest : public ::testing::Test {
     }
 
     // Sequential stream layouts keep stream sizes in the trailer.
-    if (nonLegacyFormat(expectedVersion) && !isTabletVersion(expectedVersion)) {
+    if (!isTabletVersion(expectedVersion)) {
       auto actualSizes = readTrailerStreamMetadataDenseForTest(end);
       if (actualSizes.size() < expectedSizes.size()) {
         actualSizes.resize(expectedSizes.size(), 0);
@@ -1364,8 +1068,7 @@ TEST_F(DenseTrailerRoundTripTest, denseFormatEmpty) {
 
   // Skip the header to reach the streams.
   const char* streamsPos = buffer.data();
-  serde::readSerializationHeader(
-      streamsPos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+  serde::readSerializationHeader(streamsPos, buffer.data() + buffer.size());
   auto streams = parseStreams(
       streamsPos,
       buffer.data() + buffer.size(),
@@ -1393,8 +1096,7 @@ TEST_F(DenseTrailerRoundTripTest, denseFormatSequential) {
 
   // Skip the header.
   const char* pos = buffer.data();
-  serde::readSerializationHeader(
-      pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+  serde::readSerializationHeader(pos, buffer.data() + buffer.size());
 
   auto streams = parseStreams(
       pos,
@@ -1423,8 +1125,7 @@ TEST_F(DenseTrailerRoundTripTest, denseFormatWithGaps) {
       sizes, EncodingType::Trivial, EncodingType::Trivial, buffer);
 
   const char* pos = buffer.data();
-  serde::readSerializationHeader(
-      pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+  serde::readSerializationHeader(pos, buffer.data() + buffer.size());
 
   auto streams = parseStreams(
       pos,
@@ -1454,8 +1155,7 @@ TEST_F(DenseTrailerRoundTripTest, denseFormatOnlyLastStream) {
       sizes, EncodingType::Trivial, EncodingType::Trivial, buffer);
 
   const char* pos = buffer.data();
-  serde::readSerializationHeader(
-      pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+  serde::readSerializationHeader(pos, buffer.data() + buffer.size());
 
   auto streams = parseStreams(
       pos,
@@ -1836,8 +1536,7 @@ TEST_F(EncodeDecodeTest, streamSizesEncodingType) {
     serde::detail::writeTrailer(sizes, encodingType, encodingType, buffer);
 
     const char* pos = buffer.data();
-    serde::readSerializationHeader(
-        pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+    serde::readSerializationHeader(pos, buffer.data() + buffer.size());
     auto streams = parseStreams(
         pos,
         buffer.data() + buffer.size(),
@@ -1864,8 +1563,7 @@ TEST_F(EncodeDecodeTest, streamSizesEncodingTypeDefault) {
       sizes, EncodingType::Trivial, EncodingType::Trivial, buffer);
 
   const char* pos = buffer.data();
-  serde::readSerializationHeader(
-      pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+  serde::readSerializationHeader(pos, buffer.data() + buffer.size());
   auto streams = parseStreams(
       pos,
       buffer.data() + buffer.size(),
@@ -1894,8 +1592,7 @@ TEST_F(EncodeDecodeTest, streamSizesEncodingTypeCompactRaw) {
     serde::detail::writeTrailer(sizes, encodingType, encodingType, buffer);
 
     const char* pos = buffer.data();
-    serde::readSerializationHeader(
-        pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+    serde::readSerializationHeader(pos, buffer.data() + buffer.size());
     auto streams = parseStreams(
         pos,
         buffer.data() + buffer.size(),
@@ -1973,7 +1670,6 @@ class StreamDataEncodedResetTest : public ::testing::Test {
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
-  BufferPtr decompressionBuffer_;
 };
 
 TEST_F(StreamDataEncodedResetTest, resetUpdatesRowCountEncodingFlag) {
@@ -1994,19 +1690,12 @@ TEST_F(StreamDataEncodedResetTest, resetUpdatesRowCountEncodingFlag) {
         encode(fixedValues, fixedBuffer, /*useVarintRowCount=*/false);
 
     std::vector<BufferPtr> stringBuffers;
-    serde::StreamData streamData(
-        ScalarKind::Int32, stringBuffers, pool_.get(), &decompressionBuffer_);
+    serde::StreamData streamData(stringBuffers, pool_.get());
 
-    streamData.reset(
-        varintEncoded,
-        version,
-        /*streamEncodingUsesVarintRowCount=*/true);
+    streamData.reset(varintEncoded, /*streamEncodingUsesVarintRowCount=*/true);
     expectDecoded(streamData, varintValues);
 
-    streamData.reset(
-        fixedEncoded,
-        version,
-        /*streamEncodingUsesVarintRowCount=*/false);
+    streamData.reset(fixedEncoded, /*streamEncodingUsesVarintRowCount=*/false);
     expectDecoded(streamData, fixedValues);
   }
 }
@@ -2156,121 +1845,4 @@ TEST_F(EncodeTypedCompressionTest, defaultFactoryNoCompression) {
   EXPECT_EQ(
       compressionPolicy->config().compressionType,
       CompressionType::Uncompressed);
-}
-
-// Exercises detail::encode's LZ4 path; the decode side is only scaffolding.
-class EncodeLz4Test : public ::testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
-
-  void SetUp() override {
-    pool_ = memory::memoryManager()->addLeafPool("encode_lz4_test");
-  }
-
-  std::shared_ptr<memory::MemoryPool> pool_;
-  BufferPtr decompressionBuffer_;
-};
-
-TEST_F(EncodeLz4Test, encodeDecodeLZ4Roundtrip) {
-  const std::vector<int32_t> expected(256);
-  std::string_view input(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-
-  SerializerOptions options;
-  options.compressionType = CompressionType::Lz4;
-  options.compressionThreshold = 1;
-
-  std::string buffer(input.size() + 2 * sizeof(uint32_t) + 1, '\0');
-  const auto encodedSize = serde::detail::encode(options, input, buffer.data());
-
-  // encode() outputs [size:u32][compressionType:i8][data...]; StreamData
-  // expects the stream without the size prefix.
-  std::string_view streamData(
-      buffer.data() + sizeof(uint32_t), encodedSize - sizeof(uint32_t));
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      streamData,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output(expected.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output.data()),
-      static_cast<uint32_t>(output.size() * sizeof(int32_t)));
-  EXPECT_EQ(output, expected);
-}
-
-TEST_F(EncodeLz4Test, encodeLZ4BelowThresholdStaysUncompressed) {
-  const std::vector<int32_t> expected = {1, 2, 3};
-  std::string_view input(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-
-  SerializerOptions options;
-  options.compressionType = CompressionType::Lz4;
-  options.compressionThreshold = 1'000'000;
-
-  std::string buffer(input.size() + 2 * sizeof(uint32_t) + 1, '\0');
-  const auto encodedSize = serde::detail::encode(options, input, buffer.data());
-
-  std::string_view streamData(
-      buffer.data() + sizeof(uint32_t), encodedSize - sizeof(uint32_t));
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      streamData,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output(expected.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output.data()),
-      static_cast<uint32_t>(output.size() * sizeof(int32_t)));
-  EXPECT_EQ(output, expected);
-}
-
-TEST_F(EncodeLz4Test, encodeDecodeLZ4HighCompression) {
-  const std::vector<int32_t> expected(256);
-  std::string_view input(
-      reinterpret_cast<const char*>(expected.data()),
-      expected.size() * sizeof(int32_t));
-
-  SerializerOptions options;
-  options.compressionType = CompressionType::Lz4;
-  options.compressionThreshold = 1;
-  options.compressionLevel = 9;
-
-  std::string buffer(input.size() + 2 * sizeof(uint32_t) + 1, '\0');
-  const auto encodedSize = serde::detail::encode(options, input, buffer.data());
-
-  std::string_view streamData(
-      buffer.data() + sizeof(uint32_t), encodedSize - sizeof(uint32_t));
-
-  std::vector<BufferPtr> stringBuffers;
-  serde::StreamData sd(
-      ScalarKind::Int32,
-      streamData,
-      stringBuffers,
-      pool_.get(),
-      serde::StreamData::Options{
-          .version = SerializationVersion::kLegacy,
-          .decompressionBuffer = &decompressionBuffer_});
-
-  std::vector<int32_t> output(expected.size());
-  sd.copyTo(
-      reinterpret_cast<char*>(output.data()),
-      static_cast<uint32_t>(output.size() * sizeof(int32_t)));
-  EXPECT_EQ(output, expected);
 }

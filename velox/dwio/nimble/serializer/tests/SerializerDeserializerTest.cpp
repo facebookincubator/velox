@@ -55,7 +55,7 @@ using facebook::nimble::test::makeTestTabletOptions;
 // For kSerialization mode, we test both with and without compression to
 // exercise the compressionOptions path in ReplayedEncodingSelectionPolicy.
 struct TestParams {
-  std::optional<SerializationVersion> version;
+  SerializationVersion version{SerializationVersion::kSerialization};
   // Compression options used with encodingLayoutTree.
   // nullopt (default) means no compression.
   std::optional<CompressionOptions> compressionOptions{};
@@ -77,12 +77,8 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
     pool_ = velox::memory::memoryManager()->addLeafPool("default_leaf");
   }
 
-  std::optional<SerializationVersion> version() const {
+  SerializationVersion version() const {
     return GetParam().version;
-  }
-
-  bool hasHeader() const {
-    return version().has_value();
   }
 
   EncodingType streamSizesEncodingType() const {
@@ -99,7 +95,6 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
 
   DeserializerOptions deserializerOptions() const {
     return DeserializerOptions{
-        .hasHeader = hasHeader(),
         .bufferPoolCapacity = bufferPoolCapacity(),
     };
   }
@@ -292,9 +287,6 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
           flatMapColumns,
       size_t count) {
     SerializerOptions options{
-        .compressionType = CompressionType::Zstd,
-        .compressionThreshold = 32,
-        .compressionLevel = 3,
         .version = version(),
         .flatMapColumns = flatMapColumns,
         .streamIndicesEncodingType = streamSizesEncodingType(),
@@ -586,9 +578,6 @@ TEST_P(SerializationTest, fuzzNullableStreams) {
     });
 
     SerializerOptions options{
-        .compressionType = CompressionType::Zstd,
-        .compressionThreshold = 32,
-        .compressionLevel = 3,
         .version = version(),
         .streamIndicesEncodingType = streamSizesEncodingType(),
         .streamSizesEncodingType = streamSizesEncodingType(),
@@ -738,9 +727,6 @@ TEST_P(SerializationTest, flatMapRejectsTopLevelNullRows) {
   input->setNull(2, true);
 
   SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
       .streamIndicesEncodingType = streamSizesEncodingType(),
@@ -821,9 +807,6 @@ TEST_P(SerializationTest, flatMapWithNestedNullsRoundTrips) {
       std::vector<velox::VectorPtr>{ids, features, nested});
 
   SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
       .streamIndicesEncodingType = streamSizesEncodingType(),
@@ -996,29 +979,22 @@ void collectStreamOffsets(
 
 std::string formatName(const ::testing::TestParamInfo<TestParams>& info) {
   std::string name;
-  if (!info.param.version.has_value()) {
-    name = "LegacyFormat";
-  } else {
-    switch (*info.param.version) {
-      case SerializationVersion::kLegacy:
-        name = "LegacyFormat";
-        break;
-      case SerializationVersion::kLegacyCompact:
-        name = "CompactRawFormat";
-        break;
-      case SerializationVersion::kTablet:
-        name = "TabletFormat";
-        break;
-      case SerializationVersion::kSerialization:
-        name = "SerializationFormat";
-        break;
-      case SerializationVersion::kProjection:
-        name = "ProjectionFormat";
-        break;
-      case SerializationVersion::kLegacySerialization:
-        name = "LegacySerializationFormat";
-        break;
-    }
+  switch (info.param.version) {
+    case SerializationVersion::kLegacyCompact:
+      name = "CompactRawFormat";
+      break;
+    case SerializationVersion::kTablet:
+      name = "TabletFormat";
+      break;
+    case SerializationVersion::kSerialization:
+      name = "SerializationFormat";
+      break;
+    case SerializationVersion::kProjection:
+      name = "ProjectionFormat";
+      break;
+    case SerializationVersion::kLegacySerialization:
+      name = "LegacySerializationFormat";
+      break;
   }
   // Add compression suffix for encoding modes.
   if (info.param.compressionOptions.has_value()) {
@@ -1046,9 +1022,6 @@ SerializationTest::SerializeResult SerializationTest::serialize(
   }
 
   SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .streamIndicesEncodingType = streamSizesEncodingType(),
       .streamSizesEncodingType = streamSizesEncodingType(),
@@ -1260,9 +1233,6 @@ TEST_P(SerializationTest, flatMapEncodingFuzz) {
         seed);
 
     const SerializerOptions options{
-        .compressionType = CompressionType::Zstd,
-        .compressionThreshold = 32,
-        .compressionLevel = 3,
         .version = version(),
         .flatMapColumns = testCase.flatMapColumns,
         .streamIndicesEncodingType = streamSizesEncodingType(),
@@ -1509,9 +1479,6 @@ TEST_P(SerializationTest, flatMapEncoding) {
   };
 
   const SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"float_features", {}}, {"string_features", {}}},
   };
@@ -1652,9 +1619,6 @@ TEST_P(SerializationTest, flatMapEncodingWithVaryingKeys) {
   };
 
   const SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
   };
@@ -1853,7 +1817,6 @@ TEST_P(SerializationTest, flatMapEncodingWithNestedTypes) {
   };
 
   SerializerOptions options{
-      .compressionType = CompressionType::Uncompressed,
       .version = version(),
       .flatMapColumns = {{"nested_features", {}}, {"struct_features", {}}},
   };
@@ -2021,9 +1984,6 @@ TEST_P(SerializationTest, nestedFlatMapWithVaryingInnerKeys) {
   };
 
   SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"nested_map", {}}},
   };
@@ -2113,9 +2073,6 @@ TEST_P(SerializationTest, nullableStreamsRoundTrip) {
           const folly::F14FastMap<std::string, std::set<std::string>>&
               flatMapColumns) {
         SerializerOptions options{
-            .compressionType = CompressionType::Zstd,
-            .compressionThreshold = 32,
-            .compressionLevel = 3,
             .version = version(),
             .flatMapColumns = flatMapColumns,
             .streamIndicesEncodingType = streamSizesEncodingType(),
@@ -2141,9 +2098,6 @@ TEST_P(SerializationTest, nullableStreamsRoundTrip) {
         }
       };
 
-  const bool encodingEnabled =
-      SerializerOptions{.version = version()}.enableEncoding();
-
   // Nested scalar content nulls require the encoded serializer format.
   {
     auto type =
@@ -2163,19 +2117,7 @@ TEST_P(SerializationTest, nullableStreamsRoundTrip) {
         10,
         std::vector<velox::VectorPtr>{ids, values});
 
-    if (encodingEnabled) {
-      roundTrip(type, row, noFlatMaps);
-    } else {
-      SerializerOptions options{.version = version()};
-      Serializer serializer{options, type, pool_.get()};
-      NIMBLE_ASSERT_THROW(
-          serializer.serialize(row, OrderedRanges::of(0, row->size())),
-          "nullable content streams require an encoded serializer format");
-    }
-  }
-
-  if (!encodingEnabled) {
-    return;
+    roundTrip(type, row, noFlatMaps);
   }
 
   // Map value nulls are encoded as nullable content streams.
@@ -2333,8 +2275,8 @@ TEST_F(SerializationTest, rowNullStreamOmissionRoundTrips) {
     const auto nestedNullOffset =
         schema->asRow().childAt(0)->asRow().nullsDescriptor().offset();
 
-    DeserializerOptions deserializerOptions{.hasHeader = true};
-    serde::StreamDataParser reader{pool_.get(), deserializerOptions};
+    DeserializerOptions deserializerOptions{};
+    serde::StreamDataParser reader{pool_.get()};
     reader.initialize(serialized);
 
     bool sawRootNullStream = false;
@@ -2425,7 +2367,7 @@ TEST_F(SerializationTest, nestedEncodingBufferCacheSizeConfigured) {
     Deserializer deserializer{
         SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
         pool_.get(),
-        DeserializerOptions{.hasHeader = true}};
+        DeserializerOptions{}};
 
     for (const auto base : {0, 100}) {
       auto input = makeInput(base);
@@ -2483,8 +2425,8 @@ TEST_F(SerializationTest, encodedSerializerRoundTripsTopLevelRowNulls) {
   const auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
   const auto rootNullOffset = schema->asRow().nullsDescriptor().offset();
-  DeserializerOptions deserializerOptions{.hasHeader = true};
-  serde::StreamDataParser reader{pool_.get(), deserializerOptions};
+  DeserializerOptions deserializerOptions{};
+  serde::StreamDataParser reader{pool_.get()};
   reader.initialize(serialized);
   bool sawRootNullStream = false;
   reader.iterateStreams([&](uint32_t offset, std::string_view streamData) {
@@ -2589,13 +2531,12 @@ TEST_F(SerializationTest, regularDataNullsDoNotRequireNullBarrier) {
 
   const char* pos = serialized.data();
   const auto header = serde::readSerializationHeader(
-      pos, serialized.data() + serialized.size(), true);
+      pos, serialized.data() + serialized.size());
   EXPECT_FALSE(header.flags.requiresNullBarrier);
 
   const auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
-  Deserializer deserializer{
-      schema, pool_.get(), DeserializerOptions{.hasHeader = true}};
+  Deserializer deserializer{schema, pool_.get(), DeserializerOptions{}};
   velox::VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -2656,7 +2597,7 @@ TEST_F(SerializationTest, deserializesInputWithoutStreamVarintRowCountFlag) {
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
       pool_.get(),
-      DeserializerOptions{.hasHeader = true}};
+      DeserializerOptions{}};
   velox::VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -2736,7 +2677,7 @@ TEST_F(SerializationTest, deserializerReadsPhysicalRootNullStream) {
     return serialized;
   };
 
-  DeserializerOptions deserializerOptions{.hasHeader = true};
+  DeserializerOptions deserializerOptions{};
   Deserializer deserializer{schema, pool_.get(), deserializerOptions};
 
   velox::VectorPtr output;
@@ -2790,7 +2731,7 @@ TEST_F(
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
       pool_.get(),
-      DeserializerOptions{.hasHeader = true}};
+      DeserializerOptions{}};
 
   auto makeInput = [&](int32_t base,
                        const std::vector<velox::vector_size_t>& nullRows)
@@ -2870,7 +2811,7 @@ TEST_F(SerializationTest, encodedSerializerNestedRowNullsAcrossBatches) {
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
       pool_.get(),
-      DeserializerOptions{.hasHeader = true}};
+      DeserializerOptions{}};
 
   auto makeInput = [&](int32_t idBase,
                        const std::vector<velox::vector_size_t>& nestedNullRows)
@@ -2976,7 +2917,7 @@ TEST_F(
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
       pool_.get(),
-      DeserializerOptions{.hasHeader = true}};
+      DeserializerOptions{}};
 
   auto makeInput = [&](int64_t scoreBase,
                        const std::array<velox::vector_size_t, kRows>& sizes,
@@ -3194,9 +3135,6 @@ TEST_P(SerializationTest, flatMapSparseKeysScatterBitmap) {
 
   // Serialize with FlatMap encoding
   const SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
   };
@@ -3248,12 +3186,10 @@ TEST_P(SerializationTest, unsupportedWriterVersionsRejected) {
   const std::vector<TestCase> testCases{
       TestCase{
           .version = SerializationVersion::kProjection,
-          .expectedMessage =
-              "Serializer writes must use kLegacy or kSerialization"},
+          .expectedMessage = "Serializer writes must use kSerialization"},
       TestCase{
           .version = SerializationVersion::kTablet,
-          .expectedMessage =
-              "Serializer writes must use kLegacy or kSerialization"},
+          .expectedMessage = "Serializer writes must use kSerialization"},
   };
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(fmt::format("version={}", toString(testCase.version)));
@@ -3273,7 +3209,6 @@ TEST_F(
       pool_.get(), type, nullptr, 1, std::vector<velox::VectorPtr>{col});
 
   const std::vector<SerializationVersion> versions{
-      SerializationVersion::kLegacy,
       SerializationVersion::kLegacyCompact,
       SerializationVersion::kLegacySerialization};
   for (const auto version : versions) {
@@ -3285,38 +3220,10 @@ TEST_F(
     ASSERT_FALSE(blob.empty());
     const char* pos = blob.data();
     const auto header =
-        serde::readSerializationHeader(pos, blob.data() + blob.size(), true);
+        serde::readSerializationHeader(pos, blob.data() + blob.size());
     EXPECT_EQ(header.version, SerializationVersion::kSerialization);
     EXPECT_EQ(header.rowCount, 1);
   }
-}
-
-TEST_F(SerializationTest, serializerDefaultWritesNoHeaderLegacy) {
-  auto type = velox::ROW({{"x", velox::INTEGER()}});
-  auto col = velox::BaseVector::create(velox::INTEGER(), 1, pool_.get());
-  col->asFlatVector<int32_t>()->set(0, 42);
-  auto row = std::make_shared<velox::RowVector>(
-      pool_.get(), type, nullptr, 1, std::vector<velox::VectorPtr>{col});
-
-  Serializer serializer{SerializerOptions{}, type, pool_.get()};
-  std::string blob;
-  serializer.serialize(row, OrderedRanges::of(0, 1), blob);
-  ASSERT_FALSE(blob.empty());
-
-  const char* pos = blob.data();
-  const auto header =
-      serde::readSerializationHeader(pos, blob.data() + blob.size(), false);
-  EXPECT_EQ(header.version, SerializationVersion::kLegacy);
-  EXPECT_EQ(header.rowCount, 1);
-  EXPECT_EQ(pos - blob.data(), sizeof(uint32_t));
-
-  Deserializer deserializer{
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
-      pool_.get()};
-  velox::VectorPtr output;
-  deserializer.deserialize(blob, output);
-  ASSERT_EQ(output->size(), row->size());
-  EXPECT_TRUE(vectorEquals(output, row, 0));
 }
 
 // Test encoding layout tree for non-FlatMap types.
@@ -4282,9 +4189,6 @@ TEST_P(SerializationTest, flatMapInMapStreamsForDiscoveredKeys) {
   };
 
   SerializerOptions options{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"flat_map", {}}},
   };
@@ -4326,7 +4230,7 @@ TEST_P(SerializationTest, flatMapInMapStreamsForDiscoveredKeys) {
   auto collectStreamOffsets =
       [&](std::string_view data) -> folly::F14FastSet<uint32_t> {
     auto desOpts = deserializerOptions();
-    serde::StreamDataParser reader{pool_.get(), desOpts};
+    serde::StreamDataParser reader{pool_.get()};
     reader.initialize(data);
     folly::F14FastSet<uint32_t> offsets;
     reader.iterateStreams(
@@ -4503,9 +4407,6 @@ TEST_P(SerializationTest, flatMapAsStruct) {
 
   // Serialize with FlatMap encoding.
   const SerializerOptions serOptions{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
   };
@@ -4763,7 +4664,7 @@ TEST_F(SerializationTest, tabletDeserialization) {
   auto tablet = serializeTablet(rowType, {input}, /*enableChunking=*/true);
 
   nimble::Deserializer deserializer(
-      tablet.schema, pool_.get(), DeserializerOptions{.hasHeader = true});
+      tablet.schema, pool_.get(), DeserializerOptions{});
 
   velox::VectorPtr deserialized;
   for (const auto& assembled : tablet.serialized) {
@@ -4844,7 +4745,7 @@ TEST_F(SerializationTest, tabletTrailerDeserialization) {
         ASSERT_LT(tablet.tabletUniqueBodyBytes[0], tablet.tabletBodyBytes[0]);
 
         nimble::Deserializer deserializer{
-            tablet.schema, pool_.get(), DeserializerOptions{.hasHeader = true}};
+            tablet.schema, pool_.get(), DeserializerOptions{}};
         velox::VectorPtr output;
         deserializer.deserialize(
             std::string_view(tablet.serialized[0]), output);
@@ -4882,7 +4783,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxRoundTrip) {
   auto tablet = serializeTablet(rowType, {input}, /*enableChunking=*/true);
 
   nimble::Deserializer deserializer(
-      tablet.schema, pool_.get(), DeserializerOptions{.hasHeader = true});
+      tablet.schema, pool_.get(), DeserializerOptions{});
 
   velox::VectorPtr deserialized;
   for (const auto& assembled : tablet.serialized) {
@@ -4933,7 +4834,6 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxWithParallelDecode) {
       tablet.schema,
       pool_.get(),
       DeserializerOptions{
-          .hasHeader = true,
           .decodeExecutor = &executor,
           .maxDecodeParallelism = 2,
       });
@@ -5047,7 +4947,6 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxHighParallelism) {
       nimbleSchema,
       pool_.get(),
       DeserializerOptions{
-          .hasHeader = true,
           .decodeExecutor = &executor,
           .maxDecodeParallelism = 8,
       });
@@ -5170,7 +5069,7 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxConcurrentDeserializers) {
       auto threadPool = velox::memory::memoryManager()->addLeafPool(
           "thread_" + std::to_string(t));
       nimble::Deserializer deserializer(
-          schemas[t], threadPool.get(), DeserializerOptions{.hasHeader = true});
+          schemas[t], threadPool.get(), DeserializerOptions{});
 
       velox::VectorPtr deserialized;
       for (const auto& assembled : allAssembled[t]) {
@@ -5327,7 +5226,6 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxFlatMapWithParallelDecode) {
       nimbleSchema,
       pool_.get(),
       DeserializerOptions{
-          .hasHeader = true,
           .decodeExecutor = &executor,
           .maxDecodeParallelism = 4,
       });
@@ -5441,7 +5339,6 @@ TEST_F(SerializationTest, zstdThreadLocalDCtxRepeatedBatches) {
       nimbleSchema,
       pool_.get(),
       DeserializerOptions{
-          .hasHeader = true,
           .decodeExecutor = &executor,
           .maxDecodeParallelism = 4,
       });
@@ -5568,9 +5465,6 @@ TEST_P(SerializationTest, flatMapDeserializeWithFlatMapSchema) {
 // in BatchedStreamDecoder::next(), this crashes in loadOffsets() accessing
 // rawNulls() on an unallocated buffer.
 TEST_P(SerializationTest, flatMapScatteredReadWithSparseKeys) {
-  if (!version().has_value() || version() == SerializationVersion::kLegacy) {
-    GTEST_SKIP() << "Legacy format does not support struct flat-map reads";
-  }
   // Map<int, Array<bigint>> — similar to EBF's data column.
   auto type = velox::ROW({
       {"data", velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()))},
@@ -5658,7 +5552,7 @@ TEST_P(SerializationTest, flatMapScatteredReadWithSparseKeys) {
        {"2", velox::ARRAY(velox::BIGINT())}});
   auto outputType = velox::ROW({{"data", structType}});
 
-  DeserializerOptions deserOptions{.hasHeader = true};
+  DeserializerOptions deserOptions{};
   deserOptions.outputType = outputType;
   Deserializer deserializer{schema, pool_.get(), deserOptions};
   velox::VectorPtr output;
@@ -5774,9 +5668,6 @@ TEST_P(SerializationTest, arrayWithOffsetsAndSlidingMapWindows) {
 
   // Serialize and deserialize.
   SerializerOptions serOptions{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
   };
   Serializer serializer{serOptions, rowType, pool_.get()};
@@ -5915,8 +5806,8 @@ TEST_F(SerializationTest, predefinedFlatMapKeysUseEncodingLayout) {
                                      ->asScalar()
                                      .scalarDescriptor()
                                      .offset();
-  const DeserializerOptions deserializerOptions{.hasHeader = true};
-  serde::StreamDataParser parser{pool_.get(), deserializerOptions};
+  const DeserializerOptions deserializerOptions{};
+  serde::StreamDataParser parser{pool_.get()};
   parser.initialize(serialized);
   bool foundValueStream = false;
   parser.iterateStreams([&](uint32_t offset, std::string_view streamData) {
@@ -6261,8 +6152,7 @@ TEST_F(SerializationTest, fuzzMixedVersionSerialization) {
       views.emplace_back(buf);
     }
 
-    Deserializer deserializer(
-        schema, pool_.get(), DeserializerOptions{.hasHeader = true});
+    Deserializer deserializer(schema, pool_.get(), DeserializerOptions{});
     velox::VectorPtr output;
     deserializer.deserialize(views, output);
 
@@ -6300,9 +6190,6 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeRow) {
       seed);
 
   SerializerOptions serOptions{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
   };
   Serializer serializer{serOptions, type, pool_.get()};
@@ -6567,9 +6454,6 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeFlatMapAsStruct) {
   };
 
   const SerializerOptions serOptions{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
   };
@@ -6770,9 +6654,6 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeSkippedFewKeys) {
   };
 
   const SerializerOptions serOptions{
-      .compressionType = CompressionType::Zstd,
-      .compressionThreshold = 32,
-      .compressionLevel = 3,
       .version = version(),
       .flatMapColumns = {{"features", {}}},
   };
@@ -7099,7 +6980,7 @@ std::string buildLegacyTrivialTrailer(const std::vector<uint32_t>& denseSizes) {
 std::string rewriteAsLegacyCompactRaw(std::string_view kSerializationBlob) {
   const char* end = kSerializationBlob.data() + kSerializationBlob.size();
   const char* headerEnd = kSerializationBlob.data();
-  const auto header = serde::readSerializationHeader(headerEnd, end, true);
+  const auto header = serde::readSerializationHeader(headerEnd, end);
   NIMBLE_CHECK_EQ(header.version, SerializationVersion::kSerialization);
   const auto bodyStartOffset =
       static_cast<size_t>(headerEnd - kSerializationBlob.data());
@@ -7136,7 +7017,7 @@ std::string rewriteAsLegacyCompactRaw(std::string_view kSerializationBlob) {
 std::string rewriteAsLegacySerialization(std::string_view kSerializationBlob) {
   const char* end = kSerializationBlob.data() + kSerializationBlob.size();
   const char* headerEnd = kSerializationBlob.data();
-  const auto header = serde::readSerializationHeader(headerEnd, end, true);
+  const auto header = serde::readSerializationHeader(headerEnd, end);
   NIMBLE_CHECK_EQ(header.version, SerializationVersion::kSerialization);
   const auto bodyStartOffset =
       static_cast<size_t>(headerEnd - kSerializationBlob.data());
@@ -7194,7 +7075,7 @@ TEST_F(SerializationTest, compactRawProductionBlobRoundtrip) {
       static_cast<uint8_t>(kLegacyCompactBlob[0]),
       static_cast<uint8_t>(SerializationVersion::kLegacyCompact));
 
-  DeserializerOptions deserOptions{.hasHeader = true};
+  DeserializerOptions deserOptions{};
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
       pool_.get(),
@@ -7246,7 +7127,7 @@ TEST_F(SerializationTest, legacySerializationProductionBlobRoundtrip) {
       static_cast<uint8_t>(kLegacySerializationBlob[0]),
       static_cast<uint8_t>(SerializationVersion::kLegacySerialization));
 
-  DeserializerOptions deserOptions{.hasHeader = true};
+  DeserializerOptions deserOptions{};
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
       pool_.get(),

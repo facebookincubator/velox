@@ -25,8 +25,7 @@ namespace {
 inline SerializationVersion validateVersion(uint8_t versionByte) {
   const auto version = static_cast<SerializationVersion>(versionByte);
   NIMBLE_CHECK(
-      version == SerializationVersion::kLegacy ||
-          version == SerializationVersion::kLegacyCompact ||
+      version == SerializationVersion::kLegacyCompact ||
           version == SerializationVersion::kLegacySerialization ||
           version == SerializationVersion::kTablet ||
           version == SerializationVersion::kSerialization ||
@@ -75,14 +74,11 @@ TabletChunkHeader extractTabletChunkHeader(const char*& pos, const char* end) {
 
 // ---- Generic serialization header ----
 
-SerializationHeader
-readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
+SerializationHeader readSerializationHeader(const char*& pos, const char* end) {
   SerializationHeader header;
 
-  if (hasHeader) {
-    NIMBLE_CHECK_GE(end - pos, 1, "Truncated header (version)");
-    header.version = validateVersion(static_cast<uint8_t>(*pos++));
-  }
+  NIMBLE_CHECK_GE(end - pos, 1, "Truncated header (version)");
+  header.version = validateVersion(static_cast<uint8_t>(*pos++));
 
   if (isTabletVersion(header.version)) {
     auto tablet = extractTabletChunkHeader(pos, end);
@@ -100,12 +96,7 @@ readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
     return header;
   }
 
-  if (usesVarintRowCount(header.version)) {
-    header.rowCount = varint::readVarint32(&pos);
-  } else {
-    header.rowCount = encoding::readUint32(pos);
-  }
-
+  header.rowCount = varint::readVarint32(&pos);
   header.flags = readHeaderFlags(pos, header.version);
 
   return header;

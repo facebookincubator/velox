@@ -59,7 +59,7 @@ bool outputRequiresNullBarrier(const folly::IOBuf& buf) {
   const auto serialized = toString(buf);
   const char* pos = serialized.data();
   const auto header =
-      readSerializationHeader(pos, serialized.data() + serialized.size(), true);
+      readSerializationHeader(pos, serialized.data() + serialized.size());
   return header.flags.requiresNullBarrier;
 }
 
@@ -332,7 +332,6 @@ class ProjectorFormatTest : public ProjectorTestBase,
   // Get deserializer options for output format.
   DeserializerOptions outputDeserializerOptions() const {
     return {
-        .hasHeader = true,
         .bufferPoolCapacity = GetParam().bufferPoolCapacity,
     };
   }
@@ -429,12 +428,12 @@ TEST_F(ProjectorTestBase, projectsInputWithoutStreamVarintRowCountFlag) {
     auto projectedStr = toString(projected);
 
     const char* pos = projectedStr.data();
-    const auto header = readSerializationHeader(
-        pos, projectedStr.data() + projectedStr.size(), true);
+    const auto header =
+        readSerializationHeader(pos, projectedStr.data() + projectedStr.size());
     EXPECT_TRUE(header.flags.streamEncodingUsesVarintRowCount);
 
-    auto result = deserialize(
-        projectedStr, outputSchema, DeserializerOptions{.hasHeader = true});
+    auto result =
+        deserialize(projectedStr, outputSchema, DeserializerOptions{});
     ASSERT_EQ(result->size(), 3);
     auto resultRow = result->as<RowVector>();
     auto bCol = resultRow->childAt(0)->as<FlatVector<int64_t>>();
@@ -481,8 +480,7 @@ TEST_F(
           /*streamEncodingUsesVarintRowCount=*/false,
           /*streamHasChunkHeader=*/false));
 
-  auto result = deserialize(
-      projectedStr, outputSchema, DeserializerOptions{.hasHeader = true});
+  auto result = deserialize(projectedStr, outputSchema, DeserializerOptions{});
   ASSERT_EQ(result->size(), 3);
   auto bCol = result->as<RowVector>()->childAt(0)->as<FlatVector<int64_t>>();
   EXPECT_EQ(bCol->valueAt(0), 10);
@@ -765,8 +763,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerBuildsProjectedType) {
   auto inputSchema =
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
 
-  Deserializer deserializer{
-      inputSchema, makeSubfields({"b"}), pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{inputSchema, makeSubfields({"b"}), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -791,8 +788,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerCanBeReused) {
 
   auto inputSchema =
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
-  Deserializer deserializer{
-      inputSchema, makeSubfields({"b"}), pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{inputSchema, makeSubfields({"b"}), pool_.get(), {}};
 
   auto makeInput = [&](const std::vector<int32_t>& aValues,
                        const std::vector<int64_t>& bValues) {
@@ -858,10 +854,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedFields) {
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
 
   Deserializer deserializer{
-      inputSchema,
-      makeSubfields({"outer.inner1"}),
-      pool_.get(),
-      {.hasHeader = true}};
+      inputSchema, makeSubfields({"outer.inner1"}), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -902,7 +895,7 @@ TEST_F(
   auto inputSchema =
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
 
-  Deserializer deserializer{inputSchema, {}, pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{inputSchema, {}, pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -941,7 +934,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerSelectsAllFieldsExplicitly) {
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
 
   Deserializer deserializer{
-      inputSchema, makeSubfields({"a", "b"}), pool_.get(), {.hasHeader = true}};
+      inputSchema, makeSubfields({"a", "b"}), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -971,7 +964,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerOrdersFieldsByName) {
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
 
   Deserializer deserializer{
-      inputSchema, makeSubfields({"c", "a"}), pool_.get(), {.hasHeader = true}};
+      inputSchema, makeSubfields({"c", "a"}), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -1015,7 +1008,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedScenarios) {
       inputSchema,
       makeSubfields({"z.nested.right", "z.nested.left", "a.first"}),
       pool_.get(),
-      {.hasHeader = true}};
+      {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -1040,10 +1033,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedScenarios) {
       200);
 
   Deserializer wholeFieldDeserializer{
-      inputSchema,
-      makeSubfields({"z.nested.left", "z"}),
-      pool_.get(),
-      {.hasHeader = true}};
+      inputSchema, makeSubfields({"z.nested.left", "z"}), pool_.get(), {}};
   wholeFieldDeserializer.deserialize(serialized, output);
   EXPECT_TRUE(output->type()->equivalent(*ROW({{"z", type->childAt(0)}})));
   for (vector_size_t row = 0; row < input->size(); ++row) {
@@ -1084,7 +1074,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerNestedFuzzer) {
       inputSchema,
       makeSubfields({"z.y", "z.x.b", "z.x.a", "a", "m"}),
       pool_.get(),
-      {.hasHeader = true}};
+      {}};
   auto expectedType = ROW({
       {"a", type->childAt(1)},
       {"m", BIGINT()},
@@ -1183,10 +1173,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerReadsTopLevelFlatMap) {
       });
 
   Deserializer deserializer{
-      inputSchema,
-      makeSubfields({"features"}),
-      pool_.get(),
-      {.hasHeader = true}};
+      inputSchema, makeSubfields({"features"}), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(serialized, output);
 
@@ -1244,10 +1231,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerReadsFlatMapKey) {
       });
 
   Deserializer deserializer{
-      inputSchema,
-      makeSubfields({"features[1]"}),
-      pool_.get(),
-      {.hasHeader = true}};
+      inputSchema, makeSubfields({"features[1]"}), pool_.get(), {}};
   auto expectedType = ROW({{"features", MAP(INTEGER(), DOUBLE())}});
   VectorPtr output;
   deserializer.deserialize(serialized, output);
@@ -1283,15 +1267,6 @@ TEST_F(ProjectorTest, incompatibleFormatsRejected) {
 
   auto inputSchema =
       getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
-
-  // Test kLegacy output version — rejected in constructor.
-  NIMBLE_ASSERT_THROW(
-      Projector(
-          inputSchema,
-          subfields,
-          pool_.get(),
-          {.projectVersion = SerializationVersion::kLegacy}),
-      "Projection output version must be kProjection");
 
   // Test kTablet output version — rejected in constructor.
   NIMBLE_ASSERT_THROW(
@@ -1391,8 +1366,7 @@ TEST_F(ProjectorTest, fullProjectionPassThrough) {
     auto projected = projectInput(projector, serialized, useIOBuf);
 
     // Verify can deserialize correctly.
-    auto result =
-        deserialize(toString(projected), outputSchema, {.hasHeader = true});
+    auto result = deserialize(toString(projected), outputSchema, {});
     ASSERT_EQ(result->size(), 3);
 
     auto resultRow = result->as<RowVector>();
@@ -1401,11 +1375,7 @@ TEST_F(ProjectorTest, fullProjectionPassThrough) {
         resultRow->childAt(1)->as<FlatVector<int64_t>>()->valueAt(0), 100);
 
     verifyProjectedSchema(
-        type,
-        subfields,
-        outputSchema,
-        toString(projected),
-        {.hasHeader = true});
+        type, subfields, outputSchema, toString(projected), {});
   }
 }
 
@@ -1508,7 +1478,7 @@ TEST_F(ProjectorTest, flatMapSerializeDeserializeNoProjction) {
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
 
   // Deserialize directly (no projection).
-  auto result = deserialize(serialized, inputSchema, {.hasHeader = true});
+  auto result = deserialize(serialized, inputSchema, {});
 
   ASSERT_EQ(result->size(), 2);
   auto resultRow = result->as<RowVector>();
@@ -1653,7 +1623,7 @@ TEST_F(ProjectorTest, projectFlatMapAllKeys) {
       {.projectVersion = SerializationVersion::kProjection});
 
   auto outputSchema = projector.projectedSchema();
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   for (bool useIOBuf : {false, true}) {
     SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
     auto projected = projectInput(projector, serialized, useIOBuf);
@@ -1769,8 +1739,7 @@ TEST_F(ProjectorTest, flatMapKeyProjectionSchemaComparison) {
 
   // Both schemas should decode correctly.
   {
-    auto result =
-        deserialize(projectedStr, projectorSchema, {.hasHeader = true});
+    auto result = deserialize(projectedStr, projectorSchema, {});
     ASSERT_EQ(result->size(), numRows);
     auto* map = result->as<RowVector>()->childAt(0)->as<MapVector>();
     ASSERT_NE(map, nullptr);
@@ -1779,7 +1748,7 @@ TEST_F(ProjectorTest, flatMapKeyProjectionSchemaComparison) {
     }
   }
   {
-    auto result = deserialize(projectedStr, convertSchema, {.hasHeader = true});
+    auto result = deserialize(projectedStr, convertSchema, {});
     ASSERT_EQ(result->size(), numRows);
     auto* map = result->as<RowVector>()->childAt(0)->as<MapVector>();
     ASSERT_NE(map, nullptr);
@@ -2055,7 +2024,7 @@ TEST_F(ProjectorTest, projectFlatMapSingleKey) {
   ASSERT_EQ(outputSchema->asRow().childAt(0)->asFlatMap().nameAt(0), "2");
 
   // Project and deserialize.
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   for (bool useIOBuf : {false, true}) {
     SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
     auto projected = projectInput(projector, serialized, useIOBuf);
@@ -2154,7 +2123,7 @@ TEST_F(ProjectorTest, projectFlatMapMultipleKeys) {
   ASSERT_EQ(outputSchema->asRow().childAt(0)->asFlatMap().nameAt(1), "c");
 
   // Project and deserialize.
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   for (bool useIOBuf : {false, true}) {
     SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
     auto projected = projectInput(projector, serialized, useIOBuf);
@@ -2260,7 +2229,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKey) {
   // and confirm key 999 decodes to null for every row.
   auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
   auto projectedStr = toString(projected);
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   auto result = deserialize(projectedStr, projectedSchema, deserOpts);
   ASSERT_EQ(numRows, result->size());
   auto* features = result->as<RowVector>()->childAt(0)->as<MapVector>();
@@ -2319,7 +2288,6 @@ TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
   auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
 
   DeserializerOptions deserOpts{
-      .hasHeader = true,
       .outputType = ROW({"features"}, {ROW({"a", "x"}, {BIGINT(), BIGINT()})})};
   auto output =
       deserialize(toString(projected), projector.projectedSchema(), deserOpts);
@@ -2432,7 +2400,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
   // Round-trip: decoded map should be empty for every row (the inMap stream
   // is all-zero placeholder → gap-fill says "no rows have this key").
   auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   auto result = deserialize(toString(projected), projectedSchema, deserOpts);
   ASSERT_EQ(numRows, result->size());
   auto* features = result->as<RowVector>()->childAt(0)->as<MapVector>();
@@ -2531,7 +2499,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
   ASSERT_EQ(Kind::Array, projectedFlatMap.childAt(0)->kind());
 
   auto projected = projectInput(projector, serialized, /*useIOBuf=*/false);
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   auto result = deserialize(toString(projected), projectedSchema, deserOpts);
   ASSERT_EQ(numRows, result->size());
   auto* features = result->as<RowVector>()->childAt(0)->as<MapVector>();
@@ -2628,7 +2596,7 @@ TEST_F(ProjectorTest, missingKeyInMiddleProducesPlaceholder) {
   // all three keys). The Projector emits a 0-byte placeholder slot for key 2
   // so the expanded schema's offsets line up with the projected blob and the
   // Deserializer's gap-fill produces a null column for the missing key.
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
   auto result = deserialize(projectedStr, expandedSchema, deserOpts);
 
   ASSERT_EQ(result->size(), 1);
@@ -2889,9 +2857,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
   }
 
   auto rootNullResult = deserialize(
-      topLevelRowHasNulls.serialized,
-      topLevelRowHasNulls.schema,
-      {.hasHeader = true});
+      topLevelRowHasNulls.serialized, topLevelRowHasNulls.schema, {});
   ASSERT_EQ(rootNullResult->size(), kRows);
   EXPECT_TRUE(rootNullResult->isNullAt(2));
 
@@ -2986,10 +2952,8 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
       EXPECT_EQ(
           outputRequiresNullBarrier(projected),
           testCase.expectedRequiresNullBarrier);
-      auto result = deserialize(
-          toString(projected),
-          projector.projectedSchema(),
-          {.hasHeader = true});
+      auto result =
+          deserialize(toString(projected), projector.projectedSchema(), {});
       ASSERT_EQ(result->size(), kRows);
     }
   }
@@ -3042,8 +3006,7 @@ TEST_F(ProjectorTest, projectedRowNullMixedBatchPreserveNulls) {
   const auto projectedWithNullString = toString(projectedWithNull);
   std::vector<std::string_view> batches{
       projectedNoNullString, projectedWithNullString};
-  Deserializer deserializer{
-      projector.projectedSchema(), pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{projector.projectedSchema(), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(batches, output);
 
@@ -3114,8 +3077,7 @@ TEST_F(ProjectorTest, projectedNestedRowNullsMixedBatchPreserveNulls) {
   const auto projectedWithNullString = toString(projectedWithNull);
   std::vector<std::string_view> batches{
       projectedNoNullString, projectedWithNullString};
-  Deserializer deserializer{
-      projector.projectedSchema(), pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{projector.projectedSchema(), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(batches, output);
 
@@ -3210,8 +3172,7 @@ TEST_F(ProjectorTest, projectedFlatMapNullsMixedBatchPreserveNulls) {
   const auto projectedWithNullString = toString(projectedWithNull);
   std::vector<std::string_view> batches{
       projectedNoNullString, projectedWithNullString};
-  Deserializer deserializer{
-      projector.projectedSchema(), pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{projector.projectedSchema(), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(batches, output);
 
@@ -3281,8 +3242,7 @@ TEST_F(ProjectorTest, projectedUnselectedNullColumnDoesNotRequireNullBarrier) {
 
   const auto projectedString = toString(projected);
   std::vector<std::string_view> batches{projectedString};
-  Deserializer deserializer{
-      projector.projectedSchema(), pool_.get(), {.hasHeader = true}};
+  Deserializer deserializer{projector.projectedSchema(), pool_.get(), {}};
   VectorPtr output;
   deserializer.deserialize(batches, output);
 
@@ -3778,8 +3738,7 @@ TEST_F(ProjectorTest, projectedComplexNullFuzzerPreservesNulls) {
       batches.push_back(projectedString);
     }
 
-    Deserializer deserializer{
-        projector.projectedSchema(), pool_.get(), {.hasHeader = true}};
+    Deserializer deserializer{projector.projectedSchema(), pool_.get(), {}};
     VectorPtr output;
     deserializer.deserialize(batches, output);
     ASSERT_EQ(output->size(), kRowsPerBatch * kBatches);
@@ -4234,8 +4193,7 @@ TEST_F(ProjectorTest, projectMultipleFlatMapColumns) {
   for (bool useIOBuf : {false, true}) {
     SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
     auto projected = projectInput(projector, serialized, useIOBuf);
-    auto result =
-        deserialize(toString(projected), outputSchema, {.hasHeader = true});
+    auto result = deserialize(toString(projected), outputSchema, {});
 
     ASSERT_EQ(result->size(), numRows);
     auto resultRow = result->as<RowVector>();
@@ -4359,8 +4317,8 @@ TEST_F(ProjectorTestBase, flatMapConstantInMapStreams) {
   // Helper to collect stream offsets present in serialized data.
   auto collectStreamOffsets =
       [&](std::string_view data) -> folly::F14FastSet<uint32_t> {
-    DeserializerOptions desOpts{.hasHeader = true};
-    serde::StreamDataParser reader{pool_.get(), desOpts};
+    DeserializerOptions desOpts{};
+    serde::StreamDataParser reader{pool_.get()};
     reader.initialize(data);
     folly::F14FastSet<uint32_t> offsets;
     reader.iterateStreams(
@@ -4430,8 +4388,7 @@ TEST_F(ProjectorTestBase, flatMapConstantInMapStreams) {
     for (bool useIOBuf : {false, true}) {
       SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
       auto projected = projectInput(projector, serializedData[i], useIOBuf);
-      auto result =
-          deserialize(toString(projected), outputSchema, {.hasHeader = true});
+      auto result = deserialize(toString(projected), outputSchema, {});
       ASSERT_EQ(result->size(), inputs[i]->size());
       for (vector_size_t j = 0; j < inputs[i]->size(); ++j) {
         ASSERT_TRUE(result->equalValueAt(inputs[i].get(), j, j))
@@ -4476,8 +4433,7 @@ TEST_F(ProjectorTest, chainedIOBufInput) {
   auto outputSchema = projector.projectedSchema();
 
   auto projected = projector.project(*chainedBuf);
-  auto result =
-      deserialize(toString(projected), outputSchema, {.hasHeader = true});
+  auto result = deserialize(toString(projected), outputSchema, {});
   ASSERT_EQ(result->size(), 3);
 
   auto resultRow = result->as<RowVector>();
@@ -4492,8 +4448,8 @@ TEST_F(ProjectorTest, chainedIOBufInput) {
   auto allSubfields = makeSubfields({"a", "b", "c"});
   Projector allColumnsProjector(inputSchema, allSubfields, pool_.get(), {});
   auto allColumnsResult = allColumnsProjector.project(*chainedBuf);
-  auto allColumnsDeserialized = deserialize(
-      toString(allColumnsResult), outputSchema, {.hasHeader = true});
+  auto allColumnsDeserialized =
+      deserialize(toString(allColumnsResult), outputSchema, {});
   ASSERT_EQ(allColumnsDeserialized->size(), 3);
 }
 
@@ -4529,7 +4485,7 @@ TEST_F(ProjectorTest, sortedStreamIndicesFastPath) {
 
   auto outputSchema = projector.projectedSchema();
 
-  DeserializerOptions deserOpts{.hasHeader = true};
+  DeserializerOptions deserOpts{};
 
   // Test contiguous path.
   {
@@ -4678,8 +4634,7 @@ TEST_F(ProjectorTest, unsortedStreamIndicesReorderPath) {
       projected = projector.project(std::string_view(serialized));
     }
 
-    auto result =
-        deserialize(toString(projected), outputSchema, {.hasHeader = true});
+    auto result = deserialize(toString(projected), outputSchema, {});
     ASSERT_EQ(result->size(), numRows);
     auto resultRow = result->as<RowVector>();
 
@@ -4785,8 +4740,7 @@ TEST_F(ProjectorTest, singleFlatMapSortedFastPath) {
 
   auto outputSchema = projector.projectedSchema();
   auto projected = projector.project(std::string_view(serialized));
-  auto result =
-      deserialize(toString(projected), outputSchema, {.hasHeader = true});
+  auto result = deserialize(toString(projected), outputSchema, {});
   ASSERT_EQ(result->size(), numRows);
 
   auto resultRow = result->as<RowVector>();
@@ -4941,8 +4895,7 @@ TEST_F(ProjectorTest, fuzzMixedVersionProjection) {
       projectedSVs.push_back(buf);
     }
 
-    Deserializer deserializer(
-        outputSchema, pool_.get(), DeserializerOptions{.hasHeader = true});
+    Deserializer deserializer(outputSchema, pool_.get(), DeserializerOptions{});
     VectorPtr output;
     deserializer.deserialize(projectedSVs, output);
 

@@ -41,11 +41,8 @@ class MemoryPool;
 
 namespace facebook::nimble {
 
-/// Serialization format version.
-///
-/// - kLegacy: Simple zstd compression with inline u32 sizes.
-///   Wire:
-///   [version:1B][rowCount:u32][size_0:u32][stream_data_0]...[size_N:u32][stream_data_N]
+/// Serialization format version. Every version carries a leading version byte
+/// and encodes its streams with the nimble encoding framework.
 ///
 /// - kLegacyCompact: READ-ONLY post the two-array sparse trailer change.
 ///   Existing production blobs at this version are decoded via the frozen
@@ -85,7 +82,6 @@ namespace facebook::nimble {
 ///       (useVarintRowCount=false), matching the tablet's default format.
 ///   Wire: same two-array sparse trailer layout as kSerialization.
 enum class SerializationVersion : uint8_t {
-  kLegacy = 0,
   // READ-ONLY post the two-array trailer change: production blobs with this
   // version byte are still decoded via `nimble::serde::legacy::`. New
   // Serializer writes are upgraded to kSerialization; Projector writers emit
@@ -105,12 +101,6 @@ enum class SerializationVersion : uint8_t {
 };
 
 std::string toString(SerializationVersion version);
-
-/// Returns true if the version is any non-legacy format. All non-legacy
-/// formats have a version header, encoded streams, and a stream sizes trailer.
-inline bool nonLegacyFormat(SerializationVersion version) {
-  return version != SerializationVersion::kLegacy;
-}
 
 /// Returns true if the version is the tablet passthrough format.
 inline bool isTabletVersion(SerializationVersion version) {
@@ -136,43 +126,12 @@ inline bool hasSerializationHeaderFlags(SerializationVersion version) {
       version == SerializationVersion::kTablet;
 }
 
-/// Returns true if the optional version carries serialization header flags.
-inline bool hasSerializationHeaderFlags(
-    std::optional<SerializationVersion> version) {
-  return version.has_value() && hasSerializationHeaderFlags(version.value());
-}
-
 /// Returns true if the version's compact header carries a flags byte after the
-/// row count. kTablet carries its flag in the tablet chunk header instead;
-/// kLegacy, the frozen kLegacyCompact, and kLegacySerialization have no flags
-/// byte.
+/// row count. kTablet carries its flag in the tablet chunk header instead; the
+/// frozen kLegacyCompact and kLegacySerialization have no flags byte.
 inline bool usesCompactHeaderFlags(SerializationVersion version) {
   return version == SerializationVersion::kSerialization ||
       version == SerializationVersion::kProjection;
-}
-
-/// Returns true if the optional version's compact header carries a flags byte.
-inline bool usesCompactHeaderFlags(
-    std::optional<SerializationVersion> version) {
-  return version.has_value() && usesCompactHeaderFlags(version.value());
-}
-
-/// Returns true if the version is the tablet passthrough format.
-inline bool isTabletVersion(std::optional<SerializationVersion> version) {
-  return version.has_value() && isTabletVersion(version.value());
-}
-
-/// Returns true if the version uses varint for the header row count.
-/// All non-legacy versioned formats (kLegacyCompact, kTablet) use varint row
-/// counts in the header. The raw stream bodies inside kTablet may use fixed
-/// u32 row counts in their encoding headers.
-inline bool usesVarintRowCount(SerializationVersion version) {
-  return version != SerializationVersion::kLegacy;
-}
-
-/// Returns true if the optional version uses varint for the header row count.
-inline bool usesVarintRowCount(std::optional<SerializationVersion> version) {
-  return version.has_value() && usesVarintRowCount(version.value());
 }
 
 /// Validates and returns the EncodingType for a stream-sizes trailer section
@@ -192,23 +151,15 @@ inline std::ostream& operator<<(
 EncodingSelectionPolicyCreator defaultEncodingSelectionPolicyCreator();
 
 struct SerializerOptions {
-  /// Legacy compression settings. These only apply when version is kLegacy or
-  /// nullopt. Encoded formats handle compression through the encoding selection
-  /// policy.
-  CompressionType compressionType{CompressionType::Uncompressed};
-  uint32_t compressionThreshold{0};
-  int32_t compressionLevel{0};
-
   /// Serialization format version.
-  /// - nullopt: Legacy format with no version header.
-  /// - kSerialization: Encoded Serializer format.
-  /// - kLegacy / kLegacyCompact / kLegacySerialization: Legacy spellings for
-  ///   migration. Existing kLegacyCompact production blobs are decoded via
+  /// - kSerialization: Encoded Serializer format (default).
+  /// - kLegacyCompact / kLegacySerialization: Legacy spellings for migration.
+  ///   Existing kLegacyCompact production blobs are decoded via
   ///   `nimble::serde::legacy::`; new Serializer writes are upgraded to
   ///   kSerialization while callers migrate.
   /// - kProjection / kTablet are not valid Serializer writer versions
   ///   (Projector + tablet pipelines write them, respectively).
-  std::optional<SerializationVersion> version{};
+  SerializationVersion version{SerializationVersion::kSerialization};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
   /// of predefined key strings. When the set is empty, the column is
@@ -267,23 +218,9 @@ struct SerializerOptions {
   /// Sizes are the byte sizes of non-zero streams, parallel to the indices
   /// array. Supported types: Trivial, Varint, Delta, FixedBitWidth.
   EncodingType streamSizesEncodingType{EncodingType::FixedBitWidth};
-
-  /// Returns true if the serialized data has a version header byte.
-  bool hasVersionHeader() const;
-
-  /// Returns the effective serialization version.
-  SerializationVersion serializationVersion() const;
-
-  /// Returns true if nimble encoding is enabled.
-  bool enableEncoding() const;
 };
 
 struct DeserializerOptions {
-  /// Whether the serialized data has a header byte.
-  /// - false (default): Legacy format (version 0) with no header.
-  /// - true: Version is auto-detected from the first byte of serialized data.
-  bool hasHeader{false};
-
   /// Output type for deserializing flatmap columns as struct (ROW).
   /// When provided, each top-level flatmap column whose corresponding field in
   /// outputType is ROW will be deserialized as a struct instead of a map. The

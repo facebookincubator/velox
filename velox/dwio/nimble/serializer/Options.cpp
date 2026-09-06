@@ -22,8 +22,6 @@ namespace facebook::nimble {
 
 std::string toString(SerializationVersion version) {
   switch (version) {
-    case SerializationVersion::kLegacy:
-      return "kLegacy";
     case SerializationVersion::kLegacyCompact:
       return "kLegacyCompact";
     case SerializationVersion::kLegacySerialization:
@@ -66,18 +64,6 @@ EncodingSelectionPolicyCreator defaultEncodingSelectionPolicyCreator() {
   return [](DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
     return factory.createPolicy(dataType);
   };
-}
-
-bool SerializerOptions::hasVersionHeader() const {
-  return version.has_value();
-}
-
-SerializationVersion SerializerOptions::serializationVersion() const {
-  return version.value_or(SerializationVersion::kLegacy);
-}
-
-bool SerializerOptions::enableEncoding() const {
-  return nonLegacyFormat(serializationVersion());
 }
 
 } // namespace facebook::nimble

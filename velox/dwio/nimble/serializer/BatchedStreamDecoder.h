@@ -81,14 +81,12 @@ class BatchedStreamDecoder : public Decoder {
   void addBatch(
       uint32_t startRow,
       std::string_view data,
-      SerializationVersion version,
       bool streamEncodingUsesVarintRowCount) {
     NIMBLE_CHECK(!data.empty(), "Physical stream segment must be non-empty");
     streamSegments_.emplace_back(
         StreamSegment{
             .startRow = startRow,
             .data = data,
-            .version = version,
             .streamEncodingUsesVarintRowCount =
                 streamEncodingUsesVarintRowCount});
   }
@@ -138,7 +136,6 @@ class BatchedStreamDecoder : public Decoder {
     // streams to detect gaps when decoding across multiple chunks.
     uint32_t startRow;
     std::string_view data;
-    SerializationVersion version;
     bool streamEncodingUsesVarintRowCount;
   };
 
@@ -204,12 +201,6 @@ class BatchedStreamDecoder : public Decoder {
       uint32_t rowCount,
       uint32_t outputOffset,
       void* output);
-
-  serde::StreamData::DecodeResult readLegacyStreamSegment(
-      serde::StreamData& streamData,
-      void* output,
-      uint32_t offset,
-      uint32_t count);
 
   serde::StreamData::DecodeResult readSegment(
       void* output,
@@ -283,17 +274,12 @@ class BatchedStreamDecoder : public Decoder {
   // than the FlatMap value/null stream.
   const bool isInMapStream_;
   // Cached from type at construction to avoid per-call dispatch.
-  const ScalarKind scalarKind_;
   const uint32_t typeStorageWidth_;
   // Pool for encoding scratch buffers (e.g. MainlyConstant's isCommon and
   // otherValues buffers). Persists across reset()/addBatch() cycles so buffers
   // are reused instead of being allocated/freed through MemoryPool each time.
   // Null when buffer pooling is disabled via DeserializerOptions.
   const std::unique_ptr<velox::BufferPool> bufferPool_;
-  // Decompression buffer reused across StreamData lifetimes. Persists across
-  // reset()/addBatch() cycles so the buffer capacity is reused instead of
-  // freed and re-allocated on each segment transition.
-  velox::BufferPtr decompressionBuffer_;
 
   // --- Stream decode state (cleared by reset()) ---
   size_t streamSegmentIndex_{0};

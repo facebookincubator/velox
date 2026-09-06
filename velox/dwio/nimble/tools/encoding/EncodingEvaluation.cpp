@@ -135,7 +135,7 @@ ChunkMeasurement evaluateCandidateEncodingOnce(
   const auto serializedSchema =
       schemaSerializer.serialize(serializer.schemaBuilder());
   auto schema = nimble::SchemaDeserializer::deserialize(serializedSchema);
-  nimble::DeserializerOptions deserializerOptions{.hasHeader = true};
+  nimble::DeserializerOptions deserializerOptions{};
   nimble::Deserializer deserializer(schema, pool, deserializerOptions);
 
   velox::CpuWallTiming decodeTiming;

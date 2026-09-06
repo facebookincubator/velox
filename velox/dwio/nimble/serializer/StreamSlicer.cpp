@@ -301,8 +301,7 @@ folly::IOBuf StreamSlicer::slice(
     uint32_t offset,
     uint32_t length) const {
   const auto inputVersion = getInputVersion(input);
-  DeserializerOptions parserOptions{.hasHeader = true};
-  auto parser = StreamDataParser{pool_, parserOptions};
+  auto parser = StreamDataParser{pool_};
   const auto rowCount = parser.initialize(input);
   NIMBLE_CHECK_EQ(parser.version(), inputVersion, "Unexpected input version");
   NIMBLE_CHECK_LE(offset, rowCount, "Slice offset exceeds row count");
