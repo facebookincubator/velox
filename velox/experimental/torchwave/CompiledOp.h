@@ -60,6 +60,15 @@ struct Launch {
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
+  /// Earliest step this launch may be placed in, or -1 for no floor. Placement
+  /// otherwise puts a launch one step after the last of its inputs, which is as
+  /// early as its data allows -- right for compute, wrong for a copy that fills
+  /// a band of a concat result. That band exists only once the concat's
+  /// allocation group has been carved, so such a copy has to sit no earlier
+  /// than the step whose head lays the concat out, however early its own source
+  /// happens to be ready.
+  int32_t minLevel{-1};
+
   /// Indices into constants in enclosing OpInvocation.
   std::vector<int32_t> constantIndices;
 
@@ -412,6 +421,11 @@ class CompositeInvocation {
   /// Installs the groups this invocation allocates, built once for the whole
   /// graph before its first execution.
   void setAllocGroupPlan(std::unique_ptr<AllocGroupPlan> plan);
+
+  /// The groups this invocation allocates, or null while none are installed.
+  const AllocGroupPlan* allocGroupPlan() const {
+    return allocGroupPlan_.get();
+  }
 
  private:
   /// Launches the kernel. In debug_single_ops mode, launches once per block
