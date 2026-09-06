@@ -382,6 +382,34 @@ std::vector<std::string> FilterGenerator::makeFilterables(
   return filterables;
 }
 
+namespace {
+
+// Row group skip filters are produced by makeRowGroupSkipRangeFilter, which is
+// only implemented for the kinds below. The generic template builds a
+// BigintRange out of getIntegerValue(), so floating point and HUGEINT would
+// narrow into a filter of the wrong type, and the complex type override fails
+// outright. VARCHAR is excluded on purpose: its specialization returns a filter
+// built from kMaxString, a sentinel picked to exceed *test* data, which selects
+// nothing against real data.
+bool supportsRowGroupSkip(const TypePtr& type) {
+  const auto kind = type->kind();
+  return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::TIMESTAMP;
+}
+
+// Resolves a top level field by name. Returns nullptr for the dotted subfield
+// paths a caller may supply directly, which findChild does not accept.
+TypePtr topLevelFieldType(const RowType& rowType, const std::string& name) {
+  if (name.find('.') != std::string::npos) {
+    return nullptr;
+  }
+  auto index = rowType.getChildIdxIfExists(name);
+  return index.has_value() ? rowType.childAt(*index) : nullptr;
+}
+
+} // namespace
+
 std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
     const std::vector<std::string>& filterable,
     int32_t countX100) {
@@ -423,6 +451,18 @@ std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
         ? folly::Random::rand32(rng_) %
             static_cast<int32_t>(100 - specs.back().selectPct)
         : 0;
+
+    // Ask for a min/max row group skip filter on a fraction of the specs. This
+    // is an independent draw rather than another `category` so the value filter
+    // distribution above is left alone, and it skips the null kinds because
+    // rowGroupSkipFilter ignores filterKind and would silently replace them.
+    const auto fieldType = topLevelFieldType(*rowType_, name);
+    if (fieldType != nullptr && supportsRowGroupSkip(fieldType) &&
+        specs.back().filterKind != FilterKind::kIsNull &&
+        specs.back().filterKind != FilterKind::kIsNotNull &&
+        folly::Random::rand32(rng_) % 10 == 0) {
+      specs.back().isForRowGroupSkip = true;
+    }
   }
 
   return specs;
