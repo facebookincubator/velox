@@ -233,6 +233,15 @@ DEFINE_bool(
     defer_size_outputs,
     false,
     "EXPERIMENT, not correct yet. Stop counting a returned sym_size / sym_numel as a use of its operand when the partitioner builds its levels, so the operand does not become a CSE border on the getter's account. Measures what removing those borders is worth; the getter can end up reading a tensor that was fused away");
+DEFINE_string(
+    prefer_per_sm,
+    "",
+    "Preferred blocks per SM for individual kernel ops, as a comma-separated "
+    "list of <opcode>=<blocks>, e.g. \"30=1,300=3\". A trailing comma is "
+    "allowed and empty entries are skipped. An op with a preference is packed "
+    "only with ops that share it, and its launch is capped at numSMs times the "
+    "preference. Opcodes are the op numbers the --trace=16 legend prints");
+
 DEFINE_bool(
     fold_shared_chains,
     true,
@@ -670,6 +679,46 @@ std::unique_ptr<ModelContext> ModelFixture::makeModelContext() {
 
 // --- ExecutorTestBase ---
 
+namespace {
+
+// Parses --prefer_per_sm: a comma-separated list of <opcode>=<blocks>. A
+// trailing comma and empty entries are tolerated so a list can be built up by
+// appending. Throws on anything else rather than silently ignoring it -- a
+// typo here is a measurement that quietly did not happen.
+std::unordered_map<int32_t, int32_t> parsePreferPerSm(const std::string& spec) {
+  std::unordered_map<int32_t, int32_t> result;
+  size_t pos = 0;
+  while (pos < spec.size()) {
+    const size_t comma = spec.find(',', pos);
+    const std::string entry =
+        spec.substr(pos, comma == std::string::npos ? comma : comma - pos);
+    pos = comma == std::string::npos ? spec.size() : comma + 1;
+    if (entry.empty()) {
+      continue;
+    }
+    const size_t eq = entry.find('=');
+    TORCH_CHECK(
+        eq != std::string::npos && eq > 0 && eq + 1 < entry.size(),
+        "--prefer_per_sm entry '",
+        entry,
+        "' is not <opcode>=<blocks>");
+    const int32_t opCode = std::stoi(entry.substr(0, eq));
+    const int32_t blocks = std::stoi(entry.substr(eq + 1));
+    TORCH_CHECK(
+        blocks > 0,
+        "--prefer_per_sm entry '",
+        entry,
+        "' asks for ",
+        blocks,
+        " blocks per SM; the value is a width, and 0 means unspecified, so it "
+        "must be at least 1");
+    result[opCode] = blocks;
+  }
+  return result;
+}
+
+} // namespace
+
 void ExecutorTestBase::SetUpTestSuite() {
   // Diagnostic: print device properties and test basic CUDA ops.
   LOG(INFO) << "CUDA device count: " << at::cuda::device_count();
@@ -740,6 +789,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
   WaveConfig::get().concatOperandsInPlace = FLAGS_concat_operands_in_place;
   WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
+  WaveConfig::get().preferBlocksPerSm = parsePreferPerSm(FLAGS_prefer_per_sm);
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
   WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;

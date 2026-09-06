@@ -1424,6 +1424,8 @@ int32_t CompileCtx::pushdownFused(NodeCP node, int32_t minLevel) {
   auto kernelOp = generateFused(sg);
   kernelOpStorage_.push_back(std::move(kernelOp));
   launch.op = kernelOpStorage_.back().get();
+  launch.blocksPerSm =
+      WaveConfig::get().preferredBlocksPerSm(launch.op->opCode());
   launch.values.assign(
       launch.op->orderedInputs().begin(), launch.op->orderedInputs().end());
   launch.minLevel = minLevel;
@@ -2198,6 +2200,7 @@ bool CompileCtx::emitConcatOperandCopy(
   auto* op = it->second;
   Launch launch;
   launch.op = op;
+  launch.blocksPerSm = WaveConfig::get().preferredBlocksPerSm(op->opCode());
   launch.values.reserve(op->orderedInputs().size());
   auto* formalDest = op->expr() != nullptr && !op->expr()->outputs().empty()
       ? op->expr()->outputs()[0]
