@@ -58,6 +58,11 @@ class TestingAdmissionCapacityMmapAllocator : public MmapAllocator {
     admissionCapacity_.store(admissionCapacity);
   }
 
+ protected:
+  MachinePageCount admissionCapacity() const {
+    return admissionCapacity_.load();
+  }
+
  private:
   bool allocateNonContiguousWithoutRetry(
       const SizeMix& sizeMix,
@@ -83,6 +88,22 @@ class TestingAdmissionCapacityMmapAllocator : public MmapAllocator {
   }
 
   std::atomic<MachinePageCount> admissionCapacity_;
+};
+
+// Reports dynamic admission headroom to cache callers without reducing the
+// configured capacity used to size MmapAllocator's virtual address ranges.
+class TestingCacheAdmissionCapacityMmapAllocator
+    : public TestingAdmissionCapacityMmapAllocator {
+ public:
+  using TestingAdmissionCapacityMmapAllocator::
+      TestingAdmissionCapacityMmapAllocator;
+
+  size_t capacity() const override {
+    return AllocationTraits::pageBytes(
+        std::max(
+            std::min(admissionCapacity(), kConfiguredCapacityPages),
+            numAllocated()));
+  }
 };
 
 TEST(DynamicMmapAllocatorTest, enforcesAdmissionCapacity) {
@@ -161,6 +182,136 @@ TEST(DynamicMmapAllocatorTest, allowsNoGrowthAboveReducedCapacity) {
 
 DEBUG_ONLY_TEST(
     DynamicMmapAllocatorTest,
+    preservesConfiguredMappedCapacityDuringConcurrentFailure) {
+  MmapAllocator allocator(makeAllocatorOptions());
+
+  Allocation mapped;
+  Allocation mappedFree;
+  Allocation additionalMappedFree;
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kConfiguredCapacityPages - 2, mapped));
+  ASSERT_TRUE(allocator.allocateNonContiguous(1, mappedFree));
+  ASSERT_TRUE(allocator.allocateNonContiguous(1, additionalMappedFree));
+  allocator.freeNonContiguous(mappedFree);
+  allocator.freeNonContiguous(additionalMappedFree);
+  ASSERT_EQ(allocator.numAllocated(), kConfiguredCapacityPages - 2);
+  ASSERT_EQ(allocator.numMapped(), kConfiguredCapacityPages);
+  auto mappedGuard =
+      folly::makeGuard([&]() { allocator.freeNonContiguous(mapped); });
+
+  folly::Baton<> withinCapacityReservation;
+  folly::Baton<> overCapacityReservation;
+  folly::Baton<> releaseWithinCapacityReservation;
+  folly::Baton<> releaseOverCapacityReservation;
+  std::atomic<int32_t> numReservations{0};
+  TestValue::enable();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::memory::MmapAllocator::allocateContiguousImpl",
+      std::function<void(MmapAllocator*)>([&](MmapAllocator* /*unused*/) {
+        if (numReservations.fetch_add(1) == 0) {
+          withinCapacityReservation.post();
+          releaseWithinCapacityReservation.wait();
+        } else {
+          overCapacityReservation.post();
+          releaseOverCapacityReservation.wait();
+        }
+      }));
+
+  auto launchAllocation = [&](MachinePageCount numPages,
+                              ContiguousAllocation& allocation,
+                              bool& succeeded,
+                              std::exception_ptr& error) {
+    return std::thread([&, numPages]() {
+      try {
+        succeeded = allocator.allocateContiguous(numPages, nullptr, allocation);
+      } catch (...) {
+        error = std::current_exception();
+      }
+    });
+  };
+
+  ContiguousAllocation withinCapacityAllocation;
+  bool withinCapacitySucceeded{false};
+  std::exception_ptr withinCapacityError;
+  auto withinCapacityThread = launchAllocation(
+      2,
+      withinCapacityAllocation,
+      withinCapacitySucceeded,
+      withinCapacityError);
+  ContiguousAllocation overCapacityAllocation;
+  bool overCapacitySucceeded{false};
+  std::exception_ptr overCapacityError;
+  std::thread overCapacityThread;
+  auto threadGuard = folly::makeGuard([&]() {
+    releaseWithinCapacityReservation.post();
+    releaseOverCapacityReservation.post();
+    if (withinCapacityThread.joinable()) {
+      withinCapacityThread.join();
+    }
+    if (overCapacityThread.joinable()) {
+      overCapacityThread.join();
+    }
+    allocator.freeContiguous(withinCapacityAllocation);
+    allocator.freeContiguous(overCapacityAllocation);
+  });
+  ASSERT_TRUE(withinCapacityReservation.try_wait_for(5s));
+
+  overCapacityThread = launchAllocation(
+      1, overCapacityAllocation, overCapacitySucceeded, overCapacityError);
+  ASSERT_TRUE(overCapacityReservation.try_wait_for(5s));
+  ASSERT_EQ(allocator.numAllocated(), kConfiguredCapacityPages + 1);
+
+  releaseWithinCapacityReservation.post();
+  withinCapacityThread.join();
+  EXPECT_LE(allocator.numMapped(), kConfiguredCapacityPages);
+  releaseOverCapacityReservation.post();
+  overCapacityThread.join();
+  if (withinCapacityError) {
+    std::rethrow_exception(withinCapacityError);
+  }
+  if (overCapacityError) {
+    std::rethrow_exception(overCapacityError);
+  }
+
+  EXPECT_TRUE(withinCapacitySucceeded);
+  EXPECT_FALSE(overCapacitySucceeded);
+  EXPECT_TRUE(allocator.checkConsistency());
+
+  allocator.freeNonContiguous(mapped);
+  mappedGuard.dismiss();
+  allocator.freeContiguous(withinCapacityAllocation);
+  allocator.freeContiguous(overCapacityAllocation);
+  threadGuard.dismiss();
+  EXPECT_EQ(allocator.numAllocated(), 0);
+  EXPECT_TRUE(allocator.checkConsistency());
+}
+
+TEST(DynamicMmapAllocatorTest, allowsMappedAllocationWhenBestEffortTrimFails) {
+  constexpr MachinePageCount kInitialCapacityPages = 8;
+  constexpr MachinePageCount kReducedCapacityPages = 4;
+  TestingAdmissionCapacityMmapAllocator allocator(kInitialCapacityPages);
+
+  Allocation mapped;
+  Allocation additionalMapped;
+  ASSERT_TRUE(allocator.allocateNonContiguous(kReducedCapacityPages, mapped));
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kReducedCapacityPages, additionalMapped));
+  allocator.freeNonContiguous(mapped);
+  allocator.freeNonContiguous(additionalMapped);
+  ASSERT_EQ(allocator.numMapped(), kInitialCapacityPages);
+
+  allocator.setAdmissionCapacity(kReducedCapacityPages);
+  allocator.testingSetFailureInjection(
+      MemoryAllocator::InjectedFailure::kMadvise);
+  EXPECT_TRUE(allocator.allocateNonContiguous(kReducedCapacityPages, mapped));
+  EXPECT_EQ(allocator.numAllocated(), kReducedCapacityPages);
+  EXPECT_TRUE(allocator.checkConsistency());
+
+  allocator.freeNonContiguous(mapped);
+}
+
+DEBUG_ONLY_TEST(
+    DynamicMmapAllocatorTest,
     rechecksMappedCapacityAfterConcurrentAllocation) {
   constexpr MachinePageCount kInitialCapacityPages = 16;
   constexpr MachinePageCount kReducedCapacityPages = 2;
@@ -183,7 +334,8 @@ DEBUG_ONLY_TEST(
       "facebook::velox::memory::MmapAllocator::ensureEnoughMappedPages",
       std::function<void(MmapAllocator*)>([&](MmapAllocator* /*unused*/) {
         targetComputed.post();
-        resumeRebalance.wait();
+        EXPECT_TRUE(resumeRebalance.try_wait_for(30s))
+            << "Timed out waiting to resume mapped-page balancing";
       }));
 
   bool replacementSucceeded{false};
@@ -265,14 +417,18 @@ DEBUG_ONLY_TEST(
       "facebook::velox::memory::MmapAllocator::ensureEnoughMappedPages",
       std::function<void(MmapAllocator*)>([&](MmapAllocator* /*unused*/) {
         targetComputed.post();
-        resumeRebalance.wait();
+        EXPECT_TRUE(resumeRebalance.try_wait_for(30s))
+            << "Timed out waiting to resume mapped-page balancing";
       }));
 
   bool replacementSucceeded{false};
   std::exception_ptr replacementError;
   std::thread replacementThread([&]() {
     try {
-      replacementSucceeded = allocator.allocateNonContiguous(20, replacement);
+      // Replacing 16 + 4 pages with 8 + 4 requires eight newly mapped pages,
+      // so success cannot bypass the mapped-count recheck via the zero-map
+      // path.
+      replacementSucceeded = allocator.allocateNonContiguous(12, replacement);
     } catch (...) {
       replacementError = std::current_exception();
     }
@@ -285,6 +441,8 @@ DEBUG_ONLY_TEST(
   });
   ASSERT_TRUE(targetComputed.try_wait_for(5s));
 
+  EXPECT_EQ(allocator.numAllocated(), 52);
+  EXPECT_EQ(allocator.numMapped(), 118);
   allocator.freeContiguous(contiguous);
   Allocation concurrent;
   allocator.setAdmissionCapacity(kInitialCapacityPages);
@@ -303,11 +461,10 @@ DEBUG_ONLY_TEST(
     allocator.freeNonContiguous(concurrent);
     return;
   }
-  EXPECT_EQ(
-      allocator.numAllocated(), replacement.numPages() + concurrent.numPages());
-  EXPECT_LE(
-      allocator.numMapped(),
-      std::max(kReducedCapacityPages, allocator.numAllocated()));
+  EXPECT_EQ(replacement.numPages(), 12);
+  EXPECT_EQ(concurrent.numPages(), 32);
+  EXPECT_EQ(allocator.numAllocated(), 44);
+  EXPECT_EQ(allocator.numMapped(), 44);
   EXPECT_TRUE(allocator.checkConsistency());
 
   allocator.freeNonContiguous(replacement);
@@ -316,15 +473,32 @@ DEBUG_ONLY_TEST(
   EXPECT_TRUE(allocator.checkConsistency());
 }
 
-TEST(DynamicMmapAllocatorTest, rejectsCapacityAboveConfiguredCapacity) {
+TEST(DynamicMmapAllocatorTest, clampsCapacityToConfiguredCapacity) {
   TestingAdmissionCapacityMmapAllocator allocator(kConfiguredCapacityPages + 1);
 
-  Allocation allocation;
-  EXPECT_THROW(
-      allocator.allocateNonContiguous(1, allocation), VeloxRuntimeError);
-  if (!allocation.empty()) {
-    allocator.freeNonContiguous(allocation);
-  }
+  Allocation nonContiguous;
+  ASSERT_TRUE(
+      allocator.allocateNonContiguous(kConfiguredCapacityPages, nonContiguous));
+  Allocation extra;
+  EXPECT_FALSE(allocator.allocateNonContiguous(1, extra));
+  allocator.freeNonContiguous(nonContiguous);
+
+  ContiguousAllocation contiguous;
+  ASSERT_TRUE(allocator.allocateContiguous(
+      kConfiguredCapacityPages, nullptr, contiguous));
+  ContiguousAllocation extraContiguous;
+  EXPECT_FALSE(allocator.allocateContiguous(1, nullptr, extraContiguous));
+  allocator.freeContiguous(contiguous);
+
+  ASSERT_TRUE(allocator.allocateContiguous(
+      kConfiguredCapacityPages - 1,
+      nullptr,
+      contiguous,
+      nullptr,
+      kConfiguredCapacityPages + 1));
+  EXPECT_TRUE(allocator.growContiguous(1, contiguous));
+  EXPECT_FALSE(allocator.growContiguous(1, contiguous));
+  allocator.freeContiguous(contiguous);
 }
 
 TEST(DynamicMmapAllocatorTest, cacheEvictsAtAdmissionCapacity) {
@@ -332,7 +506,7 @@ TEST(DynamicMmapAllocatorTest, cacheEvictsAtAdmissionCapacity) {
   constexpr MachinePageCount kReducedCapacityPages = 4;
   constexpr uint64_t kEntryBytes =
       kReducedCapacityPages * AllocationTraits::kPageSize;
-  auto allocator = std::make_shared<TestingAdmissionCapacityMmapAllocator>(
+  auto allocator = std::make_shared<TestingCacheAdmissionCapacityMmapAllocator>(
       kInitialCapacityPages);
   auto dataCache = cache::AsyncDataCache::create(allocator.get());
 
@@ -350,10 +524,16 @@ TEST(DynamicMmapAllocatorTest, cacheEvictsAtAdmissionCapacity) {
     ASSERT_EQ(dataCache->cachedPages(), kInitialCapacityPages);
 
     allocator->setAdmissionCapacity(kReducedCapacityPages);
+    EXPECT_EQ(
+        allocator->capacity(),
+        AllocationTraits::pageBytes(kInitialCapacityPages));
     auto pin = dataCache->findOrCreate(
         cache::RawFileCacheKey{file.id(), 2 * kEntryBytes}, kEntryBytes);
     EXPECT_FALSE(pin.empty());
     EXPECT_LE(dataCache->cachedPages(), kReducedCapacityPages);
+    EXPECT_EQ(
+        allocator->capacity(),
+        AllocationTraits::pageBytes(kReducedCapacityPages));
   }
 
   dataCache->shutdown();
