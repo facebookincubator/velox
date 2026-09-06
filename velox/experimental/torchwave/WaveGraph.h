@@ -305,6 +305,20 @@ class WaveGraph {
   /// Returns true if 'value' was created by newTensorValue or newScalarValue.
   bool isCreatedValue(ValueCP value) const;
 
+  /// Records that 'value' is the output of a clone a wide cat inserted so the
+  /// operand has a buffer of its own to fill. Such a clone looks pointless in
+  /// isolation -- nobody writes it and its source is read-only -- and the
+  /// read-only clone elision would drop it, which is exactly what must not
+  /// happen: the concat's allocation group carves the clone into the region of
+  /// the result the operand occupies, so its producer writes the band directly
+  /// instead of the concat copying it in through a serial offset walk.
+  void markConcatFillClone(ValueCP value);
+
+  /// The clone outputs markConcatFillClone recorded.
+  const folly::F14FastSet<ValueCP>& concatFillClones() const {
+    return concatFillClones_;
+  }
+
   /// Creates a new Value with the same type and dtype as 'original', attached
   /// to an internal placeholder node. Registers it in idToValue_.
   nativert::Value* duplicateValue(ValueCP original);
@@ -467,6 +481,10 @@ class WaveGraph {
 
   // Pre-built map from Value::id() to Value* for fast lookups.
   IdToValueMap idToValue_;
+
+  // Clone outputs a wide cat inserted to fill its regions in parallel. See
+  // markConcatFillClone.
+  folly::F14FastSet<ValueCP> concatFillClones_;
 
   // Owns TensorMeta objects created by newTensorValue so pointers in
   // types_.types remain valid.
