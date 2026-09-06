@@ -252,6 +252,16 @@ class ExecutorTestBase : public ::testing::Test {
       std::vector<c10::IValue> inputs,
       const std::string& refFramePath);
 
+  /// Drops the reference-frame entries whose value ids the wave graph cannot
+  /// have, and returns how many were dropped. The reference run mints Values
+  /// the wave run does not (insertCpuOnlyCopies' _to_copy outputs), and they
+  /// take the ids straight after the loaded graph's last -- which is exactly
+  /// where the wave graph's own rewrites start numbering. Left in, those
+  /// entries make the intermediates check compare two unrelated tensors. No-op
+  /// until runNativertReferenceWithInputs has recorded the boundary.
+  int32_t dropUnsharedReferenceValues(
+      std::unordered_map<int32_t, c10::IValue>& refFrame) const;
+
   /// Runs 'fixture' through the wave executor with explicit 'inputs' and
   /// verifies against 'expected'. If 'refFramePath' is non-empty it is loaded
   /// as the reference frame so wave checks intermediates too.
@@ -276,6 +286,11 @@ class ExecutorTestBase : public ::testing::Test {
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};
   int64_t lastRefNodesChecked_{0};
+
+  // Number of Values the reference graph and the wave graph agree on, recorded
+  // by runNativertReferenceWithInputs before the passes only the reference
+  // runs. Ids at or above it exist in one graph only. -1 until recorded.
+  int32_t numSharedReferenceValues_{-1};
 
   /// Display name for the current test, included in failure messages.
   std::string displayName_;

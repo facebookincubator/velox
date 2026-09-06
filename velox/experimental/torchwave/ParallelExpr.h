@@ -45,6 +45,14 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 /// Returns the number of nodes merged away.
 int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types);
 
+/// Rewrites ops that produce a TensorList into per-tensor form, by calling each
+/// op's own Metadata::decompose rule. One traversal serves every op, so a new
+/// decomposition is a rule on the op rather than another pass over the graph.
+/// Call after commonSubexpressions -- decomposition multiplies the node count,
+/// and CSE is cheaper on the bundled form -- and before partitioning, which is
+/// what the per-tensor nodes exist to inform. Returns the number rewritten.
+int64_t decomposeListOps(nativert::Graph& graph, WaveGraph& waveGraph);
+
 /// Rematerializes each multiply-used metadata getter (sym_size / sym_numel) at
 /// its use sites, so it stops being a shared value the partitioner has to
 /// materialize as a top-level output. Only duplicates a getter whose operand is

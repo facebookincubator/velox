@@ -345,7 +345,7 @@ bool operandMeasurableAt(
     const auto it = produced.find(operand.valueId);
     return it == produced.end() || !(point < it->second.at);
   }
-  if (operand.reserveShape != nullptr ||
+  if (operand.reserveShape != nullptr || operand.hasReserveInChain ||
       operand.sizeExpr.op == SizeShortcut::kNone) {
     return false;
   }
