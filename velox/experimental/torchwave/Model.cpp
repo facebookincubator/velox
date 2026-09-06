@@ -95,6 +95,10 @@ std::unique_ptr<TorchWaveModel> TorchWaveModel::loadFromReader(
   setGraphDevice(loaded.graph.get(), /*isCuda=*/true);
   rewriteGpuIncompatibleOps(*loaded.graph);
   insertCpuOnlyCopies(*loaded.graph);
+  // Retarget merge-and-dedup to the fused TorchWave _tw CUDA ops when a build
+  // has registered them (e.g. the _torchwave_meta extension); a no-op for the
+  // base engine, where the sparsenn op runs as a standalone.
+  rewriteMergeAndDedupToTw(*loaded.graph);
 
   auto context = std::make_unique<ModelContext>();
   context->graph = std::move(loaded.graph);
@@ -115,6 +119,11 @@ TorchWaveModel::~TorchWaveModel() = default;
 
 std::vector<c10::IValue> TorchWaveModel::run(std::vector<c10::IValue> inputs) {
   return executor_->runInputs(std::move(inputs));
+}
+
+std::vector<c10::IValue> TorchWaveModel::runReuse(
+    std::vector<c10::IValue> inputs) {
+  return executor_->runInputsReuse(std::move(inputs));
 }
 
 std::vector<at::Tensor> TorchWaveModel::runTensors(
