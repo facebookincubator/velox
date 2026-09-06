@@ -198,6 +198,34 @@ void DictionaryEncoding<T>::readWithVisitor(
           &indicesHook));
   indicesVisitor.setRowIndex(startRowIndex);
   legacy::callReadWithVisitor(*indicesEncoding_, indicesVisitor, params);
+
+  // Once the indices are materialised, a dense read that inspects no filter,
+  // hook or null per row is a straight alphabet gather, so translate the whole
+  // run in one pass instead of paying a visitor callback per value.
+  // `kFilterOnly` visitors are excluded: they have no values buffer to write.
+  if constexpr (V::dense && !V::kHasFilter && !V::kHasHook && !V::kFilterOnly) {
+    if (visitor.reader().rawNullsInReadRange() == nullptr) {
+      using DataType = typename V::DataType;
+      const auto numIndices = visitor.numRows() - startRowIndex;
+
+      // Mirrors readWithVisitorSlow: the extract-to-reader path allocates
+      // result nulls even when this range has none, or a reused buffer leaks
+      // stale null bits from a previous chunk into the output.
+      params.prepareResultNulls();
+      auto* values = detail::mutableValues<detail::ValueType<DataType>>(
+          visitor, numIndices);
+      for (vector_size_t i = 0; i < numIndices; ++i) {
+        values[i] = detail::dataToValue(
+            visitor,
+            detail::castFromPhysicalType<DataType>(
+                alphabet_[indicesBuffer_[i]]));
+      }
+      visitor.addNumValues(numIndices);
+      visitor.setRowIndex(visitor.numRows());
+      return;
+    }
+  }
+
   detail::readWithVisitorSlow(visitor, params, nullptr, [&] {
     const auto index = indicesBuffer_[visitor.rowIndex() - startRowIndex];
     return alphabet_[index];
