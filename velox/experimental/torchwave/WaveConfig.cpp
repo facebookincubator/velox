@@ -96,6 +96,7 @@ std::string WaveConfig::toString() const {
   addInt("maxDelayedFree", &WaveConfig::maxDelayedFree);
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
   addBool("configPerOp", &WaveConfig::configPerOp);
+  addBool("deferSizeOutputs", &WaveConfig::deferSizeOutputs);
   addBool("donateBuffers", &WaveConfig::donateBuffers);
   addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
   addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);

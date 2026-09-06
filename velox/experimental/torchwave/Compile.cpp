@@ -2250,55 +2250,59 @@ void CompileCtx::emitBarrier() {
   }
 }
 
+// Resolves the ordering question for one operand. An input read through a
+// view is the base's storage: a view of something this kernel fills still
+// needs the barrier, a view of anything else does not, and the view node
+// itself never writes and so never justifies one. An in-place writer is not
+// the base's producer either -- the storage was created elsewhere, often in
+// an earlier kernel -- so the producer test alone cannot see it; ask the
+// users too, since a writer running unsynchronized in this kernel is the same
+// hazard as a producer running in it.
+bool CompileCtx::valueNeedsBarrier(ValueCP operand, NodeCP consumer) {
+  auto* value = viewBase(operand);
+  if (!value) {
+    return false;
+  }
+  auto* producer = value->producer();
+  if (producer && generatingOp_->allNodes().count(producer) &&
+      !preBarrierValues_.count(value)) {
+    return true;
+  }
+  for (auto* user : value->users()) {
+    if (user == consumer || !generatingOp_->allNodes().count(user)) {
+      continue;
+    }
+    const auto* userMeta = nodeMeta(user);
+    if (!userMeta || !userMeta->mutatesArg.has_value()) {
+      continue;
+    }
+    auto ordinal = static_cast<size_t>(*userMeta->mutatesArg);
+    const auto& userInputs = user->inputs();
+    if (ordinal >= userInputs.size() || userInputs[ordinal].value != value) {
+      continue;
+    }
+    bool synchronized = true;
+    for (auto* output : user->outputs()) {
+      if (!preBarrierValues_.count(output)) {
+        synchronized = false;
+        break;
+      }
+    }
+    if (!synchronized) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool CompileCtx::callNeedsBarrier(NodeCP node) {
   // A call reads its inputs from memory, so if a producer ran earlier in this
   // same kernel with no barrier since, that producer's writes from other blocks
   // may not yet be visible. randomAccess is not consulted -- an aligned read is
   // still unsafe across blocks, and the preBarrierValues_ check below avoids
   // emitting a redundant barrier when one already separates them.
-  // Resolves the ordering question for one operand. An input read through a
-  // view is the base's storage: a view of something this kernel fills still
-  // needs the barrier, a view of anything else does not, and the view node
-  // itself never writes and so never justifies one. An in-place writer is not
-  // the base's producer either -- the storage was created elsewhere, often in
-  // an earlier kernel -- so the producer test alone cannot see it; ask the
-  // users too, since a writer running unsynchronized in this kernel is the same
-  // hazard as a producer running in it.
   auto needsBarrierFor = [&](ValueCP operand) {
-    auto* value = viewBase(operand);
-    if (!value) {
-      return false;
-    }
-    auto* producer = value->producer();
-    if (producer && generatingOp_->allNodes().count(producer) &&
-        !preBarrierValues_.count(value)) {
-      return true;
-    }
-    for (auto* user : value->users()) {
-      if (user == node || !generatingOp_->allNodes().count(user)) {
-        continue;
-      }
-      const auto* userMeta = nodeMeta(user);
-      if (!userMeta || !userMeta->mutatesArg.has_value()) {
-        continue;
-      }
-      auto ordinal = static_cast<size_t>(*userMeta->mutatesArg);
-      const auto& userInputs = user->inputs();
-      if (ordinal >= userInputs.size() || userInputs[ordinal].value != value) {
-        continue;
-      }
-      bool synchronized = true;
-      for (auto* output : user->outputs()) {
-        if (!preBarrierValues_.count(output)) {
-          synchronized = false;
-          break;
-        }
-      }
-      if (!synchronized) {
-        return true;
-      }
-    }
-    return false;
+    return valueNeedsBarrier(operand, node);
   };
   // One whole operand. For a tensor list the list node itself is
   // metadata-only, so the real producers are the element nodes.

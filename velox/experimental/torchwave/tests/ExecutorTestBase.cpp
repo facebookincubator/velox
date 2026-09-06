@@ -150,8 +150,8 @@ DEFINE_bool(
     "Launch kernel once per block for debugging, waiting after each launch");
 DEFINE_bool(
     auto_adjust_cost,
-    false,
-    "Adjust per-op cost multipliers after each execution based on actual thread block clocks");
+    true,
+    "Adjust per-op cost multipliers after each execution based on actual thread block clocks. Defaults to WaveConfig's own default, which this flag assigns unconditionally: a different default here would silently override the engine's");
 
 DEFINE_bool(
     enable_reuse,
@@ -217,6 +217,10 @@ DEFINE_bool(
     cse_views,
     false,
     "Before partitioning, merge view nodes that produce the same value from the same operands");
+DEFINE_bool(
+    defer_size_outputs,
+    false,
+    "EXPERIMENT, not correct yet. Stop counting a returned sym_size / sym_numel as a use of its operand when the partitioner builds its levels, so the operand does not become a CSE border on the getter's account. Measures what removing those borders is worth; the getter can end up reading a tensor that was fused away");
 DEFINE_bool(
     mk_select,
     false,
@@ -690,6 +694,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
   WaveConfig::get().configPerOp = FLAGS_config_per_op;
+  WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
   WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
   WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;

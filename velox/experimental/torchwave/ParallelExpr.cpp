@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -112,6 +113,56 @@ float selfCost(NodeCP /*expr*/) {
 struct LevelData {
   NodeSet exprs;
 };
+
+// A metadata getter (sym_size / sym_numel) whose only role is to be a top-level
+// graph output, over an operand something else also reads.
+//
+// Such a getter is in `top`, so makeLevelsInner counts a second reference to
+// its operand's producer, and makeCseBorder turns that into a border: the
+// producer moves to its own earlier layer and every other consumer of it
+// follows a layer later than it needed to. The getter's own work is one scalar
+// field read on the host; the whole cost is the layer split it forces.
+//
+// Users are counted through 'reachable', not through users(): torch.export
+// leaves dead `_operator.ge` / `_operator.le` shape guards behind once the
+// asserts are stripped -- 428 of them on the ROO graph -- and they appear in a
+// value's users() while contributing to no level. Counting them refuses every
+// candidate.
+bool isDeferredSizeOutput(
+    NodeCP node,
+    NodeCP outputNode,
+    const NodeSet& reachable) {
+  const Metadata* meta = Registry::metadata(node->target());
+  if (meta == nullptr || !meta->isMetadataGetter) {
+    return false;
+  }
+  if (node->outputs().size() != 1 || node->outputs()[0] == nullptr) {
+    return false;
+  }
+  // Consumed on the device as well as returned: it has to stay a real op or the
+  // consumer has nothing to read.
+  for (auto* user : node->outputs()[0]->users()) {
+    if (user != outputNode && reachable.count(user) > 0) {
+      return false;
+    }
+  }
+  if (node->inputs().empty() || node->inputs()[0].value == nullptr) {
+    return false;
+  }
+  ValueCP operand = node->inputs()[0].value;
+  if (operand->producer() == nullptr) {
+    return false;
+  }
+  // Sole user: removing the reference merges no layer, so there is nothing to
+  // win and no reason to grow a second mechanism.
+  int32_t others = 0;
+  for (auto* user : operand->users()) {
+    if (user != node && reachable.count(user) > 0) {
+      ++others;
+    }
+  }
+  return others > 0;
+}
 
 size_t levelOf(std::vector<LevelData>& levels, NodeCP expr) {
   for (size_t i = 0; i < levels.size(); ++i) {
@@ -2017,6 +2068,36 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
   auto topExprs = args(root);
   NodeSet top(topExprs.begin(), topExprs.end());
 
+  // Returned metadata getters, excluded from the level walk so they stop
+  // creating a CSE border on their operand. Put back before the last layer is
+  // built (below) so they still run and still fill their output slot.
+  //
+  // The reachable set is built here rather than at function scope so a run with
+  // the flag off does not pay for a walk of the whole graph.
+  std::vector<NodeCP> deferredSizes;
+  if (WaveConfig::get().deferSizeOutputs) {
+    NodeSet reachable;
+    std::vector<NodeCP> stack(topExprs.begin(), topExprs.end());
+    while (!stack.empty()) {
+      NodeCP n = stack.back();
+      stack.pop_back();
+      if (!reachable.insert(n).second) {
+        continue;
+      }
+      for (auto* in : args(n)) {
+        stack.push_back(in);
+      }
+    }
+    for (auto* expr : top) {
+      if (isDeferredSizeOutput(expr, root, reachable)) {
+        deferredSizes.push_back(expr);
+      }
+    }
+    for (auto* expr : deferredSizes) {
+      top.erase(expr);
+    }
+  }
+
   std::vector<LevelData> levelData;
   std::unordered_map<NodeCP, int32_t> refCount;
   makeExprLevels(top, levelData, refCount);
@@ -2073,11 +2154,31 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
     current = project;
   }
 
+  // The deferred getters rejoin here: topExprs still lists them, so they are
+  // already in the layer's node set; putting them back in 'top' is what makes
+  // collectReachable pull their operands in as layer inputs.
+  for (auto* expr : deferredSizes) {
+    top.insert(expr);
+  }
+
   auto* project = makeParallelProject(current, top, topExprs);
   if (project == nullptr) {
     TORCH_CHECK(false, "makeParallelProject returned null");
   }
   current = project;
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) &&
+      WaveConfig::get().deferSizeOutputs) {
+    int32_t layers = 0;
+    for (auto* p = current; p != nullptr; p = p->input()) {
+      ++layers;
+    }
+    std::cout << fmt::format(
+        "partition: {} layers, last layer has {} exprs, {} size outputs deferred\n",
+        layers,
+        current->nodes().size(),
+        deferredSizes.size());
+  }
 
   // All layers are now built in execution order; annotate each with its
   // last-use / reusable-last-use values.
