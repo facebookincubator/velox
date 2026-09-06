@@ -25,6 +25,8 @@ target_link_libraries(
   velox_constrained_input_generators
   velox_functions_json
   velox_presto_types
+  velox_quantile_digest
+  velox_tdigest
   velox_type
   GTest::gtest
   GTest::gtest_main
