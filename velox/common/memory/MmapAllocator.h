@@ -148,7 +148,11 @@ class MmapAllocator : public MemoryAllocator {
   // other callers must use the public allocation APIs, which own validation,
   // reservation, retry, and cleanup. These functions limit net increases in
   // allocated and mapped pages while allowing existing usage to remain above a
-  // reduced capacity until memory is freed.
+  // reduced capacity until memory is freed. Values above the configured
+  // capacity are clamped. Derived allocators used with a cache must override
+  // capacity() to reflect their admission policy without reporting less than
+  // allocated usage, so that cache headroom calculations neither underflow nor
+  // bypass eviction.
   bool allocateNonContiguousWithCapacity(
       const SizeMix& sizeMix,
       Allocation& out,
@@ -367,10 +371,13 @@ class MmapAllocator : public MemoryAllocator {
   void* allocateBytesWithoutRetry(uint64_t bytes, uint16_t alignment) override;
 
   // Ensures that there are at least 'newMappedNeeded' pages that are not
-  // backing any existing allocation. Advises away pages backing freed slots
-  // in the size classes toward the greater of 'admissionCapacity' and the
-  // current allocated pages. Returns false only if reclaim falls short and
-  // the current mapped-page count still exceeds that fresh effective bound.
+  // backing any existing allocation by advising away pages backing freed
+  // size-class slots. Uses 'capacity_' as the mapped-page bound unless
+  // 'admissionCapacity' is lower, in which case the bound is the greater of
+  // 'admissionCapacity' and the current allocated pages. If 'newMappedNeeded'
+  // is zero, reclamation is best effort and the call succeeds. Otherwise,
+  // returns false if reclaim falls short and the current mapped-page count
+  // still exceeds the freshly computed bound.
   bool ensureEnoughMappedPages(
       int32_t newMappedNeeded,
       MachinePageCount admissionCapacity);
