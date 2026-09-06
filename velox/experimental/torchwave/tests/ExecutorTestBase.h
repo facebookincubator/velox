@@ -334,11 +334,13 @@ class ExecutorTestBase : public ::testing::Test {
   /// hold only the ops that have such a variant (e.g. masked_select).
   ModePlans compilePlans(const std::string& pt2File);
 
-  /// Compiles 'pt2File' in the cooperative grid and returns what the
+  /// Compiles 'pt2File' for the grid 'cg' names and returns what the
   /// allocation-group pass makes of it, so a test can assert on the plan --
   /// which concats are placed ahead of their operands, what the lifetime
-  /// grouping folds -- without running the graph.
-  AllocGroupStats allocGroupStats(const std::string& pt2File);
+  /// grouping folds -- without running the graph. The mode runs on both grids,
+  /// and places fewer concat operands on the multi-kernel one, so which grid
+  /// the plan was built for is part of what a test is asserting.
+  AllocGroupStats allocGroupStats(const std::string& pt2File, bool cg = true);
 };
 
 } // namespace torch::wave

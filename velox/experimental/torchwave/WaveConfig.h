@@ -277,6 +277,23 @@ struct WaveConfig {
   // which a no-op op balances.
   bool metadataGetterStandalone{true};
 
+  // If true, a concat operand whose producer could write the operand's band
+  // directly is left to be fused into the concat's own kernel instead of being
+  // pushed into a kernel of its own in the previous step. The pushdown is what
+  // makes the operand "already placed" by the time the carve is decided, which
+  // costs it its band and buys it a copy. Only taken for an operand the concat
+  // is the sole consumer of, and only when its extent is computable without
+  // running it.
+  //
+  // On by default. The pushdown buys a parallel fill and pays for it in three
+  // times the memory traffic -- the producer writes its own buffer, then a copy
+  // reads it and writes the band -- plus a buffer that has to stay live across
+  // the step boundary. On the 1k ROO graph that trade is worth taking for 237
+  // operands: 453 MB per execution stops being copied and the run is 2.0%
+  // faster. It is per-operand rather than global, so a graph of few narrow
+  // concats may not see it.
+  bool concatOperandsInPlace{true};
+
   // If true, a column folds its producer's gather into its own even when the
   // producer has several readers, provided every reader is a consumer that can
   // absorb a chain itself. The sole-reader rule two foldable consumers can
