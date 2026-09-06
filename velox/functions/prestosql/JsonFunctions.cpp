@@ -187,6 +187,23 @@ class JsonFormatFunction : public exec::VectorFunction {
   }
 };
 
+// Returns whether two json_parse object keys are equal, given that 'later'
+// sorts at-or-after 'earlier' in the key ordering. The caller only compares an
+// element against an earlier element of the sorted permutation, so a single
+// direction suffices on the normalized path. On the fast/plain path equal keys
+// are byte-identical (normalization runs before parsing), so a raw comparison
+// is correct.
+template <bool kNeedNormalize>
+bool keyEqualToSortedPredecessor(
+    std::string_view earlier,
+    std::string_view later) {
+  if constexpr (kNeedNormalize) {
+    return !lessThanForJsonParse(earlier, later);
+  } else {
+    return earlier == later;
+  }
+}
+
 // A performant json parsing implementation. Does not handle null rows. This is
 // also leveraged by json functions other than json_parse that need to parse a
 // varchar input. If `nullOnError` is true, the result will have null values for
@@ -490,14 +507,35 @@ class JsonParseImpl {
       sortIndices(
           [&](int32_t i, int32_t j) { return fields[i].key < fields[j].key; });
     }
-    for (auto i = 0; i < numFields; ++i) {
-      if (i > 0) {
+    // Emit one field per run of equal keys, keeping the last occurrence in the
+    // document. Equal keys are adjacent because the permutation is sorted by
+    // key; the sort is not stable, so within a run keep the field with the
+    // greatest original index (= the last occurrence). Duplicates are rare, so
+    // the inner scan is a single iteration on the common no-duplicate path.
+    bool first{true};
+    for (int i = 0; i < numFields;) {
+      int32_t lastOccurrence = sortIndices_[i];
+      int runEnd = i;
+      while (runEnd + 1 < numFields &&
+             keyEqualToSortedPredecessor<kNeedNormalize>(
+                 fields[sortIndices_[i]].key,
+                 fields[sortIndices_[runEnd + 1]].key)) {
+        ++runEnd;
+        lastOccurrence = std::max(lastOccurrence, sortIndices_[runEnd]);
+      }
+      // A collapsed run is byte-equal on every path (normalization makes
+      // comparator-equal keys byte-identical); guards against a future fastSort
+      // or normalization change grouping distinct keys.
+      VELOX_DCHECK_EQ(fields[sortIndices_[i]].key, fields[lastOccurrence].key);
+      if (!first) {
         addOrMergeChar(views_, kSeparator);
       }
-      auto& field = fields[sortIndices_[i]];
+      first = false;
+      const auto& field = fields[lastOccurrence];
       for (int j = 0; j < field.size; ++j) {
         views_.push_back(views_[field.offset + j]);
       }
+      i = runEnd + 1;
     }
     auto numNewViews = views_.size() - sortedBegin;
     static_assert(std::is_trivially_copyable_v<std::string_view>);

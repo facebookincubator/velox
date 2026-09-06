@@ -287,7 +287,55 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1","v1"])");
   testJsonParse(R"({ "abc" : "\/"})", R"({"abc":"/"})");
   testJsonParse(R"({ "abc" : "\\/"})", R"({"abc":"\\/"})");
-  testJsonParse("{\"\\\\\":null, \"\\\\\":null}", R"({"\\":null,"\\":null})");
+  // Exact-duplicate object keys collapse, keeping the last value (matches
+  // Presto). The backslash key forces the normalized path; differing values
+  // prove keep-LAST.
+  testJsonParse(R"({"\\":1,"\\":2})", R"({"\\":2})");
+  testJsonParse(R"({"\\":1,"\\":2,"\\":3})", R"({"\\":3})");
+  testJsonParse(R"({"a":1,"a":2})", R"({"a":2})");
+  testJsonParse(R"({"a":1,"a":2,"a":3})", R"({"a":3})");
+  // Case-sensitive: 'a' and 'A' are distinct, both kept, sorted (A < a).
+  testJsonParse(R"({"a":1,"A":2})", R"({"A":2,"a":1})");
+  // Dedup interleaved with sort, and two separate duplicate groups.
+  testJsonParse(R"({"b":1,"a":2,"a":3})", R"({"a":3,"b":1})");
+  testJsonParse(R"({"a":1,"a":2,"b":3,"b":4})", R"({"a":2,"b":4})");
+  // Last value wins even when null or a different shape.
+  testJsonParse(R"({"a":1,"a":null})", R"({"a":null})");
+  testJsonParse(R"({"a":1,"a":[1,2]})", R"({"a":[1,2]})");
+  // Empty-key duplicate.
+  testJsonParse(R"({"":1,"":2})", R"({"":2})");
+  // Nested object and object-in-array collapse via recursion.
+  testJsonParse(R"({"x":{"a":1,"a":2}})", R"({"x":{"a":2}})");
+  testJsonParse(R"([{"a":1,"a":2},{"b":1,"b":2}])", R"([{"a":2},{"b":2}])");
+  // Fast/plain-path key-length boundaries (differing values); the last key
+  // (>24B) exercises the plain path, the rest the fastSort chunk/tail handling.
+  testJsonParse(R"({"1234567":1,"1234567":2})", R"({"1234567":2})");
+  testJsonParse(R"({"12345678":1,"12345678":2})", R"({"12345678":2})");
+  testJsonParse(R"({"123456789":1,"123456789":2})", R"({"123456789":2})");
+  testJsonParse(
+      R"({"123456789012345":1,"123456789012345":2})",
+      R"({"123456789012345":2})");
+  testJsonParse(
+      R"({"1234567890123456":1,"1234567890123456":2})",
+      R"({"1234567890123456":2})");
+  testJsonParse(
+      R"({"12345678901234567":1,"12345678901234567":2})",
+      R"({"12345678901234567":2})");
+  testJsonParse(
+      R"({"123456789012345678901234":1,"123456789012345678901234":2})",
+      R"({"123456789012345678901234":2})");
+  testJsonParse(
+      R"({"1234567890123456789012345":1,"1234567890123456789012345":2})",
+      R"({"1234567890123456789012345":2})");
+  // Escaped vs literal decode-equal key (\/ normalizes to /) -> collapse
+  // keep-last.
+  testJsonParse(R"({"\/":1,"/":2})", R"({"/":2})");
+  // Multibyte-UTF-8 duplicate key, differing values (normalized path).
+  testJsonParse(R"({"信":1,"信":2})", R"({"信":2})");
+  // Known-divergence lock (Masha Q4): "\n" and "\u000A" both
+  // decode to U+000A, but the comparator byte-length tiebreak ranks them
+  // distinct, so they are NOT collapsed (both kept). Documents the scope.
+  testJsonParse(R"({"\n":1,"\u000A":2})", R"({"\n":1,"\u000A":2})");
   testJsonParse(R"({ "abc" : [1, 2, 3, 4    ]})", R"({"abc":[1,2,3,4]})");
   // Test out with unicodes and empty keys.
   testJsonParse(
