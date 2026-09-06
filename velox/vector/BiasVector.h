@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CppAttributes.h>
 #include <folly/dynamic.h>
 
 #include "velox/common/base/SimdUtil.h"
@@ -151,7 +152,8 @@ class BiasVector : public SimpleVector<T> {
    * this vector. This is used during execution to process over the subset of
    * values when possible.
    */
-  inline const BufferPtr& values() const override {
+  inline const BufferPtr& values() const
+      [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] override {
     return values_;
   }
 

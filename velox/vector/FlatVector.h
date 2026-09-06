@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CppAttributes.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/dynamic.h>
@@ -136,7 +137,7 @@ class FlatVector final : public SimpleVector<T> {
   /// Returns a smart pointer holding the values for
   /// this vector. This is used during execution to process over the subset of
   /// values when possible.
-  const BufferPtr& values() const override {
+  const BufferPtr& values() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] override {
     return values_;
   }
 
@@ -421,7 +422,8 @@ class FlatVector final : public SimpleVector<T> {
   /// by StringView's. It is safe to share these among multiple vectors. These
   /// buffers are append only. It is allowed to append data, but it is
   /// prohibited to modify already written data.
-  const std::vector<BufferPtr>& stringBuffers() const {
+  const std::vector<BufferPtr>& stringBuffers() const
+      [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return stringBuffers_;
   }
 

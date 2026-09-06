@@ -22,6 +22,7 @@
 #include <utility>
 
 #include <fmt/format.h>
+#include <folly/CppAttributes.h>
 #include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
@@ -243,7 +244,7 @@ class BaseVector {
   /// this on first access. For ConstantVector, this method returns a BufferPtr
   /// of only size 1. For DictionaryVector, this method returns a BufferPtr for
   /// only nulls in the top-level layer.
-  const BufferPtr& nulls() const {
+  const BufferPtr& nulls() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     return nulls_;
   }
 
@@ -722,7 +723,7 @@ class BaseVector {
 
   static const VectorPtr& loadedVectorShared(const VectorPtr& vector);
 
-  virtual const BufferPtr& values() const {
+  virtual const BufferPtr& values() const [[FOLLY_ATTR_CLANG_LIFETIMEBOUND]] {
     VELOX_UNSUPPORTED("Only flat vectors have a values buffer");
   }
 
