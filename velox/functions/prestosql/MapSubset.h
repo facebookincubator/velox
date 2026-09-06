@@ -235,6 +235,9 @@ struct MapSubsetFunction {
       searchKeys_;
 };
 
+/// Registers the simple functions above, plus a vector function under the same
+/// name that projects FlatMapVector inputs into a FlatMapVector result and
+/// delegates to the simple functions for every other encoding.
 void registerMapSubset(const std::string& name);
 
 } // namespace facebook::velox::functions

@@ -16,6 +16,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/vector/FlatMapVector.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::test;
 
@@ -114,6 +116,24 @@ TEST_F(MapSubsetTest, bigintKey) {
 
   // Non-constant keys.
   result = evaluate("map_subset(c0, c1)", data);
+  assertEqualVectors(expected, result);
+
+  // Duplicate search keys. A key repeated in the search list must still appear
+  // at most once in the result, both for constant and non-constant keys.
+  result = evaluate("map_subset(c0, array_constructor(1, 3, 1, 5, 3))", data);
+  assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "map_subset(c0, c1)",
+      makeRowVector({
+          data->childAt(0),
+          makeArrayVectorFromJson<int64_t>({
+              "[1, 3, 1, 5]",
+              "[1, 3, 5, 7, 1]",
+              "[3, 5, 3]",
+              "[1, 3, 1]",
+          }),
+      }));
   assertEqualVectors(expected, result);
 
   // Empty list of keys. Expect empty maps.
@@ -289,6 +309,312 @@ TEST_F(MapSubsetTest, timestampWithTimeZone) {
       "map_subset(c0, c1)",
       makeRowVector({mapsWithRowKeys, lookupWithRowKeys}));
   assertEqualVectors(expectedWithRowKeys, result);
+}
+
+TEST_F(MapSubsetTest, flatMapConstantKeys) {
+  auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 3:null, 4:40}",
+      "{1:11, 3:33}",
+      "{}",
+      "{2:22, 4:44}",
+  });
+  auto data = makeRowVector({input});
+
+  auto result = evaluate("map_subset(c0, array_constructor(1, 3, 5))", data);
+
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 3:null}",
+          "{1:11, 3:33}",
+          "{}",
+          "{}",
+      }),
+      result);
+
+  // The whole point of the flat map path: the result stays a flat map and
+  // reuses the input's map values instead of copying key/value pairs.
+  ASSERT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  auto* flatResult = result->as<FlatMapVector>();
+  EXPECT_EQ(flatResult->numDistinctKeys(), 2);
+  EXPECT_EQ(
+      flatResult->projectKey<int64_t>(1).get(),
+      input->projectKey<int64_t>(1).get());
+  EXPECT_EQ(
+      flatResult->projectKey<int64_t>(3).get(),
+      input->projectKey<int64_t>(3).get());
+
+  // Empty list of keys. Expect empty maps.
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({"{}", "{}", "{}", "{}"}),
+      evaluate("map_subset(c0, array_constructor()::bigint[])", data));
+
+  // No requested key is present in the map.
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({"{}", "{}", "{}", "{}"}),
+      evaluate("map_subset(c0, array_constructor(7, 8))", data));
+
+  // Null and duplicate search keys.
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 3:null}",
+          "{1:11, 3:33}",
+          "{}",
+          "{}",
+      }),
+      evaluate(
+          "map_subset(c0, array_constructor(1, cast(null as bigint), 1, 3))",
+          data));
+
+  // A constant list of keys may point at any row of the base array, not just
+  // the first one, so the search range has to come from that row's offset.
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 3:null}",
+          "{1:11, 3:33}",
+          "{}",
+          "{}",
+      }),
+      evaluate(
+          "map_subset(c0, c1)",
+          makeRowVector({
+              input,
+              BaseVector::wrapInConstant(
+                  input->size(),
+                  1,
+                  makeArrayVectorFromJson<int64_t>({"[7]", "[1, 3]"})),
+          })));
+}
+
+TEST_F(MapSubsetTest, flatMapNonConstantKeys) {
+  auto data = makeRowVector({
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20, 3:null, 4:40}",
+          "{1:11, 2:22, 3:33}",
+          "{1:12, 2:23}",
+          "{}",
+      }),
+      makeArrayVectorFromJson<int64_t>({
+          "[1, 3]",
+          "[2]",
+          "[5]",
+          "[1, 2]",
+      }),
+  });
+
+  auto result = evaluate("map_subset(c0, c1)", data);
+
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 3:null}",
+          "{2:22}",
+          "{}",
+          "{}",
+      }),
+      result);
+  EXPECT_EQ(result->encoding(), VectorEncoding::Simple::FLAT_MAP);
+
+  // Empty, null and duplicate search keys. A null search key list makes the
+  // whole row null.
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{}",
+          "{1:11, 2:22}",
+          "{2:23}",
+          "null",
+      }),
+      evaluate(
+          "map_subset(c0, c1)",
+          makeRowVector({
+              data->childAt(0),
+              makeArrayVectorFromJson<int64_t>({
+                  "[]",
+                  "[1, null, 2, 1]",
+                  "[2, 2]",
+                  "null",
+              }),
+          })));
+}
+
+TEST_F(MapSubsetTest, flatMapNulls) {
+  auto data = makeRowVector({
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10, 2:20}",
+          "null",
+          "{1:11, 2:null}",
+          "null",
+      }),
+      makeArrayVectorFromJson<int64_t>({
+          "[1]",
+          "[1]",
+          "[1, 2]",
+          "[2]",
+      }),
+  });
+
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10}",
+          "null",
+          "{1:11, 2:null}",
+          "null",
+      }),
+      evaluate("map_subset(c0, c1)", data));
+
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10}",
+          "null",
+          "{1:11}",
+          "null",
+      }),
+      evaluate("map_subset(c0, array_constructor(1))", data));
+}
+
+TEST_F(MapSubsetTest, flatMapVarcharKeys) {
+  auto data = makeRowVector({
+      makeFlatMapVectorFromJson<std::string, int32_t>({
+          "{\"apple\": 1, \"banana\": 2, \"Cucurbitaceae\": null}",
+          "{\"banana\": 2, \"orange\": 4}",
+      }),
+      makeArrayVectorFromJson<std::string>({
+          "[\"apple\", \"Cucurbitaceae\"]",
+          "[\"orange\", \"apple\"]",
+      }),
+  });
+
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<std::string, int32_t>({
+          "{\"apple\": 1, \"Cucurbitaceae\": null}",
+          "{}",
+      }),
+      evaluate(
+          "map_subset(c0, array_constructor('apple', 'Cucurbitaceae'))", data));
+
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<std::string, int32_t>({
+          "{\"apple\": 1, \"Cucurbitaceae\": null}",
+          "{\"orange\": 4}",
+      }),
+      evaluate("map_subset(c0, c1)", data));
+}
+
+TEST_F(MapSubsetTest, flatMapWrappedEncodings) {
+  auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 2:20, 3:30}",
+      "{1:11, 3:33}",
+      "{2:22}",
+      "{}",
+      "{1:14, 2:24, 3:34}",
+      "{3:35}",
+      "{1:16, 2:26}",
+      "{2:27, 3:37}",
+      "{1:18}",
+      "{1:19, 2:29, 3:39}",
+  });
+  auto expected = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1:10, 3:30}",
+      "{1:11, 3:33}",
+      "{}",
+      "{}",
+      "{1:14, 3:34}",
+      "{3:35}",
+      "{1:16}",
+      "{3:37}",
+      "{1:18}",
+      "{1:19, 3:39}",
+  });
+
+  auto scattered = [](auto row) { return (row * 17 + 3) % 10; };
+  auto wrapped = wrapInDictionary(
+      makeIndices(input->size(), scattered), input->size(), input);
+
+  assertEqualVectors(
+      wrapInDictionary(
+          makeIndices(expected->size(), scattered), expected->size(), expected),
+      evaluate(
+          "map_subset(c0, array_constructor(1, 3))", makeRowVector({wrapped})));
+
+  // Non-constant search keys keep the dictionary from being peeled off, so the
+  // function has to translate the wrapping itself.
+  assertEqualVectors(
+      wrapInDictionary(
+          makeIndices(expected->size(), scattered), expected->size(), expected),
+      evaluate(
+          "map_subset(c0, c1)",
+          makeRowVector({
+              wrapped,
+              makeArrayVector<int64_t>(
+                  input->size(),
+                  [](auto /*row*/) { return 2; },
+                  [](auto /*row*/, auto index) { return index == 0 ? 1 : 3; }),
+          })));
+
+  // Rows sharing a flat map row but asking for different keys.
+  assertEqualVectors(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({
+          "{1:10}",
+          "{2:20}",
+          "{3:30}",
+      }),
+      evaluate(
+          "map_subset(c0, c1)",
+          makeRowVector({
+              wrapInDictionary(makeIndices({0, 0, 0}), 3, input),
+              makeArrayVectorFromJson<int64_t>({"[1]", "[2]", "[3]"}),
+          })));
+
+  // Constant-encoded flat map.
+  assertEqualVectors(
+      BaseVector::wrapInConstant(5, 1, expected),
+      evaluate(
+          "map_subset(c0, array_constructor(1, 3))",
+          makeRowVector({BaseVector::wrapInConstant(5, 1, input)})));
+}
+
+TEST_F(MapSubsetTest, fuzzFlatMap) {
+  VectorFuzzer::Options options;
+  options.allowFlatMapVector = true;
+  VectorFuzzer fuzzer(options, pool());
+
+  constexpr vector_size_t kSize = 100;
+
+  for (auto iteration = 0; iteration < 50; ++iteration) {
+    SCOPED_TRACE(fmt::format("iteration: {}", iteration));
+
+    auto flatMap = fuzzer.fuzzFlatMap(BIGINT(), INTEGER(), kSize);
+    auto map = flatMap->toMapVector();
+
+    // Search for about half of the keys the flat map actually holds, so the
+    // result is neither everything nor nothing.
+    const auto* distinctKeys =
+        flatMap->distinctKeys()->as<SimpleVector<int64_t>>();
+    std::vector<int64_t> searchKeys;
+    for (vector_size_t i = 0; i < flatMap->numDistinctKeys(); i += 2) {
+      searchKeys.push_back(distinctKeys->valueAt(i));
+    }
+
+    const auto keySizeAt = [&](vector_size_t row) {
+      return searchKeys.empty() ? 0 : row % (searchKeys.size() + 1);
+    };
+    const auto keyAt = [&](vector_size_t row, vector_size_t index) {
+      return searchKeys[(row + index) % searchKeys.size()];
+    };
+
+    std::vector<std::pair<std::string, VectorPtr>> keyArguments = {
+        {"constant keys",
+         BaseVector::wrapInConstant(
+             kSize, 0, makeArrayVector<int64_t>({searchKeys}))},
+        {"per-row keys",
+         makeArrayVector<int64_t>(kSize, keySizeAt, keyAt, nullEvery(7))},
+    };
+
+    for (const auto& [name, keys] : keyArguments) {
+      SCOPED_TRACE(name);
+      assertEqualVectors(
+          evaluate("map_subset(c0, c1)", makeRowVector({map, keys})),
+          evaluate("map_subset(c0, c1)", makeRowVector({flatMap, keys})));
+    }
+  }
 }
 
 } // namespace
