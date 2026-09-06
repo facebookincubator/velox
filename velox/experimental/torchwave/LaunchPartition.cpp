@@ -241,12 +241,19 @@ struct Chunk {
 struct GroupKey {
   bool cooperative{false};
   int32_t occupancy{1};
+  /// GridOp::blocksPerSm, so an op that asked for a width only shares a launch
+  /// with ops that asked for the same one. Zero -- no preference -- is a class
+  /// like any other, which is what keeps the unconstrained ops together.
+  int32_t blocksPerSm{0};
 
   bool operator<(const GroupKey& other) const {
     if (cooperative != other.cooperative) {
       return cooperative < other.cooperative;
     }
-    return occupancy < other.occupancy;
+    if (occupancy != other.occupancy) {
+      return occupancy < other.occupancy;
+    }
+    return blocksPerSm < other.blocksPerSm;
   }
 };
 
@@ -699,7 +706,8 @@ std::optional<LaunchPlan> partitionLaunches(
   for (size_t i = 0; i < ops.size(); ++i) {
     const GroupKey key{
         .cooperative = needsCooperative(ops, want, static_cast<int32_t>(i)),
-        .occupancy = blocksPerSM(device, ops[i].dynamicShared)};
+        .occupancy = blocksPerSM(device, ops[i].dynamicShared),
+        .blocksPerSm = ops[i].blocksPerSm};
     groups[key].push_back(static_cast<int32_t>(i));
   }
 
@@ -714,13 +722,17 @@ std::optional<LaunchPlan> partitionLaunches(
     // ordinary launch may exceed its capacity -- the hardware runs the surplus
     // in a later wave -- so it keeps the estimate and the occupancy classes
     // stay as they were.
-    const int32_t capacity = std::max(
-        1,
-        std::max(1, device.numSMs) *
-            (key.cooperative
-                 ? coopBlocksPerSM(
-                       device, key.occupancy, maxDynamicShared(ops, members))
-                 : key.occupancy));
+    //
+    // A group that asked for a width gets numSMs times it instead, and never
+    // more than the occupancy its shared memory allows: the preference is there
+    // to run NARROWER than the resources permit, and letting it widen the
+    // launch would hand out blocks the hardware cannot keep resident.
+    const int32_t occupancy = key.cooperative
+        ? coopBlocksPerSM(device, key.occupancy, maxDynamicShared(ops, members))
+        : key.occupancy;
+    const int32_t perSm =
+        key.blocksPerSm > 0 ? std::min(key.blocksPerSm, occupancy) : occupancy;
+    const int32_t capacity = std::max(1, std::max(1, device.numSMs) * perSm);
     PackedGroup group;
     group.key = key;
     group.members = members;
@@ -730,6 +742,16 @@ std::optional<LaunchPlan> partitionLaunches(
       shrinkMembersToBudget(want, members, waves * capacity);
       group.launches = packCooperative(want, members, capacity, waves);
     } else {
+      // For an ordinary group the capacity is only a packing hint, so a group
+      // asking for a width has to be shrunk to it explicitly -- otherwise one
+      // opcode with several launches in a step keeps its total. That is not
+      // hypothetical: op 107 on the ROO graph is five launches of one
+      // KernelOperation, individually well under the cap and together over it.
+      // A width is about blocks resident per SM, which is a property of the
+      // whole launch, not of one op's share of it.
+      if (key.blocksPerSm > 0) {
+        shrinkMembersToBudget(want, members, capacity);
+      }
       group.launches = packGroup(ops, want, members, capacity);
       mergeThinTail(group.launches, capacity);
     }

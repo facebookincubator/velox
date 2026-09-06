@@ -16,9 +16,11 @@
 
 #include "velox/experimental/torchwave/WaveConfig.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace torch::wave {
@@ -118,6 +120,19 @@ std::string WaveConfig::toString() const {
   addFloat("minBlockUs", &WaveConfig::minBlockUs);
   addBool("singlePassSelect", &WaveConfig::singlePassSelect);
   addBool("singlePass", &WaveConfig::singlePass);
+  if (!preferBlocksPerSm.empty()) {
+    std::vector<std::pair<int32_t, int32_t>> entries(
+        preferBlocksPerSm.begin(), preferBlocksPerSm.end());
+    std::sort(entries.begin(), entries.end());
+    std::string joined;
+    for (const auto& [opCode, blocks] : entries) {
+      if (!joined.empty()) {
+        joined += ",";
+      }
+      joined += std::to_string(opCode) + "=" + std::to_string(blocks);
+    }
+    parts.push_back("preferBlocksPerSm=" + joined);
+  }
 
   if (parts.empty()) {
     return "defaults";
