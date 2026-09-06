@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/Arena.h"
 #include "velox/dwio/common/encryption/TestProvider.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/BinaryStreamReader.h"
@@ -74,7 +75,7 @@ auto createFooter(
     google::protobuf::Arena& arena,
     uint32_t strideLen,
     const std::string& schema) {
-  auto footer = google::protobuf::Arena::CreateMessage<proto::Footer>(&arena);
+  auto footer = ArenaCreate<proto::Footer>(&arena);
   footer->set_rowindexstride(strideLen);
   auto type = HiveTypeParser().parse(schema);
   FooterWriteWrapper wrapper{footer};
