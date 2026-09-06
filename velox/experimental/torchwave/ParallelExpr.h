@@ -33,7 +33,16 @@ namespace torch::wave {
 /// before partitioning: ParallelNodes::rewriteInPlace walks one ProjectNode
 /// layer at a time and cannot see a source whose clones land in different
 /// layers. Returns the number elided.
-int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
+/// Drops clones nobody writes, whose source is never mutated and which do not
+/// escape as graph outputs, then merges the identical ones that remain.
+/// 'keep' names clone outputs that must survive both halves: a wide cat's fill
+/// clones exist precisely so each operand has a buffer of its own for the
+/// allocation group to carve into the result, which is invisible here -- they
+/// read as pointless read-only copies.
+int64_t elideReadOnlyClones(
+    nativert::Graph& graph,
+    const ValueTypes& types,
+    const folly::F14FastSet<ValueCP>& keep = {});
 
 /// Merges nodes that compute the same value from the same operands, to a
 /// fixpoint: merging two nodes can make their consumers congruent in turn. Only

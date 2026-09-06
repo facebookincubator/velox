@@ -198,10 +198,17 @@ bool hasShapeOnDeviceInChain(
 }
 
 // Returns true if any node in the producer chain of 'node' (stopping at
-// subgraphInputs) sizes a return with a reserve function. See
-// ConcatInputInfo::hasReserveInChain. The walk stops at subgraph inputs on
-// purpose: an earlier kernel's output is in the frame by the time the group is
-// carved, however its shape was arrived at.
+// subgraphInputs) sizes a return with a reserve function whose answer cannot be
+// known before it runs. See ConcatInputInfo::hasReserveInChain. The walk stops
+// at subgraph inputs on purpose: an earlier kernel's output is in the frame by
+// the time the group is carved, however its shape was arrived at.
+//
+// A reserve that returns the shape of one of its inputs (ArgumentMeta::
+// shapeFromInput -- ones_like and the rest of the *_like factories, _to_copy,
+// cumsum) is not such a reserve: its answer is that input's extent, which the
+// recursion below reaches on its own. Treating it as opaque used to refuse the
+// whole concat, since one operand unmeasurable at every point leaves no point
+// where all of them are.
 bool hasReserveShapeInChain(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
@@ -212,7 +219,7 @@ bool hasReserveShapeInChain(
   auto* meta = Registry::metadata(node->target());
   if (meta) {
     for (const auto& rm : meta->returnMeta) {
-      if (rm.reserveShape != nullptr) {
+      if (rm.reserveShape != nullptr && rm.shapeFromInput < 0) {
         return true;
       }
     }
@@ -683,8 +690,16 @@ void insertConcatOperandCopies(
           {{"self", const_cast<nativert::Value*>(operand)}});
       graph->insertBefore(clone, mutableListPack);
       auto* copied = waveGraph.newTensorValue(clone, "cat_copy", resultDtype);
+      // newTensorValue records the dtype but no shape, and a value of unknown
+      // rank makes concatIsStandalone give up on the whole cat -- it needs
+      // every element to have the same known rank. A clone has its source's
+      // rank and, being a fresh dense buffer, is contiguous.
+      auto& constraint = types.constraints.at(copied->id());
+      constraint.rank = types.rank(operand);
+      constraint.contiguity = Contiguity::kContiguous;
       input.value = copied;
       copied->addUser(mutableListPack);
+      waveGraph.markConcatFillClone(copied);
     }
     const_cast<nativert::Value*>(operand)->eraseUser(mutableListPack);
   }

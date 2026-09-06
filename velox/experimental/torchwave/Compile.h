@@ -302,10 +302,14 @@ class CompileCtx {
   void pushdownFused(NodeCP node);
 
   /// Ends the kernel of every op in 'value's producer chain whose output extent
-  /// is computed on device, so the extent is read back to the host before the
-  /// consuming launch sizes its outputs. Used for a rank > 1 cat / stack, which
-  /// must know every operand's shape on the host to lay the result out.
-  void breakDeviceSizedProducers(ValueCP value);
+  /// the host cannot work out ahead of the launch -- settled on device, or
+  /// known only to the producer's own reserve function -- so the value is
+  /// materialized in an earlier step and its extent is an ordinary frame
+  /// tensor's by the time the consuming launch sizes its outputs. Used for a
+  /// cat / stack that must lay its result out on the host: it needs every
+  /// operand's extent at one point, so one unmeasurable operand would refuse
+  /// the whole concat.
+  void breakUnmeasurableProducers(ValueCP value);
 
   /// Places 'producer' and its own inputs, then emits 'producer' as its own
   /// kernel launch so a consumer reads its output as a materialized border
