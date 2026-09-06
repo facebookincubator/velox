@@ -353,6 +353,26 @@ TEST_P(ScalarColumnReaderTest, integerDeltaBlockWithFilter) {
   }
 }
 
+TEST_P(ScalarColumnReaderTest, integerEliasFanoWithFilter) {
+  const bool stringDecoderZeroCopy = GetParam();
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      513, [](auto row) { return int64_t{-300} + row / 3; })});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(-200, -100, false));
+
+  auto file = test::createNimbleFile(
+      *rootPool(),
+      input,
+      makeForcedEncodingWriterOptions(EncodingType::EliasFano));
+  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  validateWithFilter(*input, *readers.rowReader, 29, [](auto row) {
+    const auto value = int64_t{-300} + row / 3;
+    return value >= -200 && value <= -100;
+  });
+}
+
 TEST_P(ScalarColumnReaderTest, bigintWithNulls) {
   const bool stringDecoderZeroCopy = GetParam();
   auto input = makeRowVector({

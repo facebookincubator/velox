@@ -15,12 +15,16 @@
  */
 #pragma once
 
+#include <utility>
+
+#include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
@@ -65,6 +69,17 @@ inline int dataTypeSize(DataType type) {
     default:
       NIMBLE_UNSUPPORTED("{}", type);
   }
+}
+
+// Uses the stream's serialized type because it may differ in signedness from
+// the visitor type while sharing the same physical width.
+template <typename F>
+auto dispatchEliasFano(Encoding& encoding, F&& callback) {
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      encoding.dataType(),
+      EncodingDataType,
+      std::forward<F>(callback)(
+          static_cast<EliasFanoEncoding<EncodingDataType>&>(encoding)));
 }
 
 template <typename F>
@@ -149,6 +164,13 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
       NIMBLE_UNREACHABLE(
           "DeltaBlock encoding only supports integral data types, got {}.",
+          encoding.dataType());
+    case EncodingType::EliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return dispatchEliasFano(encoding, std::forward<F>(f));
+      }
+      NIMBLE_UNREACHABLE(
+          "EliasFano encoding only supports integral data types, got {}.",
           encoding.dataType());
     case EncodingType::ALP:
       if constexpr (isFloatingPointType<T>()) {

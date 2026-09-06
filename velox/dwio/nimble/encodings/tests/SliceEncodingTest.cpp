@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -151,6 +152,20 @@ TEST_F(SliceEncodingTest, wrapsFullRange) {
 
   const std::vector<int32_t> expected{10, 11, 12};
   EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, slicesEliasFano) {
+  const auto values = makeVector<uint32_t>({10, 11, 15, 15, 30, 100});
+  const auto encoded =
+      nimble::test::Encoder<nimble::EliasFanoEncoding<uint32_t>>::encode(
+          *buffer_, values);
+
+  auto encoding = createEncoding(slice(encoded, /*offset=*/1, /*length=*/4));
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::EliasFano);
+  EXPECT_EQ(encoding->rowCount(), 4);
+
+  const std::vector<uint32_t> expected{11, 15, 15, 30};
+  EXPECT_EQ(materialize<uint32_t>(*encoding, 4), expected);
 }
 
 TEST_F(SliceEncodingTest, wrapsRle) {

@@ -47,6 +47,7 @@ add_library(
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
   views/DeltaBlockEncodingView.h
+  views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
@@ -101,6 +102,7 @@ add_library(
   ForEncoding.h
   FixedBitWidthEncoding.h
   EncodingSliceFactory.h
+  EliasFanoEncoding.h
   DictionaryEncoding.h
   DeltaEncoding.h
   DeltaBlockEncoding.h

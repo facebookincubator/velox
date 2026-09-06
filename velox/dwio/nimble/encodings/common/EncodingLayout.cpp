@@ -195,6 +195,7 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Constant:
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
+    case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
     case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:

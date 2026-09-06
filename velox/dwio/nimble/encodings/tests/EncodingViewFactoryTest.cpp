@@ -44,6 +44,7 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::RLE,
       nimble::EncodingType::FOR,
       nimble::EncodingType::DeltaBlock,
+      nimble::EncodingType::EliasFano,
       nimble::EncodingType::Huffman,
       nimble::EncodingType::PFOR,
       nimble::EncodingType::SimdForBitpack,

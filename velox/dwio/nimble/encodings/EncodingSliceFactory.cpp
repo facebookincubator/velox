@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -249,6 +250,19 @@ std::string_view sliceBlockBitPacking(
           encoded, offset, length, buffer, options));
 }
 
+std::string_view sliceEliasFano(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      EliasFanoEncoding<T>::slice(encoded, offset, length, buffer, options));
+}
+
 std::string_view slicePFOR(
     std::string_view encoded,
     DataType dataType,
@@ -358,6 +372,8 @@ std::string_view EncodingSliceFactory::slice(
     case EncodingType::BlockBitPacking:
       return sliceBlockBitPacking(
           encoded, dataType, offset, length, buffer, options);
+    case EncodingType::EliasFano:
+      return sliceEliasFano(encoded, dataType, offset, length, buffer, options);
     case EncodingType::PFOR:
       return slicePFOR(encoded, dataType, offset, length, buffer, options);
     case EncodingType::SimdForBitpack:
