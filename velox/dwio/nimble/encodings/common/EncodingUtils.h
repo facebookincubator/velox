@@ -232,38 +232,50 @@ struct DefaultEncodingTrait {
 };
 
 /// Dispatches readIndicesWithVisitor to the correct encoding type.
-/// Supports DictionaryEncoding, NullableEncoding, and MainlyConstantEncoding
-/// wrapping DictionaryEncoding. Currently only supports string
-/// (std::string_view) dictionary encodings. Non-legacy encodings only.
-template <typename V>
+/// Supports DictionaryEncoding and dictionary-enabled NullableEncoding,
+/// MainlyConstantEncoding, RLEEncoding, and ConstantEncoding wrappers.
+/// Non-legacy encodings only.
+///
+/// T is the encoding's logical value type, which cannot be deduced from the
+/// visitor: the visitor reads dictionary indices, so its DataType is the index
+/// type rather than the alphabet's value type.
+template <typename T, typename V>
 void callReadIndicesWithVisitor(
     Encoding& encoding,
     V& visitor,
     ReadWithVisitorParams& params) {
+  static_assert(
+      !std::is_same_v<T, std::string>,
+      "String encodings use std::string_view as their logical value type");
+  NIMBLE_CHECK_EQ(
+      encoding.dataType(),
+      TypeTraits<T>::dataType,
+      "Unexpected encoding data type: {}",
+      encoding.dataType());
   switch (encoding.encodingType()) {
     case EncodingType::Dictionary: {
-      static_cast<DictionaryEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<DictionaryEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::Nullable: {
-      static_cast<NullableEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<NullableEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::MainlyConstant: {
-      static_cast<MainlyConstantEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<MainlyConstantEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::RLE: {
-      static_cast<RLEEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<RLEEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::Constant: {
-      static_cast<ConstantEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<ConstantEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     default:
