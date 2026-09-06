@@ -1263,9 +1263,11 @@ TEST_F(ExecutorTest, catTest) {
   // operand's extent has to be known before the concat sizes anything. A
   // masked_select settles its extent on device, so it now ends its own kernel
   // first rather than fusing into the cat -- there is no serial fill to fall
-  // back on that could discover the extent as it goes. The multi-kernel grid
-  // already decomposed it, and its compaction step's extent is read back
-  // before the cat, so that one still fuses.
+  // back on that could discover the extent as it goes. Neither does the
+  // multi-kernel decomposition fuse: breakUnmeasurableProducers ends the kernel
+  // at a reserve-sized operand too, because the layout needs every extent at
+  // one point and only that op's own reserve knows this one. One kernel
+  // boundary is what placing the result costs.
   auto plans = compilePlans("data/cat_test.pt2");
   if (WaveConfig::get().singlePass) {
     // --tw_single_pass replaces both decompositions with one look-back op.
@@ -1277,7 +1279,7 @@ TEST_F(ExecutorTest, catTest) {
         {"aten.cat.default", "tw.masked_select_1pass"}));
   } else {
     EXPECT_FALSE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
-    EXPECT_TRUE(plans.multiKernel.fuses(
+    EXPECT_FALSE(plans.multiKernel.fuses(
         {"aten.cat.default", "tw.masked_select_final"}));
   }
   EXPECT_FALSE(plans.singleBlock.fuses(
@@ -1382,25 +1384,23 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups, concat groups on");
 
-  // What the pass made of it. 'wide' places all four of its gathers and 'mixed'
-  // the two around the graph input it cannot place, so six operand allocations
-  // and six concat copies go away, and with the two results eight values stop
-  // being the lifetime grouping's to place.
+  // What the pass made of it. 'wide' places all four of its gathers, 'mixed'
+  // the two around the graph input it cannot place, and 'nd' its three, so nine
+  // operand allocations and nine concat copies go away; with the four results,
+  // thirteen values stop being the lifetime grouping's to place.
   auto stats = allocGroupStats(pt2);
-  EXPECT_EQ(stats.numConcatGroups, 2);
-  EXPECT_EQ(stats.numConcatMembers, 6);
-  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 2);
-  // 'pair' is below the threshold. 'nd' and 'scaled' have every operand
-  // computed by the concat's own kernel behind a reserveShape, so no earlier
-  // point knows their extents and the layout cannot be laid out ahead of them.
-  // 'scaled' is the case an operand's own descriptor does not show: the
-  // elementwise op between the gather and the concat gives the operand a size
-  // expression of its own, and only a walk up its producer chain finds the
-  // reserve behind it. Placed anyway, the regions are laid out from extents
-  // that are not there yet and overlap.
+  EXPECT_EQ(stats.numConcatGroups, 4);
+  EXPECT_EQ(stats.numConcatMembers, 4 + 2 + 3);
+  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
+  // 'pair' is below the threshold. 'scaled' is placed but carves nothing: the
+  // elementwise op between each gather and the concat gives the operand a size
+  // expression of its own, so its extent is settled where the concat's own
+  // kernel computes it rather than at any earlier point, and there is no write
+  // left for the group to redirect. It still owns the result's buffer and lays
+  // the regions out, which is what the operands are filled through.
   EXPECT_EQ(stats.numConcatTooFew, 1);
-  EXPECT_EQ(stats.numConcatNoMembers, 0);
-  EXPECT_EQ(stats.numConcatUnplaceableOperand, 2);
+  EXPECT_EQ(stats.numConcatNoMembers, 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
 
   // Nothing is placed with the mode's concat half switched off, which is what
   // makes the arm above an A/B rather than two runs of the same thing.
@@ -1902,6 +1902,192 @@ TEST_F(ExecutorTest, dedupTest) {
 
 TEST_F(ExecutorTest, largeElementTest) {
   runTest("data/large_element_test.pt2", "data/large_element_test_results.pt");
+}
+
+// A step with far more ops than the wave has blocks, whose sizes span three
+// orders of magnitude and are settled on device. One thousand independent
+// repeat_interleave results -- 90% of them a few tens of thousands of elements,
+// a handful in the millions -- each scaled by an elementwise op, plus one
+// barrier op (a cooperative-grid cumsum) to make the step a cg grid.
+//
+// The barrier op is what turns the size spread into the pathology this is
+// about. A cg grid is trimmed back to one wave, and with more ops than the wave
+// has blocks the trim cannot get there: it strips the widest op a block at a
+// time until every op is on one, so the multi-million-element op ends up beside
+// the sixteen-thousand-element ones and the step's makespan becomes its alone.
+// (Without the barrier op the ordinary pro-rata split handles this graph fine
+// -- 1096 blocks over a 432-block wave, skew 1.0.) The size mix comes out of
+// the runtime counts tensor, so none of it is known when the grid is compiled.
+TEST_F(ExecutorTest, launchSkewTest) {
+  constexpr int32_t kNumOps = 1000;
+  // Elements in the tensor every op repeats, so an op's size is kSeedLen times
+  // its count.
+  constexpr int64_t kSeedLen = 32;
+
+  // Millions for a few, hundreds of thousands for a tenth, tens of thousands
+  // for the remaining 90%.
+  auto countFor = [](int32_t index) -> int64_t {
+    if (index < 3) {
+      return 62'500;
+    }
+    return index < 100 ? 1'875 : 500;
+  };
+
+  std::string graphStr = "graph(%seed, %counts):\n";
+  std::string returns;
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["seed"] = makeTensorMeta(c10::ScalarType::Float, 1);
+  meta["counts"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  for (int32_t i = 0; i < kNumOps; ++i) {
+    graphStr += fmt::format(
+        "%c{0} = torch.ops.aten.select.int(self=%counts, dim=0, index={0})\n"
+        "%x{0} = torch.ops.aten.repeat_interleave.self_Tensor(self=%seed, repeats=%c{0})\n"
+        "%o{0} = torch.ops.aten.mul.Scalar(self=%x{0}, other=2.0)\n",
+        i);
+    meta[fmt::format("c{}", i)] = makeTensorMeta(c10::ScalarType::Long, 0);
+    meta[fmt::format("x{}", i)] = makeTensorMeta(c10::ScalarType::Float, 1);
+    meta[fmt::format("o{}", i)] = makeTensorMeta(c10::ScalarType::Float, 1);
+    returns += fmt::format("{}%o{}", i == 0 ? "" : ", ", i);
+  }
+  // One barrier op in the same step as the thousand scales: a cg cumsum over
+  // the smallest of them, so it contributes almost nothing to the step's work
+  // and only its barrier matters.
+  graphStr += fmt::format(
+      "%cs = torch.ops.aten.cumsum.default(self=%x{}, dim=0)\n", kNumOps - 1);
+  meta["cs"] = makeTensorMeta(c10::ScalarType::Float, 1);
+  returns += ", %cs";
+  graphStr += "return(" + returns + ")\n";
+
+  auto seed = at::arange(kSeedLen, at::kFloat);
+  std::vector<int64_t> countValues;
+  countValues.reserve(kNumOps);
+  for (int32_t i = 0; i < kNumOps; ++i) {
+    countValues.push_back(countFor(i));
+  }
+  auto counts = at::tensor(countValues, at::kLong);
+
+  // The op count and the size spread are the point of the test; if the graph
+  // ever stops producing them the assertions below would pass vacuously.
+  ASSERT_EQ(countFor(0) * kSeedLen, 2'000'000);
+  ASSERT_EQ(countFor(999) * kSeedLen, 16'000);
+
+  // launchMeta and the per-block clocks, and with them the grid measurement,
+  // are only collected under kTiming.
+  const int32_t savedTrace = WaveConfig::get().trace;
+  auto resetConfig = folly::makeGuard([savedTrace] {
+    WaveConfig::get().trace = savedTrace;
+    WaveConfig::get().partitionLaunches = false;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+  WaveConfig::get().trace =
+      savedTrace | WaveConfig::kGrid | WaveConfig::kTiming;
+  WaveConfig::get().isCg = true;
+
+  // How evenly a step's blocks actually ran, from their own clocks: the work
+  // done over what the machine could have done in the longest block's time. 1
+  // is every block finishing together.
+  struct StepBalance {
+    LaunchMeta meta;
+    double util{0};
+    int64_t maxClocks{0};
+  };
+
+  // The step of the last run whose grid came out worst balanced, and how its
+  // blocks really ran.
+  auto worstStep = []() -> StepBalance {
+    const auto& info = waveThreadInfo();
+    StepBalance worst;
+    for (size_t i = 0; i < info.launchMeta.size(); ++i) {
+      const auto& step = info.launchMeta[i];
+      if (step.gridStats.numOps <= 1 ||
+          step.gridStats.skew <= worst.meta.gridStats.skew) {
+        continue;
+      }
+      worst = StepBalance{.meta = step};
+      if (i >= info.debugInfo.size() || info.debugInfo[i].empty()) {
+        continue;
+      }
+      int64_t total = 0;
+      for (const auto& block : info.debugInfo[i]) {
+        total += block.clocks;
+        worst.maxClocks = std::max(worst.maxClocks, block.clocks);
+      }
+      if (worst.maxClocks > 0) {
+        worst.util = static_cast<double>(total) /
+            (static_cast<double>(worst.maxClocks) *
+             static_cast<double>(info.debugInfo[i].size()));
+      }
+    }
+    return worst;
+  };
+
+  auto checkOutputs = [&](const std::vector<at::Tensor>& outputs,
+                          const char* label) {
+    ASSERT_EQ(outputs.size(), static_cast<size_t>(kNumOps) + 1) << label;
+    for (int32_t i = 0; i < kNumOps; ++i) {
+      auto reference =
+          at::repeat_interleave(seed, at::scalar_tensor(countFor(i), at::kLong))
+              .mul(2.0);
+      ASSERT_TRUE(tensorsMatch(outputs[i], reference))
+          << label << " output " << i << ": "
+          << firstDifference(outputs[i], reference);
+    }
+    // The barrier op. Its blocks have to stay co-resident in one cooperative
+    // launch however the step is split, and a scan is what notices when they
+    // do not.
+    auto scan = at::cumsum(
+        at::repeat_interleave(
+            seed, at::scalar_tensor(countFor(kNumOps - 1), at::kLong)),
+        0);
+    ASSERT_TRUE(tensorsMatch(outputs[kNumOps], scan))
+        << label << " cumsum: " << firstDifference(outputs[kNumOps], scan);
+  };
+
+  WaveConfig::get().partitionLaunches = false;
+  checkOutputs(
+      runWaveProgrammatic(
+          nativert::stringToGraph(graphStr), meta, {{seed, counts}}),
+      "one launch per step");
+  const auto unsplit = worstStep();
+
+  // The premise: more ops than the wave has blocks, so the cg trim leaves
+  // almost all of them on one block and the step runs many times longer than a
+  // balanced wave of the same work would.
+  EXPECT_GT(unsplit.meta.gridStats.numStarved, 0);
+  EXPECT_GT(unsplit.meta.gridStats.skew, 5.0f);
+  EXPECT_EQ(unsplit.meta.gridStats.numSegments, 1);
+
+  WaveConfig::get().partitionLaunches = true;
+  checkOutputs(
+      runWaveProgrammatic(
+          nativert::stringToGraph(graphStr), meta, {{seed, counts}}),
+      "partitioned");
+  const auto split = worstStep();
+
+  LOG(INFO) << fmt::format(
+      "launchSkew: node {} step {} ops={} target={} skew={:.1f} starved={}; "
+      "one launch: util={:.1f}% maxClk={} -> {} launches: util={:.1f}% maxClk={}",
+      unsplit.meta.sequenceNumber,
+      unsplit.meta.stepIdx,
+      unsplit.meta.gridStats.numOps,
+      unsplit.meta.gridStats.targetBlocks,
+      unsplit.meta.gridStats.skew,
+      unsplit.meta.gridStats.numStarved,
+      100.0 * unsplit.util,
+      unsplit.maxClocks,
+      split.meta.gridStats.numSegments,
+      100.0 * split.util,
+      split.maxClocks);
+
+  // Same step, now spread over several packed waves. An op straddling a launch
+  // boundary still computes its whole slice, which is what the matching outputs
+  // above establish.
+  EXPECT_EQ(split.meta.sequenceNumber, unsplit.meta.sequenceNumber);
+  EXPECT_EQ(split.meta.stepIdx, unsplit.meta.stepIdx);
+  EXPECT_GT(split.meta.gridStats.numSegments, 1);
+  // The point of the split: the longest block, which is the step's makespan,
+  // comes down because the op that owned it is no longer confined to one block.
+  EXPECT_LT(split.maxClocks, unsplit.maxClocks / 2);
 }
 
 TEST_F(ExecutorTest, referenceFrame) {

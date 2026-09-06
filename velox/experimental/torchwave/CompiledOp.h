@@ -214,6 +214,13 @@ class CompositeKernel {
   /// default KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
 
+  /// Blocks of this kernel that stay resident on one SM at 'dynamicSharedBytes'
+  /// of dynamic shared memory, as the driver computes it. 0 when there is no
+  /// compiled kernel to ask. Sizing a cooperative launch by anything else risks
+  /// a grid the driver will refuse, so the launch partitioner reads this rather
+  /// than dividing KernelInfo's zero-shared figure down.
+  int32_t occupancy(int32_t numThreads, int32_t dynamicSharedBytes) const;
+
   std::string toString(Listing mode = kExprs) const;
 
   const std::string& entryPoint() const {
