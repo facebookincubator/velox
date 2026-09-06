@@ -174,8 +174,12 @@ struct WaveConfig {
 
   // If true, release the frame tensors of each ProjectNode's last-use values
   // right after that node's composite invocation executes, instead of keeping
-  // them until the whole graph finishes. Off by default.
-  bool freeIntermediates{false};
+  // them until the whole graph finishes. On by default. It cannot be turned on
+  // before this commit: a concat alloc group's buffer is only ever released
+  // when this is set, and until the decomposition here the group carved a cat
+  // element that was a view of a wave-produced value, so the released buffer
+  // was reused under a live reader (cumsumOffsetsReproTest).
+  bool freeIntermediates{true};
 
   // If true, release each last-use value after the last STEP that reads it
   // rather than after the node's last step. A node's ops finish at different
@@ -194,8 +198,8 @@ struct WaveConfig {
   // buffer is parsed into the frame at the first later step that can read one
   // of the values it brings back, so a step that reads none of them does its
   // sizing, allocation, parameter fill and launch while the transfer is still
-  // in flight. Off by default.
-  bool deferD2h{false};
+  // in flight. On by default.
+  bool deferD2h{true};
 
   // If true, drop the host-side stream waits that are not a real data or memory
   // dependency, so the host can queue as many steps ahead of the device as it
@@ -280,6 +284,29 @@ struct WaveConfig {
   // does on purpose, so merging them can work against the partitioner.
   bool cseCompute{false};
   bool cseViews{false};
+
+  // Split a list-producing op into one node per tensor before partitioning, so
+  // each column reaches the block allocator with its own cost instead of one
+  // op's grid covering all of them. Also folds a chain of such ops where the
+  // op supports it. On by default; the switch is for A/B against the list form.
+  bool decomposeLists{true};
+
+  // If true, a column folds its producer's gather into its own even when the
+  // producer has several readers, provided every reader is a consumer that can
+  // absorb a chain itself. The sole-reader rule two foldable consumers can
+  // never satisfy: whichever rule runs first sees the other as an outside
+  // reader and declines, and the second then sees a gather already reading the
+  // buffer, so neither folds and the intermediate is always written. Folding
+  // into both removes it, at the cost of running the producer's steps once per
+  // consumer.
+  //
+  // On by default, which only measurement could decide, because a reader that
+  // folds beside one that then declines for its own reasons leaves the buffer
+  // AND duplicates the work. On the ROO preproc at 1k rows it takes every one
+  // of the 23 columns where a select reads a flip: kernel time 39.6 -> 37.1 ms
+  // and peak GPU RAM 27.97 -> 26.93 GB, with no column left materialized for a
+  // consumer that declined.
+  bool foldSharedChains{true};
 
   // If true, cooperative-grid mode expands tw.masked_select_jagged into its
   // multi-kernel stages instead of the single-node cg form. The stages reserve

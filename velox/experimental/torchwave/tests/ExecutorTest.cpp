@@ -1390,12 +1390,17 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   EXPECT_EQ(stats.numConcatGroups, 2);
   EXPECT_EQ(stats.numConcatMembers, 6);
   EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 2);
-  // 'pair' is below the threshold. 'nd' has every operand computed by the
-  // concat's own kernel behind a reserveShape, so no earlier point knows their
-  // extents and the layout cannot be laid out ahead of them.
+  // 'pair' is below the threshold. 'nd' and 'scaled' have every operand
+  // computed by the concat's own kernel behind a reserveShape, so no earlier
+  // point knows their extents and the layout cannot be laid out ahead of them.
+  // 'scaled' is the case an operand's own descriptor does not show: the
+  // elementwise op between the gather and the concat gives the operand a size
+  // expression of its own, and only a walk up its producer chain finds the
+  // reserve behind it. Placed anyway, the regions are laid out from extents
+  // that are not there yet and overlap.
   EXPECT_EQ(stats.numConcatTooFew, 1);
   EXPECT_EQ(stats.numConcatNoMembers, 0);
-  EXPECT_EQ(stats.numConcatUnplaceableOperand, 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 2);
 
   // Nothing is placed with the mode's concat half switched off, which is what
   // makes the arm above an A/B rather than two runs of the same thing.

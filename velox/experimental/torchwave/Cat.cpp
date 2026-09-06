@@ -197,6 +197,38 @@ bool hasShapeOnDeviceInChain(
   return false;
 }
 
+// Returns true if any node in the producer chain of 'node' (stopping at
+// subgraphInputs) sizes a return with a reserve function. See
+// ConcatInputInfo::hasReserveInChain. The walk stops at subgraph inputs on
+// purpose: an earlier kernel's output is in the frame by the time the group is
+// carved, however its shape was arrived at.
+bool hasReserveShapeInChain(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return false;
+  }
+  auto* meta = Registry::metadata(node->target());
+  if (meta) {
+    for (const auto& rm : meta->returnMeta) {
+      if (rm.reserveShape != nullptr) {
+        return true;
+      }
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    if (subgraphInputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer && hasReserveShapeInChain(producer, subgraphInputs, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // The launch-time shape of one operand, coerced to 'rank' dimensions.
 std::vector<Dim> concatInputShape(
     const ConcatInputInfo& info,
@@ -391,6 +423,13 @@ void concatSetOutputs(
           hasShapeOnDeviceInChain(elem->producer(), subgraphInputs, visited);
     }
 
+    std::unordered_set<NodeCP> reserveVisited;
+    bool hasReserveInChain = false;
+    if (elem->producer() != nullptr) {
+      hasReserveInChain = hasReserveShapeInChain(
+          elem->producer(), subgraphInputs, reserveVisited);
+    }
+
     bool elemIsView = desc.viewNode != nullptr;
     if (!elemIsView && elem->producer()) {
       auto* producerMeta = Registry::metadata(elem->producer()->target());
@@ -420,6 +459,7 @@ void concatSetOutputs(
          .sizeExpr = std::move(inputSizeExpr),
          .reserveShape = std::move(catReserve),
          .hasShapeOnDevice = hasSod,
+         .hasReserveInChain = hasReserveInChain,
          .mayWriteStrided = producerMayWriteStrided(elem),
          .isSubgraphInput = false,
          .isView = elemIsView});

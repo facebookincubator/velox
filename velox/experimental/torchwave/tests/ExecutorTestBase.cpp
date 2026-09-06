@@ -163,7 +163,7 @@ DEFINE_bool(
     "With --enable_reuse, run the pre-partition read-only clone elision pass");
 DEFINE_bool(
     free_intermediates,
-    false,
+    true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
 DEFINE_bool(
     step_last_use,
@@ -175,7 +175,7 @@ DEFINE_bool(
     "Drain both streams at the end of every step, so freed buffers are back in the allocator before the next step allocates (serializes the pipeline; for measuring peak memory)");
 DEFINE_bool(
     defer_d2h,
-    false,
+    true,
     "Do not wait for a step's device-to-host transfer at the step that issues it; parse its pinned buffer at the first later step that reads one of the returned values");
 DEFINE_bool(
     run_ahead,
@@ -221,6 +221,14 @@ DEFINE_bool(
     defer_size_outputs,
     false,
     "EXPERIMENT, not correct yet. Stop counting a returned sym_size / sym_numel as a use of its operand when the partitioner builds its levels, so the operand does not become a CSE border on the getter's account. Measures what removing those borders is worth; the getter can end up reading a tensor that was fused away");
+DEFINE_bool(
+    decompose_lists,
+    true,
+    "Before partitioning, split a list-producing op into one node per tensor so each column is costed and given blocks on its own, and fold chains of them where the op supports it");
+DEFINE_bool(
+    fold_shared_chains,
+    true,
+    "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
 DEFINE_bool(
     mk_select,
     false,
@@ -700,6 +708,8 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
+  WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
+  WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
   WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
@@ -1503,6 +1513,17 @@ std::vector<c10::IValue> ExecutorTestBase::runNativertReferenceWithInputs(
   stripDataAsserts(graph);
   applySyntheticGraphRewrites(graph);
   setGraphDevice(&graph, true);
+  // Everything above runs on the wave graph too, so up to here the two number
+  // their Values identically. The two passes below do NOT -- wave resolves
+  // cpuOnly arguments itself at runtime and keeps its own concat -- and every
+  // Value they mint takes an id past the loaded graph's last. That is exactly
+  // where the wave graph, whose id counter never advanced, starts numbering
+  // the Values ITS rewrites create. So an id at or above this boundary names
+  // one value in the reference and a different one in wave, and comparing
+  // them is comparing two unrelated tensors: on the ROO train graph a
+  // tensor_split indices copy, int64[10], against a repeat_interleave prefix,
+  // int32[1024]. Recorded here and enforced in dropUnsharedReferenceValues.
+  numSharedReferenceValues_ = static_cast<int32_t>(graph.numValues());
   rewriteGpuIncompatibleOps(graph);
   insertCpuOnlyCopies(graph);
 
@@ -1605,6 +1626,28 @@ void ExecutorTestBase::executeAndCompareWave(
                            << " output(s) differ from the nativert reference";
 }
 
+int32_t ExecutorTestBase::dropUnsharedReferenceValues(
+    std::unordered_map<int32_t, c10::IValue>& refFrame) const {
+  if (numSharedReferenceValues_ < 0) {
+    return 0;
+  }
+  int32_t dropped = 0;
+  for (auto it = refFrame.begin(); it != refFrame.end();) {
+    if (it->first >= numSharedReferenceValues_) {
+      it = refFrame.erase(it);
+      ++dropped;
+    } else {
+      ++it;
+    }
+  }
+  if (dropped > 0) {
+    LOG(INFO) << "reference frame: dropped " << dropped
+              << " value(s) at or above id " << numSharedReferenceValues_
+              << ", which the reference graph has and the wave graph does not";
+  }
+  return dropped;
+}
+
 void ExecutorTestBase::runWaveWithInputs(
     ModelFixture& fixture,
     std::vector<c10::IValue> inputs,
@@ -1613,6 +1656,7 @@ void ExecutorTestBase::runWaveWithInputs(
   std::unordered_map<int32_t, c10::IValue> refFrame;
   if (!refFramePath.empty()) {
     refFrame = loadReferenceFrame(refFramePath);
+    dropUnsharedReferenceValues(refFrame);
     WaveConfig::get().referenceFrame = &refFrame;
   }
 
@@ -1664,6 +1708,7 @@ void ExecutorTestBase::runSyntheticSweep(
   // Load the reference frame once. Verification only reads it and executions
   // are serial, so all configs share this single map.
   auto refFrame = loadReferenceFrame(refFramePath);
+  dropUnsharedReferenceValues(refFrame);
 
   struct SweepConfig {
     const char* name{};
@@ -1715,6 +1760,17 @@ void ExecutorTestBase::runSyntheticSweep(
     stripDataAsserts(*fixture->model.graph);
     applySyntheticGraphRewrites(*fixture->model.graph);
     setGraphDevice(fixture->model.graph.get(), true);
+    // The same prep the reference had when it recorded the boundary, so the
+    // two must agree on the Value count here. If they ever do not, every id
+    // past the first divergence names a different value in each graph and the
+    // whole intermediates check is silently comparing unrelated tensors --
+    // which reads as one arbitrary tensor mismatch, not as the id-space bug it
+    // is. Fail as itself instead.
+    ASSERT_EQ(
+        static_cast<int32_t>(fixture->model.graph->numValues()),
+        numSharedReferenceValues_)
+        << "reference and wave graphs disagree on their Value count, so the "
+           "reference frame's ids no longer name the same values";
 
     auto ctx = fixture->makeModelContext();
     auto cfg = std::make_shared<WaveConfig>(baseConfig);
