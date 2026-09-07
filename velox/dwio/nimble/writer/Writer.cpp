@@ -36,10 +36,12 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
@@ -57,6 +59,7 @@
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
 #include "velox/dwio/nimble/velox/RawSizeUtils.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
 
@@ -600,6 +603,27 @@ class WriterStreamContext : public StreamContext {
     isInMapStream_ = value;
   }
 
+  // Offsets of the value streams the reader consults to decide whether this
+  // in-map stream's key had data in a stripe. Empty for every other stream.
+  //
+  // Built with visitValueStreamLeaves(), the readers' own traversal, so the
+  // two cannot drift. That matters more than it looks: a walk that merely
+  // collects "every stream under this subtree" is a different question and
+  // answers it differently -- it would count a Row's nulls stream, and recurse
+  // past an Array's or Map's lengths, none of which the reader treats as
+  // evidence.
+  //
+  // Fixed once at schema configure time. The value subtree of a flat map key
+  // is static, because flat map keys are the only thing discovered
+  // dynamically and flat maps are never nested.
+  const std::vector<offset_size>& flatMapValueStreamOffsets() const {
+    return flatMapValueStreamOffsets_;
+  }
+
+  void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
+    flatMapValueStreamOffsets_ = std::move(offsets);
+  }
+
   // The layout to replay for this stream: overlaid from the EncodingLayoutTree
   // at setup, or captured from this stream's first encode when
   // encoding-selection caching is enabled. Empty until one of those populates
@@ -637,6 +661,7 @@ class WriterStreamContext : public StreamContext {
  private:
   bool isNullStream_{false};
   bool isInMapStream_{false};
+  std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
   mutable std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
@@ -1672,6 +1697,13 @@ void configureAddedFlatMapField(
   auto& inMapContext = streamContext(
       flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
   inMapContext.setIsInMapStream(true);
+  std::vector<offset_size> valueStreamOffsets;
+  visitValueStreamLeaves(fieldType, [&](offset_size offset) {
+    valueStreamOffsets.push_back(offset);
+    // Collect every leaf: the visitor's true short-circuits the walk.
+    return false;
+  });
+  inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
 
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
@@ -2762,6 +2794,72 @@ void Writer::encodeStream(
   streamData.reset();
 }
 
+namespace {} // namespace
+
+std::vector<const StreamDescriptorBuilder*>
+Writer::collectAllTrueInMapStreams() {
+  std::vector<const StreamDescriptorBuilder*> candidates;
+  if (!context_->options().skipConstantFlatMapInMapStreams) {
+    return candidates;
+  }
+
+  // Runs before the encode loop because all-true is only knowable from the raw
+  // stream. Afterwards compact() has consumed it, and the encoded form only
+  // answers the question by decoding, which is what this avoids.
+  for (const auto& [_, stream] : context_->streams()) {
+    const auto& descriptor = stream->descriptor();
+    auto* streamContext = descriptor.context<WriterStreamContext>();
+    if (streamContext == nullptr || !streamContext->isInMapStream()) {
+      continue;
+    }
+    const auto offset = descriptor.offset();
+    // Only streams that are still whole. One already chunked mid-stripe has
+    // part of itself encoded, so the raw data left here is just the tail and
+    // says nothing about the stripe.
+    //
+    // Declining costs the space saving, never correctness, and it is hard to
+    // reach. An in-map stream is one byte per row, so it must pass
+    // minStreamChunkRawSize (512KiB, ~524k rows for this one key) AND do so
+    // while the flush policy reports memory pressure, since mid-stripe
+    // chunking only runs under shouldChunk(). A table wide enough to want flat
+    // maps fills a 256MB raw stripe long before one key's in-map reaches half
+    // a megabyte.
+    if (offset >= encodedStreams_.size() ||
+        !encodedStreams_[offset].chunks.empty()) {
+      continue;
+    }
+    // In-map streams are ContentStreamData<bool> (FieldWriter.cpp), so data()
+    // is a plain view: no materialization, and none of the string value
+    // streams are touched.
+    if (isAllTrueBoolStream(stream->data())) {
+      candidates.push_back(&descriptor);
+    }
+  }
+  return candidates;
+}
+
+void Writer::suppressAllTrueInMapStreams(
+    const std::vector<const StreamDescriptorBuilder*>& candidates) {
+  // After the encode loop a value stream reached disk exactly when it has
+  // chunks. Nothing needs to be read from the streams themselves, so this
+  // costs no materialization and inspects no encoded bytes.
+  const auto reachedDisk = [this](offset_size offset) {
+    return offset < encodedStreams_.size() &&
+        !encodedStreams_[offset].chunks.empty();
+  };
+
+  for (const auto* descriptor : candidates) {
+    // Drop the all-true in-map stream only while a value stream proves the key
+    // was present. The offsets were recorded with the reader's own traversal,
+    // so the writer cannot count bytes the reader will not look at.
+    const auto* streamContext = descriptor->context<WriterStreamContext>();
+    const auto& valueOffsets = streamContext->flatMapValueStreamOffsets();
+    if (std::any_of(valueOffsets.begin(), valueOffsets.end(), reachedDisk)) {
+      encodedStreams_[descriptor->offset()].chunks.clear();
+    }
+  }
+}
+
 void Writer::processStream(
     StreamData& streamData,
     velox::BufferPool* encodingScratchBufferPool,
@@ -2769,7 +2867,7 @@ void Writer::processStream(
     uint64_t& streamSize,
     std::atomic_uint64_t& chunkSize) {
   const auto offset = streamData.descriptor().offset();
-  const auto* context = streamData.descriptor().context<WriterStreamContext>();
+  auto* context = streamData.descriptor().context<WriterStreamContext>();
   NIMBLE_CHECK(encodedStreams_[offset].chunks.empty());
   if ((context != nullptr) && context->isNullStream()) {
     // For null streams we promote the null values to be written as
@@ -2786,15 +2884,23 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are all-true (every row
-    // has the key) or all-false (no row has the key). The reader distinguishes
-    // these by checking value stream presence: all-true keys have value
-    // streams, all-false keys do not.
+    // When enabled, skip encoding in-map streams that are constant, since the
+    // reader recovers the in-map state from value stream presence.
+    //
+    // All-false is dropped here: the key really is absent from this stripe,
+    // which is exactly what the reader concludes from two missing streams.
+    //
+    // All-true is still encoded here. collectAllTrueInMapStreams() has
+    // already noted it, and suppressAllTrueInMapStreams() drops the chunks
+    // after the stripe is encoded, once it is known whether a value stream
+    // survived to prove the key was present.
     //
     // NOTE: readers that don't infer missing in-map streams require
     // skipConstantFlatMapInMapStreams to remain false.
     streamData.materialize();
-    if (!isConstantBoolStream(streamData.data())) {
+    const auto data = streamData.data();
+    const bool allTrue = isAllTrueBoolStream(data);
+    if (allTrue || !isConstantBoolStream(data)) {
       encodeStream(
           streamData,
           encodingScratchBufferPool,
@@ -3033,6 +3139,12 @@ bool Writer::writeStripe() {
     return false;
   }
 
+  // Collected before the encode loop, applied after it: all-true is only
+  // visible in the raw stream, while "did a value stream reach disk" is only
+  // settled once encoding is done.
+  ensureWriteStreams();
+  const auto allTrueInMapStreams = collectAllTrueInMapStreams();
+
   if (context_->options().enableChunking) {
     // Chunk all streams.
     std::vector<uint32_t> streamIndices(context_->streams().size());
@@ -3047,6 +3159,8 @@ bool Writer::writeStripe() {
   uint64_t stripeSize{0};
   {
     LoggingScope scope{*context_->logger()};
+
+    suppressAllTrueInMapStreams(allTrueInMapStreams);
 
     size_t nonEmptyCount{0};
     for (auto i = 0; i < encodedStreams_.size(); ++i) {
