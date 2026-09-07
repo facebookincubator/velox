@@ -799,6 +799,7 @@ WriterStreamContext::ensureSharedDictionaryWriter(
   SharedDictionaryWriter::Options dictionaryOptions{
       .scope = config.scope,
       .dictionaryId = config.dictionaryId,
+      .resolverKey = config.resolverKey,
       .useExternalAlphabet = config.useExternalAlphabet,
       .alphabetEncodings = config.alphabetEncodings,
       .encodingSelectionPolicyCreator =
@@ -854,13 +855,28 @@ void configureDictionary(
           "Shared dictionary value must be an integer or string scalar, got "
           "{}.",
           scalar.scalarDescriptor().scalarKind());
-      if (config.scope == SharedDictionaryScope::Stripe) {
-        NIMBLE_USER_CHECK_EQ(
-            config.dictionaryId,
-            0,
-            "Stripe shared dictionary config must leave dictionaryId unset.");
-        config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
-            scalar.scalarDescriptor().offset());
+      // Stripe and File dictionaries are named inside the written file, so the
+      // writer allocates their ids here, once per configured value stream.
+      // External dictionaries are named by the caller and keep the id they came
+      // with, which the reader hands back to the resolver.
+      switch (config.scope) {
+        case SharedDictionaryScope::Stripe:
+          NIMBLE_USER_CHECK_EQ(
+              config.dictionaryId,
+              0,
+              "Stripe shared dictionary config must leave dictionaryId unset.");
+          config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
+              scalar.scalarDescriptor().offset());
+          break;
+        case SharedDictionaryScope::File:
+          NIMBLE_USER_CHECK_EQ(
+              config.dictionaryId,
+              0,
+              "File shared dictionary config must leave dictionaryId unset.");
+          config.dictionaryId = schemaBuilder.createFileSharedDictionaryId();
+          break;
+        case SharedDictionaryScope::External:
+          break;
       }
       streamContext(scalar.scalarDescriptor())
           .setSharedDictionaryConfig(config);
@@ -940,20 +956,6 @@ const TypeBuilder& resolveFieldPath(
     current = &current->asRow().findChild(childName);
   }
   return *current;
-}
-
-void maybeAddFileDictionaryId(
-    const SharedDictionaryConfig& config,
-    folly::F14FastSet<uint32_t>& fileDictionaryIds) {
-  if (config.scope != SharedDictionaryScope::File) {
-    return;
-  }
-  const bool inserted = fileDictionaryIds.insert(config.dictionaryId).second;
-  NIMBLE_USER_CHECK(
-      inserted,
-      "File shared dictionary ID {} is configured for multiple streams. "
-      "Cross-stream domains are not supported yet.",
-      config.dictionaryId);
 }
 
 // Resolves [*] to the selected array element or map value type.
@@ -1422,7 +1424,6 @@ DictionaryConfigs collectDictionaryConfigs(
       velox::TypeKind::ROW,
       "Shared dictionary encoding requires a row root type, got {}.",
       type.type()->toString());
-  folly::F14FastSet<uint32_t> fileDictionaryIds;
   folly::F14FastSet<uint32_t> columnValueNodeIds;
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
   for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
@@ -1443,7 +1444,6 @@ DictionaryConfigs collectDictionaryConfigs(
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
-    maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     const auto inserted =
         configs.columns.emplace(nodeId, columnDictionary.dictionary).second;
@@ -1478,7 +1478,6 @@ DictionaryConfigs collectDictionaryConfigs(
     auto& flatMapKeys = configs.flatMaps[nodeId];
     for (const auto& flatMapKey : flatMap.keys) {
       const auto& config = flatMapKey.dictionary;
-      maybeAddFileDictionaryId(config, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
               .valueSubfield = flatMapKey.valueSubfield, .dictionary = config});

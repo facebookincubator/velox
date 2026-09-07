@@ -486,6 +486,12 @@ offset_size SchemaBuilder::createSharedDictionaryStream(
   return dictionaryStreamOffset;
 }
 
+uint32_t SchemaBuilder::createFileSharedDictionaryId() {
+  // No exhaustion guard: every file dictionary needs at least one value
+  // stream, and stream offsets run out of the same 32-bit space first.
+  return nextFileSharedDictionaryId_++;
+}
+
 std::optional<offset_size> SchemaBuilder::sharedDictionaryStreamOffset(
     offset_size valueStreamOffset) const {
   const auto iterator = sharedDictionaryStreamOffsets_.find(valueStreamOffset);

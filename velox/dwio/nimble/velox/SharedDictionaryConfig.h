@@ -31,11 +31,25 @@ class SharedDictionaryConfigBuilder;
 struct SharedDictionaryConfig {
   /// Where the dictionary alphabet is stored or resolved.
   SharedDictionaryScope scope{SharedDictionaryScope::Stripe};
-  /// Dictionary id within File or External scope. Stripe scope assigns this
-  /// from the generated auxiliary alphabet stream.
+
+  /// Identifies the dictionary inside the written file. The writer assigns
+  /// this for Stripe and File scope -- from the generated auxiliary alphabet
+  /// stream and from a per-file counter respectively -- so callers must leave
+  /// it unset for those scopes. External scope has no in-file dictionary and
+  /// carries |resolverKey| through to the catalog instead.
   uint32_t dictionaryId{};
+
   /// Resolves a provided alphabet instead of building one from written values.
   bool useExternalAlphabet{false};
+
+  /// Names this dictionary in the caller's own store, for File scope with
+  /// useExternalAlphabet. Needed only there: External scope is caller-named
+  /// end to end, so its |dictionaryId| already is the resolver key, while a
+  /// File dictionary gets a writer-assigned id and so must carry the caller's
+  /// key separately. Caller-owned, so unlike |dictionaryId| it may repeat
+  /// across value streams that share one provided dictionary.
+  uint32_t resolverKey{};
+
   /// Candidate encodings for alphabets stored in this file.
   std::vector<EncodingType> alphabetEncodings{};
 };

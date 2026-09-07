@@ -76,7 +76,8 @@ struct SharedDictionarySource {
   // Scope used for this key's shared dictionary.
   SharedDictionaryScope scope{SharedDictionaryScope::Stripe};
 
-  // Dictionary id for file and external scopes. Stripe scope always uses zero.
+  // Dictionary id for external scope, where the caller names the dictionary.
+  // Stripe and file scopes have writer-assigned ids and ignore this.
   uint32_t dictionaryId{};
 };
 
