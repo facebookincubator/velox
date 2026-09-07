@@ -237,6 +237,21 @@ class Writer : public velox::dwio::common::Writer {
       uint64_t& streamSize,
       std::atomic_uint64_t& chunkSize);
 
+  // Clears all-true flat map in-map streams whose key is still provable from a
+  // value stream, so they encode to nothing. Must run single-threaded in the
+  // encode prologue of the closing pass: it reads peer streams, which the
+  // concurrent encode is free to mutate, and by then no further rows can
+  // arrive so both "pending" and "already chunked" are stable.
+  // Descriptors of all-true, single-chunk flat map in-map streams, collected
+  // before the encode loop: all-true is only knowable from the raw stream,
+  // which compact() consumes during encoding.
+  std::vector<const StreamDescriptorBuilder*> collectAllTrueInMapStreams();
+
+  // Drops those whose key is still provable from a value stream. Runs after
+  // the encode loop, where "reached disk" is just chunk presence.
+  void suppressAllTrueInMapStreams(
+      const std::vector<const StreamDescriptorBuilder*>& candidates);
+
   void processStream(
       StreamData& streamData,
       velox::BufferPool* encodingScratchBufferPool,
