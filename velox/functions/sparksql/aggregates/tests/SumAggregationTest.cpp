@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/AggregateUtil.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
