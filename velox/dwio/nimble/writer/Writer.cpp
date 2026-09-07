@@ -595,12 +595,19 @@ class WriterStreamContext : public StreamContext {
     isNullStream_ = value;
   }
 
+  // A stream is a flat map in-map stream exactly when it has value stream
+  // offsets recorded against it: setInMapValueStreamOffsets() is the only
+  // thing that populates them, and it is called for nothing else. Deriving it
+  // rather than carrying a parallel bool removes the obligation to keep the
+  // two in sync.
+  //
+  // The offsets are never empty for an in-map stream. Every arm of
+  // visitValueStreamLeaves() yields at least one descriptor -- scalars and
+  // containers visit their own, Row and FlatMap recurse under a
+  // NIMBLE_CHECK_GT(childrenCount, 0) -- so a key always has at least one
+  // value stream to record.
   bool isInMapStream() const {
-    return isInMapStream_;
-  }
-
-  void setIsInMapStream(bool value) {
-    isInMapStream_ = value;
+    return !flatMapValueStreamOffsets_.empty();
   }
 
   // Offsets of the value streams the reader consults to decide whether this
@@ -620,7 +627,11 @@ class WriterStreamContext : public StreamContext {
     return flatMapValueStreamOffsets_;
   }
 
-  void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
+  // Marks this stream as an in-map stream and records its value streams in one
+  // step: with isInMapStream() derived from these, a stream must never be
+  // observable as one without the other.
+  void setInMapValueStreamOffsets(std::vector<offset_size> offsets) {
+    NIMBLE_DCHECK(!offsets.empty(), "An in-map stream has value streams");
     flatMapValueStreamOffsets_ = std::move(offsets);
   }
 
@@ -660,7 +671,6 @@ class WriterStreamContext : public StreamContext {
 
  private:
   bool isNullStream_{false};
-  bool isInMapStream_{false};
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
@@ -1696,14 +1706,13 @@ void configureAddedFlatMapField(
   auto& flatmapBuilder = flatmap.asFlatMap();
   auto& inMapContext = streamContext(
       flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
-  inMapContext.setIsInMapStream(true);
   std::vector<offset_size> valueStreamOffsets;
   visitValueStreamLeaves(fieldType, [&](offset_size offset) {
     valueStreamOffsets.push_back(offset);
     // Collect every leaf: the visitor's true short-circuits the walk.
     return false;
   });
-  inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
+  inMapContext.setInMapValueStreamOffsets(std::move(valueStreamOffsets));
 
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
