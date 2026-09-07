@@ -27,7 +27,6 @@
 #include <cudf/types.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
-#include <rmm/resource_ref.hpp>
 
 #include <cstddef>
 #include <memory>
@@ -62,15 +61,11 @@ struct CudfJoinOutputLayout {
   void fillNullProbeColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref tempMr,
-      rmm::device_async_resource_ref outputMr) const;
+      rmm::cuda_stream_view stream) const;
   void fillNullBuildColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream,
-      rmm::device_async_resource_ref tempMr,
-      rmm::device_async_resource_ref outputMr) const;
+      rmm::cuda_stream_view stream) const;
 
   const std::vector<exec::IdentityProjection>& probeProjections() const {
     return probeProjections_;

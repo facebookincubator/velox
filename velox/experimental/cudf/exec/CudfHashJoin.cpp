@@ -2137,8 +2137,7 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         std::vector<std::unique_ptr<cudf::column>> outCols(outputType_->size());
         // Left side nulls (types derive from probe schema at the matching
         // channel indices)
-        outputLayout_.fillNullProbeColumns(
-            outCols, m, stream, get_temp_mr(), get_output_mr());
+        outputLayout_.fillNullProbeColumns(outCols, m, stream);
         // Right side - gather unmatched build columns if any
         if (!outputLayout_.buildColumnIndices.empty()) {
           auto rightInput =

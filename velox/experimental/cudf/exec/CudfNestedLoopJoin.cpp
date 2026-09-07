@@ -741,8 +741,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
   }
 
   // Create all-null columns for the build side.
-  outputLayout_.fillNullBuildColumns(
-      outCols, numUnmatched, stream, get_temp_mr(), get_output_mr());
+  outputLayout_.fillNullBuildColumns(outCols, numUnmatched, stream);
 
   return std::make_unique<cudf::table>(std::move(outCols));
 }
@@ -786,8 +785,7 @@ RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
   std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
 
   // Create all-null columns for the probe side.
-  outputLayout_.fillNullProbeColumns(
-      outCols, numUnmatched, stream, get_temp_mr(), get_output_mr());
+  outputLayout_.fillNullProbeColumns(outCols, numUnmatched, stream);
 
   // Place unmatched build columns at their output positions.
   if (unmatchedBuild) {

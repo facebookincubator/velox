@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfJoin.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -53,16 +55,14 @@ void fillNullColumns(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref tempMr,
-    rmm::device_async_resource_ref outputMr) {
+    rmm::cuda_stream_view stream) {
   for (const auto& proj : projections) {
     auto cudfDataType =
         veloxToCudfDataType(inputType->childAt(proj.inputChannel));
-    auto nullScalar =
-        cudf::make_default_constructed_scalar(cudfDataType, stream, tempMr);
-    outCols[proj.outputChannel] =
-        cudf::make_column_from_scalar(*nullScalar, numRows, stream, outputMr);
+    auto nullScalar = cudf::make_default_constructed_scalar(
+        cudfDataType, stream, get_temp_mr());
+    outCols[proj.outputChannel] = cudf::make_column_from_scalar(
+        *nullScalar, numRows, stream, get_output_mr());
   }
 }
 
@@ -147,33 +147,15 @@ void CudfJoinOutputLayout::scatterBuildColumns(
 void CudfJoinOutputLayout::fillNullProbeColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref tempMr,
-    rmm::device_async_resource_ref outputMr) const {
-  fillNullColumns(
-      probeProjections_,
-      probeType_,
-      outCols,
-      numRows,
-      stream,
-      tempMr,
-      outputMr);
+    rmm::cuda_stream_view stream) const {
+  fillNullColumns(probeProjections_, probeType_, outCols, numRows, stream);
 }
 
 void CudfJoinOutputLayout::fillNullBuildColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref tempMr,
-    rmm::device_async_resource_ref outputMr) const {
-  fillNullColumns(
-      buildProjections_,
-      buildType_,
-      outCols,
-      numRows,
-      stream,
-      tempMr,
-      outputMr);
+    rmm::cuda_stream_view stream) const {
+  fillNullColumns(buildProjections_, buildType_, outCols, numRows, stream);
 }
 
 cudf::table_view makeExtendedTableView(
