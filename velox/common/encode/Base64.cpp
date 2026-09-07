@@ -89,21 +89,6 @@ constexpr const Base64::ReverseIndex kBase64UrlReverseIndexTable = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255};
 
-// Checks if the input Base64 string is padded.
-bool isPadded(const char* input, size_t inputSize) {
-  return inputSize > 0 && input[inputSize - 1] == kPadding;
-}
-
-// Counts the number of padding characters in encoded input.
-size_t numPadding(const char* input, size_t inputSize) {
-  size_t numPadding{0};
-  while (inputSize > 0 && input[inputSize - 1] == kPadding) {
-    ++numPadding;
-    --inputSize;
-  }
-  return numPadding;
-}
-
 // Validate the character in charset with ReverseIndex table
 constexpr bool checkForwardIndex(
     uint8_t index,
@@ -275,6 +260,21 @@ std::string Base64::encode(const char* input, size_t inputSize) {
 }
 
 namespace {
+
+// Checks if the input Base64 string is padded.
+bool isPadded(const char* input, size_t inputSize) {
+  return inputSize > 0 && input[inputSize - 1] == kPadding;
+}
+
+// Counts the number of padding characters in encoded input.
+size_t numPadding(const char* input, size_t inputSize) {
+  size_t numPadding{0};
+  while (inputSize > 0 && input[inputSize - 1] == kPadding) {
+    ++numPadding;
+    --inputSize;
+  }
+  return numPadding;
+}
 
 // This is a quick and simple iterator implementation for an IOBuf so that the
 // template that uses iterators can work on IOBuf chains. It only implements

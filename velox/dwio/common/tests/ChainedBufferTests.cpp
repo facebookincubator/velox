@@ -39,14 +39,14 @@ TEST_F(ChainedBufferTests, testCreate) {
   ChainedBuffer<int32_t> buf{*pool_, 128, 1024};
   ASSERT_EQ(buf.capacity(), 128);
   ASSERT_EQ(buf.size(), 0);
-  ASSERT_EQ(buf.pageCount(), 1);
+  ASSERT_EQ(buf.numPages(), 1);
   ChainedBuffer<int32_t> buf2{*pool_, 256, 1024};
   ASSERT_EQ(buf2.capacity(), 256);
-  ASSERT_EQ(buf2.pageCount(), 1);
+  ASSERT_EQ(buf2.numPages(), 1);
   ASSERT_EQ(buf2.size(), 0);
   ChainedBuffer<int32_t> buf3{*pool_, 257, 1024};
   ASSERT_EQ(buf3.capacity(), 512);
-  ASSERT_EQ(buf3.pageCount(), 2);
+  ASSERT_EQ(buf3.numPages(), 2);
   ASSERT_EQ(buf3.size(), 0);
 
   VELOX_ASSERT_THROW(
@@ -55,7 +55,7 @@ TEST_F(ChainedBufferTests, testCreate) {
 
   ChainedBuffer<int32_t> buf0{*pool_, 0, 1024};
   ASSERT_EQ(buf0.capacity(), 0);
-  ASSERT_EQ(buf0.pageCount(), 0);
+  ASSERT_EQ(buf0.numPages(), 0);
   ASSERT_EQ(buf0.size(), 0);
 }
 
@@ -70,16 +70,16 @@ TEST_F(ChainedBufferTests, testReserve) {
     buf.reserve(16);
     buf.reserve(17);
     ASSERT_EQ(buf.capacity(), 32);
-    ASSERT_EQ(buf.pageCount(), 1);
+    ASSERT_EQ(buf.numPages(), 1);
     buf.reserve(112);
     ASSERT_EQ(buf.capacity(), 128);
-    ASSERT_EQ(buf.pageCount(), 1);
+    ASSERT_EQ(buf.numPages(), 1);
     buf.reserve(257);
     ASSERT_EQ(buf.capacity(), 512);
-    ASSERT_EQ(buf.pageCount(), 2);
+    ASSERT_EQ(buf.numPages(), 2);
     buf.reserve(1025);
     ASSERT_EQ(buf.capacity(), 1024 + 256);
-    ASSERT_EQ(buf.pageCount(), 5);
+    ASSERT_EQ(buf.numPages(), 5);
   }
 }
 
@@ -89,21 +89,21 @@ TEST_F(ChainedBufferTests, testAppend) {
     buf.unsafeAppend(i);
     ASSERT_EQ(buf.capacity(), 16);
     ASSERT_EQ(buf.size(), i + 1);
-    ASSERT_EQ(buf.pageCount(), 1);
+    ASSERT_EQ(buf.numPages(), 1);
   }
   buf.reserve(32);
   for (size_t i = 0; i < 16; ++i) {
     buf.unsafeAppend(i + 16);
     ASSERT_EQ(buf.capacity(), 32);
     ASSERT_EQ(buf.size(), i + 17);
-    ASSERT_EQ(buf.pageCount(), 2);
+    ASSERT_EQ(buf.numPages(), 2);
   }
   for (size_t i = 0; i < 32; ++i) {
     ASSERT_EQ(buf[i], i);
   }
   buf.append(100);
   ASSERT_EQ(buf.capacity(), 48);
-  ASSERT_EQ(buf.pageCount(), 3);
+  ASSERT_EQ(buf.numPages(), 3);
   ASSERT_EQ(buf[buf.size() - 1], 100);
 }
 
@@ -112,13 +112,13 @@ TEST_F(ChainedBufferTests, testClear) {
   buf.clear();
   ASSERT_EQ(buf.capacity(), 128);
   ASSERT_EQ(buf.size(), 0);
-  ASSERT_EQ(buf.pageCount(), 1);
+  ASSERT_EQ(buf.numPages(), 1);
 
   ChainedBuffer<int32_t> buf2{*pool_, 1024, 1024};
   buf2.clear(false);
   ASSERT_EQ(buf2.capacity(), 256);
   ASSERT_EQ(buf2.size(), 0);
-  ASSERT_EQ(buf2.pageCount(), 1);
+  ASSERT_EQ(buf2.numPages(), 1);
 }
 
 TEST_F(ChainedBufferTests, testApplyRange) {
@@ -179,7 +179,7 @@ TEST_F(ChainedBufferTests, testPageAccess) {
   for (int32_t i = 0; i < 1024; ++i) {
     buf.append(i);
   }
-  ASSERT_EQ(buf.pageCount(), 4);
+  ASSERT_EQ(buf.numPages(), 4);
   EXPECT_EQ(buf[0], 0);
   EXPECT_EQ(buf[255], 255);
   EXPECT_EQ(buf[256], 256);
@@ -189,7 +189,7 @@ TEST_F(ChainedBufferTests, testPageAccess) {
   for (int64_t i = 0; i < 1024; ++i) {
     buf2.append(i);
   }
-  ASSERT_EQ(buf2.pageCount(), 8);
+  ASSERT_EQ(buf2.numPages(), 8);
   EXPECT_EQ(buf2[0], 0);
   EXPECT_EQ(buf2[127], 127);
   EXPECT_EQ(buf2[128], 128);
@@ -199,7 +199,7 @@ TEST_F(ChainedBufferTests, testPageAccess) {
   for (int32_t i = 0; i <= 1024; ++i) {
     buf3.append(static_cast<int8_t>(i));
   }
-  ASSERT_EQ(buf3.pageCount(), 2);
+  ASSERT_EQ(buf3.numPages(), 2);
   buf3[0] = 11;
   buf3[1023] = 22;
   buf3[1024] = 33;
@@ -234,11 +234,11 @@ TEST_F(ChainedBufferTests, testClearAll) {
     buf.clear(false);
     ASSERT_EQ(buf.capacity(), initialCapacityBytes);
     ASSERT_EQ(buf.size(), 0);
-    ASSERT_EQ(buf.pageCount(), initialCapacityBytes == 0 ? 0 : 1);
+    ASSERT_EQ(buf.numPages(), initialCapacityBytes == 0 ? 0 : 1);
     buf.clear(true);
     ASSERT_EQ(buf.capacity(), 0);
     ASSERT_EQ(buf.size(), 0);
-    ASSERT_EQ(buf.pageCount(), 0);
+    ASSERT_EQ(buf.numPages(), 0);
 
     buf.reserve(256);
     ASSERT_EQ(buf.capacity(), 256);
@@ -251,47 +251,47 @@ TEST_F(ChainedBufferTests, testClearAll) {
     }
     ASSERT_EQ(buf.capacity(), 256);
     ASSERT_EQ(buf.size(), 256);
-    ASSERT_EQ(buf.pageCount(), 1);
+    ASSERT_EQ(buf.numPages(), 1);
     buf.append(32);
     ASSERT_EQ(buf.capacity(), 512);
     ASSERT_EQ(buf.size(), 257);
-    ASSERT_EQ(buf.pageCount(), 2);
+    ASSERT_EQ(buf.numPages(), 2);
 
     buf.clear(true);
     ASSERT_EQ(buf.capacity(), 0);
     ASSERT_EQ(buf.size(), 0);
-    ASSERT_EQ(buf.pageCount(), 0);
+    ASSERT_EQ(buf.numPages(), 0);
 
     for (int i = 0; i <= 256; ++i) {
       buf.append(32);
     }
     ASSERT_EQ(buf.capacity(), 512);
     ASSERT_EQ(buf.size(), 257);
-    ASSERT_EQ(buf.pageCount(), 2);
+    ASSERT_EQ(buf.numPages(), 2);
     buf.clear(true);
 
     ASSERT_EQ(buf.capacity(), 0);
     ASSERT_EQ(buf.size(), 0);
-    ASSERT_EQ(buf.pageCount(), 0);
+    ASSERT_EQ(buf.numPages(), 0);
 
     for (int i = 0; i <= 2048; ++i) {
       buf.append(32);
     }
     ASSERT_EQ(buf.capacity(), 2304);
     ASSERT_EQ(buf.size(), 2049);
-    ASSERT_EQ(buf.pageCount(), 9);
+    ASSERT_EQ(buf.numPages(), 9);
 
     buf.clear(true);
     ASSERT_EQ(buf.capacity(), 0);
     ASSERT_EQ(buf.size(), 0);
-    ASSERT_EQ(buf.pageCount(), 0);
+    ASSERT_EQ(buf.numPages(), 0);
 
     for (int i = 0; i <= 2048; ++i) {
       buf.append(32);
     }
     ASSERT_EQ(buf.capacity(), 2304);
     ASSERT_EQ(buf.size(), 2049);
-    ASSERT_EQ(buf.pageCount(), 9);
+    ASSERT_EQ(buf.numPages(), 9);
   }
 }
 

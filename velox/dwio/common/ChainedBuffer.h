@@ -120,7 +120,7 @@ class ChainedBuffer {
     return size_;
   }
 
-  size_t pageCount() const {
+  size_t numPages() const {
     return pages_.size();
   }
 
