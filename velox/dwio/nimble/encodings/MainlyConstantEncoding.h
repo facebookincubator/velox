@@ -738,7 +738,7 @@ class MainlyConstantEncodingBase
     const std::string_view otherValues{pos, otherValuesSize};
     pos += otherValuesSize;
     const std::string_view commonValue{
-        pos, static_cast<size_t>(encoded.end() - pos)};
+        pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
     auto* pool = &buffer.getMemoryPool();
     ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
@@ -906,7 +906,9 @@ MainlyConstantEncoding<T>::MainlyConstantEncoding(
       *this->pool_, {pos, otherValuesBytes}, stringBufferFactory, options);
   pos += otherValuesBytes;
   this->commonValue_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(),
+      "Unexpected mainly constant encoding end");
 }
 
 template <typename T>
