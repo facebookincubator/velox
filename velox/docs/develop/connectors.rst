@@ -107,9 +107,8 @@ By default, the C++ AWS S3 client does not honor the configuration of the
 environment variables http_proxy, https_proxy, and no_proxy.
 The Java AWS S3 client supports this.
 The environment variables can be specified as lower case, upper case or both.
-In order to enable the use of a proxy the hive connector configuration variable
-`hive.s3.use-proxy-from-env` must be set to `true`. By default, the value
-is `false`.
+In order to enable the use of a proxy, set the S3 configuration variable
+``s3.use-proxy-from-env`` to ``true``. By default, the value is ``false``.
 
 This is the behavior when the proxy settings are enabled:
 

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Varint.h>
+#include <folly/lang/Bits.h>
 #include <folly/small_vector.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
@@ -32,7 +33,7 @@ class DeltaBpDecoder {
  public:
   /// Trailing readable bytes the SIMD kernel needs past the last
   /// page byte; PageReader::kPageReadPadding must be >= this.
-  static constexpr int kRequiredTrailingPadding = 8;
+  static constexpr int kRequiredTrailingPadding = 11;
 
   explicit DeltaBpDecoder(const char* start) : bufferStart_(start) {
     initHeader();
@@ -378,9 +379,10 @@ class DeltaBpDecoder {
   }
 
   /// Decode one whole miniblock with prefix-sum fused. Unsigned mod-2^64
-  /// per Parquet spec. Reads up to 7 bytes past the miniblock end;
-  /// safe via kPageReadPadding at page end and adjacent miniblocks
-  /// intra-page.
+  /// per Parquet spec. The bitWidth <= 16 path reads up to 7 bytes past the
+  /// miniblock end; the bitWidth > 16 path reads up to 11 bytes past the
+  /// miniblock end. Safe via kPageReadPadding at page end and adjacent
+  /// miniblocks intra-page.
   template <typename DataType, uint8_t bitWidth>
   FOLLY_ALWAYS_INLINE void decodeMiniBlockSimd(
       const char* src,
@@ -406,7 +408,7 @@ class DeltaBpDecoder {
         const int32_t byteOff = bitPos >> 3;
         const int32_t bitInByte = bitPos & 7;
         const uint64_t word =
-            *reinterpret_cast<const uint64_t*>(p + byteOff) >> bitInByte;
+            folly::loadUnaligned<uint64_t>(p + byteOff) >> bitInByte;
         cumulative += step + static_cast<AccumType>(word & mask);
         out[i + 0] = static_cast<DataType>(cumulative);
         cumulative += step + static_cast<AccumType>((word >> bitWidth) & mask);
@@ -420,15 +422,17 @@ class DeltaBpDecoder {
       }
     } else {
       // 2*bw + bitInByte > 64; load via __uint128_t (two u64 + SHRD).
+      // kPageReadPadding covers the max 11-byte page-end over-read; adjacent
+      // miniblocks cover intra-page over-reads.
       for (int32_t i = 0; i < numValues; i += 2) {
         const int32_t bitPos = i * bitWidth;
         const int32_t byteOff = bitPos >> 3;
         const int32_t bitInByte = bitPos & 7;
         const __uint128_t window =
             static_cast<__uint128_t>(
-                *reinterpret_cast<const uint64_t*>(p + byteOff)) |
+                folly::loadUnaligned<uint64_t>(p + byteOff)) |
             (static_cast<__uint128_t>(
-                 *reinterpret_cast<const uint64_t*>(p + byteOff + 8))
+                 folly::loadUnaligned<uint64_t>(p + byteOff + 8))
              << 64);
         const uint64_t word = static_cast<uint64_t>(window >> bitInByte);
         cumulative += step + static_cast<AccumType>(word & mask);

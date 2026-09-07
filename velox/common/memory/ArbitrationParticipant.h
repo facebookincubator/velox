@@ -371,27 +371,27 @@ class ArbitrationParticipant
 class ScopedArbitrationParticipant {
  public:
   ScopedArbitrationParticipant(
-      std::shared_ptr<ArbitrationParticipant> ArbitrationParticipant,
+      std::shared_ptr<ArbitrationParticipant> participant,
       std::shared_ptr<MemoryPool> pool);
 
   ArbitrationParticipant* operator->() const {
-    return ArbitrationParticipant_.get();
+    return participant_.get();
   }
 
   ArbitrationParticipant& operator*() const {
-    return *ArbitrationParticipant_;
+    return *participant_;
   }
 
   ArbitrationParticipant& operator()() const {
-    return *ArbitrationParticipant_;
+    return *participant_;
   }
 
   ArbitrationParticipant* get() const {
-    return ArbitrationParticipant_.get();
+    return participant_.get();
   }
 
  private:
-  std::shared_ptr<ArbitrationParticipant> ArbitrationParticipant_;
+  std::shared_ptr<ArbitrationParticipant> participant_;
   std::shared_ptr<MemoryPool> pool_;
 };
 

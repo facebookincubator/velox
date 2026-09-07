@@ -388,4 +388,46 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 /* static */ Config::Entry<bool> Config::ENABLE_ENCODING_SELECTION_CACHE(
     "nimble.encoding.enable_selection_cache",
     false);
+
+// Defaults match the corresponding WriterOptions fields, so an absent key
+// leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD is the
+// exception: WriterOptions holds an optional and the writer substitutes its own
+// threshold when unset, so the builder applies this only when the key is
+// present rather than defaulting it here.
+/* static */ Config::Entry<uint32_t> Config::METADATA_COMPRESSION_THRESHOLD(
+    "nimble.metadata.compression.threshold",
+    0);
+
+/* static */ Config::Entry<std::string> Config::STRIPE_GROUP_ENCODING_LAYOUT(
+    "nimble.stripe_group.encoding_layout",
+    "raw");
+
+/* static */ Config::Entry<double> Config::CHUNK_STATS_MIN_AVG_CHUNKS(
+    "nimble.chunk.stats.min_avg_chunks",
+    2);
+
+/* static */ Config::Entry<uint32_t> Config::MAX_ENCODE_PARALLELISM(
+    "nimble.encoding.max_parallelism",
+    0);
+
+/* static */ Config::Entry<uint32_t> Config::MIN_STREAMS_PER_ENCODING_TASK(
+    "nimble.encoding.min_streams_per_task",
+    1);
+
+/* static */ Config::Entry<uint32_t>
+    Config::MAX_CACHED_ENCODING_SCRATCH_BUFFERS(
+        "nimble.encoding.max_cached_scratch_buffers",
+        0);
+
+/* static */ Config::Entry<uint32_t> Config::MAX_CACHED_NESTED_ENCODING_BUFFERS(
+    "nimble.encoding.max_cached_nested_buffers",
+    0);
+
+/* static */ Config::Entry<bool> Config::FIXED_BIT_WIDTH_USE_EXACT_BITS(
+    "nimble.fixedbitwidth.use_exact_bits",
+    false);
+
+/* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
+    "nimble.flatmap.skip_constant_in_map_streams",
+    false);
 } // namespace facebook::nimble

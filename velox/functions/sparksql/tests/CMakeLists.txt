@@ -60,6 +60,7 @@ add_executable(
   MakeDecimalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
+  MapFromArraysTest.cpp
   MapFromEntriesTest.cpp
   MapTest.cpp
   MaskTest.cpp

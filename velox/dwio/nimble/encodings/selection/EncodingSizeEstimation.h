@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
@@ -179,6 +180,13 @@ struct EncodingSizeEstimation {
       case EncodingType::DeltaBlock: {
         if constexpr (isIntegralType<T>()) {
           return DeltaBlockEncoding<T>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::EliasFano: {
+        if constexpr (isIntegralType<T>()) {
+          return EliasFanoEncoding<T>::estimateSize(values);
         } else {
           return std::nullopt;
         }

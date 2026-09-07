@@ -34,6 +34,7 @@
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -231,6 +232,21 @@ EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
       {},
       CompressionType::Uncompressed,
       {encodedValuesLayout}};
+}
+
+EncodingLayout makeBitRangeSplitEncodingLayout() {
+  const auto sectionLayout = [] {
+    return EncodingLayout{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+  };
+  return EncodingLayout{
+      EncodingType::BitRangeSplit,
+      EncodingLayout::Config{{
+          {std::string(BitRangeSplitEncoding<int64_t>::kRangesConfigKey),
+           "0-15;16-58;59-63"},
+      }},
+      CompressionType::Uncompressed,
+      {sectionLayout(), sectionLayout(), sectionLayout()}};
 }
 
 WriterOptions makeSingleColumnWriterOptions(
@@ -1320,6 +1336,57 @@ TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpFloatAndDouble) {
             toString(encodedValuesEncodingType)));
     testColumnReaderAlpFloatingPointRange<float>(encodedValuesEncodingType);
     testColumnReaderAlpFloatingPointRange<double>(encodedValuesEncodingType);
+  }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderBitRangeSplitBigintRangeFilter) {
+  constexpr vector_size_t kRows{512};
+  const auto valueAt = [](vector_size_t row) {
+    return static_cast<int64_t>(
+        (uint64_t{5} << 59) | ((uint64_t{1'760'000'000'000} + row) << 16) |
+        (static_cast<uint64_t>(row) % 4 + 1));
+  };
+  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, valueAt)});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(
+      input, makeSingleColumnWriterOptions(makeBitRangeSplitEncodingLayout()));
+
+  const auto captured = captureFirstColumnEncoding(*ctx);
+  ASSERT_TRUE(captured.has_value());
+  ASSERT_EQ(captured->encodingType(), EncodingType::BitRangeSplit);
+  ASSERT_EQ(captured->childrenCount(), 3);
+  for (NestedEncodingIdentifier sectionIndex{0}; sectionIndex < 3;
+       ++sectionIndex) {
+    SCOPED_TRACE(fmt::format("sectionIndex={}", sectionIndex));
+    ASSERT_TRUE(captured->child(sectionIndex).has_value());
+    EXPECT_EQ(
+        captured->child(sectionIndex)->encodingType(),
+        EncodingType::FixedBitWidth);
+  }
+
+  constexpr vector_size_t kFirstMatch{100};
+  constexpr vector_size_t kLastMatch{200};
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(
+          valueAt(kFirstMatch), valueAt(kLastMatch), false));
+
+  auto root =
+      buildReader(*ctx, rowType, *scanSpec, /*stringDecoderZeroCopy=*/true);
+  auto* child = readColumn(root.get(), kRows);
+  ASSERT_EQ(child->numValues(), kLastMatch - kFirstMatch + 1);
+
+  const auto outputRows = child->outputRows();
+  const auto values = getValues<int64_t>(child);
+  ASSERT_EQ(outputRows.size(), values.size());
+  for (vector_size_t index{0}; index < values.size(); ++index) {
+    SCOPED_TRACE(fmt::format("index={}", index));
+    const auto expectedRow = kFirstMatch + index;
+    EXPECT_EQ(outputRows[index], expectedRow);
+    EXPECT_EQ(values[index], valueAt(expectedRow));
   }
 }
 
