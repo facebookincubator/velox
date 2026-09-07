@@ -16,10 +16,13 @@
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
@@ -52,6 +55,35 @@ DEFINE_bool(
     "aren't thrown and the process isn't killed in the process of cleaning "
     "up after failures. Therefore, results are not compared when this is "
     "enabled. Note that this option only works in debug builds.");
+
+DEFINE_int64(
+    input_file_max_bytes,
+    0,
+    "When reading an existing file, cap every scan to this many bytes from the "
+    "start of it. Zero reads the whole file. Both plans and the sample read get "
+    "the same range, so the comparison is unaffected.\n"
+    "This bounds work only as far as split granularity allows: a format that "
+    "takes a whole stripe whenever its start falls inside the range still reads "
+    "that entire stripe, so on a file with few large stripes it may reduce "
+    "nothing. Measured on one 588MB production Nimble file it did not.");
+
+DEFINE_int32(
+    input_file_query_shapes,
+    4,
+    "Number of query shapes run per call when reading an existing file. Kept "
+    "well below the count used for generated files: there is no expensive "
+    "write to amortize here, and a caller loops until its own deadline, so "
+    "this is the granularity at which that deadline can be honoured. Each "
+    "shape scans the whole file twice, which on a production file is not "
+    "cheap.");
+
+DEFINE_int32(
+    input_file_sample_rows,
+    100'000,
+    "When running query shapes against an existing file, the number of rows "
+    "read from it to generate subfield filters from. Only the values matter -- "
+    "the reference row set the generator narrows is discarded -- so a bounded "
+    "prefix keeps a large production file from being read whole.");
 
 DEFINE_int32(
     aggregation_pushdown_frequency,
@@ -122,10 +154,12 @@ constexpr int kProbeRows = 64;
 // (now expensive) write happens once per run(); this many shapes amortize it.
 constexpr int kQueryShapesPerFile = 20;
 
-VectorFuzzer::Options makeVectorFuzzerOptions() {
+VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
   VectorFuzzer::Options options;
   options.vectorSize = kDefaultVectorSize;
   options.allowSlice = false;
+  options.nullRatio = nullRatio;
+  options.containerHasNulls = nullRatio > 0;
   return options;
 }
 
@@ -222,7 +256,8 @@ int TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
 }
 
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
-    : config_(config), vectorFuzzer_(makeVectorFuzzerOptions(), config.pool) {
+    : config_(config),
+      vectorFuzzer_(makeVectorFuzzerOptions(config.nullRatio), config.pool) {
   VELOX_CHECK_GT(config_.columnCount, 0);
   VELOX_CHECK_GT(config_.evolutionCount, 0);
   VELOX_CHECK_GT(FLAGS_batches_per_file, 0);
@@ -282,28 +317,26 @@ void generateAggregatesForColumns(
     return;
   }
 
-  int numAggregates = std::min(
+  const int numAggregates = std::min(
       static_cast<int>(availableColumns.size()),
       std::min(
           static_cast<int>(5),
           static_cast<int>(
               folly::Random::rand32(1, availableColumns.size() + 1, rng))));
 
-  std::unordered_set<int> selectedIndices;
+  // Partial Fisher-Yates over a copy: draws numAggregates distinct columns in
+  // one pass. The previous rejection loop could spin for a while on the last
+  // pick, when only one of the available columns was still unselected.
+  std::vector<int> shuffled = availableColumns;
   for (int i = 0; i < numAggregates; ++i) {
-    if (folly::Random::oneIn(2, rng)) {
-      int randomIdx;
-      do {
-        randomIdx = folly::Random::rand32(availableColumns.size(), rng);
-      } while (selectedIndices.count(randomIdx) > 0);
-      selectedIndices.insert(randomIdx);
-
-      int colIdx = availableColumns[randomIdx];
-      std::string aggFunc = supportedAggFuncs[folly::Random::rand32(
-          supportedAggFuncs.size(), rng)];
-      aggregates.push_back(
-          fmt::format("{}({})", aggFunc, schema->nameOf(colIdx)));
-    }
+    const int pick = i +
+        static_cast<int>(folly::Random::rand32(
+            static_cast<uint32_t>(shuffled.size() - i), rng));
+    std::swap(shuffled[i], shuffled[pick]);
+    const auto& aggFunc = supportedAggFuncs[folly::Random::rand32(
+        static_cast<uint32_t>(supportedAggFuncs.size()), rng)];
+    aggregates.push_back(
+        fmt::format("{}({})", aggFunc, schema->nameOf(shuffled[i])));
   }
 }
 
@@ -943,6 +976,125 @@ void TableEvolutionFuzzer::run() {
   }
 }
 
+RowTypePtr TableEvolutionFuzzer::readInputFileSchema(
+    const InputFile& inputFile) const {
+  dwio::common::ReaderOptions readerOptions(config_.pool);
+  readerOptions.setFileFormat(inputFile.format);
+  auto uniqueReadFile = filesystems::getFileSystem(inputFile.path, nullptr)
+                            ->openFileForRead(inputFile.path);
+  std::shared_ptr<ReadFile> readFile{std::move(uniqueReadFile)};
+  auto input = std::make_unique<dwio::common::BufferedInput>(
+      readFile, readerOptions.memoryPool());
+  auto readerFactory = dwio::common::getReaderFactory(inputFile.format);
+  VELOX_CHECK_NOT_NULL(
+      readerFactory,
+      "No reader factory registered for the format of {}",
+      inputFile.path);
+  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  VELOX_CHECK_NOT_NULL(reader, "Could not open {}", inputFile.path);
+  return reader->rowType();
+}
+
+std::pair<std::vector<Split>, std::vector<Split>>
+TableEvolutionFuzzer::makeInputFileSplits(const InputFile& inputFile) const {
+  auto makeSplit = [&] { return Split(makeInputFileSplit(inputFile)); };
+  std::vector<Split> actualSplits;
+  std::vector<Split> expectedSplits;
+  actualSplits.push_back(makeSplit());
+  expectedSplits.push_back(makeSplit());
+  return {std::move(actualSplits), std::move(expectedSplits)};
+}
+
+std::shared_ptr<connector::hive::HiveConnectorSplit>
+TableEvolutionFuzzer::makeInputFileSplit(const InputFile& inputFile) const {
+  const uint64_t length = FLAGS_input_file_max_bytes > 0
+      ? static_cast<uint64_t>(FLAGS_input_file_max_bytes)
+      : std::numeric_limits<uint64_t>::max();
+  return std::make_shared<connector::hive::HiveConnectorSplit>(
+      connectorId(), inputFile.path, inputFile.format, /*start=*/0, length);
+}
+
+RowVectorPtr TableEvolutionFuzzer::readInputFileSample(
+    const InputFile& inputFile,
+    const RowTypePtr& schema,
+    int32_t maxRows) const {
+  CursorParameters params;
+  params.serialExecution = true;
+  params.planNode = PlanBuilder().tableScan(schema).planNode();
+
+  auto cursor = TaskCursor::create(params);
+  // Same range the plan scans use, so the values the filters are built from
+  // come from the rows those scans will actually see.
+  cursor->task()->addSplit("0", Split(makeInputFileSplit(inputFile)));
+  cursor->task()->noMoreSplits("0");
+
+  std::vector<RowVectorPtr> batches;
+  int32_t rows = 0;
+  while (rows < maxRows && cursor->moveNext()) {
+    auto batch = cursor->current();
+    rows += batch->size();
+    // Copy: the cursor reuses its output vector across calls.
+    batches.push_back(
+        std::static_pointer_cast<RowVector>(
+            BaseVector::copy(*batch, config_.pool)));
+  }
+  // Unconditional: stopping at maxRows leaves the task running, and cancelling
+  // one that already reached the end of its splits is a no-op.
+  cursor->task()->requestCancel().wait();
+
+  VELOX_CHECK(!batches.empty(), "Input file {} has no rows", inputFile.path);
+  return fuzzer::mergeRowVectors(batches, config_.pool);
+}
+
+void TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
+  inputFile_ = &inputFile;
+  SCOPE_EXIT {
+    inputFile_ = nullptr;
+  };
+
+  const auto schema = readInputFileSchema(inputFile);
+  VELOX_CHECK_GT(
+      schema->size(), 0, "Input file {} has no columns", inputFile.path);
+  LOG(INFO) << "Input file " << inputFile.path << " schema "
+            << schema->toString();
+
+  const RowVectorPtr finalExpectedData =
+      readInputFileSample(inputFile, schema, FLAGS_input_file_sample_rows);
+
+  // One setup, matching the file: no evolution, no bucketing. Both plans then
+  // read the same splits and the comparison isolates the plan difference.
+  std::vector<Setup> testSetups{
+      Setup{schema, /*log2BucketCount=*/0, inputFile.format}};
+  const std::vector<column_index_t> bucketColumnIndices;
+
+  // Flatmap-as-struct reading needs the key sets the writer observed, which
+  // are only collected while writing. Left empty, so map columns are read as
+  // maps.
+  const folly::F14FastMap<int, folly::F14FastSet<std::string>>
+      globalMapColumnKeys;
+  const std::vector<int> globallyConsistentColumnIndexVector;
+
+  const fuzzer::ExpressionFuzzer::FuzzedExpressionData noRemainingFilters;
+  const std::unordered_map<std::string, std::string> noColumnNameMapping;
+  const std::vector<std::vector<RowVectorPtr>> noWriteResults;
+
+  auto executor = folly::getGlobalCPUExecutor();
+  for (int shape = 0; shape < FLAGS_input_file_query_shapes; ++shape) {
+    VLOG(1) << "Running query shape " << shape;
+    runQueryShape(
+        noWriteResults,
+        testSetups,
+        bucketColumnIndices,
+        finalExpectedData,
+        globalMapColumnKeys,
+        globallyConsistentColumnIndexVector,
+        /*shouldGenerateRemainingFilters=*/false,
+        noRemainingFilters,
+        noColumnNameMapping,
+        *executor);
+  }
+}
+
 void TableEvolutionFuzzer::runQueryShape(
     const std::vector<std::vector<RowVectorPtr>>& writeResults,
     const std::vector<Setup>& testSetups,
@@ -973,8 +1125,12 @@ void TableEvolutionFuzzer::runQueryShape(
     VLOG(1) << "selectedBucket=" << *selectedBucket;
   }
 
-  auto [actualSplits, expectedSplits] = createScanSplitsFromWriteResults(
-      writeResults, testSetups, bucketColumnIndices, selectedBucket);
+  // There are no write results to rebuild from when running against a file
+  // that was not written here; both plans read that one file.
+  auto [actualSplits, expectedSplits] = inputFile_ != nullptr
+      ? makeInputFileSplits(*inputFile_)
+      : createScanSplitsFromWriteResults(
+            writeResults, testSetups, bucketColumnIndices, selectedBucket);
 
   // Step 5: Setup scan tasks with filters and optional aggregation pushdown
   auto rowType = testSetups.back().schema;

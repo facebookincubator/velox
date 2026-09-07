@@ -1,0 +1,457 @@
+---
+slug: hash-table-caching
+title: "Build Once, Probe Many: Hash Table Caching in Velox"
+authors: [shrinidhijoshi, JkSelf, xiaoxmeng]
+tags: [tech-blog, performance, joins]
+description: "How Velox caches broadcast hash-join tables across tasks to eliminate redundant build work and input I/O."
+---
+
+## TL;DR
+
+Broadcast joins are common in analytical workloads because they avoid
+repartitioning both inputs when one side is small enough to replicate across
+workers. Compared with partitioned hash or sort-merge joins, they are often
+more efficient because the large probe side remains in place, avoiding its
+substantial network and storage shuffle cost.
+
+In materialized execution engines such as Presto-on-Spark and Spark with
+Gluten, build-side splits are planned for every join task. Without additional
+coordination, each task reads the same data and constructs an identical hash
+table. Velox's `HashTableCache` replaces this build-per-task behavior with a
+build-once, reuse-many protocol within each worker process, delivering
+significant cost savings for broadcast-join workloads by eliminating repeated
+table construction and build-side I/O.
+
+<!-- truncate -->
+
+## The build-side tax
+
+Broadcast data follows a write-once, read-many I/O pattern. Every task that
+rebuilds the table must read the build side, compute hashes, populate a row
+container, and allocate a hash index. At large task counts, concurrent reads
+can overwhelm the storage or exchange service, leading to throttling and
+backoff. Tasks then stall while reserved worker resources remain idle.
+
+The CPU cost is also significant when the broadcast side contains millions of
+rows or produces a hash table measured in gigabytes. Repeating the same work on
+every task wastes both compute and memory bandwidth.
+
+## Overall design
+
+`HashTableCache` is a process-wide singleton that stores completed hash tables
+and coordinates tasks attempting to build the same table. For Velox-managed
+builds, entries are keyed by `queryId:planNodeId` unless the engine supplies an
+explicit stable cache key. Exactly one task becomes the builder; concurrent
+tasks wait for that build, and tasks arriving after completion reuse the table
+immediately.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/hash-table-cache-architecture.png"
+    alt="Hash table cache architecture with one builder and multiple waiter tasks"
+    width="90%"
+  />
+  <figcaption>
+    <em>HashTableCache coordinates table construction and reuse across tasks in one worker process.</em>
+  </figcaption>
+</figure>
+
+The design has three main components:
+
+1. **`HashTableCache`:** Stores entries and serializes builder election,
+   publication, and removal.
+2. **`HashTableCacheEntry`:** Holds the table, build-coordination state, and a
+   dedicated memory pool.
+3. **`HashBuild` integration:** Checks the cache during initialization, builds
+   or waits, and publishes the completed table to both the cache and the local
+   join bridge.
+
+### Cache structure
+
+The singleton maps stable string keys to shared cache entries:
+
+```cpp
+class HashTableCache {
+ private:
+  std::mutex lock_;
+  std::unordered_map<
+      std::string,
+      std::shared_ptr<HashTableCacheEntry>> tables_;
+};
+```
+
+Each entry contains the cached data and its coordination metadata:
+
+| Field | Description |
+|---|---|
+| `cacheKey` | Stable identifier used to look up the entry. |
+| `builderTaskId` | Task elected to build the table. |
+| `tablePool` | Query-scoped leaf pool used for table allocations. |
+| `table` | Completed `BaseHashTable`, null until publication. |
+| `hasNullKeys` | Whether the build side contained null join keys. |
+| `buildComplete` | Atomic flag indicating that the table is ready. |
+| `buildPromises` | Promises used to notify tasks waiting for the build. |
+
+All cache-map decisions are made under one mutex. The lock protects only map
+lookups, insertions, removals, and promise creation; it is never held while
+reading input, allocating table memory, building the table, or waking waiters.
+
+## Cache API
+
+Velox-managed builds use `get()`, `put()`, and `drop()`. The `exist()` and
+`add()` methods support externally built tables, such as tables registered by
+Gluten.
+
+### `get()`
+
+Every cache-enabled `HashBuild` operator calls `get()` during initialization.
+The method elects a builder or registers the caller as a waiter while holding
+the cache mutex:
+
+```text
+get(key, taskId, queryCtx, future):
+    lock
+
+    if key is absent:
+        create incomplete entry
+        set builderTaskId = taskId
+        create query-scoped tablePool
+        register QueryCtx cleanup callback
+        return entry                         // builder
+
+    if entry.buildComplete:
+        return entry                         // late arrival
+
+    if entry.builderTaskId == taskId:
+        return entry                         // another builder driver
+
+    create promise/future pair
+    entry.buildPromises.push_back(promise)
+    return entry and future                  // waiter
+```
+
+When creating an entry, `get()` adds `tablePool` as a leaf child of the query
+pool. All drivers in the builder task allocate their partial tables from this
+pool through `HashBuild::tableMemoryPool()`. The method also registers a
+`QueryCtx` release callback that removes the cache entry when the query ends.
+
+Drivers from the elected builder task do not wait on the cache. They continue
+through the regular intra-task build path and coordinate with their peers via
+`HashJoinBridge`.
+
+### `put()`
+
+The last driver in the builder task merges the partial tables and calls
+`put()` to publish the result:
+
+```text
+put(key, table, hasNullKeys):
+    lock
+    assert entry exists and is incomplete
+    entry.table = table
+    entry.hasNullKeys = hasNullKeys
+    entry.buildComplete = true
+    promises = move(entry.buildPromises)
+    unlock
+
+    for each promise:
+        promise.setValue()                   // wake outside the lock
+```
+
+Moving the promises out of the entry lets `put()` release the cache mutex
+before fulfilling them. Resumed drivers and future callbacks therefore never
+run while the global cache lock is held.
+
+### `drop()`
+
+`drop()` removes an entry during query cleanup or when a builder abandons an
+incomplete build:
+
+```text
+drop(key):
+    lock
+    entry = move(tables[key])
+    tables.erase(key)
+    unlock
+
+    promises = move(entry.buildPromises)
+    entry.table.reset()                      // release outside the lock
+    for each promise:
+        promise.setValue()                   // unblock failed-build waiters
+```
+
+Table destruction and promise fulfillment occur outside the mutex. This keeps
+deallocation and scheduler activity out of the cache's critical section.
+
+### `exist()` and `add()`
+
+External systems can check for and register already completed tables:
+
+```text
+exist(key):
+    lock
+    return key exists and entry.buildComplete
+
+add(key, table, hasNullKeys, tablePool):
+    construct completed entry
+    lock
+    assert key does not exist
+    tables[key] = entry
+```
+
+Unlike `put()`, `add()` does not complete an entry previously reserved by
+`get()`. It creates a new completed entry, so duplicate keys are rejected.
+
+## Enabling hash table caching
+
+Hash table caching is opt-in on `HashJoinNode`. Engines should enable it only
+for broadcast joins whose probe path treats the shared table as immutable.
+
+```cpp
+auto joinNode =
+    core::HashJoinNode::Builder()
+        .id(planNodeIdGenerator->next())
+        .joinType(core::JoinType::kInner)
+        .nullAware(false)
+        .leftKeys({leftKeyField})
+        .rightKeys({rightKeyField})
+        .left(probeNode)
+        .right(buildNode)
+        .outputType(outputType)
+        .useHashTableCache(true)
+        .build();
+```
+
+When `useHashTableCache` is false, which is the default, the join follows the
+regular build-per-task path.
+
+## End-to-end join execution
+
+Join execution has three phases: build, synchronization, and probe. All
+cache-specific coordination occurs during the build phase, where a task either
+constructs, waits for, or retrieves the hash table. The synchronization and
+probe phases continue through the existing `HashJoinBridge` and `HashProbe`
+paths without a separate cache-specific implementation.
+
+### Step 1: Build or retrieve the table
+
+For Velox-managed builds, each task takes one of three paths:
+
+- **Builder task:** The first task to call `get()` for a cache key becomes the
+  builder. Every driver in that task builds its normal partial table. The
+  drivers synchronize through the existing `HashJoinBridge` peer coordination,
+  and the last driver merges the partial tables before calling
+  `HashTableCache::put()`.
+- **Waiter task:** A task that encounters an incomplete entry owned by another
+  task receives a `ContinueFuture`, transitions to `kWaitForBuild`, and
+  suspends until the builder calls `put()`. Once notified, it calls
+  `noMoreInput()`, retrieves the completed table, and passes it directly to its
+  local `HashJoinBridge` without constructing a table.
+- **Cache hit:** A task arriving after `buildComplete` becomes true skips the
+  wait and immediately passes the cached table to its join bridge. `HashBuild`
+  reports these outcomes through the `hashtable.cacheHit` and
+  `hashtable.cacheMiss` runtime statistics.
+
+Spark with Gluten follows a related external-build path:
+
+1. Spark constructs the build-side table during `BroadcastExchange`, before
+   probe-side joins run.
+2. The driver serializes and broadcasts the table. Each executor deserializes
+   it as a native Velox object identified by a stable `buildHashTableId`.
+3. Gluten checks `exist()` and, when necessary, calls `add()` to register the
+   completed table.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/hash-table-build-lifecycle.png"
+    alt="Hash table cache lifecycle from builder election through waiter reuse"
+    width="90%"
+  />
+  <figcaption>
+    <em>Velox-managed and externally built tables converge on the same cache-hit and probe path.</em>
+  </figcaption>
+</figure>
+
+### Step 2: Synchronize through `HashJoinBridge`
+
+`HashJoinBridge` remains the handoff point between the build and probe sides of
+each task. Whether the table was built locally or retrieved from the cache,
+`HashBuild` calls `joinBridge.setHashTable()` to notify the probe operators
+that the table is ready. The cache coordinates across tasks; the bridge
+continues to coordinate within one task.
+
+### Step 3: Probe the shared table
+
+`HashProbe` takes the table from its local bridge and executes normally. The
+table is held by `shared_ptr`, so references in the cache, bridge, and active
+probe operators keep it alive while it is being scanned. Reuse changes table
+ownership and construction, not hash lookup semantics.
+
+## Memory ownership and lifetime
+
+A cached table must outlive the task that built it because later tasks in the
+same query may reuse it. Allocating it from the builder operator's task pool
+would tie the table to a lifetime that ends too early.
+
+### Pool hierarchy
+
+```text
+Query Pool
+├── Task 1 Pool (builder may finish first)
+│   └── Operator Pool
+└── cached_table_<key> Pool
+    └── Cached BaseHashTable and partial-table allocations
+```
+
+`HashTableCache::get()` creates `tablePool` as a thread-safe leaf child of the
+query pool. All builder drivers allocate their partial tables from this shared
+pool. The completed table therefore remains accounted to the query rather than
+to any individual task and can survive builder-task completion.
+
+### Shared ownership
+
+Without caching, the completed hash table can be transferred to
+`HashJoinBridge` with unique ownership. With caching enabled, the entry retains
+a `shared_ptr<BaseHashTable>` and passes a copy to the bridge. Probe operators
+can hold their own references without preventing the cache from serving other
+tasks.
+
+### Query cleanup
+
+When `get()` creates an entry, it registers a release callback on `QueryCtx`.
+Query teardown calls `drop()` before the query pool is destroyed. `drop()`
+removes the entry under the mutex, then resets the table outside the lock. This
+ordering releases cached allocations before their parent pool disappears and
+avoids dangling pool references.
+
+## Failure recovery
+
+The builder/waiter protocol requires an explicit failure path. If a builder
+runs out of memory or otherwise closes before calling `put()`, an incomplete
+entry with `buildComplete == false` must not remain in the process-wide cache.
+Otherwise, every later task becomes a waiter on a future that no thread can
+fulfill, effectively poisoning the cache key for that worker.
+
+Recovery has two parts:
+
+1. `HashBuild::close()` detects that the operator belongs to the builder task
+   and that publication never completed, then calls `HashTableCache::drop()`.
+2. `drop()` removes the incomplete entry and fulfills its pending promises
+   outside the cache mutex.
+
+Waking a waiter does not imply success. The waiter resumes in
+`receivedCachedHashTable()`, observes that `buildComplete` is still false on
+its retained entry, and fails with a diagnostic error rather than hanging.
+Because the global entry has already been removed, a later retry can create a
+fresh entry and become the new builder.
+
+This distinction is important: a promise communicates that a wait condition
+changed, not that the operation necessarily succeeded. `buildComplete` remains
+the source of truth. Operational logging around builder election, waiting,
+publication, wakeup, reuse, and failure helps distinguish normal cache misses
+from waiters released after an abandoned build.
+
+Failure cleanup should also validate the builder identity. If several drivers
+from a failed builder close concurrently, a stale driver must not remove a
+replacement entry created by a retry for the same key. Query-lifetime cleanup
+can remain unconditional, while failed-builder cleanup can supply the expected
+builder task ID.
+
+## Further optimization: Avoiding redundant source reads
+
+Eliminating table construction is only part of the build-side savings. A
+waiter or cache-hit task must also avoid reading input that it will never use.
+This requires resolving the cache state before the driver pulls from the
+upstream scan or exchange.
+
+Two mechanisms provide this behavior:
+
+1. Exchange-source initialization can be deferred until the driver determines
+   that upstream output is required. This lazy path was introduced in
+   [Velox pull request #15768](https://github.com/facebookincubator/velox/pull/15768).
+2. A waiter enters `kWaitForBuild`, while a cache hit completes `HashBuild`
+   without requesting input. The driver checks the downstream operator's
+   blocked state and input requirements before calling the upstream operator's
+   `getOutput()`.
+
+As a result, waiter and late-arrival tasks do not fetch build-side splits or
+initiate exchange reads. They avoid both redundant hash-table construction and
+the associated storage and network I/O.
+
+## API evolution and integrations
+
+The initial cache API centered on Velox-owned builds: `get()` reserves an entry
+and `put()` completes it. The externally contributed
+[Velox pull request #17662](https://github.com/facebookincubator/velox/pull/17662)
+added `add()` and `exist()` so Gluten could inject a pre-built table while
+preserving the original builder/waiter invariants.
+
+The separation is deliberate. `put()` completes a reserved entry and wakes its
+waiters; `add()` inserts a table that was already completed elsewhere. Both
+paths produce the same cache-hit behavior for `HashBuild`, but their creation
+and ownership contracts remain explicit.
+
+## Limitations and future work
+
+### Eviction
+
+Cache eviction is not currently supported. Entries remain until query teardown
+calls `drop()`. A memory-pressure-driven policy would need to address:
+
+1. Tracking memory held by cached tables.
+2. Selecting entries for eviction, for example by recency or size.
+3. Preserving active probes that still hold shared references.
+4. Providing a rebuild path for tasks arriving after eviction.
+
+`drop()` already provides an entry-removal primitive, but eviction also needs a
+clear contract with memory arbitration and active table consumers.
+
+### Spilling
+
+Cached tables cannot currently spill. `HashBuild::canSpill()` and
+`HashBuild::canReclaim()` return false when caching is enabled. Spilling clears
+or reconstructs table state, which conflicts with sharing one stable table
+across builder, waiter, and probe tasks.
+
+Broadcast joins are generally selected only when the build side is expected to
+fit in memory. Larger inputs should use a partitioned join with spilling
+enabled. Spill-aware caching would need to define whether a table can be
+reclaimed while probe operators retain references and how later tasks recover
+or rebuild the evicted state.
+
+### Mutable hash tables
+
+Cached tables are shared and must be treated as immutable. Some right-side join
+semantics record per-row probe state in the build table. Such paths cannot
+safely reuse one table across tasks. Engines enabling the cache must restrict
+it to compatible join types; library-level validation of these restrictions is
+an area for further hardening.
+
+## Conclusion
+
+Broadcast joins are a substantial part of analytical workloads because they
+avoid shuffling the large probe side. Hash table caching makes these joins more
+efficient in materialized execution engines by changing broadcast-table
+construction from once per task to once per executor.
+
+The process-wide cache elects one builder, suspends concurrent waiters, and
+routes completed tables through each task's existing `HashJoinBridge`. Cache
+state is resolved before upstream input is pulled, allowing reuse to eliminate
+both repeated construction and unnecessary storage or exchange I/O. A
+query-scoped pool and shared ownership allow the table to outlive its builder
+task without escaping memory accounting.
+
+Explicit abandoned-build recovery completes the coordination protocol: failed
+builders remove incomplete entries and wake waiters instead of leaving them
+blocked indefinitely. The external insertion API extends the same reuse path
+to engines such as Gluten while keeping externally built tables separate from
+Velox's builder/waiter contract.
+
+Together, these mechanisms preserve the low-shuffle advantage of broadcast
+joins while reducing their CPU, memory-bandwidth, storage, and network costs.
+
+## Acknowledgements
+
+Thanks to the Velox, Presto-on-Spark, and Gluten communities for the design,
+implementation, testing, and review that made hash table caching available
+across multiple materialized execution environments.

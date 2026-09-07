@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Native Delta Statistics with Velox Task Barriers](https://velox-lib.io/blog/native-delta-statistics) (2026-08-25)
+- [Build Once, Probe Many: Hash Table Caching in Velox](https://velox-lib.io/blog/hash-table-caching) (2026-08-03)
 - [War of the Allocators](https://velox-lib.io/blog/war-of-the-allocators) (2026-07-27)
-- [Making OpenZL Available in Nimble OSS](https://velox-lib.io/blog/openzl-in-nimble-oss) (2026-07-05)
-- [Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox](https://velox-lib.io/blog/right-semi-join-performance) (2026-06-26)
 
 ## Community
 

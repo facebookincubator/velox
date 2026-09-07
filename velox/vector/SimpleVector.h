@@ -25,7 +25,6 @@
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/hash/Hash.h>
-#include <glog/logging.h>
 
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
@@ -163,8 +162,9 @@ class SimpleVector : public BaseVector {
     // need to ensure it is loaded.
     loadedVector();
     other = other->loadedVector();
-    DCHECK(dynamic_cast<const SimpleVector<T>*>(other) != nullptr)
-        << "Attempting to compare vectors not of the same type";
+    VELOX_DCHECK_NOT_NULL(
+        dynamic_cast<const SimpleVector<T>*>(other),
+        "Attempting to compare vectors not of the same type");
     bool otherNull = other->isNullAt(otherIndex);
     bool thisNull = isNullAt(index);
 

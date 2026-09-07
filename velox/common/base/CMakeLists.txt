@@ -32,6 +32,7 @@ velox_add_library(
   AdmissionController.cpp
   BitUtil.cpp
   BloomFilter.cpp
+  ConcurrentRuntimeStatWriter.cpp
   Counters.cpp
   Fs.cpp
   PeriodicStatsReporter.cpp
@@ -53,6 +54,7 @@ velox_add_library(
   ClassName.h
   CoalesceIo.h
   ConcurrentCounter.h
+  ConcurrentRuntimeStatWriter.h
   CountBits.h
   Counters.h
   Crc.h
@@ -112,6 +114,13 @@ velox_link_libraries(
 
 velox_add_library(velox_status Status.cpp HEADERS Status.h)
 velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE glog::glog)
+
+velox_add_library(velox_tracked_executor TrackedExecutor.cpp HEADERS TrackedExecutor.h)
+velox_link_libraries(
+  velox_tracked_executor
+  PUBLIC velox_common_base velox_exception Folly::folly fmt::fmt
+  PRIVATE velox_time
+)
 
 velox_add_library(velox_compare_flags INTERFACE HEADERS CompareFlags.h)
 

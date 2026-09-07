@@ -117,7 +117,7 @@ TEST_F(WriterContextTest, RemoveIntDictionaryEncoderForNode) {
   EXPECT_EQ(0, context.dictEncoders_.size());
 }
 
-TEST_F(WriterContextTest, BuildPhysicalSizeAggregators) {
+TEST_F(WriterContextTest, buildPhysicalSizeAggregators) {
   auto config = std::make_shared<Config>();
   WriterContext context{
       config,

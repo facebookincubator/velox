@@ -78,7 +78,7 @@ class EqualityDeleteFileReader {
       const std::shared_ptr<const FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      dwio::common::RuntimeStatistics& runtimeStats,
+      dwio::common::RuntimeStats& runtimeStats,
       const std::string& connectorId);
 
   /// Applies equality deletes to the output vector by setting bits in the

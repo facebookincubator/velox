@@ -27,20 +27,50 @@
 //                 mirrored chunk with an ascending global write whose values
 //                 come from a reversed shared read -- both global accesses
 //                 ascending, the reversal is confined to shared memory.
+//   reverseVector (--vector only) each thread loads one aligned 16-byte vector
+//                 (longlong2 = two int64), swaps its two lanes in registers,
+//                 and stores it to the mirrored vector slot. Both global
+//                 accesses are 128-bit; the reversal never leaves registers, so
+//                 no shared memory and half as many threads.
 //
 // If descending coalesced access is as fast as ascending, reverseDirect matches
-// forwardCopy and there is nothing to gain from reverseShared.
+// forwardCopy and there is nothing to gain from reverseShared. reverseVector
+// tests whether wider (128-bit) transactions sustain bandwidth at lower
+// occupancy, where fewer resident warps mean fewer in-flight requests.
 
 #include <cuda_runtime.h>
+#include <gflags/gflags.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
+DEFINE_bool(
+    vector,
+    false,
+    "Also run reverseVector: a 16-byte (longlong2) reverse that swaps the two "
+    "int64 lanes of each aligned vector in registers.");
+
+DEFINE_bool(
+    single_block,
+    false,
+    "Compare scalar (reverseDirect) vs vector (reverseVector) reverse launched "
+    "with a single thread block (grid=1), sweeping block dims 128/256/512/1024. "
+    "Shows how far one block's in-flight requests get, and whether 128-bit "
+    "transactions help when only one block hides latency.");
+
+DEFINE_int32(
+    blockdim,
+    0,
+    "In --single-block mode, test only this block dim instead of sweeping "
+    "128/256/512/1024.");
+
 namespace {
 
 constexpr int kBlockSize = 256;
 constexpr int kIters = 10;
+// A single-block launch over the whole array is slow, so time fewer iterations.
+constexpr int kSingleBlockIters = 3;
 
 #define CUDA_CHECK(expr)              \
   do {                                \
@@ -103,6 +133,86 @@ __global__ void reverseShared(const int64_t* src, int64_t* dst, int64_t n) {
   }
 }
 
+// 16-byte vectorized reverse. Each thread loads one aligned longlong2 (two
+// int64), swaps the lanes in registers, and stores it to the mirrored vector
+// slot. Source vector v holds src[2v], src[2v+1]; the full reverse sends those
+// to dst[n-1-2v], dst[n-2-2v], which are exactly the two lanes of dst vector
+// numVec-1-v -- so the destination vector is the source vector with its lanes
+// swapped. src/dst are 16-byte aligned (cudaMalloc) and n is even (a multiple
+// of kBlockSize), so numVec is exact and no lane spills past the end.
+__global__ void reverseVector(const int64_t* src, int64_t* dst, int64_t n) {
+  const longlong2* srcVec = reinterpret_cast<const longlong2*>(src);
+  longlong2* dstVec = reinterpret_cast<longlong2*>(dst);
+  int64_t numVec = n / 2;
+  int64_t stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t v = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       v < numVec;
+       v += stride) {
+    longlong2 val = srcVec[v];
+    longlong2 rev;
+    rev.x = val.y;
+    rev.y = val.x;
+    dstVec[numVec - 1 - v] = rev;
+  }
+}
+
+// Same 16-byte reverse, but each thread issues kUnroll independent 128-bit
+// loads before any store, raising memory-level parallelism per warp so peak
+// bandwidth is reached with fewer resident warps. The k-th load of every thread
+// is one grid-stride apart, so each unrolled group stays coalesced; the
+// per-lane bound check keeps the tail safe with no past-end access.
+template <int kUnroll>
+__global__ void
+reverseVectorUnroll(const int64_t* src, int64_t* dst, int64_t n) {
+  const longlong2* srcVec = reinterpret_cast<const longlong2*>(src);
+  longlong2* dstVec = reinterpret_cast<longlong2*>(dst);
+  int64_t numVec = n / 2;
+  int64_t gridStride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+  int64_t start = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  for (int64_t v = start; v < numVec; v += gridStride * kUnroll) {
+    longlong2 vals[kUnroll];
+#pragma unroll
+    for (int k = 0; k < kUnroll; ++k) {
+      int64_t vi = v + k * gridStride;
+      if (vi < numVec) {
+        vals[k] = srcVec[vi];
+      }
+    }
+#pragma unroll
+    for (int k = 0; k < kUnroll; ++k) {
+      int64_t vi = v + k * gridStride;
+      if (vi < numVec) {
+        longlong2 rev;
+        rev.x = vals[k].y;
+        rev.y = vals[k].x;
+        dstVec[numVec - 1 - vi] = rev;
+      }
+    }
+  }
+}
+
+// Like reverseVector but with restrict pointers (no aliasing, so loads hoist
+// ahead of stores) and streaming cache operators (__ldcs/__stcs) that mark the
+// accesses evict-first, keeping this once-through data out of L2.
+__global__ void reverseVectorStreaming(
+    const int64_t* __restrict__ src,
+    int64_t* __restrict__ dst,
+    int64_t n) {
+  const longlong2* srcVec = reinterpret_cast<const longlong2*>(src);
+  longlong2* dstVec = reinterpret_cast<longlong2*>(dst);
+  int64_t numVec = n / 2;
+  int64_t stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
+  for (int64_t v = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       v < numVec;
+       v += stride) {
+    longlong2 val = __ldcs(&srcVec[v]);
+    longlong2 rev;
+    rev.x = val.y;
+    rev.y = val.x;
+    __stcs(&dstVec[numVec - 1 - v], rev);
+  }
+}
+
 __global__ void
 countErrors(const int64_t* dst, int64_t n, bool reversed, int* errors) {
   int64_t stride = static_cast<int64_t>(gridDim.x) * blockDim.x;
@@ -123,10 +233,10 @@ int occupancyGrid(const void* kernel, size_t sharedBytes, int numSms) {
   return numSms * blocksPerSm;
 }
 
-// Times 'kIters' launches of 'launch' with CUDA events and returns the average
+// Times 'iters' launches of 'launch' with CUDA events and returns the average
 // milliseconds per launch.
 template <typename Launch>
-float timeMs(Launch launch) {
+float timeMs(Launch launch, int iters = kIters) {
   cudaEvent_t start;
   cudaEvent_t stop;
   CUDA_CHECK(cudaEventCreate(&start));
@@ -134,7 +244,7 @@ float timeMs(Launch launch) {
   launch(); // warmup
   CUDA_CHECK(cudaDeviceSynchronize());
   CUDA_CHECK(cudaEventRecord(start));
-  for (int i = 0; i < kIters; ++i) {
+  for (int i = 0; i < iters; ++i) {
     launch();
   }
   CUDA_CHECK(cudaEventRecord(stop));
@@ -143,7 +253,7 @@ float timeMs(Launch launch) {
   CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
-  return ms / kIters;
+  return ms / iters;
 }
 
 int64_t verify(const int64_t* dst, int64_t n, bool reversed, int numSms) {
@@ -161,7 +271,8 @@ int64_t verify(const int64_t* dst, int64_t n, bool reversed, int numSms) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   int device = 0;
   CUDA_CHECK(cudaGetDevice(&device));
   cudaDeviceProp prop;
@@ -241,13 +352,89 @@ int main() {
         }
       };
 
+  // Single-block mode: launch grid=1 and compare scalar (reverseDirect) against
+  // vector (reverseVector). One block issues a bounded number of outstanding
+  // requests, so this isolates how block size (more warps hiding latency) and
+  // 128-bit transactions (more bytes per request) each raise the bandwidth a
+  // lone block can reach.
+  auto runSingle = [&](const char* name, auto kernel, bool reversed, int bd) {
+    CUDA_CHECK(cudaMemset(dst, 0, n * sizeof(int64_t)));
+    kernel<<<1, bd>>>(src, dst, n);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    int64_t errors = verify(dst, n, reversed, numSms);
+    float ms =
+        timeMs([&]() { kernel<<<1, bd>>>(src, dst, n); }, kSingleBlockIters);
+    double gbps = bytesPerCopy / (ms / 1000.0) / 1.0e9;
+    printf(
+        "    %-14s blockDim=%4d  %.3f ms  %.1f GB/s  (%.1f%% nominal)  "
+        "errors=%ld\n",
+        name,
+        bd,
+        ms,
+        gbps,
+        100.0 * gbps / nominalGbps,
+        static_cast<long>(errors));
+  };
+
   printf("\n");
-  run("forwardCopy", forwardCopy, 0, /*reversed=*/false);
-  run("reverseDirect", reverseDirect, 0, /*reversed=*/true);
-  run("reverseShared",
-      reverseShared,
-      kBlockSize * sizeof(int64_t),
-      /*reversed=*/true);
+  // cudaMemcpy device-to-device: the tuned contiguous-copy ceiling. It cannot
+  // reverse, so it is a forward-copy reference only. Timed with the async form
+  // so the launches queue on the stream the events bracket.
+  {
+    CUDA_CHECK(cudaMemset(dst, 0, n * sizeof(int64_t)));
+    CUDA_CHECK(
+        cudaMemcpy(dst, src, n * sizeof(int64_t), cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    int64_t errors = verify(dst, n, /*reversed=*/false, numSms);
+    float ms = timeMs([&]() {
+      cudaMemcpyAsync(
+          dst, src, n * sizeof(int64_t), cudaMemcpyDeviceToDevice, 0);
+    });
+    double gbps = bytesPerCopy / (ms / 1000.0) / 1.0e9;
+    printf(
+        "  %-14s (forward ceiling)  %.3f ms  %.1f GB/s  (%.0f%% nominal)  "
+        "errors=%ld\n",
+        "cudaMemcpy",
+        ms,
+        gbps,
+        100.0 * gbps / nominalGbps,
+        static_cast<long>(errors));
+  }
+
+  if (FLAGS_single_block) {
+    auto sweepOne = [&](int bd) {
+      printf("  blockDim=%d:\n", bd);
+      runSingle("forwardCopy", forwardCopy, /*reversed=*/false, bd);
+      runSingle("reverseDirect", reverseDirect, /*reversed=*/true, bd);
+      runSingle("reverseVector", reverseVector, /*reversed=*/true, bd);
+      runSingle(
+          "reverseUnroll2", reverseVectorUnroll<2>, /*reversed=*/true, bd);
+      runSingle(
+          "reverseUnroll4", reverseVectorUnroll<4>, /*reversed=*/true, bd);
+      runSingle("reverseStream", reverseVectorStreaming, /*reversed=*/true, bd);
+    };
+    printf("Single block (grid=1), scalar vs vector:\n");
+    if (FLAGS_blockdim != 0) {
+      sweepOne(FLAGS_blockdim);
+    } else {
+      for (int bd : {128, 256, 512, 1024}) {
+        sweepOne(bd);
+      }
+    }
+  } else {
+    run("forwardCopy", forwardCopy, 0, /*reversed=*/false);
+    run("reverseDirect", reverseDirect, 0, /*reversed=*/true);
+    run("reverseShared",
+        reverseShared,
+        kBlockSize * sizeof(int64_t),
+        /*reversed=*/true);
+    if (FLAGS_vector) {
+      run("reverseVector", reverseVector, 0, /*reversed=*/true);
+      run("reverseUnroll2", reverseVectorUnroll<2>, 0, /*reversed=*/true);
+      run("reverseUnroll4", reverseVectorUnroll<4>, 0, /*reversed=*/true);
+      run("reverseStream", reverseVectorStreaming, 0, /*reversed=*/true);
+    }
+  }
 
   CUDA_CHECK(cudaFree(src));
   CUDA_CHECK(cudaFree(dst));

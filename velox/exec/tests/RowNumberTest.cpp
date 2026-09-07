@@ -20,6 +20,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -613,97 +614,6 @@ DEBUG_ONLY_TEST_F(RowNumberTest, rowNumberSpillFileCreateConfig) {
   ASSERT_TRUE(rowNumberConfigVerified.load());
 }
 
-namespace {
-
-// Defines a minimal plan node for the backpressuring downstream used by the
-// regression test below.
-class BackpressureNode : public core::PlanNode {
- public:
-  BackpressureNode(const core::PlanNodeId& id, core::PlanNodePtr input)
-      : PlanNode(id), sources_{std::move(input)} {}
-
-  const RowTypePtr& outputType() const override {
-    return sources_[0]->outputType();
-  }
-
-  const std::vector<core::PlanNodePtr>& sources() const override {
-    return sources_;
-  }
-
-  std::string_view name() const override {
-    return "Backpressure";
-  }
-
- private:
-  void addDetails(std::stringstream& /* stream */) const override {}
-
-  std::vector<core::PlanNodePtr> sources_;
-};
-
-// Passes input through but refuses it most of the time, keeping the upstream
-// RowNumber holding a buffered batch. Before the needsInput() fix this made the
-// Driver re-feed RowNumber and overwrite its undrained input_.
-class BackpressureOperator : public Operator {
- public:
-  BackpressureOperator(
-      DriverCtx* ctx,
-      int32_t id,
-      const std::shared_ptr<const BackpressureNode>& node)
-      : Operator(ctx, node->outputType(), id, node->id(), "Backpressure") {}
-
-  bool needsInput() const override {
-    if (noMoreInput_ || input_ != nullptr) {
-      return false;
-    }
-    // Accept input only every 4th poll. The rejected polls are when the Driver
-    // would re-feed (and, before the fix, overwrite) the upstream RowNumber.
-    return (++polls_ % 4) == 0;
-  }
-
-  void addInput(RowVectorPtr input) override {
-    input_ = std::move(input);
-  }
-
-  RowVectorPtr getOutput() override {
-    return std::move(input_);
-  }
-
-  BlockingReason isBlocked(ContinueFuture* /* future */) override {
-    return BlockingReason::kNotBlocked;
-  }
-
-  bool isFinished() override {
-    return noMoreInput_ && input_ == nullptr;
-  }
-
- private:
-  mutable int32_t polls_{0};
-};
-
-class BackpressureNodeFactory : public Operator::PlanNodeTranslator {
- public:
-  std::unique_ptr<Operator> toOperator(
-      DriverCtx* ctx,
-      int32_t id,
-      const core::PlanNodePtr& node) override {
-    if (auto bpNode = std::dynamic_pointer_cast<const BackpressureNode>(node)) {
-      return std::make_unique<BackpressureOperator>(ctx, id, bpNode);
-    }
-    return nullptr;
-  }
-
-  std::optional<uint32_t> maxDrivers(const core::PlanNodePtr& node) override {
-    if (std::dynamic_pointer_cast<const BackpressureNode>(node)) {
-      // Single driver, mirroring the BATCH-mode RPC operator that exposed the
-      // bug.
-      return 1;
-    }
-    return std::nullopt;
-  }
-};
-
-} // namespace
-
 // Regression test: a window operator (RowNumber) feeding a backpressuring
 // downstream must not drop rows. Before the fix, RowNumber::needsInput() did
 // not check input_ == nullptr, so when the downstream returned
@@ -711,7 +621,7 @@ class BackpressureNodeFactory : public Operator::PlanNodeTranslator {
 // undrained batch, silently dropping rows (seen in production with a BATCH-mode
 // RPC operator).
 TEST_F(RowNumberTest, noRowLossWithBackpressuringDownstream) {
-  Operator::registerOperator(std::make_unique<BackpressureNodeFactory>());
+  Operator::registerOperator(std::make_unique<BackpressureTranslator>());
 
   // Many small batches so the Driver repeatedly feeds RowNumber while the
   // downstream refuses input.
@@ -729,14 +639,14 @@ TEST_F(RowNumberTest, noRowLossWithBackpressuringDownstream) {
   }
   const vector_size_t totalRows = numBatches * rowsPerBatch;
 
-  auto plan =
-      PlanBuilder()
-          .values(batches)
-          .rowNumber({"c0"})
-          .addNode([](const std::string& id, core::PlanNodePtr input) {
-            return std::make_shared<BackpressureNode>(id, std::move(input));
-          })
-          .planNode();
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .rowNumber({"c0"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/3, std::move(input));
+                  })
+                  .planNode();
 
   // Single driver so RowNumber and the backpressuring downstream share a
   // pipeline, as with a BATCH-mode RPC operator (maxDrivers=1).

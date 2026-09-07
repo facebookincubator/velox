@@ -17,6 +17,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include <folly/container/F14Map.h>
+#include <folly/synchronization/CallOnce.h>
 
 #include <torch/nativert/executor/OpKernel.h>
 #include <torch/nativert/graph/Graph.h>
@@ -46,17 +48,39 @@ class CompileCtx;
 class Optimizer;
 struct ExecutionState;
 
+/// Compile-time knowledge of a value's memory layout.
+enum class Contiguity : int8_t {
+  /// Layout not known -- conservative default (treat as possibly strided).
+  kUnknown = 0,
+  /// Known row-major contiguous (dense, standard strides).
+  kContiguous = 1,
+  /// Known NOT contiguous -- a strided view (transpose, diagonal, expand,
+  /// step>1 or inner-dim slice, ...).
+  kNoncontiguous = 2,
+};
+
 /// Rank and layout constraints for a graph value, used during optimization.
 struct ValueConstraint {
   int8_t rank{-1};
-  /// True when the value is known at compile time to be row-major contiguous
-  /// (dense, standard strides). Defaults to false: a wrong `true` could let a
-  /// kernel read a strided tensor as dense and corrupt results, whereas a
-  /// conservative `false` only costs an unnecessary copy. Set true for ops that
-  /// always materialize a fresh dense output (elementwise, cumsum, masked
-  /// select, cat, clone, contiguous, factory ops, ...) and propagated by view
-  /// and reshape; computed per PyTorch semantics for slice/select.
-  bool contiguous{false};
+  /// 3-state layout knowledge. kUnknown (default) is conservative: a wrong
+  /// kContiguous could let a kernel read a strided tensor as dense and corrupt
+  /// results, whereas kUnknown only costs an unnecessary copy. Set kContiguous
+  /// for ops that always materialize a fresh dense output (elementwise, cumsum,
+  /// masked select, cat, clone, contiguous, factory ops, ...); set
+  /// kNoncontiguous for views known to be strided (transpose, diagonal,
+  /// expand); propagated by view/reshape; computed per PyTorch semantics for
+  /// slice/select.
+  Contiguity contiguity{Contiguity::kUnknown};
+  /// True when the value has a zero stride in some dim (expand/broadcast): it
+  /// has fewer physical than logical elements, so an in-place write into it is
+  /// ill-defined.
+  bool zeroStrides{false};
+  /// True when the value is externally owned / persistent -- a graph input,
+  /// weight, or constant (producer-less) -- so it is not a writable
+  /// intermediate.
+  bool externallyOwned{false};
+  /// True when the value is a graph output.
+  bool graphOutput{false};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.
@@ -75,13 +99,52 @@ struct ValueTypes {
   }
 
   /// Whether 'value' is known to be contiguous. Returns false (conservative)
-  /// for values with no tracked constraint.
+  /// for values with unknown layout or no tracked constraint.
   bool contiguous(ValueCP value) const {
+    return contiguity(value) == Contiguity::kContiguous;
+  }
+
+  /// Whether 'value' is known to be NOT contiguous (a strided view). Returns
+  /// false for unknown layout or no tracked constraint.
+  bool noncontiguous(ValueCP value) const {
+    return contiguity(value) == Contiguity::kNoncontiguous;
+  }
+
+  /// The 3-state layout knowledge for 'value' (kUnknown if untracked).
+  Contiguity contiguity(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return Contiguity::kUnknown;
+    }
+    return constraints[id].contiguity;
+  }
+
+  /// Whether 'value' has a zero stride (expand/broadcast). False if untracked.
+  bool zeroStrides(ValueCP value) const {
     auto id = value->id();
     if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
       return false;
     }
-    return constraints[id].contiguous;
+    return constraints[id].zeroStrides;
+  }
+
+  /// Whether 'value' is externally owned (input/weight/constant). False if
+  /// untracked.
+  bool externallyOwned(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].externallyOwned;
+  }
+
+  /// Whether 'value' is a graph output. False if untracked.
+  bool graphOutput(ValueCP value) const {
+    auto id = value->id();
+    if (id < 0 || static_cast<size_t>(id) >= constraints.size()) {
+      return false;
+    }
+    return constraints[id].graphOutput;
   }
 };
 
@@ -193,6 +256,15 @@ class WaveGraph {
     return nodes_;
   }
 
+  /// Runs 'build' the first time any execution of this graph asks for the
+  /// allocation-group plans, and never again. The plans are derived from the
+  /// compiled grids, so they are the same for every execution, but the mode
+  /// they serve is a runtime choice -- and concurrent executions of one graph
+  /// would otherwise each build and install their own.
+  void ensureAllocGroupPlans(const std::function<void()>& build) {
+    folly::call_once(allocGroupPlanOnce_, build);
+  }
+
   ValueTypes& types() {
     return types_;
   }
@@ -209,6 +281,15 @@ class WaveGraph {
   /// No TensorMeta is created for this value. The value is recorded in
   /// createdValueDtypes_ for later duplication.
   nativert::Value* newScalarValue(
+      nativert::Node* node,
+      std::string_view name,
+      c10::ScalarType dtype);
+
+  /// Like newScalarValue, but not recorded for duplication. For a scalar that
+  /// other nodes read: a recorded value is per-op scratch, and congruent nodes
+  /// share one ProjectOperation, so every invocation after the first is bound
+  /// to a private duplicate while the readers still name the original.
+  nativert::Value* newSharedScalarValue(
       nativert::Node* node,
       std::string_view name,
       c10::ScalarType dtype);
@@ -246,20 +327,94 @@ class WaveGraph {
     return idToValue_;
   }
 
-  /// Fills in missing attribute defaults from FunctionSchema and creates
-  /// multiKernelVariants_ for nodes that have one.
+  /// Appends one concat's carve verdicts, as placement decided them. Collected
+  /// while the graph compiles and printed with the allocation-group report,
+  /// which is the only account of why a concat carves nothing.
+  void addConcatCarveReport(const std::string& line) {
+    concatCarveReport_ += line;
+  }
+
+  /// The per-concat carve verdicts, or empty when no concat took one.
+  const std::string& concatCarveReport() const {
+    return concatCarveReport_;
+  }
+
+  /// Stores what the allocation-group pass made of this graph, rendered while
+  /// the plan was built. Kept as text because the plan itself is handed out per
+  /// node and not retained whole.
+  void setAllocGroupReport(std::string report) {
+    allocGroupReport_ = std::move(report);
+  }
+
+  /// The allocation-group report, or empty when no plan was built. Printed by
+  /// the first execution that runs with tracing on, which is usually long after
+  /// the plan was settled.
+  const std::string& allocGroupReport() const {
+    return allocGroupReport_;
+  }
+
+  /// True the first time this is called, so a once-per-graph report is not
+  /// repeated by every execution.
+  bool takeAllocGroupReportUnprinted() {
+    return !std::exchange(allocGroupReportPrinted_, true);
+  }
+
+  /// A point in the compiled schedule: which compiled node, and which step of
+  /// its grid. The same coordinate the allocation-group plan is expressed in,
+  /// so a decision taken while compiling survives into the plan unchanged.
+  /// Launch partitioning subdivides a step and never renumbers one, so the
+  /// pair stays valid through it.
+  struct SchedulePoint {
+    int32_t node{-1};
+    int32_t step{-1};
+
+    bool operator<(const SchedulePoint& other) const {
+      return std::tie(node, step) < std::tie(other.node, other.step);
+    }
+    bool operator==(const SchedulePoint& other) const {
+      return node == other.node && step == other.step;
+    }
+  };
+
+  /// Records that the launch filling 'id' runs at 'written' and that its
+  /// dimensions are readable from 'realized'. The first write wins: a later one
+  /// finds the buffer already there.
+  void addSchedulePoint(
+      nativert::ValueId id,
+      SchedulePoint written,
+      SchedulePoint realized) {
+    writtenAt_.try_emplace(id, written);
+    realizedAt_.try_emplace(id, realized);
+  }
+
+  /// Where the launch that fills 'id' runs, or null when no launch writes it:
+  /// a graph input, or the output of an op that never became a wave kernel.
+  /// Recorded only when the config fixes a single grid, which is the only case
+  /// where a step index names one launch.
+  const SchedulePoint* writtenAt(nativert::ValueId id) const {
+    const auto it = writtenAt_.find(id);
+    return it == writtenAt_.end() ? nullptr : &it->second;
+  }
+
+  /// Where 'id's dimensions become readable on the host.
+  ///
+  /// An ordinary kernel output is measured before its own step runs -- the
+  /// reservation that sizes it is host code that runs first -- so its dims are
+  /// known at the step that writes it. An output the device sizes, and any
+  /// standalone's output, is measured only once the step has run, so it is
+  /// known one step later. Null wherever writtenAt is.
+  const SchedulePoint* realizedAt(nativert::ValueId id) const {
+    const auto it = realizedAt_.find(id);
+    return it == realizedAt_.end() ? nullptr : &it->second;
+  }
+
+  /// Fills in missing attribute defaults from FunctionSchema.
   void normalizeAndAnnotateGraph();
 
   /// Propagates constraints for the outputs of 'node' using the shared
   /// Optimizer instance. The optimizer's visited set ensures main-graph
   /// nodes are not re-traversed.
   void optimizeNode(const nativert::Node* node);
-
-  /// Returns the multikernel variant subgraph for 'node', or nullptr if none.
-  const Subgraph* multiKernelVariant(NodeCP node) const {
-    auto it = multiKernelVariants_.find(node);
-    return it != multiKernelVariants_.end() ? &it->second : nullptr;
-  }
 
   /// Returns a unique name by appending _NN to the given name.
   std::string uniqueName(std::string_view name) {
@@ -316,6 +471,35 @@ class WaveGraph {
   /// per-op freeable intermediate.
   bool isGraphOutput(nativert::ValueId id) const {
     return graphOutputIds_.count(id) != 0;
+  }
+
+  /// Records that 'id' was the input of a clone the in-place pass elided, so an
+  /// in-place writer now overwrites its buffer. Called at compile time from
+  /// each ProjectNode's elidedCloneCounts.
+  void addElidedCloneInput(nativert::ValueId id) {
+    elidedCloneInputIds_.insert(id);
+  }
+
+  /// True if 'id' is the input of an elided clone. Its buffer is deliberately
+  /// overwritten in place, so it no longer holds the value the reference frame
+  /// recorded for it and must not be compared against the reference.
+  bool isElidedCloneInput(nativert::ValueId id) const {
+    return elidedCloneInputIds_.count(id) != 0;
+  }
+
+  /// Records that a concat group places 'id': it is either a concat result or
+  /// an operand carved out of one. Called at compile time from
+  /// installGraphAllocGroupPlans.
+  void addConcatPlaced(nativert::ValueId id) {
+    concatPlacedIds_.insert(id);
+  }
+
+  /// True if a concat group places 'id'. Such a value is a band of the concat
+  /// result and its producer writes the concat in place, so it must not be
+  /// given a buffer from anywhere else: doing so leaves the band unwritten and
+  /// the concat does not copy it in, having counted the operand as placed.
+  bool isConcatPlaced(nativert::ValueId id) const {
+    return concatPlacedIds_.count(id) != 0;
   }
 
   /// Returns the ModelContext, or nullptr if none was provided.
@@ -376,11 +560,6 @@ class WaveGraph {
   // Placeholder node used by duplicateValue to attach new Values.
   nativert::Node* placeholderNode_{nullptr};
 
-  // For nodes that have a multikernel implementation, like multiblock
-  // reduction, this gives the subgraph to substitute for the Node when
-  // generating the multiblock case of a ProjectOperation.
-  std::unordered_map<NodeCP, Subgraph> multiKernelVariants_;
-
   // Counter for generating unique value names via uniqueName().
   int32_t nextValueId_{0};
 
@@ -426,9 +605,33 @@ class WaveGraph {
   // start of compile, read at execution time by LaunchData.
   std::unordered_set<nativert::ValueId> graphOutputIds_;
 
+  // Inputs of the clones the in-place pass elided. Their buffers are written
+  // in place by the rewired writer, so they diverge from the reference frame by
+  // design. Populated at compile time, read by the reference-frame checks.
+  std::unordered_set<nativert::ValueId> elidedCloneInputIds_;
+  std::unordered_set<nativert::ValueId> concatPlacedIds_;
+
+  // See writtenAt() and realizedAt(). Filled as each launch is placed and kept
+  // afterwards: step indices are comparable across the ops of one node, and
+  // the node index orders them across nodes, so a value an earlier node wrote
+  // keeps its point for the whole compile. Also what lets a report say why a
+  // concat operand was copied rather than carved.
+  // See allocGroupReport(). Rendered at compile time and printed on the first
+  // traced execution.
+  std::string concatCarveReport_;
+  std::string allocGroupReport_;
+  bool allocGroupReportPrinted_{false};
+
+  folly::F14FastMap<nativert::ValueId, SchedulePoint> writtenAt_;
+  folly::F14FastMap<nativert::ValueId, SchedulePoint> realizedAt_;
+
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.
   std::unique_ptr<Optimizer> optimizer_;
+
+  // Guards the one-time build of the allocation-group plans held by the
+  // CompiledNodes.
+  folly::once_flag allocGroupPlanOnce_;
 
   // Pool of reusable ExecutionState objects.
   std::mutex statePoolMutex_;

@@ -167,6 +167,7 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK(noMoreInput_);
 
   if (numOutputRows_ == numInputRows_) {
+    releaseRows();
     return nullptr;
   }
   VELOX_CHECK_GT(maxOutputRows, 0);
@@ -181,6 +182,12 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
     getOutputWithoutSpill();
   }
   return std::move(output_);
+}
+
+void SortBuffer::releaseRows() {
+  data_->clear();
+  sortedRows_.clear();
+  sortedRows_.shrink_to_fit();
 }
 
 bool SortBuffer::hasSpilled() const {

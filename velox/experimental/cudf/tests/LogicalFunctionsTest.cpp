@@ -55,24 +55,26 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kAstEvaluatorName,
         /*priority=*/0,
-        [](std::shared_ptr<exec::Expr> expr) {
+        [](const core::TypedExprPtr& expr) {
           return cudf_velox::ASTExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
-          return std::make_shared<cudf_velox::ASTExpression>(
-              std::move(expr), row);
+        [](const core::TypedExprPtr& expr,
+           const RowTypePtr& row,
+           memory::MemoryPool* pool) {
+          return std::make_shared<cudf_velox::ASTExpression>(expr, row, pool);
         },
         /*overwrite=*/true);
 
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kJitEvaluatorName,
         /*priority=*/0,
-        [](std::shared_ptr<exec::Expr> expr) {
+        [](const core::TypedExprPtr& expr) {
           return cudf_velox::JitExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
-          return std::make_shared<cudf_velox::JitExpression>(
-              std::move(expr), row);
+        [](const core::TypedExprPtr& expr,
+           const RowTypePtr& row,
+           memory::MemoryPool* pool) {
+          return std::make_shared<cudf_velox::JitExpression>(expr, row, pool);
         },
         /*overwrite=*/true);
   }
@@ -87,10 +89,11 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
   void assertUsesFunctionEvaluator(
       const RowTypePtr& inputRowType,
       const std::string& expression) {
-    auto expr = cudf_velox::test_utils::compileExecExpr(
-        expression, inputRowType, execCtx_.get());
-    ASSERT_TRUE(cudf_velox::canBeEvaluatedByCudf(expr, /*deep=*/false));
-    auto cudfExpr = cudf_velox::createCudfExpression(expr, inputRowType);
+    auto expr = cudf_velox::test_utils::optimizeTypedExpr(
+        expression, inputRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(cudf_velox::canExprRunOnGpu(expr, queryCtx_.get(), pool()));
+    auto cudfExpr =
+        cudf_velox::createCudfExpression(expr, inputRowType, pool());
     ASSERT_NE(
         dynamic_cast<cudf_velox::FunctionExpression*>(cudfExpr.get()), nullptr)
         << expr->toString();

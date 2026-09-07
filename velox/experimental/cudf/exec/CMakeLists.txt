@@ -28,12 +28,14 @@ add_library(
   CudfJoin.cpp
   CudfJoin.h
   CudfLimit.cpp
+  CudfLocalMerge.cpp
   CudfLocalPartition.cpp
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
   CudfReduce.cpp
   CudfTopN.cpp
+  CudfTopNRowNumber.cpp
   CudfWindow.cpp
   DebugUtil.cpp
   DecimalAggregationDevice.cu

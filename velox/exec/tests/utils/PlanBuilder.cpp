@@ -391,7 +391,10 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         dataColumns_,
         indexColumns_,
         /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        filterColumnHandles_);
+        filterColumnHandles_,
+        sampleRate_,
+        /*dbName=*/"",
+        dataColumnFieldIds_);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -408,18 +411,19 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   auto upstreamNode = planBuilder_.planNode();
   VELOX_CHECK_NOT_NULL(upstreamNode, "TableWrite cannot be the source node");
 
-  // If outputType wasn't explicit specified, fallback to use the output of the
-  // upstream operator.
-  auto outputType = outputType_ ? outputType_ : upstreamNode->outputType();
+  // If targetColumns wasn't explicit specified, fallback to use the output of
+  // the upstream operator.
+  auto targetColumns =
+      targetColumns_ ? targetColumns_ : upstreamNode->outputType();
 
   // If insertHandle_ is not specified, build a HiveInsertTableHandle along with
   // columnHandles, bucketProperty and locationHandle.
-  if (!insertHandle_) {
+  if (insertHandle_ == nullptr) {
     // Create column handles.
     std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
         columnHandles;
-    for (auto i = 0; i < outputType->size(); ++i) {
-      const auto column = outputType->nameOf(i);
+    for (auto i = 0; i < targetColumns->size(); ++i) {
+      const auto column = targetColumns->nameOf(i);
       const bool isPartitionKey =
           std::find(partitionBy_.begin(), partitionBy_.end(), column) !=
           partitionBy_.end();
@@ -429,8 +433,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
               isPartitionKey
                   ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
                   : connector::hive::FileColumnHandle::ColumnType::kRegular,
-              outputType->childAt(i),
-              outputType->childAt(i)));
+              targetColumns->childAt(i),
+              targetColumns->childAt(i)));
     }
 
     auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
@@ -442,10 +446,10 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     std::shared_ptr<HiveBucketProperty> bucketProperty;
     if (bucketCount_ != 0) {
       bucketProperty = buildHiveBucketProperty(
-          outputType, bucketCount_, bucketedBy_, sortBy_);
+          targetColumns, bucketCount_, bucketedBy_, sortBy_);
     }
 
-    auto hiveHandle = std::make_shared<connector::hive::HiveInsertTableHandle>(
+    insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
         fileFormat_,
@@ -453,11 +457,14 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
         compressionKind_,
         serdeParameters_,
         options_,
-        ensureFiles_);
-
-    insertHandle_ =
-        std::make_shared<core::InsertTableHandle>(connectorId_, hiveHandle);
+        ensureFiles_,
+        // Repeats the constructor's default so that storageParameters, which
+        // follows it positionally, can be passed.
+        std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
+        storageParameters_);
   }
+  const auto insertTableHandle = std::make_shared<core::InsertTableHandle>(
+      connectorId_, insertHandle_, notNullColumns_);
 
   std::optional<core::ColumnStatsSpec> columnStatsSpec;
   if (!aggregates_.empty()) {
@@ -468,7 +475,7 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     for (const auto& partitionBy : partitionBy_) {
       groupingKeys.push_back(
           std::make_shared<core::FieldAccessTypedExpr>(
-              outputType->findChild(partitionBy), partitionBy));
+              targetColumns->findChild(partitionBy), partitionBy));
     }
     columnStatsSpec = core::ColumnStatsSpec(
         std::move(groupingKeys),
@@ -478,10 +485,10 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
   }
   const auto writeNode = std::make_shared<core::TableWriteNode>(
       id,
-      outputType,
-      outputType->names(),
+      targetColumns,
+      targetColumns->names(),
       columnStatsSpec,
-      insertHandle_,
+      insertTableHandle,
       false,
       TableWriteTraits::outputType(columnStatsSpec),
       commitStrategy_,
@@ -802,11 +809,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const RowTypePtr& schema,
     const bool ensureFiles,
     const connector::CommitStrategy commitStrategy,
-    std::shared_ptr<core::InsertTableHandle> insertTableHandle) {
+    connector::ConnectorInsertTableHandlePtr insertTableHandle,
+    const std::unordered_map<std::string, std::string>& storageParameters) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
-      .outputType(schema)
+      .targetColumns(schema)
       .partitionBy(partitionBy)
       .bucketCount(bucketCount)
       .bucketedBy(bucketedBy)
@@ -815,6 +823,7 @@ PlanBuilder& PlanBuilder::tableWrite(
       .aggregates(aggregates)
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
+      .storageParameters(storageParameters)
       .options(options)
       .compressionKind(compressionKind)
       .ensureFiles(ensureFiles)
@@ -2255,6 +2264,31 @@ PlanBuilder& PlanBuilder::unnest(
     const std::optional<std::string>& ordinalColumn,
     const std::optional<std::string>& markerName) {
   VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
+  std::vector<std::optional<std::string>> unnestNames;
+  for (const auto& name : unnestColumns) {
+    auto input = planNode_->outputType()->findChild(name);
+    if (input->isArray()) {
+      unnestNames.emplace_back(name + "_e");
+    } else if (input->isMap()) {
+      unnestNames.emplace_back(name + "_k");
+      unnestNames.emplace_back(name + "_v");
+    } else {
+      VELOX_NYI(
+          "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",
+          input->toString());
+    }
+  }
+  return unnest(
+      replicateColumns, unnestColumns, unnestNames, ordinalColumn, markerName);
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<std::string>& replicateColumns,
+    const std::vector<std::string>& unnestColumns,
+    const std::vector<std::optional<std::string>>& unnestNames,
+    const std::optional<std::string>& ordinalColumn,
+    const std::optional<std::string>& markerName) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
   std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
       replicateFields;
   replicateFields.reserve(replicateColumns.size());
@@ -2266,21 +2300,6 @@ PlanBuilder& PlanBuilder::unnest(
   unnestFields.reserve(unnestColumns.size());
   for (const auto& name : unnestColumns) {
     unnestFields.emplace_back(field(name));
-  }
-
-  std::vector<std::string> unnestNames;
-  for (const auto& name : unnestColumns) {
-    auto input = planNode_->outputType()->findChild(name);
-    if (input->isArray()) {
-      unnestNames.push_back(name + "_e");
-    } else if (input->isMap()) {
-      unnestNames.push_back(name + "_k");
-      unnestNames.push_back(name + "_v");
-    } else {
-      VELOX_NYI(
-          "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",
-          input->toString());
-    }
   }
 
   planNode_ = std::make_shared<core::UnnestNode>(

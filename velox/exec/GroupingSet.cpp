@@ -1626,6 +1626,7 @@ void GroupingSet::toIntermediate(
       populateTempVectors(i, input);
       VELOX_DCHECK(aggregateVector);
       function->toIntermediate(rows, tempVectors_, aggregateVector);
+      ++numToIntermediateFastPathCalls_;
       continue;
     }
 

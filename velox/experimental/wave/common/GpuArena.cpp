@@ -396,8 +396,11 @@ void GpuArena::free(Buffer* buffer) {
   if (iter == arenas_.end() || iter->first != addressU64) {
     VELOX_CHECK(iter != arenas_.begin());
     --iter;
+    // A request larger than singleArenaCapacity_ gets a slab sized to it, and
+    // that slab then serves later allocations too, so the bound is the slab's
+    // own size, not the nominal one.
     VELOX_CHECK_GE(
-        iter->first + singleArenaCapacity_, addressU64 + buffer->size_);
+        iter->first + iter->second->byteSize(), addressU64 + buffer->size_);
   }
   iter->second->free(buffer->ptr_, buffer->size_);
   if (iter->second->empty() && iter->second != currentArena_ &&

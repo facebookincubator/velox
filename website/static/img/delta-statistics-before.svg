@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1290" height="430" viewBox="0 0 1290 430" role="img" aria-labelledby="title desc">
+  <title id="title">Delta statistics collection before native aggregation</title>
+  <desc id="desc">Columnar batches enter the Spark Delta writer, which sends data to both the Velox Parquet writer and a row-based Delta statistics tracker through columnar-to-row conversion.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#5f6b7a"/>
+    </marker>
+    <style>
+      .box { fill: #f7f9fc; stroke: #62748a; stroke-width: 2; rx: 10; }
+      .problem { fill: #fff0f0; stroke: #c24141; stroke-width: 2; rx: 10; }
+      .output { fill: #eef7ff; stroke: #3778a8; stroke-width: 2; rx: 10; }
+      .line { fill: none; stroke: #5f6b7a; stroke-width: 2.5; marker-end: url(#arrow); }
+      .label { fill: #182230; font: 600 18px Arial, sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .small { fill: #7f1d1d; font: 600 15px Arial, sans-serif; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="1290" height="430" fill="#ffffff"/>
+
+  <rect class="box" x="35" y="174" width="190" height="72"/>
+  <text class="label" x="130" y="210">Columnar batches</text>
+
+  <rect class="box" x="255" y="174" width="205" height="72"/>
+  <text class="label" x="357.5" y="210">Spark Delta writer</text>
+
+  <rect class="box" x="550" y="65" width="210" height="72"/>
+  <text class="label" x="655" y="101">Velox Parquet writer</text>
+
+  <rect class="output" x="830" y="65" width="190" height="72"/>
+  <text class="label" x="925" y="101">Delta Parquet files</text>
+
+  <rect class="problem" x="550" y="280" width="230" height="72"/>
+  <text class="label" x="665" y="306">Columnar-to-row</text>
+  <text class="label" x="665" y="328">conversion</text>
+
+  <rect class="problem" x="830" y="280" width="205" height="72"/>
+  <text class="label" x="932.5" y="306">Row-based Delta</text>
+  <text class="label" x="932.5" y="328">statistics tracker</text>
+
+  <rect class="output" x="1095" y="280" width="170" height="72"/>
+  <text class="label" x="1180" y="306">Per-file</text>
+  <text class="label" x="1180" y="328">statistics JSON</text>
+
+  <path class="line" d="M225 210 H255"/>
+  <path class="line" d="M460 210 H500 V101 H550"/>
+  <path class="line" d="M760 101 H830"/>
+  <path class="line" d="M500 210 V316 H550"/>
+  <path class="line" d="M780 316 H830"/>
+  <path class="line" d="M1035 316 H1095"/>
+
+</svg>

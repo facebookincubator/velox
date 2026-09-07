@@ -674,14 +674,10 @@ bool Task::allNodesReceivedNoMoreSplitsMessageLocked() const {
 }
 
 const std::string& Task::getOrCreateSpillDirectory() {
+  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
   VELOX_CHECK(
       !spillDirectory_.empty() || spillDirectoryCallback_,
       "Spill directory or spill directory callback must be set");
-  if (spillDirectoryCreated_) {
-    return spillDirectory_;
-  }
-
-  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
   if (spillDirectoryCreated_) {
     return spillDirectory_;
   }
@@ -709,16 +705,22 @@ const std::string& Task::getOrCreateSpillDirectory() {
 }
 
 void Task::removeSpillDirectoryIfExists() {
-  if (spillDirectory_.empty() || !spillDirectoryCreated_) {
-    return;
+  {
+    std::lock_guard<std::mutex> l(spillDirCreateMutex_);
+    if (spillDirectory_.empty() || !spillDirectoryCreated_) {
+      return;
+    }
+    try {
+      auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
+      fs->rmdir(spillDirectory_);
+      spillDirectoryCreated_ = false;
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
+                 << "' for Task " << taskId() << ": " << e.what();
+    }
   }
-  try {
-    auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
-    fs->rmdir(spillDirectory_);
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
-               << "' for Task " << taskId() << ": " << e.what();
-  }
+  TestValue::adjust(
+      "facebook::velox::exec::Task::removeSpillDirectoryIfExists", this);
 }
 
 uint64_t Task::driverCpuTimeSliceLimitMs() const {
@@ -1123,11 +1125,11 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
     VELOX_CHECK_GE(
         maxDrivers,
         1,
-        "maxDrivers parameter must be greater then or equal to 1");
+        "maxDrivers parameter must be greater than or equal to 1");
     VELOX_CHECK_GE(
         concurrentSplitGroups,
         1,
-        "concurrentSplitGroups parameter must be greater then or equal to 1");
+        "concurrentSplitGroups parameter must be greater than or equal to 1");
 
     {
       std::unique_lock<std::timed_mutex> l(mutex_);
@@ -1337,7 +1339,8 @@ void Task::initializePartitionOutput() {
         shared_from_this(),
         partitionedOutputNode->kind(),
         partitionedOutputNode->numPartitions(),
-        numOutputDrivers);
+        numOutputDrivers,
+        partitionedOutputNode->transportOptions());
   }
 }
 
@@ -1496,7 +1499,7 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
         splitGroupId, factory->needsSpatialJoinBridges());
     addIndexLookupJoinBridgesLocked(
         splitGroupId, factory->needsIndexLookupJoinBridges());
-    addCustomJoinBridgesLocked(splitGroupId, factory->planNodes);
+    addCustomJoinBridgesLocked(splitGroupId, factory->needsCustomJoinBridges());
 
     core::PlanNodeId tableScanNodeId;
     if (queryCtx_->queryConfig().tableScanScaledProcessingEnabled() &&
@@ -1644,6 +1647,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
 
   if (allFinished) {
     self->terminate(TaskState::kFinished);
+    self->removeSpillDirectoryIfExists();
   }
 }
 
@@ -1871,7 +1875,7 @@ void Task::noMoreSplitsForGroup(
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
-  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::shared_ptr<InMemoryExchangeClient> exchangeClient;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2503,17 +2507,33 @@ void Task::addHashJoinBridgesLocked(
 
 void Task::addCustomJoinBridgesLocked(
     uint32_t splitGroupId,
-    const std::vector<core::PlanNodePtr>& planNodes) {
+    const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNode : planNodes) {
+  for (const auto& planNodeId : planNodeIds) {
+    // Unlike built-in bridges (hash, NLJ, etc.) custom bridges need the plan
+    // node to call Operator::joinBridgeFromPlanNode().  The node may belong to
+    // a different factory: in mixed execution mode the ungrouped build factory
+    // must create the bridge, but the plan node lives in the grouped probe
+    // factory.  Search all factories to find it.
+    auto findNode = [&]() -> core::PlanNodePtr {
+      for (const auto& factory : driverFactories_) {
+        for (const auto& planNode : factory->planNodes) {
+          if (planNode->id() == planNodeId) {
+            return planNode;
+          }
+        }
+      }
+      return nullptr;
+    };
+    auto planNode = findNode();
+    VELOX_CHECK_NOT_NULL(
+        planNode, "Plan node {} for custom join bridge not found", planNodeId);
     if (auto joinBridge = Operator::joinBridgeFromPlanNode(planNode)) {
       auto const inserted = splitGroupState.customBridges
-                                .emplace(planNode->id(), std::move(joinBridge))
+                                .emplace(planNodeId, std::move(joinBridge))
                                 .second;
       VELOX_CHECK(
-          inserted,
-          "Join bridge for node {} is already present",
-          planNode->id());
+          inserted, "Join bridge for node {} is already present", planNodeId);
     }
   }
 }
@@ -2664,7 +2684,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier taskCompletionNotifier;
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
+  std::vector<std::shared_ptr<InMemoryExchangeClient>> exchangeClients;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -3751,7 +3771,7 @@ void Task::createExchangeClientLocked(
       planNodeId);
   // Low-water mark for filling the exchange queue is 1/2 of the per worker
   // buffer size of the producers.
-  exchangeClients_[pipelineId] = std::make_shared<ExchangeClient>(
+  exchangeClients_[pipelineId] = std::make_shared<InMemoryExchangeClient>(
       taskId_,
       destination_,
       queryCtx()->queryConfig().maxExchangeBufferSize(),
@@ -3765,7 +3785,7 @@ void Task::createExchangeClientLocked(
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 
-std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
+std::shared_ptr<InMemoryExchangeClient> Task::getExchangeClientLocked(
     const core::PlanNodeId& planNodeId) const {
   auto it = exchangeClientByPlanNode_.find(planNodeId);
   if (it == exchangeClientByPlanNode_.end()) {
@@ -3774,7 +3794,7 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return it->second;
 }
 
-std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
+std::shared_ptr<InMemoryExchangeClient> Task::getExchangeClientLocked(
     int32_t pipelineId) const {
   VELOX_CHECK_LT(pipelineId, exchangeClients_.size());
   return exchangeClients_[pipelineId];

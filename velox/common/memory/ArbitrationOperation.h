@@ -111,11 +111,39 @@ class ArbitrationOperation {
     globalArbitrationStartTimeNs_ = getCurrentTimeNano();
   }
 
-  /// The execution stats of this arbitration operation after completion.
+  /// Holds the execution timing of this arbitration operation, valid only
+  /// after it finishes. The four fields are the gaps between consecutive
+  /// timestamps:
+  ///
+  ///   createTimeNs_                  created / enqueued
+  ///     |
+  ///     |  localArbitrationWaitTimeNs
+  ///     v
+  ///   startTimeNs_                   starts running (kRunning)
+  ///     |
+  ///     |  localArbitrationExecTimeNs
+  ///     v
+  ///   globalArbitrationStartTimeNs_  global arbitration wait begins
+  ///     |
+  ///     |  globalArbitrationWaitTimeNs
+  ///     v
+  ///   finishTimeNs_                  finished (kFinished)
+  ///
+  /// executionTimeNs spans createTimeNs_..finishTimeNs_, i.e. the sum of the
+  /// three gaps. When no global arbitration happens,
+  /// globalArbitrationStartTimeNs_ is 0, localArbitrationExecTimeNs spans
+  /// startTimeNs_..finishTimeNs_, and globalArbitrationWaitTimeNs is 0.
   struct Stats {
+    /// Time queued on the participant before this operation starts running.
     uint64_t localArbitrationWaitTimeNs{0};
+
+    /// Time running local arbitration before any global arbitration wait.
     uint64_t localArbitrationExecTimeNs{0};
+
+    /// Time waiting for global arbitration; zero if none happened.
     uint64_t globalArbitrationWaitTimeNs{0};
+
+    /// Total time from creation to finish.
     uint64_t executionTimeNs{0};
   };
 
@@ -128,19 +156,24 @@ class ArbitrationOperation {
   const uint64_t requestBytes_;
   const uint64_t timeoutNs_;
 
-  // The start time of this arbitration operation.
+  // Time when this operation was created and enqueued, before it starts
+  // running. See Stats for how the timestamps carve the timeline.
   const uint64_t createTimeNs_;
   const ScopedArbitrationParticipant participant_;
 
   State state_{State::kInit};
 
+  // Time when this operation starts running (kRunning), after waiting its turn
+  // on the participant.
   uint64_t startTimeNs_{0};
+  // Time when this operation finishes (kFinished).
   uint64_t finishTimeNs_{0};
 
   uint64_t maxGrowBytes_{0};
   uint64_t minGrowBytes_{0};
 
-  // The time that starts global arbitration wait
+  // Time when this operation starts waiting for global arbitration. Zero if
+  // global arbitration does not happen.
   uint64_t globalArbitrationStartTimeNs_{};
 
   friend class ArbitrationParticipant;

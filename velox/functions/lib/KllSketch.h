@@ -48,6 +48,10 @@ struct View {
 
 constexpr uint32_t kDefaultK = 200;
 
+/// Largest power-of-two K whose total capacity fits in uint32_t for all
+/// supported level counts.
+constexpr uint32_t kMaxK = 1U << 30;
+
 /// Estimate the proper k value to ensure the error bound epsilon.
 uint32_t kFromEpsilon(double epsilon);
 

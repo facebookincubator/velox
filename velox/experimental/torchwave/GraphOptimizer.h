@@ -39,6 +39,11 @@ class Optimizer {
  private:
   void visitValue(const nativert::Value* value);
   void ensureConstraint(int32_t id);
+  // Attaches 'constraint' to 'value' and, when 'value' is a TensorList, to its
+  // element values.
+  void setConstraint(
+      const nativert::Value* value,
+      const ValueConstraint& constraint);
 
   WaveGraph& waveGraph_;
   ValueTypes& types_;

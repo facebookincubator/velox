@@ -77,9 +77,11 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
     const std::shared_ptr<const core::WindowNode>& windowNode,
     velox::memory::MemoryPool* pool,
     const common::SpillConfig* spillConfig,
-    tsan_atomic<bool>* nonReclaimableSection)
+    tsan_atomic<bool>* nonReclaimableSection,
+    uint64_t maxRetainedBytes)
     : WindowBuild(windowNode, pool, spillConfig, nonReclaimableSection),
       hasRangeFrame_(hasRangeFrame(windowNode)),
+      maxRetainedBytes_(std::max<uint64_t>(maxRetainedBytes, 1)),
       partitionKeyValues_(keyChannels(partitionKeyInfo_, inputChannels_), pool),
       peerKeyValues_(keyChannels(sortKeyInfo_, inputChannels_), pool),
       boundaryKeyChannels_(
@@ -91,9 +93,69 @@ RowsStreamingWindowBuild::RowsStreamingWindowBuild(
       this);
 }
 
+int64_t RowsStreamingWindowBuild::numRetainedRows() const {
+  int64_t numRows = pendingRowCount_;
+  for (const auto& windowPartition : windowPartitions_) {
+    numRows += windowPartition->numRows();
+  }
+  return numRows;
+}
+
+bool RowsStreamingWindowBuild::reachedRetainedBytesBudget() const {
+  // RANGE frames must retain the whole incomplete peer group, so they are never
+  // throttled on bytes.
+  if (hasRangeFrame_ || !estimatedRowSize_.has_value()) {
+    return false;
+  }
+  const uint64_t retainedBytes =
+      static_cast<uint64_t>(numRetainedRows()) * estimatedRowSize_.value();
+  return retainedBytes >= maxRetainedBytes_;
+}
+
+void RowsStreamingWindowBuild::updatePendingRowBudget() {
+  if (!estimatedRowSize_.has_value()) {
+    return;
+  }
+  const uint64_t rowBudget = maxRetainedBytes_ / estimatedRowSize_.value();
+  maxPendingRows_ = static_cast<vector_size_t>(std::min<uint64_t>(
+      std::max<uint64_t>(rowBudget, 1),
+      std::numeric_limits<vector_size_t>::max()));
+}
+
+bool RowsStreamingWindowBuild::hasRowsToDrain() const {
+  for (const auto& windowPartition : windowPartitions_) {
+    if (windowPartition->numRows() > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool RowsStreamingWindowBuild::needsInput() {
-  // We need input if there is no or only partition.
-  return windowPartitions_.size() < 2;
+  // Stop accepting input once two partitions are buffered: the head can be
+  // output while the tail keeps accepting input.
+  if (windowPartitions_.size() >= 2) {
+    return false;
+  }
+
+  // Within a single not-yet-complete partition, 'windowPartitions_.size()'
+  // stays 1, so the check above never throttles and a large partition would
+  // accumulate its entire input (held by reference) before any output. For
+  // ROWS-frame functions (e.g. row_number/rank) every buffered row is
+  // immediately emittable, so once the retained input reaches the byte budget,
+  // ask the driver to drain output instead - draining calls
+  // 'removeProcessedRows()', which releases the retained input vectors.
+  // On the same condition 'addInput()' flushes the pending rows into a
+  // partition, so a drainable partition always exists when this returns false.
+  if (!reachedRetainedBytesBudget()) {
+    return true;
+  }
+
+  // Only throttle while the operator still has rows it can emit. Refusing
+  // input when nothing is emittable would leave the driver unable to either
+  // feed or drain this operator, and the task would stall. Accepting input
+  // past the budget grows memory, which is the lesser failure.
+  return !hasRowsToDrain();
 }
 
 void RowsStreamingWindowBuild::ensureInputPartition() {
@@ -131,6 +193,19 @@ void RowsStreamingWindowBuild::addPartitionInputs(bool finished) {
 void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
   loadBoundaryColumns(input);
 
+  // Skipped for RANGE frames, which are never throttled on bytes and so have no
+  // use for the estimate: 'estimateFlatSize()' walks the vector on every batch.
+  if (!hasRangeFrame_ && input->size() > 0) {
+    // Floored at one byte: an encoded input can estimate to fewer bytes than
+    // rows, and a zero row size would make the retained-byte total zero and
+    // silently disable throttling.
+    const int64_t rowSize = std::max<int64_t>(
+        static_cast<int64_t>(input->estimateFlatSize()) / input->size(), 1);
+    estimatedRowSize_ =
+        std::max<int64_t>(estimatedRowSize_.value_or(0), rowSize);
+    updatePendingRowBudget();
+  }
+
   vector_size_t rangeStart = 0;
   for (auto row = 0; row < input->size(); ++row) {
     const bool hasPreviousRow = row > 0 || partitionKeyValues_.hasValue();
@@ -139,7 +214,16 @@ void RowsStreamingWindowBuild::addInput(RowVectorPtr input) {
       addPartitionInputs(true);
       rangeStart = row;
     }
-    if (hasPreviousRow && pendingRowCount_ >= numRowsPerOutput_) {
+    // Flush pending rows into a partition once the output-row target is hit,
+    // or once the retained-byte budget is reached with nothing yet drainable.
+    // The byte-budget trigger exists only so 'needsInput()' never throttles a
+    // single wide partition without leaving output for the driver to drain;
+    // gating it on 'hasRowsToDrain()' keeps it to one flush, instead of
+    // splitting every remaining row of this input into its own range while the
+    // budget stays exceeded.
+    if (hasPreviousRow &&
+        (pendingRowCount_ >= numRowsPerOutput_ ||
+         (pendingRowCount_ >= maxPendingRows_ && !hasRowsToDrain()))) {
       // Needs to wait the peer group ready for range frame.
       if (hasRangeFrame_) {
         if (isNewPeerGroup(input, row)) {

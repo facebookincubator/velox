@@ -25,7 +25,7 @@ namespace {
 
 bool needsProbeMismatch(core::JoinType joinType) {
   return isLeftJoin(joinType) || isFullJoin(joinType) ||
-      isLeftSemiProjectJoin(joinType);
+      isLeftSemiProjectJoin(joinType) || isAntiJoin(joinType);
 }
 
 bool needsBuildMismatch(core::JoinType joinType) {
@@ -322,11 +322,22 @@ bool NestedLoopJoinProbe::advanceProbe() {
   return false;
 }
 
-void NestedLoopJoinProbe::handleLeftSemiProjectNoCondition() {
+void NestedLoopJoinProbe::handleProbeOnlyNoCondition() {
+  // Reached only with a non-empty build vector, so every probe row matches.
+  if (isAntiJoin(joinType_)) {
+    // Anti join emits nothing when the probe row matches.
+    buildIndex_ = buildVectors_.value().size();
+    filterResultRow_ = 0;
+    return;
+  }
+
+  // Left semi filter and left semi project emit the probe row once.
   rawProbeOutputIndices_[numOutputRows_++] = probeRow_;
-  output_->childAt(outputType_->size() - 1)
-      ->asFlatVector<bool>()
-      ->set(numOutputRows_ - 1, true);
+  if (isLeftSemiProjectJoin(joinType_)) {
+    output_->childAt(outputType_->size() - 1)
+        ->asFlatVector<bool>()
+        ->set(numOutputRows_ - 1, true);
+  }
   buildIndex_ = buildVectors_.value().size();
   filterResultRow_ = 0;
 }
@@ -365,6 +376,13 @@ bool NestedLoopJoinProbe::addFilteredOutput(
         continue;
       }
     } else if (handleMatchedFilterRow(i, buildRowCount, singleProbeRow)) {
+      // The emit-once short-circuit (left semi filter/project) advances the
+      // probe state past the batch-boundary check below. Honor that boundary
+      // here so a full batch is produced instead of overflowing output_.
+      if (numOutputRows_ == outputBatchSize_) {
+        copyBuildValues(buildVector);
+        return false;
+      }
       return true;
     }
 
@@ -402,18 +420,41 @@ bool NestedLoopJoinProbe::handleMatchedFilterRow(
   if (needsBuildMismatch(joinType_)) {
     buildMatched_[buildIndex_].setValid(buildRow_, true);
   }
+
+  // Anti join: a match disqualifies the probe row, so emit nothing and stop
+  // scanning the build for this probe row.
+  if (isAntiJoin(joinType_)) {
+    probeRowHasMatch_ = true;
+    shortCircuitProbeRow(filterResultRow, buildRowCount, singleProbeRow);
+    return true;
+  }
+
   addOutputRow();
   ++numOutputRows_;
   probeRowHasMatch_ = true;
+
+  // Left semi filter: emit the probe row once and stop scanning the build.
+  if (isLeftSemiFilterJoin(joinType_)) {
+    shortCircuitProbeRow(filterResultRow, buildRowCount, singleProbeRow);
+    return true;
+  }
 
   if (!isLeftSemiProjectJoin(joinType_)) {
     return false;
   }
 
+  // Left semi project: set the match column and stop scanning the build.
   output_->childAt(outputType_->size() - 1)
       ->asFlatVector<bool>()
       ->set(numOutputRows_ - 1, true);
+  shortCircuitProbeRow(filterResultRow, buildRowCount, singleProbeRow);
+  return true;
+}
 
+void NestedLoopJoinProbe::shortCircuitProbeRow(
+    vector_size_t filterResultRow,
+    vector_size_t buildRowCount,
+    bool singleProbeRow) {
   if (singleProbeRow) {
     buildIndex_ = buildVectors_.value().size();
     filterResultRow_ = 0;
@@ -424,7 +465,6 @@ bool NestedLoopJoinProbe::handleMatchedFilterRow(
     buildRow_ = 0;
     probeRowHasMatch_ = false;
   }
-  return true;
 }
 
 // Main join loop.
@@ -464,10 +504,10 @@ bool NestedLoopJoinProbe::addToOutput() {
       return false;
     }
 
-    // Handle LeftSemiProjectJoin with no join condition before evaluating the
-    // filter.
-    if (isLeftSemiProjectNoCondition()) {
-      handleLeftSemiProjectNoCondition();
+    // Handle probe-only joins (left semi filter/project, anti) with no join
+    // condition before evaluating the filter (there is no filter to evaluate).
+    if (isProbeOnlyNoCondition()) {
+      handleProbeOnlyNoCondition();
       return true;
     }
 

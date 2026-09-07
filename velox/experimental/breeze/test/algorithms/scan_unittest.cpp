@@ -47,7 +47,7 @@ using try_make_unsigned =
     typename std::conditional<std::is_integral<T>::value, std::make_unsigned<T>,
                               identity<T>>::type;
 
-TYPED_TEST(AlgorithmTest, ScanAdd) {
+TYPED_TEST(AlgorithmTest, scanAdd) {
   constexpr int kBlockThreads = 32;
   constexpr int kItemsPerThread = 2;
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
@@ -88,7 +88,7 @@ TYPED_TEST(AlgorithmTest, ScanAdd) {
 
 #if !defined(PLATFORM_OPENMP)
 
-TYPED_TEST(AlgorithmTest, ScanAddWithLookbackDistance64) {
+TYPED_TEST(AlgorithmTest, scanAddWithLookbackDistance64) {
   constexpr int kBlockThreads = 64;
   constexpr int kItemsPerThread = 2;
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;

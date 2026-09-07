@@ -30,7 +30,7 @@ class StreamLabelsTest : public testing::Test {
   }
 };
 
-TEST_F(StreamLabelsTest, E2E) {
+TEST_F(StreamLabelsTest, e2e) {
   auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
   AllocationPool allocationPool(pool.get());
   StreamLabels root(allocationPool);

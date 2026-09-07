@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -793,6 +794,51 @@ TEST_F(PlanNodeToStringTest, tableScan) {
   }
 }
 
+TEST_F(PlanNodeToStringTest, tableScanAssignments) {
+  {
+    // A complex column shows the parts the scan asks for; a scalar column
+    // shows nothing.
+    RowTypePtr rowType{ROW({
+        {"m", MAP(VARCHAR(), BIGINT())},
+        {"n", BIGINT()},
+    })};
+
+    connector::ColumnHandleMap assignments;
+    assignments["m"] = test::HiveConnectorTestBase::makeColumnHandle(
+        "m", rowType->childAt(0), {"m[\"k\"]"});
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(1));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table, assignments: [m := HiveColumnHandle "
+        "[name: m, columnType: Regular, dataType: MAP<VARCHAR,BIGINT>, "
+        "requiredSubfields: [ m[\"k\"] ]]]] "
+        "-> m:MAP<VARCHAR,BIGINT>, n:BIGINT\n",
+        plan->toString(true, false));
+  }
+
+  {
+    // A scan of scalars alone adds nothing.
+    RowTypePtr rowType{ROW("n", BIGINT())};
+
+    connector::ColumnHandleMap assignments;
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(0));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table] -> n:BIGINT\n",
+        plan->toString(true, false));
+  }
+}
+
 TEST_F(PlanNodeToStringTest, decimalConstant) {
   parse::ParseOptions options;
   options.parseDecimalAsDouble = false;
@@ -1043,6 +1089,21 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
     ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
     ASSERT_EQ(
         "-- TableWrite[1][test-hive, c0, c1, c2] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with NOT NULL columns.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .startTableWriter()
+                    .outputDirectoryPath(outputDir->getPath())
+                    .notNullColumns({"c0", "c2"})
+                    .endTableWriter()
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0 not null, c1, c2 not null] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
         plan->toString(true, false));
   }
 

@@ -64,7 +64,7 @@ HiveSplitReader::HiveSplitReader(
 
 void HiveSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
-    dwio::common::RuntimeStatistics& runtimeStats,
+    dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   validateSynthesizedColumnFilters();
   FileSplitReader::prepareSplit(

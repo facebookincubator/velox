@@ -147,7 +147,7 @@ TEST_F(MapFromEntriesTest, unknownInputs) {
 }
 
 TEST_F(MapFromEntriesTest, nullRowEntriesWithSmallerChildren) {
-  // Row vector is of size 3, childrens are of size 2 since row 2 is null.
+  // Row vector is of size 3, children are of size 2 since row 2 is null.
   auto rowVector = makeRowVector(
       {makeNullableFlatVector<int32_t>({std::nullopt, 2}),
        makeFlatVector<int32_t>({1, 2})});

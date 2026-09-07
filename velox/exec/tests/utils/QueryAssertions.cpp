@@ -890,10 +890,22 @@ void DuckDbQueryRunner::createTable(
 
   ::duckdb::Appender appender(con, name);
   for (auto& vector : data) {
+    // Resolve lazy vectors once per batch. duckValueAt casts each column to
+    // SimpleVector, which returns null for a LazyVector, so materialize any
+    // lazy child before the per-row loop.
+    std::vector<VectorPtr> columnVectors;
+    columnVectors.reserve(rowType.size());
+    for (int32_t column = 0; column < rowType.size(); column++) {
+      auto columnVector = vector->childAt(column);
+      if (columnVector->isLazy()) {
+        columnVector = BaseVector::loadedVectorShared(columnVector);
+      }
+      columnVectors.push_back(std::move(columnVector));
+    }
     for (int32_t row = 0; row < vector->size(); row++) {
       appender.BeginRow();
       for (int32_t column = 0; column < rowType.size(); column++) {
-        auto columnVector = vector->childAt(column);
+        const auto& columnVector = columnVectors[column];
         auto type = rowType.childAt(column);
         if (columnVector->isNullAt(row)) {
           appender.Append(nullptr);

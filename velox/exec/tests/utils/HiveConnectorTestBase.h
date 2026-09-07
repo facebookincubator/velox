@@ -136,7 +136,8 @@ class HiveConnectorTestBase : public OperatorTestBase {
       const RowTypePtr& dataColumns = nullptr,
       const std::vector<std::string>& indexColumns = {},
       const std::unordered_map<std::string, std::string>& storageParameters =
-          {}) {
+          {},
+      std::string dbName = "") {
     return std::make_shared<connector::hive::HiveTableHandle>(
         kHiveConnectorId,
         tableName,
@@ -144,7 +145,10 @@ class HiveConnectorTestBase : public OperatorTestBase {
         remainingFilter,
         dataColumns,
         indexColumns,
-        storageParameters);
+        storageParameters,
+        std::vector<connector::hive::HiveColumnHandlePtr>{},
+        /*sampleRate=*/1.0,
+        std::move(dbName));
   }
 
   /// @param name Column name.

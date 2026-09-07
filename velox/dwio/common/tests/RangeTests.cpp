@@ -50,7 +50,7 @@ TEST(RangeTests, Add) {
   ASSERT_EQ(ranges.size(), 0);
 }
 
-TEST(RangeTests, ForEach) {
+TEST(RangeTests, forEach) {
   Ranges ranges;
   ranges.add(1, 3);
   ranges.add(6, 9);

@@ -133,3 +133,7 @@ velox_add_library(velox_tdigest INTERFACE HEADERS TDigest.h)
 velox_add_library(velox_quantile_digest INTERFACE HEADERS QuantileDigest.h)
 
 velox_add_library(velox_setdigest INTERFACE HEADERS SetDigest.h SetDigestImpl.h)
+
+velox_add_library(velox_hive_hash INTERFACE HEADERS HiveHash.h)
+
+velox_link_libraries(velox_hive_hash INTERFACE velox_vector velox_type velox_common_base)

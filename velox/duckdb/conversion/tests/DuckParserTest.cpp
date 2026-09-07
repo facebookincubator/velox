@@ -624,6 +624,44 @@ TEST(DuckParserTest, window) {
       parseWindow("nth_value(x, 3) over ()"));
 }
 
+TEST(DuckParserTest, correctWindowFrameDefault) {
+  auto parse = [](const std::string& expr) {
+    ParseOptions options;
+    options.correctWindowFrameDefault = true;
+    return parseWindowExpr(expr, options)->toString();
+  };
+
+  // Without ORDER BY every row is a peer, so a RANGE frame ending at the
+  // current row covers the whole partition. A window with no frame clause
+  // gets that frame.
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+      parse("row_number() over (partition by a)"));
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+      parse(
+          "row_number() over (partition by a "
+          "range between unbounded preceding and current row)"));
+
+  // A ROWS frame counts rows rather than peers, so it ends at the current row
+  // even with nothing ordered.
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" "
+      "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parse(
+          "row_number() over (partition by a "
+          "rows between unbounded preceding and current row)"));
+
+  // With ORDER BY the peers are the rows that tie, so the default frame ends
+  // at the current row as written.
+  EXPECT_EQ(
+      "row_number() OVER (PARTITION BY \"a\" ORDER BY \"b\" ASC NULLS LAST "
+      "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+      parse("row_number() over (partition by a order by b)"));
+}
+
 TEST(DuckParserTest, windowWithIntegerConstant) {
   ParseOptions options;
   options.parseIntegerAsBigint = false;
