@@ -3198,7 +3198,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorInteger) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-    encoding->readIndicesWithVisitor(visitor, params);
+    callReadIndicesWithVisitor<T>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), kRows);
     const auto* indices = reader->rawIndices();
@@ -3298,7 +3298,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorInteger) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, this->pool());
 
-    encoding->readIndicesWithVisitor(visitor, params);
+    callReadIndicesWithVisitor<T>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -3420,7 +3420,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorNullable) {
       visitor(filter, reader, rows, extractValues);
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   ASSERT_EQ(reader->numValues(), kRows);
   const auto* indices = reader->rawIndices();
@@ -3547,7 +3547,7 @@ TEST_P(
       visitor(filter, reader, rows, extractValues);
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   ASSERT_EQ(reader->numValues(), kRows);
   const auto* indices = reader->rawIndices();
@@ -3688,7 +3688,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorNullable) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, this->pool());
 
-    callReadIndicesWithVisitor(*encoding, visitor, params);
+    callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -3995,7 +3995,7 @@ TEST_P(
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-    callReadIndicesWithVisitor(*encoding, visitor, params);
+    callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -4065,7 +4065,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, numValuesAfterMainlyConstantReadIndices) {
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
   ASSERT_EQ(reader->numValues(), 0);
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   // numValues must equal kRows (all rows), not just numNonCommon
   // (what the inner Dict encoding's bulkScan wrote via addNumValues).
