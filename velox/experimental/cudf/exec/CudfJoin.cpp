@@ -18,15 +18,25 @@
 
 #include "velox/common/base/Exceptions.h"
 
+#include <optional>
+
 namespace facebook::velox::cudf_velox {
 
 CudfJoinOutputLayout::CudfJoinOutputLayout(
     const RowTypePtr& probeType,
     const RowTypePtr& buildType,
     const RowTypePtr& outputType,
-    std::optional<std::size_t> syntheticOutputPosition) {
-  if (syntheticOutputPosition.has_value()) {
-    VELOX_CHECK_LT(*syntheticOutputPosition, outputType->size());
+    core::JoinType joinType) {
+  // For kLeftSemiProject, the last output column is a BOOLEAN match flag
+  // that doesn't exist in probe or build types — skip it during resolution.
+  std::optional<std::size_t> syntheticOutputPosition;
+  if (core::isLeftSemiProjectJoin(joinType)) {
+    VELOX_CHECK_GT(outputType->size(), 0);
+    VELOX_CHECK_EQ(
+        outputType->childAt(outputType->size() - 1)->kind(),
+        TypeKind::BOOLEAN,
+        "Trailing output column of a LEFT SEMI PROJECT join must be BOOLEAN");
+    syntheticOutputPosition = outputType->size() - 1;
   }
 
   for (std::size_t outputPosition = 0; outputPosition < outputType->size();

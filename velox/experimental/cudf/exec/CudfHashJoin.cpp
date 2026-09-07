@@ -475,21 +475,13 @@ CudfHashJoinProbe::CudfHashJoinProbe(
   }
 
   auto outputType = joinNode_->outputType();
-  std::optional<std::size_t> syntheticOutputPosition;
   for (std::size_t i = 0; i < outputType->size(); ++i) {
     if (CudfConfig::getInstance().debugEnabled) {
       VLOG(1) << "Output column " << i << ": " << outputType->nameOf(i);
     }
   }
-  if (isLeftSemiProjectJoin(joinNode_->joinType())) {
-    VELOX_CHECK_GT(outputType->size(), 0);
-    if (outputType->childAt(outputType->size() - 1)->kind() ==
-        TypeKind::BOOLEAN) {
-      syntheticOutputPosition = outputType->size() - 1;
-    }
-  }
   outputLayout_ = CudfJoinOutputLayout(
-      probeType_, buildType_, outputType, syntheticOutputPosition);
+      probeType_, buildType_, outputType, joinNode_->joinType());
 
   if (CudfConfig::getInstance().debugEnabled) {
     for (std::size_t i = 0; i < outputLayout_.probeColumnIndices.size(); i++) {

@@ -254,13 +254,8 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
   probeType_ = joinNode_->sources()[0]->outputType();
   buildType_ = joinNode_->sources()[1]->outputType();
 
-  std::optional<std::size_t> syntheticOutputPosition;
-  if (joinType_ == core::JoinType::kLeftSemiProject) {
-    VELOX_CHECK_GT(outputType_->size(), 0);
-    syntheticOutputPosition = outputType_->size() - 1;
-  }
-  outputLayout_ = CudfJoinOutputLayout(
-      probeType_, buildType_, outputType_, syntheticOutputPosition);
+  outputLayout_ =
+      CudfJoinOutputLayout(probeType_, buildType_, outputType_, joinType_);
 }
 
 void CudfNestedLoopJoinProbe::initialize() {

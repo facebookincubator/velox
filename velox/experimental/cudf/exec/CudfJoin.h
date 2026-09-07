@@ -18,13 +18,13 @@
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/core/PlanNode.h"
 #include "velox/type/Type.h"
 
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
 #include <cstddef>
-#include <optional>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
@@ -36,7 +36,7 @@ struct CudfJoinOutputLayout {
       const RowTypePtr& probeType,
       const RowTypePtr& buildType,
       const RowTypePtr& outputType,
-      std::optional<std::size_t> syntheticOutputPosition = std::nullopt);
+      core::JoinType joinType);
 
   std::vector<cudf::size_type> probeColumnIndices;
   std::vector<cudf::size_type> buildColumnIndices;
