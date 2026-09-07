@@ -146,7 +146,10 @@ bool parseHostname(std::string_view& input, ParsedUrl& parsed) {
   return true;
 }
 
-bool scanHexGroups(std::string_view& input, int& byteCount, bool& startsWithGroup) {
+bool scanHexGroups(
+    std::string_view& input,
+    int& byteCount,
+    bool& startsWithGroup) {
   auto group = leadingHexDigits(input);
   const auto ipv4Ahead = !group.empty() && input.size() > group.size() &&
       input[group.size()] == '.';
@@ -362,8 +365,9 @@ bool parseHierarchical(std::string_view& remainder, ParsedUrl& parsed) {
     // The authority ends at the first '/', '?' or '#'.
     const auto authorityEnd = remainder.find_first_of("/?#");
     const auto authority = remainder.substr(
-        0, authorityEnd == std::string_view::npos ? remainder.size()
-                                                  : authorityEnd);
+        0,
+        authorityEnd == std::string_view::npos ? remainder.size()
+                                               : authorityEnd);
     if (authority.empty()) {
       if (authorityEnd == std::string_view::npos) {
         // '//' with nothing after it fails to parse entirely.
