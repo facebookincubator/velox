@@ -600,10 +600,6 @@ class WriterStreamContext : public StreamContext {
     isInMapStream_ = value;
   }
 
-  void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
-    flatMapValueStreamOffsets_ = std::move(offsets);
-  }
-
   // The layout to replay for this stream: overlaid from the EncodingLayoutTree
   // at setup, or captured from this stream's first encode when
   // encoding-selection caching is enabled. Empty until one of those populates
@@ -641,10 +637,6 @@ class WriterStreamContext : public StreamContext {
  private:
   bool isNullStream_{false};
   bool isInMapStream_{false};
-  // Value stream descriptor offsets for this in-map stream's flat-map field.
-  // Empty for non in-map streams and flat-map values with no reader-visible
-  // value stream.
-  std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
   mutable std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
@@ -1247,63 +1239,6 @@ void findNodeIds(
   }
 }
 
-void collectFlatMapValueStreamOffsets(
-    const TypeBuilder& type,
-    std::vector<offset_size>& offsets) {
-  switch (type.kind()) {
-    case Kind::Scalar:
-      offsets.push_back(type.asScalar().scalarDescriptor().offset());
-      return;
-    case Kind::TimestampMicroNano:
-      offsets.push_back(
-          type.asTimestampMicroNano().microsDescriptor().offset());
-      offsets.push_back(type.asTimestampMicroNano().nanosDescriptor().offset());
-      return;
-    case Kind::Array:
-      offsets.push_back(type.asArray().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asArray().elements(), offsets);
-      return;
-    case Kind::ArrayWithOffsets:
-      offsets.push_back(type.asArrayWithOffsets().offsetsDescriptor().offset());
-      offsets.push_back(type.asArrayWithOffsets().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asArrayWithOffsets().elements(), offsets);
-      return;
-    case Kind::Map:
-      offsets.push_back(type.asMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(type.asMap().values(), offsets);
-      return;
-    case Kind::SlidingWindowMap:
-      offsets.push_back(type.asSlidingWindowMap().offsetsDescriptor().offset());
-      offsets.push_back(type.asSlidingWindowMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().values(), offsets);
-      return;
-    case Kind::Row: {
-      const auto& row = type.asRow();
-      offsets.push_back(row.nullsDescriptor().offset());
-      for (size_t i = 0; i < row.childrenCount(); ++i) {
-        collectFlatMapValueStreamOffsets(row.childAt(i), offsets);
-      }
-      return;
-    }
-    case Kind::FlatMap: {
-      const auto& flatMap = type.asFlatMap();
-      offsets.push_back(flatMap.nullsDescriptor().offset());
-      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
-        offsets.push_back(flatMap.inMapDescriptorAt(i).offset());
-        collectFlatMapValueStreamOffsets(flatMap.childAt(i), offsets);
-      }
-      return;
-    }
-    default:
-      NIMBLE_UNREACHABLE("Unsupported type kind {}", type.kind());
-  }
-}
-
 FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodingsForFlatMap(
     const EncodingLayoutTree& encodingLayoutTree) {
   FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodings;
@@ -1737,9 +1672,6 @@ void configureAddedFlatMapField(
   auto& inMapContext = streamContext(
       flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
   inMapContext.setIsInMapStream(true);
-  std::vector<offset_size> valueStreamOffsets;
-  collectFlatMapValueStreamOffsets(fieldType, valueStreamOffsets);
-  inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
 
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
