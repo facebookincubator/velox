@@ -194,6 +194,60 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
+TEST_F(ToCudfSelectionTest, replaceConstantSearchUsesCudf) {
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, '-', '') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceEmptySearchFallsBack) {
+  // The empty-search semantics differ from cudf::strings::replace, so the empty
+  // constant search is declined and evaluated on CPU.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, '', 'x') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, replaceColumnSearchFallsBack) {
+  // A column-valued search does not match the constant-argument signature and
+  // falls back to CPU.
+  auto input = makeRowVector(
+      {"s", "search"},
+      {makeFlatVector<std::string>({"a-b-c", "abc", "x-y"}),
+       makeFlatVector<std::string>({"-", "b", "y"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"replace(s, search, '') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
 TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
   auto input = makeRowVector(
       {"event_ts"},
