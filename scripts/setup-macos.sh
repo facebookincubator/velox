@@ -43,7 +43,7 @@ export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # gflags and glog are installed from source to ensure version compatibility.
 # Homebrew's glog 0.7.x has breaking API changes that are incompatible with folly.
-MACOS_VELOX_DEPS="bison double-conversion fast_float flex googletest icu4c libevent libsodium lz4 openssl simdjson snappy xz xxhash zstd"
+MACOS_VELOX_DEPS="bison double-conversion fast_float flex googletest icu4c libevent libsodium lz4 openssl simdjson snappy xz xxhash zstd libxml2"
 MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"
