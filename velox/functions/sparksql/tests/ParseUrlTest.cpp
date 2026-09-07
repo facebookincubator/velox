@@ -223,13 +223,11 @@ TEST_F(ParseUrlTest, nonAsciiAndSpecialChars) {
         fmt::format("parse_url(c0, '{}')", part), url);
   };
 
-  const auto cjkUrl =
-      "https://api.example.com/search?q=\u7f8e\u56e2&userid=1";
+  const auto cjkUrl = "https://api.example.com/search?q=\u7f8e\u56e2&userid=1";
   EXPECT_EQ("api.example.com", parseUrl(cjkUrl, "HOST"));
   EXPECT_EQ("/search", parseUrl(cjkUrl, "PATH"));
   EXPECT_EQ("q=\u7f8e\u56e2&userid=1", parseUrl(cjkUrl, "QUERY"));
-  EXPECT_EQ("/search?q=\u7f8e\u56e2&userid=1",
-            parseUrl(cjkUrl, "FILE"));
+  EXPECT_EQ("/search?q=\u7f8e\u56e2&userid=1", parseUrl(cjkUrl, "FILE"));
 
   // Non-ASCII characters are not valid in hostnames, so the authority falls
   // back to registry-based form and the host is null.
@@ -263,21 +261,14 @@ TEST_F(ParseUrlTest, nonAsciiAndSpecialChars) {
   // sequence, a stray continuation byte, and a UTF-8-encoded surrogate
   // are all accepted the same way. The extracted part keeps the original
   // bytes rather than re-encoding them as U+FFFD.
+  EXPECT_EQ("a=\xE4\xB8x", parseUrl("http://h/p?a=\xE4\xB8x", "QUERY"));
   EXPECT_EQ(
-      "a=\xE4\xB8x",
-      parseUrl("http://h/p?a=\xE4\xB8x", "QUERY"));
-  EXPECT_EQ(
-      "a=\xE4\xB8",
-      parseUrl(std::string("http://h/p?a=\xE4\xB8"), "QUERY"));
-  EXPECT_EQ(
-      "a=\xB4",
-      parseUrl(std::string("http://h/p?a=\xB4"), "QUERY"));
+      "a=\xE4\xB8", parseUrl(std::string("http://h/p?a=\xE4\xB8"), "QUERY"));
+  EXPECT_EQ("a=\xB4", parseUrl(std::string("http://h/p?a=\xB4"), "QUERY"));
   EXPECT_EQ(
       "a=\xED\xA0\x80",
       parseUrl(std::string("http://h/p?a=\xED\xA0\x80"), "QUERY"));
-  EXPECT_EQ(
-      "/p\xE4\xB8",
-      parseUrl(std::string("http://h/p\xE4\xB8"), "PATH"));
+  EXPECT_EQ("/p\xE4\xB8", parseUrl(std::string("http://h/p\xE4\xB8"), "PATH"));
 }
 
 // An empty authority yields a null HOST rather than an empty string, and
@@ -292,8 +283,8 @@ TEST_F(ParseUrlTest, emptyAuthority) {
   const auto fileUrl = "file:///C:/Users/x/AppData/Temp/%E4%BC%81.png";
   EXPECT_EQ(std::nullopt, parseUrl(fileUrl, "HOST"));
   EXPECT_EQ("file", parseUrl(fileUrl, "PROTOCOL"));
-  EXPECT_EQ("/C:/Users/x/AppData/Temp/%E4%BC%81.png",
-            parseUrl(fileUrl, "PATH"));
+  EXPECT_EQ(
+      "/C:/Users/x/AppData/Temp/%E4%BC%81.png", parseUrl(fileUrl, "PATH"));
   EXPECT_EQ(std::nullopt, parseUrl(fileUrl, "AUTHORITY"));
 
   EXPECT_EQ(std::nullopt, parseUrl("http:///p", "HOST"));
@@ -383,9 +374,11 @@ TEST_F(ParseUrlTest, javaAuthorityEdgeCases) {
   // Byte values that overflow a Java int fail the address in the JDK
   // (Integer.parseInt throws); the host falls back to registry form.
   EXPECT_EQ(std::nullopt, parseUrl("http://4294967296.0.0.1/", "HOST"));
-  EXPECT_EQ("4294967296.0.0.1", parseUrl("http://4294967296.0.0.1/", "AUTHORITY"));
+  EXPECT_EQ(
+      "4294967296.0.0.1", parseUrl("http://4294967296.0.0.1/", "AUTHORITY"));
   EXPECT_EQ(std::nullopt, parseUrl("http://99999999999.0.0.1/", "HOST"));
-  EXPECT_EQ("99999999999.0.0.1", parseUrl("http://99999999999.0.0.1/", "AUTHORITY"));
+  EXPECT_EQ(
+      "99999999999.0.0.1", parseUrl("http://99999999999.0.0.1/", "AUTHORITY"));
 
   // Userinfo handling.
   EXPECT_EQ("h", parseUrl("http://user@h/", "HOST"));
@@ -498,17 +491,20 @@ TEST_F(ParseUrlTest, queryKeyExtraction) {
   // A three-argument call with a part other than QUERY returns null.
   EXPECT_EQ(
       std::nullopt,
-      evaluateOnce<std::string>("parse_url(c0, 'HOST', c1)",
-                                std::optional<std::string>("http://h/p?a=1"),
-                                std::optional<std::string>("a")));
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'HOST', c1)",
+          std::optional<std::string>("http://h/p?a=1"),
+          std::optional<std::string>("a")));
   EXPECT_EQ(
       "1",
-      evaluateOnce<std::string>("parse_url(c0, 'QUERY', 'a')",
-                                std::optional<std::string>("http://h/p?a=1")));
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a')",
+          std::optional<std::string>("http://h/p?a=1")));
   EXPECT_EQ(
       std::nullopt,
-      evaluateOnce<std::string>("parse_url(c0, 'QUERY', 'b')",
-                                std::optional<std::string>("http://h/p?a=1")));
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'b')",
+          std::optional<std::string>("http://h/p?a=1")));
 }
 
 // Pins the non-constant key path: a per-row key column bypasses
@@ -540,8 +536,7 @@ TEST_F(ParseUrlTest, nonConstantKey) {
   // 'invalid key'. Spark fails both forms identically with
   // PatternSyntaxException, so silently returning null here would diverge.
   VELOX_ASSERT_THROW(
-      run({"http://h/p?a=1"}, {"a["}),
-      "invalid regular expression:");
+      run({"http://h/p?a=1"}, {"a["}), "invalid regular expression:");
 
   // A constant invalid key, pinned for symmetry with the case above.
   VELOX_ASSERT_THROW(
@@ -562,8 +557,7 @@ TEST_F(ParseUrlTest, nonConstantKey) {
     keyStrings[i] = fmt::format("k{}", i);
   }
   VELOX_ASSERT_THROW(
-      run(
-          {urlStrings.begin(), urlStrings.end()},
+      run({urlStrings.begin(), urlStrings.end()},
           {keyStrings.begin(), keyStrings.end()}),
       "Max number of regex reached");
 }
@@ -592,8 +586,7 @@ TEST_F(ParseUrlTest, nullArguments) {
 // Pins the '#'-before-'?' split: a '?' inside the fragment belongs to the
 // fragment and never introduces a query.
 TEST_F(ParseUrlTest, questionMarkInFragment) {
-  const auto parseUrl = [&](const std::string& url,
-                            const std::string& part) {
+  const auto parseUrl = [&](const std::string& url, const std::string& part) {
     return evaluateOnce<std::string>(
         fmt::format("parse_url(c0, '{}')", part),
         std::optional<std::string>(url));
@@ -666,8 +659,7 @@ TEST_F(ParseUrlTest, ipv6LiteralShapes) {
 // Pins that the host keeps its original casing (java.net.URI does not
 // lowercase) and that userinfo escapes pass through undecoded.
 TEST_F(ParseUrlTest, hostCaseAndUserInfoEscapes) {
-  const auto parseUrl = [&](const std::string& url,
-                            const std::string& part) {
+  const auto parseUrl = [&](const std::string& url, const std::string& part) {
     return evaluateOnce<std::string>(
         fmt::format("parse_url(c0, '{}')", part),
         std::optional<std::string>(url));
@@ -683,15 +675,12 @@ TEST_F(ParseUrlTest, hostCaseAndUserInfoEscapes) {
 // a stopper at index 40, inside the second chunk (bytes 32..63). All
 // expectations verified against Spark 3.5.1.
 TEST_F(ParseUrlTest, parseUrlLongComponents) {
-  const auto parseUrl = [&](const std::string& url,
-                            const std::string& part) {
+  const auto parseUrl = [&](const std::string& url, const std::string& part) {
     return evaluateOnce<std::string>(
         fmt::format("parse_url(c0, '{}')", part),
         std::optional<std::string>(url));
   };
-  const auto repeat = [](int count, char c) {
-    return std::string(count, c);
-  };
+  const auto repeat = [](int count, char c) { return std::string(count, c); };
   const auto repeatStr = [](std::string_view unit, int count) {
     std::string out;
     for (int i = 0; i < count; ++i) {
@@ -727,8 +716,7 @@ TEST_F(ParseUrlTest, parseUrlLongComponents) {
   EXPECT_EQ(
       "/" + repeat(40, 'p') + "中" + repeat(27, 'p'),
       parseUrl(cjkPathUrl, "PATH"));
-  const auto cjkQueryUrl =
-      "http://h/p?" + repeat(40, 'k') + "=美&x=1";
+  const auto cjkQueryUrl = "http://h/p?" + repeat(40, 'k') + "=美&x=1";
   EXPECT_EQ(repeat(40, 'k') + "=美&x=1", parseUrl(cjkQueryUrl, "QUERY"));
 }
 

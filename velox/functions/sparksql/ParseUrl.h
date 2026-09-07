@@ -117,9 +117,7 @@ struct ParseURLFunction {
   }
 
  private:
-  static void assignOutput(
-      out_type<Varchar>& output,
-      std::string_view value) {
+  static void assignOutput(out_type<Varchar>& output, std::string_view value) {
     output = StringView(value.data(), static_cast<int32_t>(value.size()));
   }
 
