@@ -166,6 +166,12 @@ enum class EncodingType {
   // decode time. Produced only by EncodingSliceFactory, never by encoding
   // selection.
   Slice = 23,
+  // Stores non-decreasing integer streams using Elias-Fano coding. This is
+  // suited to sparse sorted identifiers and offsets that need compact storage,
+  // positional access, and lower-bound search.
+  // EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  // without consulting the Nimble team (oncall: dwios).
+  EliasFano = 24,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.

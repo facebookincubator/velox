@@ -38,6 +38,8 @@ add_executable(
   ConstantEncodingTest.cpp
   DictionaryEncodingTest.cpp
   DictionaryEncodingViewTest.cpp
+  EliasFanoEncodingTest.cpp
+  EliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp

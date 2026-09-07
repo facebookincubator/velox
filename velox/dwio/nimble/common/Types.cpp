@@ -49,6 +49,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::DeltaBlock, "DeltaBlock"},
         {EncodingType::SharedDictionary, "SharedDictionary"},
         {EncodingType::Slice, "Slice"},
+        {EncodingType::EliasFano, "EliasFano"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({

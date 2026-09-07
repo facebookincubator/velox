@@ -24,6 +24,7 @@
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/EncodingSliceFactory.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
@@ -154,6 +155,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::DeltaBlock: {
       RETURN_ENCODING_BY_INTEGER_TYPE(DeltaBlockEncoding, dataType);
+    }
+    case EncodingType::EliasFano: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(EliasFanoEncoding, dataType);
     }
     case EncodingType::ALP: {
       switch (dataType) {
@@ -408,6 +412,15 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "DeltaBlock encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::EliasFano: {
+      if constexpr (isIntegralType<T>()) {
+        return EliasFanoEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "EliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::ALP: {

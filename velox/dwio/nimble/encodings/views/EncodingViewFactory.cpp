@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DictionaryEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/EliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/FOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/FixedBitWidthEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/HuffmanEncodingView.h"
@@ -98,6 +99,13 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "DeltaBlock encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::EliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return std::make_unique<EliasFanoEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "EliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::Huffman:
       if constexpr (
           isIntegralType<physicalType>() &&
@@ -170,6 +178,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::RLE,
       EncodingType::FOR,
       EncodingType::DeltaBlock,
+      EncodingType::EliasFano,
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,

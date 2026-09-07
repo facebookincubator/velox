@@ -62,6 +62,7 @@ void extractCompressionType(
     case EncodingType::Varint:
     case EncodingType::Delta:
     case EncodingType::DeltaBlock:
+    case EncodingType::EliasFano:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
@@ -136,6 +137,7 @@ void traverseEncodings(
     case EncodingType::Constant:
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
+    case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
     // SubIntSplit integration is disabled; treat it as having no nested
     // encoding to traverse.
