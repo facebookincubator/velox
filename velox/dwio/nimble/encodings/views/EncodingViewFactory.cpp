@@ -19,6 +19,7 @@
 #include <array>
 
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
@@ -130,6 +131,15 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::BitRangeSplit:
+      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return std::make_unique<BitRangeSplitEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::BlockBitPacking:
       if constexpr (isNumericType<physicalType>()) {
         return std::make_unique<BlockBitPackingEncodingView<T>>(
@@ -182,6 +192,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
+      EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking};
   return std::find(
              kViewableEncodings.begin(),

@@ -172,6 +172,11 @@ enum class EncodingType {
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   EliasFano = 24,
+  /// Splits 32- or 64-bit integers into configured, independently encoded
+  /// bit-range child streams inside one self-describing encoded chunk.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  BitRangeSplit = 25,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.

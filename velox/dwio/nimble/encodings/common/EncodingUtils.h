@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -194,6 +195,14 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
       NIMBLE_UNREACHABLE(
           "SimdForBitpack encoding only supports integral data types, got {}.",
+          encoding.dataType());
+    case EncodingType::BitRangeSplit:
+      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return f(static_cast<BitRangeSplitEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNREACHABLE(
+          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
           encoding.dataType());
     case EncodingType::Huffman:
       if constexpr (isIntegralType<T>()) {
