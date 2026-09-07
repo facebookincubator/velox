@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -181,6 +182,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::SimdForBitpack: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(SimdForBitpackEncoding, dataType);
+    }
+    case EncodingType::BitRangeSplit: {
+      RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
     }
     case EncodingType::Huffman: {
       RETURN_ENCODING_BY_INTEGER_TYPE(HuffmanEncoding, dataType);
@@ -455,6 +459,16 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::BitRangeSplit: {
+      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return BitRangeSplitEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::Huffman: {
