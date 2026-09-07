@@ -16,9 +16,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -46,6 +48,22 @@ DEFINE_uint32(
     rows,
     65'536,
     "Values per dataset; use --bm_regex to select cases.");
+DEFINE_bool(
+    profile,
+    false,
+    "Report repeated Release timings and encoded sizes.");
+DEFINE_string(
+    profile_filter,
+    "",
+    "Only profile dataset names containing this text.");
+DEFINE_uint32(
+    profile_trials,
+    5,
+    "Number of timed trials per profile operation.");
+DEFINE_uint32(
+    profile_min_ms,
+    10,
+    "Minimum calibrated duration per profile trial.");
 
 namespace {
 
@@ -60,6 +78,46 @@ using facebook::nimble::benchmarks::nullFactory;
 namespace alp = facebook::nimble::detail::alp;
 
 constexpr uint64_t kSeed = 0x51ED0FF1CEULL;
+constexpr uint32_t kSamplingChunks = 32;
+
+template <typename Function>
+void profileOperation(
+    const std::string& name,
+    std::string_view operation,
+    Function&& function) {
+  const auto timeIterations = [&](uint64_t iterations) {
+    const auto start = std::chrono::steady_clock::now();
+    for (uint64_t iteration = 0; iteration < iterations; ++iteration) {
+      function();
+    }
+    return std::chrono::duration<double, std::nano>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+  };
+
+  uint64_t iterations = 1;
+  while (timeIterations(iterations) < FLAGS_profile_min_ms * 1'000'000.0) {
+    CHECK_LE(iterations, std::numeric_limits<uint64_t>::max() / 2);
+    iterations *= 2;
+  }
+  std::vector<double> timings;
+  for (uint32_t trial = 0; trial < FLAGS_profile_trials; ++trial) {
+    timings.push_back(timeIterations(iterations) / iterations);
+  }
+  std::sort(timings.begin(), timings.end());
+  const auto middle = timings.size() / 2;
+  const double median = timings.size() % 2 == 0
+      ? (timings[middle - 1] + timings[middle]) / 2
+      : timings[middle];
+  fmt::print(
+      "PROFILE,{},{},{},{:.2f},{:.2f},{:.2f}\n",
+      name,
+      operation,
+      iterations,
+      median,
+      timings.front(),
+      timings.back());
+}
 
 template <typename FloatType, typename Generator>
 std::vector<FloatType> makeValues(Generator generator) {
@@ -106,6 +164,7 @@ class AlpBenchmarkFixture {
       uint8_t exponent)
       : values_{std::move(values)},
         physicals_(values_.size()),
+        sample_(Alp::estimateSampleSize(values_.size())),
         zigZag_(values_.size()),
         mask_(values_.size()),
         output_(values_.size()),
@@ -129,11 +188,13 @@ class AlpBenchmarkFixture {
     encoded_ = std::string{encode(buffer)};
     auto encoding =
         EncodingFactory{}.create(*benchmarkPool(), encoded_, nullFactory());
+    int selectedExponent = -1;
+    int selectedFactor = -1;
     if (encoding->encodingType() == EncodingType::ALP) {
       const char* position = encoded_.data() + encoding->dataOffset();
       const auto header = alp::readHeader(position);
-      CHECK_EQ(header.exponent, batchGrid.exponent);
-      CHECK_EQ(header.factor, batchGrid.factor);
+      selectedExponent = header.exponent;
+      selectedFactor = header.factor;
     }
 
     decode();
@@ -141,19 +202,30 @@ class AlpBenchmarkFixture {
       CHECK_EQ(alp::toPhysical<FloatType>(output_[row]), physicals_[row]);
     }
 
+    uint64_t encodedHash = 14695981039346656037ULL;
+    for (const unsigned char byte : encoded_) {
+      encodedHash = (encodedHash ^ byte) * 1099511628211ULL;
+    }
+    const auto estimatedBytes = Alp::estimateSize(physicals_);
+    CHECK(estimatedBytes.has_value());
     fmt::print(
         "{}: rows={} transform=({},0) exceptions={:.2f}% "
-        "grid=({},{}) encoding={} bytes={} encoded/raw={:.4f}\n",
+        "head-grid=({},{}) selected=({},{}) encoding={} bytes={} "
+        "estimated={} encoded/raw={:.4f} hash={:016x}\n",
         name,
         values_.size(),
         exponent_,
         100.0 * (values_.size() - scalarCount) / values_.size(),
         batchGrid.exponent,
         batchGrid.factor,
+        selectedExponent,
+        selectedFactor,
         facebook::nimble::toString(encoding->encodingType()),
         encoded_.size(),
+        *estimatedBytes,
         static_cast<double>(encoded_.size()) /
-            (values_.size() * sizeof(FloatType)));
+            (values_.size() * sizeof(FloatType)),
+        encodedHash);
   }
 
   template <bool useBatch>
@@ -183,6 +255,42 @@ class AlpBenchmarkFixture {
       }
     }
     return best;
+  }
+
+  template <bool chunked>
+  void gatherSample() {
+    const uint64_t rowCount = values_.size();
+    const uint32_t sampleSize = sample_.size();
+    if constexpr (chunked) {
+      if (sampleSize == rowCount) {
+        std::copy(physicals_.begin(), physicals_.end(), sample_.begin());
+        folly::doNotOptimizeAway(sample_.data());
+        return;
+      }
+      if (rowCount > kSamplingChunks && sampleSize > kSamplingChunks) {
+        const uint32_t chunkSize = sampleSize / kSamplingChunks;
+        uint32_t written = 0;
+        for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+          const auto start = chunk * rowCount / kSamplingChunks;
+          std::copy_n(
+              physicals_.data() + start, chunkSize, sample_.data() + written);
+          written += chunkSize;
+        }
+        while (written < sampleSize) {
+          sample_[written++] = physicals_.back();
+        }
+        folly::doNotOptimizeAway(sample_.data());
+        return;
+      }
+    }
+    for (uint32_t index = 0; index < sampleSize; ++index) {
+      sample_[index] = physicals_[index * rowCount / sampleSize];
+    }
+    folly::doNotOptimizeAway(sample_.data());
+  }
+
+  void estimate() const {
+    folly::doNotOptimizeAway(Alp::estimateSize(physicals_));
   }
 
   std::string_view encode(Buffer& buffer) const {
@@ -255,6 +363,7 @@ class AlpBenchmarkFixture {
 
   std::vector<FloatType> values_;
   std::vector<PhysicalType> physicals_;
+  std::vector<PhysicalType> sample_;
   std::vector<uint64_t> zigZag_;
   std::vector<uint8_t> mask_;
   std::vector<FloatType> output_;
@@ -269,8 +378,39 @@ void registerDataset(
     uint8_t exponent) {
   const auto name = fmt::format(
       "{}_{}", std::is_same_v<FloatType, float> ? "Float" : "Double", dataset);
+  if (FLAGS_profile && name.find(FLAGS_profile_filter) == std::string::npos) {
+    return;
+  }
   auto fixture = std::make_shared<AlpBenchmarkFixture<FloatType>>(
       name, std::move(values), exponent);
+
+  if (FLAGS_profile) {
+    profileOperation(name, "TransformScalar", [&] {
+      folly::doNotOptimizeAway(fixture->template runTransform<false>());
+    });
+    profileOperation(name, "TransformBatch", [&] {
+      folly::doNotOptimizeAway(fixture->template runTransform<true>());
+    });
+    profileOperation(name, "GridScalar", [&] {
+      folly::doNotOptimizeAway(fixture->template runGrid<false>());
+    });
+    profileOperation(name, "GridBatch", [&] {
+      folly::doNotOptimizeAway(fixture->template runGrid<true>());
+    });
+    profileOperation(name, "SamplingLegacy", [&] {
+      fixture->template gatherSample<false>();
+    });
+    profileOperation(name, "SamplingChunked", [&] {
+      fixture->template gatherSample<true>();
+    });
+    profileOperation(name, "Estimate", [&] { fixture->estimate(); });
+    profileOperation(name, "Encode", [&] {
+      Buffer buffer{*benchmarkPool()};
+      folly::doNotOptimizeAway(fixture->encode(buffer));
+    });
+    profileOperation(name, "Decode", [&] { fixture->decode(); });
+    return;
+  }
 
   folly::addBenchmark(
       __FILE__, fmt::format("TransformScalar_{}", name), [fixture] {
@@ -297,6 +437,20 @@ void registerDataset(
   });
   folly::addBenchmark(__FILE__, fmt::format("Decode_{}", name), [fixture] {
     fixture->decode();
+    return 1;
+  });
+  folly::addBenchmark(
+      __FILE__, fmt::format("SamplingLegacy_{}", name), [fixture] {
+        fixture->template gatherSample<false>();
+        return 1;
+      });
+  folly::addBenchmark(
+      __FILE__, fmt::format("%SamplingChunked_{}", name), [fixture] {
+        fixture->template gatherSample<true>();
+        return 1;
+      });
+  folly::addBenchmark(__FILE__, fmt::format("Estimate_{}", name), [fixture] {
+    fixture->estimate();
     return 1;
   });
 }
@@ -361,6 +515,23 @@ void registerDatasets() {
         return static_cast<FloatType>(chaotic(random));
       }),
       2);
+
+  auto headBiased = makeValues<FloatType>([&](auto& random) {
+    return static_cast<FloatType>(cents(random)) / static_cast<FloatType>(100);
+  });
+  const auto headSize = std::min<size_t>(1024, headBiased.size() / 4);
+  std::fill_n(headBiased.begin(), headSize, FloatType{1});
+  registerDataset("HeadBiased", std::move(headBiased), 2);
+
+  uint32_t row = 0;
+  registerDataset(
+      "SparseExceptions",
+      makeValues<FloatType>([&](auto& random) {
+        return row++ % 50 == 0
+            ? std::numeric_limits<FloatType>::infinity()
+            : FloatType{1'000'000} + static_cast<FloatType>(cents(random) % 16);
+      }),
+      0);
 }
 
 } // namespace
@@ -368,13 +539,18 @@ void registerDatasets() {
 int main(int argc, char** argv) {
   const folly::Init init{&argc, &argv};
   CHECK_GT(FLAGS_rows, 0);
+  CHECK_GT(FLAGS_profile_trials, 0);
+  CHECK_GT(FLAGS_profile_min_ms, 0);
   facebook::velox::memory::MemoryManager::initialize({});
   fmt::print(
       "Transform/encode/decode times are per {} rows; grid times are per "
-      "{}-value sample. Relative rows compare batch with scalar.\n",
+      "{}-value prefix sample. Relative rows compare batch with scalar "
+      "or chunked with legacy sampling.\n",
       FLAGS_rows,
       ALPEncoding<double>::estimateSampleSize(FLAGS_rows));
   registerDatasets<double>();
   registerDatasets<float>();
-  folly::runBenchmarks();
+  if (!FLAGS_profile) {
+    folly::runBenchmarks();
+  }
 }
