@@ -877,7 +877,7 @@ TEST_F(ArraySortTest, floatingPointExtremes) {
   testFloatingPoint<double>();
 }
 
-TEST_F(ArraySortTest, constant_desc_boolean) {
+TEST_F(ArraySortTest, constantDescBoolean) {
   auto data = makeRowVector({makeNullableArrayVector<bool>({
       {false, true, std::nullopt, false, true, false, false},
       {true, false, true, false, false, std::nullopt},

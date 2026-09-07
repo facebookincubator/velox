@@ -17,6 +17,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +27,7 @@
 #include <vector>
 
 #include <folly/container/F14Map.h>
+#include <folly/synchronization/CallOnce.h>
 
 #include <torch/nativert/executor/OpKernel.h>
 #include <torch/nativert/graph/Graph.h>
@@ -254,6 +256,15 @@ class WaveGraph {
     return nodes_;
   }
 
+  /// Runs 'build' the first time any execution of this graph asks for the
+  /// allocation-group plans, and never again. The plans are derived from the
+  /// compiled grids, so they are the same for every execution, but the mode
+  /// they serve is a runtime choice -- and concurrent executions of one graph
+  /// would otherwise each build and install their own.
+  void ensureAllocGroupPlans(const std::function<void()>& build) {
+    folly::call_once(allocGroupPlanOnce_, build);
+  }
+
   ValueTypes& types() {
     return types_;
   }
@@ -270,6 +281,15 @@ class WaveGraph {
   /// No TensorMeta is created for this value. The value is recorded in
   /// createdValueDtypes_ for later duplication.
   nativert::Value* newScalarValue(
+      nativert::Node* node,
+      std::string_view name,
+      c10::ScalarType dtype);
+
+  /// Like newScalarValue, but not recorded for duplication. For a scalar that
+  /// other nodes read: a recorded value is per-op scratch, and congruent nodes
+  /// share one ProjectOperation, so every invocation after the first is bound
+  /// to a private duplicate while the readers still name the original.
+  nativert::Value* newSharedScalarValue(
       nativert::Node* node,
       std::string_view name,
       c10::ScalarType dtype);
@@ -307,20 +327,13 @@ class WaveGraph {
     return idToValue_;
   }
 
-  /// Fills in missing attribute defaults from FunctionSchema and creates
-  /// multiKernelVariants_ for nodes that have one.
+  /// Fills in missing attribute defaults from FunctionSchema.
   void normalizeAndAnnotateGraph();
 
   /// Propagates constraints for the outputs of 'node' using the shared
   /// Optimizer instance. The optimizer's visited set ensures main-graph
   /// nodes are not re-traversed.
   void optimizeNode(const nativert::Node* node);
-
-  /// Returns the multikernel variant subgraph for 'node', or nullptr if none.
-  const Subgraph* multiKernelVariant(NodeCP node) const {
-    auto it = multiKernelVariants_.find(node);
-    return it != multiKernelVariants_.end() ? &it->second : nullptr;
-  }
 
   /// Returns a unique name by appending _NN to the given name.
   std::string uniqueName(std::string_view name) {
@@ -393,6 +406,21 @@ class WaveGraph {
     return elidedCloneInputIds_.count(id) != 0;
   }
 
+  /// Records that a concat group places 'id': it is either a concat result or
+  /// an operand carved out of one. Called at compile time from
+  /// installGraphAllocGroupPlans.
+  void addConcatPlaced(nativert::ValueId id) {
+    concatPlacedIds_.insert(id);
+  }
+
+  /// True if a concat group places 'id'. Such a value is a band of the concat
+  /// result and its producer writes the concat in place, so it must not be
+  /// given a buffer from anywhere else: doing so leaves the band unwritten and
+  /// the concat does not copy it in, having counted the operand as placed.
+  bool isConcatPlaced(nativert::ValueId id) const {
+    return concatPlacedIds_.count(id) != 0;
+  }
+
   /// Returns the ModelContext, or nullptr if none was provided.
   ModelContext* modelContext() const {
     return modelContext_;
@@ -451,11 +479,6 @@ class WaveGraph {
   // Placeholder node used by duplicateValue to attach new Values.
   nativert::Node* placeholderNode_{nullptr};
 
-  // For nodes that have a multikernel implementation, like multiblock
-  // reduction, this gives the subgraph to substitute for the Node when
-  // generating the multiblock case of a ProjectOperation.
-  std::unordered_map<NodeCP, Subgraph> multiKernelVariants_;
-
   // Counter for generating unique value names via uniqueName().
   int32_t nextValueId_{0};
 
@@ -505,10 +528,15 @@ class WaveGraph {
   // in place by the rewired writer, so they diverge from the reference frame by
   // design. Populated at compile time, read by the reference-frame checks.
   std::unordered_set<nativert::ValueId> elidedCloneInputIds_;
+  std::unordered_set<nativert::ValueId> concatPlacedIds_;
 
   // Alive during construction only. Retains visited set so multikernel
   // variant nodes reuse the main-graph pass.
   std::unique_ptr<Optimizer> optimizer_;
+
+  // Guards the one-time build of the allocation-group plans held by the
+  // CompiledNodes.
+  folly::once_flag allocGroupPlanOnce_;
 
   // Pool of reusable ExecutionState objects.
   std::mutex statePoolMutex_;

@@ -628,6 +628,19 @@ TEST_P(UnsafeRowSerializerTest, multiPage) {
   test::assertEqualVectors(deserialized, expected);
 }
 
+TEST_P(UnsafeRowSerializerTest, basicLarge) {
+#ifndef NDEBUG
+  constexpr vector_size_t kNumRows = 60'000;
+#else
+  constexpr vector_size_t kNumRows = 600'000;
+#endif
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](vector_size_t row) { return row; }),
+       makeFlatVector<std::string>(
+           kNumRows, [](vector_size_t) { return std::string(2048, 'x'); })});
+  testRoundTrip(std::move(rowVector));
+}
+
 VELOX_INSTANTIATE_TEST_SUITE_P(
     UnsafeRowSerializerTest,
     UnsafeRowSerializerTest,

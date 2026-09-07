@@ -15,8 +15,12 @@
  */
 #pragma once
 
+#include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::config {
@@ -26,36 +30,43 @@ class ConfigBase;
 namespace facebook::velox::filesystems {
 
 /// Build config required to initialize an S3FileSystem instance.
-/// All hive.s3 options can be set on a per-bucket basis.
-/// The bucket-specific option is set by replacing the hive.s3. prefix on an
-/// option with hive.s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the
-/// bucket.
+/// All s3 options can be set on a per-bucket basis.
+/// The bucket-specific option is set by replacing the s3. prefix on an option
+/// with s3.bucket.BUCKETNAME., where BUCKETNAME is the name of the bucket.
 /// When connecting to a bucket, all options explicitly set will override the
-/// base hive.s3. values.
+/// base s3. values.
 /// These semantics are similar to the Apache Hadoop-Aws module.
 /// https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html
+///
+/// The canonical config prefix is "s3." and is usable from any connector. The
+/// legacy "hive.s3." prefix is accepted as a deprecated fallback: a canonical
+/// key takes precedence over its "hive.s3." counterpart when both are set.
 class S3Config {
  public:
   S3Config() = delete;
 
   /// S3 config prefix.
-  static constexpr const char* kS3Prefix = "hive.s3.";
+  static constexpr const char* kS3Prefix = "s3.";
+
+  /// Deprecated S3 config prefix, accepted as a fallback for the canonical
+  /// kS3Prefix. Prefer kS3Prefix in new configurations.
+  static constexpr const char* kS3DeprecatedPrefix = "hive.s3.";
 
   /// S3 bucket config prefix
-  static constexpr const char* kS3BucketPrefix = "hive.s3.bucket.";
+  static constexpr const char* kS3BucketPrefix = "s3.bucket.";
 
   /// Log granularity of AWS C++ SDK.
-  static constexpr const char* kS3LogLevel = "hive.s3.log-level";
+  static constexpr const char* kS3LogLevel = "s3.log-level";
 
   /// Payload signing policy.
   static constexpr const char* kS3PayloadSigningPolicy =
-      "hive.s3.payload-signing-policy";
+      "s3.payload-signing-policy";
 
   /// S3FileSystem default identity.
   static constexpr const char* kDefaultS3Identity = "s3-default-identity";
 
   /// Log location of AWS C++ SDK.
-  static constexpr const char* kS3LogLocation = "hive.s3.log-location";
+  static constexpr const char* kS3LogLocation = "s3.log-location";
 
   /// Keys to identify the config.
   enum class Keys {
@@ -148,6 +159,14 @@ class S3Config {
            << configTraits().find(key)->second.first;
     return buffer.str();
   }
+
+  /// Returns the value for the canonical 'configKey', which must be prefixed
+  /// with kS3Prefix. When the canonical key is absent, falls back to the
+  /// deprecated kS3DeprecatedPrefix form. Returns std::nullopt when neither is
+  /// set.
+  static std::optional<std::string> configValue(
+      const config::ConfigBase& config,
+      std::string_view configKey);
 
   /// The S3 storage endpoint server. This can be used to connect to an
   /// S3-compatible storage system instead of AWS.

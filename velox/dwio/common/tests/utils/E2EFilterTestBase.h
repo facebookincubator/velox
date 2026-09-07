@@ -152,7 +152,7 @@ class E2EFilterTestBase : public testing::Test {
   static bool typeKindSupportsValueHook(TypeKind kind) {
     return kind != TypeKind::TIMESTAMP && kind != TypeKind::ARRAY &&
         kind != TypeKind::ROW && kind != TypeKind::MAP &&
-        kind != TypeKind::HUGEINT;
+        kind != TypeKind::HUGEINT && kind != TypeKind::UNKNOWN;
   }
 
   std::vector<RowVectorPtr> makeDataset(
@@ -428,7 +428,7 @@ class E2EFilterTestBase : public testing::Test {
   std::shared_ptr<const RowType> rowType_;
   std::string sinkData_;
   bool useVInts_ = true;
-  dwio::common::RuntimeStatistics runtimeStats_;
+  dwio::common::RuntimeStats runtimeStats_;
   // Number of calls to flush policy between starting new stripes.
   int32_t flushEveryNBatches_{10};
   int32_t nextReadSizeIndex_{0};

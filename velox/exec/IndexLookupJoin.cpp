@@ -35,31 +35,6 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec {
 using IndexSource = connector::IndexSource;
 
-void IndexLookupJoin::IndexStatWriter::addRuntimeStat(
-    std::string_view name,
-    const RuntimeCounter& value) {
-  auto lockedStats = runtimeStats_.wlock();
-  auto it = lockedStats->find(std::string(name));
-  if (it != lockedStats->end()) {
-    it->second.addValue(value.value);
-  } else {
-    RuntimeMetric metric(value.unit);
-    metric.addValue(value.value);
-    lockedStats->emplace(std::string(name), std::move(metric));
-  }
-}
-
-void IndexLookupJoin::IndexStatWriter::setRuntimeStat(
-    std::string_view name,
-    const RuntimeMetric& metric) {
-  runtimeStats_.wlock()->insert_or_assign(std::string(name), metric);
-}
-
-std::unordered_map<std::string, RuntimeMetric>
-IndexLookupJoin::IndexStatWriter::runtimeStats() const {
-  return *runtimeStats_.rlock();
-}
-
 namespace {
 
 void duplicateJoinKeyCheck(
@@ -229,7 +204,7 @@ int64_t extractStatSum(
 std::vector<OperatorStats> IndexLookupJoin::splitStats(
     const OperatorStats& combinedStats,
     const core::PlanNodeId& indexSourceNodeId,
-    const IndexStatWriter& indexSourceStatWriter) {
+    const ConcurrentRuntimeStatWriter& indexSourceStatWriter) {
   // Create stats for the IndexSource node from the accumulated index source
   // runtime stats.
   OperatorStats indexSourceStats;
@@ -342,7 +317,7 @@ IndexLookupJoin::IndexLookupJoin(
           1 + driverCtx->queryConfig().indexLookupJoinMaxPrefetchBatches()),
       isIndexSplitCollector_{driverCtx->partitionId == 0},
       joinNode_{joinNode},
-      indexStatWriter_(std::make_shared<IndexStatWriter>()) {
+      indexStatWriter_(std::make_shared<ConcurrentRuntimeStatWriter>()) {
   duplicateJoinKeyCheck(joinNode_->leftKeys());
   duplicateJoinKeyCheck(joinNode_->rightKeys());
 
@@ -1126,32 +1101,21 @@ void IndexLookupJoin::recordIndexSourceInputStats(
   if (batch.lookupInput == nullptr || batch.lookupInput->size() == 0) {
     return;
   }
-  indexStatWriter_->addRuntimeStat(
-      "inputPositions",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupInput->size()),
-          RuntimeCounter::Unit::kNone));
-  indexStatWriter_->addRuntimeStat(
+  indexStatWriter_->addCount(
+      "inputPositions", static_cast<int64_t>(batch.lookupInput->size()));
+  indexStatWriter_->addBytes(
       "inputBytes",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupInput->estimateFlatSize()),
-          RuntimeCounter::Unit::kBytes));
+      static_cast<int64_t>(batch.lookupInput->estimateFlatSize()));
 }
 
 void IndexLookupJoin::recordIndexSourceOutputStats(
     const InputBatchState& batch) {
-  indexStatWriter_->addRuntimeStat(
-      "outputPositions",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupResult->size()),
-          RuntimeCounter::Unit::kNone));
-  indexStatWriter_->addRuntimeStat(
+  indexStatWriter_->addCount(
+      "outputPositions", static_cast<int64_t>(batch.lookupResult->size()));
+  indexStatWriter_->addBytes(
       "outputBytes",
-      RuntimeCounter(
-          static_cast<int64_t>(batch.lookupResult->output->estimateFlatSize()),
-          RuntimeCounter::Unit::kBytes));
-  indexStatWriter_->addRuntimeStat(
-      "outputVectors", RuntimeCounter(1, RuntimeCounter::Unit::kNone));
+      static_cast<int64_t>(batch.lookupResult->output->estimateFlatSize()));
+  indexStatWriter_->addCount("outputVectors", 1);
 }
 
 void IndexLookupJoin::prepareLookupResult(InputBatchState& batch) {
@@ -1697,27 +1661,21 @@ void IndexLookupJoin::recordConnectorStats() {
   if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
     const auto& lookupWallTime =
         connectorStats[std::string(kConnectorLookupWallTime)];
-    indexStatWriter_->addRuntimeStat(
-        "lookupCount",
-        RuntimeCounter(
-            static_cast<int64_t>(lookupWallTime.count),
-            RuntimeCounter::Unit::kNone));
-    indexStatWriter_->addRuntimeStat(
+    indexStatWriter_->addCount(
+        "lookupCount", static_cast<int64_t>(lookupWallTime.count));
+    indexStatWriter_->addTiming(
         "lookupWallNanos",
-        RuntimeCounter(
-            static_cast<int64_t>(lookupWallTime.sum),
-            RuntimeCounter::Unit::kNanos));
+        std::chrono::nanoseconds(static_cast<int64_t>(lookupWallTime.sum)));
     // NOTE: lookupCpuNanos may undercount CPU consumed on prefetch worker
     // threads or async I/O completion handlers, since CpuWallTimer measures
     // CPU on the calling thread only.
-    indexStatWriter_->addRuntimeStat(
+    indexStatWriter_->addTiming(
         "lookupCpuNanos",
-        RuntimeCounter(
+        std::chrono::nanoseconds(
             static_cast<int64_t>(
                 connectorStats[std::string(kConnectorResultPrepareTime)].sum +
                 connectorStats[std::string(kClientRequestProcessTime)].sum +
-                connectorStats[std::string(kClientResultProcessTime)].sum),
-            RuntimeCounter::Unit::kNanos));
+                connectorStats[std::string(kClientResultProcessTime)].sum)));
   }
   // Copy index source stats into the operator's own runtimeStats so they are
   // visible through the task-level runtime stats path.

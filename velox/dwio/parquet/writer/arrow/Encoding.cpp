@@ -663,16 +663,30 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
   template <typename ArrayType>
   void putBinaryDictionaryArray(const ArrayType& array) {
     VELOX_DCHECK_EQ(array.null_count(), 0);
+    auto onFound = [](int32_t memoIndex) {};
     for (int64_t i = 0; i < array.length(); i++) {
       auto v = array.GetView(i);
       if (ARROW_PREDICT_FALSE(v.size() > kMaxByteArraySize)) {
         throw ParquetException(
             "Parquet cannot store strings with size 2GB or more");
       }
-      dictEncodedSize_ += static_cast<int>(v.size() + sizeof(uint32_t));
+      // Only charge the dictionary size for distinct values. The dictionary
+      // alphabet may contain duplicates; charging every element (rather than
+      // only newly inserted ones) over-counts dictEncodedSize_ relative to the
+      // de-duplicated entries actually serialized by writeDict(). That mismatch
+      // sizes the flushed dictionary page from the inflated count, leaving
+      // trailing uninitialized bytes and tripping the reader's
+      // exact-consumption check in PageReader::prepareDictionary.
+      auto onNotFound = [this, &v](int32_t memoIndex) {
+        dictEncodedSize_ += static_cast<int>(v.size() + sizeof(uint32_t));
+      };
       int32_t unusedMemoIndex;
       PARQUET_THROW_NOT_OK(memoTable_.getOrInsert(
-          v.data(), static_cast<int32_t>(v.size()), &unusedMemoIndex));
+          v.data(),
+          static_cast<int32_t>(v.size()),
+          onFound,
+          onNotFound,
+          &unusedMemoIndex));
     }
   }
 

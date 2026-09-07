@@ -17,6 +17,7 @@
 #pragma once
 
 #include <deque>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -36,6 +37,8 @@ namespace torch::wave {
 
 class CompileCtx;
 class OpInvocation;
+// Defined in Cat.h, which includes this file.
+struct ConcatLayout;
 
 enum Listing { kExprs = 0, kGrids };
 
@@ -143,6 +146,14 @@ struct OutputDesc {
   SizeExpr sizeExpr;
 
   bool isList{false};
+
+  /// Set on the result of a fused aten.cat / aten.stack: the operands in join
+  /// order and the geometry of the join, which is what lets the
+  /// allocation-group pass place the whole result before any operand is
+  /// produced and hand each operand the region it writes. Held by shared
+  /// pointer because a descriptor is copied per launch and the operand list is
+  /// not small; null for every other output.
+  std::shared_ptr<const ConcatLayout> concatLayout;
 };
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src);
@@ -375,6 +386,19 @@ class KernelOperation {
     return alwaysSingleBlock_;
   }
 
+  /// Bytes of dynamic shared memory this op needs, i.e. the max over its
+  /// nodes' Metadata::dynamicSharedMemory. A launch passes the max over its
+  /// ops as the kernel's dynamic shared memory size.
+  int64_t dynamicSharedBytes() const {
+    return dynamicSharedBytes_;
+  }
+
+  /// Blocks per SM this op wants the containing kernel compiled for, i.e. the
+  /// max over its nodes' Metadata::minBlocksPerSm. Zero means no constraint.
+  int32_t minBlocksPerSm() const {
+    return minBlocksPerSm_;
+  }
+
   void setAlwaysSingleBlock(bool value) {
     alwaysSingleBlock_ = value;
   }
@@ -407,6 +431,15 @@ class KernelOperation {
 
   const std::unordered_set<nativert::ValueId>& orderingOutputs() const {
     return orderingOutputs_;
+  }
+
+  /// Declares that this op writes 'id' even though no node of its own produces
+  /// it. Used by a concat whose operands are filled by ops of their own: each
+  /// operand's op writes its band of the concat result, so anything reading the
+  /// result has to be ordered after all of them. setCode() derives the ordering
+  /// sets from the op's nodes and would not see that.
+  void addOrderingOutput(nativert::ValueId id) {
+    orderingOutputs_.insert(id);
   }
 
   /// Hash for (Node*, attrName) pairs used as keys in attrOffsets_.
@@ -520,6 +553,12 @@ class KernelOperation {
 
   // True if any node in the subgraph has alwaysSingleBlock set in its metadata.
   bool alwaysSingleBlock_{false};
+
+  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph.
+  int64_t dynamicSharedBytes_{0};
+
+  // Max Metadata::minBlocksPerSm over the nodes in the subgraph.
+  int32_t minBlocksPerSm_{0};
 
   // True if this kernel is present in both grid_ and singleBlockGrid_ (both
   // grids have a kernel at the corresponding position).

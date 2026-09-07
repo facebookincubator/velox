@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/TrackedExecutor.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 
 #include <folly/BenchmarkUtil.h>
 #include <folly/executors/InlineExecutor.h>
@@ -22,7 +23,6 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
-#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -31,33 +31,9 @@
 namespace facebook::velox {
 namespace {
 
-// Captures the metrics that TrackedExecutor::reportTo writes so the test can
-// inspect them by name.
-class MapStatWriter : public BaseRuntimeStatWriter {
- public:
-  void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
-      override {
-    metrics_.insert_or_assign(std::string{name}, metric);
-  }
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    auto [it, inserted] =
-        metrics_.try_emplace(std::string{name}, RuntimeMetric(value.unit));
-    it->second.addValue(value.value);
-  }
-
-  const std::map<std::string, RuntimeMetric>& metrics() const {
-    return metrics_;
-  }
-
- private:
-  std::map<std::string, RuntimeMetric> metrics_;
-};
-
 class TrackedExecutorTest : public testing::Test {};
 
-TEST_F(TrackedExecutorTest, reportsPerCallbackMetricsUnderPrefix) {
+TEST_F(TrackedExecutorTest, reportsOneSamplePerCallback) {
   // Run callbacks inline so the per-metric counts are deterministic.
   TrackedExecutor tracked{
       folly::getKeepAliveToken(folly::InlineExecutor::instance())};
@@ -74,20 +50,20 @@ TEST_F(TrackedExecutorTest, reportsPerCallbackMetricsUnderPrefix) {
     });
   }
 
-  MapStatWriter writer;
-  tracked.reportTo(writer, "myOp");
-  const auto& metrics = writer.metrics();
+  ConcurrentRuntimeStatWriter writer;
+  tracked.reportTo(writer);
+  const auto metrics = writer.runtimeStats();
 
   ASSERT_THAT(
       metrics,
       testing::UnorderedElementsAre(
-          testing::Key("myOp-executorWaitNanos"),
-          testing::Key("myOp-executorExecutionWallNanos"),
-          testing::Key("myOp-executorExecutionCpuNanos")));
+          testing::Key("executorWaitNanos"),
+          testing::Key("executorExecutionWallNanos"),
+          testing::Key("executorExecutionCpuNanos")));
 
-  const auto& wait = metrics.at("myOp-executorWaitNanos");
-  const auto& wall = metrics.at("myOp-executorExecutionWallNanos");
-  const auto& cpu = metrics.at("myOp-executorExecutionCpuNanos");
+  const auto& wait = metrics.at("executorWaitNanos");
+  const auto& wall = metrics.at("executorExecutionWallNanos");
+  const auto& cpu = metrics.at("executorExecutionCpuNanos");
 
   // Every scheduled callback contributes one sample to each metric.
   EXPECT_EQ(wait.count, kNumTasks);
@@ -117,13 +93,13 @@ TEST_F(TrackedExecutorTest, keepsMetricCountsAlignedWhenCallbackThrows) {
       }),
       std::runtime_error);
 
-  MapStatWriter writer;
-  tracked.reportTo(writer, "op");
-  const auto& metrics = writer.metrics();
+  ConcurrentRuntimeStatWriter writer;
+  tracked.reportTo(writer);
+  const auto metrics = writer.runtimeStats();
 
-  EXPECT_EQ(metrics.at("op-executorWaitNanos").count, 1);
-  EXPECT_EQ(metrics.at("op-executorExecutionWallNanos").count, 1);
-  EXPECT_EQ(metrics.at("op-executorExecutionCpuNanos").count, 1);
+  EXPECT_EQ(metrics.at("executorWaitNanos").count, 1);
+  EXPECT_EQ(metrics.at("executorExecutionWallNanos").count, 1);
+  EXPECT_EQ(metrics.at("executorExecutionCpuNanos").count, 1);
 }
 
 } // namespace

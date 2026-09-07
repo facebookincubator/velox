@@ -36,7 +36,7 @@ using TestTypes = ::testing::Types<int, unsigned, long long, unsigned long long,
 
 TYPED_TEST_SUITE(FunctionTest, TestTypes);
 
-TYPED_TEST(FunctionTest, ScanAdd) {
+TYPED_TEST(FunctionTest, scanAdd) {
   TypeParam src[] = {1, 6,  22, 8,  2,  3, 11, 5,  13, 9, 0,  16, 18,
                      7, 10, 4,  14, 0,  4, 21, 4,  7,  5, 10, 8,  20,
                      9, 6,  22, 30, 1,  3, 8,  12, 25, 9, 10, 25, 6,
@@ -59,7 +59,7 @@ TYPED_TEST(FunctionTest, ScanAdd) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, ScanAddOneItemPerThread) {
+TYPED_TEST(FunctionTest, scanAddOneItemPerThread) {
   TypeParam src[] = {1, 6,  22, 8,  2,  3, 11, 5,  13, 9, 0,  16, 18,
                      7, 10, 4,  14, 0,  4, 21, 4,  7,  5, 10, 8,  20,
                      9, 6,  22, 30, 1,  3, 8,  12, 25, 9, 10, 25, 6,
@@ -82,7 +82,7 @@ TYPED_TEST(FunctionTest, ScanAddOneItemPerThread) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, ScanAddHalfBlock) {
+TYPED_TEST(FunctionTest, scanAddHalfBlock) {
   TypeParam src[] = {1,  6, 22, 8,  2, 3, 11, 5,  13, 9,  0, 16, 18, 7,  10, 4,
                      14, 0, 4,  21, 4, 7, 5,  10, 8,  20, 9, 6,  22, 30, 1,  3};
 
@@ -100,7 +100,7 @@ TYPED_TEST(FunctionTest, ScanAddHalfBlock) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, ScanAddFew) {
+TYPED_TEST(FunctionTest, scanAddFew) {
   TypeParam src[] = {5, 0, 4, 2, 7, 9};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -114,7 +114,7 @@ TYPED_TEST(FunctionTest, ScanAddFew) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, ScanAddLowerHalfBitsSet) {
+TYPED_TEST(FunctionTest, scanAddLowerHalfBitsSet) {
   TypeParam lower_half_bits_set = (1llu << sizeof(TypeParam) * 4) - 1;
   std::vector<TypeParam> in(32, lower_half_bits_set);
   std::vector<TypeParam> out(in.size(), 0);

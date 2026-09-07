@@ -279,7 +279,7 @@ void testEncodingIter(
 }
 } // namespace
 
-TEST(TestEncodingManager, EncodingIter) {
+TEST(TestEncodingManager, encodingIter) {
   testEncodingIter({{1, 0}}, {});
   testEncodingIter({}, {{{1, 0}}});
   testEncodingIter({{1, 0}}, {{{2, 1}, {2, 3}}});

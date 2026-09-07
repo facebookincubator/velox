@@ -50,7 +50,7 @@ class WriterSinkTest : public Test {
   std::array<char, 1024> data;
 };
 
-TEST_F(WriterSinkTest, Checksum) {
+TEST_F(WriterSinkTest, checksum) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024 + 3, {.pool = pool.get()}};
   Config config;
@@ -93,7 +93,7 @@ TEST_F(WriterSinkTest, Checksum) {
   ASSERT_EQ(sink.size(), out.size() - offset);
 }
 
-TEST_F(WriterSinkTest, NoChecksum) {
+TEST_F(WriterSinkTest, noChecksum) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024 + 3, {.pool = pool.get()}};
   Config config;
@@ -110,7 +110,7 @@ TEST_F(WriterSinkTest, NoChecksum) {
   checkOutput(out, offset);
 }
 
-TEST_F(WriterSinkTest, NoCache) {
+TEST_F(WriterSinkTest, noCache) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;
@@ -135,7 +135,7 @@ TEST_F(WriterSinkTest, NoCache) {
   ASSERT_EQ(out.size() - offset, 512);
 }
 
-TEST_F(WriterSinkTest, CacheIndex) {
+TEST_F(WriterSinkTest, cacheIndex) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;
@@ -178,7 +178,7 @@ TEST_F(WriterSinkTest, CacheIndex) {
       std::string(out.data() + offset, 128));
 }
 
-TEST_F(WriterSinkTest, CacheFooter) {
+TEST_F(WriterSinkTest, cacheFooter) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;
@@ -221,7 +221,7 @@ TEST_F(WriterSinkTest, CacheFooter) {
       std::string(out.data() + offset + 384, 128));
 }
 
-TEST_F(WriterSinkTest, CacheBothEmptyIndex) {
+TEST_F(WriterSinkTest, cacheBothEmptyIndex) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;
@@ -250,7 +250,7 @@ TEST_F(WriterSinkTest, CacheBothEmptyIndex) {
   ASSERT_EQ(sink.getCacheSize(), 128);
 }
 
-TEST_F(WriterSinkTest, CacheBoth) {
+TEST_F(WriterSinkTest, cacheBoth) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;
@@ -299,7 +299,7 @@ TEST_F(WriterSinkTest, CacheBoth) {
       std::string(out.data() + offset + 512, 128));
 }
 
-TEST_F(WriterSinkTest, CacheExceedsLimit) {
+TEST_F(WriterSinkTest, cacheExceedsLimit) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;
@@ -427,7 +427,7 @@ TEST_F(WriterSinkTest, CacheExceedsLimit) {
   }
 }
 
-TEST_F(WriterSinkTest, CacheLarge) {
+TEST_F(WriterSinkTest, cacheLarge) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{10 * 1024 * 1024 + 3, {.pool = pool.get()}};
   Config config;
@@ -454,7 +454,7 @@ TEST_F(WriterSinkTest, CacheLarge) {
   ASSERT_EQ(out.size() - offset, total * 2);
 }
 
-TEST_F(WriterSinkTest, SetModeOutOfOrder) {
+TEST_F(WriterSinkTest, setModeOutOfOrder) {
   auto pool = memoryManager()->addLeafPool();
   MemorySink out{1024, {.pool = pool.get()}};
   Config config;

@@ -123,6 +123,25 @@ class ParquetConfig {
       std::string_view,
       "1024",
       "Write batch size for the Parquet writer.")
+  VELOX_FORMAT_CONFIG_PROPERTY(
+      kWriterEnablePageIndexSession,
+      kWriterEnablePageIndex,
+      "writer_enable_page_index",
+      "writer.enable-page-index",
+      bool,
+      false,
+      "Write the Parquet page index (column index and offset index) in the "
+      "Parquet writer. When enabled, per-page statistics are stored in the "
+      "page index instead of the data page headers.")
+  VELOX_FORMAT_CONFIG_PROPERTY(
+      kWriterRowGroupSizeSession,
+      kWriterRowGroupSize,
+      "writer_row_group_size",
+      "writer.row-group-size",
+      std::string_view,
+      "128MB",
+      "Soft target for the serialized row group size in bytes for the Parquet "
+      "writer.")
   static constexpr std::string_view kWriterCreatedBy = "writer.created-by";
 
   // Writer config accessors expect format-scoped configs. Connector prefixes
@@ -183,6 +202,20 @@ class ParquetConfig {
         kWriterBatchSizeSession, connectorConfig, kWriterBatchSize);
   }
 
+  static std::optional<std::string> writerEnablePageIndex(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterEnablePageIndexSession, connectorConfig, kWriterEnablePageIndex);
+  }
+
+  static std::optional<std::string> writerRowGroupSize(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterRowGroupSizeSession, connectorConfig, kWriterRowGroupSize);
+  }
+
   static std::optional<std::string> writerCreatedBy(
       const config::ConfigBase& connectorConfig) {
     return connectorConfig.get<std::string>(std::string(kWriterCreatedBy));
@@ -226,6 +259,10 @@ class ParquetConfig {
         properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<kWriterBatchSizeSessionProperty>(
         properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kWriterEnablePageIndexSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kWriterRowGroupSizeSessionProperty>(properties, sessionPrefix);
   }
 };
 

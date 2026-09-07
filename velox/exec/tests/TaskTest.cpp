@@ -16,6 +16,7 @@
 
 #include "velox/exec/Task.h"
 #include "folly/OperationCancelled.h"
+#include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -518,6 +519,29 @@ class TestShouldYieldOperator : public exec::Operator {
 
 class TaskTest : public HiveConnectorTestBase {
  protected:
+  std::shared_ptr<Task> createTaskWithSpillDirectory(
+      const std::string& spillDirectory) {
+    auto data = makeRowVector({makeFlatVector<int32_t>({1})});
+    return Task::create(
+        "spill-directory-lifecycle",
+        PlanBuilder().values({data}).planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](RowVectorPtr, bool, ContinueFuture*) {
+          return BlockingReason::kNotBlocked;
+        },
+        0,
+        common::SpillDiskOptions{
+            .spillDirPath = spillDirectory,
+            .spillDirCreated = false,
+            .spillDirCreateCb = [spillDirectory]() {
+              auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+              fs->mkdir(spillDirectory);
+              return spillDirectory;
+            }});
+  }
+
   static std::pair<std::shared_ptr<exec::Task>, std::vector<RowVectorPtr>>
   executeSerial(
       core::PlanFragment plan,
@@ -2248,9 +2272,9 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
-TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
-  // Marks the spill directory as not already created and ensures that the Task
-  // handles creating it on first use and eventually deleting it on destruction.
+DEBUG_ONLY_TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
+  // Verifies that the Task creates the spill directory on first use and
+  // removes it after successful completion once all drivers close.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
@@ -2275,6 +2299,11 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
 
   auto cursor = TaskCursor::create(params);
   std::shared_ptr<Task> task = cursor->task();
+  folly::Baton<> spillDirectoryRemoved;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::removeSpillDirectoryIfExists",
+      std::function<void(Task*)>(
+          [&](Task* /* unused */) { spillDirectoryRemoved.post(); }));
 
   TestScopedSpillInjection scopedSpillInjection(100);
   while (cursor->moveNext()) {
@@ -2284,8 +2313,26 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
   auto taskStats = exec::toPlanStats(task->taskStats());
   auto& stats = taskStats.at(aggrNodeId);
   ASSERT_GT(stats.spilledRows, 0);
+  const auto spillDirectory = task->spillDirectory();
+  auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+  ASSERT_TRUE(spillDirectoryRemoved.try_wait_for(std::chrono::seconds(5)));
+  EXPECT_FALSE(fs->exists(spillDirectory));
   cursor.reset(); // ensure 'task' has no other shared pointer.
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
+TEST_F(TaskTest, spillDirectoryCleanupOnTaskDestruction) {
+  const auto rootTempDir = TempDirectoryPath::create();
+  const auto spillDirectory = rootTempDir->getPath() + "/spill";
+  auto task = createTaskWithSpillDirectory(spillDirectory);
+  ASSERT_EQ(task->getOrCreateSpillDirectory(), spillDirectory);
+
+  task->requestCancel().wait();
+
+  auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+  EXPECT_TRUE(fs->exists(spillDirectory));
+  task.reset();
+  EXPECT_FALSE(fs->exists(spillDirectory));
 }
 
 TEST_F(TaskTest, spillDirNotCreated) {

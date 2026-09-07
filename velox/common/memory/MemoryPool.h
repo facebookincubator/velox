@@ -147,7 +147,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If true, tracks the leaf memory pool usage in a thread-safe mode
     /// otherwise not. This only applies for leaf memory pool with memory usage
-    /// tracking enabled. We use non-thread safe tracking mode for single
+    /// tracking enabled. We use non-thread-safe tracking mode for single
     /// threaded use case.
     ///
     /// NOTE: user can turn on/off the thread-safe mode of each individual leaf
@@ -218,8 +218,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     return trackUsage_;
   }
 
-  /// Returns true if this memory pools is thread safe which only applies for a
-  /// leaf memory pool with memory usage tracking enabled.
+  /// Returns true if this memory pool is thread-safe. Only a leaf memory pool
+  /// with memory usage tracking enabled can be non-thread-safe (see
+  /// Options::threadSafe). Aggregate memory pools, including the root, are
+  /// always thread-safe.
   virtual bool threadSafe() const {
     return threadSafe_;
   }
@@ -240,6 +242,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Invoked to create a named aggregate child memory pool.
+  ///
+  /// Unlike a leaf child, an aggregate child is always thread-safe and has no
+  /// 'threadSafe' option, as its leaf descendants may update it concurrently.
   ///
   /// NOTE: 'reclaimer' only applies if the aggregate memory pool has enabled
   /// memory usage tracking which inherits from its parent.
@@ -909,6 +914,10 @@ class MemoryPoolImpl : public MemoryPool {
   // if max capacity is exceeded or arbitration fails.
   void incrementReservationThreadSafe(MemoryPool* requestor, uint64_t size);
 
+  // Increments the reservation for a non-thread-safe leaf pool. Even though
+  // this leaf skips its own locking, it propagates the increment to the parent
+  // via the thread-safe path, because the aggregate ancestors are shared by
+  // other leaves and updated concurrently.
   FOLLY_ALWAYS_INLINE void incrementReservationNonThreadSafe(
       MemoryPool* requestor,
       uint64_t size) {

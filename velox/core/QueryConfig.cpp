@@ -150,6 +150,8 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeDynamicFilterPushdownEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeStringDynamicFilterPushdownEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeBloomFilterPushdownMaxSize);
+    VELOX_REGISTER_QUERY_CONFIG(kBypassHashProbeBloomFilterMinRows);
+    VELOX_REGISTER_QUERY_CONFIG(kBypassHashProbeBloomFilterMinPct);
     VELOX_REGISTER_QUERY_CONFIG(kMinTableRowsForParallelJoinBuild);
 
     // Debug and validation.

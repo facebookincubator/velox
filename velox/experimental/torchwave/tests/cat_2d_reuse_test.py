@@ -20,8 +20,8 @@ class Cat2dReuseTest(nn.Module):
     """Two same-shape 2D cats on different inputs.
 
     The two cats have identical tree shape, so the second one reuses the
-    standalone-cat ProjectOperation built for the first, exercising the
-    reuse/multi-invocation binding path.
+    ProjectOperation built for the first, exercising the reuse/multi-invocation
+    binding path.
 
     Inputs: a, c (100x50), b, d (100x30).
     Outputs:

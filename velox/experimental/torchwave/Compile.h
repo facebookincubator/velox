@@ -206,11 +206,30 @@ class CompileCtx {
 
   void emitCode(std::string_view text);
 
+  /// Appends text at translation-unit scope, ahead of the kernel function and
+  /// inside namespace torch::wave. For an op that codegens something its own
+  /// call names -- a type, a constant table -- rather than passes as data.
+  void emitHelperCode(std::string_view text);
+
+  /// A number unique within this translation unit, for naming what
+  /// emitHelperCode declares. Two congruent nodes share one KernelOperation
+  /// and so ask once, but two different ones may want the same declaration
+  /// under different names.
+  int32_t nextHelperId() {
+    return helperId_++;
+  }
+
   void emitBarrier();
 
   /// Returns true if 'node' reads any input whose producer ran earlier in the
   /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
+
+  /// Returns true if reading 'operand' from memory needs a barrier first:
+  /// something earlier in this same kernel writes the storage it names and no
+  /// barrier has separated the two. 'consumer' is the node about to read it,
+  /// which is not counted as a writer of its own input.
+  bool valueNeedsBarrier(ValueCP operand, NodeCP consumer);
 
   void addInclude(std::string_view header);
 
@@ -282,6 +301,27 @@ class CompileCtx {
 
   void pushdownFused(NodeCP node);
 
+  /// Ends the kernel of every op in 'value's producer chain whose output extent
+  /// is computed on device, so the extent is read back to the host before the
+  /// consuming launch sizes its outputs. Used for a rank > 1 cat / stack, which
+  /// must know every operand's shape on the host to lay the result out.
+  void breakDeviceSizedProducers(ValueCP value);
+
+  /// Places 'producer' and its own inputs, then emits 'producer' as its own
+  /// kernel launch so a consumer reads its output as a materialized border
+  /// across a kernel boundary. Used where the whole of 'producer's output must
+  /// be visible before the consumer runs, but an in-kernel barrier (which
+  /// forces a cooperative, whole-grid-resident launch) is undesirable.
+  void breakProducerIntoOwnKernel(NodeCP producer);
+
+  /// Emits the expression that computes one concat operand as its own kernel
+  /// launch, so it is sized by that operand and gets its own share of the grid
+  /// instead of running as one link in a chain of copies inside the concat's
+  /// kernel. Every op the pushdown creates is declared to write
+  /// 'concatOutput', which is what orders a reader of the concat result after
+  /// all of the operands that fill it.
+  void breakConcatOperandIntoOwnKernel(ValueCP operand, ValueCP concatOutput);
+
   std::unique_ptr<KernelOperation> generateFused(const Subgraph& sg);
 
   void generateFusedInner(const Subgraph& sg);
@@ -301,6 +341,19 @@ class CompileCtx {
 
   KernelOperation* generatingOp() const {
     return generatingOp_;
+  }
+
+  /// The single concat operand this op fills, or -1 when the op is the whole
+  /// concat. Set while generating one of the per-operand ops that
+  /// parallelConcatFill splits a wide cat / stack into: the special form then
+  /// emits the write for that operand alone instead of walking every operand in
+  /// one body, which is what keeps each op's parameters to just its own source.
+  int32_t concatOperandIndex() const {
+    return concatOperandIndex_;
+  }
+
+  void setConcatOperandIndex(int32_t index) {
+    concatOperandIndex_ = index;
   }
 
   void markPlaced(NodeCP node) {
@@ -436,6 +489,9 @@ class CompileCtx {
   // The KernelOperation for which code is being generated.
   KernelOperation* generatingOp_{nullptr};
 
+  // See concatOperandIndex().
+  int32_t concatOperandIndex_{-1};
+
   // Intermediates within 'generatingOp_' that are backed by device memory.
   std::unordered_set<ValueCP> memoryValues_;
 
@@ -476,6 +532,9 @@ class CompileCtx {
 
   // Sequential counter for out-of-line elementwise helper functions.
   int32_t outOfLineCounter_{0};
+
+  // Sequential counter handed out by nextHelperId.
+  int32_t helperId_{0};
 
   // Maps each helper function name to the set of bN variable indices it
   // requires (directly or transitively via called helpers).

@@ -221,10 +221,25 @@ Stream::Stream() {
   CUDA_CHECK(cudaStreamCreate(&stream_->stream));
 }
 
+Stream::Stream(bool nonBlocking) {
+  stream_ = std::make_unique<StreamImpl>();
+  CUDA_CHECK(cudaStreamCreateWithFlags(
+      &stream_->stream,
+      nonBlocking ? cudaStreamNonBlocking : cudaStreamDefault));
+}
+
 Stream::~Stream() {
-  if (stream_->stream) {
+  if (stream_->stream && owned_) {
     cudaStreamDestroy(stream_->stream);
   }
+}
+
+std::unique_ptr<Stream> Stream::external(void* handle) {
+  auto impl = std::make_unique<StreamImpl>();
+  impl->stream = static_cast<cudaStream_t>(handle);
+  auto stream = std::make_unique<Stream>(std::move(impl));
+  stream->owned_ = false;
+  return stream;
 }
 
 void Stream::wait() {

@@ -890,6 +890,30 @@ class QueryConfig {
       0,
       "Maximum byte size of Bloom filter from hash probe. 0 disables.")
 
+  /// Number of probe rows used to decide whether to bypass the build-side
+  /// Bloom filter for left joins and non-null-aware left semi-project and left
+  /// anti joins. 0 disables local Bloom filter probing.
+  VELOX_QUERY_CONFIG(
+      kBypassHashProbeBloomFilterMinRows,
+      bypassHashProbeBloomFilterMinRows,
+      "bypass_hash_probe_bloom_filter_min_rows",
+      int32_t,
+      0,
+      "Number of probe rows used to decide whether to bypass the build-side "
+      "Bloom filter for left joins and non-null-aware left semi-project and "
+      "left anti joins. 0 disables local Bloom filter probing.")
+
+  /// Bypass the build-side Bloom filter if its acceptance percentage meets
+  /// or exceeds this value. 0 bypasses the Bloom filter without sampling.
+  VELOX_QUERY_CONFIG(
+      kBypassHashProbeBloomFilterMinPct,
+      bypassHashProbeBloomFilterMinPct,
+      "bypass_hash_probe_bloom_filter_min_pct",
+      int32_t,
+      85,
+      "Bypass the build-side Bloom filter if its acceptance percentage meets "
+      "or exceeds this value. 0 bypasses the Bloom filter without sampling.")
+
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
   VELOX_QUERY_CONFIG(
@@ -1436,46 +1460,46 @@ class QueryConfig {
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
 
-  /// Enables the adaptive per-tier RPC rate limiter (RPCRateLimiter).
+  /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
       rpcRateLimiterAdaptiveEnabled,
       "rpc.ratelimiter.adaptive_enabled",
       bool,
       true,
-      "When true (default), the process-global per-tier RPC rate limiter adapts "
-      "its max-pending cap via AIMD driven by the backend overload signal "
+      "When true (default), each backend's rate limiter adapts its capacity "
+      "via AIMD driven by the backend overload signal "
       "(rate-limit/timeout): multiplicative-decrease on an overload-classified "
       "drain, additive-increase on a clean drain. On by default because it is "
       "the protective behavior for shared, rate-limited inference backends; set "
       "false to keep a static cap. Unlike the per-driver congestion window, this "
       "coordinates all drivers on the worker and reacts to the rate-limit signal "
-      "directly, not to RTT.")
+      "directly, not to RTT. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
 
-  /// Floor for the adaptive per-tier RPC rate limiter's max-pending cap.
+  /// Floor the adaptive rate-limit capacity may shrink to.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMinLimit,
       rpcRateLimiterMinLimit,
       "rpc.ratelimiter.min_limit",
       int64_t,
       50,
-      "Floor the adaptive RPC rate limiter's per-tier max-pending cap may "
+      "Floor that a backend's adaptive rate-limit capacity may "
       "shrink to under sustained overload. Default 50 (a floor of 1 can stall a "
       "workload under sustained throttling). Only used when "
-      "rpc.ratelimiter.adaptive_enabled is true.")
+      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
 
-  /// Multiplicative-decrease factor for the adaptive RPC rate limiter.
+  /// Multiplicative-decrease factor for the adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterDecreaseFactor,
       rpcRateLimiterDecreaseFactor,
       "rpc.ratelimiter.decrease_factor",
       double,
       0.5,
-      "Factor applied to the adaptive RPC rate limiter's per-tier max-pending "
-      "cap on each overload-classified drain. Default 0.5 (halve). Clamped to "
-      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true.")
+      "Factor applied to a backend's adaptive rate-limit capacity "
+      "on each overload-classified drain. Default 0.5 (halve). Clamped to "
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
 
-  /// Ceiling for the per-tier RPC rate-limiter max-pending cap.
+  /// Ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMaxLimit,
       rpcRateLimiterMaxLimit,
@@ -1483,11 +1507,16 @@ class QueryConfig {
       int64_t,
       200,
       "Ceiling (and, with adaptive enabled, the starting value) for the "
-      "process-global per-tier RPC rate-limiter max-pending cap. Default 200 "
+      "per-backend rate-limit capacity, shared across drivers. Default 200 "
       "(validated for LLM-inference backends); 0 falls back to the built-in 20. "
-      "With admission-controlled dispatch this cap actually bounds process-wide "
-      "in-flight rows per tier; the adaptive limiter shrinks from here toward "
-      "rpc.ratelimiter.min_limit under overload.")
+      "With admission-controlled dispatch this cap bounds in-flight work "
+      "against that backend across every driver on the worker; the adaptive "
+      "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
+      "overload. Any positive value here overrides a ceiling the function "
+      "asked for through its own options; set 0 to defer to that. The first "
+      "query to reach a backend fixes its policy for the life of the worker "
+      "process; later queries contribute their outcomes to the adaptation but "
+      "cannot change the setting.")
 
   // --- Hand-written accessors for properties that need custom logic ---
 

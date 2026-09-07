@@ -97,7 +97,7 @@ class CudfEqualityDeleteFileReader {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
       const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
-      ::facebook::velox::dwio::common::RuntimeStatistics& runtimeStats,
+      ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
       const std::string& connectorId);
 
   /// Applies equality deletes to the output CudfVector by clearing the

@@ -1132,6 +1132,44 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
       test("2024-11-03 01:30 America/Los_Angeles", 1 * kMillisInHour));
 }
 
+TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusLargeIntervalDayTime) {
+  // An interval past int32 milliseconds, i.e. over ~24.8 days. Kept separate
+  // from the case above because date_add rejects such a value outright.
+  // c0 is the timestamp, c1 the interval.
+  const std::string ts = "cast(c0 as timestamp with time zone)";
+  const int64_t interval = 180 * kMillisInDay;
+
+  const auto eval = [&](const std::string& operation,
+                        const std::string& timestamp) {
+    return evaluateOnce<std::string>(
+               fmt::format("cast({} as varchar)", operation),
+               {VARCHAR(), INTERVAL_DAY_TIME()},
+               std::optional(timestamp),
+               std::optional(interval))
+        .value();
+  };
+
+  // Addition is commutative, so both operand orders must agree.
+  const auto plus = [&](const std::string& timestamp) {
+    const auto result = eval(fmt::format("plus({}, c1)", ts), timestamp);
+    EXPECT_EQ(result, eval(fmt::format("plus(c1, {})", ts), timestamp));
+    return result;
+  };
+
+  const std::string base = "2024-10-03 01:50 America/Los_Angeles";
+
+  EXPECT_EQ("2025-04-01 01:50:00.000 America/Los_Angeles", plus(base));
+  EXPECT_EQ(
+      "2024-04-06 01:50:00.000 America/Los_Angeles",
+      eval(fmt::format("minus({}, c1)", ts), base));
+
+  // A day-to-second interval is a fixed count of milliseconds, so crossing
+  // into daylight saving moves the wall clock forward an hour.
+  EXPECT_EQ(
+      "2025-05-30 02:50:00.000 America/Los_Angeles",
+      plus("2024-12-01 01:50 America/Los_Angeles"));
+}
+
 TEST_F(DateTimeFunctionsTest, minusTimestamp) {
   const auto minus = [&](std::optional<int64_t> t1, std::optional<int64_t> t2) {
     const auto timestamp1 = (t1.has_value()) ? Timestamp(t1.value(), 0)
@@ -4993,7 +5031,7 @@ TEST_F(DateTimeFunctionsTest, dateFormatTimestampWithTimezone) {
           "%y-%M-%e %T %p", TimestampWithTimezone(-20220915000, "-03:00")));
 }
 
-TEST_F(DateTimeFunctionsTest, test_week_year) {
+TEST_F(DateTimeFunctionsTest, testWeekYear) {
   const auto dateFormat = [&](std::optional<Timestamp> timestamp,
                               std::optional<std::string> format) {
     return evaluateOnce<std::string>("date_format(c0, c1)", timestamp, format);

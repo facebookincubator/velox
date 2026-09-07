@@ -651,7 +651,7 @@ TEST_F(TestWriterFlush, CheckAgainstMemoryBudget) {
 }
 
 // Tests the number of stripes produced based on random results.
-TEST_F(TestWriterFlush, MemoryBasedFlushRandom) {
+TEST_F(TestWriterFlush, memoryBasedFlushRandom) {
   struct TestCase {
     TestCase(
         uint32_t seed,

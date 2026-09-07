@@ -1,4 +1,5 @@
 %{
+#define yyFlexLexer veloxprestotpFlexLexer
 #include <FlexLexer.h>
 #include <fmt/format.h>
 #include <boost/algorithm/string/predicate.hpp>
