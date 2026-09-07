@@ -15,18 +15,65 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfJoin.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/Exceptions.h"
+
+#include <cudf/column/column_factories.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 
 #include <optional>
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+
+void scatterColumns(
+    const std::vector<exec::IdentityProjection>& projections,
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    std::vector<std::unique_ptr<cudf::column>>& cols) {
+  for (std::size_t i = 0; i < projections.size(); ++i) {
+    outCols[projections[i].outputChannel] = std::move(cols[i]);
+  }
+}
+
+void scatterColumns(
+    const std::vector<exec::IdentityProjection>& projections,
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    std::vector<std::unique_ptr<cudf::column>>& cols,
+    std::size_t srcOffset) {
+  for (const auto& proj : projections) {
+    outCols[proj.outputChannel] =
+        std::move(cols[srcOffset + proj.inputChannel]);
+  }
+}
+
+void fillNullColumns(
+    const std::vector<exec::IdentityProjection>& projections,
+    const RowTypePtr& inputType,
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref tempMr,
+    rmm::device_async_resource_ref outputMr) {
+  for (const auto& proj : projections) {
+    auto cudfDataType =
+        veloxToCudfDataType(inputType->childAt(proj.inputChannel));
+    auto nullScalar =
+        cudf::make_default_constructed_scalar(cudfDataType, stream, tempMr);
+    outCols[proj.outputChannel] =
+        cudf::make_column_from_scalar(*nullScalar, numRows, stream, outputMr);
+  }
+}
+
+} // namespace
+
 CudfJoinOutputLayout::CudfJoinOutputLayout(
     const RowTypePtr& probeType,
     const RowTypePtr& buildType,
     const RowTypePtr& outputType,
-    core::JoinType joinType) {
+    core::JoinType joinType)
+    : probeType_(probeType), buildType_(buildType) {
   // For kLeftSemiProject, the last output column is a BOOLEAN match flag
   // that doesn't exist in probe or build types — skip it during resolution.
   std::optional<std::size_t> syntheticOutputPosition;
@@ -47,17 +94,86 @@ CudfJoinOutputLayout::CudfJoinOutputLayout(
 
     const auto& outputName = outputType->nameOf(outputPosition);
     if (auto probeIndex = probeType->getChildIdxIfExists(outputName)) {
-      probeColumnIndices.push_back(static_cast<cudf::size_type>(*probeIndex));
-      probeColumnOutputPositions.push_back(outputPosition);
+      probeProjections_.emplace_back(
+          *probeIndex, static_cast<column_index_t>(outputPosition));
       continue;
     }
     if (auto buildIndex = buildType->getChildIdxIfExists(outputName)) {
-      buildColumnIndices.push_back(static_cast<cudf::size_type>(*buildIndex));
-      buildColumnOutputPositions.push_back(outputPosition);
+      buildProjections_.emplace_back(
+          *buildIndex, static_cast<column_index_t>(outputPosition));
       continue;
     }
     VELOX_FAIL("Join field {} not in probe or build input", outputName);
   }
+
+  probeColumnIndices.reserve(probeProjections_.size());
+  for (const auto& proj : probeProjections_) {
+    probeColumnIndices.push_back(
+        static_cast<cudf::size_type>(proj.inputChannel));
+  }
+  buildColumnIndices.reserve(buildProjections_.size());
+  for (const auto& proj : buildProjections_) {
+    buildColumnIndices.push_back(
+        static_cast<cudf::size_type>(proj.inputChannel));
+  }
+}
+
+void CudfJoinOutputLayout::scatterProbeColumns(
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    std::vector<std::unique_ptr<cudf::column>>& cols) const {
+  scatterColumns(probeProjections_, outCols, cols);
+}
+
+void CudfJoinOutputLayout::scatterBuildColumns(
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    std::vector<std::unique_ptr<cudf::column>>& cols) const {
+  scatterColumns(buildProjections_, outCols, cols);
+}
+
+void CudfJoinOutputLayout::scatterProbeColumns(
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    std::vector<std::unique_ptr<cudf::column>>& cols,
+    std::size_t srcOffset) const {
+  scatterColumns(probeProjections_, outCols, cols, srcOffset);
+}
+
+void CudfJoinOutputLayout::scatterBuildColumns(
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    std::vector<std::unique_ptr<cudf::column>>& cols,
+    std::size_t srcOffset) const {
+  scatterColumns(buildProjections_, outCols, cols, srcOffset);
+}
+
+void CudfJoinOutputLayout::fillNullProbeColumns(
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref tempMr,
+    rmm::device_async_resource_ref outputMr) const {
+  fillNullColumns(
+      probeProjections_,
+      probeType_,
+      outCols,
+      numRows,
+      stream,
+      tempMr,
+      outputMr);
+}
+
+void CudfJoinOutputLayout::fillNullBuildColumns(
+    std::vector<std::unique_ptr<cudf::column>>& outCols,
+    cudf::size_type numRows,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref tempMr,
+    rmm::device_async_resource_ref outputMr) const {
+  fillNullColumns(
+      buildProjections_,
+      buildType_,
+      outCols,
+      numRows,
+      stream,
+      tempMr,
+      outputMr);
 }
 
 cudf::table_view makeExtendedTableView(

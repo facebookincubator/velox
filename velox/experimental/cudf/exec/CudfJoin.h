@@ -19,12 +19,18 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/Type.h"
 
+#include <cudf/column/column.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/resource_ref.hpp>
+
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
@@ -38,10 +44,46 @@ struct CudfJoinOutputLayout {
       const RowTypePtr& outputType,
       core::JoinType joinType);
 
+  void scatterProbeColumns(
+      std::vector<std::unique_ptr<cudf::column>>& outCols,
+      std::vector<std::unique_ptr<cudf::column>>& cols) const;
+  void scatterBuildColumns(
+      std::vector<std::unique_ptr<cudf::column>>& outCols,
+      std::vector<std::unique_ptr<cudf::column>>& cols) const;
+  void scatterProbeColumns(
+      std::vector<std::unique_ptr<cudf::column>>& outCols,
+      std::vector<std::unique_ptr<cudf::column>>& cols,
+      std::size_t srcOffset) const;
+  void scatterBuildColumns(
+      std::vector<std::unique_ptr<cudf::column>>& outCols,
+      std::vector<std::unique_ptr<cudf::column>>& cols,
+      std::size_t srcOffset) const;
+
+  void fillNullProbeColumns(
+      std::vector<std::unique_ptr<cudf::column>>& outCols,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref tempMr,
+      rmm::device_async_resource_ref outputMr) const;
+  void fillNullBuildColumns(
+      std::vector<std::unique_ptr<cudf::column>>& outCols,
+      cudf::size_type numRows,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref tempMr,
+      rmm::device_async_resource_ref outputMr) const;
+
+  const std::vector<exec::IdentityProjection>& probeProjections() const {
+    return probeProjections_;
+  }
+
   std::vector<cudf::size_type> probeColumnIndices;
   std::vector<cudf::size_type> buildColumnIndices;
-  std::vector<std::size_t> probeColumnOutputPositions;
-  std::vector<std::size_t> buildColumnOutputPositions;
+
+ private:
+  std::vector<exec::IdentityProjection> probeProjections_;
+  std::vector<exec::IdentityProjection> buildProjections_;
+  RowTypePtr probeType_;
+  RowTypePtr buildType_;
 };
 
 /// Appends precomputed columns to a table view. The returned view is valid only
