@@ -175,8 +175,7 @@ FOLLY_ALWAYS_INLINE constexpr bool isRegNameChar(char c) {
 /// The authority grammar for a server-based authority ("host[:port]"
 /// with optional userinfo and bracketed IPv6 literals), excluding '%'.
 FOLLY_ALWAYS_INLINE constexpr bool isServerChar(char c) {
-  return isUnreserved(c) || isPcharExtra(c) || c == ';' || c == '[' ||
-      c == ']';
+  return isUnreserved(c) || isPcharExtra(c) || c == ';' || c == '[' || c == ']';
 }
 
 /// The server authority set plus '%', which appears in IPv6 scope ids
@@ -289,8 +288,8 @@ template <bool (*Pred)(char)>
 FOLLY_ALWAYS_INLINE ScanStop skipAccepted(std::string_view& input) {
   size_t i = 0;
   const size_t size = input.size();
-// Because no portable SIMD library exposes a data-driven byte shuffle, so we need
-// to fall back on a scalar implementation.
+// Because no portable SIMD library exposes a data-driven byte shuffle, so we
+// need to fall back on a scalar implementation.
 #if XSIMD_WITH_AVX2
   for (; i + 32 <= size; i += 32) {
     // Bulk-scan one 32-byte chunk per iteration. Each byte is classified
@@ -311,14 +310,43 @@ FOLLY_ALWAYS_INLINE ScanStop skipAccepted(std::string_view& input) {
     // bit is zero exactly when Pred rejects the byte (or the byte is
     // non-ASCII, which the sign-bit mask below rejects separately).
     const __m256i bitmap = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-        reinterpret_cast<const __m128i*>(
-            AsciiBitmap<Pred>::kValues.data())));
+        reinterpret_cast<const __m128i*>(AsciiBitmap<Pred>::kValues.data())));
     // The second lookup table: index k yields the one-bit mask 1 << k.
     const __m256i powerOfTwo = _mm256_setr_epi8(
-        1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 2, 4, 8, 16, 32, 64, -128, 0, 0, 0, 0, 0, 0, 0, 0);
-    const __m256i chunk = _mm256_loadu_si256(
-        reinterpret_cast<const __m256i*>(input.data() + i));
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        -128,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        -128,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0);
+    const __m256i chunk =
+        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input.data() + i));
     // Fold every byte into 0..127 so the bitmap index stays inside its
     // 16-byte domain. Without this, pshufb would silently truncate the
     // index of a >= 0x80 byte to its low 4 bits and look up an unrelated
@@ -331,8 +359,7 @@ FOLLY_ALWAYS_INLINE ScanStop skipAccepted(std::string_view& input) {
     // a 5-bit index.
     const __m256i bitmapByte = _mm256_shuffle_epi8(
         bitmap,
-        _mm256_and_si256(
-            _mm256_srli_epi16(ascii, 3), _mm256_set1_epi8(0x1F)));
+        _mm256_and_si256(_mm256_srli_epi16(ascii, 3), _mm256_set1_epi8(0x1F)));
     // Second lookup: extract the bit for (ascii & 7) out of bitmapByte.
     const __m256i bit = _mm256_and_si256(
         _mm256_shuffle_epi8(
@@ -350,7 +377,8 @@ FOLLY_ALWAYS_INLINE ScanStop skipAccepted(std::string_view& input) {
       // ctz picks the first rejected byte; classify it for the caller.
       input.remove_prefix(i + __builtin_ctz(rejected));
       const auto b = static_cast<uint8_t>(input.front());
-      return b == '%' ? ScanStop::kEscape
+      return b == '%'
+          ? ScanStop::kEscape
           : (b >= 0x80 ? ScanStop::kMultibyte : ScanStop::kRejected);
     }
   }
