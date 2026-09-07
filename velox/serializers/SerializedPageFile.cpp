@@ -150,7 +150,8 @@ uint64_t SerializedPageFileWriter::write(
   checkNotFinished();
 
   uint64_t timeNs{0};
-  auto append = [&](const folly::Range<IndexRange*>& ranges) {
+  auto append = [&](vector_size_t begin, vector_size_t size) {
+    IndexRange range{begin, size};
     NanosecondWallTimer timer(&timeNs);
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
@@ -159,29 +160,72 @@ uint64_t SerializedPageFileWriter::write(
           1'000,
           serdeOptions_.get());
     }
-    batch_->append(rows, ranges);
+    batch_->append(rows, folly::Range(&range, 1));
   };
 
   uint64_t writtenBytes{0};
   if (writeBufferSize_ == 0) {
-    append(indices);
+    for (const auto& range : indices) {
+      append(range.begin, range.size);
+    }
     writtenBytes += flush();
   } else {
-    VELOX_CHECK(!rows->containsLazyNotLoaded());
-    const auto batchSize = std::max<vector_size_t>(
-        1,
-        static_cast<vector_size_t>(
-            (static_cast<long double>(writeBufferSize_) * rows->size()) /
-            rows->estimateFlatSize()));
+    vector_size_t numRows = 0;
     for (const auto& range : indices) {
-      for (vector_size_t offset = 0; offset < range.size;) {
-        const auto chunkSize = std::min(batchSize, range.size - offset);
-        IndexRange chunk{range.begin + offset, chunkSize};
-        append(folly::Range(&chunk, 1));
-        if (batch_->size() >= writeBufferSize_) {
+      numRows += range.size;
+    }
+    std::vector<vector_size_t> rowSizes(numRows, 0);
+    std::vector<vector_size_t*> rowSizePointers(numRows);
+    std::vector<IndexRange> rowRanges;
+    rowRanges.reserve(numRows);
+    vector_size_t rowIndex = 0;
+    for (const auto& range : indices) {
+      for (vector_size_t offset = 0; offset < range.size; ++offset) {
+        rowRanges.push_back(IndexRange{range.begin + offset, 1});
+        rowSizePointers[rowIndex] = &rowSizes[rowIndex];
+        ++rowIndex;
+      }
+    }
+    Scratch scratch;
+    serde_->estimateSerializedSize(
+        rows.get(),
+        folly::Range(rowRanges.data(), rowRanges.size()),
+        rowSizePointers.data(),
+        scratch);
+
+    uint64_t bufferedSize = batch_ == nullptr ? 0 : batch_->size();
+    rowIndex = 0;
+    for (const auto& range : indices) {
+      vector_size_t chunkBegin = range.begin;
+      vector_size_t chunkSize = 0;
+      uint64_t chunkBytes = 0;
+      for (vector_size_t offset = 0; offset < range.size; ++offset) {
+        const auto rowSize = rowSizes[rowIndex++];
+        if (chunkSize > 0 &&
+            bufferedSize + chunkBytes + rowSize > writeBufferSize_) {
+          append(chunkBegin, chunkSize);
           writtenBytes += flush();
+          bufferedSize = 0;
+          chunkBegin += chunkSize;
+          chunkSize = 0;
+          chunkBytes = 0;
         }
-        offset += chunkSize;
+
+        if (chunkSize == 0 && bufferedSize > 0 &&
+            bufferedSize + rowSize > writeBufferSize_) {
+          writtenBytes += flush();
+          bufferedSize = 0;
+        }
+        ++chunkSize;
+        chunkBytes += rowSize;
+      }
+      if (chunkSize > 0) {
+        append(chunkBegin, chunkSize);
+        bufferedSize = batch_->size();
+        if (bufferedSize >= writeBufferSize_) {
+          writtenBytes += flush();
+          bufferedSize = 0;
+        }
       }
     }
   }
