@@ -17,6 +17,7 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 
 #include <fmt/core.h>
+#include <folly/CppAttributes.h>
 #include <algorithm>
 #include <iostream>
 #include <map>
@@ -329,25 +330,31 @@ void sizeExprValues(const SizeExpr& expr, std::vector<nativert::ValueId>& out) {
 // there yet, so its extent has to come from a size expression over values that
 // are: a reserve function is rejected rather than run early, since what it
 // reads is its own business and need not exist yet.
-bool operandMeasurableAt(
+// Why an operand's extent cannot be computed at 'point', or nullptr when it
+// can. The layout needs every operand measurable at one common point, so a
+// single operand answering non-null here refuses the whole concat -- and the
+// first three reasons hold at every point, not just this one.
+const char* FOLLY_NULLABLE operandUnmeasurableReason(
     const ConcatInputInfo& operand,
     const ProducedMap& produced,
     ExecPoint point) {
-  // A view is measurable even though it can never be carved: its extent is the
-  // host's to compute like any other operand's, and it is only its lack of
-  // storage of its own that keeps it out of the group's members. Refusing it
-  // here would instead sink the whole concat, since one view operand would make
-  // the layout look uncomputable at every point.
   if (operand.hasShapeOnDevice) {
-    return false;
+    return "extent settled on device";
   }
   if (operand.isSubgraphInput) {
     const auto it = produced.find(operand.valueId);
-    return it == produced.end() || !(point < it->second.at);
+    return (it == produced.end() || !(point < it->second.at))
+        ? nullptr
+        : "produced after this point";
   }
-  if (operand.reserveShape != nullptr || operand.hasReserveInChain ||
-      operand.sizeExpr.op == SizeShortcut::kNone) {
-    return false;
+  if (operand.reserveShape != nullptr) {
+    return "behind a reserveShape";
+  }
+  if (operand.hasReserveInChain) {
+    return "behind a reserveShape in its chain";
+  }
+  if (operand.sizeExpr.op == SizeShortcut::kNone) {
+    return "no size shortcut for its extent";
   }
   std::vector<nativert::ValueId> reads;
   sizeExprValues(operand.sizeExpr, reads);
@@ -360,11 +367,26 @@ bool operandMeasurableAt(
     // own reserve -- so the expression has to give the same answer both times.
     // A value written at more than one point can change in between, and the two
     // would disagree about where every operand after it starts.
-    if (point < it->second.at || it->second.numWrites != 1) {
-      return false;
+    if (point < it->second.at) {
+      return "its size expression reads a value produced later";
+    }
+    if (it->second.numWrites != 1) {
+      return "its size expression reads a value written more than once";
     }
   }
-  return true;
+  return nullptr;
+}
+
+// A view is measurable even though it can never be carved: its extent is the
+// host's to compute like any other operand's, and it is only its lack of
+// storage of its own that keeps it out of the group's members. Refusing it
+// here would instead sink the whole concat, since one view operand would make
+// the layout look uncomputable at every point.
+bool operandMeasurableAt(
+    const ConcatInputInfo& operand,
+    const ProducedMap& produced,
+    ExecPoint point) {
+  return operandUnmeasurableReason(operand, produced, point) == nullptr;
 }
 
 // The concat 'layout' describes, in the frame values of the invocation that
@@ -423,6 +445,20 @@ std::vector<AllocGroup> graphConcatGroups(
     }
   };
 
+  // The per-reason counters say how many concats were refused but not which,
+  // and a wide one left out is the difference between a parallel fill and a
+  // chain of __concatCopy walked by a single block. Name them.
+  auto refuse = [&](int32_t AllocGroupStats::* counter,
+                    const ConcatFootprint& concat,
+                    const char* reason) {
+    count(counter);
+    if (WaveConfig::get().trace & WaveConfig::kTiming) {
+      std::cout << "  concat %" << concat.resultId << " of "
+                << concat.operands.size() << " operands not placed: " << reason
+                << std::endl;
+    }
+  };
+
   for (const auto& node : nodes) {
     for (const auto& launch : node.launches) {
       const ExecPoint concatPoint{node.node, launch.step};
@@ -436,7 +472,10 @@ std::vector<AllocGroup> graphConcatGroups(
         const auto resultIt = produced.find(concat.resultId);
         if (resultIt == produced.end() || resultIt->second.numWrites != 1 ||
             claimed.count(concat.resultId) != 0) {
-          count(&AllocGroupStats::numConcatUnplaceableOperand);
+          refuse(
+              &AllocGroupStats::numConcatUnplaceableOperand,
+              concat,
+              "the result is not this launch's to place");
           continue;
         }
 
@@ -447,7 +486,10 @@ std::vector<AllocGroup> graphConcatGroups(
           }
         }
         if (onDevice) {
-          count(&AllocGroupStats::numConcatOnDevice);
+          refuse(
+              &AllocGroupStats::numConcatOnDevice,
+              concat,
+              "an operand's extent is settled on device");
           continue;
         }
 
@@ -474,7 +516,30 @@ std::vector<AllocGroup> graphConcatGroups(
           }
         }
         if (at.first < 0) {
-          count(&AllocGroupStats::numConcatUnplaceableOperand);
+          std::string why = "no execution point measures every operand";
+          if (WaveConfig::get().trace & WaveConfig::kTiming) {
+            // Which operands are in the way, tallied at the concat's own point
+            // -- the latest one the layout may use, so anything unmeasurable
+            // here is unmeasurable everywhere.
+            std::map<std::string, std::vector<nativert::ValueId>> blockers;
+            for (const auto& operand : concat.operands) {
+              if (const auto* reason = operandUnmeasurableReason(
+                      operand, produced, concatPoint)) {
+                blockers[reason].push_back(operand.valueId);
+              }
+            }
+            for (const auto& [reason, ids] : blockers) {
+              why += fmt::format(" [{} x {}:", ids.size(), reason);
+              for (size_t i = 0; i < ids.size() && i < 6; ++i) {
+                why += fmt::format(" %{}", ids[i]);
+              }
+              why += "]";
+            }
+          }
+          refuse(
+              &AllocGroupStats::numConcatUnplaceableOperand,
+              concat,
+              why.c_str());
           continue;
         }
 
@@ -509,11 +574,24 @@ std::vector<AllocGroup> graphConcatGroups(
         // and one already materialized before 'at' is copied into it. What
         // still cannot take a view is an operand that is not a value of its
         // own to redirect.
+        // Why each operand the group could not carve was left out, so a wide
+        // concat that still copies says which rule cost it. Tallied only under
+        // the trace bit; the loop is per operand of every concat.
+        std::map<std::string, std::vector<nativert::ValueId>> uncarved;
+        const bool tallyUncarved =
+            (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
+        auto leaveOut = [&](const char* reason, nativert::ValueId id) {
+          if (tallyUncarved) {
+            uncarved[reason].push_back(id);
+          }
+        };
         for (size_t i = 0; i < concat.operands.size(); ++i) {
           const auto& operand = concat.operands[i];
           // A view aliases somebody else's buffer, so there is no write of its
           // own to redirect into the region; it is copied in instead.
           if (operand.isView) {
+            leaveOut(
+                "a view, so no write of its own to redirect", operand.valueId);
             continue;
           }
           // Joining anywhere but the outermost axis makes the operand's region
@@ -522,22 +600,32 @@ std::vector<AllocGroup> graphConcatGroups(
           // their own and the concat copies it in.
           if (concat.dim != 0 && !operand.mayWriteStrided) {
             count(&AllocGroupStats::numConcatStridedBand);
+            leaveOut(
+                "a pitched band its producer cannot write", operand.valueId);
             continue;
           }
           // cat([x, y, x]): one buffer cannot be two regions of the result.
           if (occurrences[operand.valueId] != 1) {
+            leaveOut("joined at more than one position", operand.valueId);
             continue;
           }
           const auto it = produced.find(operand.valueId);
-          if (it == produced.end() || it->second.numWrites != 1) {
+          if (it == produced.end()) {
+            leaveOut("no kernel launch writes it", operand.valueId);
+            continue;
+          }
+          if (it->second.numWrites != 1) {
+            leaveOut("written at more than one point", operand.valueId);
             continue;
           }
           // A view cannot value-convert, so an operand the concat would promote
           // has to keep its own buffer and be copied in.
           if (it->second.dtype != concat.dtype) {
+            leaveOut("a dtype the concat would promote", operand.valueId);
             continue;
           }
           if (claimed.count(operand.valueId) != 0) {
+            leaveOut("already claimed by another group", operand.valueId);
             continue;
           }
           layout->memberOfOperand[i] =
@@ -545,6 +633,20 @@ std::vector<AllocGroup> graphConcatGroups(
           group.actualIds.push_back(operand.valueId);
           group.dtypes.push_back(concat.dtype);
           group.needsSync = group.needsSync || it->second.needsSync;
+        }
+        if (tallyUncarved && !uncarved.empty()) {
+          std::cout << "  concat %" << concat.resultId << " of "
+                    << concat.operands.size()
+                    << " operands: " << group.actualIds.size()
+                    << " carved, left out";
+          for (const auto& [reason, ids] : uncarved) {
+            std::cout << " [" << ids.size() << " x " << reason << ":";
+            for (size_t k = 0; k < ids.size() && k < 8; ++k) {
+              std::cout << " %" << ids[k];
+            }
+            std::cout << "]";
+          }
+          std::cout << std::endl;
         }
         // A group with nothing to carve is still worth forming: it owns the
         // result's backing store and lays every operand's region out on the

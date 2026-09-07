@@ -48,6 +48,7 @@ struct WaveConfig {
   static constexpr int32_t kTensors = 4;
   static constexpr int32_t kFrame = 8;
   static constexpr int32_t kTiming = 16;
+  static constexpr int32_t kGrid = 32;
 
   int32_t blockSize{256};
   bool allStandalone{false};
@@ -57,7 +58,7 @@ struct WaveConfig {
   int32_t numSms{0};
 
   /// Trace bit mask. kNodes prints node headers, kLaunches prints per-launch
-  /// details.
+  /// details, kGrid prints one block-balance line per step.
   int32_t trace{0};
 
   /// If set, forces the grid choice between single-block and multi-block
@@ -291,6 +292,15 @@ struct WaveConfig {
   // op supports it. On by default; the switch is for A/B against the list form.
   bool decomposeLists{true};
 
+  // If true, a metadata getter (aten.sym_size.int / aten.sym_numel.default)
+  // that is not a subexpression of a single fusable consumer runs as a
+  // host-side shortcut standalone instead of a fused kernel op. Fused, such a
+  // getter costs a whole thread block that reads one field and exits; that
+  // block is charged against its launch's slowest block, so a handful of them
+  // sink a step's balance and no block count can fix it -- there is no width at
+  // which a no-op op balances.
+  bool metadataGetterStandalone{true};
+
   // If true, a column folds its producer's gather into its own even when the
   // producer has several readers, provided every reader is a consumer that can
   // absorb a chain itself. The sole-reader rule two foldable consumers can
@@ -360,6 +370,55 @@ struct WaveConfig {
   // Their compiles are queued with the composite's, so the extra cost is
   // compile parallelism rather than serial latency. Off by default.
   bool configPerOp{false};
+  // If true, emit a step's blocks in descending projected latency instead of
+  // in op order, so the ops expected to run longest start at t=0 and the cheap
+  // ones backfill SMs as those retire. Blocks are dispatched to SMs roughly in
+  // index order, which is what makes the order matter; nothing about the work
+  // itself changes. Off by default.
+  bool orderBlocksByCost{false};
+
+  // If true, a step whose single launch is badly balanced -- or whose
+  // occupancy one shared-memory-hungry op has cut for everyone -- is split
+  // into several launches, each packed to about one wave of the occupancy its
+  // own ops allow. Same-stream launches serialize, so this trades one skewed
+  // wave for a few full ones; it only pays where the imbalance is real, which
+  // is what the gate below measures.
+  //
+  // On by default: a step with more launches than the grid has blocks cannot
+  // give its large ops more than a block or two, because every launch takes one
+  // first and the cooperative trim then shaves what is left off the tallest.
+  // Splitting is the only thing that gets those blocks back.
+  bool partitionLaunches{true};
+
+  // Most launches one step may be split into. Also the multiple of one wave
+  // the block array is reserved for, so raising it costs pinned and device
+  // memory on every step whether or not it splits.
+  int32_t maxLaunchWaves{3};
+
+  // GridStats::skew (the step's makespan over a perfectly balanced, fully
+  // occupied one) at and above which partitionLaunches splits a step.
+  float launchSkewThreshold{1.3f};
+
+  // Microseconds of GPU time a block should be worth before the packer opens
+  // one. Converted to cost units with the thread-block clocks the previous
+  // execution of the same step measured, so it adapts to what the ops actually
+  // do rather than to the static cost model. 0 divides the step evenly over
+  // one wave instead, which reproduces today's pro-rata split.
+  float minBlockUs{100.0f};
+
+  // If true, a step's blocks are sized against a per-block work quantum and
+  // the total rounded up to whole waves, instead of being handed out pro rata
+  // against a single wave's worth and then trimmed.
+  //
+  // The pro-rata split cannot survive a step with about as many ops as a wave
+  // has blocks: every op takes one block off the top whatever it costs, and
+  // the cooperative trim then takes what is left from the tallest. On the ROO
+  // graph one step spends 210 of 441 blocks on copies holding 0.1% of the work
+  // and leaves a 1.2M-element op on two. Sizing by quantum asks instead how
+  // many blocks of a given duration the work is worth, and emits that many --
+  // over several launches when it does not fit in one wave, which is what
+  // makes the answer independent of how many ops the step happens to have.
+  bool quantumGrid{false};
 
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.

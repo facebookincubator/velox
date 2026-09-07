@@ -243,7 +243,7 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   // survives fusion costs a copy and a barrier, so eliding is a win whenever
   // it is safe. Gated on enableReuse with the rest of the reuse work.
   if (WaveConfig::get().enableReuse && WaveConfig::get().elideClones) {
-    elideReadOnlyClones(*graph_, types_);
+    elideReadOnlyClones(*graph_, types_, concatFillClones_);
   }
 
   // Merge equal computations. After the rewrites above, which are what create
@@ -542,6 +542,12 @@ nativert::Value* WaveGraph::newListValue(
 
 bool WaveGraph::isCreatedValue(ValueCP value) const {
   return createdValueDtypes_.count(value->id()) > 0;
+}
+
+void WaveGraph::markConcatFillClone(ValueCP value) {
+  if (value != nullptr) {
+    concatFillClones_.insert(value);
+  }
 }
 
 void WaveGraph::declareMultiplyReferencedInput(const nativert::Value* value) {

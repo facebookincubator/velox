@@ -226,6 +226,10 @@ DEFINE_bool(
     true,
     "Before partitioning, split a list-producing op into one node per tensor so each column is costed and given blocks on its own, and fold chains of them where the op supports it");
 DEFINE_bool(
+    metadata_getter_standalone,
+    true,
+    "Run a lone aten.sym_size/sym_numel as a host-side shortcut standalone rather than a fused kernel op that spends a whole block reading one field");
+DEFINE_bool(
     fold_shared_chains,
     true,
     "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
@@ -249,6 +253,30 @@ DEFINE_bool(
     parallel_concat_fill,
     false,
     "Fill a cat/stack of more than two operands entirely in parallel: an operand that cannot write its own region of the result gets a clone of its own to fill it, so no operand is walked through a running offset inside the concat's kernel");
+DEFINE_bool(
+    order_blocks_by_cost,
+    false,
+    "Emit a step's blocks in descending projected latency instead of in op order, so the ops expected to run longest start first and the cheap ones backfill SMs as those retire");
+DEFINE_bool(
+    partition_launches,
+    true,
+    "Split a badly balanced or occupancy-starved step into several kernel launches, each packed to about one wave at the occupancy its own ops allow");
+DEFINE_int32(
+    max_launch_waves,
+    3,
+    "Most launches --partition_launches may split one step into, and the multiple of one wave the block array is reserved for");
+DEFINE_double(
+    launch_skew_threshold,
+    1.3,
+    "Step makespan over that of a perfectly balanced, fully occupied one, at and above which --partition_launches splits a step");
+DEFINE_double(
+    min_block_us,
+    100.0,
+    "GPU microseconds a block should be worth before --partition_launches opens one, converted to cost units with the thread-block clocks the step's previous execution measured");
+DEFINE_bool(
+    quantum_grid,
+    false,
+    "Size a step's blocks against a per-block work quantum and round the total up to whole waves, instead of handing out one wave's worth pro rata and trimming");
 DEFINE_bool(
     tw_single_pass,
     false,
@@ -709,6 +737,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
   WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
+  WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
   WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
   WaveConfig::get().mkSelect = FLAGS_mk_select;
   WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
@@ -716,6 +745,13 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableLifetimeAllocGroup =
       FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().parallelConcatFill = FLAGS_parallel_concat_fill;
+  WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
+  WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
+  WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
+  WaveConfig::get().launchSkewThreshold =
+      static_cast<float>(FLAGS_launch_skew_threshold);
+  WaveConfig::get().minBlockUs = static_cast<float>(FLAGS_min_block_us);
+  WaveConfig::get().quantumGrid = FLAGS_quantum_grid;
   // Read by registerBuiltins(), which initialize() calls below.
   WaveConfig::get().singlePass = FLAGS_tw_single_pass;
   WaveConfig::get().singlePassSelect = FLAGS_tw_single_pass_select;
