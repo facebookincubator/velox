@@ -360,7 +360,7 @@ void GroupingSet::addInputForActiveRows(
     if (!newGroups.empty()) {
       sortedAggregations_->initializeNewGroups(groups, newGroups);
     }
-    sortedAggregations_->addInput(groups, input);
+    sortedAggregations_->addInput(groups, input, activeRows_);
   }
 }
 
