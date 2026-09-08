@@ -241,6 +241,8 @@ class PlanBuilder {
    public:
     TableScanBuilder(PlanBuilder& builder) : planBuilder_(builder) {}
 
+    virtual ~TableScanBuilder() = default;
+
     /// @param tableName The name of the table to scan.
     TableScanBuilder& tableName(std::string tableName) {
       tableName_ = std::move(tableName);
@@ -328,8 +330,8 @@ class PlanBuilder {
       return *this;
     }
 
-    TableScanBuilder& filterColumnHandles(
-        std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles) {
+    virtual TableScanBuilder& filterColumnHandles(
+        std::vector<connector::ColumnHandlePtr> filterColumnHandles) {
       filterColumnHandles_ = std::move(filterColumnHandles);
       return *this;
     }
@@ -366,9 +368,28 @@ class PlanBuilder {
       return planBuilder_;
     }
 
-   private:
-    /// Build the plan node TableScanNode.
+   protected:
+    /// Build the plan node TableScanNode. Subclasses may override
+    /// buildConnectorTableHandle() to substitute a different handle type.
     core::PlanNodePtr build(core::PlanNodeId id);
+
+    /// Factory called by build() to create the connector table handle from
+    /// already-parsed filter state. Override in subclasses to produce a
+    /// connector-specific handle (e.g. IcebergTableHandle) without duplicating
+    /// any filter-parsing logic.
+    virtual connector::ConnectorTableHandlePtr buildConnectorTableHandle(
+        common::SubfieldFilters subfieldFilters,
+        const core::TypedExprPtr& remainingFilter);
+
+    /// Factory called by build() to create a default column handle for one
+    /// output column when no explicit assignments were provided. Override in
+    /// subclasses to produce connector-specific handles (e.g.
+    /// IcebergColumnHandle). 'outputIndex' is the 0-based position of this
+    /// column in outputType_.
+    virtual connector::ColumnHandlePtr buildDefaultColumnHandle(
+        const std::string& name,
+        const TypePtr& type,
+        uint32_t outputIndex);
 
     PlanBuilder& planBuilder_;
     std::string tableName_{"hive_table"};
@@ -379,7 +400,7 @@ class PlanBuilder {
     RowTypePtr dataColumns_;
     std::vector<std::string> indexColumns_;
     std::vector<int32_t> dataColumnFieldIds_;
-    std::vector<connector::hive::HiveColumnHandlePtr> filterColumnHandles_;
+    std::vector<connector::ColumnHandlePtr> filterColumnHandles_;
     std::unordered_map<std::string, std::string> columnAliases_;
     connector::ConnectorTableHandlePtr tableHandle_;
     connector::ColumnHandleMap assignments_;
