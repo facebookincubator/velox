@@ -735,7 +735,7 @@ void RowContainer::extractSerializedRows(
     size_t offset = 0;
 
     // Copy nulls and other flags.
-    ::memcpy(rawBuffer + offset, row + rowColumns_[0].nullByte(), flagBytes_);
+    ::memcpy(rawBuffer + offset, row + nullByte(nullOffsets_[0]), flagBytes_);
     offset += flagBytes_;
 
     // Copy values.
@@ -767,7 +767,7 @@ void RowContainer::storeSerializedRow(
   const auto serialized = vector.valueAt(index);
   size_t offset = 0;
 
-  ::memcpy(row + rowColumns_[0].nullByte(), serialized.data(), flagBytes_);
+  ::memcpy(row + nullByte(nullOffsets_[0]), serialized.data(), flagBytes_);
   offset += flagBytes_;
 
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);
