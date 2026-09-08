@@ -72,15 +72,29 @@ class CudfFunctionBaseTest : public velox::functions::test::FunctionBaseTest {
         input, pool_.get(), stream, mr);
     auto optimized =
         expression::optimize(expr, execCtx_.queryCtx(), execCtx_.pool());
-    auto filterEvaluator =
-        createCudfExpression(optimized, input->rowType(), pool_.get());
+    // Build the evaluation context from the query config exactly as
+    // CudfFilterProject does, so a test can exercise timezone-aware functions
+    // under a session timezone via queryCtx_->testingOverrideConfigUnsafe.
+    const auto exprContext =
+        contextFromConfig(execCtx_.queryCtx()->queryConfig());
+    auto filterEvaluator = createCudfExpression(
+        optimized, input->rowType(), pool_.get(), exprContext);
     auto ownedColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(ownedColumns.size());
     for (auto& col : ownedColumns) {
       inputViews.push_back(col->view());
     }
-    auto filterColumn = filterEvaluator->eval(inputViews, stream, mr);
+    // finalize=true casts the result to the Velox type the expression declares,
+    // which is what CudfFilterProject passes. Without it a cuDF function whose
+    // native result is narrower than its Presto signature -- extracts return
+    // SMALLINT where year() is declared BIGINT -- reaches the assertion at the
+    // wrong width, and assertEqualVectors compares type before value, so the
+    // test fails on the type rather than on the number. Finalizing here makes
+    // this harness agree with the operator instead of needing per-assertion
+    // widening workarounds.
+    auto filterColumn =
+        filterEvaluator->eval(inputViews, stream, mr, /*finalize=*/true);
     auto filterColumnView = asView(filterColumn);
     cudf::table_view resultTable({filterColumnView});
     // Preserve logical Velox output types, e.g. VARBINARY, when converting
