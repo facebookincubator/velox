@@ -20,6 +20,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleCompare.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
@@ -327,49 +328,66 @@ TYPED_TEST(RleEncodingTest, slice) {
           nimble::CompressionType::Uncompressed,
           options);
 
+  // Runs are [0,3) [3,5) [5,8) [8,10). A range that starts or ends inside a
+  // run keeps the boundary runs whole and comes back wrapped in a
+  // SliceEncoding; only run-aligned ranges stay a plain RLE.
   struct Range {
     const char* name;
     uint32_t offset;
     uint32_t length;
+    nimble::EncodingType expectedType;
   };
   for (const auto range :
        {Range{/*name=*/"allRunsNoPartial",
               /*offset=*/0,
-              /*length=*/10},
+              /*length=*/10,
+              nimble::EncodingType::RLE},
         Range{/*name=*/"singleRunNoPartial",
               /*offset=*/0,
-              /*length=*/3},
+              /*length=*/3,
+              nimble::EncodingType::RLE},
         Range{/*name=*/"middleRunsNoPartial",
               /*offset=*/3,
-              /*length=*/5},
-        Range{/*name=*/"lastRunNoPartial", /*offset=*/8, /*length=*/2},
+              /*length=*/5,
+              nimble::EncodingType::RLE},
+        Range{/*name=*/"lastRunNoPartial",
+              /*offset=*/8,
+              /*length=*/2,
+              nimble::EncodingType::RLE},
         Range{/*name=*/"firstRunPartialLastExact",
               /*offset=*/1,
-              /*length=*/7},
+              /*length=*/7,
+              nimble::EncodingType::Slice},
         Range{/*name=*/"firstExactLastRunPartial",
               /*offset=*/3,
-              /*length=*/4},
-        Range{/*name=*/"bothPartialSameRun", /*offset=*/1, /*length=*/1},
+              /*length=*/4,
+              nimble::EncodingType::Slice},
+        Range{/*name=*/"bothPartialSameRun",
+              /*offset=*/1,
+              /*length=*/1,
+              nimble::EncodingType::Slice},
         Range{/*name=*/"bothPartialWithInteriorRun",
               /*offset=*/1,
-              /*length=*/5}}) {
+              /*length=*/5,
+              nimble::EncodingType::Slice}}) {
     SCOPED_TRACE(
         testing::Message() << "case=" << range.name << ", offset="
                            << range.offset << ", length=" << range.length);
     nimble::Buffer sliceBuffer{*this->pool_};
     const auto sliced = nimble::RLEEncoding<DataType>::slice(
         encoded, range.offset, range.length, sliceBuffer, options);
-    nimble::RLEEncoding<DataType> encoding{
-        *this->pool_,
-        sliced,
-        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
-        options};
+    // Built through the factory rather than as an RLEEncoding directly: a
+    // deferred slice comes back as a SliceEncoding wrapping the RLE.
+    auto encoding = nimble::EncodingFactory{options}.create(
+        *this->pool_, sliced, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        });
 
-    EXPECT_EQ(encoding.encodingType(), nimble::EncodingType::RLE);
-    EXPECT_EQ(encoding.dataType(), nimble::TypeTraits<DataType>::dataType);
-    EXPECT_EQ(encoding.rowCount(), range.length);
+    EXPECT_EQ(encoding->encodingType(), range.expectedType);
+    EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<DataType>::dataType);
+    EXPECT_EQ(encoding->rowCount(), range.length);
     nimble::Vector<DataType> result(this->pool_.get(), range.length);
-    encoding.materialize(range.length, result.data());
+    encoding->materialize(range.length, result.data());
     for (uint32_t i = 0; i < range.length; ++i) {
       EXPECT_TRUE(
           nimble::NimbleCompare<DataType>::equals(

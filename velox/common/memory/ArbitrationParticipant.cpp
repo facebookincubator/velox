@@ -399,11 +399,10 @@ std::string ArbitrationParticipant::Stats::toString() const {
 }
 
 ScopedArbitrationParticipant::ScopedArbitrationParticipant(
-    std::shared_ptr<ArbitrationParticipant> ArbitrationParticipant,
+    std::shared_ptr<ArbitrationParticipant> participant,
     std::shared_ptr<MemoryPool> pool)
-    : ArbitrationParticipant_(std::move(ArbitrationParticipant)),
-      pool_(std::move(pool)) {
-  VELOX_CHECK_NOT_NULL(ArbitrationParticipant_);
+    : participant_(std::move(participant)), pool_(std::move(pool)) {
+  VELOX_CHECK_NOT_NULL(participant_);
   VELOX_CHECK_NOT_NULL(pool_);
 }
 

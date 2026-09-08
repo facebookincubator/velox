@@ -466,22 +466,32 @@ StringStatistics* StringStatisticsCollector::stringStats() {
 }
 
 void StringStatisticsCollector::addValues(std::span<std::string_view> values) {
-  if (!values.empty()) {
-    auto* stats = stringStats();
-    if (UNLIKELY(!stats->min_.has_value())) {
-      stats->min_ = std::string(values.front());
-    }
-    if (UNLIKELY(!stats->max_.has_value())) {
-      stats->max_ = std::string(values.front());
-    }
+  if (values.empty()) {
+    return;
+  }
+  uint64_t logicalSize{0};
+  for (const auto& value : values) {
+    logicalSize += value.size();
+  }
 
-    for (const auto& value : values) {
-      addLogicalSize(value.size());
-      stats->min_ = stats->min_ > value ? std::make_optional(std::string(value))
-                                        : stats->min_;
-      stats->max_ = stats->max_ < value ? std::make_optional(std::string(value))
-                                        : stats->max_;
-    }
+  // Adding once per batch is equivalent: every override is additive.
+  addLogicalSize(logicalSize);
+
+  auto* stats = stringStats();
+
+  // findMinMax returns views into the writer's value stream, which is recycled
+  // per stripe. Assign rather than construct so a monotonic column reuses the
+  // capacity it already has.
+  const auto minMax = findMinMax(values);
+  if (!stats->min_.has_value()) {
+    stats->min_.emplace(minMax.min);
+  } else if (minMax.min < *stats->min_) {
+    stats->min_->assign(minMax.min);
+  }
+  if (!stats->max_.has_value()) {
+    stats->max_.emplace(minMax.max);
+  } else if (minMax.max > *stats->max_) {
+    stats->max_->assign(minMax.max);
   }
 }
 

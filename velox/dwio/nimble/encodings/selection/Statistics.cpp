@@ -240,11 +240,22 @@ void Statistics<T, InputType>::populateUniques() const {
 template <typename T, typename InputType>
 void Statistics<T, InputType>::populateMinMaxBlocks(uint16_t blockSize) const {
   static_assert(std::is_unsigned_v<T>);
-  BlockStatsAccumulator acc(blockSize);
-  for (const auto& v : data_) {
-    acc.add(static_cast<uint64_t>(static_cast<T>(v)));
+  static_assert(std::is_same_v<T, InputType>);
+
+  std::vector<BlockStats> blocks;
+  if (data_.empty()) {
+    minMaxBlocks_ = std::move(blocks);
+    return;
   }
-  minMaxBlocks_ = acc.finish();
+
+  const size_t effectiveBlockSize = blockSize == 0 ? data_.size() : blockSize;
+  blocks.reserve((data_.size() - 1) / effectiveBlockSize + 1);
+  for (size_t offset = 0; offset < data_.size(); offset += effectiveBlockSize) {
+    const auto count = std::min(effectiveBlockSize, data_.size() - offset);
+    const auto minMax = findMinMax(data_.subspan(offset, count));
+    blocks.push_back({count, minMax.min, minMax.max});
+  }
+  minMaxBlocks_ = std::move(blocks);
 }
 
 template <typename T, typename InputType>

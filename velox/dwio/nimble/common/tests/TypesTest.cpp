@@ -51,6 +51,8 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::Fsst, "Fsst"},
       {EncodingType::Huffman, "Huffman"},
       {EncodingType::DeltaBlock, "DeltaBlock"},
+      {EncodingType::EliasFano, "EliasFano"},
+      {EncodingType::BitRangeSplit, "BitRangeSplit"},
   };
   for (const auto& [type, name] : testCases) {
     SCOPED_TRACE(name);

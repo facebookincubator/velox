@@ -18,8 +18,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <condition_variable>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -780,10 +782,14 @@ DEBUG_ONLY_TEST_F(WriterTest, encodingPoolsPassedToEncodeOptions) {
     uint32_t pooledEncodingBufferCount{0};
     std::set<const void*> observedScratchPools;
     std::set<const void*> observedEncodingBufferPools;
+    // Parallel encoding can invoke the callback concurrently.
+    std::mutex statsMutex;
+    std::condition_variable poolsObserved;
     SCOPED_TESTVALUE_SET(
         "facebook::nimble::Writer::encode",
         std::function<void(nimble::Encoding::Options*)>(
             [&](nimble::Encoding::Options* encodingOptions) {
+              std::unique_lock lock{statsMutex};
               ++encodeCount;
               if (encodingOptions->bufferPool != nullptr) {
                 ++pooledScratchEncodeCount;
@@ -794,6 +800,16 @@ DEBUG_ONLY_TEST_F(WriterTest, encodingPoolsPassedToEncodeOptions) {
                 observedEncodingBufferPools.insert(
                     encodingOptions->encodingBufferPool);
               }
+              poolsObserved.notify_all();
+              // Make the pool-count check deterministic. Without this wait,
+              // one encoding task may consume every stream before the other
+              // task is scheduled, especially on a single CPU.
+              poolsObserved.wait(lock, [&] {
+                return observedScratchPools.size() >=
+                    testCase.expectedScratchPoolCount &&
+                    observedEncodingBufferPools.size() >=
+                    testCase.expectedEncodingPoolCount;
+              });
             }));
 
     std::shared_ptr<folly::CPUThreadPoolExecutor> executor;

@@ -341,12 +341,12 @@ class WriterEncodingIndexTest2 {
         columnWriter->write(batch, common::Ranges::of(0, 1000));
         for (auto n = 0; n < mocks.size(); ++n) {
           EXPECT_CALL(*mocks.at(n), addEntry(_))
-              .WillOnce(Invoke([&, k = n](const StatisticsBuilder& builder) {
+              .WillOnce([&, k = n](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 if (k == 0) {
                   validateStats(batch, *stats);
                 }
-              }));
+              });
           // RecordPosition is invoked on call to createIndexEntry
           EXPECT_CALL(*mocks.at(n), add(_, -1)).Times(recordPositionCount[n]);
         }
@@ -777,10 +777,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
           }
           columnWriter->write(batch, common::Ranges::of(0, 1000));
           EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-              .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+              .WillOnce([&](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 validateStats<Integer>(batch, *stats);
-              }));
+              });
           // PRESENT stream positions are always recorded as soon as we create
           // new entries.
           EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(4);
@@ -798,10 +798,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
             }
           }
           EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-              .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+              .WillOnce([&](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 validateStats<Integer>(batch, *stats);
-              }));
+              });
           // We can record all stream positions immediately now that we have
           // determined the encoding.
           EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(positionCount);
@@ -837,10 +837,10 @@ class IntegerColumnWriterDirectEncodingIndexTest : public testing::Test {
             }
           }
           EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-              .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+              .WillOnce([&](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 validateStats<Integer>(batch, *stats);
-              }));
+              });
           // We can record all stream positions immediately now that we have
           // determined the encoding.
           EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(positionCount);
@@ -955,10 +955,10 @@ class StringColumnWriterDictionaryEncodingIndexTest : public testing::Test {
       for (size_t i = 0; i != pageCount; ++i) {
         columnWriter->write(batch, common::Ranges::of(0, 1000));
         EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-            .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+            .WillOnce([&](const StatisticsBuilder& builder) {
               auto stats = builder.build();
               validateStats(batch, *stats);
-            }));
+            });
         // PRESENT stream positions are always recorded as soon as we create new
         // entries.
         EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(4);
@@ -1087,10 +1087,10 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
           }
           columnWriter->write(batch, common::Ranges::of(0, 1000));
           EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-              .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+              .WillOnce([&](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 validateStats(batch, *stats);
-              }));
+              });
           // PRESENT stream positions are always recorded as soon as we create
           // new entries.
           EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(4);
@@ -1108,10 +1108,10 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
             }
           }
           EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-              .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+              .WillOnce([&](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 validateStats(batch, *stats);
-              }));
+              });
           // We can record all stream positions immediately now that we have
           // determined the encoding.
           EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(positionCount);
@@ -1147,10 +1147,10 @@ class StringColumnWriterDirectEncodingIndexTest : public testing::Test {
             }
           }
           EXPECT_CALL(*mockIndexBuilderPtr, addEntry(_))
-              .WillOnce(Invoke([&](const StatisticsBuilder& builder) {
+              .WillOnce([&](const StatisticsBuilder& builder) {
                 auto stats = builder.build();
                 validateStats(batch, *stats);
-              }));
+              });
           // We can record all stream positions immediately now that we have
           // determined the encoding.
           EXPECT_CALL(*mockIndexBuilderPtr, add(_, -1)).Times(positionCount);

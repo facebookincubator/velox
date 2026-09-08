@@ -81,7 +81,7 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return bytesFlushed_ + buffer_.size();
   }
 
-  int64_t bufferedBytes() const {
+  uint64_t bufferedBytes() const {
     return buffer_.size();
   }
 
@@ -133,6 +133,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(enableWritePageIndex, parquetOverrides->enableWritePageIndex);
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(rowGroupSizeBytes, parquetOverrides->rowGroupSizeBytes);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
 }
 
@@ -378,6 +379,21 @@ std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
   return config::toCapacity(*pageSize, config::CapacityUnit::BYTE);
 }
 
+std::optional<uint64_t> toParquetRowGroupSize(
+    std::optional<std::string> rowGroupSize) {
+  if (!rowGroupSize) {
+    return std::nullopt;
+  }
+  const auto sizeInBytes =
+      config::toCapacity(*rowGroupSize, config::CapacityUnit::BYTE);
+  VELOX_USER_CHECK_GT(
+      sizeInBytes,
+      0,
+      "Parquet writer row group size must be greater than zero: {}",
+      *rowGroupSize);
+  return sizeInBytes;
+}
+
 std::optional<bool> toBoolConfigValue(
     std::optional<std::string> value,
     const char* optionName) {
@@ -448,7 +464,11 @@ Writer::Writer(
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   } else {
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
+    const auto bytesInRowGroup =
+        parquetWriterOptions.rowGroupSizeBytes.value_or(
+            DefaultFlushPolicy::kDefaultBytesInRowGroup);
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
+        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
   }
   options_.timestampUnit = static_cast<TimestampUnit>(
       parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
@@ -840,6 +860,8 @@ ParquetWriterFactory::createFormatOptions(
       "enable write page index");
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->rowGroupSizeBytes = toParquetRowGroupSize(
+      ParquetConfig::writerRowGroupSize(connectorConfig, session));
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);

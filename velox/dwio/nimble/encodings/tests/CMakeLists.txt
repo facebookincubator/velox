@@ -30,6 +30,7 @@ target_link_libraries(nimble_encoding_layout_test_helper nimble_encodings)
 
 add_executable(
   nimble_encodings_tests
+  ALPEncodingTest.cpp
   ALPEncodingViewTest.cpp
   BufferedEncodingTest.cpp
   BlockBitPackingEncodingViewTest.cpp
@@ -37,8 +38,11 @@ add_executable(
   ConstantEncodingTest.cpp
   DictionaryEncodingTest.cpp
   DictionaryEncodingViewTest.cpp
+  EliasFanoEncodingTest.cpp
+  EliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
+  EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp

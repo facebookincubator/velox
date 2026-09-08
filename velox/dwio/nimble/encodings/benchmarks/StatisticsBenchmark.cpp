@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -46,6 +47,49 @@ void updateUniqueStats(uint32_t iters, const std::vector<T>& data) {
     const auto& uniqueCounts = statistics.uniqueCounts().value();
     folly::doNotOptimizeAway(uniqueCounts.size());
     folly::doNotOptimizeAway(uniqueCounts.at(data[data.size() / 2]));
+  }
+}
+
+template <typename T>
+void updateMinMaxBlockStats(
+    uint32_t iters,
+    const std::vector<T>& data,
+    uint16_t blockSize) {
+  while (iters-- > 0) {
+    const auto statistics = Statistics<T>::create(data);
+    const auto& blocks = statistics.minMaxBlocks(blockSize);
+    folly::doNotOptimizeAway(blocks.data());
+    folly::doNotOptimizeAway(blocks.size());
+  }
+}
+
+template <typename T>
+void updateMinMaxBlockStatsPerValue(
+    uint32_t iters,
+    const std::vector<T>& data,
+    uint16_t blockSize) {
+  using BlockStats = typename Statistics<T>::BlockStats;
+  while (iters-- > 0) {
+    std::vector<BlockStats> blocks;
+    blocks.reserve((data.size() - 1) / blockSize + 1);
+    uint64_t blockMin{std::numeric_limits<uint64_t>::max()};
+    uint64_t blockMax{0};
+    uint64_t blockCount{0};
+    for (const auto value : data) {
+      blockMin = std::min(blockMin, static_cast<uint64_t>(value));
+      blockMax = std::max(blockMax, static_cast<uint64_t>(value));
+      if (++blockCount == blockSize) {
+        blocks.push_back({blockCount, blockMin, blockMax});
+        blockMin = std::numeric_limits<uint64_t>::max();
+        blockMax = 0;
+        blockCount = 0;
+      }
+    }
+    if (blockCount != 0) {
+      blocks.push_back({blockCount, blockMin, blockMax});
+    }
+    folly::doNotOptimizeAway(blocks.data());
+    folly::doNotOptimizeAway(blocks.size());
   }
 }
 
@@ -101,6 +145,16 @@ BENCHMARK_RELATIVE(UniqueStats_Int64SparseRangeHash, iters) {
 
 BENCHMARK_RELATIVE(UniqueStats_Int64FullSpanHash, iters) {
   updateUniqueStats(iters, int64FullSpan);
+}
+
+BENCHMARK(MinMaxBlocks_PerValue_Uint64DenseRangeAtMax, iters) {
+  updateMinMaxBlockStatsPerValue(
+      iters, uint64DenseRangeAtMax, kBlockBitPackingBlockSize);
+}
+
+BENCHMARK_RELATIVE(MinMaxBlocks_BlockWise_Uint64DenseRangeAtMax, iters) {
+  updateMinMaxBlockStats(
+      iters, uint64DenseRangeAtMax, kBlockBitPackingBlockSize);
 }
 
 int main(int argc, char** argv) {

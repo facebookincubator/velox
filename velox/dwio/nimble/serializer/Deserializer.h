@@ -114,7 +114,7 @@ class Deserializer {
   ///   for each i: deserialize(data[i]).slice(rowRanges[i].startRow,
   ///                                          rowRanges[i].numRows())
   /// concatenated, but rows outside each range are never materialized —
-  /// they are skipped via the FieldReader's `skip()` primitive. Note this
+  /// they are skipped via the FieldReader's `co_skip()` primitive. Note this
   /// equivalence holds under the relative interpretation: the single-batch
   /// `deserialize` already applies the header window, so slicing its output
   /// is the same as narrowing within that window.

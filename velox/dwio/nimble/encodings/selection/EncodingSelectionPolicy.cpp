@@ -168,6 +168,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,
       EncodingType::DeltaBlock,
+      EncodingType::EliasFano,
       EncodingType::Fsst,
       EncodingType::Huffman,
   };

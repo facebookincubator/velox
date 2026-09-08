@@ -529,7 +529,8 @@ TableWriterTestBase::createInsertTableHandle(
           makeLocationHandle(
               outputDirectoryPath, std::nullopt, outputTableType),
           fileFormat_,
-          compressionKind));
+          compressionKind),
+      /*notNullColumns=*/folly::F14FastSet<std::string>{});
 }
 
 // Returns a table insert plan node.

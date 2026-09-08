@@ -17,6 +17,7 @@
 #include "folly/Likely.h"
 #include "folly/ScopeGuard.h"
 #include "folly/container/F14Set.h"
+#include "folly/coro/BlockingWait.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -106,8 +107,8 @@ bool checkColumnProjectionSubfield(
   return false;
 }
 
-// One reader operation. Executed as `reader_->skip(numRows)` when
-// `skip == true`, or `reader_->next(numRows, ...)` when `skip == false`.
+// One reader operation. Executed as `reader_->co_skip(numRows)` when
+// `skip == true`, or `reader_->co_next(numRows, ...)` when `skip == false`.
 struct DecodeOp {
   bool skip;
   uint32_t numRows;
@@ -235,7 +236,8 @@ FieldReaderParams Deserializer::createFieldReaderParams() const {
   params.flatMapFeatureSelector = flatMapFeatureSelector_;
   params.decodeExecutor = options_.decodeExecutor;
   params.maxDecodeParallelism = options_.maxDecodeParallelism;
-  params.minStreamsPerDecodeUnit = options_.minStreamsPerDecodeUnit;
+  params.minStreamsPerDecodeTask = options_.minStreamsPerDecodeTask;
+  params.decodePools = options_.decodePools;
   if (options_.outputType == nullptr) {
     return params;
   }
@@ -567,11 +569,11 @@ void Deserializer::decodeRun(DecodeRun& run, velox::VectorPtr& output) const {
   const auto ops = buildDecodeOps(runRanges_);
   for (const auto& op : ops) {
     if (op.skip) {
-      reader_->skip(op.numRows);
+      folly::coro::blockingWait(reader_->co_skip(op.numRows));
       continue;
     }
     velox::VectorPtr decoded;
-    reader_->next(op.numRows, decoded, nullptr);
+    folly::coro::blockingWait(reader_->co_next(op.numRows, decoded, nullptr));
     decoded = projectOutput(std::move(decoded));
     appendToOutput(std::move(decoded), output);
   }
