@@ -67,6 +67,7 @@ class Config : public velox::config::ConfigBase {
   static Entry<uint64_t> CHUNKING_WRITER_MIN_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_MAX_CHUNK_SIZE;
   static Entry<uint64_t> CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE;
+  static Entry<bool> CHUNKING_WRITER_ENFORCE_STREAM_CHUNK_SIZE_CAP;
 
   /// Selects and tunes the writer flush policy via a comma-separated
   /// "key:value" spec whose "type" key chooses the policy. An absent key keeps

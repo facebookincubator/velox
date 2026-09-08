@@ -288,6 +288,18 @@ struct WriterOptions {
   /// wideSchemaMaxStreamChunkRawSize in place of maxStreamChunkRawSize.
   size_t largeSchemaThreshold{500};
 
+  /// Chunks a stream once it exceeds maxStreamChunkRawSize, rather than only
+  /// when the writer is also under aggregate memory pressure. Off by default:
+  /// it changes chunk boundaries, and therefore stripe boundaries, for every
+  /// writer with chunking enabled.
+  ///
+  /// Without it, maxStreamChunkRawSize is only consulted once shouldChunk()
+  /// reports pressure on the writer's total footprint, so a single stream can
+  /// grow far past the cap. That is costly: a stream buffer grows by ~1.19x
+  /// and holds the old and new allocations across the move, so a regrow
+  /// transiently needs about twice the buffer.
+  bool enforceStreamChunkSizeCap{false};
+
   /// Number of streams to try chunking between memory pressure evaluations.
   /// Note: this is ignored when it is time to flush a stripe.
   size_t chunkedStreamBatchSize{1024};
