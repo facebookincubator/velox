@@ -24,6 +24,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -213,6 +214,20 @@ CudfSplitReader::CudfSplitReader(
   VELOX_DCHECK_EQ(readColumnNames_.size(), readColumnTypes_.size());
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
+
+  // The cuDF path never called configureReaderOptions(), so load-quantum,
+  // max-coalesced-bytes and max-coalesced-distance-bytes were silently ignored
+  // and every read ran with the ReaderOptions defaults (8MB / 128MB / 512kB)
+  // no matter what the connector was configured with. Apply them here so a
+  // tuned load-quantum reaches CachedBufferedInput.
+  const ::facebook::velox::connector::hive::HiveConfig hiveConfig(
+      cudfHiveConfig_->config());
+  const auto* sessionProperties = connectorQueryCtx_->sessionProperties();
+  baseReaderOpts_.setLoadQuantum(hiveConfig.loadQuantum(sessionProperties));
+  baseReaderOpts_.setMaxCoalesceBytes(
+      hiveConfig.maxCoalescedBytes(sessionProperties));
+  baseReaderOpts_.setMaxCoalesceDistance(
+      hiveConfig.maxCoalescedDistanceBytes(sessionProperties));
 }
 
 void CudfSplitReader::setupReader() {
