@@ -79,7 +79,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     TransformE2ETest.cpp
     TransformTest.cpp
   )
-  velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h)
+  velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h IcebergPlanBuilder.h)
 
   add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
 
