@@ -515,6 +515,16 @@ myFunc();
     of namespaces is obliterated when the code starts doing this prolifically.
     Frequently, `using foo::bar::BazClass;` is better.
 
+## Types
+
+* **Use the short `ROW` forms** rather than spelling out parallel vectors.
+  * One field: `ROW("a", BIGINT())`, not `ROW({"a"}, {BIGINT()})`.
+  * Fields sharing a type: `ROW({"a", "b"}, BIGINT())`, not
+    `ROW({"a", "b"}, {BIGINT(), BIGINT()})`.
+  * Mixed types: `ROW({{"a", BIGINT()}, {"b", VARCHAR()}})`, not
+    `ROW({"a", "b"}, {BIGINT(), VARCHAR()})`, which leaves the reader pairing
+    up two lists by position.
+
 ## Type Aliases
 
 * For types widely used together with std::shared_ptr, consider introducing
@@ -623,6 +633,35 @@ defines it; CMake and every open-source build see the new API alone.
   * `SizeIs(n)` - collection has n elements
 
   Requires `#include <gmock/gmock.h>`.
+* **Assert the error message, not just the type.** Use
+  `VELOX_ASSERT_THROW(expression, "message")` from
+  `velox/common/base/tests/GTestUtils.h`. Spelling the message out in the test
+  forces you to read it and judge whether it is informative and actionable. In
+  production that text is the whole diagnosis: for `VELOX_USER_*` it is what
+  the query author sees, for `VELOX_CHECK` it is where the on-call engineer
+  starts. `EXPECT_THROW(expression, VeloxRuntimeError)` checks the type and
+  leaves the message unread.
+* **Scope each case instead of numbering names.** When a test walks through
+  several cases, wrap each in braces and reuse one name. `rowType1`,
+  `rowType2` and `expected1` make the reader track which one is live, and keep
+  dead values in scope.
+
+  ```cpp
+  // ❌ Avoid
+  auto rowType1 = ROW("a", BIGINT());
+  ...
+  auto rowType2 = ROW("b", VARCHAR());
+
+  // ✅ Prefer
+  {
+    auto rowType = ROW("a", BIGINT());
+    ...
+  }
+  {
+    auto rowType = ROW("b", VARCHAR());
+    ...
+  }
+  ```
 
 ## Common Mistakes
 
