@@ -30,6 +30,8 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
+#include "velox/connectors/hive/iceberg/tests/IcebergPlanBuilder.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -45,8 +47,6 @@
 namespace facebook::velox::connector::hive::iceberg::test {
 
 using TempDirectoryPath = common::testutil::TempDirectoryPath;
-
-extern const std::string kIcebergConnectorId;
 
 struct PartitionField {
   // 0-based column index.
@@ -126,19 +126,35 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<int32_t>& icebergFieldIds = {});
 #endif
 
-  /// Builds an Iceberg table scan plan.
-  /// Field IDs are derived from each output column's 1-based position in
-  /// 'dataColumns' (the full table schema), which is the authoritative source
-  /// for Iceberg field IDs regardless of file format or projection.
+  /// Builds an Iceberg table scan plan via IcebergPlanBuilder.
+  ///
+  /// IcebergColumnHandle assignments are auto-built from 'dataColumns' and
+  /// 'dataColumnFieldIds'. Filter strings are parsed by the builder so there
+  /// is no duplication of filter-parsing logic. Caller-supplied 'assignments'
+  /// and 'filterColumnHandles' take precedence when provided.
+  ///
+  ///   outputType          — columns to project.
+  ///   dataColumns         — full table schema (authoritative for field IDs).
+  ///                         Defaults to outputType when nullptr.
+  ///   subfieldFilters     — subfield filter expressions pushed into the scan.
+  ///   remainingFilter     — remaining filter expression pushed into the scan.
+  ///   assignments         — explicit column-handle map; auto-built when empty.
+  ///   filterColumnHandles — filter-only column handles; auto-detected when
+  ///                         empty.
+  ///   dataColumnFieldIds  — Iceberg field IDs aligned to dataColumns;
+  ///                         defaults to 1-based ordinals when empty.
+  ///   postScanFilter      — SQL expression added as a FilterNode on top of the
+  ///                         scan (not pushed down). Empty string = no filter.
   core::PlanNodePtr makeIcebergTableScanPlan(
       const RowTypePtr& outputType,
-      const RowTypePtr& dataColumns,
-      const std::vector<int32_t>& dataColumnFieldIds = {},
+      const RowTypePtr& dataColumns = nullptr,
       const std::vector<std::string>& subfieldFilters = {},
-      const std::string& remainingFilter = "");
-
-  /// Convenience overload: outputType == dataColumns (full-projection scan).
-  core::PlanNodePtr makeIcebergTableScanPlan(const RowTypePtr& rowType);
+      const std::string& remainingFilter = "",
+      connector::ColumnHandleMap assignments = {},
+      std::vector<IcebergColumnHandlePtr> filterColumnHandles = {},
+      const std::vector<int32_t>& dataColumnFieldIds = {},
+      const std::string& postScanFilter = {},
+      common::SubfieldFilters subfieldFiltersMap = {});
 
   /// Creates Hive column handles for all columns in 'rowType', marking
   /// specified columns as partition keys.

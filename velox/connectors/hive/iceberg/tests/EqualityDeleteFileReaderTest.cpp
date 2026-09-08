@@ -362,7 +362,9 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityFilterOnlyColumnNotInProjection) {
   auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
   // WHERE id >= 3 => {3,4,5,6,7,8,9}; delete id=4,8 => {3,5,6,7,9}.
   auto plan = makeIcebergTableScanPlan(
-      outputType, tableType, {}, /*subfieldFilters=*/{"id >= 3"});
+      /*outputType=*/outputType,
+      /*dataColumns=*/tableType,
+      /*subfieldFilters=*/{"id >= 3"});
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
@@ -547,7 +549,14 @@ TEST_F(EqualityDeleteFileReaderTest, nonSequentialEqualityFieldId) {
       {},
       {dwio::common::FileFormat::DWRF, false},
       {icebergDeleteFile});
-  auto plan = makeIcebergTableScanPlan(tableType, tableType, fieldIds);
+  auto plan = makeIcebergTableScanPlan(
+      /*outputType=*/tableType,
+      /*dataColumns=*/tableType,
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/"",
+      /*assignments=*/{},
+      /*filterColumnHandles=*/{},
+      /*dataColumnFieldIds=*/fieldIds);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
@@ -595,7 +604,14 @@ TEST_F(
       /*partitionKeys=*/{},
       {dwio::common::FileFormat::DWRF, false},
       {icebergDeleteFile});
-  auto plan = makeIcebergTableScanPlan(outputType, tableType, fieldIds);
+  auto plan = makeIcebergTableScanPlan(
+      /*outputType=*/outputType,
+      /*dataColumns=*/tableType,
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/"",
+      /*assignments=*/{},
+      /*filterColumnHandles=*/{},
+      /*dataColumnFieldIds=*/fieldIds);
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
