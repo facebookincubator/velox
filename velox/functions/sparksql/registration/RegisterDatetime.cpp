@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/ConvertTimezone.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -29,6 +30,17 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "to_utc_timestamp"});
   registerFunction<FromUtcTimestampFunction, Timestamp, Timestamp, Varchar>(
       {prefix + "from_utc_timestamp"});
+  registerFunction<
+      ConvertTimezoneFunction,
+      TimestampUtc,
+      Varchar,
+      TimestampUtc>({prefix + "convert_timezone"});
+  registerFunction<
+      ConvertTimezoneFunction,
+      TimestampUtc,
+      Varchar,
+      Varchar,
+      TimestampUtc>({prefix + "convert_timezone"});
   registerFunction<UnixDateFunction, int32_t, Date>({prefix + "unix_date"});
   registerFunction<UnixSecondsFunction, int64_t, Timestamp>(
       {prefix + "unix_seconds"});
