@@ -36,11 +36,34 @@
 #include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/stream_compaction.hpp>
+#include <cudf/transform.hpp>
+
+#include <algorithm>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
+
+namespace {
+
+std::string rowGroupSelectionFilterKey(
+    const common::SubfieldFilters& filters) {
+  std::vector<std::string> entries;
+  entries.reserve(filters.size());
+  for (const auto& [field, filter] : filters) {
+    VELOX_CHECK_NOT_NULL(filter);
+    entries.push_back(fmt::format("{}={}", field.toString(), filter->toString()));
+  }
+  std::sort(entries.begin(), entries.end());
+  std::string result;
+  for (const auto& entry : entries) {
+    result += fmt::format("{}:{}", entry.size(), entry);
+  }
+  return result;
+}
+
+} // namespace
 
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
@@ -147,6 +170,8 @@ CudfHiveDataSource::CudfHiveDataSource(
     subfieldFilterExpr_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
+  rowGroupSelectionFilterKey_ =
+      rowGroupSelectionFilterKey(subfieldFilters_);
 
   VELOX_CHECK_NOT_NULL(fileHandleFactory_, "No FileHandleFactory present");
 
@@ -173,7 +198,8 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterExpr_,
+      rowGroupSelectionFilterKey_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -219,8 +245,23 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Virtual method for class-specific conversion of the split
   convertSplit(split);
 
+  if (cudfSplitReader_) {
+    decodedColumnCacheHits_ += cudfSplitReader_->decodedColumnCacheHits();
+    decodedColumnCacheMisses_ += cudfSplitReader_->decodedColumnCacheMisses();
+    decodedColumnCacheDecodeCalls_ +=
+        cudfSplitReader_->decodedColumnCacheDecodeCalls();
+    decodedColumnGpuCacheHits_ +=
+        cudfSplitReader_->decodedColumnGpuCacheHits();
+  }
   cudfSplitReader_ = createCudfSplitReader();
   cudfSplitReader_->prepareSplit(runtimeStats_);
+
+  // A complete decoded-column cache hit needs neither the Parquet data nor its
+  // footer. Avoid reopening the file solely for this approximate completed-byte
+  // statistic.
+  if (cudfSplitReader_->isFullyDecodedColumnCacheHit()) {
+    return;
+  }
 
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
@@ -252,6 +293,14 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   }
   auto cudfTable = std::move(chunkOpt.value());
   auto stream = cudfSplitReader_->stream();
+
+  if (cudfSplitReader_->shouldApplySubfieldFilterAfterRead()) {
+    VELOX_CHECK_NOT_NULL(subfieldFilterExpr_);
+    auto predicate = cudf::compute_column(
+        cudfTable->view(), *subfieldFilterExpr_, stream, get_temp_mr());
+    cudfTable = cudf::apply_boolean_mask(
+        *cudfTable, predicate->view(), stream, get_output_mr());
+  }
 
   uint64_t filterTimeUs{0};
   if (optimizedRemainingFilter_) {
@@ -307,6 +356,15 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 std::unordered_map<std::string, RuntimeMetric>
 CudfHiveDataSource::getRuntimeStats() {
   auto result = runtimeStats_.toRuntimeMetricMap();
+  const auto decodedColumnCacheHits = decodedColumnCacheHits_ +
+      (cudfSplitReader_ ? cudfSplitReader_->decodedColumnCacheHits() : 0);
+  const auto decodedColumnCacheMisses = decodedColumnCacheMisses_ +
+      (cudfSplitReader_ ? cudfSplitReader_->decodedColumnCacheMisses() : 0);
+  const auto decodedColumnCacheDecodeCalls = decodedColumnCacheDecodeCalls_ +
+      (cudfSplitReader_ ? cudfSplitReader_->decodedColumnCacheDecodeCalls()
+                        : 0);
+  const auto decodedColumnGpuCacheHits = decodedColumnGpuCacheHits_ +
+      (cudfSplitReader_ ? cudfSplitReader_->decodedColumnGpuCacheHits() : 0);
   result.insert({
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
@@ -316,6 +374,20 @@ CudfHiveDataSource::getRuntimeStats() {
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},
   });
+  if (decodedColumnCacheHits > 0 or decodedColumnCacheMisses > 0) {
+    result.emplace(
+        std::string(kDecodedColumnCacheHits),
+        RuntimeMetric(decodedColumnCacheHits));
+    result.emplace(
+        std::string(kDecodedColumnCacheMisses),
+        RuntimeMetric(decodedColumnCacheMisses));
+    result.emplace(
+        std::string(kDecodedColumnCacheDecodeCalls),
+        RuntimeMetric(decodedColumnCacheDecodeCalls));
+    result.emplace(
+        std::string(kDecodedColumnGpuCacheHits),
+        RuntimeMetric(decodedColumnGpuCacheHits));
+  }
   const auto& ioStats = ioStats_->stats();
   for (const auto& storageStats : ioStats) {
     result.emplace(storageStats.first, storageStats.second);

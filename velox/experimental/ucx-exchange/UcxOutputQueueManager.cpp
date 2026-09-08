@@ -37,7 +37,8 @@ void UcxOutputQueueManager::initializeTask(
     std::shared_ptr<exec::Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
-    int numDrivers) {
+    int numDrivers,
+    const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskId);
@@ -60,11 +61,15 @@ void UcxOutputQueueManager::initializeTask(
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
 }
 
-void UcxOutputQueueManager::updateOutputBuffers(
-    std::string_view taskId,
+bool UcxOutputQueueManager::updateOutputBuffers(
+    const std::string& taskId,
     int numBuffers,
     bool noMoreBuffers) {
-  getQueue(taskId)->updateOutputBuffers(numBuffers, noMoreBuffers);
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->updateOutputBuffers(numBuffers, noMoreBuffers);
+    return true;
+  }
+  return false;
 }
 
 void UcxOutputQueueManager::enqueue(
@@ -146,7 +151,7 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
       queue->kind() != core::PartitionedOutputNode::Kind::kBroadcast;
 }
 
-void UcxOutputQueueManager::removeTask(std::string_view taskId) {
+void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
   auto queue =
       queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
@@ -197,13 +202,40 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(
   });
 }
 
-std::optional<exec::OutputBuffer::Stats> UcxOutputQueueManager::stats(
-    std::string_view taskId) {
+std::optional<exec::OutputBufferStats> UcxOutputQueueManager::stats(
+    const std::string& taskId) {
   auto queue = getQueueIfExists(taskId);
   if (queue != nullptr) {
     return queue->stats();
   }
   return std::nullopt;
+}
+
+bool UcxOutputQueueManager::updateNumDrivers(
+    const std::string& taskId,
+    uint32_t newNumDrivers) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->updateNumDrivers(newNumDrivers);
+    return true;
+  }
+  return false;
+}
+
+std::optional<double> UcxOutputQueueManager::getUtilization(
+    const std::string& /*taskId*/) {
+  return std::nullopt;
+}
+
+std::optional<bool> UcxOutputQueueManager::isOverutilized(
+    const std::string& /*taskId*/) {
+  return std::nullopt;
+}
+
+std::string UcxOutputQueueManager::toString(const std::string& taskId) {
+  if (getQueueIfExists(taskId) != nullptr) {
+    return "UcxOutputQueue[" + taskId + "]";
+  }
+  return "UcxOutputQueue[" + taskId + " not found]";
 }
 
 } // namespace facebook::velox::ucx_exchange

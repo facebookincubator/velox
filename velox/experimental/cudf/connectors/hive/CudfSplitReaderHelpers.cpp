@@ -93,7 +93,10 @@ void BufferedInputDataSource::enqueueForDevice(
 void BufferedInputDataSource::load(rmm::cuda_stream_view stream) {
   input_->load(velox::dwio::common::LogType::FILE);
   std::lock_guard<std::mutex> lock(ioBatchMutex());
-  for (auto& deviceLoad : pendingDeviceLoads_) {
+  // A cache miss can fetch more than one independent column chunk. Each
+  // enqueued stream is single-use, so consume the batch after launching it.
+  auto pendingDeviceLoads = std::move(pendingDeviceLoads_);
+  for (auto& deviceLoad : pendingDeviceLoads) {
     deviceLoad(stream);
   }
 }

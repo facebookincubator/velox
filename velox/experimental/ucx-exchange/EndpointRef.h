@@ -18,7 +18,9 @@
 #include <ucxx/api.h>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <string_view>
 
 #include "velox/experimental/ucx-exchange/CommElement.h"
 
@@ -71,6 +73,11 @@ class EndpointRef : public std::enable_shared_from_this<EndpointRef> {
     return peerIp_;
   }
 
+  /// Returns whether this endpoint uses the named UCP transport. A missing
+  /// value means UCP could not report the endpoint transport set; callers
+  /// should fail closed rather than assuming a slow link.
+  std::optional<bool> usesTransport(std::string_view transportName) const;
+
   const std::shared_ptr<ucxx::Endpoint> endpoint_;
 
  private:
@@ -84,5 +91,9 @@ class EndpointRef : public std::enable_shared_from_this<EndpointRef> {
       std::owner_less<std::weak_ptr<CommElement>>>
       communicators_;
   std::mutex commMutex_; // Protects communicators_
+  /// UCP transport discovery is endpoint-wide, while many exchange servers
+  /// share this object. Cache the only transport queried by the policy.
+  mutable std::mutex transportMutex_;
+  mutable std::optional<bool> cudaIpcTransport_;
 };
 } // namespace facebook::velox::ucx_exchange

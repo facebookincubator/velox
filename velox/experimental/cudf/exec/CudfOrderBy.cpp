@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
+#include "velox/core/PlanNode.h"
+
 #include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
@@ -50,6 +52,45 @@ CudfOrderBy::CudfOrderBy(
         "OrderBy doesn't allow constant sorting keys");
     sortKeys_.push_back(channel);
     auto const& sortingOrder = orderByNode->sortingOrders()[i];
+    columnOrder_.push_back(
+        sortingOrder.isAscending() ? cudf::order::ASCENDING
+                                   : cudf::order::DESCENDING);
+    nullOrder_.push_back(
+        (sortingOrder.isNullsFirst() ^ !sortingOrder.isAscending())
+            ? cudf::null_order::BEFORE
+            : cudf::null_order::AFTER);
+  }
+}
+
+CudfOrderBy::CudfOrderBy(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const core::PlanNodePtr& planNode)
+    : CudfOperatorBase(
+          operatorId,
+          driverCtx,
+          planNode->outputType(),
+          planNode->id(),
+          "CudfOrderBy",
+          nvtx3::rgb{64, 224, 208},
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          planNode) {
+  auto mergeNode =
+      std::dynamic_pointer_cast<const core::MergeExchangeNode>(planNode);
+  VELOX_CHECK_NOT_NULL(
+      mergeNode, "Expected MergeExchangeNode for CudfOrderBy PlanNodePtr ctor");
+  sortKeys_.reserve(mergeNode->sortingKeys().size());
+  columnOrder_.reserve(mergeNode->sortingKeys().size());
+  nullOrder_.reserve(mergeNode->sortingKeys().size());
+  for (size_t i = 0; i < mergeNode->sortingKeys().size(); ++i) {
+    const auto channel =
+        exec::exprToChannel(mergeNode->sortingKeys()[i].get(), outputType_);
+    VELOX_CHECK(
+        channel != kConstantChannel,
+        "OrderBy doesn't allow constant sorting keys");
+    sortKeys_.push_back(channel);
+    auto const& sortingOrder = mergeNode->sortingOrders()[i];
     columnOrder_.push_back(
         sortingOrder.isAscending() ? cudf::order::ASCENDING
                                    : cudf::order::DESCENDING);

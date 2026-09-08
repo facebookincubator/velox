@@ -17,18 +17,23 @@
 
 #include <cudf/contiguous_split.hpp>
 #include <folly/Synchronized.h>
+#include <rmm/device_buffer.hpp>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
 #include <velox/exec/Task.h>
 #include <velox/experimental/ucx-exchange/UcxOutputQueueManager.h>
 #include <chrono>
+#include <exception>
 #include <future>
 #include <memory>
+#include <optional>
 #include <tuple>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 #include "velox/experimental/ucx-exchange/PartitionKey.h"
+#include "velox/experimental/ucx-exchange/UcxCompressionCostModel.h"
 
 namespace facebook::velox::ucx_exchange {
 
@@ -42,6 +47,8 @@ class UcxExchangeServer
     ReadyToTransfer,
     WaitingForDataFromQueue,
     DataReady,
+    WaitingForCompression,
+    CompressionReady,
     WaitingForSendComplete,
     WaitingForIntraNodeRetrieve,
     Done,
@@ -86,6 +93,43 @@ class UcxExchangeServer
   /// @return A shared pointer to itself.
   std::shared_ptr<UcxExchangeServer> getSelfPtr();
 
+  struct AsyncCompressionResult {
+    std::shared_ptr<rmm::device_buffer> data;
+    std::vector<int64_t> descriptor;
+    std::exception_ptr error;
+    double seconds{0.0};
+  };
+
+  struct SharedCompressionWork;
+
+  /// Returns true when this chunk should be compressed away from the UCXX
+  /// progress thread.
+  bool shouldPipelineCompression();
+
+  /// Returns true only when UCP identifies this as a non-CUDA-IPC endpoint.
+  /// Unknown transports fail closed and are queried again on a later chunk.
+  bool endpointAllowsCompression();
+
+  /// Returns the one adaptive decision for the current chunk. Both the
+  /// pipeline and synchronous paths reuse it so a raw decision is not counted
+  /// twice by the periodic-probe policy.
+  const UcxCompressionCostModel::Decision& compressionDecision();
+
+  /// Submit the current chunk to the bounded codec executor.
+  void startCompression();
+
+  /// Returns shared codec work for a packed buffer. Broadcast output places
+  /// the same packed_columns object in every destination queue, so sharing by
+  /// object identity makes exactly one destination own the encode.
+  static std::pair<std::shared_ptr<SharedCompressionWork>, bool>
+  acquireSharedCompressionWork(
+      const std::shared_ptr<cudf::packed_columns>& input);
+
+  /// Publish a codec result back to the communicator state machine.
+  void onCompressionComplete(
+      const std::shared_ptr<cudf::packed_columns>& input,
+      std::shared_ptr<const AsyncCompressionResult> result);
+
   /// @brief Sends metadata and data to the connected receiver.
   void sendData();
 
@@ -117,6 +161,16 @@ class UcxExchangeServer
 
   std::atomic<ServerState> state_;
   std::shared_ptr<cudf::packed_columns> dataPtr_{nullptr};
+  /// Completed asynchronous codec result, protected by dataMutex_.
+  std::shared_ptr<const AsyncCompressionResult> compressionResult_;
+  /// Keeps this destination subscribed to shared broadcast codec work until
+  /// its result has been consumed.
+  std::shared_ptr<SharedCompressionWork> compressionWork_;
+  std::optional<UcxCompressionCostModel::Decision> compressionDecision_;
+  /// Cached result of UCP endpoint transport discovery. Query failures leave
+  /// this unset so later chunks retry. Known CUDA-IPC endpoints stay raw,
+  /// while known non-CUDA-IPC endpoints use the configured codec policy.
+  std::optional<bool> cudaIpcTransport_;
   /// Protects dataPtr_. Must be recursive because sendData() holds the lock
   /// when calling tagSend(), and for small messages UCX completes inline via
   /// its fast-completion path, firing the sendComplete() callback on the same

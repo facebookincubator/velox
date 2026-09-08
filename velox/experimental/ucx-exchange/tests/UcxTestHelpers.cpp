@@ -19,6 +19,8 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/strings/detail/utilities.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+#include <rmm/device_buffer.hpp>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -180,8 +182,8 @@ template <typename T>
 std::unique_ptr<cudf::column> make_numeric_column_from_vector(
     const std::vector<T>& host_values,
     rmm::cuda_stream_view stream = cudf::get_default_stream(),
-    rmm::mr::device_memory_resource* mr =
-        rmm::mr::get_current_device_resource()) {
+    rmm::device_async_resource_ref mr =
+        cudf::get_current_device_resource_ref()) {
   size_t num_rows = host_values.size();
 
   // Allocate a device buffer of the correct size
@@ -208,8 +210,8 @@ std::unique_ptr<cudf::column> make_numeric_column_from_vector(
 rmm::device_buffer make_chars_buffer_from_host(
     const std::vector<std::string>& host_strings,
     rmm::cuda_stream_view stream = cudf::get_default_stream(),
-    rmm::mr::device_memory_resource* mr =
-        rmm::mr::get_current_device_resource()) {
+    rmm::device_async_resource_ref mr =
+        cudf::get_current_device_resource_ref()) {
   // Compute total bytes needed
   size_t total_bytes = 0;
   for (auto const& s : host_strings)

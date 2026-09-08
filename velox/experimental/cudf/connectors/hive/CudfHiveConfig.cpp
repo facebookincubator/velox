@@ -143,6 +143,41 @@ bool CudfHiveConfig::useExperimentalCudfReaderSession(
       config_->get<bool>(kUseExperimentalCudfReader, false));
 }
 
+bool CudfHiveConfig::experimentalDecodedColumnCacheEnabled() const {
+  return config_->get<bool>(kExperimentalDecodedColumnCacheEnabled, false);
+}
+
+bool CudfHiveConfig::experimentalDecodedColumnCacheEnabledSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kExperimentalDecodedColumnCacheEnabledSession,
+      config_->get<bool>(kExperimentalDecodedColumnCacheEnabled, false));
+}
+
+bool CudfHiveConfig::experimentalDecodedColumnGpuCacheEnabled() const {
+  return config_->get<bool>(
+      kExperimentalDecodedColumnGpuCacheEnabled, false);
+}
+
+bool CudfHiveConfig::experimentalDecodedColumnGpuCacheEnabledSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kExperimentalDecodedColumnGpuCacheEnabledSession,
+      experimentalDecodedColumnGpuCacheEnabled());
+}
+
+std::string CudfHiveConfig::experimentalDecodedColumnCacheCompression() const {
+  return config_->get<std::string>(
+      kExperimentalDecodedColumnCacheCompression, "none");
+}
+
+std::string CudfHiveConfig::experimentalDecodedColumnCacheCompressionSession(
+    const config::ConfigBase* session) const {
+  return session->get<std::string>(
+      kExperimentalDecodedColumnCacheCompressionSession,
+      experimentalDecodedColumnCacheCompression());
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }

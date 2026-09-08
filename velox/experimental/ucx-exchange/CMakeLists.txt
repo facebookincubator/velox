@@ -18,6 +18,7 @@ set(
   UcxQueues.cpp
   UcxExchange.cpp
   UcxExchangeProtocol.cpp
+  UcxCompressionCostModel.cpp
   UcxExchangeSource.cpp
   UcxExchangeServer.cpp
   UcxExchangeQueue.cpp
@@ -44,14 +45,24 @@ configure_file(
 
 add_library(velox_ucx_exchange OBJECT ${UCX_EXCHANGE_SOURCES})
 
-target_include_directories(velox_ucx_exchange PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(
+  velox_ucx_exchange
+  PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 find_package(ucx REQUIRED)
 
 target_link_libraries(
   velox_ucx_exchange
-  PUBLIC ucxx::ucxx ucx::ucp
-  PRIVATE cudf::cudf CUDA::cudart CUDA::cuda_driver Folly::folly velox_core ucx::ucs
+  PUBLIC ucxx::ucxx ucx::ucp nvtx3::nvtx3-cpp
+  PRIVATE
+    cudf::cudf
+    CUDA::cudart
+    CUDA::cuda_driver
+    Folly::folly
+    velox_core
+    velox_cudf_packed_codec
+    ucx::ucs
 )
 
 if(VELOX_BUILD_TESTING)

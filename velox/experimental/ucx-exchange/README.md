@@ -4,6 +4,8 @@ The UCX Exchange is a replacement for the inter-worker velox exchange that happe
 
 The velox UCX exchange implements all the necessary components to efficiently transfer cudf-vectors between tasks. At the core is a UCXX based transfer that directly copies the raw vector data from GPU memory to GPU memory.
 
+Optional GPU compression is documented in [COMPRESSION.md](COMPRESSION.md).
+
 ## CMake Configuration
 
 When building for the first time, this error occurs:

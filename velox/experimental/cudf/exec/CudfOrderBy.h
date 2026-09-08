@@ -33,6 +33,13 @@ class CudfOrderBy : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::OrderByNode>& orderByNode);
 
+  /// Construct from a MergeExchangeNode (used when replacing MergeExchange
+  /// with UcxExchange + CudfOrderBy).
+  CudfOrderBy(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      const core::PlanNodePtr& planNode);
+
   bool needsInput() const override {
     return !finished_;
   }

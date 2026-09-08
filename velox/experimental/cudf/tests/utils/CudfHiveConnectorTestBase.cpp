@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/connectors/hive/CudfDecodedColumnCache.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -87,6 +88,9 @@ void CudfHiveConnectorTestBase::TearDown() {
   ioExecutor_.reset();
   facebook::velox::connector::ConnectorRegistry::global().erase(
       kCudfHiveConnectorId);
+  facebook::velox::cudf_velox::connector::hive::CudfDecodedColumnCache::
+      instance()
+          .clearForTesting();
   facebook::velox::cudf_velox::unregisterCudf();
   OperatorTestBase::TearDown();
 }

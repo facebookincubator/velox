@@ -64,4 +64,9 @@ target_link_libraries(
     velox_test_util
 )
 
+if(UCX_FOUND)
+  target_compile_definitions(velox_cudf_exec PRIVATE VELOX_CUDF_HAS_UCX=1)
+  target_link_libraries(velox_cudf_exec PRIVATE velox_ucx_exchange)
+endif()
+
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)
