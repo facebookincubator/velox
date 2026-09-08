@@ -79,7 +79,7 @@ Mathematical Functions
 
     .. note::
 
-        This function is only registered when Velox is built with ``VELOX_ENABLE_FAISS=ON``, which is off by default.
+        This overload is only registered when Velox is built with ``VELOX_ENABLE_FAISS=ON``, which is off by default.
 
 .. function:: l2_squared(array(double), array(double)) -> double
    :noindex:
