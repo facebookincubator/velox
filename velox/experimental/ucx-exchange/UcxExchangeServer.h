@@ -25,7 +25,8 @@
 #include <future>
 #include <memory>
 #include <tuple>
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 #include "velox/experimental/ucx-exchange/PartitionKey.h"
@@ -117,6 +118,9 @@ class UcxExchangeServer
 
   std::atomic<ServerState> state_;
   std::shared_ptr<cudf::packed_columns> dataPtr_{nullptr};
+  /// Logical rows in 'dataPtr_', taken from the output queue rather than from
+  /// the packed table, which reports zero rows when it has no columns.
+  vector_size_t dataNumRows_{0};
   /// Protects dataPtr_. Must be recursive because sendData() holds the lock
   /// when calling tagSend(), and for small messages UCX completes inline via
   /// its fast-completion path, firing the sendComplete() callback on the same
