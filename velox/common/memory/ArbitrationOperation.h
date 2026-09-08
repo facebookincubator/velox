@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/common/base/Counters.h"
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/common/memory/ArbitrationParticipant.h"

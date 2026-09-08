@@ -338,7 +338,7 @@ void StreamingAggregation::evaluateAggregates() {
   }
 
   if (sortedAggregations_) {
-    sortedAggregations_->addInput(inputGroups_.data(), input_);
+    sortedAggregations_->addInput(inputGroups_.data(), input_, inputRows_);
   }
 }
 

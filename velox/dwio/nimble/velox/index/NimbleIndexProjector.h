@@ -319,8 +319,27 @@ class NimbleIndexProjector {
   // Returns this stripe's request ranges from the flat ScanPlan storage.
   std::span<const StripeRange> plannedStripeRanges(size_t stripeOffset) const;
 
-  // Appends one stripe to the plan and returns its projected byte count.
-  uint64_t appendStripePlan(uint32_t stripeIndex, size_t rangeOffset);
+  // Projected stream totals for one stripe, computed by locateStripeStreams()
+  // before the stripe is known to be worth keeping.
+  struct StripeStreams {
+    uint32_t numStreams{0};
+    uint64_t projectedBytes{0};
+    bool requiresNullBarrier{false};
+  };
+
+  // Locates this stripe's projected streams, staging them at the tail of
+  // ScanPlan::projectedStreams. The stripe is not part of the plan until
+  // appendStripePlan() commits it; a stripe dropped in between leaves the
+  // staged slots to be overwritten by the next stripe, and prepareStripes()
+  // trims any left over.
+  StripeStreams locateStripeStreams(uint32_t stripeIndex);
+
+  // Appends one stripe to the plan using streams already staged for it by
+  // locateStripeStreams().
+  void appendStripePlan(
+      uint32_t stripeIndex,
+      size_t rangeOffset,
+      const StripeStreams& streams);
 
   // Computes the stripe-relative body range based on request row ranges and
   // Options::maxOverfetchRowsRatio.
@@ -467,9 +486,13 @@ class NimbleIndexProjector {
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true if the request has ranges in any planned stripe.
-    // Set by prepareStripes(), used by setResumeKeys().
-    std::vector<bool> hasStripeRanges;
+    // Per-request flag: true once planning has processed a stripe range for
+    // the request. Deliberately not "contributed a range to the plan": it is
+    // also set when the stripe is dropped for projecting no streams, because
+    // what setResumeKeys() needs to know is whether the request was reached
+    // before global truncation, not whether it produced output. Set by
+    // prepareStripes(), used by setResumeKeys().
+    std::vector<bool> hasProcessedStripeRange;
     // Per-request resume keys set when a request reaches maxRowsPerRequest and
     // Options::needResumeKey is enabled.
     std::vector<std::optional<std::string>> resumeKeys;
