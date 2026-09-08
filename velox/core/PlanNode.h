@@ -37,10 +37,13 @@ class PlanNodeVisitorContext;
 using PlanNodeId = std::string;
 
 /// Well-known transport identifiers for exchange between workers. A
-/// PartitionedOutputNode names the transport it sends its results over, and the
-/// runtime resolves the matching output buffer manager and operator from the
-/// registry. In-memory buffering is the default. Other applications may define
-/// additional identifiers without modifying this header.
+/// PartitionedOutputNode names the transport it sends its results over and an
+/// ExchangeNode the transport it receives over, and the runtime resolves the
+/// matching manager or client plus its operator from the registry. Both ends of
+/// an exchange edge must name the same transport; only the coordinator building
+/// the plan sees both fragments, so it owns that invariant. In-memory buffering
+/// is the default. Other applications may define additional identifiers without
+/// modifying this header.
 struct TransportKind {
   /// In-memory output buffering (the default). How the buffered bytes are
   /// delivered is decided by the layer above -- read locally, fetched over
@@ -2200,8 +2203,24 @@ using GroupIdNodePtr = std::shared_ptr<const GroupIdNode>;
 
 class ExchangeNode : public PlanNode {
  public:
+  ExchangeNode(
+      const PlanNodeId& id,
+      RowTypePtr type,
+      std::string serdeKind,
+      std::string transportKind)
+      : PlanNode(id),
+        outputType_(std::move(type)),
+        serdeKind_(std::move(serdeKind)),
+        transportKind_(std::move(transportKind)) {}
+
+  /// Backward-compatible constructor without an explicit transport; defaults
+  /// to the in-memory transport. Prefer the constructor above.
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
-      : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {}
+      : ExchangeNode(
+            id,
+            std::move(type),
+            std::move(serdeKind),
+            std::string{TransportKind::kInMemory}) {}
 
   class Builder {
    public:
@@ -2211,6 +2230,7 @@ class ExchangeNode : public PlanNode {
       id_ = other.id();
       outputType_ = other.outputType();
       serdeKind_ = other.serdeKind();
+      transportKind_ = other.transportKind();
     }
 
     Builder& id(PlanNodeId id) {
@@ -2228,21 +2248,32 @@ class ExchangeNode : public PlanNode {
       return *this;
     }
 
+    Builder& transportKind(std::string transportKind) {
+      transportKind_ = std::move(transportKind);
+      return *this;
+    }
+
     std::shared_ptr<ExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "ExchangeNode id is not set");
       VELOX_USER_CHECK(
           outputType_.has_value(), "ExchangeNode outputType is not set");
       VELOX_USER_CHECK(
           serdeKind_.has_value(), "ExchangeNode serdeKind is not set");
+      VELOX_USER_CHECK(
+          transportKind_.has_value(), "ExchangeNode transportKind is not set");
 
       return std::make_shared<ExchangeNode>(
-          id_.value(), outputType_.value(), serdeKind_.value());
+          id_.value(),
+          outputType_.value(),
+          serdeKind_.value(),
+          transportKind_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<RowTypePtr> outputType_;
     std::optional<std::string> serdeKind_;
+    std::optional<std::string> transportKind_;
   };
 
   const RowTypePtr& outputType() const override {
@@ -2270,6 +2301,13 @@ class ExchangeNode : public PlanNode {
     return serdeKind_;
   }
 
+  /// Transport this node's input is received over; see TransportKind. The
+  /// runtime resolves the matching exchange client and exchange operator from
+  /// ExchangeTransportRegistry.
+  const std::string& transportKind() const {
+    return transportKind_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -2279,6 +2317,7 @@ class ExchangeNode : public PlanNode {
 
   const RowTypePtr outputType_;
   const std::string serdeKind_;
+  const std::string transportKind_;
 };
 
 using ExchangeNodePtr = std::shared_ptr<const ExchangeNode>;
@@ -2290,7 +2329,24 @@ class MergeExchangeNode : public ExchangeNode {
       const RowTypePtr& type,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      std::string serdeKind);
+      std::string serdeKind,
+      std::string transportKind);
+
+  /// Backward-compatible constructor without an explicit transport; defaults
+  /// to the in-memory transport. Prefer the constructor above.
+  MergeExchangeNode(
+      const PlanNodeId& id,
+      const RowTypePtr& type,
+      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+      const std::vector<SortOrder>& sortingOrders,
+      std::string serdeKind)
+      : MergeExchangeNode(
+            id,
+            type,
+            sortingKeys,
+            sortingOrders,
+            std::move(serdeKind),
+            std::string{TransportKind::kInMemory}) {}
 
   class Builder {
    public:
@@ -2302,6 +2358,7 @@ class MergeExchangeNode : public ExchangeNode {
       sortingKeys_ = other.sortingKeys();
       sortingOrders_ = other.sortingOrders();
       serdeKind_ = other.serdeKind();
+      transportKind_ = other.transportKind();
     }
 
     Builder& id(PlanNodeId id) {
@@ -2329,6 +2386,11 @@ class MergeExchangeNode : public ExchangeNode {
       return *this;
     }
 
+    Builder& transportKind(std::string transportKind) {
+      transportKind_ = std::move(transportKind);
+      return *this;
+    }
+
     std::shared_ptr<MergeExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MergeExchangeNode id is not set");
       VELOX_USER_CHECK(
@@ -2340,13 +2402,17 @@ class MergeExchangeNode : public ExchangeNode {
           "MergeExchangeNode sortingOrders is not set");
       VELOX_USER_CHECK(
           serdeKind_.has_value(), "MergeExchangeNode serdeKind is not set");
+      VELOX_USER_CHECK(
+          transportKind_.has_value(),
+          "MergeExchangeNode transportKind is not set");
 
       return std::make_shared<MergeExchangeNode>(
           id_.value(),
           outputType_.value(),
           sortingKeys_.value(),
           sortingOrders_.value(),
-          serdeKind_.value());
+          serdeKind_.value(),
+          transportKind_.value());
     }
 
    private:
@@ -2355,6 +2421,7 @@ class MergeExchangeNode : public ExchangeNode {
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
     std::optional<std::string> serdeKind_;
+    std::optional<std::string> transportKind_;
   };
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
