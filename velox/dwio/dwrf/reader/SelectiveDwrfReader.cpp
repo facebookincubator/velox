@@ -50,6 +50,11 @@ bool isIntegerCompatible(
     TypeKind fileType,
     const TypePtr& requestedType,
     const bool projectOnly) {
+  if (requestedType->isShortDecimal()) {
+    // DWRF can store short decimals as BIGINT without decimal scale streams.
+    // The integer reader materializes these values using the requested type.
+    return fileType == TypeKind::BIGINT;
+  }
   if (requestedType->isVarchar()) {
     // Integer values are converted to VARCHAR in getValues(). Filters and
     // value hooks run before this conversion and operate on integer values.
@@ -59,8 +64,7 @@ bool isIntegerCompatible(
     return true;
   }
 
-  return !requestedType->isDecimal() &&
-      dwio::common::typeutils::isCompatible(fileType, requestedType->kind());
+  return dwio::common::typeutils::isCompatible(fileType, requestedType->kind());
 }
 
 std::unique_ptr<SelectiveColumnReader> buildIntegerReader(
