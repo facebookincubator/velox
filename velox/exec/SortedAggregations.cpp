@@ -214,13 +214,16 @@ void SortedAggregations::initializeNewGroups(
   }
 }
 
-void SortedAggregations::addInput(char** groups, const RowVectorPtr& input) {
+void SortedAggregations::addInput(
+    char** groups,
+    const RowVectorPtr& input,
+    const SelectivityVector& rows) {
   for (auto i = 0; i < inputs_.size(); ++i) {
     decodedInputs_[i].decode(*input->childAt(inputs_[i]));
   }
 
-  // Add all the rows into the RowContainer.
-  for (auto row = 0; row < input->size(); ++row) {
+  // Add the selected rows into the RowContainer.
+  rows.applyToSelected([&](vector_size_t row) {
     char* newRow = inputData_->newRow();
 
     for (auto i = 0; i < inputs_.size(); ++i) {
@@ -228,7 +231,7 @@ void SortedAggregations::addInput(char** groups, const RowVectorPtr& input) {
     }
 
     addNewRow(groups[row], newRow);
-  }
+  });
 }
 
 void SortedAggregations::addNewRow(char* group, char* newRow) {
