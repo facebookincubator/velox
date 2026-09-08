@@ -30,10 +30,10 @@ velox_add_library(
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
-  InMemoryExchangeClient.cpp
   ExchangeQueue.cpp
   ExchangeSink.cpp
   ExchangeSource.cpp
+  ExchangeTransportRegistry.cpp
   MaterializedOutputBuffer.cpp
   MaterializedOutputBufferManager.cpp
   MaterializedPartitionedOutput.cpp
@@ -51,6 +51,7 @@ velox_add_library(
   HashTableCache.cpp
   IndexLookupJoin.cpp
   IndexLookupJoinBridge.cpp
+  InMemoryExchangeClient.cpp
   JoinBridge.cpp
   Limit.cpp
   LocalPartition.cpp
@@ -136,10 +137,11 @@ velox_add_library(
   EnforceSingleRow.h
   Exchange.h
   ExchangeClient.h
-  InMemoryExchangeClient.h
+  ExchangeFactory.h
   ExchangeQueue.h
   ExchangeSink.h
   ExchangeSource.h
+  ExchangeTransportRegistry.h
   Expand.h
   FilterProject.h
   GroupId.h
@@ -155,6 +157,7 @@ velox_add_library(
   HilbertIndex.h
   IndexLookupJoin.h
   IndexLookupJoinBridge.h
+  InMemoryExchangeClient.h
   JoinBridge.h
   Limit.h
   LocalPartition.h

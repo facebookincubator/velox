@@ -21,6 +21,7 @@
 #include <memory>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::ucx_exchange {
 
@@ -31,11 +32,19 @@ struct PackedTableWithStream {
   std::unique_ptr<cudf::packed_table> packedTable;
   rmm::cuda_stream_view stream;
 
+  /// Logical rows in 'packedTable', as reported by the producer. Authoritative:
+  /// cudf::table_view::num_rows() derives the count from the columns and so
+  /// returns 0 for a table with none, which is what an exchange fragment with
+  /// an empty output layout sends. 32-bit because a cuDF table cannot hold more
+  /// rows than a cudf::size_type can index.
+  vector_size_t numRows{0};
+
   PackedTableWithStream() = default;
   PackedTableWithStream(
       std::unique_ptr<cudf::packed_table>&& table,
-      rmm::cuda_stream_view s)
-      : packedTable(std::move(table)), stream(s) {}
+      rmm::cuda_stream_view s,
+      vector_size_t numRows)
+      : packedTable(std::move(table)), stream(s), numRows(numRows) {}
 
   /// Returns the size of the GPU data buffer, or 0 if packedTable is null.
   size_t gpuDataSize() const {

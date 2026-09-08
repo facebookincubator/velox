@@ -15,29 +15,53 @@
  */
 #pragma once
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include <string>
 
-#include "velox/exec/InMemoryExchangeClient.h"
+#include <folly/container/F14Map.h>
+#include <folly/dynamic.h>
+
+#include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::velox::exec {
 
-/// Legacy name for InMemoryExchangeClient. Prefer InMemoryExchangeClient and
-/// the header that declares it.
+/// Control plane of a task's receive side for one exchange transport. Owns the
+/// set of producers a pipeline reads from and is what Task holds and drives.
 ///
-/// A type alias rather than a subclass, so a pre-migration
-/// std::shared_ptr<ExchangeClient> parameter still overrides the
-/// Operator::PlanNodeTranslator::toOperator virtual that now names
-/// InMemoryExchangeClient. Retained, together with this header, so the
-/// read-only-synced Prestissimo build keeps compiling. Its Buck targets define
-/// VELOX_ENABLE_BACKWARD_COMPATIBILITY, while velox and open-source builds
-/// never do.
+/// The data plane is deliberately absent: page payloads are transport specific
+/// (in-memory serialized pages, GPU buffers, ...), so there is nothing shared
+/// to abstract. A transport registers its client factory and its exchange
+/// operator factory together in ExchangeTransportRegistry, so the operator
+/// always knows the concrete client type it was paired with and can reach the
+/// transport's own data plane directly.
 ///
-/// velox/exec/Exchange.h includes this header, which is what puts the alias on
-/// the include path those callers already take; declaring it here alone would
-/// leave it unreachable. Remove that include together with this file once every
-/// caller uses InMemoryExchangeClient.
-using ExchangeClient = InMemoryExchangeClient;
+/// Implementations must be safe to call from multiple threads: Task adds remote
+/// tasks from the split path while drivers consume data.
+class ExchangeClient {
+ public:
+  virtual ~ExchangeClient() = default;
+
+  /// Starts fetching data from the upstream task identified by 'remoteTaskId'.
+  /// If close() has been called already, notifies the upstream task that its
+  /// data is no longer needed. Repeated calls with the same 'remoteTaskId' are
+  /// ignored.
+  virtual void addRemoteTaskId(const std::string& remoteTaskId) = 0;
+
+  /// Signals that no more calls to addRemoteTaskId() will follow.
+  virtual void noMoreRemoteTasks() = 0;
+
+  /// Releases the producers and unblocks consumers. Idempotent.
+  virtual void close() = 0;
+
+  /// Returns runtime statistics aggregated across all producers.
+  /// Implementations are expected to report background CPU time as a metric
+  /// named Operator::kBackgroundCpuTimeNanos.
+  virtual folly::F14FastMap<std::string, RuntimeMetric> stats() = 0;
+
+  /// Returns a human-readable description of the producers, for logging.
+  virtual std::string toString() const = 0;
+
+  /// Returns the client state as JSON, for the task's /v1/task endpoint.
+  virtual folly::dynamic toJson() const = 0;
+};
 
 } // namespace facebook::velox::exec
-
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY

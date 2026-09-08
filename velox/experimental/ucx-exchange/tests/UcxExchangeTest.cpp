@@ -22,20 +22,35 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
+#include <folly/Synchronized.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/EventCount.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <sstream>
+#include <utility>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
+#include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
@@ -44,6 +59,8 @@
 #include "velox/experimental/ucx-exchange/tests/UcxPartitionedOutputMock.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestData.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -130,7 +147,18 @@ struct ExchangeTestParamsPrinter {
 
 class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
  protected:
-  static constexpr uint16_t kCommunicatorPort = 21346;
+  // Chosen per process in SetUpTestCase() rather than hardcoded. The
+  // communicator opens a listener on this port without address reuse, so two
+  // runs of this binary in quick succession fail the second with
+  // "bind(0.0.0.0:21346) failed: Address already in use" while the first port
+  // is still in TIME_WAIT.
+  static uint16_t communicatorPort_;
+
+  // UcxExchangeSource computes the UCX port as the split URL's port + 3
+  // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
+  // communicator's port for the round trip to land back on it.
+  static constexpr int kSplitUrlPortOffset = 3;
+
   static constexpr auto kUnusedCoordinatorUrl =
       std::string_view("http://localhost:12345/bla");
 
@@ -164,10 +192,18 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
     VLOG(0) << "setup test case, creating queue manager, communicator, etc..";
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
+    // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
+    // remoteSplit() advertises communicatorPort_ - 3 to match, so the offset
+    // must stay below the chosen port.
+    const auto freePort = exec::test::getFreePort();
+    ASSERT_GT(freePort, kSplitUrlPortOffset);
+    ASSERT_LE(freePort, std::numeric_limits<uint16_t>::max());
+    communicatorPort_ = static_cast<uint16_t>(freePort);
+
     queueManager_ = UcxOutputQueueManager::getInstanceRef();
     ContinueFuture future;
     communicator_ = facebook::velox::ucx_exchange::Communicator::initAndGet(
-        kCommunicatorPort, std::string(kUnusedCoordinatorUrl), &future);
+        communicatorPort_, std::string(kUnusedCoordinatorUrl), &future);
     if (communicator_) {
       communicatorThread_ = std::make_shared<std::thread>(
           &facebook::velox::ucx_exchange::Communicator::run,
@@ -194,7 +230,7 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
   exec::Split remoteSplit(std::string_view taskId, int partitionId) {
     std::string remoteUrl = fmt::format(
         "http://127.0.0.1:{}/v1/task/{}/results/{}",
-        kCommunicatorPort - 3,
+        communicatorPort_ - kSplitUrlPortOffset,
         taskId,
         partitionId);
     return exec::Split(
@@ -1420,7 +1456,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     // Pass custom threshold via QueryConfig.
     std::unordered_map<std::string, std::string> extraConfig{
-        {core::QueryConfig::kUcxPartitionedOutputBatchRows,
+        {cudf_velox::CudfConfig::kUcxPartitionedOutputBatchRows,
          std::to_string(customThreshold)}};
 
     auto srcTask = createPartitionedOutputTask(
@@ -1570,9 +1606,725 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   config.intraNodeExchange = origIntraNode;
 }
 
+namespace {
+
+// Row type for the real-Task cases below. Two fixed-width columns keep the
+// host/device round trip cheap while still exercising a multi-column table.
+const RowTypePtr& taskShuffleRowType() {
+  static const RowTypePtr rowType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
+  return rowType;
+}
+
+// Serde named on both plan nodes of the two-fragment plans. The UCX transport
+// ignores it because it ships packed cudf tables, but PlanBuilder requires a
+// registered name on the nodes.
+const std::string& taskShuffleSerdeKind() {
+  static const std::string kind =
+      VectorSerde::kindName(VectorSerde::Kind::kPresto);
+  return kind;
+}
+
+// Registers what a serialized-page transport needs. OperatorTestBase does this
+// for the tests derived from it; this suite has its own fixture.
+void registerSerdes() {
+  if (!isRegisteredVectorSerde()) {
+    serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde(taskShuffleSerdeKind())) {
+    serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
+  }
+}
+
+// Drives every Task built below. QueryCtx keeps a raw pointer to the executor,
+// so it has to outlive the Tasks. It is deliberately never destroyed: folly
+// joins its threads in the destructor, and doing that at static destruction
+// races with the communicator shutdown this binary performs at exit.
+folly::CPUThreadPoolExecutor* taskShuffleExecutor() {
+  static auto* executor = new folly::CPUThreadPoolExecutor(8);
+  return executor;
+}
+
+std::shared_ptr<exec::Task> makeTaskShuffleTask(
+    const std::string& taskId,
+    core::PlanFragment planFragment,
+    exec::Consumer consumer) {
+  auto queryCtx = core::QueryCtx::create(
+      taskShuffleExecutor(),
+      core::QueryConfig(std::unordered_map<std::string, std::string>{}));
+  return exec::Task::create(
+      taskId,
+      std::move(planFragment),
+      /*destination=*/0,
+      std::move(queryCtx),
+      exec::Task::ExecutionMode::kParallel,
+      std::move(consumer));
+}
+
+// Builds one deterministic batch. c0 runs 'firstValue', 'firstValue + stride',
+// ... so callers can interleave the ranges of several producers, and c1 is
+// derived from c0 so a column mix-up cannot go unnoticed.
+RowVectorPtr makeTaskShuffleBatch(
+    memory::MemoryPool* pool,
+    int32_t firstValue,
+    int32_t stride,
+    vector_size_t numRowsInBatch) {
+  auto keys =
+      BaseVector::create<FlatVector<int32_t>>(INTEGER(), numRowsInBatch, pool);
+  auto payload =
+      BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRowsInBatch, pool);
+  for (vector_size_t i = 0; i < numRowsInBatch; ++i) {
+    const int32_t value = firstValue + i * stride;
+    keys->set(i, value);
+    payload->set(i, static_cast<int64_t>(value) * 10);
+  }
+  return std::make_shared<RowVector>(
+      pool,
+      taskShuffleRowType(),
+      BufferPtr(nullptr),
+      numRowsInBatch,
+      std::vector<VectorPtr>{keys, payload});
+}
+
+// Brings a batch the consumer saw into 'pool'. CallbackSinkAdapter declares it
+// does not accept GPU input, so CompileState splices a CudfToVelox in front of
+// the sink and the batches arrive on the host; the CudfVector branch is here so
+// a change in that wiring surfaces as a failed assertion rather than a crash.
+// Either way the result is a fresh vector owned by 'pool': what the consumer
+// hands over is allocated from its operator pools, which report a leak and fail
+// the arbitrator's reservation check if anything still references them when the
+// Task is destroyed.
+RowVectorPtr toHost(const RowVectorPtr& batch, memory::MemoryPool* pool) {
+  auto cudfVector = std::dynamic_pointer_cast<cudf_velox::CudfVector>(batch);
+  if (cudfVector != nullptr) {
+    auto stream = cudfVector->stream();
+    auto host = cudf_velox::with_arrow::toVeloxColumn(
+        cudfVector->getTableView(),
+        pool,
+        taskShuffleRowType(),
+        "",
+        stream,
+        cudf::get_current_device_resource_ref());
+    stream.synchronize();
+    return host;
+  }
+  auto copy =
+      BaseVector::create<RowVector>(taskShuffleRowType(), batch->size(), pool);
+  copy->copy(batch.get(), 0, 0, batch->size());
+  return copy;
+}
+
+// Collects a consumer Task's output. The Consumer callback runs on driver
+// threads, so the batches need their own lock.
+class TaskShuffleResults {
+ public:
+  exec::Consumer consumer() {
+    return
+        [this](
+            RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
+          if (batch != nullptr && batch->size() > 0) {
+            batches_.wlock()->push_back(std::move(batch));
+          }
+          return exec::BlockingReason::kNotBlocked;
+        };
+  }
+
+  std::vector<RowVectorPtr> batches() const {
+    return batches_.copy();
+  }
+
+  void clear() {
+    batches_.wlock()->clear();
+  }
+
+ private:
+  folly::Synchronized<std::vector<RowVectorPtr>> batches_;
+};
+
+// Pairs registerCudf() with unregisterCudf() so the cuDF driver adapter, and
+// the transport registrations and memory resources it installs, do not outlive
+// the case even if the body throws.
+class CudfRegistration {
+ public:
+  CudfRegistration() {
+    cudf_velox::registerCudf();
+  }
+
+  ~CudfRegistration() {
+    cudf_velox::unregisterCudf();
+  }
+
+  CudfRegistration(const CudfRegistration&) = delete;
+  CudfRegistration& operator=(const CudfRegistration&) = delete;
+};
+
+// A producer task id paired with the batches its Values node emits.
+using TaskShuffleProducer = std::pair<std::string, std::vector<RowVectorPtr>>;
+
+// Sums the row counts of 'batches'.
+vector_size_t totalRows(const std::vector<RowVectorPtr>& batches) {
+  vector_size_t total = 0;
+  for (const auto& batch : batches) {
+    total += batch->size();
+  }
+  return total;
+}
+
+// The UCX round trip goes through the communicator's event loop, so allow well
+// over waitForTaskCompletion's 1s default.
+constexpr uint64_t kTaskShuffleMaxWaitMicros = 60'000'000;
+
+// Starts one 'Values -> PartitionedOutput' Task per entry in 'producers', all
+// on 'transportKind'. The Tasks are returned rather than waited for: a producer
+// only completes once whatever reads its output buffer has drained it.
+std::vector<std::shared_ptr<exec::Task>> startTaskShuffleProducers(
+    const std::string& transportKind,
+    const std::vector<TaskShuffleProducer>& producers) {
+  std::vector<std::shared_ptr<exec::Task>> producerTasks;
+  for (const auto& producer : producers) {
+    auto plan = exec::test::PlanBuilder()
+                    .values(producer.second)
+                    .partitionedOutput(
+                        /*keys=*/{},
+                        /*numPartitions=*/1,
+                        /*outputLayout=*/{},
+                        taskShuffleSerdeKind(),
+                        transportKind)
+                    .planFragment();
+    auto task = makeTaskShuffleTask(producer.first, std::move(plan), nullptr);
+    task->start(1);
+    producerTasks.push_back(std::move(task));
+  }
+  return producerTasks;
+}
+
+// The operator types of 'pipeline', in pipeline order. Read from TaskStats
+// rather than from the Driver because TaskStats is the vector
+// Driver::initializeOperatorStats() indexes by operatorId: a repeated id lands
+// here as an overwritten entry plus a nameless leftover.
+std::vector<std::string> operatorTypesOf(const exec::PipelineStats& pipeline) {
+  std::vector<std::string> types;
+  types.reserve(pipeline.operatorStats.size());
+  for (const auto& stats : pipeline.operatorStats) {
+    types.push_back(stats.operatorType);
+  }
+  return types;
+}
+
+// The operator ids of 'pipeline', in pipeline order.
+std::vector<int32_t> operatorIdsOf(const exec::PipelineStats& pipeline) {
+  std::vector<int32_t> ids;
+  ids.reserve(pipeline.operatorStats.size());
+  for (const auto& stats : pipeline.operatorStats) {
+    ids.push_back(stats.operatorId);
+  }
+  return ids;
+}
+
+// The c0 column of 'batches' flattened into one sequence, so that a single
+// assertion can report the first ordering violation rather than one per row.
+std::vector<int32_t> sortKeysOf(const std::vector<RowVectorPtr>& batches) {
+  std::vector<int32_t> sortKeys;
+  for (const auto& batch : batches) {
+    auto* keyColumn = batch->childAt(0)->as<SimpleVector<int32_t>>();
+    VELOX_CHECK_NOT_NULL(keyColumn, "Sort key column is not a flat INTEGER");
+    for (vector_size_t i = 0; i < batch->size(); ++i) {
+      VELOX_CHECK(!keyColumn->isNullAt(i), "Sort key is null at row: {}", i);
+      sortKeys.push_back(keyColumn->valueAt(i));
+    }
+  }
+  return sortKeys;
+}
+
+// Index of the first key that is not strictly greater than its predecessor, or
+// 'sortKeys.size()' when the whole sequence ascends.
+int64_t firstUnorderedIndex(const std::vector<int32_t>& sortKeys) {
+  return std::distance(
+      sortKeys.begin(),
+      std::adjacent_find(
+          sortKeys.begin(), sortKeys.end(), [](int32_t left, int32_t right) {
+            return left >= right;
+          }));
+}
+
+// Starts one 'Values -> PartitionedOutput' producer Task per entry in
+// 'producers', all on 'transportKind', then runs 'consumerPlan' against them,
+// feeding it one split per producer built by 'splitFor'. Returns the
+// consumer's output in host memory. Copies the consumer's stats into
+// 'consumerStats' when it is not null, which is the only way to see the
+// consumer's operator pipeline after its Task is gone.
+std::vector<RowVectorPtr> runTaskShuffle(
+    const std::string& transportKind,
+    const std::vector<TaskShuffleProducer>& producers,
+    const core::PlanFragment& consumerPlan,
+    const core::PlanNodeId& consumerNodeId,
+    const std::string& consumerTaskId,
+    const std::function<exec::Split(const std::string&)>& splitFor,
+    memory::MemoryPool* pool,
+    exec::TaskStats* consumerStats) {
+  auto producerTasks = startTaskShuffleProducers(transportKind, producers);
+
+  TaskShuffleResults results;
+  auto consumerTask =
+      makeTaskShuffleTask(consumerTaskId, consumerPlan, results.consumer());
+  consumerTask->start(1);
+  for (const auto& producer : producers) {
+    consumerTask->addSplit(consumerNodeId, splitFor(producer.first));
+  }
+  consumerTask->noMoreSplits(consumerNodeId);
+
+  VELOX_CHECK(
+      exec::test::waitForTaskCompletion(
+          consumerTask.get(), kTaskShuffleMaxWaitMicros),
+      "Consumer task did not complete for transport: {}",
+      transportKind);
+  for (const auto& task : producerTasks) {
+    VELOX_CHECK(
+        exec::test::waitForTaskCompletion(
+            task.get(), kTaskShuffleMaxWaitMicros),
+        "Producer task did not complete: {}",
+        task->taskId());
+  }
+
+  if (consumerStats != nullptr) {
+    *consumerStats = consumerTask->taskStats();
+  }
+
+  std::vector<RowVectorPtr> hostBatches;
+  for (const auto& batch : results.batches()) {
+    hostBatches.push_back(toHost(batch, pool));
+  }
+  // Drop the consumer's own vectors before the Tasks go out of scope below.
+  // They are allocated from operator pools that check for leaks on destruction,
+  // and 'results' outlives 'consumerTask' by declaration order.
+  results.clear();
+  return hostBatches;
+}
+
+// Row shape shared by taskShuffleOverUcx and the merge case below.
+constexpr vector_size_t kTaskShuffleRowsPerBatch = 1'000;
+constexpr int kTaskShuffleNumBatches = 3;
+constexpr int64_t kTaskShuffleTotalRows =
+    static_cast<int64_t>(kTaskShuffleNumBatches) * kTaskShuffleRowsPerBatch;
+
+std::vector<RowVectorPtr> makeTaskShuffleBatches(memory::MemoryPool* pool) {
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kTaskShuffleNumBatches);
+  for (int i = 0; i < kTaskShuffleNumBatches; ++i) {
+    batches.push_back(makeTaskShuffleBatch(
+        pool,
+        /*firstValue=*/i * kTaskShuffleRowsPerBatch,
+        /*stride=*/1,
+        kTaskShuffleRowsPerBatch));
+  }
+  return batches;
+}
+
+} // namespace
+
+// Runs a two-fragment plan over UCX through real Tasks. The
+// realPartitionedOutput cases above drive UcxPartitionedOutput and UcxExchange
+// from SourceDriverMock/SinkDriverMock; this one goes through Task and
+// LocalPlanner, so the exchange operator is resolved through
+// ExchangeTransportRegistry and the output buffer through
+// OutputTransportRegistry, both keyed by the transportKind on the plan nodes.
+// It is the non-merge control for mergeExchangeOverUcxIsGloballyOrdered: if
+// both fail the Task-level UCX path is at fault, if only the merge case fails
+// the merge expansion is.
+TEST_P(UcxExchangeTest, taskShuffleOverUcx) {
+  // This test doesn't use parameters - run only for the first param set.
+  if (GetParam() != generateTestParams().front()) {
+    GTEST_SKIP() << "taskShuffleOverUcx: runs only once";
+  }
+
+  registerSerdes();
+  const auto taskPrefix = getUniqueTaskPrefix();
+
+  // registerCudf() is what seeds both transport registries in this tree, so it
+  // is a prerequisite of the Task-level path and not just of the merge case.
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+
+  // The batches stay on the host. UcxPartitionedOutput requires CudfVector
+  // input, but UcxPartitionedOutputAdapter declares acceptsGpuInput(), so
+  // CompileState splices a CudfFromVelox between Values and it. Staging the
+  // batches on the device first makes that conversion operator call childAt()
+  // on a childless CudfVector and the producer task dies with "Trying to access
+  // non-existing child in RowVector".
+  const auto expected = makeTaskShuffleBatches(pool_.get());
+
+  core::PlanNodeId exchangeNodeId;
+  auto consumerPlan = exec::test::PlanBuilder()
+                          .exchange(
+                              taskShuffleRowType(),
+                              taskShuffleSerdeKind(),
+                              std::string{core::TransportKind::kUcx})
+                          .capturePlanNodeId(exchangeNodeId)
+                          .planFragment();
+
+  auto actual = runTaskShuffle(
+      std::string{core::TransportKind::kUcx},
+      {{taskPrefix + "ucxProducer", expected}},
+      consumerPlan,
+      exchangeNodeId,
+      taskPrefix + "ucxConsumer",
+      [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
+      pool_.get(),
+      /*consumerStats=*/nullptr);
+
+  EXPECT_EQ(totalRows(actual), kTaskShuffleTotalRows);
+  EXPECT_TRUE(exec::test::assertEqualResults(expected, actual));
+}
+
+// A fragment whose output layout is empty ships rows that carry no columns --
+// the build side of a cross join that projects nothing, for instance. A cuDF
+// table derives num_rows() from its columns, so once such a payload is packed
+// it can no longer report its own cardinality: the count only survives if it
+// travels beside the data, in MetadataMsg on the remote path and in the
+// registry entry on the intra-node one.
+//
+// The row count is the entire observable result here, which is the point. With
+// the count derived from the packed table instead, UcxExchange rebuilt a 0-row
+// vector and the consumer task died on
+// "Operator::getOutput() must return nullptr or a non-empty vector", which a
+// downstream global aggregation would then swallow into a wrong scalar rather
+// than an error -- SELECT count(*) over such a plan returned 0.
+TEST_P(UcxExchangeTest, zeroColumnPayloadKeepsItsRowCount) {
+  // This test doesn't use parameters - run only for the first param set.
+  if (GetParam() != generateTestParams().front()) {
+    GTEST_SKIP() << "zeroColumnPayloadKeepsItsRowCount: runs only once";
+  }
+
+  registerSerdes();
+  const auto taskPrefix = getUniqueTaskPrefix();
+
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+
+  // Zero columns, non-zero rows, staged on the host so that CudfFromVelox takes
+  // its zero-column path and hands UcxPartitionedOutput a CudfVector whose
+  // size() is the only remaining record of the cardinality.
+  const RowTypePtr zeroColumnRowType = ROW({});
+  constexpr vector_size_t kRowsPerBatch = 125;
+  constexpr int kNumBatches = 2;
+  constexpr int64_t kExpectedRows =
+      static_cast<int64_t>(kNumBatches) * kRowsPerBatch;
+
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int i = 0; i < kNumBatches; ++i) {
+    batches.push_back(
+        std::make_shared<RowVector>(
+            pool_.get(),
+            zeroColumnRowType,
+            BufferPtr(nullptr),
+            kRowsPerBatch,
+            std::vector<VectorPtr>{}));
+  }
+
+  core::PlanNodeId exchangeNodeId;
+  auto consumerPlan = exec::test::PlanBuilder()
+                          .exchange(
+                              zeroColumnRowType,
+                              taskShuffleSerdeKind(),
+                              std::string{core::TransportKind::kUcx})
+                          .capturePlanNodeId(exchangeNodeId)
+                          .planFragment();
+
+  const auto producerTaskId = taskPrefix + "zeroColumnProducer";
+  auto producerTasks = startTaskShuffleProducers(
+      std::string{core::TransportKind::kUcx}, {{producerTaskId, batches}});
+
+  // Not runTaskShuffle(): its toHost() converts through taskShuffleRowType(),
+  // and there is nothing to convert here. The counts are read directly instead.
+  TaskShuffleResults results;
+  auto consumerTask = makeTaskShuffleTask(
+      taskPrefix + "zeroColumnConsumer", consumerPlan, results.consumer());
+  consumerTask->start(1);
+  consumerTask->addSplit(exchangeNodeId, remoteSplit(producerTaskId, 0));
+  consumerTask->noMoreSplits(exchangeNodeId);
+
+  ASSERT_TRUE(
+      exec::test::waitForTaskCompletion(
+          consumerTask.get(), kTaskShuffleMaxWaitMicros))
+      << "Consumer task did not complete";
+  for (const auto& task : producerTasks) {
+    ASSERT_TRUE(
+        exec::test::waitForTaskCompletion(
+            task.get(), kTaskShuffleMaxWaitMicros))
+        << "Producer task did not complete: " << task->taskId();
+  }
+
+  int64_t receivedRows = 0;
+  for (const auto& batch : results.batches()) {
+    EXPECT_EQ(batch->type()->size(), 0) << "expected a column-less batch";
+    receivedRows += batch->size();
+  }
+  // Drop the consumer's vectors before the Tasks go out of scope, for the
+  // reason given in runTaskShuffle().
+  results.clear();
+
+  EXPECT_EQ(receivedRows, kExpectedRows);
+}
+
+// End-to-end guard on the merge path this tree restored: a kUcx
+// MergeExchangeNode runs as UcxExchange followed by CudfOrderBy, because
+// UcxExchangeClient multiplexes every source into one queue and so destroys the
+// per-source orderings exec::MergeExchange relies on. The transport builds only
+// the exchange; the sort is spliced in behind it by the cuDF
+// driver-adaptation pass, which is also what renumbers the operator ids.
+//
+// Two properties are asserted, and only two: global ordering, since nothing
+// about merge internals, batch boundaries or per-source runs survives that
+// substitution, and the shape of the resulting operator pipeline, since that is
+// where the expansion and the renumbering are observable.
+TEST_P(UcxExchangeTest, mergeExchangeOverUcxIsGloballyOrdered) {
+  // This test doesn't use parameters - run only for the first param set.
+  if (GetParam() != generateTestParams().front()) {
+    GTEST_SKIP() << "mergeExchangeOverUcxIsGloballyOrdered: runs only once";
+  }
+
+  registerSerdes();
+  const auto taskPrefix = getUniqueTaskPrefix();
+
+  // Start from an empty pair of registries so the assertions below prove that
+  // registerCudf() -- the path a real worker takes with cudf.exchange enabled
+  // -- is what seeds the kUcx transport on both sides of the edge.
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+  auto exchangeEntry = exec::ExchangeTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(exchangeEntry, nullptr);
+  // Without this, Task fails the MergeExchangeNode before any driver is built.
+  ASSERT_NE(exchangeEntry->makeMergeExchangeOperator, nullptr);
+  ASSERT_NE(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+
+  // Two producers with interleaved key ranges: neither is globally ordered on
+  // its own, so an ordered result can only come from ordering across both.
+  // CudfOrderBy accumulates every batch on the device before sorting, so the
+  // row counts stay small.
+  constexpr vector_size_t kNumRowsPerProducer = 512;
+  constexpr int kNumProducers = 2;
+  std::vector<RowVectorPtr> expected;
+  std::vector<TaskShuffleProducer> producers;
+  for (int i = 0; i < kNumProducers; ++i) {
+    auto batch = makeTaskShuffleBatch(
+        pool_.get(),
+        /*firstValue=*/i,
+        /*stride=*/kNumProducers,
+        kNumRowsPerProducer);
+    expected.push_back(batch);
+    // Host batches: CompileState puts a CudfFromVelox between Values and
+    // UcxPartitionedOutput, see taskShuffleOverUcx.
+    producers.emplace_back(
+        taskPrefix + "mergeProducer" + std::to_string(i),
+        std::vector<RowVectorPtr>{batch});
+  }
+
+  core::PlanNodeId mergeNodeId;
+  auto consumerPlan = exec::test::PlanBuilder()
+                          .mergeExchange(
+                              taskShuffleRowType(),
+                              {"c0"},
+                              taskShuffleSerdeKind(),
+                              std::string{core::TransportKind::kUcx})
+                          .capturePlanNodeId(mergeNodeId)
+                          .planFragment();
+
+  exec::TaskStats consumerStats;
+  auto actual = runTaskShuffle(
+      std::string{core::TransportKind::kUcx},
+      producers,
+      consumerPlan,
+      mergeNodeId,
+      taskPrefix + "mergeConsumer",
+      [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
+      pool_.get(),
+      &consumerStats);
+
+  ASSERT_EQ(totalRows(actual), kNumProducers * kNumRowsPerProducer);
+  EXPECT_TRUE(exec::test::assertEqualResults(expected, actual));
+
+  // One plan node became four operators: the exchange the transport built, the
+  // sort the cuDF pass spliced in behind it, the conversion back to host
+  // vectors that the CallbackSink needs, and the sink. The ids have to be
+  // consecutive from zero -- Driver::initializeOperatorStats indexes the stats
+  // by operatorId, so a repeated id would silently overwrite a slot and leave a
+  // nameless one behind.
+  ASSERT_EQ(consumerStats.pipelineStats.size(), 1);
+  EXPECT_THAT(
+      operatorTypesOf(consumerStats.pipelineStats[0]),
+      testing::ElementsAre(
+          "UcxExchange", "CudfOrderBy", "CudfToVelox", "CallbackSink"));
+  EXPECT_THAT(
+      operatorIdsOf(consumerStats.pipelineStats[0]),
+      testing::ElementsAre(0, 1, 2, 3));
+
+  const auto sortKeys = sortKeysOf(actual);
+  const auto firstUnordered = firstUnorderedIndex(sortKeys);
+  EXPECT_EQ(firstUnordered, static_cast<int64_t>(sortKeys.size()))
+      << "MergeExchange over UCX produced unordered output at index: "
+      << firstUnordered;
+}
+
+// The same merge expansion as above, but in the driver shape where the operator
+// ids are not repaired by anything else: every operator of the pipeline runs on
+// the GPU, so the cuDF pass splices in no conversion operator and the merge
+// expansion is the only replacement made.
+//
+// That distinction is the whole point of the case. When the transport built
+// both operators itself it numbered them by plan node, giving them the same
+// operatorId, and any unrelated splice hid it again --
+// DriverFactory::replaceOperators renumbers the entire driver, so a single
+// CudfToVelox in front of a CPU sink is enough to make the ids come out
+// consecutive. mergeExchangeOverUcxIsGloballyOrdered ends in a CallbackSink and
+// therefore cannot see the difference. This pipeline ends in
+// UcxPartitionedOutput, which consumes CudfVectors, so nothing is spliced and
+// the ids are whatever produced them: [0, 1, 2] when the expansion goes through
+// replaceOperators, and a repeated id when it does not -- [0, 0, 2] with the
+// registry-side expansion, which numbered the output operator after two
+// operators rather than one.
+//
+// Three Tasks are needed to reach that shape: the two producers feed the merge,
+// and a third Task drains the sorted output so the middle Task can finish and
+// report its stats.
+TEST_P(UcxExchangeTest, mergeExchangeOverUcxNumbersOperatorsConsecutively) {
+  // This test doesn't use parameters - run only for the first param set.
+  if (GetParam() != generateTestParams().front()) {
+    GTEST_SKIP()
+        << "mergeExchangeOverUcxNumbersOperatorsConsecutively: runs only once";
+  }
+
+  registerSerdes();
+  const auto taskPrefix = getUniqueTaskPrefix();
+  const auto ucx = std::string{core::TransportKind::kUcx};
+
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+
+  // Interleaved key ranges again, so the output cannot be ordered by accident.
+  constexpr vector_size_t kNumRowsPerProducer = 512;
+  constexpr int kNumProducers = 2;
+  std::vector<RowVectorPtr> expected;
+  std::vector<TaskShuffleProducer> producers;
+  for (int i = 0; i < kNumProducers; ++i) {
+    auto batch = makeTaskShuffleBatch(
+        pool_.get(),
+        /*firstValue=*/i,
+        /*stride=*/kNumProducers,
+        kNumRowsPerProducer);
+    expected.push_back(batch);
+    producers.emplace_back(
+        taskPrefix + "gpuMergeProducer" + std::to_string(i),
+        std::vector<RowVectorPtr>{batch});
+  }
+  auto producerTasks = startTaskShuffleProducers(ucx, producers);
+
+  // The Task under test: a kUcx merge exchange straight into a kUcx partitioned
+  // output, which is the all-GPU driver.
+  core::PlanNodeId mergeNodeId;
+  auto sorterPlan =
+      exec::test::PlanBuilder()
+          .mergeExchange(
+              taskShuffleRowType(), {"c0"}, taskShuffleSerdeKind(), ucx)
+          .capturePlanNodeId(mergeNodeId)
+          .partitionedOutput(
+              /*keys=*/{},
+              /*numPartitions=*/1,
+              /*outputLayout=*/{},
+              taskShuffleSerdeKind(),
+              ucx)
+          .planFragment();
+  const auto sorterTaskId = taskPrefix + "gpuMergeSorter";
+  auto sorterTask = makeTaskShuffleTask(sorterTaskId, sorterPlan, nullptr);
+  sorterTask->start(1);
+  for (const auto& producer : producers) {
+    sorterTask->addSplit(mergeNodeId, remoteSplit(producer.first, 0));
+  }
+  sorterTask->noMoreSplits(mergeNodeId);
+
+  // A plain exchange to drain the sorted output. Its own pipeline is not under
+  // test; it exists so the sorter's output buffer is consumed.
+  core::PlanNodeId drainNodeId;
+  auto drainPlan =
+      exec::test::PlanBuilder()
+          .exchange(taskShuffleRowType(), taskShuffleSerdeKind(), ucx)
+          .capturePlanNodeId(drainNodeId)
+          .planFragment();
+  TaskShuffleResults results;
+  auto drainTask = makeTaskShuffleTask(
+      taskPrefix + "gpuMergeDrain", drainPlan, results.consumer());
+  drainTask->start(1);
+  drainTask->addSplit(drainNodeId, remoteSplit(sorterTaskId, 0));
+  drainTask->noMoreSplits(drainNodeId);
+
+  ASSERT_TRUE(
+      exec::test::waitForTaskCompletion(
+          drainTask.get(), kTaskShuffleMaxWaitMicros))
+      << "Drain task did not complete";
+  ASSERT_TRUE(
+      exec::test::waitForTaskCompletion(
+          sorterTask.get(), kTaskShuffleMaxWaitMicros))
+      << "Sorter task did not complete";
+  for (const auto& task : producerTasks) {
+    ASSERT_TRUE(
+        exec::test::waitForTaskCompletion(
+            task.get(), kTaskShuffleMaxWaitMicros))
+        << "Producer task did not complete: " << task->taskId();
+  }
+
+  const auto sorterStats = sorterTask->taskStats();
+
+  std::vector<RowVectorPtr> actual;
+  for (const auto& batch : results.batches()) {
+    actual.push_back(toHost(batch, pool_.get()));
+  }
+  // The consumer's vectors come from its operator pools, which check for leaks
+  // when the Task is destroyed; 'results' outlives 'drainTask' by declaration
+  // order, so let them go here. See runTaskShuffle.
+  results.clear();
+
+  ASSERT_EQ(sorterStats.pipelineStats.size(), 1);
+  EXPECT_THAT(
+      operatorTypesOf(sorterStats.pipelineStats[0]),
+      testing::ElementsAre(
+          "UcxExchange", "CudfOrderBy", "cudfPartitionedOutput"));
+  EXPECT_THAT(
+      operatorIdsOf(sorterStats.pipelineStats[0]),
+      testing::ElementsAre(0, 1, 2));
+
+  // The consequence of a repeated id, asserted directly: stats.resize() default
+  // constructs OperatorStats(0, 0, "", ""), and every slot has to be claimed by
+  // an operator afterwards.
+  for (const auto& pipeline : sorterStats.pipelineStats) {
+    for (const auto& stats : pipeline.operatorStats) {
+      EXPECT_FALSE(stats.operatorType.empty())
+          << "Operator stats slot left unwritten at operatorId: "
+          << stats.operatorId << ", planNodeId: " << stats.planNodeId;
+    }
+  }
+
+  // The sort still has to be a sort, or the assertions above would be happy
+  // with a pipeline that merely has the right shape.
+  ASSERT_EQ(totalRows(actual), kNumProducers * kNumRowsPerProducer);
+  EXPECT_TRUE(exec::test::assertEqualResults(expected, actual));
+  const auto sortKeys = sortKeysOf(actual);
+  const auto firstUnordered = firstUnorderedIndex(sortKeys);
+  EXPECT_EQ(firstUnordered, static_cast<int64_t>(sortKeys.size()))
+      << "All-GPU merge over UCX produced unordered output at index: "
+      << firstUnordered;
+}
+
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
 std::shared_ptr<std::thread> UcxExchangeTest::communicatorThread_;
 std::shared_ptr<Communicator> UcxExchangeTest::communicator_;
 std::atomic<uint32_t> UcxExchangeTest::testCounter_{0};
+uint16_t UcxExchangeTest::communicatorPort_{0};
 
 } // namespace facebook::velox::ucx_exchange

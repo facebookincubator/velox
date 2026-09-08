@@ -33,6 +33,15 @@ class CudfOrderBy : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const core::OrderByNode>& orderByNode);
 
+  /// Constructs from a MergeExchangeNode, which supplies the same sorting keys
+  /// and orders an OrderByNode would. The UCX exchange transport builds its
+  /// merge exchange as UcxExchange followed by this operator, since the sort
+  /// that MergeExchange does on the CPU happens on the GPU here.
+  CudfOrderBy(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      const std::shared_ptr<const core::MergeExchangeNode>& mergeExchangeNode);
+
   bool needsInput() const override {
     return !finished_;
   }
@@ -52,8 +61,13 @@ class CudfOrderBy : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  // Translates 'sortingKeys' and 'sortingOrders' into the cuDF sort-key
+  // channels and orders used by doNoMoreInput(), resolved against outputType_.
+  void initializeSortKeys(
+      const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders);
+
   CudfVectorPtr outputTable_;
-  std::shared_ptr<const core::OrderByNode> orderByNode_;
   std::vector<CudfVectorPtr> inputs_;
   std::vector<cudf::size_type> sortKeys_;
   std::vector<cudf::order> columnOrder_;
