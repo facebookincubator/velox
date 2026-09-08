@@ -201,7 +201,7 @@ TEST_F(JsonExtractScalarTest, invalidJson) {
 }
 
 TEST_F(JsonExtractScalarTest, escapedString) {
-  // Verify the the returned string is unescaped.
+  // Verify the returned string is unescaped.
   EXPECT_EQ(
       jsonExtractScalar(R"({"x": {"a" : 1, "b" : "b\/c"} })", "$.x.b"), "b/c");
 }

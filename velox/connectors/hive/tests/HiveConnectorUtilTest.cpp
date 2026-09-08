@@ -23,6 +23,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/expression/Expr.h"
@@ -206,12 +207,10 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   };
 
   auto checkColumnMappingMode = [&]() {
-    auto expectedMappingMode = dwio::common::ColumnMappingMode::kPosition;
-    if (fileFormat == FileFormat::DWRF || fileFormat == FileFormat::ORC) {
-      expectedMappingMode = hiveConfig->isOrcUseColumnNames(&sessionProperties)
-          ? dwio::common::ColumnMappingMode::kName
-          : dwio::common::ColumnMappingMode::kPosition;
-    }
+    const auto expectedMappingMode =
+        hiveConfig->useColumnNames(&sessionProperties)
+        ? dwio::common::ColumnMappingMode::kName
+        : dwio::common::ColumnMappingMode::kPosition;
     EXPECT_EQ(readerOptions.columnMappingMode(), expectedMappingMode);
   };
 
@@ -323,7 +322,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   customHiveConfigProps[hive::HiveConfig::kMaxCoalescedDistance] = "513KB";
   customHiveConfigProps[hive::HiveConfig::kFileColumnNamesReadAsLowerCase] =
       "true";
-  customHiveConfigProps[hive::HiveConfig::kOrcUseColumnNames] = "true";
+  customHiveConfigProps["hive.use-column-names"] = "true";
   customHiveConfigProps[hive::HiveConfig::kFilePreloadThreshold] = "9999";
   customHiveConfigProps[hive::HiveConfig::kPrefetchRowGroups] = "10";
   customHiveConfigProps[hive::HiveConfig::kCacheMetadata] = "true";
@@ -351,6 +350,9 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   EXPECT_TRUE(readerOptions.cacheMetadata());
   clearDynamicParameters(FileFormat::ORC);
   performConfigure();
+  EXPECT_EQ(
+      readerOptions.maxCoalesceDistance(),
+      hiveConfig->maxCoalescedDistanceBytes(&sessionProperties));
   checkColumnMappingMode();
   clearDynamicParameters(FileFormat::PARQUET);
   performConfigure();
@@ -483,7 +485,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
     auto parquetOptions = checkedPointerCast<parquet::ParquetReaderOptions>(
         readerOptions.formatSpecificOptions());
     EXPECT_EQ(parquetOptions->footerSpeculativeIoSize, 7777);
-    EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold, 6666);
+    EXPECT_EQ(parquetOptions->footerMemoryTrackingThreshold(), 6666);
   }
 
   // Test Nimble format.

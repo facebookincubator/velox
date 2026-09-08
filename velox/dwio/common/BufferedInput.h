@@ -242,9 +242,12 @@ class BufferedInput {
 
  protected:
   static int adjustedReadPct(const cache::TrackingData& trackingData) {
-    // When this method is called, there is one more reference that is already
-    // counted, but the corresponding read (if exists) has not happened yet.  So
-    // we must count one fewer reference at this point.
+    // Exclude the references made since the last read (lastReferencedBytes) so
+    // the percentage counts only bytes that have already had a chance to be
+    // read. Because lastReferencedBytes accumulates every reference in the
+    // current load unit and resets on the next read, this stays correct even
+    // when many streams share one trackingId -- e.g. a flat map's per-key value
+    // streams -- and a single unit produces many references.
     const auto referencedBytes =
         trackingData.referencedBytes - trackingData.lastReferencedBytes;
     if (referencedBytes == 0) {

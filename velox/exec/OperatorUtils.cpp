@@ -127,23 +127,34 @@ void gatherCopy(
 // per event. This function returns true for such metrics.
 bool shouldAggregateRuntimeMetric(const std::string& name) {
   static const folly::F14FastSet<std::string> metricNames{
-      "dataSourceAddSplitWallNanos",
-      "dataSourceLazyWallNanos",
-      "queuedWallNanos",
-      "flushTimes",
-      "driverCpuTimeNanos",
-      "ioWaitWallNanos",
-      "storageReadWallNanos",
-      "ssdCacheReadWallNanos",
       "cacheWaitWallNanos",
       "coalescedSsdLoadWallNanos",
       "coalescedStorageLoadWallNanos",
+      "dataSourceAddSplitWallNanos",
+      "dataSourceLazyCpuNanos",
+      "dataSourceLazyWallNanos",
+      "dataSourceLazyInputBytes",
+      "dataSourceReadWallNanos",
+      "driverCpuTimeNanos",
+      "flushTimes",
+      "ioWaitWallNanos",
+      "prefetchBytes",
+      "preloadSplitPrepareTimeNanos",
+      "preloadedSplits",
+      "ramReadBytes",
+      "readyPreloadedSplits",
       "rpcCongestionWindowFinal",
       "rpcPeakInFlight",
       "rpcBaselineRttNanos",
       "rpcRttMinWallNanos",
       "rpcRttMaxWallNanos",
       "rpcStreamingMode",
+      "queuedWallNanos",
+      "storageReadWallNanos",
+      "storageReadBytes",
+      "ssdCacheReadWallNanos",
+      "waitForPreloadSplitNanos",
+      "parquet.pageLoadTimeNanos",
   };
   if (metricNames.contains(name)) {
     return true;
@@ -489,12 +500,8 @@ void addOperatorRuntimeStats(
     std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  auto [statIt, inserted] =
-      stats.emplace(std::string(name), RuntimeMetric(value.unit));
-  if (!inserted) {
-    VELOX_CHECK_EQ(statIt->second.unit, value.unit);
-  }
-  statIt->second.addValue(value.value);
+  auto [statIt, unused] = stats.try_emplace(std::string(name), value.unit);
+  statIt->second.merge(value);
 }
 
 void setOperatorRuntimeStats(

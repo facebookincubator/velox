@@ -44,8 +44,12 @@
 #include "velox/exec/rpc/RPCState.h"
 
 #include <folly/futures/Promise.h>
+#include <folly/synchronization/CallOnce.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/memory/Memory.h"
+
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <set>
@@ -367,6 +371,42 @@ TEST_F(RPCStateTest, inputBatchStorageAndRelease) {
 
   // Release all rows from batch 2 at once.
   state_->releaseRows(batchIdx2, 2);
+}
+
+// A crashed worker's stack: an abandoned AI query tears down the Task while an
+// RPC is still in flight; the callback holds a shared_ptr<RPCState>, so the
+// retained input vectors outlive the pools that allocated them. Either the
+// arbitrator's reservedBytes() == 0 check throws from ~MemoryPoolImpl() and
+// terminates the worker, or the late callback frees into pools already gone.
+// close() must therefore drop the vectors itself, on the driver thread, and
+// not rely on the reference count reaching zero in time.
+TEST_F(RPCStateTest, releaseAllInputBatchesDropsVectorsWhileStateIsStillHeld) {
+  // This binary does not stand up a MemoryManager; do it once for this test.
+  static folly::once_flag initOnce;
+  folly::call_once(initOnce, [] { memory::MemoryManager::initialize({}); });
+  auto pool = memory::memoryManager()->addLeafPool("releaseAllInputBatches");
+  VectorPtr vector = BaseVector::create(BIGINT(), 8, pool.get());
+
+  // Two batches, one still holding "active" rows: the abandoned-query case,
+  // where releaseRows() never runs because the rows are never output.
+  state_->storeInputBatch(std::vector<VectorPtr>{vector}, /*rowCount=*/4);
+  state_->storeInputBatch(std::vector<VectorPtr>{vector}, /*rowCount=*/4);
+  EXPECT_GT(vector.use_count(), 1);
+
+  // Stand in for an in-flight callback still holding the state alive.
+  auto callbackRef = state_;
+
+  state_->releaseAllInputBatches();
+
+  // The state object survives, but owns none of the pool-backed memory: this
+  // test holds the only remaining reference to the vector.
+  EXPECT_EQ(vector.use_count(), 1);
+  EXPECT_TRUE(state_->getInputBatchColumns(0).empty());
+  EXPECT_TRUE(state_->getInputBatchColumns(1).empty());
+
+  // Idempotent — close() may run after rows were already released.
+  state_->releaseAllInputBatches();
+  EXPECT_EQ(vector.use_count(), 1);
 }
 
 TEST_F(RPCStateTest, batchRowLocationsCarriedThrough) {
@@ -738,6 +778,68 @@ TEST_F(RPCStateTest, batchRttExcludesPollDelay) {
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::milliseconds(kPollDelayMs))
           .count());
+}
+
+TEST_F(RPCStateTest, batchWaiterNotOrphanedByCompletionDrainRace) {
+  // Regression guard for the completion-drain race in tryPollBatchOrWait. The
+  // batch completion callback stamps completionTimeNs and drains the waiter
+  // list under mutex_ BEFORE the batch future becomes ready (the future readies
+  // only when the callback returns). A poller that registers a waiter in that
+  // window
+  // -- drain already passed, future not yet ready -- would be orphaned, and at
+  // a window of 1 (the completing batch is the last in flight) the
+  // single-consumer driver would park forever. Race a completing batch against
+  // a poller many times and assert every park is fulfilled promptly (self-woken
+  // via the completionTimeNs guard), never orphaned.
+  constexpr int kIterations = 500;
+  for (int iter = 0; iter < kIterations; ++iter) {
+    auto state = std::make_shared<RPCState>();
+    state->setStreamingMode(RPCStreamingMode::kBatch);
+    state->setMaxWindow(1); // the completing batch is the last in flight
+
+    auto [promise, future] =
+        folly::makePromiseContract<std::vector<RPCResponse>>();
+    state->addPendingBatch(state, std::move(future), {});
+
+    // Complete on another thread so its inline drain races the poller below;
+    // the atomic gate aligns the two so the interleaving is exercised.
+    std::atomic<bool> go{false};
+    std::thread completer([&go, p = std::move(promise)]() mutable {
+      while (!go.load(std::memory_order_acquire)) {
+      }
+      p.setValue(std::vector<RPCResponse>{});
+    });
+
+    go.store(true, std::memory_order_release);
+    bool claimed = false;
+    while (!claimed) {
+      ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+      std::optional<RPCState::ReadyBatch> readyBatch;
+      switch (state->tryPollBatchOrWait(&waitFuture, &readyBatch)) {
+        case RPCState::BatchPollResult::kGotBatch:
+          claimed = true;
+          break;
+        case RPCState::BatchPollResult::kMustWait: {
+          // A legitimately-registered or self-woken waiter is fulfilled
+          // promptly; an orphaned one never is. Bound the wait so a regression
+          // fails cleanly instead of hanging the test.
+          auto f = std::move(waitFuture);
+          auto deadline =
+              std::chrono::steady_clock::now() + std::chrono::seconds(10);
+          while (!f.isReady()) {
+            ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+                << "waiter orphaned by completion-drain race at iter " << iter;
+            /* sleep override */
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+          break;
+        }
+        case RPCState::BatchPollResult::kFinished:
+          FAIL() << "unexpected kFinished while a batch is in flight";
+      }
+    }
+    completer.join();
+  }
 }
 
 } // namespace

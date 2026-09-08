@@ -870,6 +870,102 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
       .assertResults("SELECT sum(d) AS s FROM tmp");
 }
 
+// Masked groupby sum: the mask null-injects raw input so cuDF sum excludes
+// masked rows. Group 3 is fully masked out -> NULL. Runs on GPU (fallback off).
+TEST_F(CudfDecimalTest, decimalSumMaskedGroupbySingle) {
+  auto input = makeRowVector(
+      {"k", "d", "m"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({true, false, true, true, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({"k"}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(d) FILTER (WHERE m) AS s FROM tmp GROUP BY k");
+}
+
+// Masked groupby sum across partial + final steps: the mask applies only at the
+// raw partial step and propagates through the serialized intermediate state.
+TEST_F(CudfDecimalTest, decimalSumMaskedPartialFinal) {
+  auto input = makeRowVector(
+      {"k", "d", "m"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({true, false, true, true, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"k"}, {"sum(d) AS s"}, {"m"})
+                  .finalAggregation()
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults(
+          "SELECT k, sum(d) FILTER (WHERE m) AS s FROM tmp GROUP BY k");
+}
+
+// Masked global (reduce) sum, including a NULL mask entry which is excluded.
+TEST_F(CudfDecimalTest, decimalSumMaskedGlobalSingle) {
+  auto input = makeRowVector(
+      {"d", "m"},
+      {
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeNullableFlatVector<bool>({true, false, true, std::nullopt, true}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
+}
+
+// Masked global (reduce) sum where every row is masked out: the input reduces
+// to the empty set, so the result is NULL. Runs on GPU (fallback off).
+TEST_F(CudfDecimalTest, decimalSumMaskedGlobalAllMasked) {
+  auto input = makeRowVector(
+      {"d", "m"},
+      {
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({false, false, false, false, false}),
+      });
+
+  std::vector<RowVectorPtr> vectors = {input};
+  createDuckDbTable(vectors);
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(vectors)
+                  .singleAggregation({}, {"sum(d) AS s"}, {"m"})
+                  .planNode();
+
+  facebook::velox::exec::test::AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
+}
+
 TEST_F(CudfDecimalTest, decimalSumGroupbySingleDecimal64Overflow) {
   // One group of 12 values of 9e17 (DECIMAL(18,0)) sums to 1.08e19, past 2^63.
   // sum(decimal(18,0)) -> decimal(38,0), computed in 128 bits, no wrap.
@@ -1130,6 +1226,147 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateDecimal128) {
       EXPECT_EQ(outSum[i], sums[i]);
     }
   }
+}
+
+// Reproduces the Q18 failure scenario: serializes a decimal sum state with
+// partial nulls, round-trips through Arrow (which compacts null rows to 0-byte
+// payloads), then deserializes. Without the null-count fix in
+// deserializeDecimalSumState, the payload size check would fire because
+// chars_size == (numRows - nullCount) * 32, not numRows * 32.
+TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  // Serialize a 3-row state where row 1 is null (sum-null, count == 0).
+  std::vector<int64_t> sums = {100, 0, 300};
+  std::vector<int64_t> counts = {1, 0, 2};
+  std::vector<bool> sumValid = {true, false, true};
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+
+  // Round-trip through Arrow (cuDF -> Velox VARBINARY -> cuDF STRING).
+  // Arrow stores null rows with 0-byte payloads, so the resulting cuDF STRING
+  // column has chars_size == (numRows - nullCount) * 32.
+  auto expectedType = ROW({{"s", VARBINARY()}});
+  auto veloxRow = with_arrow::toVeloxColumn(
+      cudf::table_view{{stateCol->view()}},
+      pool(),
+      expectedType,
+      "s",
+      stream,
+      mr);
+  auto compactTable = with_arrow::toCudfTable(veloxRow, pool(), stream, mr);
+  auto compactStateView = compactTable->view().column(0);
+
+  // Verify the column now has the compact layout.
+  cudf::strings_column_view strings(compactStateView);
+  EXPECT_LT(
+      strings.chars_size(stream),
+      static_cast<int64_t>(sums.size()) * 32); // 32 == kDecimalSumStateSize
+
+  auto result = deserializeDecimalSumState(compactStateView, 2, stream);
+
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  EXPECT_TRUE(isValidAt(outMask, 0));
+  EXPECT_FALSE(isValidAt(outMask, 1));
+  EXPECT_TRUE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(100));
+  EXPECT_EQ(outCount[0], 1);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(300));
+  EXPECT_EQ(outCount[2], 2);
+}
+
+// Trailing null: the offset for the last row equals chars_size, so the kernel
+// would read 32 bytes past the buffer end without the null-mask guard.
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateTrailingNullCompact) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  // 3-row state: [valid, valid, null].
+  std::vector<int64_t> sums = {100, 200, 0};
+  std::vector<int64_t> counts = {1, 2, 0};
+  std::vector<bool> sumValid = {true, true, false};
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+
+  auto expectedType = ROW({{"s", VARBINARY()}});
+  auto veloxRow = with_arrow::toVeloxColumn(
+      cudf::table_view{{stateCol->view()}},
+      pool(),
+      expectedType,
+      "s",
+      stream,
+      mr);
+  auto compactTable = with_arrow::toCudfTable(veloxRow, pool(), stream, mr);
+  auto compactStateView = compactTable->view().column(0);
+
+  cudf::strings_column_view strings(compactStateView);
+  EXPECT_LT(strings.chars_size(stream), static_cast<int64_t>(sums.size()) * 32);
+
+  auto result = deserializeDecimalSumState(compactStateView, 2, stream);
+
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  EXPECT_TRUE(isValidAt(outMask, 0));
+  EXPECT_TRUE(isValidAt(outMask, 1));
+  EXPECT_FALSE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(100));
+  EXPECT_EQ(outCount[0], 1);
+  EXPECT_EQ(outSum[1], static_cast<__int128_t>(200));
+  EXPECT_EQ(outCount[1], 2);
+}
+
+// Leading null: offset 0 overlaps the next valid row's data so the read is
+// in-bounds, but verify the null mask propagates correctly.
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateLeadingNullCompact) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  // 3-row state: [null, valid, valid].
+  std::vector<int64_t> sums = {0, 200, 300};
+  std::vector<int64_t> counts = {0, 2, 3};
+  std::vector<bool> sumValid = {false, true, true};
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+
+  auto expectedType = ROW({{"s", VARBINARY()}});
+  auto veloxRow = with_arrow::toVeloxColumn(
+      cudf::table_view{{stateCol->view()}},
+      pool(),
+      expectedType,
+      "s",
+      stream,
+      mr);
+  auto compactTable = with_arrow::toCudfTable(veloxRow, pool(), stream, mr);
+  auto compactStateView = compactTable->view().column(0);
+
+  cudf::strings_column_view strings(compactStateView);
+  EXPECT_LT(strings.chars_size(stream), static_cast<int64_t>(sums.size()) * 32);
+
+  auto result = deserializeDecimalSumState(compactStateView, 2, stream);
+
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  EXPECT_FALSE(isValidAt(outMask, 0));
+  EXPECT_TRUE(isValidAt(outMask, 1));
+  EXPECT_TRUE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[1], static_cast<__int128_t>(200));
+  EXPECT_EQ(outCount[1], 2);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(300));
+  EXPECT_EQ(outCount[2], 3);
 }
 
 TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {

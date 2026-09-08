@@ -325,7 +325,7 @@ class ArithmeticTest : public SparkFunctionBaseTest {
   static constexpr double kInfDouble = std::numeric_limits<double>::infinity();
 };
 
-TEST_F(ArithmeticTest, UnaryMinus) {
+TEST_F(ArithmeticTest, unaryMinus) {
   EXPECT_EQ(unaryminus<int8_t>(1), -1);
   EXPECT_EQ(unaryminus<int16_t>(2), -2);
   EXPECT_EQ(unaryminus<int32_t>(3), -3);
@@ -334,18 +334,34 @@ TEST_F(ArithmeticTest, UnaryMinus) {
   EXPECT_EQ(unaryminus<double>(6), -6);
 }
 
-TEST_F(ArithmeticTest, UnaryMinusOverflow) {
-  EXPECT_EQ(unaryminus<int8_t>(INT8_MIN), INT8_MIN);
-  EXPECT_EQ(unaryminus<int16_t>(INT16_MIN), INT16_MIN);
-  EXPECT_EQ(unaryminus<int32_t>(INT32_MIN), INT32_MIN);
-  EXPECT_EQ(unaryminus<int64_t>(INT64_MIN), INT64_MIN);
+TEST_F(ArithmeticTest, unaryMinusFloatEdgeCases) {
   EXPECT_EQ(unaryminus<float>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<float>(kNan).value_or(0)));
   EXPECT_EQ(unaryminus<double>(-kInf), kInf);
   EXPECT_TRUE(std::isnan(unaryminus<double>(kNan).value_or(0)));
 }
 
-TEST_F(ArithmeticTest, Divide) {
+TEST_F(ArithmeticTest, unaryMinusAnsi) {
+  // Test unaryminus with ANSI off: negating MIN_VALUE returns MIN_VALUE.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+
+  EXPECT_EQ(unaryminus<int8_t>(INT8_MIN), INT8_MIN);
+  EXPECT_EQ(unaryminus<int16_t>(INT16_MIN), INT16_MIN);
+  EXPECT_EQ(unaryminus<int32_t>(INT32_MIN), INT32_MIN);
+  EXPECT_EQ(unaryminus<int64_t>(INT64_MIN), INT64_MIN);
+
+  // Test unaryminus with ANSI on: negating MIN_VALUE throws.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+
+  VELOX_ASSERT_THROW(unaryminus<int8_t>(INT8_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int16_t>(INT16_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int32_t>(INT32_MIN), "Arithmetic overflow");
+  VELOX_ASSERT_THROW(unaryminus<int64_t>(INT64_MIN), "Arithmetic overflow");
+}
+
+TEST_F(ArithmeticTest, divide) {
   // Null cases.
   EXPECT_EQ(divide(std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(divide(std::nullopt, 1), std::nullopt);
@@ -513,7 +529,7 @@ class CeilFloorTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(CeilFloorTest, Limits) {
+TEST_F(CeilFloorTest, limits) {
   EXPECT_EQ(1, ceil<int64_t>(1));
   EXPECT_EQ(-1, ceil<int64_t>(-1));
   EXPECT_EQ(3, ceil<double>(2.878));

@@ -521,7 +521,7 @@ class ByteOutputStream {
   // Number of bits/bytes that have been written in the last element
   // of 'ranges_'. In a write situation, all non-last ranges are full
   // and the last may be partly full. The position in the last range
-  // is not necessarily the the end if there has been a seek.
+  // is not necessarily the end if there has been a seek.
   mutable int64_t lastRangeEnd_{0};
 
   template <typename T>

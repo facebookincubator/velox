@@ -17,11 +17,17 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
+/// Register collect_list aggregate function.
+/// @param names Names to use for the aggregate function.
+/// @param withCompanionFunctions Also register companion functions.
+/// @param overwrite Whether to overwrite existing entry in the function
+/// registry.
 void registerCollectListAggregate(
-    const std::string& prefix,
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite);
 

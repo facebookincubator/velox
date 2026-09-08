@@ -41,7 +41,7 @@ class SelectiveDwrfReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       StripeStreams& stripe,
       const StreamLabels& streamLabels,
-      dwio::common::ColumnReaderStatistics& stats,
+      dwio::common::SplitStats& stats,
       common::ScanSpec* scanSpec,
       FlatMapContext flatMapContext = {},
       bool isRoot = false) {

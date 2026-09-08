@@ -150,6 +150,33 @@ class DecodedVector {
     return hasExtraNulls_;
   }
 
+  /// Returns true if nulls() returns storage owned by this DecodedVector.
+  ///
+  /// Owned storage is overwritten by the next decode() and freed when this
+  /// object is destroyed. When this returns false the pointer outlives this
+  /// DecodedVector, because it belongs to the decoded vector itself, so a
+  /// caller building a longer-lived view over it may borrow it rather than
+  /// copy it.
+  ///
+  /// Materializes the bitmap if that has not happened yet, so the answer never
+  /// depends on call order. That costs nothing a caller does not already owe:
+  /// nulls() caches its result, and the one path that does real work -- the
+  /// gather into top-level row order -- only runs when there are nulls to
+  /// gather, which is when the caller wanted the bitmap anyway.
+  ///
+  /// Pass the same 'rows' as decode(), exactly as for nulls().
+  bool ownsNulls(const SelectivityVector* rows = nullptr);
+
+  /// Returns true if indices() returns storage owned by this DecodedVector,
+  /// with the same lifetime and borrowing rules as ownsNulls().
+  ///
+  /// A single dictionary wrapping is adopted by pointer rather than composed,
+  /// so it reports false and can be borrowed. Composing two or more wrappings
+  /// materializes indices here and reports true. A flat or constant input
+  /// materializes on first access to indices(); this answers for that result
+  /// without forcing it.
+  bool ownsIndices() const;
+
   /// Returns the mapping from top-level rows to rows in the base vector or
   /// data() buffer.
   ///
@@ -175,9 +202,15 @@ class DecodedVector {
     return indices_[idx];
   }
 
-  /// Returns a scalar value for the top-level row 'idx'.
+  /// Type of value returned depends on T. std::shared_ptr, the physical
+  /// representation of OPAQUE, is returned by const reference to avoid an
+  /// atomic refcount bump; every other type is returned by value.
   template <typename T>
-  T valueAt(vector_size_t idx) const {
+  using TValueAt = std::conditional_t<is_shared_ptr<T>::value, const T&, T>;
+
+  /// Returns the value for the top-level row 'idx'.
+  template <typename T>
+  TValueAt<T> valueAt(vector_size_t idx) const {
     return reinterpret_cast<const T*>(data_)[index(idx)];
   }
 
@@ -207,6 +240,51 @@ class DecodedVector {
 
     VELOX_DCHECK(indices_);
     return bits::isBitNull(nulls_, indices_[idx]);
+  }
+
+  /// Returns whether any decoded row is actually null, scanning the bitmap for
+  /// a definitive answer. mayHaveNulls() is only indeterminate: it is true
+  /// whenever a null buffer is present, even if no bit in it is set.
+  ///
+  /// Side effect (so it is non-const, like nulls()): the first call that finds
+  /// no nulls normalizes this view -- drops the null buffer pointer, clears
+  /// mayHaveNulls()/hasExtraNulls(), and invalidates the nulls() cache -- so
+  /// later null checks take the no-null fast path and repeated calls are O(1).
+  /// Only this decoded view is touched, never the base vector; a view that has
+  /// nulls is left unchanged.
+  ///
+  /// Scans only when a null buffer is present: bulk for flat and combined-nulls
+  /// encodings, O(1) for constants, O(size()) for a dictionary (nulls indexed
+  /// indirectly).
+  bool hasNulls() {
+    if (!mayHaveNulls_) {
+      return false;
+    }
+    bool anyNull = false;
+    if (nulls_ != nullptr) {
+      if (isIdentityMapping_ || hasExtraNulls_) {
+        // Bitmap is indexed directly by decoded row over [0, size()).
+        anyNull = !bits::isAllSet(nulls_, 0, size_);
+      } else if (isConstantMapping_) {
+        anyNull = bits::isBitNull(nulls_, 0);
+      } else {
+        // Dictionary without extra nulls: resolve each row's base index.
+        VELOX_DCHECK(indices_);
+        for (vector_size_t i = 0; i < size_; ++i) {
+          if (bits::isBitNull(nulls_, indices_[i])) {
+            anyNull = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!anyNull) {
+      nulls_ = nullptr;
+      mayHaveNulls_ = false;
+      hasExtraNulls_ = false;
+      allNulls_.reset();
+    }
+    return anyNull;
   }
 
   /// Invokes 'func(row)' for each null top-level row in [begin, end), in
@@ -395,9 +473,15 @@ class DecodedVector {
   static const std::vector<vector_size_t>& zeroIndices();
 
   bool indicesNotCopied() const {
-    return copiedIndices_.empty() || indices_ < copiedIndices_.data() ||
-        indices_ >= &copiedIndices_.back();
+    return copiedIndices_.empty() || indices_ != copiedIndices_.data();
   }
+
+  // Whether fillInIndices() would materialize into copiedIndices_ rather than
+  // hand back one of the shared static arrays. Only meaningful before
+  // indices() has run. Consulted by ownsIndices(), so a caller can ask whether
+  // it may borrow without paying for the materialization, and by
+  // fillInIndices() itself, so the rule lives in one place.
+  bool wouldCopyIndices() const;
 
   bool nullsNotCopied() const {
     return copiedNulls_.empty() || nulls_ != copiedNulls_.data();
@@ -515,12 +599,12 @@ class DecodedVector {
 };
 
 template <>
-inline bool DecodedVector::valueAt(vector_size_t idx) const {
+inline bool DecodedVector::valueAt<bool>(vector_size_t idx) const {
   return bits::isBitSet(reinterpret_cast<const uint64_t*>(data_), index(idx));
 }
 
 template <>
-inline int128_t DecodedVector::valueAt(vector_size_t idx) const {
+inline int128_t DecodedVector::valueAt<int128_t>(vector_size_t idx) const {
   auto valuePosition =
       reinterpret_cast<const char*>(data_) + sizeof(int128_t) * index(idx);
   return HugeInt::deserialize(valuePosition);

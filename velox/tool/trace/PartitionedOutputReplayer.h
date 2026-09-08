@@ -20,7 +20,7 @@
 #include <utility>
 
 #include "velox/core/PlanNode.h"
-#include "velox/exec/OutputBufferManager.h"
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/tool/trace/OperatorReplayerBase.h"
 
 namespace facebook::velox::tool::trace {
@@ -28,7 +28,7 @@ namespace facebook::velox::tool::trace {
 /// Concurrently gets all partitioned buffer content (vec<IOBuf>) for every
 /// partition.
 void consumeAllData(
-    const std::shared_ptr<exec::OutputBufferManager>& bufferManager,
+    const std::shared_ptr<exec::DefaultOutputBufferManager>& bufferManager,
     const std::string& taskId,
     uint32_t numPartitions,
     folly::Executor* executor,
@@ -63,8 +63,8 @@ class PartitionedOutputReplayer final : public OperatorReplayerBase {
 
   const core::PartitionedOutputNode* const originalNode_;
   const std::string serdeKind_;
-  const std::shared_ptr<exec::OutputBufferManager> bufferManager_{
-      exec::OutputBufferManager::getInstanceRef()};
+  const std::shared_ptr<exec::DefaultOutputBufferManager> bufferManager_{
+      exec::DefaultOutputBufferManager::getInstanceRef()};
   const std::unique_ptr<folly::Executor> executor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency(),

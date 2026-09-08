@@ -74,10 +74,11 @@ adapters | dep-graph)
   if [[ $BUILD_PROFILE == "adapters" ]]; then
     # WAVE / CUDF gate code under velox/experimental/, which the
     # planner short-circuits to full mode via FULL_BUILD_PREFIXES,
-    # so dep-graph doesn't need their targets. CUDF is GCC-only.
-    CMAKE_FLAGS+=(-DVELOX_ENABLE_WAVE=ON)
+    # so dep-graph doesn't need their targets. Both are CUDA (nvcc)
+    # builds and nvcc with a Clang host trips on fmt's _BitInt usage,
+    # so keep WAVE and CUDF GCC-only.
     if [[ ${USE_CLANG:-false} != "true" ]]; then
-      CMAKE_FLAGS+=(-DVELOX_ENABLE_CUDF=ON)
+      CMAKE_FLAGS+=(-DVELOX_ENABLE_WAVE=ON -DVELOX_ENABLE_CUDF=ON)
     fi
   fi
   ;;
@@ -100,6 +101,13 @@ ubuntu-debug | ubuntu-bundled-deps)
     # libnuma is baked into the velox-dev:ubuntu-22.04 image. ubuntu-bundled-deps
     # runs on a bare runner that doesn't install it, so it can't enable CXL.
     CMAKE_FLAGS+=(-DVELOX_ENABLE_CXL=ON)
+  fi
+  if [[ $BUILD_PROFILE == "ubuntu-bundled-deps" ]]; then
+    # Nimble needs OpenZL and FSST, neither of which is packaged by any distro
+    # (FSST has no releases at all), so BUNDLED is the only resolution mode that
+    # can satisfy them. This profile is therefore the one place in CI where
+    # VELOX_ENABLE_NIMBLE=ON can be exercised.
+    CMAKE_FLAGS+=(-DVELOX_ENABLE_NIMBLE=ON)
   fi
   if [[ $BUILD_PROFILE == "ubuntu-debug" && ${USE_CLANG:-false} != "true" ]]; then
     # REMOTE_FUNCTIONS pulls in fbthrift / fizz / wangle / mvfst, which

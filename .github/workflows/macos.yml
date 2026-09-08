@@ -62,7 +62,7 @@ jobs:
       INSTALL_PREFIX: /tmp/deps-install
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -100,10 +100,6 @@ jobs:
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
-          if (( majorVersion == 13 )); then
-            brew uninstall cmake
-            pipx install --force cmake==3.31
-          fi
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
       - name: Configure Build

@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -629,7 +630,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -641,7 +642,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][BROADCAST {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][BROADCAST {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -653,7 +654,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][SINGLE {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][SINGLE {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -666,7 +667,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -690,7 +691,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
   }
@@ -789,6 +790,51 @@ TEST_F(PlanNodeToStringTest, tableScan) {
     ASSERT_EQ(
         "-- TableScan[0][table: hive_table, remaining filter: (not(like(ROW[\"comment\"],%special%request%)))] "
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, tableScanAssignments) {
+  {
+    // A complex column shows the parts the scan asks for; a scalar column
+    // shows nothing.
+    RowTypePtr rowType{ROW({
+        {"m", MAP(VARCHAR(), BIGINT())},
+        {"n", BIGINT()},
+    })};
+
+    connector::ColumnHandleMap assignments;
+    assignments["m"] = test::HiveConnectorTestBase::makeColumnHandle(
+        "m", rowType->childAt(0), {"m[\"k\"]"});
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(1));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table, assignments: [m := HiveColumnHandle "
+        "[name: m, columnType: Regular, dataType: MAP<VARCHAR,BIGINT>, "
+        "requiredSubfields: [ m[\"k\"] ]]]] "
+        "-> m:MAP<VARCHAR,BIGINT>, n:BIGINT\n",
+        plan->toString(true, false));
+  }
+
+  {
+    // A scan of scalars alone adds nothing.
+    RowTypePtr rowType{ROW("n", BIGINT())};
+
+    connector::ColumnHandleMap assignments;
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(0));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table] -> n:BIGINT\n",
         plan->toString(true, false));
   }
 }
@@ -1043,6 +1089,21 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
     ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
     ASSERT_EQ(
         "-- TableWrite[1][test-hive, c0, c1, c2] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with NOT NULL columns.
+  {
+    auto plan = PlanBuilder()
+                    .values({data_})
+                    .startTableWriter()
+                    .outputDirectoryPath(outputDir->getPath())
+                    .notNullColumns({"c0", "c2"})
+                    .endTableWriter()
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0 not null, c1, c2 not null] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
         plan->toString(true, false));
   }
 

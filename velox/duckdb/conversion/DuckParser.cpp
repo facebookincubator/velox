@@ -32,6 +32,7 @@
 #include <duckdb/parser/expression/window_expression.hpp> // @manual
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
+#include <fmt/format.h>
 
 namespace facebook::velox::duckdb {
 
@@ -401,7 +402,7 @@ core::ExprPtr parseConjunctionExpr(
 
   if (conjExpr.children.size() < 2) {
     throw std::invalid_argument(
-        folly::sformat(
+        fmt::format(
             "Malformed conjunction expression "
             "(expected at least 2 input columns, got {}).",
             conjExpr.children.size()));
@@ -1078,8 +1079,13 @@ core::WindowCallExprPtr buildWindowCallExpr(
   }
 
   auto endType = parseBoundType(windowExpr.end);
+  // Without ORDER BY every row is a peer, so a RANGE frame ending at the
+  // current row covers the whole partition. That is the frame a window with no
+  // frame clause gets. A ROWS frame counts rows rather than peers and ends
+  // where it says, so read the DuckDB boundary: `parseBoundType` maps both
+  // spellings of CURRENT ROW to the same bound.
   if (options.correctWindowFrameDefault && orderByKeys.empty() &&
-      endType == core::WindowCallExpr::BoundType::kCurrentRow) {
+      windowExpr.end == WindowBoundary::CURRENT_ROW_RANGE) {
     endType = core::WindowCallExpr::BoundType::kUnboundedFollowing;
   }
 

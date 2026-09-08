@@ -399,6 +399,8 @@ TypePtr ConjunctExpr::resolveType(const std::vector<TypePtr>& argTypes) {
       "Conjunct expressions expect at least one argument, received: {}",
       argTypes.size());
 
+  // An UNKNOWN argument cannot be evaluated, but it is allowed here because
+  // the conjunct may short-circuit before reaching it.
   for (const auto& argType : argTypes) {
     VELOX_CHECK(
         argType->kind() == TypeKind::BOOLEAN ||
@@ -413,6 +415,35 @@ TypePtr ConjunctExpr::resolveType(const std::vector<TypePtr>& argTypes) {
 TypePtr ConjunctCallToSpecialForm::resolveType(
     const std::vector<TypePtr>& argTypes) {
   return ConjunctExpr::resolveType(argTypes);
+}
+
+TypePtr ConjunctCallToSpecialForm::resolveTypeWithCoercions(
+    const std::vector<TypePtr>& argTypes,
+    std::vector<TypePtr>& coercions,
+    const TypeCoercer& coercer) {
+  VELOX_CHECK_GT(
+      argTypes.size(),
+      0,
+      "Conjunct expressions expect at least one argument, received: {}",
+      argTypes.size());
+
+  coercions.clear();
+  coercions.resize(argTypes.size());
+
+  for (auto i = 0; i < argTypes.size(); ++i) {
+    if (argTypes[i]->kind() == TypeKind::BOOLEAN) {
+      continue;
+    }
+
+    // A null literal argument types as UNKNOWN and coerces to boolean.
+    VELOX_CHECK(
+        coercer.coerce(argTypes[i], BOOLEAN()).has_value(),
+        "Conjunct expression argument is not coercible to BOOLEAN: {}",
+        argTypes[i]->toString());
+    coercions[i] = BOOLEAN();
+  }
+
+  return BOOLEAN();
 }
 
 ExprPtr ConjunctCallToSpecialForm::constructSpecialForm(

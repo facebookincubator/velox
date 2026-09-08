@@ -46,7 +46,7 @@ class ChecksumTests : public Test {
   std::array<char, 4096> data;
 };
 
-TEST_F(ChecksumTests, Null) {
+TEST_F(ChecksumTests, null) {
   auto checksum = ChecksumFactory::create(proto::ChecksumAlgorithm::NULL_);
   ASSERT_EQ(checksum, nullptr);
 }
@@ -58,6 +58,6 @@ TEST_F(ChecksumTests, xxHash) {
       2625948533963027735);
 }
 
-TEST_F(ChecksumTests, Crc32) {
+TEST_F(ChecksumTests, crc32) {
   runTest(proto::ChecksumAlgorithm::CRC32, 4133052486, 3074245904);
 }

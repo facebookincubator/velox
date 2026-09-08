@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <folly/Benchmark.h>
 #include <folly/Varint.h>
 #include <folly/init/Init.h>
@@ -118,7 +119,7 @@ FOLLY_ALWAYS_INLINE static int32_t findSetBitsNew(uint64_t value) {
       return 1;
   }
   DWIO_RAISE(
-      folly::sformat(
+      fmt::format(
           "Unexpected leading zeros {} for value {}", leadingZeros, value));
 }
 

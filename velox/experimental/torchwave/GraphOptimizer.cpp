@@ -16,7 +16,11 @@
 
 #include "velox/experimental/torchwave/GraphOptimizer.h"
 
+#include <optional>
+
 #include <c10/core/ScalarType.h>
+
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace torch::wave {
 
@@ -37,6 +41,24 @@ c10::ScalarType arithmeticPromoteTypes(
   return c10::promoteTypes(lhs, rhs);
 }
 
+// The element values of a TensorList, or empty when they cannot be resolved.
+// Value::getListElements() throws unless the list is packed by a prim.ListPack
+// or consumed by exactly one prim.ListUnpack, so check the shape first.
+std::vector<ValueCP> listElements(const nativert::Value* value) {
+  if (value->type().kind() != nativert::Type::Kind::TensorList) {
+    return {};
+  }
+  const auto* producer = value->producer();
+  if (producer != nullptr && producer->target() == "prim.ListPack") {
+    return value->getListElements();
+  }
+  const auto& users = value->users();
+  if (users.size() == 1 && users[0]->target() == "prim.ListUnpack") {
+    return value->getListElements();
+  }
+  return {};
+}
+
 } // namespace
 
 Optimizer::Optimizer(WaveGraph& waveGraph)
@@ -48,11 +70,61 @@ void Optimizer::ensureConstraint(int32_t id) {
   }
 }
 
+void Optimizer::setConstraint(
+    const nativert::Value* value,
+    const ValueConstraint& constraint) {
+  auto id = value->id();
+  if (id < 0) {
+    return;
+  }
+  ensureConstraint(id);
+  // Preserve flags pre-set before visitValue ran: graphOutput (set on graph
+  // outputs by optimizeGraph) and externallyOwned. A full-struct assign would
+  // silently clear them, and the clone-elision guards rely on
+  // types.graphOutput()/externallyOwned() to refuse unsafe in-place reuse of a
+  // live graph output.
+  const bool wasGraphOutput = types_.constraints.at(id).graphOutput;
+  const bool wasExternallyOwned = types_.constraints.at(id).externallyOwned;
+  types_.constraints.at(id) = constraint;
+  types_.constraints.at(id).graphOutput |= wasGraphOutput;
+  types_.constraints.at(id).externallyOwned |= wasExternallyOwned;
+
+  // A TensorList output occupies one Value, but no kernel reads that Value as a
+  // tensor -- the tensors the graph consumes are the separate Values the
+  // following prim.ListUnpack produces. A constraint declared on the list
+  // describes each of those, so carry it onto them; otherwise ops whose whole
+  // output is a list (group_length_guard_sparse,
+  // batch_flip_and_truncate_sparse, merge_and_dedup, ...) annotate a value
+  // nothing looks at, and every consumer sees rank/contiguity kUnknown.
+  for (const auto* element : listElements(value)) {
+    auto elementId = element->id();
+    if (elementId < 0) {
+      continue;
+    }
+    ensureConstraint(elementId);
+    const bool elementWasGraphOutput =
+        types_.constraints.at(elementId).graphOutput;
+    const bool elementWasExternallyOwned =
+        types_.constraints.at(elementId).externallyOwned;
+    types_.constraints.at(elementId) = constraint;
+    types_.constraints.at(elementId).graphOutput |= elementWasGraphOutput;
+    types_.constraints.at(elementId).externallyOwned |=
+        elementWasExternallyOwned;
+  }
+}
+
 void Optimizer::optimizeGraph(nativert::Graph* graph) {
   graph_ = graph;
   types_.constraints.resize(types_.types.size());
   auto outputs = graph->outputs();
   for (auto* output : outputs) {
+    if (output) {
+      auto id = output->id();
+      if (id >= 0) {
+        ensureConstraint(id);
+        types_.constraints[id].graphOutput = true;
+      }
+    }
     visitValue(output);
   }
 }
@@ -72,13 +144,24 @@ void Optimizer::optimizeNode(const nativert::Node* node) {
 
 void Optimizer::visitValue(const nativert::Value* value) {
   auto* producer = value->producer();
-  if (!producer) {
+  // Model inputs, weights and constants. A weight or constant is producer-less,
+  // but a user input is an output of the graph's single prim.Input node, so it
+  // has a producer and must be recognized by target. Both are handled here,
+  // before the visited_ check below: that check is per-node, so routing the
+  // inputs through it would annotate only the first of them.
+  if (!producer || producer->target() == "prim.Input") {
     auto id = value->id();
     if (id >= 0 && static_cast<size_t>(id) < types_.types.size() &&
         types_.types[id]) {
       ensureConstraint(id);
       types_.constraints[id].rank =
           static_cast<int8_t>(types_.types[id]->dim());
+      types_.constraints[id].externallyOwned = true;
+      if (WaveConfig::get().inputContiguous) {
+        // The caller asserts these are contiguous. executeWave verifies each
+        // one at runtime and throws otherwise.
+        types_.constraints[id].contiguity = Contiguity::kContiguous;
+      }
     }
     return;
   }
@@ -117,11 +200,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
     const auto& outputs = producer->outputs();
     for (size_t i = 0; i < outputs.size() && i < outputConstraints.size();
          ++i) {
-      auto outputId = outputs[i]->id();
-      if (outputId >= 0) {
-        ensureConstraint(outputId);
-        types_.constraints.at(outputId) = outputConstraints.at(i);
-      }
+      setConstraint(outputs[i], outputConstraints.at(i));
     }
   } else if (metadata->elementwise) {
     int8_t maxRank = -1;
@@ -138,7 +217,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
         ensureConstraint(outputId);
         types_.constraints[outputId].rank = maxRank;
         // An elementwise op materializes a fresh, densely-laid-out output.
-        types_.constraints[outputId].contiguous = true;
+        types_.constraints[outputId].contiguity = Contiguity::kContiguous;
       }
     }
   }
@@ -154,17 +233,58 @@ void Optimizer::visitValue(const nativert::Value* value) {
         tensorInputs.push_back({i, types_.types[inputId]->dtype()});
       }
     }
+    const nativert::TensorMeta* outMeta = nullptr;
+    if (!producer->outputs().empty()) {
+      auto outId = producer->outputs()[0]->id();
+      if (outId >= 0 && static_cast<size_t>(outId) < types_.types.size()) {
+        outMeta = types_.types[outId];
+      }
+    }
+
+    // Determine the dtype the op must be computed in to match eager, or nullopt
+    // to leave it to plain C++ rules.
+    std::optional<c10::ScalarType> pytorchType;
     if (tensorInputs.size() >= 2) {
-      auto pytorchType = arithmeticPromoteTypes(
+      auto promoted = arithmeticPromoteTypes(
           tensorInputs[0].second, tensorInputs[1].second);
-      // Cast any operand whose dtype differs from PyTorch's promoted type so
-      // the op is computed in exactly that type (e.g. int64 * float32 -> cast
-      // the int64 to float32, then multiply in float32, matching eager). The
-      // generated elementwise call would otherwise compute a mixed-type product
-      // in the wrong precision.
+      // Never narrow below the graph's declared (exported == eager) floating
+      // output dtype. c10::promoteTypes of the raw inputs can be narrower than
+      // what eager actually computed -- e.g. a sort key the exported program
+      // built in double (via an explicit _to_copy to double upstream).
+      // Narrowing it back to float overflows large keys to +/-inf, which flips
+      // a downstream boolean mask and changes a masked-select element count.
+      // Only widens float->double (integer outputs and the int*float->float
+      // case, whose declared output is float, are unaffected).
+      if (outMeta && c10::isFloatingType(promoted) &&
+          c10::isFloatingType(outMeta->dtype())) {
+        promoted = c10::promoteTypes(promoted, outMeta->dtype());
+      }
+      pytorchType = promoted;
+    } else if (tensorInputs.size() == 1) {
+      // Tensor-Scalar op: the scalar is a constant attribute, not a graph
+      // input. PyTorch promotes an integer tensor + a floating scalar to a
+      // float dtype (the declared float output). Wave otherwise evaluates the
+      // op in the integer input type, truncating the scalar -- e.g. the +1e-6
+      // divide-by-zero epsilon in add.Scalar becomes 0, so an empty-group
+      // denominator divides to +/-inf/nan and corrupts a downstream sort key
+      // and masked-select count. Cast the integer input to the declared float
+      // output so the op computes in float, matching eager. Comparisons stay
+      // untouched (their output is Bool, not floating).
+      if (!c10::isFloatingType(tensorInputs[0].second) && outMeta &&
+          c10::isFloatingType(outMeta->dtype())) {
+        pytorchType = outMeta->dtype();
+      }
+    }
+
+    // Cast any operand whose dtype differs from PyTorch's promoted type so the
+    // op is computed in exactly that type (e.g. int64 * float32 -> cast the
+    // int64 to float32, then multiply in float32, matching eager). The
+    // generated elementwise call would otherwise compute a mixed-type
+    // expression in the wrong precision.
+    if (pytorchType.has_value()) {
       bool needsCast = false;
       for (const auto& [ordinal, inputDtype] : tensorInputs) {
-        if (inputDtype != pytorchType) {
+        if (inputDtype != *pytorchType) {
           needsCast = true;
           break;
         }
@@ -172,23 +292,23 @@ void Optimizer::visitValue(const nativert::Value* value) {
       if (needsCast) {
         auto* mutableProducer = const_cast<nativert::Node*>(producer);
         for (auto& [ordinal, inputDtype] : tensorInputs) {
-          if (inputDtype == pytorchType) {
+          if (inputDtype == *pytorchType) {
             continue;
           }
           auto* originalValue = mutableProducer->inputs()[ordinal].value;
           auto* castNode = graph_->createNode(
               "torch.ops.aten.to.dtype", {{"self", originalValue}});
-          castNode->addAttribute({"dtype", pytorchType});
+          castNode->addAttribute({"dtype", *pytorchType});
           graph_->insertBefore(castNode, mutableProducer);
           auto* castOutput = waveGraph_.newTensorValue(
               castNode,
               std::string(originalValue->name()) + "_promoted",
-              pytorchType);
+              *pytorchType);
           mutableProducer->inputs()[ordinal].value = castOutput;
         }
         // Set the output type of the arithmetic node to the promoted type.
         for (auto* output : producer->outputs()) {
-          waveGraph_.registerTensorMeta(output, pytorchType);
+          waveGraph_.registerTensorMeta(output, *pytorchType);
         }
       }
     }

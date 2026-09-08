@@ -367,6 +367,7 @@ core::PlanNodePtr getTraceNode(
         partitionedOutputNode->partitionFunctionSpecPtr(),
         partitionedOutputNode->outputType(),
         "Presto",
+        partitionedOutputNode->transportKind(),
         std::make_shared<DummySourceNode>(
             partitionedOutputNode->sources().front()->outputType()));
   }

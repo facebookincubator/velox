@@ -535,13 +535,14 @@ std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
   uint8_t fieldDelim = '\1';
   uint8_t collectionDelim = '\2';
   uint8_t mapKeyDelim = '\3';
-  if (fieldIt != serdeParameters.end()) {
+  // Treat an empty value as absent so parseDelimiter never sees "".
+  if (fieldIt != serdeParameters.end() && !fieldIt->second.empty()) {
     fieldDelim = parseDelimiter(fieldIt->second);
   }
-  if (collectionIt != serdeParameters.end()) {
+  if (collectionIt != serdeParameters.end() && !collectionIt->second.empty()) {
     collectionDelim = parseDelimiter(collectionIt->second);
   }
-  if (mapKeyIt != serdeParameters.end()) {
+  if (mapKeyIt != serdeParameters.end() && !mapKeyIt->second.empty()) {
     mapKeyDelim = parseDelimiter(mapKeyIt->second);
   }
 
@@ -673,11 +674,8 @@ std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
         readerOpts,
         fileReadOps);
   }
-  if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE) {
-    // Nimble streams (in case of single chunk) are compressed as whole and need
-    // to be fully fetched in order to do decompression, so there is no point to
-    // fetch them by quanta.  Just use BufferedInput to fetch streams as whole
-    // to reduce memory footprint.
+  if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE &&
+      !readerOpts.nimbleDirectBufferedInputEnabled()) {
     return std::make_unique<dwio::common::BufferedInput>(
         fileHandle.file,
         readerOpts.memoryPool(),

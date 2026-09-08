@@ -69,6 +69,13 @@ class SortBuffer {
 
   std::optional<uint64_t> estimateOutputRowSize() const;
 
+  /// Returns the row container that holds the accumulated input rows. Used only
+  /// for testing the RowContainer's construction (e.g. that the non-spillable
+  /// row-pointer index is not enabled).
+  const RowContainer* testingData() const {
+    return data_.get();
+  }
+
  private:
   // Ensures there is sufficient memory reserved to process 'input'.
   void ensureInputFits(const VectorPtr& input);
@@ -93,6 +100,12 @@ class SortBuffer {
   void getOutputWithoutSpill();
 
   void getOutputWithSpill();
+
+  // Frees the accumulated rows once all of them have been returned as output. A
+  // driver closes its operators only after the last one finishes, so a sort
+  // that feeds another blocking operator in the same pipeline would otherwise
+  // hold its rows until the whole task completes.
+  void releaseRows();
 
   // Spill during input stage.
   void spillInput();

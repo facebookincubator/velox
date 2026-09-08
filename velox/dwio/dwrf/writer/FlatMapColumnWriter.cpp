@@ -37,8 +37,8 @@ StringView getKey<StringView>(const std::string& val) {
   return StringView(val);
 }
 
-template <typename KeyType>
-std::vector<KeyType> parseKeys(const std::vector<std::string>& stringKeys) {
+template <typename KeyType, typename StringContainer>
+std::vector<KeyType> parseKeys(const StringContainer& stringKeys) {
   std::vector<KeyType> keys(stringKeys.size());
   for (auto i = 0; i < stringKeys.size(); i++) {
     keys[i] = getKey<KeyType>(stringKeys[i]);
@@ -61,9 +61,6 @@ FlatMapColumnWriter<K>::FlatMapColumnWriter(
       valueType_{*type.childAt(1)},
       maxKeyCount_{context_.getConfig(Config::MAP_FLAT_MAX_KEYS)},
       collectMapStats_{context.getConfig(Config::MAP_STATISTICS)} {
-  if constexpr (std::is_same_v<KeyType, StringView>) {
-    stringKeys_.reserve(maxKeyCount_);
-  }
   auto options = StatisticsBuilder::optionsFromConfig(context.getConfigs());
   keyFileStatsBuilder_ =
       std::unique_ptr<typename TypeInfo<K>::StatisticsBuilder>(

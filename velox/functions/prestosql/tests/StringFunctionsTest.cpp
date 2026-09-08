@@ -1199,7 +1199,7 @@ TEST_F(StringFunctionsTest, stringPosition) {
   };
 
   // We dont have to try all encoding combinations here since there is a test
-  // that test the encoding resolution but we want to to have a test for each
+  // that test the encoding resolution but we want to have a test for each
   // possible resolution
   testStringPositionAllFlatVector<int64_t>(testsAscii, {true, true}, false);
 
@@ -1281,7 +1281,7 @@ TEST_F(StringFunctionsTest, stringPositionFromEnd) {
   };
 
   // We dont have to try all encoding combinations here since there is a test
-  // that test the encoding resolution but we want to to have a test for each
+  // that test the encoding resolution but we want to have a test for each
   // possible resolution
   testStringPositionFromEndAllFlatVector<int64_t>(
       testsAscii, {true, true}, false);

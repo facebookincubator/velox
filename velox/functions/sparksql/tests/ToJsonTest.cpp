@@ -92,6 +92,22 @@ TEST_F(ToJsonTest, basicMap) {
        R"({})",
        R"({"1":"a","2":null})"});
   testToJson(input, expected);
+
+  // MAP(VARBINARY, BIGINT)
+  input = makeNullableMapVector<std::string, int64_t>(
+      {std::vector<std::pair<std::string, std::optional<int64_t>>>{
+           {"Man", 1}, {"", 2}, {std::string("\x01", 1), 3}},
+       common::testutil::optionalEmpty,
+       std::nullopt,
+       std::vector<std::pair<std::string, std::optional<int64_t>>>{
+           {std::string("\xff\xee", 2), std::nullopt}}},
+      MAP(VARBINARY(), BIGINT()));
+  expected = makeNullableFlatVector<std::string>(
+      {R"({"TWFu":1,"":2,"AQ==":3})",
+       R"({})",
+       std::nullopt,
+       R"({"/+4=":null})"});
+  testToJson(input, expected);
 }
 
 TEST_F(ToJsonTest, basicBool) {
@@ -115,6 +131,29 @@ TEST_F(ToJsonTest, basicString) {
        R"({"a":"str\"3\""})",
        R"({"a":null})",
        R"({"a":"a\"é你😄"})"});
+  testToJson(input, expected);
+}
+
+TEST_F(ToJsonTest, basicBinary) {
+  disableJsonIgnoreNullFields();
+  auto data = makeNullableFlatVector<std::string>(
+      {"Man",
+       "",
+       std::string("\x01", 1),
+       std::string("\xff\xee", 2),
+       "Spark SQL",
+       std::string(58, 'A'),
+       std::nullopt},
+      VARBINARY());
+  auto input = makeRowVector({"a"}, {data});
+  auto expected = makeFlatVector<std::string>(
+      {R"({"a":"TWFu"})",
+       R"({"a":""})",
+       R"({"a":"AQ=="})",
+       R"({"a":"/+4="})",
+       R"({"a":"U3BhcmsgU1FM"})",
+       R"({"a":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ=="})",
+       R"({"a":null})"});
   testToJson(input, expected);
 }
 

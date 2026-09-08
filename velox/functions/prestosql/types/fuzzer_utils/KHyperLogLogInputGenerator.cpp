@@ -22,6 +22,14 @@
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::fuzzer {
+namespace {
+// Upper bound on the number of (join key, uii) pairs inserted into a single
+// generated sketch. Each insert adds an entry to the minhash map, which holds a
+// nested HyperLogLog per distinct join key, so generation cost grows quickly
+// with this bound. Inserts beyond 'maxSize_' are largely discarded by the
+// minhash, so a larger bound buys little additional coverage.
+constexpr int32_t kMaxNumPairs = 1000;
+} // namespace
 
 KHyperLogLogInputGenerator::KHyperLogLogInputGenerator(
     const size_t seed,
@@ -47,7 +55,7 @@ variant KHyperLogLogInputGenerator::generateTyped() {
   common::hll::KHyperLogLog<int64_t, HashStringAllocator> khll{
       maxSize_, hllBuckets_, &allocator};
 
-  auto numPairs = rand<int32_t>(rng_, minNumValues_, 10000);
+  auto numPairs = rand<int32_t>(rng_, minNumValues_, kMaxNumPairs);
   for (auto i = 0; i < numPairs; ++i) {
     auto value = rand<T>(rng_);
     int64_t joinKey = std::hash<T>{}(value);
@@ -68,7 +76,7 @@ variant KHyperLogLogInputGenerator::generateTyped<int64_t>() {
   common::hll::KHyperLogLog<int64_t, HashStringAllocator> khll{
       maxSize_, hllBuckets_, &allocator};
 
-  auto numPairs = rand<int32_t>(rng_, minNumValues_, 10000);
+  auto numPairs = rand<int32_t>(rng_, minNumValues_, kMaxNumPairs);
   for (auto i = 0; i < numPairs; ++i) {
     int64_t joinKey = rand<int64_t>(rng_);
     int64_t uii = rand<int64_t>(rng_);
@@ -97,7 +105,7 @@ variant KHyperLogLogInputGenerator::generateTyped<std::string>() {
       UTF8CharList::MATHEMATICAL_SYMBOLS};
   std::wstring_convert<std::codecvt_utf8<char16_t>, char16_t> converter;
 
-  auto numPairs = rand<int32_t>(rng_, minNumValues_, 10000);
+  auto numPairs = rand<int32_t>(rng_, minNumValues_, kMaxNumPairs);
   for (auto i = 0; i < numPairs; ++i) {
     auto size = rand<int32_t>(rng_, 0, 100);
     std::string result;

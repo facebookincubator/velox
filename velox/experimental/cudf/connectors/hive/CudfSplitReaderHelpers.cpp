@@ -86,7 +86,7 @@ void BufferedInputDataSource::enqueueForDevice(
         std::vector<uint8_t> buffer(size);
         sharedStream->readFully(reinterpret_cast<char*>(buffer.data()), size);
         CUDF_CUDA_TRY(cudaMemcpyAsync(
-            dst, buffer.data(), size, cudaMemcpyHostToDevice, stream.value()));
+            dst, buffer.data(), size, cudaMemcpyDefault, stream.value()));
       });
 }
 
@@ -148,7 +148,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
                           dst,
                           hostBuffer->data(),
                           hostBuffer->size(),
-                          cudaMemcpyHostToDevice,
+                          cudaMemcpyDefault,
                           stream.value()));
                       return hostBuffer->size();
                     });
@@ -168,20 +168,6 @@ void BufferedInputDataSource::readContiguous(
   auto stream = input_->read(offset, size, LogType::FILE);
   VELOX_CHECK(stream != nullptr, "read() returned null stream");
   stream->readFully(reinterpret_cast<char*>(dst), size);
-}
-
-std::unique_ptr<cudf::io::datasource::buffer> fetchFooterBytes(
-    std::shared_ptr<cudf::io::datasource> dataSource) {
-  // Using libcudf utility but may have custom implementation in the future
-  return cudf::io::parquet::fetch_footer_to_host(*dataSource);
-}
-
-std::unique_ptr<cudf::io::datasource::buffer> fetchPageIndexBytes(
-    std::shared_ptr<cudf::io::datasource> dataSource,
-    const cudf::io::text::byte_range_info pageIndexBytes) {
-  // Using libcudf utility but may have custom implementation in the future
-  return cudf::io::parquet::fetch_page_index_to_host(
-      *dataSource, pageIndexBytes);
 }
 
 std::tuple<
@@ -330,7 +316,7 @@ fetchByteRangesAsync(
                       dest,
                       hostBuffer->data(),
                       hostBuffer->size(),
-                      cudaMemcpyHostToDevice,
+                      cudaMemcpyDefault,
                       stream.value()));
                   return ioSize;
                 }));

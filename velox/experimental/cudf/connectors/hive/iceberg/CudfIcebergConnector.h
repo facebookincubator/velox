@@ -18,7 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 
 #include "velox/connectors/hive/HiveConnector.h"
-#include "velox/connectors/hive/iceberg/IcebergConfig.h"
+#include "velox/connectors/hive/iceberg/IcebergConnector.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
@@ -67,9 +67,10 @@ class CudfIcebergConnector final
 /// Factory for creating CudfIcebergConnector instances.
 class CudfIcebergConnectorFactory final : public ConnectorFactory {
  public:
-  static constexpr const char* kCudfIcebergConnectorName = "cudf-iceberg";
-
-  CudfIcebergConnectorFactory() : ConnectorFactory(kCudfIcebergConnectorName) {}
+  CudfIcebergConnectorFactory()
+      : ConnectorFactory(
+            ::facebook::velox::connector::hive::iceberg::
+                IcebergConnectorFactory::kIcebergConnectorName) {}
 
   explicit CudfIcebergConnectorFactory(const char* connectorName)
       : ConnectorFactory(connectorName) {}

@@ -90,7 +90,7 @@ function install_build_prerequisites {
     wget
 
   install_uv
-  uv_install cmake==3.30.4
+  uv_install --force cmake==4.3.2
 
   install_gcc11_if_needed
 
@@ -240,6 +240,8 @@ function install_velox_deps {
   run_and_time install_grpc
   run_and_time install_boost
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle

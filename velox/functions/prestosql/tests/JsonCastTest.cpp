@@ -1122,12 +1122,12 @@ TEST_F(JsonCastTest, toDouble) {
       JSON(),
       DOUBLE(),
       {"Infinity"_sv},
-      "The JSON element does not have the requested type");
+      "Source type: unknown, target type: DOUBLE");
   testThrow<JsonNativeType>(
       JSON(),
       DOUBLE(),
       {"NaN"_sv},
-      "The JSON element does not have the requested type");
+      "Source type: unknown, target type: DOUBLE");
 
   testThrow<JsonNativeType>(
       JSON(),
@@ -1214,6 +1214,34 @@ TEST_F(JsonCastTest, toArray) {
       {"[233897314173811950000]"_sv}, JSON());
   expected = makeArrayVector<double>({{233897314173811950000.0}});
   testCast(data, expected);
+
+  // Casting a non-array JSON value to an array names the actual type and the
+  // byte offset of the offending value.
+  testThrow<JsonNativeType>(
+      JSON(),
+      ARRAY(BIGINT()),
+      {"123"_sv},
+      "Source type: number, target type: ARRAY<BIGINT>, byte offset: 0.");
+  testThrow<JsonNativeType>(
+      JSON(),
+      ARRAY(BIGINT()),
+      {R"({"a":1})"_sv},
+      "Source type: object, target type: ARRAY<BIGINT>, byte offset: 0.");
+  // An array element whose type is incompatible names the element type and its
+  // byte offset within the row.
+  testThrow<JsonNativeType>(
+      JSON(),
+      ARRAY(VARCHAR()),
+      {R"(["a",{"k":1}])"_sv},
+      "Source type: object, target type: VARCHAR, byte offset: 5.");
+
+  // Under TRY, both container and element type mismatches yield null instead of
+  // throwing (and take the cheap error path, skipping detailed messages).
+  auto tryData = makeNullableFlatVector<JsonNativeType>(
+      {R"(["a","b"])"_sv, R"(["a",{"k":1}])"_sv, R"({"a":1})"_sv}, JSON());
+  auto tryExpected = makeNullableArrayVector<StringView>(
+      {{{"a"_sv, "b"_sv}}, std::nullopt, std::nullopt});
+  testCast(tryData, tryExpected, true /*try_cast*/);
 }
 
 TEST_F(JsonCastTest, toMap) {
@@ -1265,6 +1293,18 @@ TEST_F(JsonCastTest, toMap) {
       MAP(BIGINT(), DOUBLE()),
       {"{1:1.1,2:2.2}"_sv},
       "The JSON document has an improper structure");
+
+  // Casting a non-object JSON value to a map names the actual type.
+  testThrow<JsonNativeType>(
+      JSON(),
+      MAP(VARCHAR(), BIGINT()),
+      {"123"_sv},
+      "Source type: number, target type: MAP");
+  testThrow<JsonNativeType>(
+      JSON(),
+      MAP(VARCHAR(), BIGINT()),
+      {R"(["a","b"])"_sv},
+      "Source type: array, target type: MAP");
 }
 
 TEST_F(JsonCastTest, unknownType) {
@@ -1699,6 +1739,17 @@ TEST_F(JsonCastTest, tryCastFromJson) {
       {makeFlatVector<float>({0, 0})}, [](auto /*row*/) { return true; });
   evaluateAndVerify(
       JSON(), ROW({REAL()}), makeRowVector({data}), expectedRow, true);
+}
+
+TEST_F(JsonCastTest, tryCastTypeMismatchBatch) {
+  // A batch mixing valid values with type mismatches under TRY must turn every
+  // bad row into a null without throwing per row, and must not let the detail
+  // recorded for one row bleed into another. Valid rows still cast correctly.
+  auto data = makeFlatVector<JsonNativeType>(
+      {"1"_sv, "{}"_sv, "2"_sv, "[]"_sv, "3"_sv}, JSON());
+  auto expected =
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, std::nullopt, 3});
+  evaluateAndVerify(JSON(), BIGINT(), makeRowVector({data}), expected, true);
 }
 
 TEST_F(JsonCastTest, castFromJsonWithEscaping) {

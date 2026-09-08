@@ -505,7 +505,7 @@ TEST_F(CudfWindowTest, DISABLED_multiFunctionPartitionOrder) {
 
 TEST_F(CudfWindowTest, rankNaNRangeFrameBounds) {
   // rank() ignores RANGE frame bounds; port of the rank() loop from
-  // WindowTest.NaNFrameBound (sum+RANGE is not mirrored here).
+  // WindowTest.nanFrameBound (sum+RANGE is not mirrored here).
   const auto kNan = std::numeric_limits<double>::quiet_NaN();
   auto data = makeRowVector(
       {"c0", "s0", "off0", "off1"},
@@ -911,7 +911,7 @@ TEST_F(CudfWindowTest, negativeFrameArg) {
   }
 }
 
-TEST_F(CudfWindowTest, NaNFrameBound) {
+TEST_F(CudfWindowTest, nanFrameBound) {
   const auto kNan = std::numeric_limits<double>::quiet_NaN();
   auto data = makeRowVector(
       {"c0", "s0", "off0", "off1"},

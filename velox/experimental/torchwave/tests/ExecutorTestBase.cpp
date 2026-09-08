@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -40,7 +41,6 @@
 
 #include <torch/nativert/graph/GraphPasses.h>
 #include "velox/experimental/torchwave/NodePrinter.h"
-#include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
@@ -48,6 +48,10 @@
 // debug_single_ops is now WaveConfig::debugSingleOps
 
 DEFINE_bool(print_timing, false, "Print timing for wave graph execution");
+DEFINE_bool(
+    per_op_standalone_timing,
+    false,
+    "Time each eager standalone separately by syncing the torch stream after every one. That sync is what makes per-op numbers possible and is also the largest perturbation: it serializes the standalones against each other and against the wave stream, so per-step device times and GPU idle stop reflecting an untraced run");
 DEFINE_int32(num_repeats, 1, "Number of timed repetitions for each run type");
 DEFINE_bool(
     standalone_kernels,
@@ -136,18 +140,151 @@ DEFINE_bool(
     false,
     "Enable device-side debug printfs. Emergency use only");
 DEFINE_bool(
+    kernel_line_info,
+    false,
+    "Compile kernels with -lineinfo so compute-sanitizer attributes faults to "
+    "source lines. Keeps -O3 (unlike --cuda_G); forces a kernel recompile");
+DEFINE_bool(
     debug_single_ops,
     false,
     "Launch kernel once per block for debugging, waiting after each launch");
 DEFINE_bool(
     auto_adjust_cost,
-    false,
-    "Adjust per-op cost multipliers after each execution based on actual thread block clocks");
+    true,
+    "Adjust per-op cost multipliers after each execution based on actual thread block clocks. Defaults to WaveConfig's own default, which this flag assigns unconditionally: a different default here would silently override the engine's");
 
 DEFINE_bool(
     enable_reuse,
-    false,
+    true,
     "Reuse a value's buffer in place when an op is its unique last use (turn copying ops into in-place ops)");
+DEFINE_bool(
+    elide_clones,
+    true,
+    "With --enable_reuse, run the pre-partition read-only clone elision pass");
+DEFINE_bool(
+    free_intermediates,
+    true,
+    "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
+DEFINE_bool(
+    step_last_use,
+    true,
+    "With --free_intermediates, release each last-use value after the last step that reads it instead of after the node's last step");
+DEFINE_bool(
+    sync_each_step,
+    false,
+    "Drain both streams at the end of every step, so freed buffers are back in the allocator before the next step allocates (serializes the pipeline; for measuring peak memory)");
+DEFINE_bool(
+    defer_d2h,
+    true,
+    "Do not wait for a step's device-to-host transfer at the step that issues it; parse its pinned buffer at the first later step that reads one of the returned values");
+DEFINE_bool(
+    run_ahead,
+    false,
+    "Drop the host stream waits that are not a real data or memory dependency (the per-node default-stream drain), so the host can queue steps arbitrarily far ahead of the device");
+DEFINE_int64(
+    max_delayed_free,
+    1LL << 30,
+    "Ceiling in bytes on freeable memory sitting in already-issued but incomplete steps; exceeding it drains both streams before the next allocation. 0 disables");
+DEFINE_bool(
+    donate_buffers,
+    false,
+    "Hold a released wave-kernel buffer and hand it to a later wave kernel needing exactly the same byte size, instead of returning it to the caching allocator");
+DEFINE_int64(
+    donation_carry_bytes,
+    64LL << 20,
+    "Bytes of donatable buffers carried between executions; the pool is trimmed to this at the end of each run");
+DEFINE_bool(
+    duplicate_metadata,
+    false,
+    "Rematerialize each multiply-used sym_size / sym_numel at its use sites before partitioning, so it stops being a top-level output of a ProjectNode");
+DEFINE_bool(
+    config_per_op,
+    false,
+    "Alongside each composite kernel, compile one single-op kernel per op it "
+    "contains (<composite>_op_<opCode>) and log its register / shared / local "
+    "memory and occupancy after graph construction. Diagnostic only: the "
+    "per-op kernels are never launched for results, they resolve the occupancy "
+    "numbers to a single op instead of the fused whole");
+DEFINE_bool(
+    input_contiguous,
+    false,
+    "Assume all model inputs, weights, and constants are contiguous in the graph optimizer; executeWave verifies and errors out if any is not contiguous");
+DEFINE_bool(
+    cse_compute,
+    false,
+    "Before partitioning, merge compute nodes that produce the same value from the same operands");
+DEFINE_bool(
+    cse_views,
+    false,
+    "Before partitioning, merge view nodes that produce the same value from the same operands");
+DEFINE_bool(
+    defer_size_outputs,
+    false,
+    "EXPERIMENT, not correct yet. Stop counting a returned sym_size / sym_numel as a use of its operand when the partitioner builds its levels, so the operand does not become a CSE border on the getter's account. Measures what removing those borders is worth; the getter can end up reading a tensor that was fused away");
+DEFINE_bool(
+    decompose_lists,
+    true,
+    "Before partitioning, split a list-producing op into one node per tensor so each column is costed and given blocks on its own, and fold chains of them where the op supports it");
+DEFINE_bool(
+    metadata_getter_standalone,
+    true,
+    "Run a lone aten.sym_size/sym_numel as a host-side shortcut standalone rather than a fused kernel op that spends a whole block reading one field");
+DEFINE_bool(
+    concat_operands_in_place,
+    true,
+    "Leave a concat operand whose producer can write its band to be fused into the concat's own kernel, instead of pushing it into its own kernel a step earlier and copying it in");
+DEFINE_bool(
+    fold_shared_chains,
+    true,
+    "Fold a chain producer into every consumer that can absorb one, instead of only into a sole reader. Removes the intermediate at the cost of running the producer's steps once per consumer");
+DEFINE_bool(
+    mk_select,
+    false,
+    "In cg mode, expand tw.masked_select_jagged into its multi-kernel stages so the output list is sized to the exact selected count instead of the mask length");
+DEFINE_bool(
+    enable_alloc_group,
+    true,
+    "Allocate the outputs that share a lifetime out of one buffer instead of one allocator call each. Cooperative grid only, where the step boundaries a lifetime is expressed in are fixed before the first execution");
+DEFINE_bool(
+    enable_concat_alloc_group,
+    true,
+    "Give a fused cat/stack of more than two operands an allocation group of its own: the result is allocated at the step that produces the operands and each operand writes straight into the region it occupies, so the concat copies nothing");
+DEFINE_bool(
+    enable_lifetime_alloc_group,
+    true,
+    "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
+DEFINE_bool(
+    order_blocks_by_cost,
+    false,
+    "Emit a step's blocks in descending projected latency instead of in op order, so the ops expected to run longest start first and the cheap ones backfill SMs as those retire");
+DEFINE_bool(
+    partition_launches,
+    true,
+    "Split a badly balanced or occupancy-starved step into several kernel launches, each packed to about one wave at the occupancy its own ops allow");
+DEFINE_int32(
+    max_launch_waves,
+    3,
+    "Most launches --partition_launches may split one step into, and the multiple of one wave the block array is reserved for");
+DEFINE_double(
+    launch_skew_threshold,
+    1.3,
+    "Step makespan over that of a perfectly balanced, fully occupied one, at and above which --partition_launches splits a step");
+DEFINE_double(
+    min_block_us,
+    100.0,
+    "GPU microseconds a block should be worth before --partition_launches opens one, converted to cost units with the thread-block clocks the step's previous execution measured");
+DEFINE_bool(
+    quantum_grid,
+    false,
+    "Size a step's blocks against a per-block work quantum and round the total up to whole waves, instead of handing out one wave's worth pro rata and trimming");
+DEFINE_bool(
+    tw_single_pass,
+    false,
+    "Register one decoupled look-back implementation of cumsum, exclusive sum and masked_select instead of the single-block, multi-kernel and cooperative-grid variants");
+DEFINE_bool(
+    tw_single_pass_select,
+    false,
+    "Expand fb.masked_select_jagged to its single-pass look-back form instead of the barrier-based cooperative-grid one. Only has an effect in cooperative-grid mode");
 
 namespace torch::wave {
 
@@ -212,11 +349,30 @@ void deepFlattenIValue(
   }
 }
 
+void fillFrameFromUserInputs(
+    const nativert::Graph& graph,
+    nativert::ExecutionFrame& frame,
+    const std::vector<c10::IValue>& inputs);
+
 void fillFrameInputs(
     const nativert::Graph& graph,
     nativert::ExecutionFrame& frame,
     std::vector<c10::IValue> inputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // The two lists are not the same for every model. graph.userInputs() carries
+  // one entry per placeholder, including the ones the signature omits -- the
+  // ROO preproc has 315 of them, string constants the export kept -- and only
+  // that list aligns positionally with an already-flat external inputs file.
+  // Prefer it when the counts say it is the one the caller flattened against;
+  // keying off the signature there silently shifts every input past the first
+  // omitted leaf, which surfaces far away as an int reaching an op that wanted
+  // a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      inputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, inputs);
+    return;
+  }
   // Flatten one level to handle Objects/Tuples wrapping the actual inputs.
   std::vector<c10::IValue> flat;
   for (auto& v : inputs) {
@@ -238,11 +394,25 @@ void fillFrameInputs(
     }
     flat = std::move(next);
   }
+  if (flat.size() != userInputNames.size()) {
+    LOG(WARNING) << "fillFrameInputs: " << flat.size() << " inputs for "
+                 << userInputNames.size()
+                 << " user inputs; the alignment below will be wrong";
+  }
+  // One leaf per name, whether or not the name has a value in the graph. A
+  // placeholder the export kept but nothing reads -- the ROO preproc has 315
+  // of them, string constants that carry no graph value -- still occupies a
+  // position in the flattened inputs. Skipping the name without consuming its
+  // leaf shifts every input after it, which surfaces far away as an int
+  // arriving where an op wanted a tensor.
   size_t flatIdx = 0;
   for (const auto& name : userInputNames) {
-    auto* value = graph.tryGetValue(name);
-    if (value && flatIdx < flat.size()) {
-      frame.setIValue(value->id(), std::move(flat[flatIdx++]));
+    if (flatIdx >= flat.size()) {
+      break;
+    }
+    auto item = std::move(flat[flatIdx++]);
+    if (auto* value = graph.tryGetValue(name)) {
+      frame.setIValue(value->id(), std::move(item));
     }
   }
 }
@@ -268,31 +438,6 @@ void fillFrameFromUserInputs(
       }
     }
   }
-}
-
-// Removes aten._assert_async runtime data-validation nodes from the graph.
-// These guard real-data invariants (e.g. "num_candidates must be all True",
-// "labels must equal label presences") that random synthetic data does not
-// satisfy, so they fire spurious device-side asserts on a synthetic run. Their
-// outputs are unused, so removal is safe; mirrors nativert's RemoveDetach pass.
-void stripDataAsserts(nativert::Graph& graph) {
-  std::vector<nativert::Node*> toDrop;
-  for (auto& node : graph.nodes()) {
-    if (node.target() == "torch.ops.aten._assert_async.msg") {
-      toDrop.push_back(&node);
-    }
-  }
-  if (toDrop.empty()) {
-    return;
-  }
-  for (auto* node : toDrop) {
-    node->destroy();
-  }
-  graph.renumberValues();
-  graph.finalize();
-  graph.lint();
-  LOG(INFO) << "stripDataAsserts: removed " << toDrop.size()
-            << " _assert_async node(s)";
 }
 
 // Decompresses a gzipped file to a fresh temp file and returns its path. The
@@ -360,85 +505,6 @@ std::pair<std::vector<c10::IValue>, int64_t> inputsToDevice(
   }
 
   return {std::move(result), us};
-}
-
-int32_t insertCpuOnlyCopies(nativert::Graph& graph) {
-  // Collect insertion sites first; don't mutate the node list while iterating.
-  struct Site {
-    nativert::Node* consumer;
-    size_t inputIdx;
-    nativert::Value* deviceValue;
-  };
-  std::vector<Site> sites;
-  for (auto& node : graph.nodes()) {
-    const auto* meta = Registry::metadata(node.target());
-    if (!meta) {
-      continue;
-    }
-    auto& inputs = node.inputs();
-    for (size_t i = 0; i < inputs.size() && i < meta->argumentMeta.size();
-         ++i) {
-      // cpuOnly is only set on tensor args (e.g. tensor_split indices), so a
-      // non-null value here is the tensor we must keep on host.
-      if (meta->argumentMeta[i].cpuOnly && inputs[i].value) {
-        sites.push_back({&node, i, inputs[i].value});
-      }
-    }
-  }
-
-  // For each cpuOnly tensor arg, insert aten._to_copy(self, device=cpu) right
-  // before the consumer and repoint only that edge. tensor_split (the only
-  // cpuOnly op) reads its indices on the host and returns views of self, so
-  // self and the outputs stay on GPU -- no move-back is needed. Lets the
-  // generic nativert executor run the graph on GPU (wave handles cpuOnly args
-  // itself at runtime; see Launch in CompiledOp.cpp).
-  for (const auto& site : sites) {
-    auto* copyNode = graph.createNode(
-        "torch.ops.aten._to_copy.default", {{"self", site.deviceValue}});
-    copyNode->addAttribute({"dtype", torch::nativert::None{}});
-    copyNode->addAttribute({"layout", torch::nativert::None{}});
-    copyNode->addAttribute({"device", c10::Device(c10::kCPU)});
-    copyNode->addAttribute({"pin_memory", torch::nativert::None{}});
-    copyNode->addAttribute({"non_blocking", false});
-    copyNode->addAttribute({"memory_format", torch::nativert::None{}});
-    auto* cpuValue = copyNode->addOutput(
-        graph.getUniqueValueName(), site.deviceValue->type());
-    graph.insertBefore(copyNode, site.consumer);
-    site.consumer->inputs()[site.inputIdx].value = cpuValue;
-    site.deviceValue->eraseUser(site.consumer);
-    cpuValue->addUser(site.consumer);
-  }
-  LOG(INFO) << "insertCpuOnlyCopies: inserted " << sites.size()
-            << " _to_copy(device=cpu) node(s)";
-  return static_cast<int32_t>(sites.size());
-}
-
-int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph) {
-  // fb::simple_1d_concat has no CUDA implementation -- its CUDA registration is
-  // a throwing Dummy
-  // (caffe2/torch/fb/sparsenn/cpu_operators/simple_concat.cpp). It is a plain
-  // 1-D concat, identical to aten.cat(tensors, dim=0), which does have a CUDA
-  // kernel. Mirror wave's rewrite (MoreBuiltins.cpp) so the generic nativert
-  // executor can run it on GPU. (The other fb ops in this model -- sigrid_hash,
-  // grouped_masked_select_jagged_1d, batch_flip_and_truncate_sparse,
-  // group_length_guard_sparse, fused_datafm_merge_and_dedup_by_reference --
-  // have real CUDA kernels in sparsenn_operators_gpu and self-register.)
-  int32_t rewritten = 0;
-  for (auto& node : graph.nodes()) {
-    if (node.target() == "torch.ops.fb.simple_1d_concat.default") {
-      node.setTarget("torch.ops.aten.cat.default");
-      // nativert matches node inputs to schema args by name; rename the
-      // TensorList input "inputs" -> "tensors" to match aten::cat's schema.
-      if (!node.inputs().empty()) {
-        node.inputs()[0].name = "tensors";
-      }
-      node.addAttribute({"dim", static_cast<int64_t>(0)});
-      ++rewritten;
-    }
-  }
-  LOG(INFO) << "rewriteGpuIncompatibleOps: rewrote " << rewritten
-            << " fb.simple_1d_concat -> aten.cat.default";
-  return rewritten;
 }
 
 std::vector<c10::IValue> outputsToHost(
@@ -572,6 +638,15 @@ std::unique_ptr<ModelFixture> ModelFixture::load(const std::string& pt2Path) {
 
 void ModelFixture::prepareGraph(nativert::Graph* graph) {
   nativert::selectScalarOverload(graph);
+  // Drop data-dependent runtime asserts (aten._assert_scalar and the
+  // _operator.* sym chains feeding them, e.g. _operator.or_) that generic
+  // nativert has no kernels for; the wave Model.cpp load strips these in
+  // production too, so serial-nativert and wave see the same computational
+  // graph.
+  stripDataAsserts(*graph);
+  // nativert's SymInt/SymBool/Scalar kernels resolve operands by the names
+  // "a"/"b"; normalize sym-op input names so a sigmoid-archive graph runs.
+  normalizeSymOpArgNames(*graph);
 }
 
 std::vector<std::unique_ptr<nativert::OpKernel>> ModelFixture::makeKernels()
@@ -622,6 +697,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   }
 
   WaveConfig::get().printTiming = FLAGS_print_timing;
+  WaveConfig::get().perOpStandaloneTiming = FLAGS_per_op_standalone_timing;
   WaveConfig::get().allStandalone = FLAGS_standalone_kernels;
   WaveConfig::get().blockSize = FLAGS_block_dim;
   WaveConfig::get().trace = FLAGS_trace;
@@ -641,9 +717,44 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().noElementwiseFastPath = FLAGS_no_elementwise_fast_path;
   WaveConfig::get().continueAfterMismatch = FLAGS_continue_after_mismatch;
   WaveConfig::get().kernelDebugOutput = FLAGS_kernel_debug_output;
+  WaveConfig::get().kernelLineInfo = FLAGS_kernel_line_info;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
+  WaveConfig::get().elideClones = FLAGS_elide_clones;
+  WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
+  WaveConfig::get().stepLastUse = FLAGS_step_last_use;
+  WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
+  WaveConfig::get().deferD2h = FLAGS_defer_d2h;
+  WaveConfig::get().runAhead = FLAGS_run_ahead;
+  WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
+  WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
+  WaveConfig::get().configPerOp = FLAGS_config_per_op;
+  WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
+  WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
+  WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
+  WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
+  WaveConfig::get().cseCompute = FLAGS_cse_compute;
+  WaveConfig::get().cseViews = FLAGS_cse_views;
+  WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
+  WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
+  WaveConfig::get().concatOperandsInPlace = FLAGS_concat_operands_in_place;
+  WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
+  WaveConfig::get().mkSelect = FLAGS_mk_select;
+  WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
+  WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
+  WaveConfig::get().enableLifetimeAllocGroup =
+      FLAGS_enable_lifetime_alloc_group;
+  WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
+  WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
+  WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
+  WaveConfig::get().launchSkewThreshold =
+      static_cast<float>(FLAGS_launch_skew_threshold);
+  WaveConfig::get().minBlockUs = static_cast<float>(FLAGS_min_block_us);
+  WaveConfig::get().quantumGrid = FLAGS_quantum_grid;
+  // Read by registerBuiltins(), which initialize() calls below.
+  WaveConfig::get().singlePass = FLAGS_tw_single_pass;
+  WaveConfig::get().singlePassSelect = FLAGS_tw_single_pass_select;
   if (!FLAGS_print_options.empty()) {
     NodePrinter::setDefaults(
         NodePrinter::parsePrintOptions(FLAGS_print_options));
@@ -655,7 +766,8 @@ void ExecutorTestBase::SetUpTestSuite() {
 std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
     const nativert::Graph& graph,
     nativert::ExecutionFrame& frame,
-    std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels) {
+    std::vector<std::unique_ptr<nativert::OpKernel>> nodeKernels,
+    bool captureRefOutputs) {
   auto traceState = parseTraceValues(FLAGS_trace_values);
 
   // Trace user inputs already in the frame.
@@ -673,7 +785,7 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
   // they are dead after the index_put. Skip recording them to avoid false
   // positives.
   std::unordered_set<int64_t> inPlaceSelfIds;
-  if (!FLAGS_save_reference_frame.empty()) {
+  if (captureRefOutputs) {
     for (size_t scanIdx = 1; scanIdx + 1 < nodeKernels.size(); ++scanIdx) {
       auto* scanNode = nodeKernels[scanIdx]->node();
       std::string target(scanNode->target());
@@ -695,12 +807,17 @@ std::vector<c10::IValue> ExecutorTestBase::executeSerialWithTrace(
       if (output) {
         // Capture a deep copy of each output the instant its node ran, so a
         // later in-place overwrite of its storage cannot corrupt the reference.
-        // Skip scratch self-args of index_put (see inPlaceSelfIds above).
-        if (!FLAGS_save_reference_frame.empty() &&
-            !inPlaceSelfIds.count(output->id())) {
+        // Copy straight to CPU: on a GPU nativert run this keeps the whole
+        // reference frame off the GPU, so capturing every intermediate does not
+        // exhaust GPU memory (a full-graph frame at large batch otherwise
+        // OOMs). copy=true forces a fresh tensor even when the value is already
+        // on CPU. Skip scratch self-args of index_put (see inPlaceSelfIds
+        // above).
+        if (captureRefOutputs && !inPlaceSelfIds.count(output->id())) {
           const auto& iv = frame.getIValue(output->id());
           if (iv.isTensor() && iv.toTensor().numel() > 0) {
-            capturedRefOutputs_[output->id()] = iv.toTensor().detach().clone();
+            capturedRefOutputs_[output->id()] = iv.toTensor().detach().to(
+                at::kCPU, /*non_blocking=*/false, /*copy=*/true);
           }
         }
         std::vector<nativert::ValueId> ids = {output->id()};
@@ -761,8 +878,11 @@ RunTiming ExecutorTestBase::runSerial(
     auto traceKernels = fixture.makeKernels();
     nativert::SerialGraphExecutor tempExecutor(
         graph, std::move(traceKernels), serialConfig);
-    outputs =
-        executeSerialWithTrace(graph, *frame, tempExecutor.stealKernels());
+    outputs = executeSerialWithTrace(
+        graph,
+        *frame,
+        tempExecutor.stealKernels(),
+        /*captureRefOutputs=*/!FLAGS_save_reference_frame.empty());
   } else {
     outputs = executor.executeWithPrefilledFrame(*frame);
   }
@@ -777,7 +897,10 @@ RunTiming ExecutorTestBase::runSerial(
             << " non-none slots of " << graph.numValues();
 
   if (!FLAGS_save_reference_frame.empty()) {
-    saveReferenceFrame(*frame, graph, FLAGS_save_reference_frame);
+    // Prefer the per-node CPU copies (capturedRefOutputs_) over the live frame,
+    // so a GPU serial run never has to hold every intermediate on the device.
+    saveReferenceFrame(
+        *frame, graph, capturedRefOutputs_, FLAGS_save_reference_frame);
     LOG(INFO) << "Saved reference frame to " << FLAGS_save_reference_frame;
   }
 
@@ -834,6 +957,19 @@ void ExecutorTestBase::fillWaveFrame(
     nativert::ExecutionFrame& frame,
     const std::vector<c10::IValue>& deviceInputs) {
   const auto& userInputNames = graph.signature().userInputs();
+  // graph.userInputs() carries one entry per placeholder, including the ones
+  // the signature omits -- the ROO preproc has 315 of them, string constants
+  // the export kept -- and only that list aligns positionally with an
+  // already-flat external inputs file. Keying off the signature there consumes
+  // no leaf for an omitted placeholder, so every input past the first one is
+  // read from the wrong index and surfaces far away as an int reaching an op
+  // that wanted a tensor.
+  const auto& graphInputs = graph.userInputs();
+  if (graphInputs.size() != userInputNames.size() &&
+      deviceInputs.size() == graphInputs.size()) {
+    fillFrameFromUserInputs(graph, frame, deviceInputs);
+    return;
+  }
   // Flatten to match user input count.
   std::vector<c10::IValue> flat;
   for (const auto& v : deviceInputs) {
@@ -972,12 +1108,71 @@ void ExecutorTestBase::runTest(
       std::move(fixture), expected, label.empty() ? pt2File : label);
 }
 
+ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
+    const std::string& pt2File) {
+  auto baseDir = dataDir();
+  auto pt2Path =
+      pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
+  auto fixture = ModelFixture::load(pt2Path);
+  TORCH_CHECK(fixture != nullptr, "compilePlans: failed to load ", pt2Path);
+  setGraphDevice(fixture->model.graph.get(), true);
+  // Constructing the executor compiles and places the graph, populating the
+  // grids CompiledPlan reads. CompiledPlan::from copies out plain strings, so
+  // the executor and its WaveGraph need not outlive this call.
+  WaveGraphExecutor waveExec(fixture->makeModelContext());
+  auto* wave = waveExec.waveGraph();
+  return {
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kMultiKernel),
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kSingleBlock),
+      CompiledPlan::from(*wave, CompiledPlan::Mode::kCG),
+  };
+}
+
+AllocGroupStats ExecutorTestBase::allocGroupStats(
+    const std::string& pt2File,
+    bool cg) {
+  auto baseDir = dataDir();
+  auto pt2Path =
+      pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
+  auto fixture = ModelFixture::load(pt2Path);
+  TORCH_CHECK(fixture != nullptr, "allocGroupStats: failed to load ", pt2Path);
+  setGraphDevice(fixture->model.graph.get(), true);
+  // The plan is expressed in the steps of whichever grid the mode runs, so the
+  // graph has to be compiled for that grid before the footprints mean anything.
+  // 'cg' picks it: both grids are settled by compilation, and the plan is built
+  // against the one the config names.
+  auto& config = WaveConfig::get();
+  const auto savedCg = config.isCg;
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  auto restore = folly::makeGuard([&, savedCg, savedFree, savedGroup] {
+    config.isCg = savedCg;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+  });
+  config.isCg = cg;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+
+  WaveGraphExecutor waveExec(fixture->makeModelContext());
+  auto* wave = waveExec.waveGraph();
+  return buildGraphAllocGroupPlan(
+             collectNodeFootprints(
+                 wave->nodes(), wave->idToValue(), wave->types()))
+      .stats;
+}
+
 void ExecutorTestBase::runTestWithFixture(
     std::unique_ptr<ModelFixture> fixture,
     const std::vector<c10::IValue>& expected,
     const std::string& label) {
   displayName_ = label;
   auto displayName = label;
+
+  // Drop runtime data-validation asserts (e.g. _assert_scalar from torch._check
+  // on data-dependent sizes) so both the serial reference and the wave run use
+  // the same graph and the wave executor does not abort on a standalone assert.
+  stripDataAsserts(*fixture->model.graph);
 
   const int repeats = FLAGS_num_repeats;
 
@@ -1147,6 +1342,14 @@ void ExecutorTestBase::runTestWithFixture(
     auto debugFrame = waveExec.getFrame();
     ASSERT_NE(debugFrame, nullptr);
     for (int run = 0; run < 2; ++run) {
+      // The frame is reused across runs; clear the prior run's intermediates so
+      // this run recomputes from the refilled inputs.  Otherwise stale outputs
+      // make standalone ops (including in-place mutations) look
+      // already-computed (see nodeOutputsComputed) and get skipped, yielding
+      // stale results.
+      if (run > 0) {
+        debugFrame->clearNonPersistentValues();
+      }
       fillWaveFrame(graph, *debugFrame, deviceInputs);
       auto outputs = waveExec.executeWithPrefilledFrame(*debugFrame);
       if (run == 1) {
@@ -1349,13 +1552,31 @@ std::vector<c10::IValue> ExecutorTestBase::runNativertReferenceWithInputs(
   stripDataAsserts(graph);
   applySyntheticGraphRewrites(graph);
   setGraphDevice(&graph, true);
+  // Everything above runs on the wave graph too, so up to here the two number
+  // their Values identically. The two passes below do NOT -- wave resolves
+  // cpuOnly arguments itself at runtime and keeps its own concat -- and every
+  // Value they mint takes an id past the loaded graph's last. That is exactly
+  // where the wave graph, whose id counter never advanced, starts numbering
+  // the Values ITS rewrites create. So an id at or above this boundary names
+  // one value in the reference and a different one in wave, and comparing
+  // them is comparing two unrelated tensors: on the ROO train graph a
+  // tensor_split indices copy, int64[10], against a repeat_interleave prefix,
+  // int32[1024]. Recorded here and enforced in dropUnsharedReferenceValues.
+  numSharedReferenceValues_ = static_cast<int32_t>(graph.numValues());
   rewriteGpuIncompatibleOps(graph);
   insertCpuOnlyCopies(graph);
 
+  // When saving a reference frame, disable nativert's free-after-last-use so
+  // intermediates are not reclaimed before they are captured (they are copied
+  // to CPU on-produce below, so the frame is not held on the GPU).
+  auto refConfig = fixture.config;
+  if (!refFramePath.empty()) {
+    refConfig.tryFreeUnmanagedValuesAfterUse = false;
+  }
   nativert::SerialGraphExecutor executor(
-      graph, fixture.makeKernels(), fixture.config);
+      graph, fixture.makeKernels(), refConfig);
   auto frame = std::make_unique<nativert::ExecutionFrame>(
-      graph, *fixture.weights, fixture.config);
+      graph, *fixture.weights, refConfig);
 
   auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
   auto* waveDevice = facebook::velox::wave::currentDevice();
@@ -1365,49 +1586,63 @@ std::vector<c10::IValue> ExecutorTestBase::runNativertReferenceWithInputs(
   at::cuda::set_device(static_cast<c10::DeviceIndex>(waveDevice->deviceId));
 
   fillFrameFromUserInputs(graph, *frame, deviceInputs);
-  auto outputs = executor.executeWithPrefilledFrame(*frame);
+
+  std::vector<c10::IValue> outputs;
   if (!refFramePath.empty()) {
-    saveReferenceFrame(*frame, graph, refFramePath);
+    // Capture every intermediate on-produce (node by node), the same way the
+    // sigmoid --reference_from_gpu path does. A plain executeWithPrefilledFrame
+    // frees each intermediate right after its last use, so a post-run frame
+    // snapshot would only retain outputs and persistent values (the strict
+    // per-intermediate check then covers almost nothing). The 4-arg
+    // saveReferenceFrame prefers these captured copies, so the reference frame
+    // covers all intermediates.
+    capturedRefOutputs_.clear();
+    outputs = executeSerialWithTrace(
+        graph, *frame, executor.stealKernels(), /*captureRefOutputs=*/true);
+    saveReferenceFrame(*frame, graph, capturedRefOutputs_, refFramePath);
+  } else {
+    outputs = executor.executeWithPrefilledFrame(*frame);
   }
   return outputsToHost(outputs, "synthetic-ref");
 }
 
-void ExecutorTestBase::runWaveWithInputs(
-    ModelFixture& fixture,
-    std::vector<c10::IValue> inputs,
+void ExecutorTestBase::executeAndCompareWave(
+    WaveGraphExecutor& waveExec,
+    const std::vector<c10::IValue>& deviceInputs,
     const std::vector<c10::IValue>& expected,
-    const std::string& refFramePath) {
-  std::unordered_map<int32_t, c10::IValue> refFrame;
-  if (!refFramePath.empty()) {
-    refFrame = loadReferenceFrame(refFramePath);
-    WaveConfig::get().referenceFrame = &refFrame;
-  }
-
-  WaveGraphExecutor waveExec(fixture.makeModelContext());
+    const std::string& label,
+    bool haveRefFrame) {
   auto& graph = waveExec.graph();
   auto pooledFrame = waveExec.getFrame();
-
-  auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
   fillFrameFromUserInputs(graph, *pooledFrame, deviceInputs);
   auto waveOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
   waveExec.returnFrame(std::move(pooledFrame));
 
-  lastRefTensorsChecked_ = waveExec.numRefTensorsChecked();
-  lastRefNodesChecked_ = waveExec.numRefNodesChecked();
-  WaveConfig::get().referenceFrame = nullptr;
-  if (!refFramePath.empty()) {
-    LOG(INFO) << "synthetic-wave reference frame: checked "
-              << lastRefTensorsChecked_ << " tensors, " << lastRefNodesChecked_
-              << " nodes";
+  // The single-shot paths (parity, synthetic) never went through the benchmark
+  // loop that prints this, so the per-step breakdown was only reachable from
+  // the ROO benchmark -- twenty-five minutes a measurement instead of twenty
+  // seconds.
+  if (WaveConfig::get().trace & WaveConfig::kTiming) {
+    const auto& report = waveThreadInfo().perfReport;
+    if (!report.empty()) {
+      std::cout << report << std::endl;
+    }
   }
 
-  auto hostOutputs = outputsToHost(waveOutputs, "synthetic-wave");
+  lastRefTensorsChecked_ = waveExec.numRefTensorsChecked();
+  lastRefNodesChecked_ = waveExec.numRefNodesChecked();
+  if (haveRefFrame) {
+    LOG(INFO) << label << " reference frame: checked " << lastRefTensorsChecked_
+              << " tensors, " << lastRefNodesChecked_ << " nodes";
+  }
+
+  auto hostOutputs = outputsToHost(waveOutputs, label);
 
   // Compare wave outputs against the nativert reference the way the sigmoid
   // [refout] check does: tensors only, non-fatal, counting mismatches. Some
   // final outputs are legitimately None in wave (unmaterialized), so a strict
   // verifyOutputs would spuriously fail; the per-intermediate reference-frame
-  // check above is the strict correctness gate.
+  // check is the strict correctness gate.
   size_t numToCheck = std::min(hostOutputs.size(), expected.size());
   int compared = 0, mismatched = 0, skipped = 0;
   for (size_t i = 0; i < numToCheck; ++i) {
@@ -1420,15 +1655,229 @@ void ExecutorTestBase::runWaveWithInputs(
     auto exp = expected[i].toTensor();
     if (actual.sizes() != exp.sizes() || !tensorsMatch(actual, exp)) {
       ++mismatched;
-      LOG(ERROR) << "synthetic-wave output " << i
+      LOG(ERROR) << label << " output " << i
                  << " differs from reference: " << firstDifference(actual, exp);
     }
   }
-  LOG(INFO) << "synthetic-wave: " << compared << " outputs compared, "
-            << mismatched << " mismatched, " << skipped
-            << " skipped (non-tensor)";
-  EXPECT_EQ(mismatched, 0) << "synthetic-wave: " << mismatched
+  LOG(INFO) << label << ": " << compared << " outputs compared, " << mismatched
+            << " mismatched, " << skipped << " skipped (non-tensor)";
+  EXPECT_EQ(mismatched, 0) << label << ": " << mismatched
                            << " output(s) differ from the nativert reference";
+}
+
+int32_t ExecutorTestBase::dropUnsharedReferenceValues(
+    std::unordered_map<int32_t, c10::IValue>& refFrame) const {
+  if (numSharedReferenceValues_ < 0) {
+    return 0;
+  }
+  int32_t dropped = 0;
+  for (auto it = refFrame.begin(); it != refFrame.end();) {
+    if (it->first >= numSharedReferenceValues_) {
+      it = refFrame.erase(it);
+      ++dropped;
+    } else {
+      ++it;
+    }
+  }
+  if (dropped > 0) {
+    LOG(INFO) << "reference frame: dropped " << dropped
+              << " value(s) at or above id " << numSharedReferenceValues_
+              << ", which the reference graph has and the wave graph does not";
+  }
+  return dropped;
+}
+
+void ExecutorTestBase::runWaveWithInputs(
+    ModelFixture& fixture,
+    std::vector<c10::IValue> inputs,
+    const std::vector<c10::IValue>& expected,
+    const std::string& refFramePath) {
+  std::unordered_map<int32_t, c10::IValue> refFrame;
+  if (!refFramePath.empty()) {
+    refFrame = loadReferenceFrame(refFramePath);
+    dropUnsharedReferenceValues(refFrame);
+    WaveConfig::get().referenceFrame = &refFrame;
+  }
+
+  WaveGraphExecutor waveExec(fixture.makeModelContext());
+  auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
+  executeAndCompareWave(
+      waveExec,
+      deviceInputs,
+      expected,
+      "synthetic-wave",
+      !refFramePath.empty());
+
+  WaveConfig::get().referenceFrame = nullptr;
+}
+
+void ExecutorTestBase::runSyntheticSweep(
+    const std::string& path,
+    std::optional<uint64_t> seed) {
+  std::string pt2Path = path + ".pt2";
+  const std::string specPath = path + ".spec";
+
+  std::string tempPt2;
+  if (!std::filesystem::exists(pt2Path) &&
+      std::filesystem::exists(pt2Path + ".gz")) {
+    tempPt2 = decompressGzToTemp(pt2Path + ".gz");
+    pt2Path = tempPt2;
+  }
+
+  auto* waveDevice = facebook::velox::wave::currentDevice();
+  if (!waveDevice) {
+    waveDevice = facebook::velox::wave::getDevice();
+  }
+  c10::Device weightDevice(
+      c10::kCUDA, static_cast<c10::DeviceIndex>(waveDevice->deviceId));
+
+  // Generate data and run the nativert-GPU reference exactly once; every config
+  // verifies against this single reference (outputs plus the reference frame).
+  auto refFixture = loadSyntheticFixture(pt2Path);
+  ASSERT_NE(refFixture, nullptr);
+  auto generated =
+      generateFromSpec(*refFixture->model.graph, specPath, seed, weightDevice);
+  refFixture->weights = generated.weights;
+
+  const std::string refFramePath =
+      "/tmp/torchwave_synthetic_ref_" + std::to_string(getpid()) + ".pt";
+  auto expected = runNativertReferenceWithInputs(
+      *refFixture, generated.userInputs, refFramePath);
+
+  // Load the reference frame once. Verification only reads it and executions
+  // are serial, so all configs share this single map.
+  auto refFrame = loadReferenceFrame(refFramePath);
+  dropUnsharedReferenceValues(refFrame);
+
+  struct SweepConfig {
+    const char* name{};
+    std::optional<bool> cg;
+    std::optional<bool> single;
+    bool autoAdjustCost{};
+    bool freeIntermediates{};
+  };
+  const SweepConfig configs[] = {
+      {"auto", std::nullopt, std::nullopt, false, false},
+      {"auto", std::nullopt, std::nullopt, false, true},
+      {"cg=1",
+       std::optional<bool>(true),
+       std::optional<bool>(false),
+       true,
+       false},
+      {"cg=1",
+       std::optional<bool>(true),
+       std::optional<bool>(false),
+       true,
+       true},
+      {"cg=0,multi",
+       std::optional<bool>(false),
+       std::optional<bool>(false),
+       false,
+       false},
+      {"cg=0,multi",
+       std::optional<bool>(false),
+       std::optional<bool>(false),
+       false,
+       true},
+      {"single_block", std::nullopt, std::optional<bool>(true), false, false},
+      {"single_block", std::nullopt, std::optional<bool>(true), false, true},
+  };
+  const size_t numConfigs = sizeof(configs) / sizeof(configs[0]);
+
+  // Build one ModelContext per config on this thread (graph load, rewrites and
+  // device placement are serial to avoid graph-mutation races). Each context
+  // carries its own WaveConfig override: a copy of the current config (so
+  // kernelCacheDir / trace / blockSize etc. are preserved) with this mode's
+  // grid and freeing flags and a pointer to the shared reference frame.
+  const WaveConfig baseConfig = WaveConfig::get();
+  std::vector<std::unique_ptr<ModelContext>> contexts(numConfigs);
+  std::vector<std::string> labels(numConfigs);
+  for (size_t i = 0; i < numConfigs; ++i) {
+    auto fixture = loadSyntheticFixture(pt2Path);
+    ASSERT_NE(fixture, nullptr);
+    fixture->weights = generated.weights;
+    stripDataAsserts(*fixture->model.graph);
+    applySyntheticGraphRewrites(*fixture->model.graph);
+    setGraphDevice(fixture->model.graph.get(), true);
+    // The same prep the reference had when it recorded the boundary, so the
+    // two must agree on the Value count here. If they ever do not, every id
+    // past the first divergence names a different value in each graph and the
+    // whole intermediates check is silently comparing unrelated tensors --
+    // which reads as one arbitrary tensor mismatch, not as the id-space bug it
+    // is. Fail as itself instead.
+    ASSERT_EQ(
+        static_cast<int32_t>(fixture->model.graph->numValues()),
+        numSharedReferenceValues_)
+        << "reference and wave graphs disagree on their Value count, so the "
+           "reference frame's ids no longer name the same values";
+
+    auto ctx = fixture->makeModelContext();
+    auto cfg = std::make_shared<WaveConfig>(baseConfig);
+    cfg->isCg = configs[i].cg;
+    cfg->useSingleBlock = configs[i].single;
+    cfg->autoAdjustCost = configs[i].autoAdjustCost;
+    cfg->freeIntermediates = configs[i].freeIntermediates;
+    cfg->referenceFrame = &refFrame;
+    ctx->configOverride = std::move(cfg);
+    contexts[i] = std::move(ctx);
+    labels[i] = std::string("synthetic-wave[") + configs[i].name +
+        " free=" + (configs[i].freeIntermediates ? "true" : "false") + "]";
+  }
+
+  // Compile all configs' executors in parallel (construction is the compile
+  // step). The WaveConfig thread-local override makes each construction use its
+  // own config, and per-construction kernel ids keep cache keys stable. gtest
+  // assertions are not thread-safe, so a construction failure is captured as an
+  // exception and surfaced on this thread after the joins.
+  std::vector<std::unique_ptr<WaveGraphExecutor>> execs(numConfigs);
+  std::vector<std::exception_ptr> compileErrors(numConfigs);
+  {
+    std::vector<std::thread> threads;
+    threads.reserve(numConfigs);
+    for (size_t i = 0; i < numConfigs; ++i) {
+      threads.emplace_back([&, i] {
+        try {
+          auto* device = facebook::velox::wave::currentDevice();
+          if (!device) {
+            device = facebook::velox::wave::getDevice();
+          }
+          facebook::velox::wave::setDevice(device);
+          execs[i] =
+              std::make_unique<WaveGraphExecutor>(std::move(contexts[i]));
+        } catch (...) {
+          compileErrors[i] = std::current_exception();
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
+    }
+  }
+  LOG(INFO) << "synthetic sweep: compiled " << numConfigs
+            << " configs in parallel";
+
+  // Execute serially so only one config's intermediates are resident at a time.
+  auto [deviceInputs, dataMovUs] = inputsToDevice(generated.userInputs);
+  for (size_t i = 0; i < numConfigs; ++i) {
+    LOG(INFO) << "==== synthetic sweep: " << labels[i] << " ====";
+    if (compileErrors[i]) {
+      try {
+        std::rethrow_exception(compileErrors[i]);
+      } catch (const std::exception& e) {
+        ADD_FAILURE() << labels[i] << " failed to compile: " << e.what();
+      }
+      continue;
+    }
+    executeAndCompareWave(
+        *execs[i], deviceInputs, expected, labels[i], /*haveRefFrame=*/true);
+    // Release this config's executor before the next runs to bound memory.
+    execs[i].reset();
+  }
+
+  std::remove(refFramePath.c_str());
+  if (!tempPt2.empty()) {
+    std::remove(tempPt2.c_str());
+  }
 }
 
 void ExecutorTestBase::runSynthetic(

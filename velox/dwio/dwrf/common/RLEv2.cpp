@@ -393,7 +393,7 @@ uint64_t RleDecoderV2<isSigned>::nextPatched(
     VELOX_CHECK_NE(
         pl,
         0,
-        "Corrupt PATCHED_BASE encoded data (pl==0)! ",
+        "Patch list length is zero: {}",
         dwio::common::IntDecoder<isSigned>::inputStream_->getName());
 
     // read the next base width number of bytes to extract base value
@@ -420,7 +420,9 @@ uint64_t RleDecoderV2<isSigned>::nextPatched(
     VELOX_CHECK_LE(
         (patchBitSize_ + pgw),
         64,
-        "Corrupt PATCHED_BASE encoded data (patchBitSize + pgw > 64)! ",
+        "Patch width ({}) plus patch gap width ({}) exceeds 64 bits: {}",
+        patchBitSize_,
+        pgw,
         dwio::common::IntDecoder<isSigned>::inputStream_->getName());
     uint32_t cfb = getClosestFixedBits(patchBitSize_ + pgw);
     readLongs(unpackedPatch_.data(), 0, pl, cfb);

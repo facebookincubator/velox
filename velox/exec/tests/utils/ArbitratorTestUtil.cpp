@@ -16,6 +16,7 @@
 
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/TableWriter.h"
 
@@ -341,15 +342,21 @@ QueryTestResult runWriteTask(
             // triggered flush.
             .connectorSessionProperty(
                 kHiveConnectorId,
-                dwrf::Config::kOrcWriterMaxStripeSizeSession,
+                dwio::common::formatSessionProperty(
+                    dwio::common::FileFormat::ORC,
+                    dwrf::Config::kOrcWriterMaxStripeSizeSession),
                 "1GB")
             .connectorSessionProperty(
                 kHiveConnectorId,
-                dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+                dwio::common::formatSessionProperty(
+                    dwio::common::FileFormat::ORC,
+                    dwrf::Config::kOrcWriterMaxDictionaryMemorySession),
                 "1GB")
             .connectorSessionProperty(
                 kHiveConnectorId,
-                dwrf::Config::kOrcWriterMaxDictionaryMemorySession,
+                dwio::common::formatSessionProperty(
+                    dwio::common::FileFormat::ORC,
+                    dwrf::Config::kOrcWriterMaxDictionaryMemorySession),
                 "1GB")
             .queryCtx(queryCtx)
             .maxDrivers(numDrivers)

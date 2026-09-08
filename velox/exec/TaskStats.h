@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -23,7 +24,7 @@
 #include "velox/exec/BlockingReason.h"
 #include "velox/exec/DriverStats.h"
 #include "velox/exec/OperatorStats.h"
-#include "velox/exec/OutputBuffer.h"
+#include "velox/exec/OutputBufferStats.h"
 
 namespace facebook::velox::exec {
 
@@ -115,7 +116,7 @@ struct TaskStats {
   bool outputBufferOverutilized{false};
 
   /// Output buffer stats if present.
-  std::optional<OutputBuffer::Stats> outputBufferStats;
+  std::optional<OutputBufferStats> outputBufferStats;
 
   /// The longest still running operator call in "op::call" format.
   std::string longestRunningOpCall;

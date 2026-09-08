@@ -282,12 +282,11 @@ class raw_vector {
   int64_t capacity_{0};
 };
 
-// Returns a pointer to 'size' int32_t's with consecutive values
-// starting at 0. There are at least kPadding / sizeof(int32_t) values
-// past 'size', so that it is safe to access the returned pointer at maximum
-// SIMD width. Typically returns preallocated memory but if this is
-// not large enough,resizes and initializes 'storage' to the requested
-// size and returns storage.data().
+/// Returns a pointer to 'size' int32_t's with consecutive values starting at
+/// 'offset'. There are at least kPadding / sizeof(int32_t) values past 'size',
+/// so that it is safe to access the returned pointer at maximum SIMD width.
+/// Returns pre-allocated memory if it is large enough, otherwise resizes and
+/// initializes 'storage' to the requested size and 'returns storage.data()'.
 const int32_t*
 iota(int32_t size, raw_vector<int32_t>& storage, int32_t offset = 0);
 

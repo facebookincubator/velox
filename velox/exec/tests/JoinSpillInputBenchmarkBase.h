@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "velox/exec/tests/SpillerBenchmarkBase.h"
 
 namespace facebook::velox::exec::test {

@@ -16,11 +16,8 @@
 
 #pragma once
 
-#include <atomic>
-
 #include <folly/container/F14Map.h>
 #include <folly/hash/Hash.h>
-#include <glog/logging.h>
 
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -225,8 +222,6 @@ class RowVector : public BaseVector {
   /// Whether any child is a lazy vector that has not been loaded yet. The
   /// result is cached and computed lazily on first access to avoid scanning
   /// children when the flag is never read (common for intermediate RowVectors).
-  /// Safe to call concurrently even when the cached flag is dirty; see
-  /// containsLazyNotLoaded_ for why it is atomic.
   bool containsLazyNotLoaded() const;
 
   /// Invalidates the cached containsLazyNotLoaded flag, causing it to be
@@ -311,23 +306,11 @@ class RowVector : public BaseVector {
   // recomputation on next access), 0 means false, 1 means true. Computed lazily
   // on first read by computeContainsLazyNotLoaded().
   //
-  // Atomic because that first-read recomputation can run concurrently on the
-  // same vector. isLazyNotLoaded() does not recurse into ARRAY/MAP children, so
-  // a RowVector nested inside an ARRAY/MAP keeps a dirty flag that is never
-  // evaluated at the ARRAY/MAP layer; a later code path can then read it from
-  // several driver threads at once when the same base vector is shared (e.g.
-  // MinMaxByNTest.groupByRow with ARRAY<ROW<..>> partitioned via
-  // LocalPartition). The race is benign -- there are no real lazy children so
-  // it always resolves to 0 -- but TSAN flags the unsynchronized read+write, so
-  // we load/store with memory_order_relaxed, which is free on x86.
-  //
-  // The cleaner fix is to forbid unloaded lazy ARRAY/MAP children at
-  // construction (a VELOX_CHECK in the ArrayVector/MapVector constructors).
-  // That barrier runs on the single constructing thread and would populate the
-  // nested Row's flag eagerly, removing the need for this to be atomic. We
-  // cannot add it yet: some internal code points still build ARRAY/MAP over
-  // lazy children. Until those callers are fixed the flag stays atomic.
-  mutable std::atomic<int8_t> containsLazyNotLoaded_{-1};
+  // Not atomic: the ArrayVector and MapVector constructors reject unloaded lazy
+  // children, so a RowVector nested inside an ARRAY/MAP has its flag resolved
+  // on the single constructing thread before the ARRAY/MAP can be shared across
+  // driver threads.
+  mutable int8_t containsLazyNotLoaded_{-1};
 
   // Flag to indicate all children has been loaded (non-recursively).  Used to
   // optimize loadedVector calls.  If this is true, we don't recurse into
@@ -393,7 +376,7 @@ struct ArrayVectorBase : BaseVector {
   /// are safe to write at index i, i.ex not shared, or not large enough.
   void
   setOffsetAndSize(vector_size_t i, vector_size_t offset, vector_size_t size) {
-    DCHECK_LT(i, BaseVector::length_);
+    VELOX_DCHECK_LT(i, BaseVector::length_);
     offsets_->asMutable<vector_size_t>()[i] = offset;
     sizes_->asMutable<vector_size_t>()[i] = size;
   }
@@ -503,6 +486,9 @@ class ArrayVector : public ArrayVectorBase {
         "Unexpected element type: {}. Expected: {}",
         elements_->type()->toString(),
         type->childAt(0)->toString());
+    VELOX_CHECK(
+        !isLazyNotLoaded(*elements_),
+        "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
   }
 
   bool containsNullAt(vector_size_t idx) const override;
@@ -634,6 +620,12 @@ class MapVector : public ArrayVectorBase {
         "Unexpected value type: {}. Expected: {}",
         values_->type()->toString(),
         type->childAt(1)->toString());
+    VELOX_CHECK(
+        !isLazyNotLoaded(*keys_),
+        "Cannot construct MapVector with an unloaded lazy vector as keys.");
+    VELOX_CHECK(
+        !isLazyNotLoaded(*values_),
+        "Cannot construct MapVector with an unloaded lazy vector as values.");
   }
 
   ~MapVector() override = default;

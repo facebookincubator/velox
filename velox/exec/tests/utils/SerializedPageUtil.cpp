@@ -23,7 +23,7 @@ namespace facebook::velox::exec::test {
 std::unique_ptr<SerializedPageBase> toSerializedPage(
     const RowVectorPtr& vector,
     std::string serdeKind,
-    const std::shared_ptr<OutputBufferManager>& bufferManager,
+    const std::shared_ptr<DefaultOutputBufferManager>& bufferManager,
     memory::MemoryPool* pool) {
   auto data =
       std::make_unique<VectorStreamGroup>(pool, getNamedVectorSerde(serdeKind));

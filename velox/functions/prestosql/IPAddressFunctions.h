@@ -333,7 +333,7 @@ struct IPPrefixCollapseFunction {
       VELOX_USER_CHECK(
           prefixLength >= 0 && prefixLength <= ipVersionMaxBits,
           fmt::format(
-              "Recieved invalid ipprefix:{} prefix length: {}",
+              "Received invalid ipprefix:{} prefix length: {}",
               firstIpAddress,
               prefixLength));
 

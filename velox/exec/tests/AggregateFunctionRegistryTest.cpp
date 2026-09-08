@@ -120,6 +120,19 @@ TEST_F(AggregateFunctionRegistryTest, wrongArgType) {
       "Aggregate function signature is not supported");
 }
 
+TEST_F(
+    AggregateFunctionRegistryTest,
+    signatureNotSupportedRecordsStableTemplate) {
+  try {
+    resolveResultType("aggregate_func", {BIGINT()});
+    FAIL() << "Expected exception";
+  } catch (const VeloxUserError& e) {
+    EXPECT_EQ(
+        e.messageTemplate(),
+        "Aggregate function signature is not supported: {}. Supported signatures: {}.");
+  }
+}
+
 TEST_F(AggregateFunctionRegistryTest, coercions) {
   // (bigint, double) -> bigint
   // (T, T) -> T

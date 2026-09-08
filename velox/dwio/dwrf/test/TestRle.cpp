@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
@@ -454,6 +455,26 @@ TEST_F(RLEv2Test, basicPatched0) {
       values,
       decodeRLEv2(bytes, l, values.size(), values.size()),
       values.size());
+};
+
+// Regression test for a heap-buffer-overflow read in
+// RleDecoderV2::adjustGapAndPatch(). A crafted PATCHED_BASE run whose patch
+// list ends in a gap-continuation entry (gap == 255, patch == 0) used to walk
+// patchIdx_ past the end of the patch list; decoding must now fail cleanly.
+TEST_F(RLEv2Test, patchedBaseGapChainOutOfBounds) {
+  // Single-entry PATCHED_BASE patch list that is itself a continuation marker:
+  //   0x80 firstByte  -> PATCHED_BASE, fixed width 1 bit, runLength high bit 0
+  //   0x00 runLength   -> runLength = 1
+  //   0x07 thirdByte   -> base width 1 byte, patch width 8 bits
+  //   0xe1 fourthByte  -> patch gap width 8 bits, patch list length 1
+  //   0x00 base value
+  //   0x00 unpacked value
+  //   0xff 0x00 patch  -> gap = 255, patch = 0 (continuation marker)
+  const unsigned char bytes[] = {
+      0x80, 0x00, 0x07, 0xe1, 0x00, 0x00, 0xff, 0x00};
+  VELOX_ASSERT_THROW(
+      decodeRLEv2(bytes, sizeof(bytes), 1, 1),
+      "Patch gap chain runs past patch list");
 };
 
 TEST_F(RLEv2Test, basicPatched1) {

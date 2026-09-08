@@ -40,7 +40,7 @@ class WindowPartition {
   /// 'inputMapping' : Mapping from Window input column to the column position
   /// in 'data' for it. This is required because the WindowBuild re-orders
   /// the columns in 'data' for use with the spiller.
-  /// 'sortKeyInfo' : Order by columns used by the the Window operator. Used to
+  /// 'sortKeyInfo' : Order by columns used by the Window operator. Used to
   /// get peer rows from the input partition.
   WindowPartition(
       RowContainer* data,

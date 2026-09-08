@@ -515,124 +515,124 @@ using TestValuesWriterInt64Type = TestPrimitiveWriter<Int64Type>;
 using TestByteArrayValuesWriter = TestPrimitiveWriter<ByteArrayType>;
 using TestFixedLengthByteArrayValuesWriter = TestPrimitiveWriter<FLBAType>;
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlain) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlain) {
   this->testRequiredWithEncoding(Encoding::kPlain);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredDictionary) {
+TYPED_TEST(TestPrimitiveWriter, requiredDictionary) {
   this->testRequiredWithEncoding(Encoding::kPlainDictionary);
 }
 
 /*
-TYPED_TEST(TestPrimitiveWriter, RequiredRLE) {
+TYPED_TEST(TestPrimitiveWriter, requiredRLE) {
   this->TestRequiredWithEncoding(Encoding::RLE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredBitPacked) {
+TYPED_TEST(TestPrimitiveWriter, requiredBitPacked) {
   this->TestRequiredWithEncoding(Encoding::BIT_PACKED);
 }
 */
 
-TEST_F(TestValuesWriterInt32Type, RequiredDeltaBinaryPacked) {
+TEST_F(TestValuesWriterInt32Type, requiredDeltaBinaryPacked) {
   this->testRequiredWithEncoding(Encoding::kDeltaBinaryPacked);
 }
 
-TEST_F(TestValuesWriterInt64Type, RequiredDeltaBinaryPacked) {
+TEST_F(TestValuesWriterInt64Type, requiredDeltaBinaryPacked) {
   this->testRequiredWithEncoding(Encoding::kDeltaBinaryPacked);
 }
 
-TEST_F(TestByteArrayValuesWriter, RequiredDeltaLengthByteArray) {
+TEST_F(TestByteArrayValuesWriter, requiredDeltaLengthByteArray) {
   this->testRequiredWithEncoding(Encoding::kDeltaLengthByteArray);
 }
 
 /*
-TYPED_TEST(TestByteArrayValuesWriter, RequiredDeltaByteArray) {
+TYPED_TEST(TestByteArrayValuesWriter, requiredDeltaByteArray) {
   this->TestRequiredWithEncoding(Encoding::DELTA_BYTE_ARRAY);
 }
 
-TEST_F(TestFixedLengthByteArrayValuesWriter, RequiredDeltaByteArray) {
+TEST_F(TestFixedLengthByteArrayValuesWriter, requiredDeltaByteArray) {
   this->TestRequiredWithEncoding(Encoding::DELTA_BYTE_ARRAY);
 }
 */
 
-TYPED_TEST(TestPrimitiveWriter, RequiredRLEDictionary) {
+TYPED_TEST(TestPrimitiveWriter, requiredRLEDictionary) {
   this->testRequiredWithEncoding(Encoding::kRleDictionary);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStats) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithStats) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::UNCOMPRESSED, false, true, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithSnappyCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithSnappyCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::SNAPPY, false, false, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndSnappyCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithStatsAndSnappyCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::SNAPPY, false, true, LARGE_SIZE);
 }
 
 #ifdef ARROW_WITH_BROTLI
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithBrotliCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithBrotliCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::BROTLI, false, false, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithBrotliCompressionAndLevel) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithBrotliCompressionAndLevel) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::BROTLI, false, false, LARGE_SIZE, 10);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndBrotliCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithStatsAndBrotliCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::BROTLI, false, true, LARGE_SIZE);
 }
 
 #endif
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithGzipCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithGzipCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::GZIP, false, false, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithGzipCompressionAndLevel) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithGzipCompressionAndLevel) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::GZIP, false, false, LARGE_SIZE, 10);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndGzipCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithStatsAndGzipCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::GZIP, false, true, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithLz4Compression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithLz4Compression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::LZ4, false, false, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndLz4Compression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithStatsAndLz4Compression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::LZ4, false, true, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithZstdCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithZstdCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::ZSTD, false, false, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithZstdCompressionAndLevel) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithZstdCompressionAndLevel) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::ZSTD, false, false, LARGE_SIZE, 6);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainWithStatsAndZstdCompression) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainWithStatsAndZstdCompression) {
   this->testRequiredWithSettings(
       Encoding::kPlain, Compression::ZSTD, false, true, LARGE_SIZE);
 }
 
-TYPED_TEST(TestPrimitiveWriter, Optional) {
+TYPED_TEST(TestPrimitiveWriter, optional) {
   // Optional and non-repeated, with definition levels.
   // But no repetition levels.
   this->setUpSchema(Repetition::kOptional);
@@ -656,7 +656,7 @@ TYPED_TEST(TestPrimitiveWriter, Optional) {
   ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
-TYPED_TEST(TestPrimitiveWriter, OptionalSpaced) {
+TYPED_TEST(TestPrimitiveWriter, optionalSpaced) {
   // Optional and non-repeated, with definition levels.
   // But no repetition levels.
   this->setUpSchema(Repetition::kOptional);
@@ -692,7 +692,7 @@ TYPED_TEST(TestPrimitiveWriter, OptionalSpaced) {
   ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
-TYPED_TEST(TestPrimitiveWriter, Repeated) {
+TYPED_TEST(TestPrimitiveWriter, repeated) {
   // Optional and repeated, so definition and repetition levels.
   this->setUpSchema(Repetition::kRepeated);
 
@@ -716,7 +716,7 @@ TYPED_TEST(TestPrimitiveWriter, Repeated) {
   ASSERT_EQ(this->values_, this->valuesOut_);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredLargeChunk) {
+TYPED_TEST(TestPrimitiveWriter, requiredLargeChunk) {
   this->generateData(LARGE_SIZE);
 
   // Test case 1: required and non-repeated, so no definition or repetition.
@@ -742,7 +742,7 @@ TYPED_TEST(TestPrimitiveWriter, dictionaryfallbackversion20) {
   this->testDictionaryFallbackEncoding(ParquetVersion::PARQUET_2_6);
 }
 
-TEST(TestWriter, NullValuesBuffer) {
+TEST(TestWriter, nullValuesBuffer) {
   std::shared_ptr<::arrow::io::BufferOutputStream> sink = createOutputStream();
 
   const auto itemNode = schema::PrimitiveNode::make(
@@ -777,7 +777,7 @@ TEST(TestWriter, NullValuesBuffer) {
       numValues, defLevels, repLevels, validBits, validBitsOffset, values);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredPlainChecksum) {
+TYPED_TEST(TestPrimitiveWriter, requiredPlainChecksum) {
   this->testRequiredWithSettings(
       Encoding::kPlain,
       Compression::UNCOMPRESSED,
@@ -788,7 +788,7 @@ TYPED_TEST(TestPrimitiveWriter, RequiredPlainChecksum) {
       /* enable_checksum */ true);
 }
 
-TYPED_TEST(TestPrimitiveWriter, RequiredDictChecksum) {
+TYPED_TEST(TestPrimitiveWriter, requiredDictChecksum) {
   this->testRequiredWithSettings(
       Encoding::kPlain,
       Compression::UNCOMPRESSED,
@@ -801,7 +801,7 @@ TYPED_TEST(TestPrimitiveWriter, RequiredDictChecksum) {
 
 // PARQUET-719.
 // Test case for NULL values.
-TEST_F(TestValuesWriterInt32Type, OptionalNullValueChunk) {
+TEST_F(TestValuesWriterInt32Type, optionalNullValueChunk) {
   this->setUpSchema(Repetition::kOptional);
 
   this->generateData(LARGE_SIZE);
@@ -826,7 +826,7 @@ TEST_F(TestValuesWriterInt32Type, OptionalNullValueChunk) {
 // PARQUET-764.
 // Correct bitpacking for boolean write at non-byte boundaries.
 using TestBooleanValuesWriter = TestPrimitiveWriter<BooleanType>;
-TEST_F(TestBooleanValuesWriter, AlternateBooleanValues) {
+TEST_F(TestBooleanValuesWriter, alternateBooleanValues) {
   this->setUpSchema(Repetition::kRequired);
   auto writer = this->buildWriter();
   for (int i = 0; i < SMALL_SIZE; i++) {
@@ -842,7 +842,7 @@ TEST_F(TestBooleanValuesWriter, AlternateBooleanValues) {
 
 // PARQUET-979.
 // Prevent writing large MIN, MAX stats.
-TEST_F(TestByteArrayValuesWriter, OmitStats) {
+TEST_F(TestByteArrayValuesWriter, omitStats) {
   int minLen = 1024 * 4;
   int maxLen = 1024 * 8;
   this->setUpSchema(Repetition::kRequired);
@@ -861,7 +861,7 @@ TEST_F(TestByteArrayValuesWriter, OmitStats) {
 
 // PARQUET-1405.
 // Prevent writing large stats in the DataPageHeader.
-TEST_F(TestByteArrayValuesWriter, OmitDataPageStats) {
+TEST_F(TestByteArrayValuesWriter, omitDataPageStats) {
   int minLen = static_cast<int>(std::pow(10, 7));
   int maxLen = static_cast<int>(std::pow(10, 7));
   this->setUpSchema(Repetition::kRequired);
@@ -877,7 +877,7 @@ TEST_F(TestByteArrayValuesWriter, OmitDataPageStats) {
   ASSERT_NO_THROW(this->readColumn());
 }
 
-TEST_F(TestByteArrayValuesWriter, LimitStats) {
+TEST_F(TestByteArrayValuesWriter, limitStats) {
   int minLen = 1024 * 4;
   int maxLen = 1024 * 8;
   this->setUpSchema(Repetition::kRequired);
@@ -894,7 +894,7 @@ TEST_F(TestByteArrayValuesWriter, LimitStats) {
   ASSERT_TRUE(this->metadataIsStatsSet());
 }
 
-TEST_F(TestByteArrayValuesWriter, CheckDefaultStats) {
+TEST_F(TestByteArrayValuesWriter, checkDefaultStats) {
   this->setUpSchema(Repetition::kRequired);
   auto writer = this->buildWriter();
   this->generateData(SMALL_SIZE);
@@ -905,7 +905,7 @@ TEST_F(TestByteArrayValuesWriter, CheckDefaultStats) {
   ASSERT_TRUE(this->metadataIsStatsSet());
 }
 
-TEST(TestColumnWriter, RepeatedListsUpdateSpacedBug) {
+TEST(TestColumnWriter, repeatedListsUpdateSpacedBug) {
   // In ARROW-3930 we discovered a bug when writing from Arrow when we had data.
   // That looks like this:
   //
@@ -1092,7 +1092,7 @@ void verifyDecodingMultipleSetData(
 
 // Test levels with maximum bit-width from 1 to 8.
 // Increase the repetition count for each iteration by a factor of 2.
-TEST(TestLevels, TestLevelsDecodeMultipleBitWidth) {
+TEST(TestLevels, testLevelsDecodeMultipleBitWidth) {
   int minRepeatFactor = 0;
   int maxRepeatFactor = 7; // 128
   int maxBitWidth = 8;
@@ -1126,7 +1126,7 @@ TEST(TestLevels, TestLevelsDecodeMultipleBitWidth) {
 }
 
 // Test multiple decoder SetData calls.
-TEST(TestLevels, TestLevelsDecodeMultipleSetData) {
+TEST(TestLevels, testLevelsDecodeMultipleSetData) {
   int minRepeatFactor = 3;
   int maxRepeatFactor = 7; // 128
   int bitWidth = 8;
@@ -1157,7 +1157,7 @@ TEST(TestLevels, TestLevelsDecodeMultipleSetData) {
   }
 }
 
-TEST(TestLevelEncoder, MinimumBufferSize) {
+TEST(TestLevelEncoder, minimumBufferSize) {
   // PARQUET-676, PARQUET-698.
   const int kNumToEncode = 1024;
 
@@ -1185,7 +1185,7 @@ TEST(TestLevelEncoder, MinimumBufferSize) {
   ASSERT_EQ(kNumToEncode, encodeCount);
 }
 
-TEST(TestLevelEncoder, MinimumBufferSize2) {
+TEST(TestLevelEncoder, minimumBufferSize2) {
   // PARQUET-708.
   // Test the worst case for bit_width=2 consisting of.
   // LiteralRun(size=8)
@@ -1222,7 +1222,7 @@ TEST(TestLevelEncoder, MinimumBufferSize2) {
   }
 }
 
-TEST(TestColumnWriter, WriteDataPageV2Header) {
+TEST(TestColumnWriter, writeDataPageV2Header) {
   auto sink = createOutputStream();
   auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
@@ -1310,7 +1310,7 @@ TEST(TestColumnWriter, WriteDataPageV2Header) {
 
 // The test below checks that data page v2 changes on record boundaries for.
 // all repetition types (i.e. required, optional, and repeated)
-TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
+TEST(TestColumnWriter, writeDataPagesChangeOnRecordBoundaries) {
   auto sink = createOutputStream();
   auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
@@ -1390,7 +1390,7 @@ TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundaries) {
 
 // The test below checks that data page v2 changes on record boundaries for.
 // Repeated columns with small batches.
-TEST(TestColumnWriter, WriteDataPagesChangeOnRecordBoundariesWithSmallBatches) {
+TEST(TestColumnWriter, writeDataPagesChangeOnRecordBoundariesWithSmallBatches) {
   auto sink = createOutputStream();
   auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
       "schema",
@@ -1545,7 +1545,7 @@ class ColumnWriterTestSizeEstimated : public ::testing::Test {
   std::unique_ptr<ColumnChunkMetaDataBuilder> metadata_;
 };
 
-TEST_F(ColumnWriterTestSizeEstimated, NonBuffered) {
+TEST_F(ColumnWriterTestSizeEstimated, nonBuffered) {
   auto requiredWriter =
       this->buildWriter(Compression::UNCOMPRESSED, /* buffered*/ false);
   // Write half page, page will not be flushed after loop.
@@ -1573,7 +1573,7 @@ TEST_F(ColumnWriterTestSizeEstimated, NonBuffered) {
   EXPECT_EQ(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
-TEST_F(ColumnWriterTestSizeEstimated, Buffered) {
+TEST_F(ColumnWriterTestSizeEstimated, buffered) {
   auto requiredWriter =
       this->buildWriter(Compression::UNCOMPRESSED, /* buffered*/ true);
   // Write half page, page will not be flushed after loop.
@@ -1601,7 +1601,7 @@ TEST_F(ColumnWriterTestSizeEstimated, Buffered) {
   EXPECT_EQ(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
-TEST_F(ColumnWriterTestSizeEstimated, NonBufferedDictionary) {
+TEST_F(ColumnWriterTestSizeEstimated, nonBufferedDictionary) {
   auto requiredWriter =
       this->buildWriter(Compression::UNCOMPRESSED, /* buffered*/ false, true);
   // For dict, keep all values equal.
@@ -1632,7 +1632,7 @@ TEST_F(ColumnWriterTestSizeEstimated, NonBufferedDictionary) {
   EXPECT_EQ(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
-TEST_F(ColumnWriterTestSizeEstimated, BufferedCompression) {
+TEST_F(ColumnWriterTestSizeEstimated, bufferedCompression) {
   auto requiredWriter = this->buildWriter(Compression::SNAPPY, true);
 
   // Write half page.
@@ -1660,7 +1660,7 @@ TEST_F(ColumnWriterTestSizeEstimated, BufferedCompression) {
   EXPECT_GT(writtenSize, requiredWriter->totalCompressedBytesWritten());
 }
 
-TEST(TestColumnWriter, WriteDataPageV2HeaderNullCount) {
+TEST(TestColumnWriter, writeDataPageV2HeaderNullCount) {
   auto sink = createOutputStream();
   auto listType = GroupNode::make(
       "list",

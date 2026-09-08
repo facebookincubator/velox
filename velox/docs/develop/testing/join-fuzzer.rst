@@ -28,6 +28,7 @@ The logically equivalent plans are generated as follows:
     - LEFT(a, b) => RIGHT(b, a)
     - LEFT SEMI FILTER(a, b) => RIGHT SEMI FILTER(b, a)
     - LEFT SEMI PROJECT(a, b) => RIGHT SEMI PROJECT(b, a)
+    - ANTI(a, b) => RIGHT ANTI(b, a)
 - Introduce round-robin local exchange before the join:
   Values -> LocalExchange(ROUND_ROBIN) -> HashJoin
 - Replace HashJoin with OrderBy(join keys) + MergeJoin for supported join

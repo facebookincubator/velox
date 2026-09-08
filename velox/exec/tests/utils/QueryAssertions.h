@@ -98,7 +98,7 @@ class DuckDbQueryRunner {
 
 /// Scoped abort percentage utility that allows user to trigger abort during the
 ///  query execution.
-/// 'abortPct' specifies the probability of of triggering abort. 100% means
+/// 'abortPct' specifies the probability of triggering abort. 100% means
 /// abort will always be triggered.
 /// 'maxInjections' indicates the max number of actual triggering, e.g. when
 /// 'abortPct' is 20 and 'maxInjections' is 10, continuous calls to

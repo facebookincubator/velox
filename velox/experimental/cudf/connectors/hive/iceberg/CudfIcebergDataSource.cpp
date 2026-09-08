@@ -54,10 +54,6 @@ void CudfIcebergDataSource::convertSplit(
   icebergSplit_ =
       checkedPointerCast<const velox_iceberg::HiveIcebergSplit>(split);
 
-  VELOX_CHECK(
-      icebergSplit_->start == 0,
-      "Sub-splits are not yet supported in CudfIcebergDataSource");
-
   // Convert `ConnectorSplit` to `CudfHiveConnectorSplit`
   CudfHiveDataSource::convertSplit(split);
 }

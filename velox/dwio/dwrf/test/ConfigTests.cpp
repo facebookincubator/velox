@@ -16,7 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
+
 #include "folly/Random.h"
+#include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -31,7 +34,19 @@ T getConfig(
   return config->get(entry);
 }
 
-TEST(ConfigTests, Set) {
+std::shared_ptr<const Config> createWriterConfig(
+    const facebook::velox::config::ConfigBase& connectorConfig,
+    const facebook::velox::config::ConfigBase& session,
+    std::optional<CompressionKind> compressionKind = std::nullopt) {
+  DwrfWriterFactory factory;
+  auto dwrfOptions = facebook::velox::checkedPointerCast<DwrfWriterOptions>(
+      factory.createFormatOptions(connectorConfig, session));
+  facebook::velox::dwio::common::WriterOptions options;
+  options.compressionKind = compressionKind;
+  return Writer::makeWriterConfig(options, *dwrfOptions);
+}
+
+TEST(ConfigTests, set) {
   Config config;
   // set
   auto val = folly::Random::rand32();
@@ -48,7 +63,7 @@ TEST(ConfigTests, Set) {
   EXPECT_TRUE(config.get(Config::CREATE_INDEX));
 }
 
-TEST(ConfigTests, EnumConfig) {
+TEST(ConfigTests, enumConfig) {
   Config config;
   config.set(Config::COMPRESSION, CompressionKind::CompressionKind_ZLIB);
   EXPECT_EQ(
@@ -58,14 +73,14 @@ TEST(ConfigTests, EnumConfig) {
       config.get(Config::COMPRESSION), CompressionKind::CompressionKind_NONE);
 }
 
-TEST(ConfigTests, UInt32Config) {
+TEST(ConfigTests, uint32Config) {
   Config config;
   auto val = folly::Random::rand32();
   config.set(Config::ROW_INDEX_STRIDE, val);
   EXPECT_EQ(config.get(Config::ROW_INDEX_STRIDE), val);
 }
 
-TEST(ConfigTests, BoolConfig) {
+TEST(ConfigTests, boolConfig) {
   Config config;
   config.set(Config::CREATE_INDEX, false);
   EXPECT_FALSE(config.get(Config::CREATE_INDEX));
@@ -83,12 +98,10 @@ inline void PrintTo(const ConfigTestParams& param, std::ostream* os) {
 }
 
 TEST(ConfigTests, writerOptionsDefaultConfig) {
-  WriterOptions options;
   const facebook::velox::config::ConfigBase base({});
   const facebook::velox::config::ConfigBase emptySession({});
 
-  options.processConfigs(base, emptySession);
-  auto config = options.config;
+  auto config = createWriterConfig(base, emptySession);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 64L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 16L * 1024L * 1024L);
@@ -112,9 +125,7 @@ TEST(ConfigTests, writerOptionsOverrideConfig) {
   const facebook::velox::config::ConfigBase base(std::move(configFromFile));
   const facebook::velox::config::ConfigBase emptySession({});
 
-  WriterOptions options;
-  options.processConfigs(base, emptySession);
-  auto config = options.config;
+  auto config = createWriterConfig(base, emptySession);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 100L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 100L * 1024L * 1024L);
@@ -137,13 +148,8 @@ TEST(ConfigTests, writerOptionsOverrideSession) {
       {Config::kOrcWriterCompressionLevelSession, "1"},
       {Config::kOrcWriterLinearStripeSizeHeuristicsSession, "false"}};
   const facebook::velox::config::ConfigBase session(std::move(sessionOverride));
-  WriterOptions options;
-  options.compressionKind = facebook::velox::common::CompressionKind_ZLIB;
-  options.processConfigs(base, session);
-  auto config = options.config;
-  ASSERT_EQ(
-      getConfig(config, Config::COMPRESSION),
-      facebook::velox::common::CompressionKind_ZLIB);
+  auto config = createWriterConfig(base, session, CompressionKind_ZLIB);
+  ASSERT_EQ(getConfig(config, Config::COMPRESSION), CompressionKind_ZLIB);
   ASSERT_EQ(getConfig(config, Config::STRIPE_SIZE), 22L * 1024L * 1024L);
   ASSERT_EQ(
       getConfig(config, Config::MAX_DICTIONARY_SIZE), 24L * 1024L * 1024L);
@@ -156,7 +162,7 @@ TEST(ConfigTests, writerOptionsOverrideSession) {
 }
 
 class ConfigTests : public ::testing::TestWithParam<ConfigTestParams> {};
-TEST_P(ConfigTests, FlatMapCols) {
+TEST_P(ConfigTests, flatMapCols) {
   const auto& params = GetParam();
   std::map<std::string, std::string> inputConfigMap{
       {"orc.map.flat.cols", params.inputCols}};

@@ -38,6 +38,7 @@ add_library(
   ExpressionFuzzer.cpp
   ExpressionFuzzerVerifier.cpp
   FuzzerRunner.cpp
+  PrestoSkippedFunctions.cpp
   SpecialFormSignatureGenerator.cpp
 )
 velox_add_test_headers(
@@ -46,6 +47,7 @@ velox_add_test_headers(
   ExpressionFuzzer.h
   ExpressionFuzzerVerifier.h
   FuzzerRunner.h
+  PrestoSkippedFunctions.h
   SpecialFormSignatureGenerator.h
 )
 

@@ -370,8 +370,10 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
       std::vector<std::string>{"sum(c0)"});
   const auto outputType = TableWriteTraits::outputType(statsSpec);
 
-  const auto insertTableHandle =
-      std::make_shared<InsertTableHandle>("connector_id", nullptr);
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id",
+      nullptr,
+      /*notNullColumns=*/folly::F14FastSet<std::string>{});
 
   const auto verify = [&](const std::shared_ptr<const TableWriteNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -400,6 +402,24 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
 
   const auto node2 = TableWriteNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, tableWriteNodeNotNullColumnOutsideSchema) {
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id", nullptr, folly::F14FastSet<std::string>{"c1"});
+
+  VELOX_ASSERT_USER_THROW(
+      TableWriteNode::Builder()
+          .id("test_id")
+          .columns(ROW({"c0"}, {INTEGER()}))
+          .columnNames({"c0"})
+          .insertTableHandle(insertTableHandle)
+          .hasPartitioningScheme(false)
+          .outputType(TableWriteTraits::outputType(std::nullopt))
+          .commitStrategy(connector::CommitStrategy::kNoCommit)
+          .source(source_)
+          .build(),
+      "NOT NULL column is not in the table schema: c1");
 }
 
 TEST_F(PlanNodeBuilderTest, tableWriteMergeNode) {
@@ -614,6 +634,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
       std::make_shared<GatherPartitionFunctionSpec>();
   const RowTypePtr outputType = ROW({"c0"}, {BIGINT()});
   const auto serdeKind = "Presto";
+  const std::string transportOptions = R"({"exchangeId":"test"})";
 
   const auto verify =
       [&](const std::shared_ptr<const PartitionedOutputNode>& node) {
@@ -624,6 +645,7 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
         EXPECT_EQ(node->isReplicateNullsAndAny(), replicateNullsAndAny);
         EXPECT_EQ(node->outputType(), outputType);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportOptions(), transportOptions);
         EXPECT_EQ(node->partitionFunctionSpecPtr(), partitionFunctionSpec);
         EXPECT_EQ(node->sources(), std::vector<PlanNodePtr>{source_});
       };
@@ -637,12 +659,16 @@ TEST_F(PlanNodeBuilderTest, partitionedOutputNode) {
                         .partitionFunctionSpec(partitionFunctionSpec)
                         .outputType(outputType)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kInMemory})
+                        .transportOptions(transportOptions)
                         .source(source_)
                         .build();
   verify(node);
 
   const auto node2 = PartitionedOutputNode::Builder(*node).build();
   verify(node2);
+
+  EXPECT_EQ(node->serialize()["transportOptions"], transportOptions);
 }
 
 TEST_F(PlanNodeBuilderTest, hashJoinNode) {
@@ -1004,10 +1030,12 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
       std::make_shared<FieldAccessTypedExpr>(BIGINT(), "a")};
   std::vector<FieldAccessTypedExprPtr> unnestVariables{
       std::make_shared<FieldAccessTypedExpr>(ARRAY(BIGINT()), "b")};
-  std::vector<std::string> unnestNames{"b"};
+  std::vector<std::optional<std::string>> unnestNames{"b"};
   std::optional<std::string> ordinalityName =
       std::make_optional<std::string>("ord");
   std::optional<bool> splitOutput = false;
+  std::optional<std::string> markerName =
+      std::make_optional<std::string>("marker");
 
   const auto verify = [&](const std::shared_ptr<const UnnestNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -1016,19 +1044,24 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
     EXPECT_TRUE(node->hasOrdinality());
     EXPECT_EQ(node->sources()[0], source_);
     EXPECT_EQ(node->splitOutput(), splitOutput);
+    EXPECT_EQ(node->markerName(), markerName);
 
-    for (int i = 0; i < node->outputType()->size(); ++i) {
-      if (i < replicateVariables.size()) {
-        EXPECT_EQ(node->outputType()->nameOf(i), replicateVariables[i]->name());
-      } else if (i < replicateVariables.size() + unnestVariables.size()) {
-        EXPECT_EQ(
-            node->outputType()->nameOf(i),
-            unnestVariables[i - replicateVariables.size()]->name());
-      } else {
-        EXPECT_EQ(i, node->outputType()->size() - 1);
-        EXPECT_EQ(node->outputType()->nameOf(i), ordinalityName.value());
-      }
+    // Output columns: replicate columns, then the unnest names, then the
+    // optional ordinality and marker columns.
+    std::vector<std::string> expectedNames;
+    for (const auto& variable : replicateVariables) {
+      expectedNames.push_back(variable->name());
     }
+    for (const auto& name : unnestNames) {
+      expectedNames.push_back(name.value());
+    }
+    if (ordinalityName.has_value()) {
+      expectedNames.push_back(ordinalityName.value());
+    }
+    if (markerName.has_value()) {
+      expectedNames.push_back(markerName.value());
+    }
+    EXPECT_EQ(node->outputType()->names(), expectedNames);
   };
 
   const auto node = UnnestNode::Builder()
@@ -1037,6 +1070,7 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
                         .unnestVariables(unnestVariables)
                         .unnestNames(unnestNames)
                         .ordinalityName(ordinalityName)
+                        .markerName(markerName)
                         .source(source_)
                         .splitOutput(splitOutput)
                         .build();
@@ -1044,6 +1078,17 @@ TEST_F(PlanNodeBuilderTest, unnestNode) {
 
   const auto node2 = UnnestNode::Builder(*node).build();
   verify(node2);
+
+  // A wrong number of unnest names is rejected: one per array, two per map.
+  VELOX_ASSERT_THROW(
+      UnnestNode::Builder()
+          .id(id)
+          .replicateVariables(replicateVariables)
+          .unnestVariables(unnestVariables)
+          .unnestNames({"b", "extra"})
+          .source(source_)
+          .build(),
+      "one name per array");
 }
 
 TEST_F(PlanNodeBuilderTest, enforceSingleRowNode) {

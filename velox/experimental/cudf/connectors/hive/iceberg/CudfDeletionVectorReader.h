@@ -49,9 +49,8 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 ///   or 12347).
 class CudfDeletionVectorReader {
  public:
-  CudfDeletionVectorReader(
-      const velox::connector::hive::iceberg::IcebergDeleteFile& dvFile,
-      uint64_t splitOffset = 0);
+  explicit CudfDeletionVectorReader(
+      const velox::connector::hive::iceberg::IcebergDeleteFile& dvFile);
 
   ~CudfDeletionVectorReader() = default;
   CudfDeletionVectorReader(CudfDeletionVectorReader&&) noexcept = default;
@@ -59,17 +58,16 @@ class CudfDeletionVectorReader {
   CudfDeletionVectorReader(const CudfDeletionVectorReader&) = delete;
   CudfDeletionVectorReader& operator=(const CudfDeletionVectorReader&) = delete;
 
-  /// Updates the deleted positions in the row mask in-place
+  /// Updates the row mask in-place by marking rows whose positions occur
+  /// in the deletion vector.
   ///
   /// @param rowMask Mutable boolean mask column on device.
-  /// @param startRow Absolute row index of the first row in this chunk.
-  /// @param numRows Number of rows in the table chunk.
+  /// @param rowIndex Column of file-local row positions (UINT64)
   /// @param stream CUDA stream for kernel launches.
   /// @param temp_mr Device memory resource for temporary allocations.
   void applyDeletes(
       cudf::mutable_column_view const& rowMask,
-      std::size_t startRow,
-      std::size_t numRows,
+      cudf::column_view const& rowIndex,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref temp_mr);
 
@@ -103,12 +101,8 @@ class CudfDeletionVectorReader {
   // Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap
   std::unique_ptr<cudf::roaring_bitmap> bitmap_;
 
-  // Row indices column
-  std::unique_ptr<cudf::column> rowIndices_;
-
   // Deletion vector file metadata.
   const velox::connector::hive::iceberg::IcebergDeleteFile dvFile_;
-  uint64_t splitOffset_;
 
   // Whether the bitmap has been loaded from the file.
   bool loaded_{false};

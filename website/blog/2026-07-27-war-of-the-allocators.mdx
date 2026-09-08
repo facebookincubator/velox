@@ -1,0 +1,217 @@
+---
+slug: war-of-the-allocators
+title: "War of the Allocators"
+date: 2026-07-27
+authors: [bikramSingh91, oerling, xiaoxmeng, kevinwilfong]
+tags: [tech-blog, memory-management, performance]
+description: "A retrospective on choosing jemalloc while migrating Presto clusters to Velox through Prestissimo."
+---
+
+This post shares an allocator analysis conducted in late 2024 while migrating
+internal Presto clusters to Velox execution through Prestissimo. Although the
+decision described here was made at that time, the experiments and trade-offs
+remain relevant to Velox users choosing between jemalloc and Velox's mmap-based
+allocator.
+
+## Objective
+
+We conducted this investigation to determine which allocator to use as we
+migrated Presto workloads to Velox through Prestissimo. We compared jemalloc
+with Velox's custom mmap-based allocator, focusing on performance, memory
+fragmentation, RSS control, and behavior under high concurrency. This evaluation
+**considered the trade-offs** between leveraging the maturity, integration, and
+support of jemalloc, versus investing significant engineering bandwidth in
+developing a robust custom allocator that could match the reliability and
+debugging capabilities of jemalloc.
+
+<!-- truncate -->
+
+## Context
+
+In the realm of high-performance and resource-intensive applications like
+Velox, efficient memory management is paramount. A memory allocator plays a
+crucial role in managing memory block allocation and deallocation, aiming to
+minimize fragmentation and ensure memory availability when needed. When
+selecting an allocator, developers often face a trade-off between tuning an
+existing one or building a custom solution tailored to the application's usage
+patterns. Initially, Velox opted for a custom allocator; however, after
+encountering challenges with this approach, the Prestissimo migration gave us
+an opportunity to re-evaluate that decision and determine whether jemalloc was
+a better fit for these workloads since it is widely used internally at Meta.
+
+**Existing Solutions: Industry-Standard Allocators**
+
+In the industry, **jemalloc** and **tcmalloc** are widely used allocators.
+Meta has heavily invested in jemalloc since 2013, making it the default malloc
+allocator. This means all standard malloc calls are routed through jemalloc,
+which offers an expanded set of APIs for advanced allocation actions. Jemalloc
+is designed as a general-purpose allocator, ensuring compatibility with various
+application usage patterns. It is designed to provide fast allocations in
+multithreaded execution environments, making design choices that favor
+performance over tight control and accounting of current usage. It also
+features multiple levels of caching to ensure fast and efficient allocation and
+deallocation operations. Given its extensive use within Meta, jemalloc benefits
+from dedicated support, integrated tools, and metrics for enhanced debuggability
+and observability.
+
+**Velox's Custom Memory Allocator**
+
+Velox opted to develop a custom allocator using the mmap system call, driven by
+the need for tight control over Resident Set Size (RSS) as its processes often
+run close to their cgroup memory limits. This decision was made due to the
+limitations of using jemalloc, which does not provide visibility and
+fine-grained control over its internal data structures and memory management
+policies.
+
+This can pose challenges like:
+
+* Fragmentation and caching: The presence of fragmentation and caching can
+  cause the RSS to exceed the target allocation of the application. To assess
+  this we conducted an experiment that simulated the allocation pattern of a
+  typical query executed using Velox and reading ORC files. The results showed a
+  significant difference in memory usage between jemalloc and our custom
+  allocator, with jemalloc resulting in a Resident Set Size (RSS) of 31GB for a
+  target allocation of 24GB, while our mmap-based custom allocator achieved an
+  RSS of exactly 24GB, matching the target allocation.
+
+* Difficulty in reallocating physical memory: When trying to reallocate memory
+  between queries to stay under a limit, it is challenging to ensure that enough
+  physical memory is released by jemalloc before new allocations are allowed to
+  proceed. This can lead to potential spikes in RSS and cause OOM crashes.
+
+**Custom Allocator Design**
+
+The custom allocator using mmap ensures controlled RSS (Resident Set Size) by
+adhering to a target memory capacity as it has a complete view over where
+physical pages are allocated. It employs three primary allocation paths:
+
+1. Very Small Allocations: Served via malloc for allocations less than 3KB.
+2. Non-Contiguous Allocations: Managed through size classes (up to 2MB by
+   default) using mmap, with a bitmap tracking live chunks.
+3. Contiguous Allocations: For larger or contiguous memory needs, fulfilled via
+   mmap while ensuring RSS limits are respected.
+
+For more details, [see documentation on the custom
+allocator](https://facebookincubator.github.io/velox/develop/memory.html#memory-allocator).
+
+**Challenges and Reconsideration**
+
+Despite its advantages, the custom allocator has faced challenges:
+
+* Short-Lived Large Allocations: These can be expensive due to consecutive
+  mmap, page-faults, and unmap calls, significantly affecting performance.
+* Mutex Contention: High contention on size class mutexes degrades performance,
+  especially on high-core-count machines.
+
+Given these challenges, we reconsidered jemalloc. Its decade-long
+production experience and robust debugging capabilities make it an attractive
+option as Velox adoption grows. While we can address some custom allocator
+issues, jemalloc's proven track record may offer a more reliable solution for
+future scalability (both human and machine resources) and performance needs.
+
+## Investigation
+
+The results reflect the workloads, hardware, and allocator implementations
+available during the migration. They should be treated as a case study rather
+than a universal allocator recommendation.
+
+To assess whether jemalloc is a better fit for Velox, we tried to address the
+following concerns:
+
+**1. Performance Comparison**
+
+To ensure no performance regressions, we conducted shadow runs and compared
+results between the two allocators. We selected a 1-2 hour window with high
+memory and CPU usage in the source cluster, based on monitoring metrics, and
+executed the experiment for different workload types in various regions.
+
+The results showed that performance was similar or identical across the board
+for all workloads, with variations under 5%. However, we noticed an interesting
+difference in behavior between jemalloc and the mmap allocator. In interactive
+workloads, we noticed an increased number of worker communication failures when
+using jemalloc. This was attributed to consistently high CPU usage, as jemalloc
+is optimized for multi-threaded execution environments. Conversely, the custom
+allocator employs coarse-grained locking, which can limit CPU utilization and
+prevent communication threads from starving.
+
+To address this issue when using jemalloc, we reduced the number of threads
+available for Velox drivers to run from 4x to 2x the CPU_CORE_COUNT. This fix
+resolved the communication failure without affecting performance.
+
+Interestingly, when switching to a high-core-count cluster, the same root cause
+manifested as a significant performance hit for the custom mmap allocator. The
+high core count caused significant contention on the locks protecting size
+classes, whereas jemalloc performed normally.
+
+**Conclusion**:
+
+This suggests that generally both jemalloc and custom allocator are equal in
+terms of performance. However, in clusters which are characterized by high core
+counts and highly concurrent execution, the custom allocator may encounter lock
+contention. This can lead to low CPU utilization and result in significant
+performance degradation.
+
+**2. Fragmentation in the Real-World**
+
+To determine if the fragmentation micro-benchmark results translate to
+real-world execution, we analyzed the extent of fragmentation in Presto
+clusters. We calculated the ratio of "active bytes" (actual bytes allocated by
+the application via jemalloc) to "Allocated bytes" (memory allocated by
+jemalloc from the Operating System). The results showed that for presto
+processes running close to physical memory limits, this ratio stays above 97% on
+average, with occasional dips to 95% and a rare dip observed at 89%. This
+suggests that fragmentation is not a significant concern in practice.
+
+However, we also wanted to ensure that we had a mechanism to control
+fragmentation if it occurs. To achieve this, we explored the knobs provided by
+jemalloc to tune its allocator. We experimented with different combinations of
+decay rates for unused cached pages (dirty and muzzy pages) and observed their
+impact on performance. Our findings indicate that jemalloc can be tuned to
+achieve similar performance to the mmap allocator while maintaining acceptable
+memory usage. As a first iteration of the same, we introduced a reactionary
+pushback mechanism that triggers when memory usage exceeds a predetermined
+threshold. This mechanism serves as a reliable approach to prevent
+out-of-memory issues caused by the fragmentation.
+
+**Conclusion**:
+
+Our analysis suggests that fragmentation is not a significant concern in
+real-world performance. However, we have identified mechanisms to control
+fragmentation if it becomes an issue in the future. By tuning jemalloc's decay
+rates, we can maintain acceptable memory usage while achieving similar
+performance to the mmap allocator.
+
+**3. Memory Reallocation effectiveness**
+
+To ensure that jemalloc can effectively reallocate physical pages and maintain
+Resident Set Size (RSS) limits, we conducted an experiment to simulate a
+scenario where the allocator needs to transfer physical memory between size
+classes and arenas. This is crucial for Velox, which internally manages memory
+(via cache invalidation and spilling) to stay within usage limits, requiring the
+allocator to keep pace to prevent exceeding RSS limit.
+
+We designed an experiment to mimic a scenario where the cluster is running at
+capacity and a query requires a large memory allocation. We took a query engine
+cluster and shadowed the production workload for about 30 minutes, bringing the
+memory usage consistently close to more than 90%. We then ran a query specially
+tailored to create large hash tables for its group-by, simulating a quick
+increase in memory usage. We observed how the system behaved using the top
+command on a few workers and whether it resulted in RSS overshooting.
+
+**Conclusion**:
+
+The results showed that jemalloc was able to effectively manage memory and
+maintain RSS limits. We observed variations in memory usage (dips and spikes),
+which was expected, but jemalloc seemed to be fast enough to prevent RSS from
+overshooting. We did not observe any workers that OOMed, indicating that
+jemalloc was able to effectively move physical memory between size classes and
+arenas to stay under RSS limits.
+
+## Decision at the Time
+
+Based on these results, we decided to switch completely to jemalloc for the
+Presto clusters migrating to Velox through Prestissimo. jemalloc provided
+comparable performance for typical workloads, scaled better on high-core-count
+hardware, and could be tuned to keep fragmentation and RSS within acceptable
+limits. Its mature debugging and observability support also reduced the ongoing
+engineering cost of maintaining a custom allocator.

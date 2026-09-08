@@ -15,7 +15,10 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfBatchConcat.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -81,6 +84,41 @@ class CudfBatchConcatTest : public OperatorTestBase {
     return opIt->second.get();
   }
 };
+
+TEST_F(CudfBatchConcatTest, singleColumnBearingInputPassesThrough) {
+  updateCudfConfig(/*min=*/4, /*max=*/std::nullopt);
+
+  auto input = makeRowVector({makeFlatSequence<int64_t>(0, 4)});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({}, {"sum(c0)"})
+                  .planNode();
+
+  core::PlanFragment planFragment;
+  planFragment.planNode = plan;
+  auto task = Task::create(
+      "CudfBatchConcatTest_singleColumnBearingInputPassesThrough",
+      std::move(planFragment),
+      0,
+      core::QueryCtx::create(executor_.get()),
+      Task::ExecutionMode::kParallel);
+  DriverCtx driverCtx(task, 0, 0, 0, 0);
+  CudfBatchConcat concat(0, &driverCtx, plan);
+
+  auto stream = cudfGlobalStreamPool().get_stream();
+  auto table = with_arrow::toCudfTable(
+      input, pool(), stream, cudf::get_current_device_resource_ref());
+  auto cudfInput = std::make_shared<CudfVector>(
+      pool(), input->type(), input->size(), std::move(table), stream);
+
+  concat.addInput(cudfInput);
+  auto output = concat.getOutput();
+
+  ASSERT_NE(output, nullptr);
+  EXPECT_EQ(output.get(), cudfInput.get())
+      << "A single column-bearing input must not be materialized by concat";
+  concat.close();
+}
 
 // Verifies that CudfBatchConcat is inserted before aggregation and reduces
 // the number of batches reaching the aggregation operator.
@@ -270,6 +308,111 @@ TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {
   EXPECT_EQ(concatIt->second->outputVectors, 1);
 }
 
+// Verifies that CudfBatchConcat is inserted before the hash join probe and
+// correctly handles the 2-source HashJoinNode plan node.
+TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
+  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+
+  // Probe side: 6 batches of 10 rows each.
+  std::vector<RowVectorPtr> probeVectors;
+  for (int i = 0; i < 6; ++i) {
+    probeVectors.push_back(makeRowVector(
+        {"c0", "c1"},
+        {makeFlatVector<int64_t>(10, [i](auto row) { return row % 3; }),
+         makeFlatSequence<int64_t>(i * 10, 10)}));
+  }
+
+  // Build side: small dimension table.
+  auto buildVector =
+      makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({0, 1, 2})});
+
+  createDuckDbTable("probe", probeVectors);
+  createDuckDbTable("build", {buildVector});
+
+  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
+
+  auto plan = PlanBuilder(generator)
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(probeVectors, generator);
+                  })
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      PlanBuilder(generator).values({buildVector}).planNode(),
+                      "",
+                      {"c0", "c1"},
+                      core::JoinType::kInner)
+                  .capturePlanNodeId(joinNodeId)
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .maxDrivers(1)
+          .assertResults(
+              "SELECT p.c0, p.c1 FROM probe p INNER JOIN build b ON p.c0 = b.u_c0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(joinNodeId);
+  auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
+  ASSERT_NE(concatIt, nodeStats.operatorStats.end())
+      << "CudfBatchConcat should be present before hash join probe";
+
+  auto& concatStats = *concatIt->second;
+  EXPECT_EQ(concatStats.inputVectors, 6)
+      << "CudfBatchConcat should have received all 6 probe batches";
+  EXPECT_LT(concatStats.outputVectors, concatStats.inputVectors)
+      << "CudfBatchConcat should produce fewer output batches than input";
+}
+
+TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
+  updateCudfConfig(/*min=*/30, /*max=*/std::nullopt);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+
+  std::vector<RowVectorPtr> probeVectors;
+  for (int i = 0; i < 6; ++i) {
+    probeVectors.push_back(makeRowVector(
+        {"c0", "c1"},
+        {makeConstant<int64_t>(i, 10), makeFlatSequence<int64_t>(i * 10, 10)}));
+  }
+  auto buildVector = makeRowVector(
+      {"u_c0"}, {makeFlatSequence<int64_t>(0, probeVectors.size())});
+
+  createDuckDbTable("probe", probeVectors);
+  createDuckDbTable("build", {buildVector});
+
+  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
+  auto plan = PlanBuilder(generator)
+                  .addNode([&](auto id, auto pool) {
+                    return createFragmentedSource(probeVectors, generator);
+                  })
+                  .hashJoin(
+                      {"c0"},
+                      {"u_c0"},
+                      PlanBuilder(generator).values({buildVector}).planNode(),
+                      "",
+                      {"c0", "c1", "u_c0"},
+                      core::JoinType::kRight)
+                  .capturePlanNodeId(joinNodeId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(3)
+                  .assertResults(
+                      "SELECT p.c0, p.c1, b.u_c0 FROM probe p "
+                      "RIGHT JOIN build b ON p.c0 = b.u_c0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(joinNodeId);
+  ASSERT_NE(nodeStats.operatorStats.count("CudfBatchConcat"), 0);
+  ASSERT_NE(nodeStats.operatorStats.count("CudfHashJoinProbe"), 0);
+  ASSERT_EQ(nodeStats.operatorStats.at("CudfHashJoinProbe")->numDrivers, 3);
+}
+
 TEST_F(CudfBatchConcatTest, concatSplitsZeroColumnBatchesAtMaxThreshold) {
   updateCudfConfig(/*min=*/30, /*max=*/20);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
@@ -305,4 +448,34 @@ TEST_F(CudfBatchConcatTest, concatSplitsZeroColumnBatchesAtMaxThreshold) {
   EXPECT_EQ(concatIt->second->inputVectors, 3);
   EXPECT_EQ(concatIt->second->outputVectors, 2)
       << "30 zero-column rows should be split into 20-row and 10-row batches";
+}
+
+TEST_F(CudfBatchConcatTest, singleZeroColumnBatchSplitsAtMaxThreshold) {
+  updateCudfConfig(/*min=*/30, /*max=*/20);
+  CudfConfig::getInstance().concatOptimizationEnabled = true;
+
+  auto data = makeRowVector({makeFlatSequence<int64_t>(0, 30)});
+  createDuckDbTable({data});
+
+  core::PlanNodeId aggNodeId;
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("c0 >= 0")
+                  .project({})
+                  .singleAggregation({}, {"count(*)"})
+                  .capturePlanNodeId(aggNodeId)
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .maxDrivers(1)
+                  .assertResults("SELECT count(*) FROM tmp WHERE c0 >= 0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  auto& nodeStats = planStats.at(aggNodeId);
+  auto concatIt = nodeStats.operatorStats.find("CudfBatchConcat");
+  ASSERT_NE(concatIt, nodeStats.operatorStats.end());
+  EXPECT_EQ(concatIt->second->inputVectors, 1);
+  EXPECT_EQ(concatIt->second->outputVectors, 2)
+      << "A 30-row zero-column input should be split into 20 and 10 rows";
 }

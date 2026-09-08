@@ -358,7 +358,7 @@ Unicode Functions
 
     Reference: https://unicode.org/reports/tr15/#Norm_Forms
     Transforms ``string`` with the specified normalization form.
-    ``form`` must be be one of the following keywords:
+    ``form`` must be one of the following keywords:
 
     ======== ===========
     Form     Description

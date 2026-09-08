@@ -26,7 +26,7 @@ std::string printVector(const BaseVector& vector);
 /// [from, from + size).
 /// @param from Zero-based row number of the first row to print. Must be
 /// non-negative. If greater than vector size, no rows are printed.
-/// @param size Number of of rows to print. If 'from' + 'size' is greater than
+/// @param size Number of rows to print. If 'from' + 'size' is greater than
 /// vector size, a subset of rows starting from 'from' to the end of the vector
 /// are printed.
 std::string printVector(

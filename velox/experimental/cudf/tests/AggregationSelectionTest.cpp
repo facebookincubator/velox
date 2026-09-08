@@ -135,7 +135,8 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationFunctions) {
   auto aggregationNode = createAggregationNode(
       {"c0"}, {"sum(c1)", "count(c2)", "min(c3)", "max(c4)", "avg(c5)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test stddev_samp is supported
@@ -143,7 +144,8 @@ TEST_F(CudfAggregationSelectionTest, stddevSampSupported) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"stddev_samp(c1)", "stddev_samp(c5)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test unsupported aggregation functions
@@ -151,7 +153,8 @@ TEST_F(CudfAggregationSelectionTest, unsupportedAggregationFunctions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"stddev(c1)", "variance(c2)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test mixed supported and unsupported functions - should reject if any
@@ -160,14 +163,16 @@ TEST_F(CudfAggregationSelectionTest, mixedSupportedUnsupportedFunctions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"sum(c1)", "variance(c2)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test supported grouping key expressions (simple field references)
 TEST_F(CudfAggregationSelectionTest, supportedGroupingKeyExpressions) {
   auto aggregationNode = createAggregationNode({"c0", "c1"}, {"sum(c2)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test unsupported aggregation functions (using variance as example)
@@ -175,7 +180,8 @@ TEST_F(CudfAggregationSelectionTest, unsupportedGroupingKeyExpressions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"sum(c1)", "variance(c2)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test supported aggregation input expressions
@@ -183,14 +189,16 @@ TEST_F(CudfAggregationSelectionTest, supportedAggregationInputExpressions) {
   auto aggregationNode =
       createAggregationNode({"c0"}, {"sum(c1 + c2)", "max(length(c6))"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test unsupported aggregation input expressions
 TEST_F(CudfAggregationSelectionTest, unsupportedAggregationInputExpressions) {
   auto aggregationNode = createAggregationNode({"c0"}, {"variance(c1)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test global aggregation (no group by)
@@ -198,14 +206,16 @@ TEST_F(CudfAggregationSelectionTest, globalAggregationSupported) {
   auto aggregationNode =
       createAggregationNode({}, {"sum(c1)", "count(c2)", "max(c3)"});
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test global aggregation with unsupported functions
 TEST_F(CudfAggregationSelectionTest, globalAggregationUnsupported) {
   auto aggregationNode = createAggregationNode({}, {"stddev(c1)"});
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test complex groupby clause with expressions
@@ -232,7 +242,8 @@ TEST_F(CudfAggregationSelectionTest, complexGroupbyClauseExpressions) {
   auto aggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(plan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test nested aggregation: allowed -> not allowed
@@ -265,7 +276,8 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationAllowedToNotAllowed) {
   auto outerAggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(canBeEvaluatedByCudf(
+      *outerAggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test nested aggregation: allowed -> allowed
@@ -298,7 +310,8 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationAllowedToAllowed) {
   auto outerAggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(canBeEvaluatedByCudf(
+      *outerAggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test nested aggregation: not allowed -> allowed
@@ -332,7 +345,8 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationNotAllowedToAllowed) {
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
   // Only validates the current (outer) aggregation node
-  ASSERT_TRUE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_TRUE(canBeEvaluatedByCudf(
+      *outerAggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test nested aggregation: not allowed -> not allowed
@@ -365,7 +379,8 @@ TEST_F(CudfAggregationSelectionTest, nestedAggregationNotAllowedToNotAllowed) {
   auto outerAggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(outerPlan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*outerAggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(canBeEvaluatedByCudf(
+      *outerAggregationNode, queryCtx_.get(), pool_.get()));
 }
 
 // Test unsupported aggregation function signatures
@@ -666,11 +681,12 @@ TEST_F(CudfAggregationSelectionTest, distinctAggregationsRejected) {
   auto aggregationNode =
       std::dynamic_pointer_cast<const core::AggregationNode>(plan);
 
-  ASSERT_FALSE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
 }
 
-// Test `mask` clauses should be rejected
-TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
+// Masked sum is supported at raw-input steps.
+TEST_F(CudfAggregationSelectionTest, maskedSumAccepted) {
   auto plan = PlanBuilder()
                   .values({makeRowVector({
                       makeFlatVector<int64_t>({1, 2, 3}),
@@ -684,24 +700,83 @@ TEST_F(CudfAggregationSelectionTest, filterMaskClausesRejected) {
                       core::AggregationNode::Step::kSingle,
                       false)
                   .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_TRUE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
+}
 
-  auto aggregationNode =
-      std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+// Masked avg falls back to CPU (excluded in this PR).
+TEST_F(CudfAggregationSelectionTest, maskedAvgRejected) {
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({
+                      makeFlatVector<int64_t>({1, 2, 3}),
+                      makeFlatVector<int64_t>({10, 20, 30}),
+                      makeFlatVector<bool>({true, false, true}),
+                  })})
+                  .aggregation(
+                      {"c0"},
+                      {"avg(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
+}
 
-  ASSERT_TRUE(canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get()));
+// A non-boolean mask falls back to CPU.
+TEST_F(CudfAggregationSelectionTest, maskedNonBooleanRejected) {
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({
+                      makeFlatVector<int64_t>({1, 2, 3}),
+                      makeFlatVector<int64_t>({10, 20, 30}),
+                  })})
+                  .aggregation(
+                      {"c0"},
+                      {"sum(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
+}
 
-  // Manually create a modified aggregation with a mask
-  auto modifiedAggregates = aggregationNode->aggregates();
-  ASSERT_FALSE(modifiedAggregates.empty());
-
-  modifiedAggregates[0].mask =
-      std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
-
-  auto modifiedNode = core::AggregationNode::Builder(*aggregationNode)
-                          .aggregates(std::move(modifiedAggregates))
-                          .build();
-
-  ASSERT_FALSE(canBeEvaluatedByCudf(*modifiedNode, queryCtx_.get()));
+// Masked approx_distinct falls back: it is reduce-only and ignores the mask,
+// so the allowlist gate (sum/count/min/max only) must reject it.
+TEST_F(CudfAggregationSelectionTest, maskedApproxDistinctRejected) {
+  auto plan = PlanBuilder()
+                  .values({makeRowVector({
+                      makeFlatVector<int64_t>({1, 2, 3}),
+                      makeFlatVector<int64_t>({10, 20, 30}),
+                      makeFlatVector<bool>({true, false, true}),
+                  })})
+                  .aggregation(
+                      {},
+                      {"approx_distinct(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      false)
+                  .planNode();
+  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+  // Unmasked approx_distinct is supported on the cuDF reduce path.
+  ASSERT_TRUE(canBeEvaluatedByCudf(*node, queryCtx_.get(), pool_.get()));
+  auto aggs = node->aggregates();
+  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
+  auto masked =
+      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
+  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
 }
 
 // Test return type validation

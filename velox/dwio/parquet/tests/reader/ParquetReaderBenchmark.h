@@ -122,7 +122,7 @@ class ParquetReaderBenchmark {
   std::shared_ptr<facebook::velox::io::IoStatistics> metadataIoStats_ =
       std::make_shared<facebook::velox::io::IoStatistics>();
   std::unique_ptr<facebook::velox::parquet::Writer> writer_;
-  facebook::velox::dwio::common::RuntimeStatistics runtimeStats_;
+  facebook::velox::dwio::common::RuntimeStats runtimeStats_;
 };
 
 void run(

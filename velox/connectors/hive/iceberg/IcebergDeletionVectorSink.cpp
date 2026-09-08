@@ -23,6 +23,8 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/hive/HiveConfig.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
+#include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/dwio/common/FileSink.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -80,10 +82,40 @@ IcebergDeletionVectorSink::IcebergDeletionVectorSink(
   VELOX_USER_CHECK_NOT_NULL(
       hiveConfig_,
       "IcebergDeletionVectorSink requires a non-null hive config.");
-  VELOX_USER_CHECK_EQ(
-      static_cast<int32_t>(inputType_->size()),
-      kExpectedChannelCount,
-      "IcebergDeletionVectorSink expects a 2-column input (file_path, pos)");
+  // The V3 DELETE plan delivers the row-id as a synthesized
+  // ROW<file_path VARCHAR, pos BIGINT, ...> column (getDeleteRowIdColumn),
+  // and may prepend passthrough columns (e.g. a data/partition column), so the
+  // input can be ROW<id, $row_id:ROW<...>> — not a bare 2-column page. Detect
+  // the row-id by locating the ROW-typed column whose first two fields are
+  // (VARCHAR file_path, BIGINT pos). Fall back to the legacy two flat columns
+  // (file_path, pos) produced by IcebergMergeSink::makeDeleteBatch.
+  const auto isRowIdStruct = [](const TypePtr& type) {
+    return type->isRow() && type->asRow().size() >= kExpectedChannelCount &&
+        type->asRow().childAt(kFilePathChannel)->isVarchar() &&
+        type->asRow().childAt(kPositionChannel)->isBigint();
+  };
+  const auto numColumns = static_cast<int32_t>(inputType_->size());
+  bool found = false;
+  for (int32_t channel = 0; channel < numColumns; ++channel) {
+    if (isRowIdStruct(inputType_->childAt(channel))) {
+      rowIdAsStruct_ = true;
+      rowIdChannel_ = channel;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    if (numColumns == kExpectedChannelCount &&
+        inputType_->childAt(kFilePathChannel)->isVarchar() &&
+        inputType_->childAt(kPositionChannel)->isBigint()) {
+      rowIdAsStruct_ = false;
+    } else {
+      VELOX_USER_FAIL(
+          "IcebergDeletionVectorSink expects a two-column (file_path, pos) "
+          "input or a ROW<file_path, pos, ...> row-id column, got {}",
+          inputType_->toString());
+    }
+  }
 }
 
 void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
@@ -92,27 +124,60 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
   if (input == nullptr || input->size() == 0) {
     return;
   }
+
+  const auto numRows = input->size();
+  const SelectivityVector allRows(numRows);
+
+  if (rowIdAsStruct_) {
+    // The row-id is a synthesized ROW<file_path, pos, ...> column (at
+    // 'rowIdChannel_') that may be dictionary-encoded (the delete operator
+    // selects deleted rows via a dictionary over the row-id). Decode the ROW
+    // column to peel the outer encoding, then read file_path/pos from the base
+    // ROW's fields through the decoded indices. Reading the base children
+    // directly (ignoring the dictionary) mis-indexes and can read out of
+    // bounds.
+    DecodedVector decodedRowId(*input->childAt(rowIdChannel_), allRows);
+    const auto* rowId = decodedRowId.base()->as<RowVector>();
+    VELOX_USER_CHECK_NOT_NULL(rowId, "row-id column must be a ROW vector");
+    VELOX_USER_CHECK_GE(
+        rowId->childrenSize(),
+        kExpectedChannelCount,
+        "row-id ROW must have at least 2 fields (file_path, pos), got {}",
+        rowId->childrenSize());
+    const SelectivityVector baseRows(rowId->size());
+    DecodedVector decodedFilePath(*rowId->childAt(kFilePathChannel), baseRows);
+    DecodedVector decodedPosition(*rowId->childAt(kPositionChannel), baseRows);
+    for (vector_size_t i = 0; i < numRows; ++i) {
+      if (decodedRowId.isNullAt(i)) {
+        continue;
+      }
+      const auto row = decodedRowId.index(i);
+      VELOX_USER_CHECK(
+          !decodedFilePath.isNullAt(row), "Null file_path in DELETE input row");
+      VELOX_USER_CHECK(
+          !decodedPosition.isNullAt(row), "Null pos in DELETE input row");
+      const auto pathSlice = decodedFilePath.valueAt<StringView>(row);
+      PerFileState& state =
+          findOrCreatePerFile(std::string(pathSlice.data(), pathSlice.size()));
+      state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(row));
+    }
+    return;
+  }
+
   VELOX_USER_CHECK_EQ(
       static_cast<int32_t>(input->childrenSize()),
       kExpectedChannelCount,
       "IcebergDeletionVectorSink expects 2-column input pages");
-
-  const auto* filePathVector = input->childAt(kFilePathChannel)->loadedVector();
-  const auto* positionVector = input->childAt(kPositionChannel)->loadedVector();
-
-  DecodedVector decodedFilePath(
-      *filePathVector, SelectivityVector(input->size()));
-  DecodedVector decodedPosition(
-      *positionVector, SelectivityVector(input->size()));
-
-  for (vector_size_t i = 0; i < input->size(); ++i) {
+  DecodedVector decodedFilePath(*input->childAt(kFilePathChannel), allRows);
+  DecodedVector decodedPosition(*input->childAt(kPositionChannel), allRows);
+  for (vector_size_t i = 0; i < numRows; ++i) {
     VELOX_USER_CHECK(
         !decodedFilePath.isNullAt(i), "Null file_path in DELETE input row");
     VELOX_USER_CHECK(
         !decodedPosition.isNullAt(i), "Null pos in DELETE input row");
     const auto pathSlice = decodedFilePath.valueAt<StringView>(i);
-    const std::string path(pathSlice.data(), pathSlice.size());
-    PerFileState& state = findOrCreatePerFile(path);
+    PerFileState& state =
+        findOrCreatePerFile(std::string(pathSlice.data(), pathSlice.size()));
     state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(i));
   }
 }
@@ -125,7 +190,41 @@ IcebergDeletionVectorSink::findOrCreatePerFile(const std::string& path) {
   const size_t index = perFile_.size();
   perFile_.emplace_back(path, PerFileState{});
   perFileIndex_.emplace(path, index);
-  return perFile_.back().second;
+  PerFileState& state = perFile_.back().second;
+  seedFromExistingDeletionVector(state, path);
+  return state;
+}
+
+void IcebergDeletionVectorSink::seedFromExistingDeletionVector(
+    PerFileState& state,
+    const std::string& dataFile) {
+  const auto& existing = insertTableHandle_->existingDeletionVectors();
+  const auto it = existing.find(dataFile);
+  if (it == existing.end()) {
+    return;
+  }
+  const auto& descriptor = it->second;
+
+  // Reconstruct the existing DV as an IcebergDeleteFile and read its positions
+  // through the same DeletionVectorReader used on the read path. The reader
+  // ignores the memory pool argument, so nullptr is safe; the connector config
+  // resolves the (possibly warm-storage / Manifold) filesystem for the Puffin.
+  const IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      descriptor.puffinPath,
+      dwio::common::FileFormat::PUFFIN,
+      static_cast<uint64_t>(descriptor.recordCount),
+      static_cast<uint64_t>(descriptor.fileSizeInBytes),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      descriptor.contentOffset,
+      descriptor.contentLength,
+      dataFile);
+  DeletionVectorReader reader(
+      dvFile, /*splitOffset=*/0, /*pool=*/nullptr, hiveConfig_->config());
+  state.writer.addDeletedPositions(reader.deletedPositions());
 }
 
 bool IcebergDeletionVectorSink::finish() {
@@ -175,8 +274,14 @@ bool IcebergDeletionVectorSink::finish() {
     VELOX_CHECK_NOT_NULL(
         sink, "Failed to create file sink for Puffin file: {}", puffinPath);
 
-    const auto [offset, length] =
-        writePuffinFile(*sink, *pool, blob, entry.first);
+    // Iceberg V3 treats the DV blob's cardinality as authoritative, so it must
+    // match the de-duplicated bitmap that serialize() emits — not the raw
+    // insertion count (seeding an existing DV plus overlapping new deletes can
+    // introduce duplicates).
+    const size_t cardinality = entry.second.writer.numDistinctPositions();
+
+    const auto [offset, length] = writePuffinFile(
+        *sink, *pool, blob, entry.first, static_cast<int64_t>(cardinality));
     const uint64_t fileSize = sink->size();
     sink->close();
 
@@ -192,7 +297,7 @@ bool IcebergDeletionVectorSink::finish() {
     commitMessages_.push_back(buildDeletionVectorCommitMessage(
         puffinPath,
         fileSize,
-        entry.second.writer.numPositions(),
+        cardinality,
         partitionSpecId,
         entry.first,
         offset,

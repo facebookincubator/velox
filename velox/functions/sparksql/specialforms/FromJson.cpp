@@ -270,7 +270,9 @@ struct ExtractJsonTypeImpl {
                 nodeIndex + 1));
           }
         }
-      } else if (elementType->kind() == TypeKind::ROW && isRoot) {
+      } else if (
+          type == simdjson::ondemand::json_type::object &&
+          elementType->kind() == TypeKind::ROW && isRoot) {
         SIMDJSON_TRY(VELOX_DYNAMIC_TYPE_DISPATCH(
             ExtractJsonTypeImpl<simdjson::ondemand::value>::apply,
             elementType->kind(),

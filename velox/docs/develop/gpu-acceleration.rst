@@ -166,9 +166,10 @@ a host-staged shuffle would incur.
 
 The transport is engine-agnostic: it moves GPU column buffers regardless of which
 backend produced them, so the same exchange serves both Wave and cuDF. Transport
-is chosen per plan node — ``TransportKind::kUcx`` versus ``kHttp`` — and nodes
-default to the standard HTTP path (the regular serializer over host memory)
-unless explicitly opted into UCX, so it can be adopted incrementally.
+is chosen per plan node — ``TransportKind::kUcx`` versus the default
+``TransportKind::kInMemory`` — and nodes default to in-memory buffering
+(serialized pages over host memory) unless explicitly opted into UCX, so it can
+be adopted incrementally.
 
 The UCX exchange is experimental and is built separately from the core library
 (it requires a system UCX installation and benefits from GPUDirect/RDMA-capable

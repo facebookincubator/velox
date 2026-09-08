@@ -25,6 +25,7 @@ using common::ColumnStatistics;
 using common::DoubleColumnStatistics;
 using common::IntegerColumnStatistics;
 using common::StringColumnStatistics;
+using common::TimestampColumnStatistics;
 
 namespace {
 
@@ -162,6 +163,8 @@ std::unique_ptr<StatisticsBuilder> StatisticsBuilder::create(
       return std::make_unique<StringStatisticsBuilder>(options);
     case TypeKind::VARBINARY:
       return std::make_unique<BinaryStatisticsBuilder>(options);
+    case TypeKind::TIMESTAMP:
+      return std::make_unique<TimestampStatisticsBuilder>(options);
     default:
       return std::make_unique<StatisticsBuilder>(options);
   }
@@ -445,6 +448,29 @@ std::unique_ptr<ColumnStatistics> BinaryStatisticsBuilder::build() const {
     result->setNumDistinct(*numDistinct);
   }
   return result;
+}
+
+void TimestampStatisticsBuilder::merge(
+    const ColumnStatistics& other,
+    bool ignoreSize) {
+  StatisticsBuilder::merge(other, ignoreSize);
+  auto stats = dynamic_cast<const TimestampColumnStatistics*>(&other);
+  if (!stats) {
+    if (!other.isAllNull()) {
+      min_.reset();
+      max_.reset();
+    }
+    return;
+  }
+  mergeMin(min_, stats->getMinimum());
+  mergeMax(max_, stats->getMaximum());
+}
+
+std::unique_ptr<ColumnStatistics> TimestampStatisticsBuilder::build() const {
+  auto min = isAllNull() ? std::nullopt : min_;
+  auto max = isAllNull() ? std::nullopt : max_;
+  return std::make_unique<TimestampColumnStatistics>(
+      static_cast<const ColumnStatistics&>(*this), min, max);
 }
 
 } // namespace facebook::velox::dwio::stats

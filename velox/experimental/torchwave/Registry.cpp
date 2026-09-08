@@ -261,6 +261,20 @@ MetadataBuilder& MetadataBuilder::defaultOutputMeta() {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::mayWriteStrided(bool val) {
+  // Applies to every output: an op either indexes its outputs through their
+  // strides or it does not. Call after the output metas exist, which
+  // defaultOutputMeta() or returnMeta() establishes.
+  TORCH_CHECK(
+      !md_.returnMeta.empty(),
+      "mayWriteStrided needs the output metas to exist first; call "
+      "defaultOutputMeta() or returnMeta() before it");
+  for (auto& meta : md_.returnMeta) {
+    meta.mayWriteStrided = val;
+  }
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::hasBarrier(bool val) {
   md_.hasBarrier = val;
   return *this;
@@ -281,8 +295,18 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
+  md_.scanOutputReturnBarrier = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   md_.alwaysSingleBlock = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::gridSizeSumsInputs(bool val) {
+  md_.gridSizeSumsInputs = val;
   return *this;
 }
 
@@ -303,6 +327,12 @@ MetadataBuilder& MetadataBuilder::cgVariant(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::decompose(
+    std::function<bool(NodeCP, WaveGraph&)> func) {
+  md_.decompose = std::move(func);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::numBarriers(int32_t val) {
   md_.numBarriers = val;
   return *this;
@@ -315,6 +345,11 @@ MetadataBuilder& MetadataBuilder::arithmeticPromotion(bool val) {
 
 MetadataBuilder& MetadataBuilder::inPlaceIfLastUse(bool val) {
   md_.inPlaceIfLastUse = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::sizeFromOutput(bool val) {
+  md_.sizeFromOutput = val;
   return *this;
 }
 
@@ -352,6 +387,46 @@ MetadataBuilder& MetadataBuilder::costFunction(
 
 MetadataBuilder& MetadataBuilder::viewOfArg(int32_t ordinal) {
   md_.viewOfArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::mutatesArg(int32_t ordinal) {
+  md_.mutatesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::indicesArg(int32_t ordinal) {
+  md_.indicesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::valuesArg(int32_t ordinal) {
+  md_.valuesArg = ordinal;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::layoutAgnostic(bool val) {
+  md_.layoutAgnostic = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::dimAttr(std::string name) {
+  md_.dimAttr = std::move(name);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::normalizeDimAttr(bool val) {
+  md_.normalizeDimAttr = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::accumulateAttr(std::string name) {
+  md_.accumulateAttr = std::move(name);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::memoryFormatAttr(std::string name) {
+  md_.memoryFormatAttr = std::move(name);
   return *this;
 }
 
@@ -404,6 +479,12 @@ MetadataBuilder& MetadataBuilder::specialForm(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::generateTemplateArg(
+    std::function<std::string(NodeCP, CompileCtx*)> func) {
+  md_.generateTemplateArg = std::move(func);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::headerFile(std::string file) {
   md_.headerFile = std::move(file);
   return *this;
@@ -423,6 +504,17 @@ MetadataBuilder& MetadataBuilder::sharedDecls(
 MetadataBuilder& MetadataBuilder::dynamicSharedDecls(
     std::vector<std::pair<int32_t, std::string>> decls) {
   md_.dynamicSharedDecls = std::move(decls);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::dynamicSharedMemory(
+    std::function<int64_t(NodeCP)> func) {
+  md_.dynamicSharedMemory = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
+  md_.minBlocksPerSm = blocks;
   return *this;
 }
 
@@ -507,6 +599,11 @@ MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::hasOutputArg(bool val) {
+  ensureElementwise().hasOutputArg = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::isScalarElementwise(bool val) {
   md_.isScalarElementwise = val;
   return *this;
@@ -581,6 +678,50 @@ Metadata MetadataBuilder::build() {
 
 void MetadataBuilder::registerOp() {
   Registry::registerMetadata(name_, build());
+}
+
+bool producerMayWriteStrided(ValueCP value) {
+  if (value == nullptr) {
+    return false;
+  }
+  auto* producer = value->producer();
+  if (producer == nullptr) {
+    return false;
+  }
+  const auto* meta = Registry::metadata(producer->target());
+  if (meta == nullptr) {
+    return false;
+  }
+  // An elementwise op addresses its output through the lane's own index, which
+  // the generated code maps through the output tensor, so every one of them can
+  // fill a pitched band. Answering for the whole class here keeps the flag off
+  // the hundreds of individual elementwise registrations.
+  if (meta->elementwise != nullptr) {
+    return true;
+  }
+  const auto& outputs = producer->outputs();
+  for (size_t i = 0; i < outputs.size(); ++i) {
+    if (i >= meta->returnMeta.size()) {
+      break;
+    }
+    if (outputs[i] == value) {
+      return meta->returnMeta[i].mayWriteStrided;
+    }
+    // The flag on a list output covers every element of it, at any depth: the
+    // op either writes through its outputs' strides or it does not, and a list
+    // is only how the elements are handed back.
+    const auto kind = outputs[i]->type().kind();
+    if (kind == nativert::Type::Kind::TensorList ||
+        kind == nativert::Type::Kind::NestedTensorList ||
+        kind == nativert::Type::Kind::OptionalTensorList) {
+      for (auto* element : outputs[i]->getListElements()) {
+        if (element == value) {
+          return meta->returnMeta[i].mayWriteStrided;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 } // namespace torch::wave

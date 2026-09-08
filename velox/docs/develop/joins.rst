@@ -3,10 +3,10 @@ Joins
 =====
 
 Velox supports inner, left, right, full outer, left semi filter, left semi
-project, right semi filter, right semi project, anti, and counting hash joins
-using either partitioned or broadcast distribution strategies. Semi project and
-anti joins support additional null-aware flag to distinguish between IN
-(null aware) and EXISTS (regular) semantics. Anti, left semi filter, and
+project, right semi filter, right semi project, anti, right anti, and counting
+hash joins using either partitioned or broadcast distribution strategies. Semi
+project and anti joins support additional null-aware flag to distinguish between
+IN (null aware) and EXISTS (regular) semantics. Anti, left semi filter, and
 counting joins support a null-as-value flag that enables IS NOT DISTINCT FROM
 semantics for join keys (NULL equals NULL), used to implement SQL set operations
 (EXCEPT, INTERSECT, EXCEPT ALL, INTERSECT ALL). Velox also supports cross joins.
@@ -28,7 +28,7 @@ values need to match, and an optional filter to apply to join results.
 
 The join type can be one of kInner, kLeft, kRight, kFull, kLeftSemiFilter,
 kCountingLeftSemiFilter, kLeftSemiProject, kRightSemiFilter, kRightSemiProject,
-kAnti, or kCountingAnti.
+kAnti, kRightAnti, or kCountingAnti.
 
 kLeftSemiProject, kRightSemiProject and kAnti joins support an additional
 nullAware flag to distinguish between IN (null aware) and EXISTS (regular)
@@ -235,6 +235,11 @@ regular anti join is used for queries with NOT EXISTS <subquery> clause.
 Broadly-speaking anti join returns probe-side rows which have no match on
 the build side. However, the exact semantics are a bit tricky. These are
 described in detail in :doc:`Anti joins <anti-join>`.
+
+Right anti join is the build-side mirror of anti join: it returns build-side
+rows which have no match on the probe side. Unlike anti join, right anti join
+supports only the regular (NOT EXISTS) semantic and does not support the
+null-aware flag.
 
 At a high level, null-aware anti join without extra filter behaves as follows:
 

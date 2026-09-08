@@ -253,7 +253,7 @@ class Buffer {
   // Checks the magic number at capacity() to detect overrun. No-op
   // for a BufferView. An overrun is qualitatively a
   // process-terminating memory corruption. We do not kill the process
-  // here though but rather throw an error so that the the message and
+  // here though but rather throw an error so that the message and
   // stack propagate to the library user. This may also happen in a
   // ~AlignedBuffer, which will leak the memory but since the process
   // is anyway already compromized this is not an issue.

@@ -40,6 +40,7 @@ velox_add_test_headers(
   AggregationResolver.h
   ArbitratorTestUtil.h
   AssertQueryBuilder.h
+  BackpressureTestNode.h
   ExpressionBuilder.h
   FilterToExpression.h
   HashJoinTestBase.h

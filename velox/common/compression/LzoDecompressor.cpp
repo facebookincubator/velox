@@ -15,6 +15,7 @@
  */
 
 #include "folly/String.h"
+#include "folly/lang/Bits.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 
 #include <ios>
@@ -200,7 +201,7 @@ uint64_t lzoDecompress(
         if (input + SIZE_OF_SHORT > inputLimit) {
           throw MalformedInputException(input - inputAddress);
         }
-        uint32_t trailer = *reinterpret_cast<const uint16_t*>(input) & 0xFFFF;
+        const uint32_t trailer = folly::loadUnaligned<uint16_t>(input) & 0xFFFF;
         input += SIZE_OF_SHORT;
 
         // copy offset :: 16 bits :: valid range [32767..49151]
@@ -239,7 +240,7 @@ uint64_t lzoDecompress(
         if (input + SIZE_OF_SHORT > inputLimit) {
           throw MalformedInputException(input - inputAddress);
         }
-        int32_t trailer = *reinterpret_cast<const int16_t*>(input) & 0xFFFF;
+        const int32_t trailer = folly::loadUnaligned<uint16_t>(input) & 0xFFFF;
         input += SIZE_OF_SHORT;
 
         // copy offset :: 14 bits :: valid range [0..16383]
@@ -307,13 +308,13 @@ uint64_t lzoDecompress(
             output += SIZE_OF_INT;
             matchAddress += increment32;
 
-            *reinterpret_cast<int32_t*>(output) =
-                *reinterpret_cast<int32_t*>(matchAddress);
+            folly::storeUnaligned<int32_t>(
+                output, folly::loadUnaligned<int32_t>(matchAddress));
             output += SIZE_OF_INT;
             matchAddress -= decrement64;
           } else {
-            *reinterpret_cast<int64_t*>(output) =
-                *reinterpret_cast<int64_t*>(matchAddress);
+            folly::storeUnaligned<int64_t>(
+                output, folly::loadUnaligned<int64_t>(matchAddress));
             matchAddress += SIZE_OF_LONG;
             output += SIZE_OF_LONG;
           }
@@ -324,8 +325,8 @@ uint64_t lzoDecompress(
             }
 
             while (output < fastOutputLimit) {
-              *reinterpret_cast<int64_t*>(output) =
-                  *reinterpret_cast<int64_t*>(matchAddress);
+              folly::storeUnaligned<int64_t>(
+                  output, folly::loadUnaligned<int64_t>(matchAddress));
               matchAddress += SIZE_OF_LONG;
               output += SIZE_OF_LONG;
             }
@@ -335,8 +336,8 @@ uint64_t lzoDecompress(
             }
           } else {
             while (output < matchOutputLimit) {
-              *reinterpret_cast<int64_t*>(output) =
-                  *reinterpret_cast<int64_t*>(matchAddress);
+              folly::storeUnaligned<int64_t>(
+                  output, folly::loadUnaligned<int64_t>(matchAddress));
               matchAddress += SIZE_OF_LONG;
               output += SIZE_OF_LONG;
             }
@@ -361,8 +362,8 @@ uint64_t lzoDecompress(
         // fast copy. We may over-copy but there's enough room in input
         // and output to not overrun them
         do {
-          *reinterpret_cast<int64_t*>(output) =
-              *reinterpret_cast<const int64_t*>(input);
+          folly::storeUnaligned<int64_t>(
+              output, folly::loadUnaligned<int64_t>(input));
           input += SIZE_OF_LONG;
           output += SIZE_OF_LONG;
         } while (output < literalOutputLimit);
@@ -373,8 +374,10 @@ uint64_t lzoDecompress(
       lastLiteralLength = literalLength;
     }
 
-    if (input + SIZE_OF_SHORT > inputLimit &&
-        *reinterpret_cast<const int16_t*>(input) != 0) {
+    if (input + SIZE_OF_SHORT > inputLimit) {
+      throw MalformedInputException(input - inputAddress);
+    }
+    if (folly::loadUnaligned<int16_t>(input) != 0) {
       throw MalformedInputException(input - inputAddress);
     }
     input += SIZE_OF_SHORT;

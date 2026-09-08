@@ -39,6 +39,7 @@ ProjectNode                 FilterProject
 AggregationNode             HashAggregation or StreamingAggregation
 GroupIdNode                 GroupId
 MarkDistinctNode            MarkDistinct
+MarkSortedNode              MarkSorted
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
 NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
@@ -677,7 +678,7 @@ output rows with empty unnest values are not produced.
    * - unnestVariables
      - Input columns of type array or map to expand.
    * - unnestNames
-     - Names to use for expanded columns. One name per array column. Two names per map column.
+     - Names to use for expanded columns. One name per array column. Two names per map column. A name may be absent (null) to prune the corresponding expanded column, which is then neither emitted nor materialized.
    * - ordinalityName
      - Optional name for the ordinality column.
    * - emptyUnnestValueName
@@ -708,7 +709,7 @@ the written file paths on storage and the collected column stats.
    * - aggregationNode
      - Optional Aggregation plan node used to collect column stats for the data written to storage.
    * - insertTableHandle
-     - Connector-specific description of the destination table.
+     - Connector-specific description of the destination table. Its notNullColumns is a subset of columnNames; writing a null into one of them fails the query.
    * - outputType
      - A list of output columns containing the metadata of the data written storage.
 
@@ -1042,6 +1043,33 @@ table and restored together. Disabled by default; enable with `mark_distinct_spi
     - Names of grouping keys.
   * - masks
     - List of boolean mask column references. Empty when only the no-mask marker is needed.
+
+MarkSortedNode
+~~~~~~~~~~~~~~
+
+The MarkSorted operator appends a boolean marker column, named 'markerName', at the end of
+the input columns. For each row, the marker indicates whether the row maintains sort order
+relative to the preceding row, based on 'sortingKeys' and 'sortingOrders'. Rows with equal
+sorting keys are considered sorted.
+
+The operator runs in streaming mode and preserves the order of its input. The comparison
+carries across batches, so only the first row of the entire input is unconditionally marked
+true; the first row of each later batch is compared against the last row of the previous
+batch.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - markerName
+    - Name of the output boolean marker column, appended after all input columns.
+  * - sortingKeys
+    - Columns to check for sorted order. Must not be empty.
+  * - sortingOrders
+    - Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.
 
 MixedUnionNode
 ~~~~~~~~~~~~~~

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include "velox/experimental/torchwave/Project.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
@@ -232,6 +233,18 @@ void NodePrinter::printValueRef(std::stringstream& ss, ValueCP value) const {
   if (options_.showTypes && options_.valueTypes) {
     formatTypeAnnotation(ss, value, *options_.valueTypes);
   }
+  // Mark a reusable last use: the operand is a boundary input of only one expr
+  // in this ProjectNode and never read again (directly or via alias), so its
+  // buffer is free to mutate in place. "!&" marks an expr-local overwritable
+  // temp: a value produced and consumed entirely within one expr, owning its
+  // storage and never escaping, so it too may be overwritten in place.
+  if (options_.projectNode != nullptr) {
+    if (options_.projectNode->isReusableInput(value)) {
+      ss << "& ";
+    } else if (options_.projectNode->isOverwritableTemp(value)) {
+      ss << "!& ";
+    }
+  }
   if (options_.useGraphNames && options_.graph) {
     ss << leafValueString(value->name(), *options_.graph);
   } else {
@@ -347,6 +360,13 @@ void NodePrinter::printExprImpl(
         printSummary(ss, depthSummary);
       } else {
         if (options_.showOutputIds) {
+          // An inlined intermediate is printed at its definition, not as an
+          // operand ref, so flag an expr-local overwritable temp here (the "!&"
+          // in printValueRef only reaches leaf/boundary operands).
+          if (options_.projectNode != nullptr &&
+              options_.projectNode->isOverwritableTemp(value)) {
+            ss << "!& ";
+          }
           printValueId(ss, value);
           ss << " = ";
         }

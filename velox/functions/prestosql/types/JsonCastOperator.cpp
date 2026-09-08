@@ -659,6 +659,112 @@ void castToJsonFromRow(
   });
 }
 
+// Returns a human-readable name for a simdjson JSON element type, used to
+// enrich cast error messages with the offending element's actual type.
+std::string jsonTypeName(simdjson::ondemand::json_type type) {
+  switch (type) {
+    case simdjson::ondemand::json_type::array:
+      return "array";
+    case simdjson::ondemand::json_type::object:
+      return "object";
+    case simdjson::ondemand::json_type::number:
+      return "number";
+    case simdjson::ondemand::json_type::string:
+      return "string";
+    case simdjson::ondemand::json_type::boolean:
+      return "boolean";
+    case simdjson::ondemand::json_type::null:
+      return "null";
+    // simdjson returns `unknown` for tokens it cannot classify as a JSON value,
+    // e.g. bare `Infinity`/`NaN`. Report it as a named type rather than leaking
+    // the raw enum ordinal.
+    case simdjson::ondemand::json_type::unknown:
+      return "unknown";
+  }
+  VELOX_UNREACHABLE();
+}
+
+// Returns the ambient flag controlling whether a JSON cast type mismatch builds
+// a detailed (type + byte offset) error message. Set once per castFromJson()
+// call from EvalCtx::throwOnError(): true when the error will actually surface
+// (so the detailed message is worth building), and false under TRY()/TRY_CAST,
+// where every bad row simply becomes null and the message is never seen — there
+// we keep the original cheap prebuilt-exception path with no throw and no
+// message formatting. Read only on the error path, so successful casts never
+// touch it.
+bool& detailedJsonCastErrors() {
+  thread_local bool detailed = true;
+  return detailed;
+}
+
+// Bounds of the current row's JSON text within the padded input buffer. Used on
+// the error path to report the byte offset of the offending value (value start
+// minus 'base') and to reject a start pointer that falls outside the row, which
+// would otherwise yield a large, misleading offset. 'base' is set once per
+// castFromJson() call (every row is copied to the buffer's start); 'end' is set
+// per row to exclude the trailing SIMDJSON_PADDING and any leftover bytes from
+// a longer prior row. castFromJson() is not re-entered on the same operator
+// instance within a row's cast, so the range stays valid until restored.
+struct JsonCastInputRange {
+  const char* base{nullptr};
+  const char* end{nullptr};
+};
+
+// Returned by reference (address of a thread_local) so the accessor has no
+// nullable return.
+JsonCastInputRange& jsonCastInputRange() {
+  thread_local JsonCastInputRange range;
+  return range;
+}
+
+// Carries the enriched message for the most recent JSON cast type mismatch on
+// this thread. The per-value cast path stays exception-free: on a mismatch it
+// records the message here and returns simdjson::INCORRECT_TYPE instead of
+// throwing, and castFromJson() consumes it once at the top to build the row's
+// exception (clearing 'valid'). Populated only when detailedJsonCastErrors() is
+// set (non-TRY); otherwise the row takes the original prebuilt-exception path.
+struct PendingJsonCastError {
+  bool valid{false};
+  std::string message;
+};
+
+PendingJsonCastError& pendingJsonCastError() {
+  thread_local PendingJsonCastError pending;
+  return pending;
+}
+
+// Builds a VeloxUserError exception_ptr for a JSON cast type mismatch WITHOUT
+// throwing (mirrors simdjsonErrorsToExceptions()'s prebuilt-exception
+// approach), so the per-row error path never throws through the cast recursion.
+std::exception_ptr makeJsonCastUserError(const std::string& message) {
+  return std::make_exception_ptr(VeloxUserError(
+      __FILE__,
+      __LINE__,
+      __FUNCTION__,
+      /*expression*/ "",
+      message,
+      /*errorSource*/ "",
+      error_code::kInvalidArgument,
+      /*isRetriable*/ false));
+}
+
+// Restores the ambient JSON-cast error state (detail flag + input range) on
+// scope exit, so a nested castFromJson() call cannot leave stale state behind
+// for its caller.
+struct JsonCastErrorStateGuard {
+  const bool detailed{detailedJsonCastErrors()};
+  const JsonCastInputRange savedInputRange{jsonCastInputRange()};
+  JsonCastErrorStateGuard() = default;
+  JsonCastErrorStateGuard(const JsonCastErrorStateGuard&) = delete;
+  JsonCastErrorStateGuard(JsonCastErrorStateGuard&&) = delete;
+  JsonCastErrorStateGuard& operator=(const JsonCastErrorStateGuard&) = delete;
+  JsonCastErrorStateGuard& operator=(JsonCastErrorStateGuard&&) = delete;
+  ~JsonCastErrorStateGuard() {
+    detailedJsonCastErrors() = detailed;
+    jsonCastInputRange() = savedInputRange;
+  }
+};
+
 template <typename T>
 simdjson::simdjson_result<T> fromString(const std::string_view& s) {
   auto result = folly::tryTo<T>(s);
@@ -752,6 +858,98 @@ simdjson::error_code appendMapKey<TypeKind::TIMESTAMP>(
   return simdjson::INCORRECT_TYPE;
 }
 
+// Returns the raw JSON text of value. Used only on the error path to locate the
+// offending value's byte offset (its start pointer within the row buffer).
+template <typename Input>
+simdjson::simdjson_result<std::string_view> rawJson(
+    Input value,
+    simdjson::ondemand::json_type type) {
+  if (type == simdjson::ondemand::json_type::array) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
+    return array.raw_json();
+  }
+  if (type == simdjson::ondemand::json_type::object) {
+    SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
+    return object.raw_json();
+  }
+  return value.raw_json_token();
+}
+
+// Records an enriched message for a JSON cast type mismatch — the actual JSON
+// type and the byte offset of the offending value within the row's JSON — into
+// the thread-local pending slot, for castFromJson() to turn into the row's
+// exception. Does NOT throw: keeping the per-value cast path exception-free is
+// deliberate (see PendingJsonCastError). Omits the value's content, which may
+// be sensitive column data that could leak into query error logs. Error path
+// only.
+template <typename Input>
+void recordJsonCastTypeError(
+    Input value,
+    simdjson::ondemand::json_type type,
+    const TypePtr& targetType) {
+  // rawJson() yields a view into the row buffer at the value's start, so its
+  // data() minus the row base is the value's byte offset. We use only the
+  // location, never the content (which may be sensitive column data). If
+  // rawJson() fails (a pathological simdjson state), offset stays 0 — the same
+  // as a genuine top-level offset — which is an acceptable degradation since
+  // the type name is still reported.
+  int64_t offset{0};
+  if (auto rawJsonResult = rawJson<Input>(value, type);
+      !rawJsonResult.error()) {
+    const auto text = rawJsonResult.value_unsafe();
+    const auto& range = jsonCastInputRange();
+    // Only report an offset when the value's start pointer lies within the
+    // current row's JSON text. Anything outside (a stale or unexpected pointer,
+    // or the buffer's trailing padding) would produce a large, misleading
+    // offset, so fall back to 0.
+    if (range.base != nullptr && text.data() >= range.base &&
+        text.data() < range.end) {
+      offset = text.data() - range.base;
+    }
+  }
+  auto& pending = pendingJsonCastError();
+  pending.message = fmt::format(
+      "Cannot cast JSON value to the requested type. Source type: {}, target type: {}, byte offset: {}.",
+      jsonTypeName(type),
+      targetType->toString(),
+      offset);
+  pending.valid = true;
+}
+
+// Error-path helper for scalar casts. Returns INCORRECT_TYPE so the caller
+// propagates the original code; when errors will actually surface (non-TRY) it
+// first records a detailed message for the top-level consumer. Never throws.
+template <typename Input>
+simdjson::error_code raiseScalarJsonCastError(
+    Input value,
+    simdjson::ondemand::json_type type,
+    const TypePtr& targetType) {
+  if (detailedJsonCastErrors()) {
+    recordJsonCastTypeError<Input>(value, type, targetType);
+  }
+  return simdjson::INCORRECT_TYPE;
+}
+
+// Error-path only helper for container casts. The "maybe": it records an
+// informative message only on INCORRECT_TYPE when errors will surface and
+// value.type() succeeds; otherwise it returns without effect so the caller
+// propagates the original code (the cheap path under TRY, or the opaque
+// prebuilt message if type() itself fails). Never throws. Successful casts
+// never reach here. simdjson leaves its iterator un-advanced on a type mismatch
+// (see start_container in value_iterator-inl.h), so value.type() is still valid
+// after a failed get_array()/get_object().
+template <typename Input>
+void maybeRecordJsonCastTypeError(
+    Input value,
+    exec::GenericWriter& writer,
+    simdjson::error_code error) {
+  if (error == simdjson::INCORRECT_TYPE && detailedJsonCastErrors()) {
+    if (auto type = value.type(); !type.error()) {
+      recordJsonCastTypeError<Input>(value, type.value_unsafe(), writer.type());
+    }
+  }
+}
+
 template <typename Input>
 struct CastFromJsonTypedImpl {
   template <TypeKind kind>
@@ -780,7 +978,7 @@ struct CastFromJsonTypedImpl {
 
       if (isJsonType(writer.type())) {
         std::string_view json;
-        SIMDJSON_ASSIGN_OR_RAISE(json, rawJson(value, type));
+        SIMDJSON_ASSIGN_OR_RAISE(json, rawJson<Input>(value, type));
         auto& vectorWriter = writer.castTo<Varchar>();
 
         // The needNormalizeForJsonParse() just checks for escape sequences
@@ -806,7 +1004,7 @@ struct CastFromJsonTypedImpl {
             s = value.raw_json_token();
             break;
           default:
-            return simdjson::INCORRECT_TYPE;
+            return raiseScalarJsonCastError<Input>(value, type, writer.type());
         }
         writer.castTo<Varchar>().append(s);
       }
@@ -851,7 +1049,7 @@ struct CastFromJsonTypedImpl {
           break;
         }
         default:
-          return simdjson::INCORRECT_TYPE;
+          return raiseScalarJsonCastError<Input>(value, type, writer.type());
       }
       return simdjson::SUCCESS;
     }
@@ -918,7 +1116,12 @@ struct CastFromJsonTypedImpl {
         exec::GenericWriter& writer) {
       auto& writerTyped = writer.castTo<Array<Any>>();
       auto& elementType = writer.type()->childAt(0);
-      SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
+      auto arrayResult = value.get_array();
+      if (arrayResult.error()) {
+        maybeRecordJsonCastTypeError<Input>(value, writer, arrayResult.error());
+        return arrayResult.error();
+      }
+      auto array = std::move(arrayResult).value_unsafe();
       for (auto elementResult : array) {
         SIMDJSON_ASSIGN_OR_RAISE(auto element, elementResult);
         // If casting to array of JSON, nulls in array elements should become
@@ -945,7 +1148,13 @@ struct CastFromJsonTypedImpl {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
       auto& keyType = writer.type()->childAt(0);
       auto& valueType = writer.type()->childAt(1);
-      SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
+      auto objectResult = value.get_object();
+      if (objectResult.error()) {
+        maybeRecordJsonCastTypeError<Input>(
+            value, writer, objectResult.error());
+        return objectResult.error();
+      }
+      auto object = std::move(objectResult).value_unsafe();
       for (auto fieldResult : object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
         SIMDJSON_ASSIGN_OR_RAISE(auto key, field.unescaped_key(true));
@@ -1072,23 +1281,6 @@ struct CastFromJsonTypedImpl {
     }
   };
 
-  static simdjson::simdjson_result<std::string_view> rawJson(
-      Input value,
-      simdjson::ondemand::json_type type) {
-    switch (type) {
-      case simdjson::ondemand::json_type::array: {
-        SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
-        return array.raw_json();
-      }
-      case simdjson::ondemand::json_type::object: {
-        SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
-        return object.raw_json();
-      }
-      default:
-        return value.raw_json_token();
-    }
-  }
-
   template <typename T>
   static simdjson::error_code castJsonToInt(
       Input value,
@@ -1121,7 +1313,7 @@ struct CastFromJsonTypedImpl {
         break;
       }
       default:
-        return simdjson::INCORRECT_TYPE;
+        return raiseScalarJsonCastError<Input>(value, type, writer.type());
     }
     return simdjson::SUCCESS;
   }
@@ -1147,7 +1339,7 @@ struct CastFromJsonTypedImpl {
         break;
       }
       default:
-        return simdjson::INCORRECT_TYPE;
+        return raiseScalarJsonCastError<Input>(value, type, writer.type());
     }
     return simdjson::SUCCESS;
   }
@@ -1177,6 +1369,13 @@ void JsonCastOperator::castFromJson(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) const {
+  // Only pay for detailed (type + value) cast error messages when the error
+  // will actually surface. Under TRY() bad rows become null and the message is
+  // discarded, so we keep the original cheap prebuilt-exception path (no throw,
+  // no formatting). The guard restores the ambient state on scope exit,
+  // including the non-TRY rethrow.
+  JsonCastErrorStateGuard jsonCastErrorStateGuard;
+
   // Result is guaranteed to be a flat writable vector.
   auto* flatResult = result.as<typename KindToFlatVector<kind>::type>();
   exec::VectorWriter<Any> writer;
@@ -1192,9 +1391,20 @@ void JsonCastOperator::castFromJson(
     maxSize = std::max(maxSize, input.size());
   });
   paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
+  // Each row is copied to the start of paddedInput_, so 'base' lets the error
+  // path report the offending value's byte offset within the row's JSON; 'end'
+  // is narrowed per row below to bound that offset. Set 'base' and the detail
+  // flag together, right before the loop, so the flag is never enabled while
+  // the range is stale.
+  jsonCastInputRange() = {paddedInput_.data(), nullptr};
+  detailedJsonCastErrors() = context.throwOnError();
+  // Clear any detail left by a prior call so this call only ever consumes a
+  // message it recorded itself (a bad row records, and the loop consumes it in
+  // the same iteration).
+  pendingJsonCastError().valid = false;
   context.applyToSelectedNoThrow(
       rows,
-      [&](auto row) INLINE_LAMBDA {
+      [&](vector_size_t row) INLINE_LAMBDA {
         writer.setOffset(row);
         if (inputVector->isNullAt(row)) {
           writer.commitNull();
@@ -1202,10 +1412,21 @@ void JsonCastOperator::castFromJson(
         }
         auto& input = inputVector->valueAt(row);
         memcpy(paddedInput_.data(), input.data(), input.size());
+        jsonCastInputRange().end = paddedInput_.data() + input.size();
         simdjson::padded_string_view paddedInput(
             paddedInput_.data(), input.size(), paddedInput_.size());
         if (auto error = castFromJsonOneRow<kind>(paddedInput, writer)) {
-          context.setVeloxExceptionError(row, errors_[error]);
+          // A type mismatch under non-TRY records a detailed message deep in
+          // the cast recursion (without throwing); surface it here. Everything
+          // else — including all TRY casts — takes the original
+          // prebuilt-exception path with no per-row allocation.
+          if (auto& pending = pendingJsonCastError(); pending.valid) {
+            context.setVeloxExceptionError(
+                row, makeJsonCastUserError(pending.message));
+            pending.valid = false;
+          } else {
+            context.setVeloxExceptionError(row, errors_[error]);
+          }
           writer.commitNull();
         }
       },

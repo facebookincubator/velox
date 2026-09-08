@@ -15,8 +15,8 @@
  */
 #pragma once
 
+#include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/ExchangeQueue.h"
-#include "velox/exec/OutputBufferManager.h"
 #include "velox/vector/ComplexVector.h"
 // #include "velox/vector/VectorStream.h"
 
@@ -26,7 +26,7 @@ namespace facebook::velox::exec::test {
 std::unique_ptr<SerializedPageBase> toSerializedPage(
     const RowVectorPtr& vector,
     std::string serdeKind,
-    const std::shared_ptr<OutputBufferManager>& bufferManager,
+    const std::shared_ptr<DefaultOutputBufferManager>& bufferManager,
     memory::MemoryPool* pool);
 
 } // namespace facebook::velox::exec::test

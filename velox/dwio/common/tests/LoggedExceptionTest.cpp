@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/Random.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/dwio/common/exception/Exception.h"
 
@@ -109,6 +110,45 @@ TEST(LoggedExceptionTest, basic) {
   // Verifier duplicate registration is rejected
   ASSERT_ANY_THROW(
       registerExceptionLogger(std::make_unique<TestExceptionLogger>(counter)));
+}
+
+TEST(LoggedExceptionTest, fmtMessageTemplate) {
+  using ::testing::AllOf;
+  using ::testing::Property;
+  using ::testing::Throws;
+
+  // DWIO_RAISE_FMT keeps the format string as the template while the message
+  // interpolates the runtime value.
+  EXPECT_THAT(
+      [] { DWIO_RAISE_FMT("read past EOF in {}", "stream-7"); },
+      Throws<VeloxException>(AllOf(
+          Property(&VeloxException::messageTemplate, "read past EOF in {}"),
+          Property(&VeloxException::message, "read past EOF in stream-7"),
+          Property(
+              &VeloxException::errorSource,
+              error_source::kErrorSourceExternal))));
+
+  // The compared values are interpolated; the template does not embed them.
+  EXPECT_THAT(
+      [] { DWIO_ENSURE_EQ_FMT(1, 2, "reading col {}", "c0"); },
+      Throws<VeloxException>(AllOf(
+          Property(
+              &VeloxException::messageTemplate,
+              "[Equality Constraint Violation: {} == {}]: reading col {}"),
+          Property(
+              &VeloxException::message,
+              "[Equality Constraint Violation: 1 == 2]: reading col c0"))));
+
+  // An empty context format is allowed.
+  EXPECT_THAT(
+      [] { DWIO_ENSURE_LT_FMT(5, 3, ""); },
+      Throws<VeloxException>(AllOf(
+          Property(
+              &VeloxException::messageTemplate,
+              "[Range Constraint Violation: {} < {}]: "),
+          Property(
+              &VeloxException::message,
+              "[Range Constraint Violation: 5 < 3]: "))));
 }
 
 TEST(LoggedExceptionTest, traceCollectionControlTest) {

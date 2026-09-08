@@ -19,6 +19,7 @@
 #include <folly/container/F14Set.h>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -26,6 +27,7 @@
 
 #include <folly/Executor.h>
 #include "velox/common/EnumDeclare.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/compression/Compression.h"
@@ -77,10 +79,15 @@ VELOX_DECLARE_ENUM_NAME(FileFormat);
 
 FileFormat toFileFormat(std::string_view s);
 
-/// Returns a format-scoped config prefix using the file format's canonical
-/// string token. For example, PARQUET with "." returns "parquet.", while
-/// PARQUET with "_" returns "parquet_".
+/// Returns a format-scoped config prefix. DWRF and ORC share the ORC config
+/// namespace. For example, DWRF with "." returns "orc.", while PARQUET with
+/// "_" returns "parquet_".
 std::string formatConfigPrefix(FileFormat fmt, std::string_view separator);
+
+/// Returns a format-scoped session property key. DWRF and ORC share the ORC
+/// session property namespace. For example, DWRF with "writer.stripe-max-size"
+/// returns "orc_writer.stripe-max-size".
+std::string formatSessionProperty(FileFormat fmt, std::string_view key);
 
 /// Controls how a reader maps the requested table schema to physical file
 /// columns.
@@ -102,8 +109,8 @@ enum class ColumnMappingMode {
   /// reordered, deleted, or added back later with the same name but a different
   /// type.
   ///
-  /// The caller must provide ReaderOptions::parquetFieldIds() ordered to match
-  /// ReaderOptions::fileSchema() at every row-typed level. Each ParquetFieldId
+  /// The caller must provide ReaderOptions::fieldIds() ordered to match
+  /// ReaderOptions::fileSchema() at every row-typed level. Each field-id
   /// entry describes the table field ID for the corresponding requested column,
   /// and nested children describe field IDs below structs, arrays, and maps.
   ///
@@ -236,6 +243,19 @@ class FormatSpecificOptions {
   FormatSpecificOptions(FormatSpecificOptions&&) = default;
   FormatSpecificOptions& operator=(FormatSpecificOptions&&) = default;
   virtual ~FormatSpecificOptions() = default;
+
+  /// Merges format-scoped option overrides into this object.
+  ///
+  /// This is used when a caller supplies formatSpecificOptions and the
+  /// connector still needs to apply session or connector configs produced by
+  /// the format factory. Values in 'overrides' take precedence over matching
+  /// fields in this object. Implementations should overlay only the fields
+  /// owned by that format's config path, preserving other caller-provided
+  /// fields.
+  virtual void merge(const FormatSpecificOptions& overrides) {
+    VELOX_UNSUPPORTED(
+        "Merging format-specific options is not supported for these options.");
+  }
 };
 
 /// Options for creating a RowReader.
@@ -636,7 +656,7 @@ class RowReaderOptions {
   // Function to populate metrics related to feature projection stats
   // in Koski. This gets fired in FlatMapColumnReader.
   // This is a bit of a hack as there is (by design) no good way
-  // To propogate information from column reader to Koski
+  // To propagate information from column reader to Koski
   std::function<void(
       facebook::velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
       keySelectionCallback_;
@@ -878,6 +898,18 @@ class ReaderOptions : public io::ReaderOptions {
     selectiveNimbleReaderEnabled_ = value;
   }
 
+  /// If true, Nimble reads use DirectBufferedInput, which loads each stream
+  /// quantum-by-quantum (loadQuantum-sized) on demand instead of fetching the
+  /// whole stream up front. When false, Nimble uses BufferedInput and fetches
+  /// each stream in one piece.
+  bool nimbleDirectBufferedInputEnabled() const {
+    return nimbleDirectBufferedInputEnabled_;
+  }
+
+  void setNimbleDirectBufferedInputEnabled(bool value) {
+    nimbleDirectBufferedInputEnabled_ = value;
+  }
+
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
@@ -957,15 +989,15 @@ class ReaderOptions : public io::ReaderOptions {
     preloadIndex_ = value;
   }
 
-  /// Whether to load and initialize the chunk index during file open.
-  /// When true, the chunk index section is preloaded and the structured
-  /// ChunkIndex object is created. Default true.
-  bool loadChunkIndex() const {
-    return loadChunkIndex_;
+  /// Whether to load and initialize the chunk stats during file open.
+  /// When true, the chunk stats section is preloaded and the structured
+  /// ChunkStats object is created. Default true.
+  bool loadChunkStats() const {
+    return loadChunkStats_;
   }
 
-  void setLoadChunkIndex(bool value) {
-    loadChunkIndex_ = value;
+  void setLoadChunkStats(bool value) {
+    loadChunkStats_ = value;
   }
 
   bool allowEmptyFile() const {
@@ -1014,12 +1046,14 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
+  // Controls how physical file columns are matched to requested schema columns.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const tz::TimeZone* sessionTimezone_{nullptr};
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
+  bool nimbleDirectBufferedInputEnabled_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};
@@ -1027,7 +1061,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool cacheData_{true};
   bool loadClusterIndex_{false};
   bool preloadIndex_{false};
-  bool loadChunkIndex_{true};
+  bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};
   cache::AsyncDataCache* cache_{nullptr};

@@ -232,10 +232,37 @@ inline std::optional<std::string> getMax(
       : columnChunkStats.max().to_optional();
 }
 
+std::optional<Timestamp> int64ToTimestamp(
+    std::optional<int64_t> value,
+    std::optional<thrift::ConvertedType> convertedType,
+    const std::optional<thrift::LogicalType>& logicalType) {
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  if (logicalType.has_value() &&
+      logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP) {
+    auto unit = logicalType->get_TIMESTAMP().unit();
+    const auto unitType = unit->getType();
+    if (unitType == thrift::TimeUnit::Type::MILLIS) {
+      return Timestamp::fromMillis(value.value());
+    } else if (unitType == thrift::TimeUnit::Type::NANOS) {
+      return Timestamp::fromNanos(value.value());
+    }
+    return Timestamp::fromMicros(value.value());
+  }
+  if (convertedType == thrift::ConvertedType::TIMESTAMP_MILLIS) {
+    return Timestamp::fromMillis(value.value());
+  }
+  return Timestamp::fromMicros(value.value());
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
     const thrift::Statistics& columnChunkStats,
     const velox::Type& type,
-    uint64_t numRowsInRowGroup) {
+    uint64_t numRowsInRowGroup,
+    thrift::Type physicalType,
+    std::optional<thrift::ConvertedType> convertedType,
+    const std::optional<thrift::LogicalType>& logicalType) {
   std::optional<uint64_t> nullCount =
       columnChunkStats.null_count().to_optional();
   std::optional<uint64_t> valueCount = nullCount
@@ -313,6 +340,21 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMin<std::string>(columnChunkStats),
           getMax<std::string>(columnChunkStats),
           std::nullopt);
+    case TypeKind::TIMESTAMP:
+      if (physicalType == thrift::Type::INT64 &&
+          (convertedType.has_value() || logicalType.has_value())) {
+        return std::make_unique<dwio::common::TimestampColumnStatistics>(
+            valueCount,
+            hasNull,
+            std::nullopt,
+            std::nullopt,
+            int64ToTimestamp(
+                getMin<int64_t>(columnChunkStats), convertedType, logicalType),
+            int64ToTimestamp(
+                getMax<int64_t>(columnChunkStats), convertedType, logicalType));
+      }
+      return std::make_unique<dwio::common::ColumnStatistics>(
+          valueCount, hasNull, std::nullopt, std::nullopt);
 
     default:
       return std::make_unique<dwio::common::ColumnStatistics>(
@@ -332,7 +374,7 @@ common::CompressionKind thriftCodecToCompressionKind(
     case thrift::CompressionCodec::LZO:
       return common::CompressionKind::CompressionKind_LZO;
     case thrift::CompressionCodec::LZ4:
-      return common::CompressionKind::CompressionKind_LZ4;
+      return common::CompressionKind::CompressionKind_LZ4_HADOOP;
     case thrift::CompressionCodec::ZSTD:
       return common::CompressionKind::CompressionKind_ZSTD;
     case thrift::CompressionCodec::LZ4_RAW:
@@ -379,18 +421,30 @@ bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
           .has_value();
 }
 
+bool ColumnChunkMetaDataPtr::hasIndexPage() const {
+  return hasMetadata() &&
+      apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+          ->index_page_offset()
+          .has_value();
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics>
 ColumnChunkMetaDataPtr::getColumnStatistics(
     const TypePtr type,
-    int64_t numRows) {
+    int64_t numRows,
+    std::optional<thrift::ConvertedType> convertedType,
+    const std::optional<thrift::LogicalType>& logicalType) {
   VELOX_CHECK(hasStatistics());
+  const auto& metaData =
+      apache::thrift::can_throw(*thriftColumnChunkPtr(ptr_)->meta_data());
   return buildColumnStatisticsFromThrift(
-      apache::thrift::can_throw(
-          *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
-               ->statistics()),
+      apache::thrift::can_throw(*metaData.statistics()),
       *type,
-      numRows);
-};
+      numRows,
+      apache::thrift::can_throw(*metaData.type()),
+      convertedType,
+      logicalType);
+}
 
 std::string ColumnChunkMetaDataPtr::getColumnMetadataStatsMinValue() {
   VELOX_CHECK(hasStatistics());
@@ -432,6 +486,14 @@ int64_t ColumnChunkMetaDataPtr::dictionaryPageOffset() const {
            ->dictionary_page_offset());
 }
 
+bool ColumnChunkMetaDataPtr::hasColumnIndex() const {
+  return thriftColumnChunkPtr(ptr_)->column_index_offset().has_value();
+}
+
+bool ColumnChunkMetaDataPtr::hasOffsetIndex() const {
+  return thriftColumnChunkPtr(ptr_)->offset_index_offset().has_value();
+}
+
 common::CompressionKind ColumnChunkMetaDataPtr::compression() const {
   return thriftCodecToCompressionKind(
       apache::thrift::can_throw(
@@ -459,6 +521,13 @@ int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return apache::thrift::can_throw(
       *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
            ->total_uncompressed_size());
+}
+
+uint64_t ColumnChunkMetaDataPtr::readSize() const {
+  return static_cast<uint64_t>(
+      compression() == common::CompressionKind::CompressionKind_NONE
+          ? totalUncompressedSize()
+          : totalCompressedSize());
 }
 
 FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(

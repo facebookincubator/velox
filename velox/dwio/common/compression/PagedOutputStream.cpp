@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/compression/PagedOutputStream.h"
 
+#include <cstring>
+
 namespace facebook::velox::dwio::common::compression {
 
 std::vector<std::string_view> PagedOutputStream::createPage() {
@@ -44,6 +46,10 @@ std::vector<std::string_view> PagedOutputStream::createPage() {
     writeHeader(compressionBuffer_->data(), compressedSize, false);
     compressed = std::string_view(
         compressionBuffer_->data(), compressedSize + pageHeaderSize_);
+    if (verifyDecompressor_ != nullptr) {
+      verifyCompressedPage(
+          compressed, buffer_.data() + pageHeaderSize_, origSize);
+    }
   }
 
   if (encryptor_ == nullptr) {
@@ -84,6 +90,60 @@ void PagedOutputStream::resetBuffers() {
     pool_->returnBuffer(std::move(compressionBuffer_));
   }
   encryptionBuffer_ = nullptr;
+}
+
+void PagedOutputStream::verifyCompressedPage(
+    std::string_view compressedPage,
+    const char* uncompressed,
+    uint64_t uncompressedSize) {
+  // Parse the 3-byte page header the same way the reader does, so a wrong
+  // header length is exercised too.
+  const auto* header = reinterpret_cast<const uint8_t*>(compressedPage.data());
+  const uint32_t compressedSize = (static_cast<uint32_t>(header[0]) >> 1) |
+      (static_cast<uint32_t>(header[1]) << 7) |
+      (static_cast<uint32_t>(header[2]) << 15);
+  // Only pages that were actually compressed reach here.
+  VELOX_CHECK_EQ(header[0] & 1, 0);
+
+  // Borrow the shared decompression buffer from the pool; return it on every
+  // exit. The compression buffer cannot be reused as the scratch: it holds the
+  // compressed page being verified.
+  auto decompressionBuffer = pool_->getDecompressionBuffer(uncompressedSize);
+  const auto returnGuard = folly::makeGuard([&]() {
+    pool_->returnDecompressionBuffer(std::move(decompressionBuffer));
+  });
+
+  const char* const payload = compressedPage.data() + pageHeaderSize_;
+  uint64_t decompressedSize{0};
+  std::string decodeError;
+  try {
+    decompressedSize = verifyDecompressor_->decompress(
+        payload, compressedSize, decompressionBuffer->data(), uncompressedSize);
+  } catch (const std::exception& e) {
+    decodeError = e.what();
+  }
+
+  const bool verified = decodeError.empty() &&
+      decompressedSize == uncompressedSize &&
+      ::memcmp(decompressionBuffer->data(), uncompressed, uncompressedSize) ==
+          0;
+  if (verified) {
+    return;
+  }
+
+  // Throw so the call site aborts and retries the write; the useful state
+  // travels in the message. The corruption is nondeterministic, so a retry
+  // usually succeeds.
+  VELOX_FAIL(
+      "DWRF write-side compression verification failed: the freshly compressed "
+      "page does not decode back to the original bytes; aborting the write to "
+      "avoid persisting a corrupt file. stream={} uncompressedSize={} "
+      "compressedSize={} decompressedSize={} decodeError={}",
+      verifyDecompressor_->streamDebugInfo(),
+      uncompressedSize,
+      compressedSize,
+      decompressedSize,
+      decodeError.empty() ? std::string{"none"} : decodeError);
 }
 
 uint64_t PagedOutputStream::flush() {

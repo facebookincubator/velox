@@ -310,6 +310,13 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b)
     return nullptr;
   }
 
+  // Custom types do not participate in structural coercion: their
+  // size()/childAt() expose a physical backing, not type parameters, so they
+  // cannot be reconstructed via getType(name, params). Treat them as opaque.
+  if (customTypeExists(a->name())) {
+    return a->equivalent(*b) ? a : nullptr;
+  }
+
   if (a->name() == TypeKindName::toName(TypeKind::ROW)) {
     return leastCommonSuperRowType(*this, a->asRow(), b->asRow());
   }

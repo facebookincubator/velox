@@ -32,6 +32,21 @@ class RleBpDecoder {
         bitMask_(bits::lowMask(bitWidth)),
         lastSafeWord_(end - sizeof(uint64_t)) {}
 
+  /// Reset to decode from a new page buffer without reallocating.
+  void reset(const char* start, const char* end, uint8_t bitWidth) {
+    bufferStart_ = start;
+    bufferEnd_ = end;
+    bitWidth_ = bitWidth;
+    byteWidth_ = bits::divRoundUp(bitWidth, 8);
+    bitMask_ = bits::lowMask(bitWidth);
+    lastSafeWord_ = end - sizeof(uint64_t);
+    remainingValues_ = 0;
+    value_ = 0;
+    repeating_ = false;
+    bitOffset_ = 0;
+    numRemainingUnpackedValues_ = 0;
+  }
+
   void skip(uint64_t numValues);
 
   /// Decode @param numValues number of values and copy the decoded values into
@@ -120,10 +135,10 @@ class RleBpDecoder {
 
   const char* bufferStart_;
   const char* bufferEnd_;
-  const int8_t bitWidth_;
-  const int8_t byteWidth_;
-  const uint64_t bitMask_;
-  const char* const lastSafeWord_;
+  int8_t bitWidth_;
+  int8_t byteWidth_;
+  uint64_t bitMask_;
+  const char* lastSafeWord_;
   uint64_t remainingValues_{0};
   int64_t value_;
   int8_t bitOffset_{0};

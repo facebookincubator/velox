@@ -26,6 +26,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -150,6 +151,149 @@ class IndexLookupJoinTest : public IndexLookupJoinTestBase,
   const std::unique_ptr<folly::CPUThreadPoolExecutor> connectorCpuExecutor_{
       std::make_unique<folly::CPUThreadPoolExecutor>(128)};
 };
+
+class LazyStaleAcrossBatchTest : public IndexLookupJoinTestBase {
+ protected:
+  void SetUp() override {
+    HiveConnectorTestBase::SetUp();
+    TestIndexConnectorFactory::registerConnector(connectorCpuExecutor_.get());
+    Operator::registerOperator(std::make_unique<BackpressureTranslator>());
+    keyType_ = ROW({"u0"}, {BIGINT()});
+    valueType_ = ROW({"u1"}, {BIGINT()});
+    tableType_ = concat(keyType_, valueType_);
+    probeType_ = ROW({"t0", "t1"}, {BIGINT(), BIGINT()});
+  }
+
+  void TearDown() override {
+    Operator::unregisterAllOperators();
+    connector::ConnectorRegistry::global().erase(kTestIndexConnectorName);
+    HiveConnectorTestBase::TearDown();
+  }
+
+  static std::shared_ptr<TestIndexTableHandle> makeIndexTableHandle(
+      const std::shared_ptr<TestIndexTable>& indexTable,
+      bool asyncLookup) {
+    return std::make_shared<TestIndexTableHandle>(
+        kTestIndexConnectorName, indexTable, asyncLookup, false);
+  }
+
+  static connector::ColumnHandleMap makeIndexColumnHandles(
+      const std::vector<std::string>& names) {
+    connector::ColumnHandleMap handles;
+    for (const auto& name : names) {
+      handles.emplace(name, std::make_shared<TestIndexColumnHandle>(name));
+    }
+    return handles;
+  }
+
+  const std::unique_ptr<folly::CPUThreadPoolExecutor> connectorCpuExecutor_{
+      std::make_unique<folly::CPUThreadPoolExecutor>(128)};
+};
+
+// Reproduces the Driver-level bug where the TableScan reader advances past a
+// passthrough LazyVector that the IndexLookupJoin still holds unloaded
+// downstream, surfacing as "Loading LazyVector after the enclosing reader has
+// moved". See BackpressureTestNode.h for how the back-pressuring sink forces
+// the driver to race the scan ahead while a probe batch is draining. The bug is
+// operator-neutral; NestedLoopJoinTest has the same regression with a
+// cross-product join. This test passes once the Driver fix is in place.
+TEST_F(LazyStaleAcrossBatchTest, lazyVectorStaleUnderBackpressure) {
+  IndexTableData tableData;
+  generateIndexTableData(/*keyCardinalities=*/{100}, tableData, pool_);
+
+  // One large probe input -> one file -> one split whose reader yields many
+  // (10k-row) batches (~9). The join drains each batch over multiple
+  // getOutput() calls, so while one batch is draining the driver advances the
+  // scan to read later batches -- this is what lets the reader move past a
+  // batch whose scan lazy is still unloaded downstream.
+  auto probeVectors = generateProbeInput(
+      /*numBatches=*/1,
+      /*batchSize=*/90'000,
+      /*numDuplicateProbeRows=*/1,
+      tableData,
+      pool_,
+      /*probeJoinKeys=*/{"t0"},
+      /*hasNullKeys=*/false,
+      /*inColumns=*/{},
+      /*betweenColumns=*/{},
+      /*equalMatchPct=*/100);
+  auto probeFiles = createProbeFiles(probeVectors);
+
+  auto indexTable = TestIndexTable::create(
+      /*numEqualJoinKeys=*/1,
+      tableData.keyVectors,
+      tableData.valueVectors,
+      *pool());
+  // Synchronous lookups: isBlocked never blocks the join, so the join drains
+  // each batch itself while the driver races the scan ahead.
+  auto indexTableHandle =
+      makeIndexTableHandle(indexTable, /*asyncLookup=*/false);
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto indexScanNode = makeIndexScanNode(
+      planNodeIdGenerator,
+      indexTableHandle,
+      makeScanOutputType({"u0", "u1"}),
+      makeIndexColumnHandles({"u0", "u1"}));
+
+  // Project[1] loads t1 and passes t0 through as an unloaded scan LazyVector;
+  // Project[2] loads t0 to form the join key.
+  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+                  .startTableScan()
+                  .outputType(probeType_)
+                  .endTableScan()
+                  .captureScanNodeId(probeScanNodeId_)
+                  .project({"t1 + 0 AS t1", "t0"})
+                  .project({"t0 + 0 AS t0", "t1"})
+                  .startIndexLookupJoin()
+                  .leftKeys({"t0"})
+                  .rightKeys({"u0"})
+                  .indexSource(indexScanNode)
+                  .outputLayout({"t0", "t1", "u1"})
+                  .joinType(core::JoinType::kInner)
+                  .endIndexLookupJoin()
+                  .capturePlanNodeId(joinNodeId_)
+                  // Downstream projects: the join drains each probe batch into
+                  // them over multiple driver iterations, during which the
+                  // driver fills the scan + upstream projects ahead of
+                  // Project[2].
+                  .project({"t0 + 0 AS t0", "t1", "u1"})
+                  .project({"t0", "t1 + 0 AS t1", "u1"})
+                  .addNode([](const std::string& id, core::PlanNodePtr input) {
+                    return std::make_shared<BackpressureNode>(
+                        id, /*delayCycles=*/20, std::move(input));
+                  })
+                  .planNode();
+
+  // No prefetch (maxNumInputBatches_ == 1). The join holds a single probe batch
+  // and drains it into the downstream projects over many getOutput() calls
+  // because its output is chunked at outputBatchSize_ (1024) while a scan read
+  // is 10000 rows. Throughout that multi-call drain numInputBatches()==1==max
+  // so the join refuses input; the driver, unable to feed it, instead advances
+  // the scan->Project[1]->Project[2] chain via per-pair back-pressure:
+  // Project[1] forwards the next batch (with t0 still an unloaded scan lazy)
+  // into the empty Project[2], then the scan reads one more batch. When the
+  // join finishes the current batch and finally pulls Project[2], Project[2]
+  // loads that stranded t0 lazy against a reader that has already moved ->
+  // stale version crash. Parallel (non-serial) execution: the sink does not
+  // block the driver per output chunk. In serial cursor mode the driver returns
+  // kWaitForConsumer after every chunk and resumes from the sink, so it
+  // re-drains the join (which still holds the batch) without ever walking up to
+  // the scan -- the reader never advances during the drain and the bug is
+  // masked. With a non-blocking sink the driver continues the loop up to the
+  // scan between chunks, advancing the reader while Project[2] still holds an
+  // unloaded lazy.
+  auto result =
+      AssertQueryBuilder(plan)
+          .serialExecution(false)
+          .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
+          .copyResults(pool_.get());
+  // With the bug, copyResults() above throws the lazy-vector "reader has moved"
+  // error before reaching here. After the fix, the inner join produces exactly
+  // one output row per probe row: equalMatchPct=100 so every probe key matches,
+  // and the index keys are unique (keyCardinalities={100}) so each match fans
+  // out to a single row.
+  ASSERT_EQ(result->size(), probeVectors[0]->size());
+}
 
 TEST_F(IndexLookupJoinTest, joinCondition) {
   const auto rowType =

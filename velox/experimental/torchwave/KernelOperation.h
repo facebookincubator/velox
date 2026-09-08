@@ -17,6 +17,7 @@
 #pragma once
 
 #include <deque>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -36,6 +37,8 @@ namespace torch::wave {
 
 class CompileCtx;
 class OpInvocation;
+// Defined in Cat.h, which includes this file.
+struct ConcatLayout;
 
 enum Listing { kExprs = 0, kGrids };
 
@@ -132,9 +135,25 @@ struct OutputDesc {
   /// can set the output shape by that.
   bool byLargestInput{false};
 
+  /// Propagated from ArgumentMeta::nonRootOutput: this output belongs to a
+  /// non-last part of a split root op and is a real output of the original op,
+  /// so it is excluded from the freeable intermediates list (LaunchData::
+  /// intermediates). Flagged statically at registration, not from downstream
+  /// uses, because a shared ProjectOperation may or may not reference the value
+  /// externally per actual use.
+  bool nonRootOutput{false};
+
   SizeExpr sizeExpr;
 
   bool isList{false};
+
+  /// Set on the result of a fused aten.cat / aten.stack: the operands in join
+  /// order and the geometry of the join, which is what lets the
+  /// allocation-group pass place the whole result before any operand is
+  /// produced and hand each operand the region it writes. Held by shared
+  /// pointer because a descriptor is copied per launch and the operand list is
+  /// not small; null for every other output.
+  std::shared_ptr<const ConcatLayout> concatLayout;
 };
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src);
@@ -230,6 +249,17 @@ class KernelOperation {
     return expr_;
   }
 
+  /// True if the actual value 'id' is fed to more than one part of a multipart
+  /// expansion (WaveGraph::multiUseInputs). Such values are produced in one
+  /// part's kernel op but read by another, so they must not be freed as per-op
+  /// intermediates.
+  bool isMultiUseInput(nativert::ValueId id) const;
+
+  /// True if the actual value 'id' is a graph output (or a list-output
+  /// element), which escapes the graph and must not be freed as a per-op
+  /// intermediate.
+  bool isGraphOutput(nativert::ValueId id) const;
+
   int32_t numInputs() const {
     return numInputs_;
   }
@@ -238,12 +268,35 @@ class KernelOperation {
     return orderedInputs_;
   }
 
+  /// Returns the static tensor metadata of the subgraph leaf inputs.
+  const std::vector<const nativert::TensorMeta*>& inputTypes() const {
+    return inputTypes_;
+  }
+
   bool isInput(ValueCP value) const {
     return inputs_.count(value);
   }
 
+  /// True if 'value' has a parameter slot in this kernel, i.e. it is backed by
+  /// memory as a boundary input or a materialized output (including TensorList
+  /// elements). Such a value must be read from its slot rather than recomputed
+  /// inline during elementwise codegen.
+  bool hasParamSlot(ValueCP value) const {
+    return paramOffsets_.count(value) > 0;
+  }
+
   const std::vector<OutputDesc>& outputDescs() const {
     return outputDescs_;
+  }
+
+  /// Marks every output as reserved by somebody else, so nothing allocates
+  /// over the buffer already in the frame. Used for the ops that fill a wide
+  /// concat's bands: the band is the concat allocation group's, materialized
+  /// before the copy runs.
+  void delegateOutputs() {
+    for (auto& desc : outputDescs_) {
+      desc.delegated = true;
+    }
   }
 
   /// Returns the set of values backed by memory. Includes all inputs and
@@ -311,6 +364,19 @@ class KernelOperation {
     return elementExprs_;
   }
 
+  /// Records that the tensor param at 'offset' needs an own-dims index
+  /// calculator (sizes[]) force-initialized in the block prologue. Set for the
+  /// output and whole-tensor operands of gather ops (index_select, repeat)
+  /// whose device functions decompose the linear index by own dims.
+  void addOwnDimsCalcOffset(int32_t offset) {
+    ownDimsCalcOffsets_.insert(offset);
+  }
+
+  /// Param offsets of tensors needing an own-dims index calculator.
+  const std::unordered_set<int32_t>& ownDimsCalcOffsets() const {
+    return ownDimsCalcOffsets_;
+  }
+
   const std::unordered_set<NodeCP>& allNodes() const {
     return allNodes_;
   }
@@ -328,6 +394,19 @@ class KernelOperation {
 
   bool alwaysSingleBlock() const {
     return alwaysSingleBlock_;
+  }
+
+  /// Bytes of dynamic shared memory this op needs, i.e. the max over its
+  /// nodes' Metadata::dynamicSharedMemory. A launch passes the max over its
+  /// ops as the kernel's dynamic shared memory size.
+  int64_t dynamicSharedBytes() const {
+    return dynamicSharedBytes_;
+  }
+
+  /// Blocks per SM this op wants the containing kernel compiled for, i.e. the
+  /// max over its nodes' Metadata::minBlocksPerSm. Zero means no constraint.
+  int32_t minBlocksPerSm() const {
+    return minBlocksPerSm_;
   }
 
   void setAlwaysSingleBlock(bool value) {
@@ -362,6 +441,15 @@ class KernelOperation {
 
   const std::unordered_set<nativert::ValueId>& orderingOutputs() const {
     return orderingOutputs_;
+  }
+
+  /// Declares that this op writes 'id' even though no node of its own produces
+  /// it. Used by a concat whose operands are filled by ops of their own: each
+  /// operand's op writes its band of the concat result, so anything reading the
+  /// result has to be ordered after all of them. setCode() derives the ordering
+  /// sets from the op's nodes and would not see that.
+  void addOrderingOutput(nativert::ValueId id) {
+    orderingOutputs_.insert(id);
   }
 
   /// Hash for (Node*, attrName) pairs used as keys in attrOffsets_.
@@ -426,6 +514,12 @@ class KernelOperation {
 
   std::vector<ValueCP> orderedInputs_;
 
+  // Static tensor metadata of the subgraph leaf inputs (carried from Subgraph).
+  // Used to size the grid from a static shape when an input is an
+  // unmaterialized intermediate at host sizing time (e.g. a view-rooted op
+  // under a cooperative grid).
+  std::vector<const nativert::TensorMeta*> inputTypes_;
+
   // Assigns a param offset for 'value', expanding TensorList elements.
   void assignParamOffset(ValueCP value, int32_t& offset);
 
@@ -460,10 +554,21 @@ class KernelOperation {
 
   std::vector<ElementExpr> elementExprs_;
 
+  // Param offsets of tensors whose sizes[] must be force-initialized for their
+  // own dims (gather-op output and whole-tensor operands). See
+  // ownDimsCalcOffsets().
+  std::unordered_set<int32_t> ownDimsCalcOffsets_;
+
   std::unordered_set<NodeCP> allNodes_;
 
   // True if any node in the subgraph has alwaysSingleBlock set in its metadata.
   bool alwaysSingleBlock_{false};
+
+  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph.
+  int64_t dynamicSharedBytes_{0};
+
+  // Max Metadata::minBlocksPerSm over the nodes in the subgraph.
+  int32_t minBlocksPerSm_{0};
 
   // True if this kernel is present in both grid_ and singleBlockGrid_ (both
   // grids have a kernel at the corresponding position).

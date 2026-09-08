@@ -34,7 +34,12 @@ void ScanTracker::recordReference(
   std::lock_guard<std::mutex> l(mutex_);
   auto& data = data_[id];
   data.referencedBytes += bytes;
-  data.lastReferencedBytes = bytes;
+  // Accumulate, rather than overwrite, the bytes referenced since the last
+  // read. A single load unit (e.g. a stripe) can reference the same trackingId
+  // many times -- a flat map's per-key value streams intentionally share one
+  // trackingId -- and adjustedReadPct() must be able to exclude all of those
+  // references until the bytes are actually read.
+  data.lastReferencedBytes += static_cast<double>(bytes);
   sum_.referencedBytes += bytes;
 }
 
@@ -49,6 +54,10 @@ void ScanTracker::recordRead(
   std::lock_guard<std::mutex> l(mutex_);
   auto& data = data_[id];
   data.readBytes += bytes;
+  // The bytes referenced since the last read are now being read, so they are no
+  // longer "referenced but not yet read". Reset the counter; references from
+  // the next load unit re-accumulate it.
+  data.lastReferencedBytes = 0;
   sum_.readBytes += bytes;
 }
 

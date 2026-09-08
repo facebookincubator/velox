@@ -9,7 +9,10 @@ implemented by the null aware anti join. NOT EXISTS semantics are implemented
 by the regular anti join.
 
 Velox provides regular anti join via ``JoinType::kAnti`` and null-aware anti
-join via ``JoinType::kNullAwareAnti``.
+join via ``JoinType::kNullAwareAnti``. The build-side mirror, which returns
+build-side rows with no match on the probe side, is provided via
+``JoinType::kRightAnti`` (regular NOT EXISTS semantic only; no null-aware
+variant).
 
 This article explains the differences in semantics between NOT IN and NOT EXISTS
 queries and discusses the implementation of these in the null aware and regular

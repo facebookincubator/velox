@@ -502,7 +502,7 @@ inline int64_t findNthInstanceByteIndexFromEnd(
 /// replacement string if ignoreEmptyReplaced is false, otherwise the result is
 /// empty.
 ///
-/// Note: if replaceFirst=true, the only the first found occurence of replaced
+/// Note: if replaceFirst=true, the only the first found occurrence of replaced
 /// is replaced. If replaced is empty, then replacement is added before the
 /// inputString.
 ///
@@ -625,7 +625,7 @@ inline static size_t replace(
     auto unchangedSize = position - readPosition;
     writeUnchanged(unchangedSize);
     writeReplacement();
-    // If replaceFirst is true, we only replace the first occurence
+    // If replaceFirst is true, we only replace the first occurrence
     // of the found replaced
     if (replaceFirst) {
       break;

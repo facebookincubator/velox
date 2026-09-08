@@ -137,6 +137,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     WriteKind writeKind,
+    std::unordered_map<std::string, ExistingDeletionVector>
+        existingDeletionVectors,
     std::shared_ptr<const FileNameGenerator> fileNameGenerator)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
@@ -151,7 +153,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           false,
           std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
-      writeKind_(writeKind) {
+      writeKind_(writeKind),
+      existingDeletionVectors_(std::move(existingDeletionVectors)) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The

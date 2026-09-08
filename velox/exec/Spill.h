@@ -650,7 +650,7 @@ class SpillState {
 
   /// Returns the current number of finished files from a given partition.
   ///
-  /// NOTE: the fucntion returns zero if the state has finished or the
+  /// NOTE: the function returns zero if the state has finished or the
   /// partition is not spilled yet.
   size_t numFinishedFiles(const SpillPartitionId& id) const;
 

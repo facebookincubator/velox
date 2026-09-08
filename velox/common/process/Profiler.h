@@ -61,7 +61,7 @@ class Profiler {
   // this.
   static std::string resultPath_;
 
-  // indicates if the results of the the profile should be saved at stop.
+  // indicates if the results of the profile should be saved at stop.
   static tsan_atomic<bool> shouldSaveResult_;
 
   // Time of starting the profile. Seconds from epoch.

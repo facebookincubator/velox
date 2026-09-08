@@ -283,7 +283,7 @@ class TestPrimitiveReader : public ::testing::Test {
   std::vector<uint8_t> dataBuffer_; // For BA and FLBA
 };
 
-TEST_F(TestPrimitiveReader, TestInt32FlatRequired) {
+TEST_F(TestPrimitiveReader, testInt32FlatRequired) {
   int levelsPerPage = 100;
   int numPages = 50;
   maxDefLevel_ = 0;
@@ -294,7 +294,7 @@ TEST_F(TestPrimitiveReader, TestInt32FlatRequired) {
   ASSERT_NO_FATAL_FAILURE(executeDict(numPages, levelsPerPage, &descr));
 }
 
-TEST_F(TestPrimitiveReader, TestInt32FlatOptional) {
+TEST_F(TestPrimitiveReader, testInt32FlatOptional) {
   int levelsPerPage = 100;
   int numPages = 50;
   maxDefLevel_ = 4;
@@ -305,7 +305,7 @@ TEST_F(TestPrimitiveReader, TestInt32FlatOptional) {
   ASSERT_NO_FATAL_FAILURE(executeDict(numPages, levelsPerPage, &descr));
 }
 
-TEST_F(TestPrimitiveReader, TestInt32FlatRepeated) {
+TEST_F(TestPrimitiveReader, testInt32FlatRepeated) {
   int levelsPerPage = 100;
   int numPages = 50;
   maxDefLevel_ = 4;
@@ -317,7 +317,7 @@ TEST_F(TestPrimitiveReader, TestInt32FlatRepeated) {
 }
 
 // Tests skipping around page boundaries.
-TEST_F(TestPrimitiveReader, TestSkipAroundPageBoundries) {
+TEST_F(TestPrimitiveReader, testSkipAroundPageBoundries) {
   int levelsPerPage = 100;
   int numPages = 7;
   maxDefLevel_ = 0;
@@ -427,7 +427,7 @@ TEST_F(TestPrimitiveReader, TestSkipAroundPageBoundries) {
 
 // Skip with repeated field. This test makes it clear that we are skipping.
 // Values and not records.
-TEST_F(TestPrimitiveReader, TestSkipRepeatedField) {
+TEST_F(TestPrimitiveReader, testSkipRepeatedField) {
   // Example schema: message M { repeated int32 b = 1 }
   maxDefLevel_ = 1;
   maxRepLevel_ = 1;
@@ -483,7 +483,7 @@ TEST_F(TestPrimitiveReader, TestSkipRepeatedField) {
 }
 
 // Page claims to have two values but only 1 is present.
-TEST_F(TestPrimitiveReader, TestReadValuesMissing) {
+TEST_F(TestPrimitiveReader, testReadValuesMissing) {
   maxDefLevel_ = 1;
   maxRepLevel_ = 0;
   constexpr int batchSize = 1;
@@ -533,7 +533,7 @@ TEST_F(TestPrimitiveReader, TestReadValuesMissing) {
 
 // Repetition level byte length reported in Page but Max Repetition level.
 // Is zero for the column.
-TEST_F(TestPrimitiveReader, TestRepetitionLvlBytesWithMaxRepetitionZero) {
+TEST_F(TestPrimitiveReader, testRepetitionLvlBytesWithMaxRepetitionZero) {
   constexpr int batchSize = 4;
   maxDefLevel_ = 1;
   maxRepLevel_ = 0;
@@ -572,7 +572,7 @@ TEST_F(TestPrimitiveReader, TestRepetitionLvlBytesWithMaxRepetitionZero) {
 }
 
 // Page claims to have two values but only 1 is present.
-TEST_F(TestPrimitiveReader, TestReadValuesMissingWithDictionary) {
+TEST_F(TestPrimitiveReader, testReadValuesMissingWithDictionary) {
   constexpr int batchSize = 1;
   maxDefLevel_ = 1;
   maxRepLevel_ = 0;
@@ -626,7 +626,7 @@ TEST_F(TestPrimitiveReader, TestReadValuesMissingWithDictionary) {
       ParquetException);
 }
 
-TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
+TEST_F(TestPrimitiveReader, testDictionaryEncodedPages) {
   maxDefLevel_ = 0;
   maxRepLevel_ = 0;
   NodePtr type = schema::int32("a", Repetition::kRequired);
@@ -691,7 +691,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPages) {
   pages_.clear();
 }
 
-TEST_F(TestPrimitiveReader, TestDictionaryEncodedPagesWithExposeEncoding) {
+TEST_F(TestPrimitiveReader, testDictionaryEncodedPagesWithExposeEncoding) {
   maxDefLevel_ = 0;
   maxRepLevel_ = 0;
   int levelsPerPage = 100;
@@ -755,7 +755,7 @@ TEST_F(TestPrimitiveReader, TestDictionaryEncodedPagesWithExposeEncoding) {
   pages_.clear();
 }
 
-TEST_F(TestPrimitiveReader, TestNonDictionaryEncodedPagesWithExposeEncoding) {
+TEST_F(TestPrimitiveReader, testNonDictionaryEncodedPagesWithExposeEncoding) {
   maxDefLevel_ = 0;
   maxRepLevel_ = 0;
   int64_t valueSize = 100;
@@ -889,7 +889,7 @@ class RecordReaderPrimitiveTypeTest
 
 // Tests reading a required field. The expected results are the same for.
 // Reading dense and spaced.
-TEST_P(RecordReaderPrimitiveTypeTest, ReadRequired) {
+TEST_P(RecordReaderPrimitiveTypeTest, readRequired) {
   init(schema::int32("b", Repetition::kRequired));
 
   // Records look like: {10, 20, 20, 30, 30, 30}
@@ -933,7 +933,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, ReadRequired) {
 // Tests reading an optional field.
 // Use a max definition field > 1 to test both cases where parent is present or.
 // Parent is missing.
-TEST_P(RecordReaderPrimitiveTypeTest, ReadOptional) {
+TEST_P(RecordReaderPrimitiveTypeTest, readOptional) {
   NodePtr column = GroupNode::make(
       "a",
       Repetition::kOptional,
@@ -1003,7 +1003,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, ReadOptional) {
 
 // Tests reading a required repeated field. The results are the same for
 // reading. Dense or spaced.
-TEST_P(RecordReaderPrimitiveTypeTest, ReadRequiredRepeated) {
+TEST_P(RecordReaderPrimitiveTypeTest, readRequiredRepeated) {
   NodePtr column = GroupNode::make(
       "p",
       Repetition::kRequired,
@@ -1054,7 +1054,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, ReadRequiredRepeated) {
 
 // Tests reading a nullable repeated field. Tests reading null values at.
 // Differnet levels and reading an empty list.
-TEST_P(RecordReaderPrimitiveTypeTest, ReadNullableRepeated) {
+TEST_P(RecordReaderPrimitiveTypeTest, readNullableRepeated) {
   NodePtr column = GroupNode::make(
       "p",
       Repetition::kOptional,
@@ -1146,7 +1146,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, ReadNullableRepeated) {
 }
 
 // Test that we can skip required top level field.
-TEST_P(RecordReaderPrimitiveTypeTest, SkipRequiredTopLevel) {
+TEST_P(RecordReaderPrimitiveTypeTest, skipRequiredTopLevel) {
   init(schema::int32("b", Repetition::kRequired));
 
   std::vector<std::shared_ptr<Page>> pages;
@@ -1179,7 +1179,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, SkipRequiredTopLevel) {
 }
 
 // Skip an optional field. Intentionally included some null values.
-TEST_P(RecordReaderPrimitiveTypeTest, SkipOptional) {
+TEST_P(RecordReaderPrimitiveTypeTest, skipOptional) {
   init(schema::int32("b", Repetition::kOptional));
 
   // Records look like {null, 10, 20, 30, null, 40, 50, 60}
@@ -1256,7 +1256,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, SkipOptional) {
 }
 
 // Test skipping for repeated fields.
-TEST_P(RecordReaderPrimitiveTypeTest, SkipRepeated) {
+TEST_P(RecordReaderPrimitiveTypeTest, skipRepeated) {
   init(schema::int32("b", Repetition::kRepeated));
 
   // Records look like {null, [20, 20, 20], null, [30, 30], [40]}
@@ -1334,7 +1334,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, SkipRepeated) {
 
 // Tests that for repeated fields, we first consume what is in the buffer.
 // Before reading more levels.
-TEST_P(RecordReaderPrimitiveTypeTest, SkipRepeatedConsumeBufferFirst) {
+TEST_P(RecordReaderPrimitiveTypeTest, skipRepeatedConsumeBufferFirst) {
   init(schema::int32("b", Repetition::kRepeated));
 
   std::vector<std::shared_ptr<Page>> pages;
@@ -1381,7 +1381,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, SkipRepeatedConsumeBufferFirst) {
 }
 
 // Test reading when one record spans multiple pages for a repeated field.
-TEST_P(RecordReaderPrimitiveTypeTest, ReadPartialRecord) {
+TEST_P(RecordReaderPrimitiveTypeTest, readPartialRecord) {
   init(schema::int32("b", Repetition::kRepeated));
 
   std::vector<std::shared_ptr<Page>> pages;
@@ -1470,7 +1470,7 @@ TEST_P(RecordReaderPrimitiveTypeTest, ReadPartialRecord) {
 
 // Test skipping for repeated fields for the case when one record spans
 // multiple. Pages.
-TEST_P(RecordReaderPrimitiveTypeTest, SkipPartialRecord) {
+TEST_P(RecordReaderPrimitiveTypeTest, skipPartialRecord) {
   init(schema::int32("b", Repetition::kRepeated));
 
   std::vector<std::shared_ptr<Page>> pages;
@@ -1780,7 +1780,7 @@ class ByteArrayRecordReaderTest : public ::testing::TestWithParam<bool> {
 // Tests reading and skipping a ByteArray field.
 // The binary readers only differ in DeocdeDense and DecodeSpaced functions, so.
 // Testing optional is sufficient in excercising those code paths.
-TEST_P(ByteArrayRecordReaderTest, ReadAndSkipOptional) {
+TEST_P(ByteArrayRecordReaderTest, readAndSkipOptional) {
   makeRecordReader(90, 1);
 
   // Read one-third of the page.
@@ -1801,7 +1801,7 @@ TEST_P(ByteArrayRecordReaderTest, ReadAndSkipOptional) {
 // Tests reading and skipping an optional FLBA field.
 // The binary readers only differ in DeocdeDense and DecodeSpaced functions, so.
 // Testing optional is sufficient in excercising those code paths.
-TEST_P(FLBARecordReaderTest, ReadAndSkipOptional) {
+TEST_P(FLBARecordReaderTest, readAndSkipOptional) {
   makeRecordReader(90, 1, 4);
 
   // Read one-third of the page.
@@ -1833,7 +1833,7 @@ INSTANTIATE_TEST_SUITE_P(
 class RecordReaderStressTest
     : public ::testing::TestWithParam<Repetition::type> {};
 
-TEST_P(RecordReaderStressTest, StressTest) {
+TEST_P(RecordReaderStressTest, stressTest) {
   LevelInfo levelInfo;
   // Define these boolean variables for improving readability below.
   bool repeated = false, required = false;

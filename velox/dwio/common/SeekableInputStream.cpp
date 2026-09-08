@@ -54,6 +54,7 @@ void SeekableInputStream::readFully(char* buffer, size_t bufferSize) {
     const void* chunk;
     int32_t length;
     VELOX_CHECK(Next(&chunk, &length), "bad read in readFully");
+    VELOX_CHECK_GE(length, 0, "Negative chunk length in readFully: {}", length);
     readLength = static_cast<size_t>(length);
     bytesToCopy = std::min(readLength, bufferSize - pos);
     auto* bytes = reinterpret_cast<const char*>(chunk);

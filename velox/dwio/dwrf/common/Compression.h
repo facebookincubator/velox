@@ -64,7 +64,8 @@ inline std::unique_ptr<dwio::common::BufferedOutputStream> createCompressor(
     CompressionBufferPool& bufferPool,
     dwio::common::DataBufferHolder& bufferHolder,
     const Config& config,
-    const dwio::common::encryption::Encrypter* encrypter = nullptr) {
+    const dwio::common::encryption::Encrypter* encrypter = nullptr,
+    const std::string& streamDebugInfo = "") {
   CompressionOptions dwrfOrcCompressionOptions = getDwrfOrcCompressionOptions(
       kind,
       config.get(Config::COMPRESSION_THRESHOLD),
@@ -76,13 +77,25 @@ inline std::unique_ptr<dwio::common::BufferedOutputStream> createCompressor(
       return std::make_unique<dwio::common::BufferedOutputStream>(bufferHolder);
     }
   }
+  // When the VERIFY_COMPRESSION writer option is set, build a matching
+  // block decompressor so PagedOutputStream can round-trip each compressed
+  // page and throw before a corrupt frame is persisted.
+  std::unique_ptr<Decompressor> verifyDecompressor;
+  if (compressor && config.get(Config::VERIFY_COMPRESSION)) {
+    verifyDecompressor = createBlockDecompressor(
+        kind,
+        bufferHolder.maxSize(),
+        dwrfOrcCompressionOptions,
+        streamDebugInfo);
+  }
   return std::make_unique<PagedOutputStream>(
       bufferPool,
       bufferHolder,
       dwrfOrcCompressionOptions.compressionThreshold,
       PAGE_HEADER_SIZE,
       std::move(compressor),
-      encrypter);
+      encrypter,
+      std::move(verifyDecompressor));
 }
 
 inline CompressionOptions getDwrfOrcDecompressionOptions(

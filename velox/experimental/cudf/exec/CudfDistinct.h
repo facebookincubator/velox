@@ -46,6 +46,8 @@ class CudfDistinct : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   CudfVectorPtr getDistinctKeys(
       cudf::table_view tableView,
