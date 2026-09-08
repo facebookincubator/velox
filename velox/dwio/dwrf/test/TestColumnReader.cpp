@@ -5264,7 +5264,7 @@ TEST_P(SchemaMismatchTest, testFloat) {
   runTest<float, double>(size);
 }
 
-TEST_P(SchemaMismatchTest, testintegerToVarchar) {
+TEST_P(SchemaMismatchTest, testIntegerToVarchar) {
   // set format
   streams_.setFormat(DwrfFormat::kOrc);
   // set getEncoding
@@ -5309,34 +5309,20 @@ TEST_P(SchemaMismatchTest, testintegerToVarchar) {
       values.size(), [](int64_t expected, StringView actual) {
         EXPECT_EQ(std::to_string(expected), actual.str());
       });
-}
 
-TEST_P(SchemaMismatchTest, testIntegerToVarcharWithFilter) {
-  if (!useSelectiveReader()) {
-    return;
-  }
-
-  proto::ColumnEncoding directEncoding;
-  directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);
-  EXPECT_CALL(streams_, getEncodingProxy(_))
-      .WillRepeatedly(Return(&directEncoding));
-  EXPECT_CALL(streams_, getStreamProxy(_, _, _))
-      .WillRepeatedly(Return(nullptr));
-
+  // Filter on integer to varchar schema evolution is not supported.
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  scanSpec->getOrCreateChild(common::Subfield("c0"))
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>{"1"}, false));
+  const auto fileType = ROW({"c0"}, {BIGINT()});
   const auto requestedType = ROW({"c0"}, {VARCHAR()});
-  const std::vector<TypePtr> integerTypes = {
-      TINYINT(), SMALLINT(), INTEGER(), BIGINT()};
-  for (const auto& integerType : integerTypes) {
-    auto scanSpec = std::make_unique<common::ScanSpec>("root");
-    scanSpec->getOrCreateChild(common::Subfield("c0"))
-        ->setFilter(
-            std::make_unique<common::BytesValues>(
-                std::vector<std::string>{"1"}, false));
-    VELOX_ASSERT_THROW(
-        buildReader(
-            requestedType, ROW({"c0"}, {integerType}), {}, scanSpec.get()),
-        "to VARCHAR schema evolution only supports projection");
-  }
+  buildReader(requestedType, fileType, {}, scanSpec.get());
+  VectorPtr batch = newBatch(requestedType);
+  VELOX_ASSERT_THROW(
+      selectiveColumnReader_->next(values.size(), batch, nullptr),
+      "testInt64() is not supported");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

@@ -46,21 +46,14 @@ void checkType(
   }
 }
 
-bool isIntegerCompatible(
-    TypeKind fileType,
-    const TypePtr& requestedType,
-    const bool projectOnly) {
+bool isIntegerCompatible(TypeKind fileType, const TypePtr& requestedType) {
   if (requestedType->isShortDecimal()) {
     // DWRF can store short decimals as BIGINT without decimal scale streams.
     // The integer reader materializes these values using the requested type.
     return fileType == TypeKind::BIGINT;
   }
   if (requestedType->isVarchar()) {
-    // Integer values are converted to VARCHAR in getValues(). Filters and
-    // value hooks run before this conversion and operate on integer values.
-    VELOX_USER_CHECK(
-        projectOnly,
-        "INTEGER to VARCHAR schema evolution only supports projection");
+    // Integer values are converted to VARCHAR in getValues().
     return true;
   }
 
@@ -107,12 +100,11 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
 
   EncodingKey ek{fileType->id(), params.flatMapContext().sequence};
   auto& stripe = params.stripeStreams();
-  const bool projectOnly = !scanSpec.filter() && !scanSpec.valueHook();
   switch (fileTypeKind) {
     case TypeKind::BOOLEAN:
     case TypeKind::TINYINT:
       checkType(fileType->type(), requestedType, [=](const TypePtr& type) {
-        return isIntegerCompatible(fileTypeKind, requestedType, projectOnly);
+        return isIntegerCompatible(fileTypeKind, requestedType);
       });
       return std::make_unique<SelectiveByteRleColumnReader>(
           requestedType,
@@ -131,7 +123,7 @@ std::unique_ptr<SelectiveColumnReader> SelectiveDwrfReader::build(
     case TypeKind::SMALLINT:
     case TypeKind::INTEGER:
       checkType(fileType->type(), requestedType, [=](const TypePtr& type) {
-        return isIntegerCompatible(fileTypeKind, requestedType, projectOnly);
+        return isIntegerCompatible(fileTypeKind, requestedType);
       });
       return buildIntegerReader(requestedType, fileType, params, scanSpec);
     case TypeKind::ARRAY:
