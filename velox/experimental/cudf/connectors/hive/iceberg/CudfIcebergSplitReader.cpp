@@ -59,6 +59,51 @@ namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 
 namespace {
 
+bool sameLogicalType(
+    const cudf::io::parquet::LogicalType& left,
+    const cudf::io::parquet::LogicalType& right) {
+  const auto sameOptional = [](const auto& a, const auto& b, auto equal) {
+    return a.has_value() == b.has_value() && (!a || equal(*a, *b));
+  };
+  const auto sameTime = [](const auto& a, const auto& b) {
+    return a.isAdjustedToUTC == b.isAdjustedToUTC && a.unit.type == b.unit.type;
+  };
+  return left.type == right.type &&
+      sameOptional(
+             left.decimal_type,
+             right.decimal_type,
+             [](const auto& a, const auto& b) {
+               return a.scale == b.scale && a.precision == b.precision;
+             }) &&
+      sameOptional(left.time_type, right.time_type, sameTime) &&
+      sameOptional(left.timestamp_type, right.timestamp_type, sameTime) &&
+      sameOptional(
+             left.int_type, right.int_type, [](const auto& a, const auto& b) {
+               return a.bitWidth == b.bitWidth && a.isSigned == b.isSigned;
+             });
+}
+
+// Iceberg adapts columns once for a native batch. Require identical physical
+// schemas, including annotations omitted by cuDF's SchemaElement::operator==,
+// so files needing different schema evolution retain their individual readers.
+bool sameBatchSchema(
+    const std::vector<cudf::io::parquet::SchemaElement>& left,
+    const std::vector<cudf::io::parquet::SchemaElement>& right) {
+  return left.size() == right.size() &&
+      std::equal(
+             left.begin(),
+             left.end(),
+             right.begin(),
+             [](const auto& a, const auto& b) {
+               return a == b && a.repetition_type == b.repetition_type &&
+                   a.arrow_type == b.arrow_type &&
+                   a.output_as_byte_array == b.output_as_byte_array &&
+                   a.logical_type.has_value() == b.logical_type.has_value() &&
+                   (!a.logical_type ||
+                    sameLogicalType(*a.logical_type, *b.logical_type));
+             });
+}
+
 // Returns true if a delete/update file should be skipped based on sequence
 // number conflict resolution. Per the Iceberg spec (V2+):
 //   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
@@ -111,6 +156,49 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           subfieldFilterExpr),
       icebergSplit_(std::move(icebergSplit)),
       hiveConfig_(hiveConfig) {}
+
+bool CudfIcebergSplitReader::tryPrepareBatch(
+    const std::vector<
+        std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& batch,
+    dwio::common::RuntimeStats& runtimeStats) {
+  initializeSplit();
+  try {
+    fileMetaDatas();
+  } catch (const cudf::logic_error&) {
+    // cuDF's footer loader can reject different schemas before returning
+    // metadata. Let the per-file reader perform validation and adaptation;
+    // errors in an individual file still propagate through that path.
+    return false;
+  }
+  const auto& schema = fileMetaData_.front().schema;
+  if (schema.empty() || readColumnNames_.empty()) {
+    return false;
+  }
+  // Keep batching to ordinary columns present in every file. Missing columns
+  // and synthesized metadata retain the established per-file adaptation.
+  for (const auto& name : readColumnNames_) {
+    if (std::none_of(
+            schema.front().children_idx.begin(),
+            schema.front().children_idx.end(),
+            [&](auto i) { return schema.at(i).name == name; })) {
+      return false;
+    }
+  }
+  VELOX_CHECK_EQ(batch.size(), fileMetaData_.size());
+  for (size_t i = 0; i < batch.size(); ++i) {
+    // Iceberg does not always send a file size in split metadata. Check the
+    // open datasource before treating a bounded split as a full file.
+    const auto& child =
+        static_cast<const velox_iceberg::HiveIcebergSplit&>(*batch[i]);
+    if (child.length < fileSize(i) ||
+        !sameBatchSchema(schema, fileMetaData_[i].schema)) {
+      return false;
+    }
+  }
+  prepareSplitInternal(runtimeStats);
+  recordPreparedSplit(runtimeStats);
+  return true;
+}
 
 void CudfIcebergSplitReader::resetSplit() {
   deletionVectorReader_.reset();
@@ -737,10 +825,7 @@ void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
   // Read file metadatas if not already
   fileMetaDatas();
 
-  VELOX_CHECK_EQ(
-      fileMetaData_.size(),
-      1,
-      "Expected a single parquet footer for Iceberg data file");
+  VELOX_CHECK_EQ(fileMetaData_.size(), split_->filePaths.size());
   const auto& meta = fileMetaData_.front();
   VELOX_CHECK(not meta.schema.empty(), "Parquet footer schema is empty");
   VELOX_CHECK_GE(meta.num_rows, 0, "Parquet footer reports negative row count");
@@ -777,12 +862,14 @@ CudfIcebergSplitReader::computeSplitRowRange() const {
 
   std::size_t startRow{0};
   std::size_t numRows{0};
-  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
-    const auto offset = rowGroupOffset(rowGroup);
-    if (offset < split_->start) {
-      startRow += rowGroup.num_rows;
-    } else if (offset - split_->start < split_->size()) {
-      numRows += rowGroup.num_rows;
+  for (const auto& metadata : fileMetaData_) {
+    for (const auto& rowGroup : metadata.row_groups) {
+      const auto offset = rowGroupOffset(rowGroup);
+      if (offset < split_->start) {
+        startRow += rowGroup.num_rows;
+      } else if (offset - split_->start < split_->size()) {
+        numRows += rowGroup.num_rows;
+      }
     }
   }
   return {startRow, numRows};

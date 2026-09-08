@@ -436,6 +436,9 @@ void CudfConfig::initialize(
           "Invalid timestamp unit: {}. Valid values are: s, ms, us, ns", unit);
     }
   }
+  if (config.find(kCudfBatchSplitsEnabled) != config.end()) {
+    batchSplitsEnabled = folly::to<bool>(config[kCudfBatchSplitsEnabled]);
+  }
 }
 
 } // namespace facebook::velox::cudf_velox

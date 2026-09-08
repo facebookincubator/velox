@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
@@ -32,6 +33,10 @@ CudfHiveConnector::CudfHiveConnector(
     : ::facebook::velox::connector::hive::HiveConnector(id, config, executor),
       cudfHiveConfig_(std::make_shared<CudfHiveConfig>(config)) {
   VLOG(1) << "cuDF Hive connector created";
+}
+
+bool CudfHiveConnector::supportsSplitBatch() const {
+  return cudfIsRegistered() && CudfConfig::getInstance().batchSplitsEnabled;
 }
 
 std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(

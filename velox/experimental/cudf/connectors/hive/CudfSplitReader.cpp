@@ -42,6 +42,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
@@ -208,18 +209,52 @@ void CudfSplitReader::prepareSplitInternal(
   setupReader();
 }
 
-void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
-  // Reset existing split and split readers, if any
+CudfSplitReader::~CudfSplitReader() {
   resetSplit();
+}
 
-  // Acquire a stream from the global stream pool
+void CudfSplitReader::initializeSplit() {
+  resetSplit();
   stream_ = cudfGlobalStreamPool().get_stream();
+}
 
-  // Perform split-specific setup.
+void CudfSplitReader::recordPreparedSplit(
+    dwio::common::RuntimeStats& runtimeStats) const {
+  ++runtimeStats.processedSplits;
+  if (multiFileReader_) {
+    auto& metrics =
+        runtimeStats.formatSpecificStats[dwio::common::FileFormat::PARQUET];
+    metrics["cudfMultiFileReaders"].addValue(1);
+    metrics["cudfBatchedFiles"].addValue(split_->filePaths.size());
+  }
+}
+
+bool CudfSplitReader::tryPrepareBatch(
+    const std::vector<uint64_t>& lengths,
+    dwio::common::RuntimeStats& runtimeStats) {
+  initializeSplit();
+  try {
+    fileMetaDatas();
+  } catch (const cudf::logic_error&) {
+    // cuDF rejects incompatible schemas while reading the footer vector.
+    // Let individual readers perform their usual validation and adaptation.
+    return false;
+  }
+  VELOX_CHECK_EQ(lengths.size(), fileMetaData_.size());
+  for (size_t i = 0; i < lengths.size(); ++i) {
+    if (lengths[i] < fileSize(i)) {
+      return false;
+    }
+  }
   prepareSplitInternal(runtimeStats);
+  recordPreparedSplit(runtimeStats);
+  return true;
+}
 
-  // Update runtime stats
-  runtimeStats.processedSplits++;
+void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
+  initializeSplit();
+  prepareSplitInternal(runtimeStats);
+  recordPreparedSplit(runtimeStats);
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
@@ -260,6 +295,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
         std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
   }
 
+  if (multiFileReader_) {
+    return readMultiFileChunk();
+  }
+
   // Read table using the experimental parquet reader
   VELOX_CHECK_NOT_NULL(exptSplitReader_, "cuDF hybrid scan reader not present");
   VELOX_CHECK_NOT_NULL(hybridScanState_, "hybrid scan state not present");
@@ -292,7 +331,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     // for each input byte range, and a future to wait for all reads to
     // complete
     auto ioData = fetchByteRangesAsync(
-        dataSource_, columnChunkByteRanges, stream_, get_temp_mr());
+        dataSources_.front(), columnChunkByteRanges, stream_, get_temp_mr());
 
     // Wait for all pending reads to complete
     std::get<2>(ioData).wait();
@@ -323,11 +362,79 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
       std::move(tableWithMetadata.tbl), outputType_, stream_, output_mr);
 }
 
+std::optional<std::unique_ptr<cudf::table>>
+CudfSplitReader::readMultiFileChunk() {
+  const auto outputMemoryResource = determineCudfMemoryResource();
+  std::call_once(*hybridScanState_->isHybridScanSetup_, [&]() {
+    auto rowGroups = multiFileReader_->all_row_groups(readerOptions_);
+    if (readerOptions_.get_filter().has_value()) {
+      rowGroups = multiFileReader_->filter_row_groups_with_stats(
+          rowGroups, readerOptions_, stream_);
+    }
+
+    // cuDF returns flattened column ranges and the source of each range.
+    // Read each source through its own datasource, then restore cuDF's order.
+    const auto [ranges, sources] =
+        multiFileReader_->all_column_chunks_byte_ranges(
+            rowGroups, readerOptions_);
+    VELOX_CHECK_EQ(ranges.size(), sources.size());
+    std::vector<std::vector<cudf::io::text::byte_range_info>> rangesBySource(
+        dataSources_.size());
+    std::vector<std::vector<size_t>> positionsBySource(dataSources_.size());
+    for (size_t i = 0; i < ranges.size(); ++i) {
+      VELOX_CHECK_GE(sources[i], 0);
+      const auto source = static_cast<size_t>(sources[i]);
+      VELOX_CHECK_LT(source, dataSources_.size());
+      rangesBySource[source].push_back(ranges[i]);
+      positionsBySource[source].push_back(i);
+    }
+
+    hybridScanState_->columnChunkData_.resize(ranges.size());
+    for (size_t source = 0; source < dataSources_.size(); ++source) {
+      if (rangesBySource[source].empty()) {
+        continue;
+      }
+      auto [buffers, spans, completion] = fetchByteRangesAsync(
+          dataSources_[source], rangesBySource[source], stream_, get_temp_mr());
+      // Finish the read before releasing its buffers or switching sources.
+      // This retains the existing I/O ownership model without a new executor.
+      completion.get();
+      VELOX_CHECK_EQ(spans.size(), positionsBySource[source].size());
+      for (size_t i = 0; i < spans.size(); ++i) {
+        hybridScanState_->columnChunkData_[positionsBySource[source][i]] =
+            spans[i];
+      }
+      for (auto& buffer : buffers) {
+        hybridScanState_->columnChunkBuffers_.push_back(std::move(buffer));
+      }
+    }
+
+    multiFileReader_->setup_chunking_for_all_columns(
+        cudfHiveConfig_->maxChunkReadLimitSession(
+            connectorQueryCtx_->sessionProperties()),
+        cudfHiveConfig_->maxPassReadLimitSession(
+            connectorQueryCtx_->sessionProperties()),
+        rowGroups,
+        hybridScanState_->columnChunkData_,
+        readerOptions_,
+        stream_,
+        outputMemoryResource);
+  });
+
+  if (!multiFileReader_->has_next_table_chunk()) {
+    return std::nullopt;
+  }
+  auto result = multiFileReader_->materialize_all_columns_chunk();
+  return castDecimalColumnsToVeloxTypes(
+      std::move(result.tbl), outputType_, stream_, outputMemoryResource);
+}
+
 void CudfSplitReader::resetSplit() {
   splitReader_.reset();
   exptSplitReader_.reset();
+  multiFileReader_.reset();
   hybridScanState_.reset();
-  dataSource_.reset();
+  dataSources_.clear();
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterExpr_;
   hasSplitSpecificPushdownFilter_ = false;
@@ -346,104 +453,111 @@ bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
 }
 
 void CudfSplitReader::setupCudfDataSource() {
-  if (dataSource_) {
+  if (not dataSources_.empty()) {
     return;
   }
 
   const auto useBufferedInput = cudfHiveConfig_->useBufferedInputSession(
       connectorQueryCtx_->sessionProperties());
 
-  VELOX_CHECK(
-      not isAbfsPath(split_->filePath) or useBufferedInput,
-      "ABFS blobs require buffered input data source. "
-      "Set the session property '{}' (or connector property '{}') to 'true'. "
-      "Blob Path: {}.",
-      CudfHiveConfig::kUseBufferedInputSession,
-      CudfHiveConfig::kUseBufferedInput,
-      split_->filePath);
+  for (const auto& path : split_->filePaths) {
+    VELOX_CHECK(
+        not isAbfsPath(path) or useBufferedInput,
+        "ABFS blobs require buffered input data source. "
+        "Set the session property '{}' (or connector property '{}') to 'true'. "
+        "Blob Path: {}.",
+        CudfHiveConfig::kUseBufferedInputSession,
+        CudfHiveConfig::kUseBufferedInput,
+        path);
+  }
 
   // Use KvikIO data source if we don't want to use the BufferedInput source
   if (not useBufferedInput) {
     VLOG(1) << fmt::format(
-        "Using KvikIO data source for file: {}", split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+        "Using KvikIO data sources for {} file(s)", split_->filePaths.size());
+    auto sources =
+        cudf::io::make_datasources(cudf::io::source_info{split_->filePaths});
+    dataSources_.reserve(sources.size());
+    for (auto& source : sources) {
+      dataSources_.push_back(std::move(source));
+    }
     return;
   }
 
-  auto fileHandleCachePtr = FileHandleCachedPtr{};
-  try {
-    const auto fileHandleKey = FileHandleKey{
-        .filename = split_->filePath,
-        .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-    auto fileProperties = FileProperties{};
-    fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
-    VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
-  } catch (const VeloxRuntimeError& e) {
-    // ABFS blobs can not fall back to KvikIO. Throw the original error.
-    if (isAbfsPath(split_->filePath)) {
-      VELOX_USER_FAIL(
-          "Failed to generate file handle cache for ABFS blob. Ensure "
-          "registerAbfsFileSystem() and registerAzureClientProvider() have "
-          "been called and the connector config provides Azure credentials. "
-          "Blob path: {}. Error: {}.",
-          split_->filePath,
-          e.what());
+  dataSources_.reserve(split_->filePaths.size());
+  for (const auto& path : split_->filePaths) {
+    auto fileHandleCachePtr = FileHandleCachedPtr{};
+    try {
+      const auto fileHandleKey = FileHandleKey{
+          .filename = path,
+          .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+      auto fileProperties = FileProperties{};
+      fileHandleCachePtr = fileHandleFactory_->generate(
+          fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
+      VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+    } catch (const VeloxRuntimeError& e) {
+      if (isAbfsPath(path)) {
+        VELOX_USER_FAIL(
+            "Failed to generate file handle cache for ABFS blob. Ensure "
+            "registerAbfsFileSystem() and registerAzureClientProvider() have "
+            "been called and the connector config provides Azure credentials. "
+            "Blob path: {}. Error: {}.",
+            path,
+            e.what());
+      }
+
+      LOG(WARNING) << fmt::format(
+          "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
+          path);
+      dataSources_.push_back(
+          std::move(
+              cudf::io::make_datasources(cudf::io::source_info{path}).front()));
+      continue;
     }
 
-    LOG(WARNING) << fmt::format(
-        "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
-        split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
-    return;
-  }
-
-  // Here we keep adding new entries to CacheTTLController when new
-  // fileHandles are generated, if CacheTTLController was created. Creator of
-  // CacheTTLController needs to make sure a size control strategy was
-  // available such as removing aged out entries.
-  if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
-    cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
-  }
-
-  auto bufferedInput =
-      velox::connector::hive::BufferedInputBuilder::getInstance()->create(
-          *fileHandleCachePtr,
-          baseReaderOpts_,
-          connectorQueryCtx_,
-          ioStatistics_,
-          ioStats_,
-          executor_);
-  if (not bufferedInput) {
-    // ABFS blobs can not fall back to KvikIO
-    if (isAbfsPath(split_->filePath)) {
-      VELOX_USER_FAIL(
-          "Failed to create buffered input data source for the ABFS blob. Ensure that the registered "
-          "BufferedInputBuilder is ABFS-aware. Blob path: {}.",
-          split_->filePath);
+    if (auto* cacheTTLController = cache::CacheTTLController::getInstance()) {
+      cacheTTLController->addOpenFileInfo(fileHandleCachePtr->uuid.id());
     }
 
-    LOG(WARNING) << fmt::format(
-        "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
-        split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
-    return;
+    auto bufferedInput =
+        velox::connector::hive::BufferedInputBuilder::getInstance()->create(
+            *fileHandleCachePtr,
+            baseReaderOpts_,
+            connectorQueryCtx_,
+            ioStatistics_,
+            ioStats_,
+            executor_);
+    if (not bufferedInput) {
+      if (isAbfsPath(path)) {
+        VELOX_USER_FAIL(
+            "Failed to create buffered input data source for the ABFS blob. Ensure that the registered "
+            "BufferedInputBuilder is ABFS-aware. Blob path: {}.",
+            path);
+      }
+
+      LOG(WARNING) << fmt::format(
+          "Failed to create buffered input data source for file. Falling back to KvikIO. Path: {}",
+          path);
+      dataSources_.push_back(
+          std::move(
+              cudf::io::make_datasources(cudf::io::source_info{path}).front()));
+      continue;
+    }
+    dataSources_.push_back(
+        std::make_unique<BufferedInputDataSource>(std::move(bufferedInput)));
   }
-  dataSource_ =
-      std::make_unique<BufferedInputDataSource>(std::move(bufferedInput));
 }
 
 void CudfSplitReader::setupReaderOptions() {
-  VELOX_CHECK_NOT_NULL(
-      dataSource_,
+  VELOX_CHECK(
+      not dataSources_.empty(),
       "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
-  auto sourceInfo = cudf::io::source_info{dataSource_.get()};
+  std::vector<cudf::io::datasource*> sources;
+  sources.reserve(dataSources_.size());
+  for (const auto& source : dataSources_) {
+    sources.push_back(source.get());
+  }
+  auto sourceInfo = cudf::io::source_info{sources};
 
   // Reader options
   readerOptions_ =
@@ -482,6 +596,10 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
   return get_output_mr();
 }
 
+uint64_t CudfSplitReader::fileSize(size_t index) const {
+  return dataSources_.at(index)->size();
+}
+
 void CudfSplitReader::fileMetaDatas() {
   if (not fileMetaData_.empty()) {
     return;
@@ -491,13 +609,16 @@ void CudfSplitReader::fileMetaDatas() {
   setupCudfDataSource();
 
   // Check that the datasource is set up
-  VELOX_CHECK_NOT_NULL(
-      dataSource_,
+  VELOX_CHECK(
+      not dataSources_.empty(),
       "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
 
-  // Wrap the existing datasource without transferring ownership.
+  // Wrap the existing datasources without transferring ownership.
   std::vector<std::unique_ptr<cudf::io::datasource>> sources;
-  sources.push_back(cudf::io::datasource::create(dataSource_.get()));
+  sources.reserve(dataSources_.size());
+  for (const auto& source : dataSources_) {
+    sources.push_back(cudf::io::datasource::create(source.get()));
+  }
   fileMetaData_ = cudf::io::read_parquet_footers(sources);
   VELOX_CHECK_GE(
       fileMetaData_.size(),
@@ -525,7 +646,10 @@ void CudfSplitReader::createCudfReader() {
   setupReaderOptions();
 
   std::vector<std::unique_ptr<cudf::io::datasource>> sources;
-  sources.push_back(cudf::io::datasource::create(dataSource_.get()));
+  sources.reserve(dataSources_.size());
+  for (const auto& source : dataSources_) {
+    sources.push_back(cudf::io::datasource::create(source.get()));
+  }
 
   // Create a parquet reader
   splitReader_ = std::make_unique<cudf::io::chunked_parquet_reader>(
@@ -547,25 +671,23 @@ void CudfSplitReader::createExperimentalReader() {
   // Read file metadatas
   fileMetaDatas();
 
-  // Setup reader options
-  setupReaderOptions();
-
   VELOX_CHECK_EQ(
       fileMetaData_.size(),
-      1,
-      "cuDF experimental reader requires exactly one parquet metadata");
+      dataSources_.size(),
+      "Expected one parquet metadata per data source");
 
-  // Create a hybrid scan reader
-  nvtxRangePush("hybridScanReader");
-  auto reader = std::make_unique<CudfHybridScanReader>(
-      std::move(fileMetaData_.front()), readerOptions_);
-  nvtxRangePop();
-
-  exptSplitReader_ = std::move(reader);
+  setupReaderOptions();
+  if (dataSources_.size() > 1) {
+    multiFileReader_ = std::make_unique<
+        cudf::io::parquet::experimental::hybrid_scan_multifile>(
+        cudf::host_span<const cudf::io::parquet::FileMetaData>{
+            fileMetaData_.data(), fileMetaData_.size()},
+        readerOptions_);
+  } else {
+    exptSplitReader_ = std::make_unique<CudfHybridScanReader>(
+        std::move(fileMetaData_.front()), readerOptions_);
+  }
   hybridScanState_ = std::make_unique<HybridScanState>();
-
-  // Metadata ingested
-  fileMetaData_.clear();
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {

@@ -342,7 +342,14 @@ bool TableScan::getSplit() {
   }
 
   if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
-    splitTracer_->write(split);
+    if (const auto* batch = dynamic_cast<const connector::ConnectorSplitBatch*>(
+            split.connectorSplit.get())) {
+      for (const auto& child : batch->splits) {
+        splitTracer_->write(Split(folly::copy(child)));
+      }
+    } else {
+      splitTracer_->write(split);
+    }
   }
 
   stats_.wlock()->addRuntimeStat(
@@ -416,7 +423,13 @@ bool TableScan::getSplit() {
     {
       MicrosecondWallTimer timer(&addSplitTimeUs);
       auto lk = driverCtx_->driver->pushdownFilters()->at(0).rlock();
-      dataSource_->addSplit(connectorSplit);
+      if (const auto* batch =
+              dynamic_cast<const connector::ConnectorSplitBatch*>(
+                  connectorSplit.get())) {
+        dataSource_->addSplit(batch->splits);
+      } else {
+        dataSource_->addSplit(connectorSplit);
+      }
     }
     stats_.wlock()->addRuntimeStat(
         std::string(TableScan::kDataSourceAddSplitWallNanos),
@@ -489,7 +502,13 @@ void TableScan::preload(
         }
         {
           auto lk = pushdownFilters->at(0).rlock();
-          dataSource->addSplit(split);
+          if (const auto* batch =
+                  dynamic_cast<const connector::ConnectorSplitBatch*>(
+                      split.get())) {
+            dataSource->addSplit(batch->splits);
+          } else {
+            dataSource->addSplit(split);
+          }
         }
         return dataSource;
       });

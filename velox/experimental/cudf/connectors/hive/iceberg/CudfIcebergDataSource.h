@@ -55,6 +55,11 @@ class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig);
 
  protected:
+  std::unique_ptr<CudfSplitReader> createBatchedSplitReader(
+      const std::vector<
+          std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& batch,
+      dwio::common::RuntimeStats& runtimeStats) override;
+
   // Override to create `CudfIcebergSplitReader` instead of
   // `CudfHiveSplitReader`
   std::unique_ptr<CudfSplitReader> createCudfSplitReader() override;

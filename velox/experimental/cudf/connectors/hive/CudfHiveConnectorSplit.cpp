@@ -19,8 +19,11 @@
 
 #include <cudf/io/types.hpp>
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -32,10 +35,38 @@ std::string stripFilePrefix(const std::string& targetPath) {
   }
   return targetPath;
 }
+
+std::string normalizeBatchedFilePath(const std::string& targetPath) {
+  auto path = stripFilePrefix(targetPath);
+  constexpr std::string_view kS3APrefix{"s3a:"};
+  if (path.starts_with(kS3APrefix)) {
+    path.erase(kS3APrefix.size() - 2, 1);
+  }
+  return path;
+}
+
+std::vector<std::string> stripFilePrefixes(
+    const std::vector<std::string>& paths) {
+  VELOX_USER_CHECK(!paths.empty(), "A batched split must contain a file");
+  std::vector<std::string> result;
+  result.reserve(paths.size());
+  for (const auto& p : paths) {
+    result.push_back(normalizeBatchedFilePath(p));
+  }
+  return result;
+}
+
 } // namespace
 
 std::string CudfHiveConnectorSplit::toString() const {
-  return fmt::format("CudfHive: {}", filePath);
+  if (filePaths.size() <= 1) {
+    return fmt::format("CudfHive: {}", filePath);
+  }
+  return fmt::format(
+      "CudfHive: {} files [{}..{}]",
+      filePaths.size(),
+      filePaths.front(),
+      filePaths.back());
 }
 
 std::string CudfHiveConnectorSplit::getFileName() const {
@@ -55,20 +86,84 @@ CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     int64_t _splitWeight,
     const std::unordered_map<std::string, std::string>& _infoColumns)
     : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
-      filePath(stripFilePrefix(_filePath)),
+      filePaths({stripFilePrefix(_filePath)}),
+      filePath(filePaths.front()),
       start(_start),
       length(_length),
       cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)),
       infoColumns(_infoColumns) {}
 
+CudfHiveConnectorSplit::CudfHiveConnectorSplit(
+    BatchTag,
+    const std::string& connectorId,
+    const std::vector<std::string>& paths,
+    int64_t splitWeight)
+    : facebook::velox::connector::ConnectorSplit(connectorId, splitWeight),
+      filePaths(stripFilePrefixes(paths)),
+      filePath(filePaths.front()),
+      start(0),
+      length(std::numeric_limits<uint64_t>::max()),
+      cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePaths)) {}
+
+// static
+std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::makeBatch(
+    const std::string& connectorId,
+    const std::vector<std::string>& filePaths,
+    int64_t splitWeight) {
+  return std::shared_ptr<CudfHiveConnectorSplit>(new CudfHiveConnectorSplit(
+      BatchTag{}, connectorId, filePaths, splitWeight));
+}
+
+// static
+CudfHiveConnectorSplitBuilder CudfHiveConnectorSplitBuilder::forFilePaths(
+    std::vector<std::string> filePaths) {
+  return CudfHiveConnectorSplitBuilder(BatchTag{}, std::move(filePaths));
+}
+
+std::vector<std::shared_ptr<CudfHiveConnectorSplit>>
+makeCudfHiveConnectorSplitBatches(
+    const std::string& connectorId,
+    const std::vector<std::string>& filePaths,
+    size_t maxFilesPerBatch,
+    int64_t splitWeight) {
+  if (filePaths.empty()) {
+    return {};
+  }
+  const auto batchSize =
+      maxFilesPerBatch == 0 ? filePaths.size() : maxFilesPerBatch;
+  std::vector<std::shared_ptr<CudfHiveConnectorSplit>> result;
+  result.reserve((filePaths.size() + batchSize - 1) / batchSize);
+  for (size_t start = 0; start < filePaths.size(); start += batchSize) {
+    const auto end = std::min(start + batchSize, filePaths.size());
+    result.push_back(
+        CudfHiveConnectorSplit::makeBatch(
+            connectorId,
+            std::vector<std::string>(
+                filePaths.begin() + start, filePaths.begin() + end),
+            splitWeight));
+  }
+  return result;
+}
+
 // static
 std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
     const folly::dynamic& obj) {
   const auto connectorId = obj["connectorId"].asString();
+  const auto splitWeight = obj["splitWeight"].asInt();
+
+  if (obj.count("filePaths")) {
+    std::vector<std::string> filePaths;
+    filePaths.reserve(obj["filePaths"].size());
+    for (const auto& path : obj["filePaths"]) {
+      filePaths.push_back(path.asString());
+    }
+    return CudfHiveConnectorSplit::makeBatch(
+        connectorId, filePaths, splitWeight);
+  }
+
   const auto filePath = obj["filePath"].asString();
   const auto start = static_cast<uint64_t>(obj["start"].asInt());
   const auto length = static_cast<uint64_t>(obj["length"].asInt());
-  const auto splitWeight = obj["splitWeight"].asInt();
 
   std::unordered_map<std::string, std::string> infoColumns;
   for (const auto& [key, value] : obj["infoColumns"].items()) {
@@ -86,6 +181,14 @@ folly::dynamic CudfHiveConnectorSplit::serialize() const {
   obj["start"] = start;
   obj["length"] = length;
   obj["splitWeight"] = splitWeight;
+
+  if (filePaths.size() > 1) {
+    folly::dynamic paths = folly::dynamic::array;
+    for (const auto& path : filePaths) {
+      paths.push_back(path);
+    }
+    obj["filePaths"] = std::move(paths);
+  }
 
   folly::dynamic infoColumnsObj = folly::dynamic::object;
   for (const auto& [key, value] : infoColumns) {

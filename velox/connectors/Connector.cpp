@@ -18,6 +18,8 @@
 
 #include "velox/common/EnumDefine.h"
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -26,6 +28,83 @@
 #include "velox/connectors/ConnectorRegistryInternal.h"
 
 namespace facebook::velox::connector {
+
+namespace {
+int64_t totalSplitWeight(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  int64_t total = 0;
+  for (const auto& split : splits) {
+    VELOX_USER_CHECK_NOT_NULL(split);
+    VELOX_USER_CHECK_GE(split->splitWeight, 0);
+    if (total < std::numeric_limits<int64_t>::max()) {
+      total = split->splitWeight > std::numeric_limits<int64_t>::max() - total
+          ? std::numeric_limits<int64_t>::max()
+          : total + split->splitWeight;
+    }
+  }
+  return total;
+}
+
+bool allSplitsCacheable(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  return std::all_of(splits.begin(), splits.end(), [](const auto& split) {
+    return split != nullptr && split->cacheable;
+  });
+}
+} // namespace
+
+ConnectorSplitBatch::ConnectorSplitBatch(
+    const std::string& connectorId,
+    std::vector<std::shared_ptr<ConnectorSplit>> _splits)
+    : ConnectorSplit(
+          connectorId,
+          totalSplitWeight(_splits),
+          allSplitsCacheable(_splits)),
+      splits(std::move(_splits)) {
+  VELOX_USER_CHECK(!splits.empty(), "A split batch must not be empty");
+  for (const auto& split : splits) {
+    VELOX_USER_CHECK_NOT_NULL(split);
+    VELOX_USER_CHECK(
+        dynamic_cast<const ConnectorSplitBatch*>(split.get()) == nullptr,
+        "Nested split batches are not supported");
+    VELOX_USER_CHECK(
+        split->dataSource == nullptr,
+        "Preloaded splits cannot be added to a split batch");
+    VELOX_USER_CHECK_EQ(
+        split->connectorId,
+        connectorId,
+        "All splits in a batch must use the same connector ID");
+  }
+  const auto hint = splits.front()->batchSizeHint;
+  if (std::all_of(splits.begin(), splits.end(), [hint](const auto& split) {
+        return split->batchSizeHint == hint;
+      })) {
+    batchSizeHint = hint;
+  }
+}
+
+std::string ConnectorSplitBatch::toString() const {
+  return fmt::format("Split batch: {} splits", splits.size());
+}
+
+uint64_t ConnectorSplitBatch::size() const {
+  uint64_t total = 0;
+  for (const auto& split : splits) {
+    const auto splitSize = split->size();
+    if (splitSize > std::numeric_limits<uint64_t>::max() - total) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    total += splitSize;
+  }
+  return total;
+}
+
+void DataSource::addSplit(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  VELOX_CHECK_EQ(
+      splits.size(), 1, "Data source does not support split batches");
+  addSplit(splits.front());
+}
 
 ScopedRegistry<std::string, Connector>& connectors() {
   static ScopedRegistry<std::string, Connector> instance;

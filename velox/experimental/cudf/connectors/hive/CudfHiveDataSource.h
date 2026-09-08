@@ -53,6 +53,10 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
+  /// Initializes one reader for compatible files, with per-file fallback.
+  void addSplit(
+      const std::vector<std::shared_ptr<ConnectorSplit>>& splits) override;
+
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
       const std::shared_ptr<facebook::velox::common::Filter>& /*filter*/)
@@ -80,6 +84,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  protected:
+  // Returns a prepared multi-file reader when the batch's per-file state is
+  // compatible, or nullptr to retain sequential processing of its children.
+  virtual std::unique_ptr<CudfSplitReader> createBatchedSplitReader(
+      const std::vector<
+          std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& batch,
+      dwio::common::RuntimeStats& runtimeStats);
+
   // Virtual method to create a `CudfSplitReader` or subclass for the data
   // source.
   virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
@@ -112,6 +123,12 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   cudf::ast::expression const* subfieldFilterExpr_{nullptr};
 
  private:
+  // Activates the next child of the current logical split batch.
+  bool prepareNextSplit();
+
+  // Accounts for the files represented by the current reader.
+  void updateCompletedBytes();
+
   // Construct and cache a RowTypePtr for the table column names and types.
   const RowTypePtr getTableRowType();
   RowTypePtr cachedTableRowType_{};
@@ -124,6 +141,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   dwio::common::RuntimeStats runtimeStats_;
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
+
+  std::vector<std::shared_ptr<ConnectorSplit>> splitBatch_;
+  size_t nextSplitIndex_{0};
 
   // Optimized remaining-filter expression, or null when there is no remaining
   // filter. Gates remaining-filter evaluation in next().

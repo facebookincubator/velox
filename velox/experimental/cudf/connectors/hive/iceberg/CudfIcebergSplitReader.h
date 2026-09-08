@@ -65,6 +65,14 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr);
 
+  /// Prepares compatible full files with one multi-file hybrid reader.
+  /// Returns false for different physical schemas so the data source can
+  /// retain the original per-file readers and schema adaptation.
+  bool tryPrepareBatch(
+      const std::vector<
+          std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& batch,
+      dwio::common::RuntimeStats& runtimeStats);
+
  protected:
   // Sets up delete file readers and column projection after base state reset.
   void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
