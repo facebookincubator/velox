@@ -20,6 +20,10 @@
 
 #include "velox/dwio/nimble/common/Types.h"
 
+namespace facebook::velox {
+class ReadFile;
+}
+
 namespace facebook::nimble {
 
 /// Postscript information (last 20 bytes of a Nimble file).
@@ -77,5 +81,12 @@ class Postscript {
   uint32_t majorVersion_{0};
   uint32_t minorVersion_{0};
 };
+
+/// Returns whether the file has a valid Nimble postscript.
+///
+/// Checks the file size, magic number, supported major version, and footer
+/// bounds. Does not parse the footer or verify the checksum. File read errors
+/// are propagated to the caller.
+bool isNimbleFile(const velox::ReadFile& file);
 
 } // namespace facebook::nimble

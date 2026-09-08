@@ -18,9 +18,12 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/file/File.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
+#include "velox/dwio/nimble/tablet/TabletWriter.h"
 
 using namespace facebook::nimble;
 
@@ -116,4 +119,22 @@ TEST(PostscriptTest, parseBadMagic) {
   auto buf = ps.serialize();
   buf[Postscript::kSize - 1] = 'X';
   NIMBLE_ASSERT_THROW(Postscript::parse(buf), "Magic number mismatch");
+}
+
+TEST(PostscriptTest, identifiesNimbleFile) {
+  facebook::velox::memory::MemoryManager memoryManager;
+  auto pool = memoryManager.addLeafPool("PostscriptTest");
+
+  std::string data;
+  facebook::velox::InMemoryWriteFile writeFile{&data};
+  auto writer = TabletWriter::create(&writeFile, *pool, {});
+  writer->close();
+  writeFile.close();
+
+  facebook::velox::InMemoryReadFile file{std::string_view{data}};
+
+  EXPECT_TRUE(isNimbleFile(file));
+
+  data.back() = '\0';
+  EXPECT_FALSE(isNimbleFile(file));
 }

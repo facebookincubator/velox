@@ -17,10 +17,17 @@
 
 #include <cstring>
 
+#include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 
 namespace facebook::nimble {
+namespace {
+
+constexpr size_t kMajorVersionOffset{kPostscriptSize - 3 * sizeof(uint16_t)};
+constexpr size_t kMagicNumberOffset{kPostscriptSize - sizeof(uint16_t)};
+
+} // namespace
 
 Postscript::Postscript(
     uint32_t footerSize,
@@ -62,6 +69,37 @@ Postscript Postscript::parse(std::string_view data) {
   ps.checksumType_ = *reinterpret_cast<const ChecksumType*>(pos + 5);
   ps.checksum_ = *reinterpret_cast<const uint64_t*>(pos + 6);
   return ps;
+}
+
+bool isNimbleFile(const velox::ReadFile& file) {
+  const uint64_t fileSize = file.size();
+  if (fileSize < kPostscriptSize) {
+    return false;
+  }
+
+  const auto postscript =
+      file.pread(fileSize - kPostscriptSize, kPostscriptSize);
+  if (postscript.size() != kPostscriptSize) {
+    return false;
+  }
+
+  uint32_t footerSize;
+  std::memcpy(&footerSize, postscript.data(), sizeof(footerSize));
+
+  uint16_t majorVersion;
+  std::memcpy(
+      &majorVersion,
+      postscript.data() + kMajorVersionOffset,
+      sizeof(majorVersion));
+
+  uint16_t magicNumber;
+  std::memcpy(
+      &magicNumber,
+      postscript.data() + kMagicNumberOffset,
+      sizeof(magicNumber));
+
+  return magicNumber == kMagicNumber && majorVersion <= kVersionMajor &&
+      footerSize <= fileSize - kPostscriptSize;
 }
 
 std::string Postscript::serialize() const {
