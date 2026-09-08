@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <folly/ScopeGuard.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -182,6 +186,67 @@ TEST_F(CudfNestedLoopJoinTest, innerJoinWithFilter) {
                   .planNode();
 
   assertQuery(plan, "SELECT t.c0, u.c0 FROM t INNER JOIN u ON t.c0 < u.c0");
+}
+
+// A timezone-sensitive join condition must read the session-local wall clock,
+// the same way the CPU evaluates it. The single build row makes the cross
+// product equal to the probe rows, so only hour(l_ts) = 18 decides which row
+// survives. Under America/Los_Angeles (UTC-8) the two instants land on opposite
+// sides of the predicate from their UTC values: 2021-01-01 02:00 UTC is the
+// local 18:00 and passes, while 2021-01-01 18:00 UTC is the local 10:00 and
+// fails. Running the same plan on GPU (cuDF registered) and CPU (cuDF
+// unregistered) under the same session timezone must therefore select the same
+// probe row. Until the condition honors the session timezone the GPU keeps the
+// UTC-18:00 row instead.
+TEST_F(CudfNestedLoopJoinTest, joinConditionHonorsSessionTimezone) {
+  // 2021-01-01 18:00:00 UTC == 2021-01-01 10:00:00 America/Los_Angeles.
+  constexpr int64_t kUtc1800 = 1'609'524'000;
+  // 2021-01-01 02:00:00 UTC == 2020-12-31 18:00:00 America/Los_Angeles.
+  constexpr int64_t kLocal1800 = 1'609'466'400;
+
+  auto left = makeRowVector(
+      {"l_id", "l_ts"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(kUtc1800, 0), Timestamp(kLocal1800, 0)}, TIMESTAMP())});
+  auto right = makeRowVector({"r_id"}, {makeFlatVector<int64_t>({0})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "hour(l_ts) = 18",
+              {"l_id"},
+              core::JoinType::kInner)
+          .planNode();
+
+  auto run = [&]() {
+    return AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kSessionTimezone, "America/Los_Angeles")
+        .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+        .copyResults(pool());
+  };
+
+  RowVectorPtr gpu;
+  {
+    // Disable CPU fallback for the GPU run so a missing GPU path throws instead
+    // of silently running on CPU and hiding the timezone gap. The CPU run below
+    // does not need this guard because it unregisters cuDF entirely.
+    auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+    const bool savedAllowCpuFallback = cudfConfig.allowCpuFallback;
+    cudfConfig.allowCpuFallback = false;
+    SCOPE_EXIT {
+      cudfConfig.allowCpuFallback = savedAllowCpuFallback;
+    };
+    gpu = run();
+  }
+
+  cudf_velox::unregisterCudf();
+  auto cpu = run();
+  cudf_velox::registerCudf();
+  facebook::velox::test::assertEqualVectors(cpu, gpu);
 }
 
 // Test 6: Multiple batches (tests streaming behavior)

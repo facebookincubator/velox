@@ -29,6 +29,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/expression/ExprConstants.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -174,6 +175,72 @@ const std::unordered_map<std::string, Op> binaryOps = [] {
   merged.insert(prestoBinaryOps.begin(), prestoBinaryOps.end());
   return merged;
 }();
+
+// The comparison subset of binaryOps, as distinct from the arithmetic and
+// logical entries in the same map. Only these can be MADE correct for TIMESTAMP
+// WITH TIME ZONE by normalizeForComparison masking the zone key off both
+// operands.
+//
+// An earlier version of this comment claimed arithmetic on a packed value "is
+// not a valid Presto expression". That was wrong, and the mistake is what left
+// the hole arithmeticOps below now closes: Presto registers TSWTZ - TSWTZ ->
+// INTERVAL and TSWTZ +/- INTERVAL -> TSWTZ, so such expressions do reach here.
+const std::unordered_set<Op> comparisonOps = {
+    Op::EQUAL,
+    Op::NOT_EQUAL,
+    Op::LESS,
+    Op::GREATER,
+    Op::LESS_EQUAL,
+    Op::GREATER_EQUAL,
+};
+
+// The arithmetic subset, which needs the OPPOSITE treatment from comparisonOps:
+// a comparison over TIMESTAMP WITH TIME ZONE is made correct by masking the
+// zone key off, and arithmetic cannot be made correct that way at all.
+const std::unordered_set<Op> arithmeticOps = {
+    Op::ADD,
+    Op::SUB,
+    Op::MUL,
+    Op::DIV,
+    Op::MOD,
+};
+
+// True if any direct operand of `expr` is a TIMESTAMP WITH TIME ZONE.
+//
+// The type is physically (millis << kMillisShift) | zone_key and
+// veloxToCudfDataType maps it to a plain INT64, so the AST cannot tell it from
+// an ordinary integer and will do integer arithmetic on the packed bits.
+// Measured on a live cluster before this guard existed:
+//
+//   t - TIMESTAMP '2000-01-01 00:00:00 UTC'
+//     CPU -11121 03:42:20   GPU -45552248 09:57:20
+//     -- larger by exactly 4096 = 2^kMillisShift, the packed difference
+//     carrying
+//        the shift.
+//   ka - mi, one instant keyed to two zones
+//     CPU 0                 GPU -0 00:00:00.005
+//     -- the two zone keys differing, leaked straight out of the low bits.
+//
+// Neither error raised: both engines returned rows and the values differed.
+//
+// Masking the zone key off does not rescue this the way it rescues a
+// comparison, because the operands are on different scales: the packed value
+// counts 2^12 units per millisecond and an INTERVAL literal counts one.
+// Declining sends the expression to the CPU, which is correct. Implementing it
+// on the GPU is possible -- for INTERVAL DAY TO SECOND, packed + (delta <<
+// kMillisShift) is exact, since the low bits of the shifted delta are zero and
+// no carry reaches the zone key -- but INTERVAL YEAR TO MONTH is calendar
+// arithmetic and TSWTZ - TSWTZ needs an unpack, so that is a feature and not
+// this fix.
+bool anyOperandIsTimestampWithTimeZone(const core::TypedExprPtr& expr) {
+  for (const auto& input : expr->inputs()) {
+    if (input != nullptr && input->type() != nullptr &&
+        isTimestampWithTimeZoneType(input->type())) {
+      return true;
+    }
+  }
+  return false;
+}
 
 const std::unordered_map<std::string, Op> prestoUnaryOps = {
     {"not", Op::NOT},
@@ -334,8 +401,17 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     // Binary operations.  Velox parsers always lower AND/OR into binary
     // chains, so a single isOpAndInputsSupported check covers them too.
     if (binaryOps.find(name) != binaryOps.end()) {
-      return len == 2 &&
-          isOpAndInputsSupported(binaryOps.at(name), inputCudfDataTypes);
+      const auto op = binaryOps.at(name);
+      // Arithmetic over a packed TIMESTAMP WITH TIME ZONE is wrong and, unlike
+      // a comparison, cannot be normalized into correctness -- see
+      // anyOperandIsTimestampWithTimeZone for the measured values. Comparisons
+      // are NOT declined here: they stay on the GPU and
+      // AstContext::normalizeForComparison masks the zone key off each operand.
+      if (arithmeticOps.count(op) != 0 &&
+          anyOperandIsTimestampWithTimeZone(expr)) {
+        return false;
+      }
+      return len == 2 && isOpAndInputsSupported(op, inputCudfDataTypes);
     }
 
     // Unary operations (includes both unaryOps and "isnotnull")
@@ -365,6 +441,19 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
   }
 
   if (expr->isCastKind()) {
+    // A cast of -- or to -- TIMESTAMP WITH TIME ZONE is never the identity the
+    // AST would make of it. DATE is TypeKind::INTEGER and Presto's TIME is
+    // BIGINT-backed, so cast(TSWTZ AS DATE) and cast(TSWTZ AS TIME) both arrive
+    // looking like CAST_TO_INT64 on an INT64: an identity on the packed value.
+    // Measured before this guard, with no error on either side:
+    //   cast(ka AS time)   CPU 15:07:40.000   GPU 19:56:10.137
+    // The reverse direction (TIMESTAMP -> TSWTZ) is a real conversion
+    // implemented by CastFunction on the precompute path, not by the AST, so
+    // declining here does not remove it.
+    if (isTimestampWithTimeZoneType(expr->type()) ||
+        anyOperandIsTimestampWithTimeZone(expr)) {
+      return false;
+    }
     // Cast operations: only INTEGER, BIGINT, DOUBLE supported in pure AST
     const auto outputKind = expr->type()->kind();
     if (outputKind == TypeKind::INTEGER || outputKind == TypeKind::BIGINT) {
@@ -390,8 +479,21 @@ struct AstContext {
       precomputeInstructions;
   memory::MemoryPool* pool;
   const core::TypedExprPtr rootExpr;
+  // Query-scoped context threaded into timezone-sensitive functions built on
+  // the precompute path (e.g. date_format or a VARCHAR->TIMESTAMP cast inside a
+  // join condition).
+  CudfDateTimeContext context;
 
   cudf::ast::expression const& pushExprToTree(const core::TypedExprPtr& expr);
+  /// Pushes `expr` and normalizes the result for use as a comparison operand.
+  cudf::ast::expression const& pushComparisonOperand(
+      const core::TypedExprPtr& expr);
+  /// Rewrites an already-pushed node so that comparing it matches Velox's
+  /// comparison semantics for `type`. Only TIMESTAMP WITH TIME ZONE needs it;
+  /// every other type is returned unchanged.
+  cudf::ast::expression const& normalizeForComparison(
+      cudf::ast::expression const& node,
+      const TypePtr& type);
   cudf::ast::expression const& addPrecomputeInstructionOnSide(
       size_t sideIdx,
       size_t columnIndex,
@@ -504,6 +606,48 @@ static VectorPtr toConstantVector(
   return c->hasValueVector() ? c->valueVector() : c->toConstantVector(pool);
 }
 
+cudf::ast::expression const& AstContext::normalizeForComparison(
+    cudf::ast::expression const& node,
+    const TypePtr& type) {
+  if (!isTimestampWithTimeZoneType(type)) {
+    return node;
+  }
+  // A TIMESTAMP WITH TIME ZONE is physically (millis << kMillisShift) |
+  // zone_key, and Velox compares it on the instant ALONE --
+  // TimestampWithTimeZoneType::compare and ::hash both read unpackMillisUtc,
+  // via the type's ProvideCustomComparison hook. cuDF has no type-level hook:
+  // it sees a bare INT64 and compares all 64 bits, so the zone key decides
+  // whenever the instants tie and two values for the same moment in different
+  // zones never compare equal. Clearing the zone key on both operands makes the
+  // comparison one over instants, which is what Velox specifies.
+  //
+  // The zone key is CLEARED rather than shifted out because
+  // cudf::ast::ast_operator has BITWISE_AND but no shift operators. Zeroing
+  // the low kMillisShift bits computes (v >> kMillisShift) << kMillisShift,
+  // which is monotone and collapses exactly the values sharing an instant -- so
+  // it preserves both equality and ordering, which is all a comparison needs.
+  // It is also correct for pre-epoch instants: two's-complement AND floors
+  // toward negative infinity, matching unpackMillisUtc's arithmetic shift,
+  // where a divide by 4096 would truncate toward zero and land a millisecond
+  // late.
+  //
+  // Applied per comparison operand rather than to every TIMESTAMP WITH TIME
+  // ZONE node, because a masked value is equivalent for EQUALITY and ORDERING
+  // ONLY. The packed value is what a projection has to emit and what to_iso8601
+  // and timezone_hour have to read, so normalizing those would discard the zone
+  // key.
+  auto maskVector = BaseVector::createConstant(
+      BIGINT(), static_cast<int64_t>(~kTimezoneMask), 1, pool);
+  auto const& mask = tree.push(createLiteral(maskVector, scalars));
+  return tree.push(
+      cudf::ast::operation{cudf::ast::ast_operator::BITWISE_AND, node, mask});
+}
+
+cudf::ast::expression const& AstContext::pushComparisonOperand(
+    const core::TypedExprPtr& expr) {
+  return normalizeForComparison(pushExprToTree(expr), expr->type());
+}
+
 /// Pushes an expression into the AST tree and returns a reference to the
 /// resulting expression.
 ///
@@ -527,7 +671,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if (sideIdx < 0) {
       sideIdx = 0;
     }
-    auto node = createCudfExpression(expr, inputRowSchema[sideIdx], pool);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[sideIdx], pool, context);
     VELOX_CHECK_NOT_NULL(
         node, "Failed to compile sub-expression: {}", expr->toString());
     return addPrecomputeInstructionOnSide(
@@ -573,9 +718,15 @@ cudf::ast::expression const& AstContext::pushExprToTree(
 
       if (binaryOps.find(name) != binaryOps.end()) {
         VELOX_CHECK_EQ(len, 2);
-        auto const& op1 = pushExprToTree(expr->inputs()[0]);
-        auto const& op2 = pushExprToTree(expr->inputs()[1]);
-        return tree.push(Operation{binaryOps.at(name), op1, op2});
+        const auto binaryOp = binaryOps.at(name);
+        const bool isComparison = comparisonOps.count(binaryOp) > 0;
+        auto const& op1 = isComparison
+            ? pushComparisonOperand(expr->inputs()[0])
+            : pushExprToTree(expr->inputs()[0]);
+        auto const& op2 = isComparison
+            ? pushComparisonOperand(expr->inputs()[1])
+            : pushExprToTree(expr->inputs()[1]);
+        return tree.push(Operation{binaryOp, op1, op2});
       } else if (unaryOps.find(name) != unaryOps.end()) {
         VELOX_CHECK_EQ(len, 1);
         auto const& op1 = pushExprToTree(expr->inputs()[0]);
@@ -593,9 +744,10 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         return tree.push(Operation{Op::NOT, nullOp});
       } else if (name == "between") {
         VELOX_CHECK_EQ(len, 3);
-        auto const& value = pushExprToTree(expr->inputs()[0]);
-        auto const& lower = pushExprToTree(expr->inputs()[1]);
-        auto const& upper = pushExprToTree(expr->inputs()[2]);
+        // All three lower to comparisons, so all three need normalizing.
+        auto const& value = pushComparisonOperand(expr->inputs()[0]);
+        auto const& lower = pushComparisonOperand(expr->inputs()[1]);
+        auto const& upper = pushComparisonOperand(expr->inputs()[2]);
         auto const& geLower =
             tree.push(Operation{Op::GREATER_EQUAL, value, lower});
         auto const& leUpper =
@@ -603,7 +755,7 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         return tree.push(Operation{Op::NULL_LOGICAL_AND, geLower, leUpper});
       } else if (name == "in") {
         VELOX_CHECK_EQ(len, 2);
-        auto const& op1 = pushExprToTree(expr->inputs()[0]);
+        auto const& op1 = pushComparisonOperand(expr->inputs()[0]);
         VELOX_CHECK(
             expr->inputs()[1]->isConstantKind(), "IN list must be a constant");
         auto inListVec = toConstantVector(expr->inputs()[1], pool);
@@ -612,9 +764,17 @@ cudf::ast::expression const& AstContext::pushExprToTree(
         auto literals = createLiteralsFromArray(inListVec, scalars);
 
         std::vector<const cudf::ast::expression*> exprVec;
+        // The IN list's elements carry the same physical layout as the value
+        // being tested, so each needs the same normalization op1 just got --
+        // otherwise a packed literal would be compared against an unpacked
+        // value. The element type is the value's own type; the list is an ARRAY
+        // of it.
+        const auto& elementType = expr->inputs()[0]->type();
         for (auto& literal : literals) {
           auto const& opi = tree.push(std::move(literal));
-          auto const& logicalNode = tree.push(Operation{Op::EQUAL, op1, opi});
+          auto const& logicalNode = tree.push(
+              Operation{
+                  Op::EQUAL, op1, normalizeForComparison(opi, elementType)});
           exprVec.push_back(&logicalNode);
         }
 

@@ -195,6 +195,11 @@ void registerPrestoFunctions(const std::string& prefix) {
            .returnType("date")
            .constantArgumentType("varchar")
            .argumentType("date")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("timestamp with time zone")
+           .constantArgumentType("varchar")
+           .argumentType("timestamp with time zone")
            .build()},
       true,
       DateTruncFunction::canEvaluate);

@@ -36,6 +36,7 @@
 #include <vector>
 
 namespace facebook::velox::core {
+class QueryConfig;
 class QueryCtx;
 } // namespace facebook::velox::core
 
@@ -80,6 +81,34 @@ void checkAllTrue(
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref mr);
 
+/// Carries query-scoped evaluation settings that individual GPU functions need
+/// but that are not part of the expression tree, most notably the session
+/// timezone. Populated from the QueryConfig at expression-creation time and
+/// attached to every CudfFunction so timezone-aware functions can match the CPU
+/// path. Defaults represent "no session timezone" (UTC/GMT), matching the CPU
+/// behavior when adjust_timestamp_to_session_timezone is off.
+struct CudfDateTimeContext {
+  /// Session timezone name (QueryConfig::sessionTimezone), e.g.
+  /// "America/Los_Angeles". Empty means none.
+  std::string sessionTimezone;
+  /// Whether timezone-less timestamp conversions honor the session timezone
+  /// (QueryConfig::adjustTimestampToTimezone).
+  bool adjustTimestampToTimezone{false};
+
+  /// Returns true when extraction functions must convert the instant to the
+  /// session-local wall clock before reading a calendar field.
+  bool appliesSessionTimezone() const {
+    return adjustTimestampToTimezone && !sessionTimezone.empty();
+  }
+};
+
+/// Builds a CudfDateTimeContext from the query config, copying the session
+/// timezone, the adjust-to-session-timezone flag, and the session start time.
+/// Operators that construct cuDF expressions build the context here so the
+/// derivation lives in one place and timezone-aware functions match the CPU
+/// path.
+CudfDateTimeContext contextFromConfig(const core::QueryConfig& config);
+
 class CudfFunction {
  public:
   virtual ~CudfFunction() = default;
@@ -87,6 +116,17 @@ class CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const = 0;
+
+  /// Attaches the query-scoped evaluation context. Called once after the
+  /// function is created. Functions that do not need it simply ignore context_.
+  void setContext(const CudfDateTimeContext& context) {
+    context_ = context;
+  }
+
+ protected:
+  // Query-scoped evaluation context (session timezone and start time), attached
+  // via setContext. Timezone-aware functions read it; others ignore it.
+  CudfDateTimeContext context_;
 };
 
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
@@ -123,11 +163,13 @@ void registerCudfFunctions(
 
 /// Create a CudfFunction for the given name and expression.
 /// Returns nullptr if no registered function matches the expression's
-/// signature.
+/// signature. The context is attached to the created function so
+/// timezone-aware functions can read the session timezone.
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context = {});
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
@@ -152,7 +194,8 @@ class FunctionExpression : public CudfExpression {
   static std::shared_ptr<FunctionExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const CudfDateTimeContext& context = {});
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -191,16 +234,15 @@ class FunctionExpression : public CudfExpression {
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context = {});
 
 /// Plan-time GPU eligibility for a top-level operator expression, as invoked by
 /// the OperatorAdapters and the aggregation validators. Optimizes the
 /// expression (constant folding and rewrites) with `pool` so the check sees the
 /// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
 /// folds to a plain decimal constant that the structural check accepts, rather
-/// than a live decimal-target cast that it would reject. Then applies the
-/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
+/// than a live decimal-target cast that it would reject. Then applies a
 /// structural support check on the optimized expression. When
 /// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
