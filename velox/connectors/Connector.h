@@ -127,6 +127,26 @@ struct ConnectorSplit : public ISerializable {
   }
 };
 
+/// Carries the splits submitted together through Task::addSplit(). TableScan
+/// unwraps these into DataSource's vector overload. Counts as one scheduled
+/// split with the combined weight of its children.
+struct ConnectorSplitBatch : public ConnectorSplit {
+  ConnectorSplitBatch(
+      const std::string& connectorId,
+      std::vector<std::shared_ptr<ConnectorSplit>> splits);
+
+  std::string toString() const override;
+  uint64_t size() const override;
+
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED(
+        "ConnectorSplitBatch is process-local and cannot be serialized");
+    return nullptr;
+  }
+
+  const std::vector<std::shared_ptr<ConnectorSplit>> splits;
+};
+
 class ColumnHandle : public ISerializable {
  public:
   virtual ~ColumnHandle() = default;
@@ -345,6 +365,11 @@ class DataSource {
   /// added. Next returns nullptr to indicate that current split is fully
   /// processed.
   virtual void addSplit(std::shared_ptr<ConnectorSplit> split) = 0;
+
+  /// Processes a batch until next() reports completion of all its splits.
+  /// Used only when Connector::supportsSplitBatch() returns true.
+  virtual void addSplit(
+      const std::vector<std::shared_ptr<ConnectorSplit>>& splits);
 
   /// Process a split added via addSplit. Returns nullptr if split has been
   /// fully processed. Returns std::nullopt and sets the 'future' if started
@@ -746,6 +771,12 @@ class Connector {
   /// so that file opening and metadata operations are off the Driver'
   /// thread.
   virtual bool supportsSplitPreload() const {
+    return false;
+  }
+
+  /// Returns true if this connector accepts batches through DataSource's
+  /// vector addSplit overload. Otherwise Task queues each split separately.
+  virtual bool supportsSplitBatch() const {
     return false;
   }
 

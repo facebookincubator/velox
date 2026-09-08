@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/Task.h"
+#include <gmock/gmock.h>
 #include "folly/OperationCancelled.h"
 #include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
@@ -26,6 +27,8 @@
 #include "velox/common/memory/tests/SharedArbitratorTestUtil.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
@@ -729,6 +732,353 @@ TEST_F(TaskTest, stateChangeFutureNotFiredWhenNoMoreSplits) {
   task->requestCancel().wait();
 }
 
+TEST_F(TaskTest, splitVectorDelivery) {
+  // Serialize each notification as an existing connector-specific listener
+  // does.
+  class RecordingListener : public SplitListener {
+   public:
+    RecordingListener(
+        const std::string& taskId,
+        const std::string& taskUuid,
+        std::vector<std::shared_ptr<connector::ConnectorSplit>>& observed)
+        : SplitListener(taskId, taskUuid), observed_(observed) {}
+
+    void onAddSplit(const core::PlanNodeId& planNodeId, const Split& split)
+        override {
+      EXPECT_EQ(planNodeId, "0");
+      split.connectorSplit->serialize();
+      observed_.push_back(split.connectorSplit);
+    }
+
+    void onTaskCompletion() override {}
+
+   private:
+    // Original objects delivered to the listener, in notification order.
+    std::vector<std::shared_ptr<connector::ConnectorSplit>>& observed_;
+  };
+
+  // Attach the recording listener to the task created by this test.
+  class RecordingListenerFactory : public SplitListenerFactory {
+   public:
+    explicit RecordingListenerFactory(
+        std::vector<std::shared_ptr<connector::ConnectorSplit>>& observed)
+        : observed_(observed) {}
+
+    std::unique_ptr<SplitListener> create(
+        const std::string& taskId,
+        const std::string& taskUuid,
+        const core::QueryConfig& /*config*/) override {
+      return std::make_unique<RecordingListener>(taskId, taskUuid, observed_);
+    }
+
+   private:
+    std::vector<std::shared_ptr<connector::ConnectorSplit>>& observed_;
+  };
+
+  class BatchConnector : public connector::hive::HiveConnector {
+   public:
+    using HiveConnector::HiveConnector;
+
+    bool supportsSplitBatch() const override {
+      return true;
+    }
+  };
+
+  for (const bool batching : {false, true}) {
+    SCOPED_TRACE(batching);
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> observed;
+    auto listenerFactory = std::make_shared<RecordingListenerFactory>(observed);
+    ASSERT_TRUE(registerSplitListenerFactory(listenerFactory));
+    SCOPE_EXIT {
+      unregisterSplitListenerFactory(listenerFactory);
+    };
+    auto queryCtx = core::QueryCtx::create();
+    if (batching) {
+      // The global connector remains the CPU Hive connector. Batch support
+      // must be resolved through the same query override as TableScan.
+      auto registry = connector::ConnectorRegistry::create();
+      registry->insert(
+          kHiveConnectorId,
+          std::make_shared<BatchConnector>(
+              kHiveConnectorId,
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>{}),
+              ioExecutor_.get()));
+      queryCtx->setRegistry(
+          connector::ConnectorRegistry::kRegistryKey, registry);
+    }
+    auto task = Task::create(
+        "vector-splits",
+        PlanBuilder().tableScan(ROW({"c0"}, {BIGINT()})).planFragment(),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kSerial,
+        exec::Consumer{});
+    SCOPE_EXIT {
+      task->requestCancel().wait();
+    };
+    task->addSplit("0", std::vector<Split>{});
+    EXPECT_EQ(task->taskStats().numTotalSplits, 0);
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> children;
+    std::vector<Split> splits;
+    for (int i = 0; i < 3; ++i) {
+      auto child = connector::hive::HiveConnectorSplitBuilder(
+                       fmt::format("file{}.parquet", i))
+                       .connectorId(kHiveConnectorId)
+                       .splitWeight(10)
+                       .build();
+      children.push_back(child);
+      splits.emplace_back(std::move(child));
+    }
+    task->addSplit("0", std::move(splits));
+    EXPECT_THAT(observed, testing::ElementsAreArray(children));
+    EXPECT_EQ(task->taskStats().numTotalSplits, batching ? 1 : 3);
+    EXPECT_EQ(task->taskStats().queuedTableScanSplitWeights, 30);
+    task->noMoreSplits("0");
+    for (int i = 0; i < (batching ? 1 : 3); ++i) {
+      Split split;
+      ContinueFuture future;
+      ASSERT_EQ(
+          task->getSplitOrFuture(
+              0, kUngroupedGroupId, "0", 0, nullptr, split, future),
+          BlockingReason::kNotBlocked);
+      if (batching) {
+        const auto batch =
+            std::dynamic_pointer_cast<connector::ConnectorSplitBatch>(
+                split.connectorSplit);
+        ASSERT_NE(batch, nullptr);
+        EXPECT_EQ(batch->splits, children);
+        EXPECT_EQ(batch->splitWeight, 30);
+      } else {
+        EXPECT_EQ(split.connectorSplit, children[i]);
+      }
+    }
+    EXPECT_EQ(task->taskStats().numQueuedSplits, 0);
+    EXPECT_EQ(task->taskStats().queuedTableScanSplitWeights, 0);
+  }
+}
+
+TEST_F(TaskTest, splitVectorScan) {
+  using ConnectorSplits =
+      std::vector<std::shared_ptr<connector::ConnectorSplit>>;
+
+  // Collect calls from the driver and the preload executor.
+  struct ScanState {
+    folly::Synchronized<std::vector<ConnectorSplits>> received;
+    std::atomic<int32_t> numTransfers{0};
+  };
+
+  // Produce one row per non-empty child and finish only after the whole batch.
+  class BatchDataSource : public connector::DataSource {
+   public:
+    BatchDataSource(
+        RowTypePtr outputType,
+        memory::MemoryPool* pool,
+        std::shared_ptr<ScanState> state)
+        : outputType_(std::move(outputType)),
+          pool_(pool),
+          state_(std::move(state)) {}
+
+    void addSplit(std::shared_ptr<connector::ConnectorSplit> split) override {
+      addSplit(ConnectorSplits{std::move(split)});
+    }
+
+    void addSplit(const ConnectorSplits& splits) override {
+      splits_ = splits;
+      nextChild_ = 0;
+      state_->received.wlock()->push_back(splits);
+    }
+
+    std::optional<RowVectorPtr> next(
+        uint64_t /*size*/,
+        ContinueFuture& /*future*/) override {
+      if (nextChild_ == splits_.size()) {
+        return nullptr;
+      }
+      const auto split =
+          std::dynamic_pointer_cast<connector::hive::HiveConnectorSplit>(
+              splits_[nextChild_++]);
+      VELOX_CHECK_NOT_NULL(split);
+      const vector_size_t numRows = split->start == 0 ? 0 : 1;
+      auto result = BaseVector::create<RowVector>(outputType_, numRows, pool_);
+      if (numRows != 0) {
+        result->childAt(0)->asFlatVector<int64_t>()->set(0, split->start);
+      }
+      completedRows_ += numRows;
+      return result;
+    }
+
+    void addDynamicFilter(
+        column_index_t /*outputChannel*/,
+        const std::shared_ptr<common::Filter>& /*filter*/) override {
+      VELOX_UNSUPPORTED();
+    }
+
+    uint64_t getCompletedBytes() override {
+      return completedRows_ * sizeof(int64_t);
+    }
+
+    uint64_t getCompletedRows() override {
+      return completedRows_;
+    }
+
+    bool allPrefetchIssued() const override {
+      return true;
+    }
+
+    void setFromDataSource(
+        std::unique_ptr<connector::DataSource> source) override {
+      auto* prepared = dynamic_cast<BatchDataSource*>(source.get());
+      VELOX_CHECK_NOT_NULL(prepared);
+      splits_ = std::move(prepared->splits_);
+      nextChild_ = prepared->nextChild_;
+      completedRows_ += prepared->completedRows_;
+      ++state_->numTransfers;
+    }
+
+   private:
+    const RowTypePtr outputType_;
+    memory::MemoryPool* const pool_;
+    const std::shared_ptr<ScanState> state_;
+    // Retain the original children until the batch has been consumed.
+    ConnectorSplits splits_;
+    size_t nextChild_{0};
+    uint64_t completedRows_{0};
+  };
+
+  // Supply a batch-capable source while retaining Hive's executor for preload.
+  class BatchConnector : public connector::hive::HiveConnector {
+   public:
+    BatchConnector(folly::Executor* executor, std::shared_ptr<ScanState> state)
+        : HiveConnector(
+              kHiveConnectorId,
+              std::make_shared<config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>{}),
+              executor),
+          state_(std::move(state)) {}
+
+    bool canAddDynamicFilter() const override {
+      return false;
+    }
+
+    bool supportsSplitBatch() const override {
+      return true;
+    }
+
+    std::unique_ptr<connector::DataSource> createDataSource(
+        const RowTypePtr& outputType,
+        const connector::ConnectorTableHandlePtr& /*tableHandle*/,
+        const connector::ColumnHandleMap& /*columnHandles*/,
+        connector::ConnectorQueryCtx* context) override {
+      return std::make_unique<BatchDataSource>(
+          outputType, context->memoryPool(), state_);
+    }
+
+   private:
+    const std::shared_ptr<ScanState> state_;
+  };
+
+  for (const bool batching : {false, true}) {
+    for (const bool preload : {false, true}) {
+      SCOPED_TRACE(fmt::format("batching={}, preload={}", batching, preload));
+      auto state = std::make_shared<ScanState>();
+      auto registry = connector::ConnectorRegistry::create();
+      registry->insert(
+          kHiveConnectorId,
+          std::make_shared<BatchConnector>(ioExecutor_.get(), state));
+      auto queryCtx = core::QueryCtx::create();
+      queryCtx->setRegistry(
+          connector::ConnectorRegistry::kRegistryKey, registry);
+      queryCtx->testingOverrideConfigUnsafe({
+          {core::QueryConfig::kMaxSplitPreloadPerDriver, preload ? "3" : "0"},
+      });
+      auto task = Task::create(
+          "vector-scan",
+          PlanBuilder().tableScan(ROW({"c0"}, {BIGINT()})).planFragment(),
+          0,
+          queryCtx,
+          Task::ExecutionMode::kSerial,
+          Consumer{});
+      SCOPE_EXIT {
+        task->requestCancel().wait();
+      };
+      ConnectorSplits children;
+      std::vector<Split> splits;
+      for (int i = 0; i < 3; ++i) {
+        auto child =
+            connector::hive::HiveConnectorSplitBuilder(fmt::format("file{}", i))
+                .connectorId(kHiveConnectorId)
+                .start(i)
+                .splitWeight(10)
+                .build();
+        children.push_back(child);
+        splits.emplace_back(std::move(child));
+      }
+      if (batching) {
+        task->addSplit("0", std::move(splits));
+      } else {
+        for (auto& split : splits) {
+          task->addSplit("0", std::move(split));
+        }
+      }
+      task->noMoreSplits("0");
+      std::vector<int64_t> values;
+      while (auto result = task->next()) {
+        ASSERT_EQ(result->size(), 1);
+        values.push_back(
+            result->childAt(0)->asFlatVector<int64_t>()->valueAt(0));
+        if (batching) {
+          EXPECT_EQ(task->taskStats().numRunningTableScanSplits, 1);
+          EXPECT_EQ(task->taskStats().runningTableScanSplitWeights, 30);
+          EXPECT_EQ(task->taskStats().numFinishedSplits, 0);
+        }
+      }
+      EXPECT_THAT(values, testing::UnorderedElementsAre(1, 2));
+      EXPECT_TRUE(task->isFinished());
+      const auto stats = task->taskStats();
+      EXPECT_EQ(stats.numFinishedSplits, batching ? 1 : 3);
+      EXPECT_EQ(stats.numRunningSplits, 0);
+      EXPECT_EQ(stats.numQueuedSplits, 0);
+      EXPECT_EQ(stats.runningTableScanSplitWeights, 0);
+      EXPECT_EQ(stats.queuedTableScanSplitWeights, 0);
+      const auto received = state->received.copy();
+      if (batching) {
+        ASSERT_THAT(received, testing::SizeIs(1));
+        EXPECT_THAT(received.front(), testing::ElementsAreArray(children));
+      } else {
+        ConnectorSplits observed;
+        for (const auto& batch : received) {
+          ASSERT_THAT(batch, testing::SizeIs(1));
+          observed.push_back(batch.front());
+        }
+        EXPECT_THAT(observed, testing::UnorderedElementsAreArray(children));
+      }
+      EXPECT_EQ(state->numTransfers.load(), preload ? (batching ? 1 : 3) : 0);
+    }
+  }
+}
+
+TEST_F(TaskTest, splitSequenceWatermark) {
+  auto task = Task::create(
+      "split-watermark",
+      PlanBuilder().tableScan(ROW({"c0"}, {BIGINT()})).planFragment(),
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+  EXPECT_EQ(task->maxSplitSequenceId("0"), std::numeric_limits<long>::min());
+  task->setMaxSplitSequenceId("0", 10);
+  task->setMaxSplitSequenceId("0", 5);
+  EXPECT_EQ(task->maxSplitSequenceId("0"), 10);
+  EXPECT_FALSE(task->addSplitWithSequence(
+      "0", Split(makeHiveConnectorSplit("duplicate")), 10));
+  EXPECT_TRUE(task->addSplitWithSequence(
+      "0", Split(makeHiveConnectorSplit("new")), 11));
+  EXPECT_EQ(task->maxSplitSequenceId("0"), 10);
+  task->requestCancel().wait();
+  EXPECT_EQ(task->maxSplitSequenceId("0"), std::numeric_limits<long>::min());
+}
+
 TEST_F(TaskTest, wrongPlanNodeForSplit) {
   auto connectorSplit = std::make_shared<connector::hive::HiveConnectorSplit>(
       "test",
@@ -754,7 +1104,7 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
 
   // Add an empty split.
-  task->addSplit("0", exec::Split());
+  task->addSplit("0", {});
 
   // Try to add split for a non-source node.
   auto errorMessage =

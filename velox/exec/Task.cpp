@@ -27,6 +27,7 @@
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
@@ -1697,9 +1698,27 @@ void Task::setMaxSplitSequenceId(
   }
 }
 
+long Task::maxSplitSequenceId(const core::PlanNodeId& planNodeId) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  // Finished tasks still accept remote splits to clean up upstream buffers.
+  return isRunningLocked()
+      ? getPlanNodeSplitsStateLocked(planNodeId).maxSequenceId
+      : std::numeric_limits<long>::min();
+}
+
 void Task::onAddSplit(
     const core::PlanNodeId& planNodeId,
     const exec::Split& split) {
+  if (splitListeners_.empty()) {
+    return;
+  }
+  if (const auto* batch = dynamic_cast<const connector::ConnectorSplitBatch*>(
+          split.connectorSplit.get())) {
+    for (const auto& child : batch->splits) {
+      onAddSplit(planNodeId, Split(folly::copy(child)));
+    }
+    return;
+  }
   for (auto& listener : splitListeners_) {
     listener->onAddSplit(planNodeId, split);
   }
@@ -1774,6 +1793,52 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   if (shouldLogSplit) {
     onAddSplit(planNodeId, split);
   }
+}
+
+void Task::addSplitBatch(
+    const core::PlanNodeId& planNodeId,
+    std::vector<exec::Split>&& splits) {
+  bool canBatch = splits.size() > 1;
+  if (canBatch) {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    canBatch = isRunningLocked() &&
+        getPlanNodeSplitsStateLocked(planNodeId).sourceIsTableScan;
+  }
+  if (canBatch) {
+    const auto& first = splits.front().connectorSplit;
+    canBatch =
+        first &&
+        std::all_of(splits.begin(), splits.end(), [&](const auto& split) {
+          return split.hasConnectorSplit() && !split.hasGroup() &&
+              !split.isBarrier() && !split.connectorSplit->dataSource &&
+              split.connectorSplit->splitWeight >= 0 &&
+              split.connectorSplit->connectorId == first->connectorId &&
+              split.connectorSplit->batchSizeHint == first->batchSizeHint;
+        });
+    if (canBatch) {
+      const auto connector =
+          connector::ConnectorRegistry::tryGet(*queryCtx_, first->connectorId);
+      canBatch = connector && connector->supportsSplitBatch();
+    }
+  }
+  if (!canBatch) {
+    for (auto& split : splits) {
+      addSplit(planNodeId, std::move(split));
+    }
+    return;
+  }
+
+  const auto connectorId = splits.front().connectorSplit->connectorId;
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> children;
+  children.reserve(splits.size());
+  for (auto& split : splits) {
+    children.push_back(std::move(split.connectorSplit));
+  }
+  addSplit(
+      planNodeId,
+      Split(
+          std::make_shared<connector::ConnectorSplitBatch>(
+              connectorId, std::move(children))));
 }
 
 void Task::addRemoteSplit(

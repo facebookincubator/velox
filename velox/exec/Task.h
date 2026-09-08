@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/IntrusiveList.h>
+#include <concepts>
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
 #include "velox/core/PlanFragment.h"
@@ -249,6 +250,11 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       long maxSequenceId);
 
+  /// Returns the watermark used to discard re-delivered splits. Callers that
+  /// filter a vector using this snapshot must serialize delivery and watermark
+  /// updates, just as callers of addSplitWithSequence() do.
+  long maxSplitSequenceId(const core::PlanNodeId& planNodeId);
+
   /// Adds split for a source operator corresponding to plan node with
   /// specified ID.
   /// It requires sequential id of the split and, when that id is NOT greater
@@ -266,6 +272,19 @@ class Task : public std::enable_shared_from_this<Task> {
   /// specified ID. Does not require sequential id.
   /// Note that, the operation is silently ignored if Task is not running.
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
+
+  /// Adds a batch for a table scan. A connector that supports batching receives
+  /// the vector together; other sources receive individual splits. Grouped,
+  /// barrier, preloaded, or mixed-connector splits are queued individually.
+  /// Callers bound batch sizes and submit enough batches for their drivers.
+  /// An empty vector is a no-op. Existing single-split APIs are unchanged.
+  /// Uses vector type deduction to keep addSplit(planNodeId, {}) unambiguous.
+  template <std::same_as<exec::Split> SplitType>
+  void addSplit(
+      const core::PlanNodeId& planNodeId,
+      std::vector<SplitType>&& splits) {
+    addSplitBatch(planNodeId, std::move(splits));
+  }
 
   /// We mark that for the given group there would be no more splits coming.
   void noMoreSplitsForGroup(
@@ -1091,7 +1110,13 @@ class Task : public std::enable_shared_from_this<Task> {
   // Notifies listeners that the task is now complete.
   void onTaskCompletion();
 
+  // Notifies listeners once per original split, unwrapping scheduled batches.
   void onAddSplit(const core::PlanNodeId& planNodeId, const exec::Split& split);
+
+  // Queues a vector as one batch when the source and splits support batching.
+  void addSplitBatch(
+      const core::PlanNodeId& planNodeId,
+      std::vector<exec::Split>&& splits);
 
   // Returns true if all splits are finished processing and there are no more
   // splits coming for the task.
