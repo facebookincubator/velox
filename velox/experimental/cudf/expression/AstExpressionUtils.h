@@ -390,6 +390,10 @@ struct AstContext {
       precomputeInstructions;
   memory::MemoryPool* pool;
   const core::TypedExprPtr rootExpr;
+  // Query-scoped context threaded into timezone-sensitive functions built on
+  // the precompute path (e.g. date_format or a VARCHAR->TIMESTAMP cast inside a
+  // join condition).
+  CudfDateTimeContext context;
 
   cudf::ast::expression const& pushExprToTree(const core::TypedExprPtr& expr);
   cudf::ast::expression const& addPrecomputeInstructionOnSide(
@@ -527,7 +531,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if (sideIdx < 0) {
       sideIdx = 0;
     }
-    auto node = createCudfExpression(expr, inputRowSchema[sideIdx], pool);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[sideIdx], pool, context);
     VELOX_CHECK_NOT_NULL(
         node, "Failed to compile sub-expression: {}", expr->toString());
     return addPrecomputeInstructionOnSide(
