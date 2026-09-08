@@ -51,7 +51,13 @@ jobs:
         os:
           - {runner: ubuntu-24.04-arm, platform: arm64}
           - {runner: ubuntu-24.04, platform: amd64}
-        target: [ci, pyvelox, ubuntu, fedora]
+        target: [ci, centos9-debug, pyvelox, ubuntu, fedora]
+        exclude:
+          # Only x86 jobs use this image, so don't take an arm runner to build
+          # nothing. ubuntu and fedora skip arm with an empty bake group
+          # instead; that works too but still allocates the runner.
+          - os: {runner: ubuntu-24.04-arm, platform: arm64}
+            target: centos9-debug
 
     steps:
       - name: Free Disk Space
@@ -145,10 +151,12 @@ jobs:
           mkdir -p "$DIGEST_DIR"
           cd "$DIGEST_DIR" || exit 1
           # Add the target for any images that shouldn't be build as multi-platform
-          # into the skip list
-          echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora"];
+          # into the skip list.
+          # Strip only the trailing architecture rather than everything after the
+          # first dash, so names that contain a dash (centos9-debug) survive.
+          echo "$METADATA" | jq -r 'def skip: ["ubuntu", "fedora", "centos9-debug"];
             . | to_entries[] | select(.value | has("image.name")) |
-            .key | split("-")[0] |
+            .key | sub("-(amd64|arm64)$"; "") |
             if . as $name | skip | index($name) != null then empty else . end' | \
             while read -r image_name; do
               touch "$image_name"
