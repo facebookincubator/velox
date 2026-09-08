@@ -107,6 +107,10 @@ class CudfSplitReader : public NvtxHelper {
     return decodedColumnCacheDecodeCalls_;
   }
 
+  uint64_t decodedColumnGpuCacheHits() const {
+    return decodedColumnGpuCacheHits_;
+  }
+
   bool usedDecodedColumnCacheMetadataFastPath() const {
     return usedDecodedColumnCacheMetadataFastPath_;
   }
@@ -228,6 +232,7 @@ class CudfSplitReader : public NvtxHelper {
 
   // State used only by the opt-in decoded-column cache path.
   bool useDecodedColumnCache_{false};
+  bool useDecodedColumnGpuCache_{false};
   bool isFullyDecodedColumnCacheHit_{false};
   CudfDecodedColumnCache::CompressionMode decodedColumnCacheCompression_{
       CudfDecodedColumnCache::CompressionMode::kNone};
@@ -250,6 +255,7 @@ class CudfSplitReader : public NvtxHelper {
   uint64_t decodedColumnCacheHits_{0};
   uint64_t decodedColumnCacheMisses_{0};
   uint64_t decodedColumnCacheDecodeCalls_{0};
+  uint64_t decodedColumnGpuCacheHits_{0};
 
   dwio::common::ReaderOptions baseReaderOpts_;
   cudf::ast::expression const* subfieldFilterExpr_;

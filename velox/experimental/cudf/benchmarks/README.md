@@ -152,6 +152,8 @@ These flags apply to `velox_cudf_tpch_benchmark` and `velox_cudf_tpcds_benchmark
 | `--cudf_hive_use_decoded_column_cache` | `false` | Use the process-lifetime decoded range cache backed by a CCCL pinned-host pool and treat benchmark files as immutable |
 | `--cudf_hive_decoded_column_cache_compression` | `none` | Cache storage codec: `none`, `column`, or `column-advanced` (all modes remain experimental) |
 | `--cudf_hive_decoded_column_cache_max_pinned_bytes` | 70 GiB | Process-lifetime pinned-pool byte limit; configure before the cache is first used |
+| `--cudf_hive_use_gpu_decoded_column_cache` | `false` | Keep an additional non-evicting GPU-resident decoded range tier; requires the decoded CPU cache |
+| `--cudf_hive_decoded_column_cache_max_gpu_bytes` | 40 GiB | Logical admission limit for the optional non-evicting GPU tier |
 | `--cudf_properties` | `""` | Path to a CudfConfig properties file (key=value per line). See `CudfConfig.h` for available keys |
 
 ---

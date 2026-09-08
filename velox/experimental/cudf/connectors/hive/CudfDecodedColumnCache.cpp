@@ -103,6 +103,7 @@ cuda::memory_pool_properties pinnedPoolProperties(uint64_t maxPinnedBytes) {
 struct CacheConfiguration {
   std::mutex mutex;
   uint64_t maxPinnedBytes{CudfDecodedColumnCache::kMaxPinnedBytes};
+  uint64_t maxGpuBytes{CudfDecodedColumnCache::kMaxGpuBytes};
   bool initialized{false};
 };
 
@@ -116,6 +117,12 @@ uint64_t takeConfiguredMaxPinnedBytes() {
   std::lock_guard<std::mutex> lock(configuration.mutex);
   configuration.initialized = true;
   return configuration.maxPinnedBytes;
+}
+
+uint64_t takeConfiguredMaxGpuBytes() {
+  auto& configuration = cacheConfiguration();
+  std::lock_guard<std::mutex> lock(configuration.mutex);
+  return configuration.maxGpuBytes;
 }
 
 int currentNumaNode() {
@@ -172,6 +179,13 @@ class PackedColumnCompression {
   size_t uncompressedBytes_;
 };
 
+struct CudfDecodedColumnCache::GpuColumnChunk {
+  int64_t firstRow;
+  int64_t lastRow;
+  uint64_t bytes;
+  std::unique_ptr<cudf::column> column;
+};
+
 class PinnedHostAllocation {
  public:
   PinnedHostAllocation(
@@ -207,8 +221,9 @@ class PinnedHostAllocation {
 };
 
 struct CudfDecodedColumnCache::Impl {
-  explicit Impl(uint64_t maxPinnedBytes)
+  Impl(uint64_t maxPinnedBytes, uint64_t maxGpuBytes)
       : maxPinnedBytes(maxPinnedBytes),
+        maxGpuBytes(maxGpuBytes),
         pinnedPool(currentNumaNode(), pinnedPoolProperties(maxPinnedBytes)) {}
 
   std::shared_ptr<const PinnedHostAllocation> allocate(size_t size) {
@@ -274,8 +289,66 @@ struct CudfDecodedColumnCache::Impl {
     return result;
   }
 
+  struct CoveredGpuColumnRange {
+    std::shared_ptr<const GpuColumnChunk> chunk;
+    int64_t firstRow;
+    int64_t lastRow;
+  };
+
+  std::optional<std::vector<CoveredGpuColumnRange>>
+  findGpuColumnRangesLocked(
+      const ColumnKey& key,
+      int64_t firstRow,
+      int64_t lastRow) const {
+    const auto it = gpuColumns.find(key);
+    if (it == gpuColumns.end()) {
+      return std::nullopt;
+    }
+
+    std::vector<CoveredGpuColumnRange> result;
+    auto cursor = firstRow;
+    while (cursor < lastRow) {
+      std::shared_ptr<const GpuColumnChunk> best;
+      for (const auto& chunk : it->second) {
+        if (chunk->firstRow > cursor) {
+          break;
+        }
+        if (chunk->lastRow > cursor and
+            (not best or chunk->lastRow > best->lastRow)) {
+          best = chunk;
+        }
+      }
+      if (not best) {
+        return std::nullopt;
+      }
+
+      const auto coveredUntil = std::min(lastRow, best->lastRow);
+      result.push_back({best, cursor, coveredUntil});
+      cursor = coveredUntil;
+    }
+    return result;
+  }
+
+  bool reserveGpuBytes(uint64_t size) {
+    if (maxGpuBytes == 0 or size > maxGpuBytes) {
+      return false;
+    }
+    auto current = gpuBytes.load(std::memory_order_relaxed);
+    do {
+      if (size > maxGpuBytes - current) {
+        return false;
+      }
+    } while (not gpuBytes.compare_exchange_weak(
+        current,
+        current + size,
+        std::memory_order_relaxed,
+        std::memory_order_relaxed));
+    return true;
+  }
+
   mutable std::mutex mutex;
   const uint64_t maxPinnedBytes;
+  const uint64_t maxGpuBytes;
   cuda::pinned_memory_pool pinnedPool;
   std::atomic<uint64_t> allocatedBytes{0};
   std::atomic<uint64_t> insertedUncompressedBytes{0};
@@ -289,6 +362,13 @@ struct CudfDecodedColumnCache::Impl {
   std::atomic<uint64_t> restoredUncompressedBytes{0};
   std::atomic<uint64_t> decompressionNanos{0};
   std::atomic<uint64_t> pipelinedRestoreBatches{0};
+  std::atomic<uint64_t> gpuBytes{0};
+  std::atomic<uint64_t> gpuInsertedBytes{0};
+  std::atomic<uint64_t> gpuInsertedRanges{0};
+  std::atomic<uint64_t> gpuAdmissionRejectedRanges{0};
+  std::atomic<uint64_t> gpuRestoreCalls{0};
+  std::atomic<uint64_t> gpuRestoredBytes{0};
+  std::atomic<uint64_t> gpuRestoreBatches{0};
   std::unordered_map<FileKey, MetadataPtr, FileKeyHash> metadata;
   std::unordered_map<
       RowGroupSelectionKey,
@@ -297,6 +377,11 @@ struct CudfDecodedColumnCache::Impl {
       rowGroupSelections;
   std::unordered_map<ColumnKey, std::vector<ColumnRangePtr>, ColumnKeyHash>
       columns;
+  std::unordered_map<
+      ColumnKey,
+      std::vector<std::shared_ptr<const GpuColumnChunk>>,
+      ColumnKeyHash>
+      gpuColumns;
 };
 
 size_t PinnedColumnChunk::packedSize() const {
@@ -316,7 +401,8 @@ const void* PinnedColumnChunk::pinnedData() const {
 }
 
 CudfDecodedColumnCache::CudfDecodedColumnCache()
-    : impl_(std::make_unique<Impl>(takeConfiguredMaxPinnedBytes())) {}
+    : impl_(std::make_unique<Impl>(
+          takeConfiguredMaxPinnedBytes(), takeConfiguredMaxGpuBytes())) {}
 
 CudfDecodedColumnCache::~CudfDecodedColumnCache() = default;
 
@@ -337,6 +423,15 @@ void CudfDecodedColumnCache::configureMaxPinnedBytes(
       not configuration.initialized,
       "Decoded column cache limit must be configured before first use");
   configuration.maxPinnedBytes = maxPinnedBytes;
+}
+
+void CudfDecodedColumnCache::configureMaxGpuBytes(uint64_t maxGpuBytes) {
+  auto& configuration = cacheConfiguration();
+  std::lock_guard<std::mutex> lock(configuration.mutex);
+  VELOX_USER_CHECK(
+      not configuration.initialized,
+      "Decoded column GPU cache limit must be configured before first use");
+  configuration.maxGpuBytes = maxGpuBytes;
 }
 
 CudfDecodedColumnCache::CompressionMode
@@ -430,7 +525,8 @@ bool CudfDecodedColumnCache::insertColumnRangeIfAbsent(
     cudf::column_view column,
     rmm::cuda_stream_view stream,
     rmm::device_async_resource_ref tempMr,
-    CompressionMode compressionMode) {
+    CompressionMode compressionMode,
+    std::optional<rmm::device_async_resource_ref> gpuCacheMr) {
   VELOX_CHECK_LT(firstRow, lastRow, "Decoded cache range must be non-empty");
   VELOX_CHECK_EQ(
       lastRow - firstRow,
@@ -551,29 +647,122 @@ bool CudfDecodedColumnCache::insertColumnRangeIfAbsent(
   candidate->data_ = std::move(pinnedData);
   candidate->compression_ = std::move(compression);
 
-  std::lock_guard<std::mutex> lock(impl_->mutex);
-  if (impl_->findColumnRangesLocked(key, firstRow, lastRow).has_value()) {
+  auto gpuKey = key;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->findColumnRangesLocked(key, firstRow, lastRow).has_value()) {
+      return false;
+    }
+    const auto storedSize = candidate->packedSize();
+    const auto isCompressed = candidate->compressed();
+    auto& chunks = impl_->columns[std::move(key)];
+    chunks.push_back(std::move(candidate));
+    std::sort(
+        chunks.begin(), chunks.end(), [](const auto& left, const auto& right) {
+          return std::tie(left->firstRow_, left->lastRow_) <
+              std::tie(right->firstRow_, right->lastRow_);
+        });
+    impl_->insertedUncompressedBytes.fetch_add(
+        uncompressedPackedSize, std::memory_order_relaxed);
+    impl_->insertedStoredBytes.fetch_add(storedSize, std::memory_order_relaxed);
+    (isCompressed ? impl_->insertedCompressedRanges
+                  : impl_->insertedRawRanges)
+        .fetch_add(1, std::memory_order_relaxed);
+    if (compressionAttempted) {
+      impl_->compressionAttempts.fetch_add(1, std::memory_order_relaxed);
+      impl_->compressionEncodeNanos.fetch_add(
+          compressionEncodeNanos, std::memory_order_relaxed);
+    }
+  }
+  if (gpuCacheMr.has_value()) {
+    insertGpuColumnRangeIfAbsent(
+        std::move(gpuKey),
+        firstRow,
+        lastRow,
+        column,
+        uncompressedPackedSize,
+        stream,
+        gpuCacheMr.value());
+  }
+  return true;
+}
+
+bool CudfDecodedColumnCache::insertGpuColumnRangeIfAbsent(
+    ColumnKey key,
+    int64_t firstRow,
+    int64_t lastRow,
+    cudf::column_view column,
+    uint64_t estimatedBytes,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref cacheMr) {
+  VELOX_CHECK_LT(firstRow, lastRow, "Decoded GPU cache range must be non-empty");
+  VELOX_CHECK_EQ(
+      lastRow - firstRow,
+      column.size(),
+      "Decoded GPU cache range must match column size");
+  {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->findGpuColumnRangesLocked(key, firstRow, lastRow).has_value()) {
+      return false;
+    }
+  }
+
+  estimatedBytes = std::max<uint64_t>(estimatedBytes, 1);
+  if (not impl_->reserveGpuBytes(estimatedBytes)) {
+    impl_->gpuAdmissionRejectedRanges.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
-  const auto storedSize = candidate->packedSize();
-  const auto isCompressed = candidate->compressed();
-  auto& chunks = impl_->columns[std::move(key)];
+
+  std::unique_ptr<cudf::column> deviceColumn;
+  uint64_t reservedBytes = estimatedBytes;
+  try {
+    deviceColumn =
+        std::make_unique<cudf::column>(column, stream, cacheMr);
+    const auto actualBytes = deviceColumn->alloc_size();
+    if (actualBytes > reservedBytes) {
+      const auto additionalBytes = actualBytes - reservedBytes;
+      if (not impl_->reserveGpuBytes(additionalBytes)) {
+        impl_->gpuBytes.fetch_sub(reservedBytes, std::memory_order_relaxed);
+        impl_->gpuAdmissionRejectedRanges.fetch_add(
+            1, std::memory_order_relaxed);
+        return false;
+      }
+    } else if (actualBytes < reservedBytes) {
+      impl_->gpuBytes.fetch_sub(
+          reservedBytes - actualBytes, std::memory_order_relaxed);
+    }
+    reservedBytes = actualBytes;
+    stream.synchronize();
+  } catch (const std::exception& error) {
+    impl_->gpuBytes.fetch_sub(reservedBytes, std::memory_order_relaxed);
+    impl_->gpuAdmissionRejectedRanges.fetch_add(1, std::memory_order_relaxed);
+    LOG(WARNING) << "Skipping decoded column GPU cache admission after device "
+                    "allocation failed: "
+                 << error.what();
+    return false;
+  }
+
+  auto candidate = std::make_shared<GpuColumnChunk>(GpuColumnChunk{
+      .firstRow = firstRow,
+      .lastRow = lastRow,
+      .bytes = reservedBytes,
+      .column = std::move(deviceColumn),
+  });
+
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  if (impl_->findGpuColumnRangesLocked(key, firstRow, lastRow).has_value()) {
+    impl_->gpuBytes.fetch_sub(reservedBytes, std::memory_order_relaxed);
+    return false;
+  }
+  auto& chunks = impl_->gpuColumns[std::move(key)];
   chunks.push_back(std::move(candidate));
   std::sort(
       chunks.begin(), chunks.end(), [](const auto& left, const auto& right) {
-        return std::tie(left->firstRow_, left->lastRow_) <
-            std::tie(right->firstRow_, right->lastRow_);
+        return std::tie(left->firstRow, left->lastRow) <
+            std::tie(right->firstRow, right->lastRow);
       });
-  impl_->insertedUncompressedBytes.fetch_add(
-      uncompressedPackedSize, std::memory_order_relaxed);
-  impl_->insertedStoredBytes.fetch_add(storedSize, std::memory_order_relaxed);
-  (isCompressed ? impl_->insertedCompressedRanges : impl_->insertedRawRanges)
-      .fetch_add(1, std::memory_order_relaxed);
-  if (compressionAttempted) {
-    impl_->compressionAttempts.fetch_add(1, std::memory_order_relaxed);
-    impl_->compressionEncodeNanos.fetch_add(
-        compressionEncodeNanos, std::memory_order_relaxed);
-  }
+  impl_->gpuInsertedBytes.fetch_add(reservedBytes, std::memory_order_relaxed);
+  impl_->gpuInsertedRanges.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
@@ -804,12 +993,83 @@ CudfDecodedColumnCache::materializeColumnRanges(
   return outputs;
 }
 
+std::vector<std::unique_ptr<cudf::column>>
+CudfDecodedColumnCache::materializeGpuColumnRanges(
+    const std::vector<ColumnRangeRequest>& requests,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref outputMr) const {
+  std::vector<std::unique_ptr<cudf::column>> outputs(requests.size());
+  bool restoredAny = false;
+  for (size_t requestIndex = 0; requestIndex < requests.size();
+       ++requestIndex) {
+    std::vector<Impl::CoveredGpuColumnRange> coverage;
+    bool fullyCovered = true;
+    {
+      std::lock_guard<std::mutex> lock(impl_->mutex);
+      for (const auto& [firstRow, lastRow] : requests[requestIndex].ranges) {
+        auto rangeCoverage = impl_->findGpuColumnRangesLocked(
+            requests[requestIndex].key, firstRow, lastRow);
+        if (not rangeCoverage) {
+          fullyCovered = false;
+          break;
+        }
+        coverage.insert(
+            coverage.end(),
+            std::make_move_iterator(rangeCoverage->begin()),
+            std::make_move_iterator(rangeCoverage->end()));
+      }
+    }
+    if (not fullyCovered or coverage.empty()) {
+      continue;
+    }
+
+    std::vector<cudf::column_view> pieceViews;
+    pieceViews.reserve(coverage.size());
+    for (const auto& range : coverage) {
+      const auto relativeFirst = range.firstRow - range.chunk->firstRow;
+      const auto relativeLast = range.lastRow - range.chunk->firstRow;
+      VELOX_CHECK_LE(
+          relativeLast,
+          static_cast<int64_t>(std::numeric_limits<cudf::size_type>::max()));
+      const auto slices = cudf::slice(
+          range.chunk->column->view(),
+          {static_cast<cudf::size_type>(relativeFirst),
+           static_cast<cudf::size_type>(relativeLast)},
+          stream);
+      VELOX_CHECK_EQ(slices.size(), 1);
+      pieceViews.push_back(slices.front());
+    }
+
+    auto output = pieceViews.size() == 1
+        ? std::make_unique<cudf::column>(pieceViews.front(), stream, outputMr)
+        : cudf::concatenate(pieceViews, stream, outputMr);
+    impl_->gpuRestoreCalls.fetch_add(
+        coverage.size(), std::memory_order_relaxed);
+    impl_->gpuRestoredBytes.fetch_add(
+        output->alloc_size(), std::memory_order_relaxed);
+    outputs[requestIndex] = std::move(output);
+    restoredAny = true;
+  }
+  if (restoredAny) {
+    impl_->gpuRestoreBatches.fetch_add(1, std::memory_order_relaxed);
+  }
+  return outputs;
+}
+
 uint64_t CudfDecodedColumnCache::pinnedBytes() const {
   return impl_->allocatedBytes.load(std::memory_order_relaxed);
 }
 
 uint64_t CudfDecodedColumnCache::maxPinnedBytes() const {
   return impl_->maxPinnedBytes;
+}
+
+uint64_t CudfDecodedColumnCache::gpuBytes() const {
+  return impl_->gpuBytes.load(std::memory_order_relaxed);
+}
+
+uint64_t CudfDecodedColumnCache::maxGpuBytes() const {
+  return impl_->maxGpuBytes;
 }
 
 CudfDecodedColumnCache::Stats CudfDecodedColumnCache::stats() const {
@@ -837,12 +1097,27 @@ CudfDecodedColumnCache::Stats CudfDecodedColumnCache::stats() const {
           impl_->decompressionNanos.load(std::memory_order_relaxed),
       .pipelinedRestoreBatches =
           impl_->pipelinedRestoreBatches.load(std::memory_order_relaxed),
+      .maxGpuBytes = impl_->maxGpuBytes,
+      .gpuBytes = impl_->gpuBytes.load(std::memory_order_relaxed),
+      .gpuInsertedBytes =
+          impl_->gpuInsertedBytes.load(std::memory_order_relaxed),
+      .gpuInsertedRanges =
+          impl_->gpuInsertedRanges.load(std::memory_order_relaxed),
+      .gpuAdmissionRejectedRanges =
+          impl_->gpuAdmissionRejectedRanges.load(std::memory_order_relaxed),
+      .gpuRestoreCalls =
+          impl_->gpuRestoreCalls.load(std::memory_order_relaxed),
+      .gpuRestoredBytes =
+          impl_->gpuRestoredBytes.load(std::memory_order_relaxed),
+      .gpuRestoreBatches =
+          impl_->gpuRestoreBatches.load(std::memory_order_relaxed),
   };
 }
 
 void CudfDecodedColumnCache::clearForTesting() {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   impl_->columns.clear();
+  impl_->gpuColumns.clear();
   impl_->metadata.clear();
   impl_->rowGroupSelections.clear();
   impl_->insertedUncompressedBytes.store(0, std::memory_order_relaxed);
@@ -856,6 +1131,13 @@ void CudfDecodedColumnCache::clearForTesting() {
   impl_->restoredUncompressedBytes.store(0, std::memory_order_relaxed);
   impl_->decompressionNanos.store(0, std::memory_order_relaxed);
   impl_->pipelinedRestoreBatches.store(0, std::memory_order_relaxed);
+  impl_->gpuBytes.store(0, std::memory_order_relaxed);
+  impl_->gpuInsertedBytes.store(0, std::memory_order_relaxed);
+  impl_->gpuInsertedRanges.store(0, std::memory_order_relaxed);
+  impl_->gpuAdmissionRejectedRanges.store(0, std::memory_order_relaxed);
+  impl_->gpuRestoreCalls.store(0, std::memory_order_relaxed);
+  impl_->gpuRestoredBytes.store(0, std::memory_order_relaxed);
+  impl_->gpuRestoreBatches.store(0, std::memory_order_relaxed);
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

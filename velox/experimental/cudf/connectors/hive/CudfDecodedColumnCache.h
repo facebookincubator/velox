@@ -85,6 +85,7 @@ struct CachedParquetFileMetadata {
 class CudfDecodedColumnCache {
  public:
   static constexpr uint64_t kMaxPinnedBytes = 70ULL << 30;
+  static constexpr uint64_t kMaxGpuBytes = 40ULL << 30;
 
   enum class CompressionMode {
     kNone,
@@ -106,6 +107,14 @@ class CudfDecodedColumnCache {
     uint64_t restoredUncompressedBytes{0};
     uint64_t decompressionNanos{0};
     uint64_t pipelinedRestoreBatches{0};
+    uint64_t maxGpuBytes{0};
+    uint64_t gpuBytes{0};
+    uint64_t gpuInsertedBytes{0};
+    uint64_t gpuInsertedRanges{0};
+    uint64_t gpuAdmissionRejectedRanges{0};
+    uint64_t gpuRestoreCalls{0};
+    uint64_t gpuRestoredBytes{0};
+    uint64_t gpuRestoreBatches{0};
   };
 
   struct FileKey {
@@ -167,6 +176,11 @@ class CudfDecodedColumnCache {
   /// first called. The experimental cache retains a 70 GiB default.
   static void configureMaxPinnedBytes(uint64_t maxPinnedBytes);
 
+  /// Overrides the non-evicting GPU tier limit before instance() is first
+  /// called. The tier remains unused unless the reader-level GPU cache option
+  /// is enabled.
+  static void configureMaxGpuBytes(uint64_t maxGpuBytes);
+
   static CompressionMode compressionModeFromString(std::string_view value);
 
   MetadataPtr findMetadata(const FileKey& key) const;
@@ -202,7 +216,22 @@ class CudfDecodedColumnCache {
       cudf::column_view column,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref tempMr,
-      CompressionMode compressionMode);
+      CompressionMode compressionMode,
+      std::optional<rmm::device_async_resource_ref> gpuCacheMr =
+          std::nullopt);
+
+  /// Copies and inserts a decoded range into the non-evicting GPU tier.
+  /// Returns false when the range is already covered, the tier is disabled,
+  /// or admission would exceed the configured logical byte limit. Allocation
+  /// failure is treated as non-admission, not query failure.
+  bool insertGpuColumnRangeIfAbsent(
+      ColumnKey key,
+      int64_t firstRow,
+      int64_t lastRow,
+      cudf::column_view column,
+      uint64_t estimatedBytes,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref cacheMr);
 
   /// Restores and concatenates [firstRow, lastRow) on the requested stream.
   /// Returns nullptr if the cache has a gap in the requested range.
@@ -226,14 +255,26 @@ class CudfDecodedColumnCache {
       rmm::device_async_resource_ref outputMr,
       rmm::device_async_resource_ref tempMr) const;
 
+  /// Materializes each request directly from GPU-resident decoded chunks.
+  /// The returned vector matches requests in size and contains nullptr for
+  /// requests with any coverage gap, allowing callers to fall back to the CPU
+  /// tier independently per column.
+  std::vector<std::unique_ptr<cudf::column>> materializeGpuColumnRanges(
+      const std::vector<ColumnRangeRequest>& requests,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref outputMr) const;
+
   uint64_t pinnedBytes() const;
   uint64_t maxPinnedBytes() const;
+  uint64_t gpuBytes() const;
+  uint64_t maxGpuBytes() const;
   Stats stats() const;
 
   /// Clears all entries for test isolation. Production code never calls this.
   void clearForTesting();
 
  private:
+  struct GpuColumnChunk;
   struct Impl;
 
   CudfDecodedColumnCache();

@@ -221,6 +221,10 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   stream_ = cudfGlobalStreamPool().get_stream();
 
   useDecodedColumnCache_ = shouldUseDecodedColumnCache();
+  useDecodedColumnGpuCache_ =
+      useDecodedColumnCache_ and
+      cudfHiveConfig_->experimentalDecodedColumnGpuCacheEnabledSession(
+          connectorQueryCtx_->sessionProperties());
   if (useDecodedColumnCache_) {
     prepareDecodedColumnCache();
   } else {
@@ -346,6 +350,7 @@ void CudfSplitReader::resetSplit() {
   pushdownFilterExpr_ = subfieldFilterExpr_;
   hasSplitSpecificPushdownFilter_ = false;
   useDecodedColumnCache_ = false;
+  useDecodedColumnGpuCache_ = false;
   isFullyDecodedColumnCacheHit_ = false;
   decodedColumnCacheCompression_ =
       CudfDecodedColumnCache::CompressionMode::kNone;
@@ -726,25 +731,53 @@ CudfSplitReader::readNextDecodedColumnCacheFileRange() {
   }
 
   if (not cachedColumnRequests.empty()) {
-    if (not decodedColumnCacheTransferStream_) {
-      decodedColumnCacheTransferStream_ =
-          std::make_unique<rmm::cuda_stream>(
-              rmm::cuda_stream::flags::non_blocking);
+    auto& cache = CudfDecodedColumnCache::instance();
+    std::vector<std::unique_ptr<cudf::column>> gpuCachedColumns(
+        cachedColumnRequests.size());
+    if (useDecodedColumnGpuCache_) {
+      gpuCachedColumns = cache.materializeGpuColumnRanges(
+          cachedColumnRequests, stream_, determineCudfMemoryResource());
     }
-    auto cachedColumns =
-        CudfDecodedColumnCache::instance().materializeColumnRanges(
-            cachedColumnRequests,
-            stream_,
-            decodedColumnCacheTransferStream_->view(),
-            determineCudfMemoryResource(),
-            get_temp_mr());
-    VELOX_CHECK(cachedColumns.has_value());
-    VELOX_CHECK_EQ(cachedColumns->size(), cachedColumnIndices.size());
+
+    std::vector<size_t> cpuCachedColumnIndices;
+    std::vector<CudfDecodedColumnCache::ColumnRangeRequest>
+        cpuCachedColumnRequests;
     for (size_t cachedIndex = 0; cachedIndex < cachedColumnIndices.size();
          ++cachedIndex) {
-      columnStates[cachedColumnIndices[cachedIndex]].output =
-          std::move(cachedColumns.value()[cachedIndex]);
-      ++decodedColumnCacheHits_;
+      if (gpuCachedColumns[cachedIndex]) {
+        columnStates[cachedColumnIndices[cachedIndex]].output =
+            std::move(gpuCachedColumns[cachedIndex]);
+        ++decodedColumnCacheHits_;
+        ++decodedColumnGpuCacheHits_;
+        continue;
+      }
+      cpuCachedColumnIndices.push_back(cachedColumnIndices[cachedIndex]);
+      cpuCachedColumnRequests.push_back(
+          std::move(cachedColumnRequests[cachedIndex]));
+    }
+
+    if (not cpuCachedColumnRequests.empty()) {
+      if (not decodedColumnCacheTransferStream_) {
+        decodedColumnCacheTransferStream_ =
+            std::make_unique<rmm::cuda_stream>(
+                rmm::cuda_stream::flags::non_blocking);
+      }
+      auto cachedColumns = cache.materializeColumnRanges(
+          cpuCachedColumnRequests,
+          stream_,
+          decodedColumnCacheTransferStream_->view(),
+          determineCudfMemoryResource(),
+          get_temp_mr());
+      VELOX_CHECK(cachedColumns.has_value());
+      VELOX_CHECK_EQ(
+          cachedColumns->size(), cpuCachedColumnIndices.size());
+      for (size_t cachedIndex = 0;
+           cachedIndex < cpuCachedColumnIndices.size();
+           ++cachedIndex) {
+        columnStates[cpuCachedColumnIndices[cachedIndex]].output =
+            std::move(cachedColumns.value()[cachedIndex]);
+        ++decodedColumnCacheHits_;
+      }
     }
   }
 
@@ -847,7 +880,10 @@ CudfSplitReader::decodeAndCacheFileColumns(
           slices.front(),
           stream_,
           get_temp_mr(),
-          decodedColumnCacheCompression_);
+          decodedColumnCacheCompression_,
+          useDecodedColumnGpuCache_
+              ? std::optional<rmm::device_async_resource_ref>{get_output_mr()}
+              : std::nullopt);
     }
     result.push_back(std::move(column));
   }

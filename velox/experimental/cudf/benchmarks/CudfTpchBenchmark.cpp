@@ -93,6 +93,18 @@ DEFINE_uint64(
     "default remains 70 GiB.");
 
 DEFINE_bool(
+    cudf_hive_use_gpu_decoded_column_cache,
+    false,
+    "Keep an additional non-evicting GPU-resident copy of decoded column "
+    "ranges. Requires --cudf_hive_use_decoded_column_cache.");
+
+DEFINE_uint64(
+    cudf_hive_decoded_column_cache_max_gpu_bytes,
+    cudf_velox::connector::hive::CudfDecodedColumnCache::kMaxGpuBytes,
+    "Logical admission limit for the experimental non-evicting GPU tier. The "
+    "default is 40 GiB and the tier is disabled unless explicitly enabled.");
+
+DEFINE_bool(
     cudf_benchmark_nvtx_query_ranges,
     false,
     "Wrap each verbose TPC-H query iteration in an NVTX range containing the "
@@ -121,9 +133,15 @@ class RepeatFlagRestorer {
 } // namespace
 
 void CudfTpchBenchmark::initialize() {
+  VELOX_USER_CHECK(
+      not FLAGS_cudf_hive_use_gpu_decoded_column_cache or
+          FLAGS_cudf_hive_use_decoded_column_cache,
+      "The GPU decoded column cache requires the decoded column CPU cache");
   cudf_velox::connector::hive::CudfDecodedColumnCache::
       configureMaxPinnedBytes(
           FLAGS_cudf_hive_decoded_column_cache_max_pinned_bytes);
+  cudf_velox::connector::hive::CudfDecodedColumnCache::configureMaxGpuBytes(
+      FLAGS_cudf_hive_decoded_column_cache_max_gpu_bytes);
 
   if (!FLAGS_cudf_properties.empty()) {
     cudf_velox::CudfConfig::getInstance().initialize(
@@ -156,6 +174,10 @@ void CudfTpchBenchmark::initialize() {
     cudfHiveConfigurationValues[cudf_velox::connector::hive::CudfHiveConfig::
                                     kExperimentalDecodedColumnCacheEnabled] =
         std::to_string(FLAGS_cudf_hive_use_decoded_column_cache);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::
+             kExperimentalDecodedColumnGpuCacheEnabled] =
+            std::to_string(FLAGS_cudf_hive_use_gpu_decoded_column_cache);
     cudfHiveConfigurationValues
         [cudf_velox::connector::hive::CudfHiveConfig::
              kExperimentalDecodedColumnCacheCompression] =
@@ -230,15 +252,20 @@ void CudfTpchBenchmark::runMain(
       const auto insertedStored =
           after.insertedStoredBytes - before.insertedStoredBytes;
       out << fmt::format(
-          "decoded-cache iteration={} compression={} max_pinned_bytes={} "
+          "decoded-cache iteration={} compression={} gpu_cache={} "
+          "max_pinned_bytes={} "
           "pinned_bytes={} "
           "inserted_uncompressed_bytes={} inserted_stored_bytes={} "
           "compressed_ranges={} raw_ranges={} compression_attempts={} "
           "encode_ms={:.3f} restore_calls={} restored_stored_bytes={} "
           "restored_uncompressed_bytes={} decompress_ms={:.3f} "
-          "restore_batches={}\n",
+          "restore_batches={} max_gpu_bytes={} gpu_bytes={} "
+          "gpu_inserted_bytes={} gpu_inserted_ranges={} "
+          "gpu_admission_rejected_ranges={} gpu_restore_calls={} "
+          "gpu_restored_bytes={} gpu_restore_batches={}\n",
           iteration,
           FLAGS_cudf_hive_decoded_column_cache_compression,
+          FLAGS_cudf_hive_use_gpu_decoded_column_cache,
           after.maxPinnedBytes,
           after.pinnedBytes,
           insertedUncompressed,
@@ -255,7 +282,16 @@ void CudfTpchBenchmark::runMain(
           static_cast<double>(
               after.decompressionNanos - before.decompressionNanos) /
               1'000'000.0,
-          after.pipelinedRestoreBatches - before.pipelinedRestoreBatches);
+          after.pipelinedRestoreBatches - before.pipelinedRestoreBatches,
+          after.maxGpuBytes,
+          after.gpuBytes,
+          after.gpuInsertedBytes - before.gpuInsertedBytes,
+          after.gpuInsertedRanges - before.gpuInsertedRanges,
+          after.gpuAdmissionRejectedRanges -
+              before.gpuAdmissionRejectedRanges,
+          after.gpuRestoreCalls - before.gpuRestoreCalls,
+          after.gpuRestoredBytes - before.gpuRestoredBytes,
+          after.gpuRestoreBatches - before.gpuRestoreBatches);
     }
   }
 }
@@ -282,6 +318,9 @@ CudfTpchBenchmark::makeConnectorProperties() {
   cfg->set(
       CudfHiveCfg::kExperimentalDecodedColumnCacheEnabled,
       std::to_string(FLAGS_cudf_hive_use_decoded_column_cache));
+  cfg->set(
+      CudfHiveCfg::kExperimentalDecodedColumnGpuCacheEnabled,
+      std::to_string(FLAGS_cudf_hive_use_gpu_decoded_column_cache));
   cfg->set(
       CudfHiveCfg::kExperimentalDecodedColumnCacheCompression,
       FLAGS_cudf_hive_decoded_column_cache_compression);

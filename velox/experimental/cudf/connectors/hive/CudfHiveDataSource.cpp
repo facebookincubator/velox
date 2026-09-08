@@ -250,6 +250,8 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     decodedColumnCacheMisses_ += cudfSplitReader_->decodedColumnCacheMisses();
     decodedColumnCacheDecodeCalls_ +=
         cudfSplitReader_->decodedColumnCacheDecodeCalls();
+    decodedColumnGpuCacheHits_ +=
+        cudfSplitReader_->decodedColumnGpuCacheHits();
   }
   cudfSplitReader_ = createCudfSplitReader();
   cudfSplitReader_->prepareSplit(runtimeStats_);
@@ -361,6 +363,8 @@ CudfHiveDataSource::getRuntimeStats() {
   const auto decodedColumnCacheDecodeCalls = decodedColumnCacheDecodeCalls_ +
       (cudfSplitReader_ ? cudfSplitReader_->decodedColumnCacheDecodeCalls()
                         : 0);
+  const auto decodedColumnGpuCacheHits = decodedColumnGpuCacheHits_ +
+      (cudfSplitReader_ ? cudfSplitReader_->decodedColumnGpuCacheHits() : 0);
   result.insert({
       {std::string(connector::hive::HiveDataSource::kTotalScanTime),
        RuntimeMetric(
@@ -380,6 +384,9 @@ CudfHiveDataSource::getRuntimeStats() {
     result.emplace(
         std::string(kDecodedColumnCacheDecodeCalls),
         RuntimeMetric(decodedColumnCacheDecodeCalls));
+    result.emplace(
+        std::string(kDecodedColumnGpuCacheHits),
+        RuntimeMetric(decodedColumnGpuCacheHits));
   }
   const auto& ioStats = ioStats_->stats();
   for (const auto& storageStats : ioStats) {

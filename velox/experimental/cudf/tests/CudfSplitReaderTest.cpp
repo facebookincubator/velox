@@ -242,6 +242,103 @@ TEST_F(CudfSplitReaderTest, pinnedRangeCacheAssemblesOverlaps) {
   EXPECT_EQ(cache.pinnedBytes(), pinnedBytes);
 }
 
+TEST_F(CudfSplitReaderTest, gpuRangeCacheAssemblesOverlaps) {
+  auto input =
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto cudfTable = with_arrow::toCudfTable(input, input->pool(), stream, mr);
+  auto ranges = cudf::slice(cudfTable->view(), {0, 50, 50, 100}, stream);
+  ASSERT_EQ(ranges.size(), 2);
+
+  int deviceId = 0;
+  CUDF_CUDA_TRY(cudaGetDevice(&deviceId));
+  CudfDecodedColumnCache::ColumnKey key{
+      .file = {.connectorId = "test", .filePath = "gpu-overlapping-ranges"},
+      .deviceId = deviceId,
+      .columnName = "c0",
+      .veloxType = BIGINT()->toString(),
+      .timestampType = cudf::type_id::TIMESTAMP_MILLISECONDS,
+      .usePandasMetadata = true,
+      .useArrowSchema = true,
+      .allowMismatchedSchemas = false,
+  };
+
+  auto& cache = CudfDecodedColumnCache::instance();
+  const auto gpuBytesBefore = cache.gpuBytes();
+  ASSERT_TRUE(cache.insertGpuColumnRangeIfAbsent(
+      key,
+      0,
+      50,
+      ranges[0].column(0),
+      50 * sizeof(int64_t),
+      stream,
+      mr));
+  ASSERT_TRUE(cache.insertGpuColumnRangeIfAbsent(
+      key,
+      50,
+      100,
+      ranges[1].column(0),
+      50 * sizeof(int64_t),
+      stream,
+      mr));
+  EXPECT_GT(cache.gpuBytes(), gpuBytesBefore);
+  EXPECT_LE(cache.gpuBytes(), cache.maxGpuBytes());
+
+  const auto statsBefore = cache.stats();
+  std::vector<CudfDecodedColumnCache::ColumnRangeRequest> requests{
+      {key, {{25, 75}}}};
+  auto assembled = cache.materializeGpuColumnRanges(requests, stream, mr);
+  ASSERT_EQ(assembled.size(), 1);
+  ASSERT_NE(assembled.front(), nullptr);
+  ASSERT_EQ(assembled.front()->size(), 50);
+  std::vector<int64_t> actual(assembled.front()->size());
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      actual.data(),
+      assembled.front()->view().data<int64_t>(),
+      actual.size() * sizeof(int64_t),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
+  stream.synchronize();
+  for (size_t i = 0; i < actual.size(); ++i) {
+    EXPECT_EQ(actual[i], i + 25);
+  }
+
+  const auto statsAfter = cache.stats();
+  EXPECT_EQ(statsAfter.gpuRestoreCalls - statsBefore.gpuRestoreCalls, 2);
+  EXPECT_EQ(statsAfter.gpuRestoreBatches - statsBefore.gpuRestoreBatches, 1);
+
+  requests.front().ranges = {{25, 125}};
+  auto missing = cache.materializeGpuColumnRanges(requests, stream, mr);
+  ASSERT_EQ(missing.size(), 1);
+  EXPECT_EQ(missing.front(), nullptr);
+
+  const auto gpuBytes = cache.gpuBytes();
+  EXPECT_FALSE(cache.insertGpuColumnRangeIfAbsent(
+      key,
+      0,
+      50,
+      ranges[0].column(0),
+      50 * sizeof(int64_t),
+      stream,
+      mr));
+  EXPECT_EQ(cache.gpuBytes(), gpuBytes);
+
+  auto overCapKey = key;
+  overCapKey.file.filePath = "gpu-over-cap";
+  const auto rejectedBefore = cache.stats().gpuAdmissionRejectedRanges;
+  EXPECT_FALSE(cache.insertGpuColumnRangeIfAbsent(
+      std::move(overCapKey),
+      0,
+      50,
+      ranges[0].column(0),
+      cache.maxGpuBytes() + 1,
+      stream,
+      mr));
+  EXPECT_EQ(
+      cache.stats().gpuAdmissionRejectedRanges - rejectedBefore, 1);
+}
+
 TEST_F(CudfSplitReaderTest, compressedPinnedRangeCacheRoundTrip) {
   constexpr vector_size_t kRows = 1 << 16;
   auto input =
@@ -304,6 +401,111 @@ TEST_F(CudfSplitReaderTest, compressedPinnedRangeCacheRoundTrip) {
       afterRestore.restoredUncompressedBytes,
       afterInsert.insertedUncompressedBytes);
   EXPECT_GT(afterRestore.decompressionNanos, 0);
+}
+
+TEST_F(CudfSplitReaderTest, readerPrefersGpuTierOverPinnedTier) {
+  constexpr vector_size_t kRows = 32;
+  auto fileRowType = ROW({"c0"}, {BIGINT()});
+  auto dataFile = common::testutil::TempFilePath::create();
+  writeToFile(
+      dataFile->getPath(),
+      makeRowVector(
+          {"c0"}, {makeFlatVector<int64_t>(kRows, folly::identity)}));
+
+  auto properties = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {CudfHiveConfig::kUseExperimentalCudfReader, "true"},
+          {CudfHiveConfig::kExperimentalDecodedColumnCacheEnabled, "true"},
+          {CudfHiveConfig::kExperimentalDecodedColumnGpuCacheEnabled, "true"},
+          {CudfHiveConfig::kImmutableFiles, "true"},
+      });
+  ::facebook::velox::connector::ConnectorQueryCtx connectorQueryCtx(
+      pool_.get(),
+      pool_.get(),
+      properties.get(),
+      nullptr,
+      common::PrefixSortConfig{},
+      nullptr,
+      nullptr,
+      "query.CudfSplitReaderTest",
+      "task.CudfSplitReaderTest",
+      "plan.CudfSplitReaderTest",
+      0,
+      "");
+  FileHandleFactory fileHandleFactory(
+      std::make_unique<FileHandleCache>(1000),
+      std::make_unique<FileHandleGenerator>());
+  auto tableHandle =
+      CudfHiveConnectorTestBase::makeTableHandle("parquet_table", fileRowType);
+
+  struct ReadResult {
+    uint64_t hits;
+    uint64_t gpuHits;
+    uint64_t misses;
+    uint64_t decodeCalls;
+    uint64_t cpuRestoreBatches;
+    uint64_t gpuRestoreBatches;
+    size_t rows;
+  };
+  auto read = [&]() {
+    auto split =
+        CudfHiveConnectorSplitBuilder(dataFile->getPath())
+            .connectorId(
+                ::facebook::velox::cudf_velox::exec::test::
+                    kCudfHiveConnectorId)
+            .build();
+    CudfSplitReader reader(
+        std::move(split),
+        tableHandle,
+        fileRowType,
+        {"c0"},
+        &fileHandleFactory,
+        ioExecutor_.get(),
+        &connectorQueryCtx,
+        std::make_shared<CudfHiveConfig>(properties),
+        std::make_shared<io::IoStatistics>(),
+        std::make_shared<IoStats>(),
+        true,
+        nullptr);
+    dwio::common::RuntimeStats runtimeStats;
+    reader.prepareSplit(runtimeStats);
+    const auto statsBefore = CudfDecodedColumnCache::instance().stats();
+    size_t rows = 0;
+    while (auto chunk = reader.next(0)) {
+      rows += chunk.value()->num_rows();
+      reader.stream().synchronize();
+    }
+    const auto statsAfter = CudfDecodedColumnCache::instance().stats();
+    return ReadResult{
+        .hits = reader.decodedColumnCacheHits(),
+        .gpuHits = reader.decodedColumnGpuCacheHits(),
+        .misses = reader.decodedColumnCacheMisses(),
+        .decodeCalls = reader.decodedColumnCacheDecodeCalls(),
+        .cpuRestoreBatches = statsAfter.pipelinedRestoreBatches -
+            statsBefore.pipelinedRestoreBatches,
+        .gpuRestoreBatches =
+            statsAfter.gpuRestoreBatches - statsBefore.gpuRestoreBatches,
+        .rows = rows,
+    };
+  };
+
+  const auto first = read();
+  EXPECT_EQ(first.hits, 0);
+  EXPECT_EQ(first.gpuHits, 0);
+  EXPECT_EQ(first.misses, 1);
+  EXPECT_EQ(first.decodeCalls, 1);
+  EXPECT_EQ(first.rows, kRows);
+  EXPECT_GT(CudfDecodedColumnCache::instance().gpuBytes(), 0);
+
+  ASSERT_TRUE(std::filesystem::remove(dataFile->getPath()));
+  const auto second = read();
+  EXPECT_EQ(second.hits, 1);
+  EXPECT_EQ(second.gpuHits, 1);
+  EXPECT_EQ(second.misses, 0);
+  EXPECT_EQ(second.decodeCalls, 0);
+  EXPECT_EQ(second.cpuRestoreBatches, 0);
+  EXPECT_EQ(second.gpuRestoreBatches, 1);
+  EXPECT_EQ(second.rows, kRows);
 }
 
 TEST_F(CudfSplitReaderTest, batchesDecodedColumnsAcrossFileRowGroups) {

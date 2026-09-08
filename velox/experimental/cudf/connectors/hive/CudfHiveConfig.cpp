@@ -154,6 +154,18 @@ bool CudfHiveConfig::experimentalDecodedColumnCacheEnabledSession(
       config_->get<bool>(kExperimentalDecodedColumnCacheEnabled, false));
 }
 
+bool CudfHiveConfig::experimentalDecodedColumnGpuCacheEnabled() const {
+  return config_->get<bool>(
+      kExperimentalDecodedColumnGpuCacheEnabled, false);
+}
+
+bool CudfHiveConfig::experimentalDecodedColumnGpuCacheEnabledSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kExperimentalDecodedColumnGpuCacheEnabledSession,
+      experimentalDecodedColumnGpuCacheEnabled());
+}
+
 std::string CudfHiveConfig::experimentalDecodedColumnCacheCompression() const {
   return config_->get<std::string>(
       kExperimentalDecodedColumnCacheCompression, "none");

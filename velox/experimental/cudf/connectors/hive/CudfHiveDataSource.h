@@ -48,6 +48,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       "decodedColumnCacheMisses";
   static constexpr std::string_view kDecodedColumnCacheDecodeCalls =
       "decodedColumnCacheDecodeCalls";
+  static constexpr std::string_view kDecodedColumnGpuCacheHits =
+      "decodedColumnGpuCacheHits";
 
   CudfHiveDataSource(
       const RowTypePtr& outputType,
@@ -135,6 +137,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   uint64_t decodedColumnCacheHits_{0};
   uint64_t decodedColumnCacheMisses_{0};
   uint64_t decodedColumnCacheDecodeCalls_{0};
+  uint64_t decodedColumnGpuCacheHits_{0};
 
   // Optimized remaining-filter expression, or null when there is no remaining
   // filter. Gates remaining-filter evaluation in next().

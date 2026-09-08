@@ -96,6 +96,15 @@ class CudfHiveConfig {
   static constexpr const char* kExperimentalDecodedColumnCacheEnabledSession =
       "cudf.hive.experimental_decoded_column_cache_enabled";
 
+  // Optional non-evicting GPU-resident tier above the decoded pinned-host
+  // cache. This experimental tier is populated only when the decoded column
+  // cache itself is enabled.
+  static constexpr const char* kExperimentalDecodedColumnGpuCacheEnabled =
+      "cudf.hive.experimental-decoded-column-gpu-cache-enabled";
+  static constexpr const char*
+      kExperimentalDecodedColumnGpuCacheEnabledSession =
+          "cudf.hive.experimental_decoded_column_gpu_cache_enabled";
+
   // Storage codec for decoded cache ranges: none, column, or
   // column-advanced. The latter enables all codecs imported from the adaptive
   // UCX exchange compression experiment.
@@ -178,6 +187,10 @@ class CudfHiveConfig {
 
   bool experimentalDecodedColumnCacheEnabled() const;
   bool experimentalDecodedColumnCacheEnabledSession(
+      const config::ConfigBase* session) const;
+
+  bool experimentalDecodedColumnGpuCacheEnabled() const;
+  bool experimentalDecodedColumnGpuCacheEnabledSession(
       const config::ConfigBase* session) const;
 
   std::string experimentalDecodedColumnCacheCompression() const;
