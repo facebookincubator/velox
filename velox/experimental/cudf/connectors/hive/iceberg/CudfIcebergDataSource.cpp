@@ -48,6 +48,55 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           cudfHiveConfig),
       hiveConfig_(hiveConfig) {}
 
+std::unique_ptr<CudfSplitReader>
+CudfIcebergDataSource::createBatchedSplitReader(
+    const std::vector<
+        std::shared_ptr<facebook::velox::connector::ConnectorSplit>>& batch,
+    dwio::common::RuntimeStats& runtimeStats) {
+  if (!useExperimentalCudfReader_) {
+    return nullptr;
+  }
+
+  std::vector<std::string> paths;
+  std::shared_ptr<const velox_iceberg::HiveIcebergSplit> first;
+  for (const auto& child : batch) {
+    auto split =
+        std::dynamic_pointer_cast<const velox_iceberg::HiveIcebergSplit>(child);
+    if (!split || !split->deleteFiles.empty() ||
+        !split->partitionKeys.empty() ||
+        !split->identityPartitionKeys.empty() || split->start != 0 ||
+        split->fileFormat != dwio::common::FileFormat::PARQUET ||
+        split->tableBucketNumber || split->bucketConversion ||
+        split->rowIdProperties || split->extraFileInfo ||
+        split->batchSizeHint != 0 || !split->cacheable || split->properties) {
+      return nullptr;
+    }
+    // Per-file information columns cannot be injected as one batch constant.
+    for (const auto& name : readColumnNames_) {
+      if (split->infoColumns.contains(name)) {
+        return nullptr;
+      }
+    }
+    if (!first) {
+      first = split;
+    } else if (
+        split->customSplitInfo != first->customSplitInfo ||
+        split->columnMappingMode != first->columnMappingMode) {
+      return nullptr;
+    }
+    paths.push_back(split->filePath);
+  }
+
+  icebergSplit_ = first;
+  split_ = CudfHiveConnectorSplit::makeBatch(first->connectorId, paths, 0);
+  auto reader = createCudfSplitReader();
+  if (!checkedPointerCast<CudfIcebergSplitReader>(reader.get())
+           ->tryPrepareBatch(batch, runtimeStats)) {
+    return nullptr;
+  }
+  return reader;
+}
+
 void CudfIcebergDataSource::convertSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
   // Convert `ConnectorSplit` to `HiveIcebergSplit`

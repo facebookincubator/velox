@@ -54,6 +54,9 @@ class CudfIcebergConnector final
     return false;
   }
 
+  /// Accepts split vectors when cuDF split batching is enabled.
+  bool supportsSplitBatch() const override;
+
   bool supportsSplitPreload() const override {
     return false;
   }

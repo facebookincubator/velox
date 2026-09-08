@@ -40,6 +40,18 @@ The datasource checks whole-file coverage against actual file sizes. Incompatibl
 splits retain their original per-file processing and metadata. The existing cuDF
 file-list split constructors also remain available for direct reader callers.
 
+## Iceberg scope
+
+Iceberg combines a vector only for the experimental reader when all children
+are unpartitioned Parquet files without deletes, have identical physical schemas
+and column-mapping metadata, and read ordinary data columns present in each file.
+Bounded splits must cover the actual size of their files.
+
+Other cases run through the existing per-file Iceberg reader. This includes
+deletes, partition values, file metadata columns, missing columns, differing
+schemas, and byte ranges. No multi-file delete processing or schema
+reconciliation is introduced.
+
 ## Integration and observation
 
 Presto collects the splits accepted from each TaskSource update into a vector

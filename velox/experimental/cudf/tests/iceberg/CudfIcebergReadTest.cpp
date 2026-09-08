@@ -16,6 +16,7 @@
 
 /// Basic end-to-end read tests for the cudf Iceberg connector.
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
@@ -2478,6 +2479,329 @@ TEST_F(CudfIcebergReadTest, partitionColumnsFromHive) {
                   .endTableScan()
                   .planNode();
   AssertQueryBuilder(plan).splits(icebergSplits).assertResults({expected});
+}
+
+TEST_F(CudfIcebergReadTest, splitBatchUsesMultiFileHybridReader) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto firstData = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto secondData = makeRowVector({makeFlatVector<int64_t>({3, 4, 5})});
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  writeToFile(firstFile->getPath(), firstData);
+  writeToFile(secondFile->getPath(), secondData);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(asRowType(firstData->type()))
+                  .endTableScan()
+                  .planNode();
+  for (const bool experimental : {false, true}) {
+    for (const bool buffered : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("experimental={}, buffered={}", experimental, buffered));
+      std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+          children{
+              makeIcebergSplits(firstFile->getPath()).front(),
+              makeIcebergSplits(secondFile->getPath()).front()};
+      auto task =
+          AssertQueryBuilder(plan)
+              .connectorSessionProperty(
+                  kCudfIcebergConnectorId,
+                  connector::hive::CudfHiveConfig::
+                      kUseExperimentalCudfReaderSession,
+                  experimental ? "true" : "false")
+              .connectorSessionProperty(
+                  kCudfIcebergConnectorId,
+                  connector::hive::CudfHiveConfig::kUseBufferedInputSession,
+                  buffered ? "true" : "false")
+              .beforeTaskStart([&](Task& task) {
+                std::vector<Split> splits;
+                for (auto child : children) {
+                  splits.emplace_back(std::move(child));
+                }
+                task.addSplit(plan->id(), std::move(splits));
+                task.noMoreSplits(plan->id());
+              })
+              .assertResults({firstData, secondData});
+      const auto stats = toPlanStats(task->taskStats());
+      const auto& metrics = stats.at(plan->id()).customStats;
+      if (experimental) {
+        ASSERT_TRUE(metrics.contains("parquet.cudfMultiFileReaders"));
+        EXPECT_EQ(metrics.at("parquet.cudfMultiFileReaders").sum, 1);
+        EXPECT_EQ(metrics.at("parquet.cudfBatchedFiles").sum, 2);
+      } else {
+        EXPECT_FALSE(metrics.contains("parquet.cudfMultiFileReaders"));
+      }
+    }
+  }
+}
+
+TEST_F(CudfIcebergReadTest, splitBatchDoesNotExpandByteRanges) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+      children;
+  for (const auto& file : {firstFile, secondFile}) {
+    writeToFile(file->getPath(), data);
+    children.push_back(IcebergSplitBuilder(file->getPath())
+                           .connectorId(kCudfIcebergConnectorId)
+                           .fileFormat(dwio::common::FileFormat::PARQUET)
+                           // Covers the file header, without any row groups.
+                           .length(1)
+                           .build());
+  }
+  auto plan = makeTableScanPlan(asRowType(data->type()));
+  auto empty = makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{})});
+  auto task = AssertQueryBuilder(plan)
+                  .connectorSessionProperty(
+                      kCudfIcebergConnectorId,
+                      connector::hive::CudfHiveConfig::
+                          kUseExperimentalCudfReaderSession,
+                      "true")
+                  .beforeTaskStart([&](Task& task) {
+                    std::vector<Split> splits;
+                    for (auto child : children) {
+                      splits.emplace_back(std::move(child));
+                    }
+                    task.addSplit(plan->id(), std::move(splits));
+                    task.noMoreSplits(plan->id());
+                  })
+                  .assertResults({empty});
+  EXPECT_FALSE(toPlanStats(task->taskStats())
+                   .at(plan->id())
+                   .customStats.contains("parquet.cudfMultiFileReaders"));
+}
+
+TEST_F(CudfIcebergReadTest, splitBatchFallsBackForSchemaEvolution) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto firstData = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto secondData = makeRowVector(
+      {makeFlatVector<int64_t>({3, 4}), makeFlatVector<int64_t>({30, 40})});
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  writeToFile(firstFile->getPath(), firstData);
+  writeToFile(secondFile->getPath(), secondData);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(asRowType(secondData->type()))
+                  .endTableScan()
+                  .planNode();
+  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+      children{
+          makeIcebergSplits(firstFile->getPath()).front(),
+          makeIcebergSplits(secondFile->getPath()).front()};
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt, 30, 40})});
+  auto task = AssertQueryBuilder(plan)
+                  .connectorSessionProperty(
+                      kCudfIcebergConnectorId,
+                      connector::hive::CudfHiveConfig::
+                          kUseExperimentalCudfReaderSession,
+                      "true")
+                  .beforeTaskStart([&](Task& task) {
+                    std::vector<Split> splits;
+                    for (auto child : children) {
+                      splits.emplace_back(std::move(child));
+                    }
+                    task.addSplit(plan->id(), std::move(splits));
+                    task.noMoreSplits(plan->id());
+                  })
+                  .assertResults({expected});
+  EXPECT_FALSE(toPlanStats(task->taskStats())
+                   .at(plan->id())
+                   .customStats.contains("parquet.cudfMultiFileReaders"));
+}
+
+TEST_F(CudfIcebergReadTest, splitBatchFallsBackForFileMetadata) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  writeToFile(firstFile->getPath(), data);
+  writeToFile(secondFile->getPath(), data);
+  auto type = ROW({"c0", "$path"}, {BIGINT(), VARCHAR()});
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(type)
+                  .endTableScan()
+                  .planNode();
+  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+      children;
+  std::vector<RowVectorPtr> expected;
+  for (const auto& file : {firstFile, secondFile}) {
+    auto split = makeIcebergSplits(file->getPath()).front();
+    std::static_pointer_cast<HiveIcebergSplit>(split)->infoColumns["$path"] =
+        file->getPath();
+    children.push_back(std::move(split));
+    expected.push_back(makeRowVector(
+        type->names(),
+        {data->childAt(0), makeFlatVector<std::string>(2, [&](auto) {
+           return file->getPath();
+         })}));
+  }
+  auto task = AssertQueryBuilder(plan)
+                  .connectorSessionProperty(
+                      kCudfIcebergConnectorId,
+                      connector::hive::CudfHiveConfig::
+                          kUseExperimentalCudfReaderSession,
+                      "true")
+                  .beforeTaskStart([&](Task& task) {
+                    std::vector<Split> splits;
+                    for (auto child : children) {
+                      splits.emplace_back(std::move(child));
+                    }
+                    task.addSplit(plan->id(), std::move(splits));
+                    task.noMoreSplits(plan->id());
+                  })
+                  .assertResults(expected);
+  EXPECT_FALSE(toPlanStats(task->taskStats())
+                   .at(plan->id())
+                   .customStats.contains("parquet.cudfMultiFileReaders"));
+}
+
+TEST_F(
+    CudfIcebergReadTest,
+    splitBatchPreservesPerFilePartitionAndDeleteMetadata) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto firstData = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto secondData = makeRowVector({makeFlatVector<int64_t>({3, 4})});
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  writeToFile(firstFile->getPath(), firstData);
+  writeToFile(secondFile->getPath(), secondData);
+
+  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
+  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
+
+  auto firstDeleteFile = TempFilePath::create();
+  auto firstDelete = makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {
+          makeFlatVector<std::string>(
+              1, [&](vector_size_t) { return firstFile->getPath(); }),
+          makeFlatVector<int64_t>({0}),
+      });
+  writeDeleteFile(
+      DeleteFileFormat::DWRF, firstDeleteFile->getPath(), {firstDelete});
+  IcebergDeleteFile firstDeleteMetadata(
+      FileContent::kPositionalDeletes,
+      firstDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(firstDeleteFile->getPath()));
+
+  auto secondDeleteFile = TempFilePath::create();
+  auto secondDelete = makeRowVector(
+      {pathColumn->name, posColumn->name},
+      {
+          makeFlatVector<std::string>(
+              1, [&](vector_size_t) { return secondFile->getPath(); }),
+          makeFlatVector<int64_t>({1}),
+      });
+  writeDeleteFile(
+      DeleteFileFormat::DWRF, secondDeleteFile->getPath(), {secondDelete});
+  IcebergDeleteFile secondDeleteMetadata(
+      FileContent::kPositionalDeletes,
+      secondDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(secondDeleteFile->getPath()));
+
+  auto firstSplits = makeIcebergSplits(
+      firstFile->getPath(), {firstDeleteMetadata}, {{"region", "US"}});
+  auto secondSplits = makeIcebergSplits(
+      secondFile->getPath(), {secondDeleteMetadata}, {{"region", "EU"}});
+  ASSERT_EQ(firstSplits.size(), 1);
+  ASSERT_EQ(secondSplits.size(), 1);
+  ASSERT_NE(
+      std::dynamic_pointer_cast<HiveIcebergSplit>(firstSplits.front()),
+      nullptr);
+  ASSERT_NE(
+      std::dynamic_pointer_cast<HiveIcebergSplit>(secondSplits.front()),
+      nullptr);
+
+  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+      children{firstSplits.front(), secondSplits.front()};
+
+  auto tableType = ROW({"c0", "region"}, {BIGINT(), VARCHAR()});
+  facebook::velox::connector::ColumnHandleMap assignments;
+  assignments["c0"] = std::make_shared<HiveColumnHandle>(
+      "c0",
+      HiveColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{});
+  assignments["region"] = std::make_shared<HiveColumnHandle>(
+      "region",
+      HiveColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR(),
+      VARCHAR(),
+      std::vector<common::Subfield>{});
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(tableType)
+                  .dataColumns(tableType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+  auto expected = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int64_t>({2, 3}),
+          makeFlatVector<std::string>({"US", "EU"}),
+      });
+
+  AssertQueryBuilder(plan).splits(children).assertResults({expected});
+  auto task = AssertQueryBuilder(plan)
+                  .connectorSessionProperty(
+                      kCudfIcebergConnectorId,
+                      cudf_velox::connector::hive::CudfHiveConfig::
+                          kUseExperimentalCudfReaderSession,
+                      "true")
+                  .beforeTaskStart([&](Task& task) {
+                    std::vector<Split> splits;
+                    for (auto child : children) {
+                      splits.emplace_back(std::move(child));
+                    }
+                    task.addSplit(plan->id(), std::move(splits));
+                    task.noMoreSplits(plan->id());
+                  })
+                  .assertResults({expected});
+  EXPECT_FALSE(toPlanStats(task->taskStats())
+                   .at(plan->id())
+                   .customStats.contains("parquet.cudfMultiFileReaders"));
 }
 
 // Test reading a DATE identity partition column. DATE partition values arrive

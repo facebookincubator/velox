@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
@@ -54,6 +55,10 @@ CudfIcebergConnector::CudfIcebergConnector(
               connectorConfig())) {
   registerIcebergInternalFunctions(icebergConfig_->functionPrefix());
   VLOG(1) << "cuDF Iceberg connector created";
+}
+
+bool CudfIcebergConnector::supportsSplitBatch() const {
+  return cudfIsRegistered() && CudfConfig::getInstance().batchSplitsEnabled;
 }
 
 std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
