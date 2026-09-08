@@ -115,6 +115,13 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// source's destructive move would corrupt data for other servers).
   bool canUseIntraNode(std::string_view taskId);
 
+  /// Resolves whether a task can use process-local exchange after its real
+  /// output kind is known. If the task is still represented by a placeholder,
+  /// callback invocation is deferred until initializeTask() or removeTask().
+  void notifyOnIntraNodeEligibility(
+      std::string_view taskId,
+      UcxIntraNodeEligibilityCallback callback);
+
   /// @brief Removes the queue for the given task from the queue manager.
   /// Calls "terminate" on the queue to awake waiting producers.
   void removeTask(const std::string& taskId) override;

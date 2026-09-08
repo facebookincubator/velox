@@ -151,6 +151,42 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
       queue->kind() != core::PartitionedOutputNode::Kind::kBroadcast;
 }
 
+void UcxOutputQueueManager::notifyOnIntraNodeEligibility(
+    std::string_view taskId,
+    UcxIntraNodeEligibilityCallback callback) {
+  VELOX_CHECK(callback, "Intra-node eligibility callback must be set");
+
+  const std::string taskIdStr{taskId};
+  std::shared_ptr<UcxOutputQueue> outputQueue;
+  bool taskRemoved = false;
+  queues_.withLock([&](auto& queues) {
+    auto it = queues.find(taskIdStr);
+    if (it != queues.end()) {
+      outputQueue = it->second;
+      return;
+    }
+
+    taskRemoved = removedTasks_.withLock(
+        [&](auto& removed) { return removed.count(taskIdStr) > 0; });
+    if (!taskRemoved) {
+      // A local source can connect before the producer task is initialized.
+      // Preserve the handshake until initializeTask() publishes the real kind.
+      outputQueue = std::make_shared<UcxOutputQueue>(
+          nullptr,
+          /*numDestinations=*/0,
+          /*numDrivers=*/0,
+          core::PartitionedOutputNode::Kind::kPartitioned);
+      queues[taskIdStr] = outputQueue;
+    }
+  });
+
+  if (taskRemoved) {
+    callback(false);
+    return;
+  }
+  outputQueue->notifyOnIntraNodeEligibility(std::move(callback));
+}
+
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
   auto queue =
