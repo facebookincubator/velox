@@ -112,6 +112,10 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 <dd><blockquote>
 <div><p>Returns the <a class="reference external" href="https://en.wikipedia.org/wiki/Cosine_similarity">cosine similarity</a> between the vectors represented as array(real).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This overload is only registered when Velox is built with <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS=ON</span></code>, which is off by default.</p>
+</div>
 </div></blockquote>
 </dd></dl>
 
@@ -126,6 +130,10 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 <p>SELECT l2_squared(ARRAY[], ARRAY[2, 3]); – Throws VeloxUserError</p>
 <p>SELECT l2_squared(ARRAY[], ARRAY[]); – NaN</p>
 </div></blockquote>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This overload is only registered when Velox is built with <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS=ON</span></code>, which is off by default.</p>
+</div>
 </dd></dl>
 
 <dl class="py function">
@@ -134,6 +142,10 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 <dd><blockquote>
 <div><p>Returns the squared <a class="reference external" href="https://en.wikipedia.org/wiki/Euclidean_distance">Euclidean distance</a> between the vectors represented as array(double).
 If any input array is empty, the function returns NaN. If the input arrays have different sizes, the function throws VeloxUserError.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This overload is only registered when Velox is built with <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS=ON</span></code>, which is off by default.</p>
+</div>
 </div></blockquote>
 </dd></dl>
 
@@ -149,6 +161,10 @@ If any input array is empty, the function returns NaN. If the input arrays have 
 <p>SELECT dot_product(ARRAY[], ARRAY[2, 3]); – Throws VeloxUserError</p>
 <p>SELECT dot_product(ARRAY[], ARRAY[]); – NaN</p>
 </div></blockquote>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This overload is only registered when Velox is built with <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS=ON</span></code>, which is off by default.</p>
+</div>
 </div></blockquote>
 </dd></dl>
 
