@@ -76,13 +76,13 @@ void SelectiveIntegerDictionaryColumnReader::getValues(
   getIntValues(rows, fileType_->type(), &integers);
   switch (fileType_->type()->kind()) {
     case TypeKind::SMALLINT:
-      *result = convertIntegerToVarchar<int16_t>(integers, pool_);
+      *result = convertToVarchar<int16_t>(integers, pool_);
       return;
     case TypeKind::INTEGER:
-      *result = convertIntegerToVarchar<int32_t>(integers, pool_);
+      *result = convertToVarchar<int32_t>(integers, pool_);
       return;
     case TypeKind::BIGINT:
-      *result = convertIntegerToVarchar<int64_t>(integers, pool_);
+      *result = convertToVarchar<int64_t>(integers, pool_);
       return;
     default:
       VELOX_UNREACHABLE(

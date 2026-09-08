@@ -95,9 +95,15 @@ void SelectiveByteRleColumnReader::getValues(
     return;
   }
 
-  VectorPtr integers;
-  getFlatValues<int8_t, int8_t>(rows, &integers, TINYINT());
-  *result = convertIntegerToVarchar<int8_t>(integers, pool_);
+  if (boolRle_) {
+    VectorPtr booleans;
+    getFlatValues<int8_t, bool>(rows, &booleans, BOOLEAN());
+    *result = convertToVarchar<bool>(booleans, pool_);
+  } else {
+    VectorPtr integers;
+    getFlatValues<int8_t, int8_t>(rows, &integers, TINYINT());
+    *result = convertToVarchar<int8_t>(integers, pool_);
+  }
 }
 
 } // namespace facebook::velox::dwrf

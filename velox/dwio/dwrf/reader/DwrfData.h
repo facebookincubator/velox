@@ -168,10 +168,8 @@ class DwrfParams : public dwio::common::FormatParams {
 };
 
 template <typename T>
-VectorPtr convertIntegerToVarchar(
-    const VectorPtr& input,
-    memory::MemoryPool* pool) {
-  static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
+VectorPtr convertToVarchar(const VectorPtr& input, memory::MemoryPool* pool) {
+  static_assert(std::is_integral_v<T>);
 
   const auto* values = input->as<SimpleVector<T>>();
   auto strings = BaseVector::create<FlatVector<StringView>>(
@@ -184,14 +182,18 @@ VectorPtr convertIntegerToVarchar(
       continue;
     }
 
-    const auto [position, errorCode] = std::to_chars(
-        buffer.data(), buffer.data() + buffer.size(), values->valueAt(i));
-    VELOX_DCHECK_EQ(
-        errorCode,
-        std::errc(),
-        "Failed to convert value to varchar: {}.",
-        std::make_error_code(errorCode).message());
-    strings->set(i, StringView(buffer.data(), position - buffer.data()));
+    if constexpr (std::is_same_v<T, bool>) {
+      strings->set(i, values->valueAt(i) ? "true" : "false");
+    } else {
+      const auto [position, errorCode] = std::to_chars(
+          buffer.data(), buffer.data() + buffer.size(), values->valueAt(i));
+      VELOX_DCHECK_EQ(
+          errorCode,
+          std::errc(),
+          "Failed to convert value to varchar: {}.",
+          std::make_error_code(errorCode).message());
+      strings->set(i, StringView(buffer.data(), position - buffer.data()));
+    }
   }
   return strings;
 }

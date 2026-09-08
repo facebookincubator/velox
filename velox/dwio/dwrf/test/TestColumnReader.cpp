@@ -5083,6 +5083,11 @@ TEST_P(SchemaMismatchTest, testBoolean) {
   runTest<bool, int16_t>(size);
   runTest<bool, int32_t>(size);
   runTest<bool, int64_t>(size);
+  if (useSelectiveReader()) {
+    runTest<bool, StringView>(size, [](bool expected, StringView actual) {
+      EXPECT_EQ(expected ? "true" : "false", actual.str());
+    });
+  }
 }
 
 TEST_P(SchemaMismatchTest, testByte) {
