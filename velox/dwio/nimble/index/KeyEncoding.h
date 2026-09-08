@@ -43,6 +43,33 @@ namespace facebook::nimble::index {
 ///       restart interval).
 class KeyEncoding {
  public:
+  /// Forward cursor over keys in row order.
+  ///
+  /// Sequential reads through a cursor are cheaper than repeated get():
+  /// prefix-encoded keys decode incrementally from the preceding key instead
+  /// of restarting from the enclosing restart point, and no key is copied
+  /// into an owned string.
+  ///
+  /// A cursor carries the read position, and for prefix encodings the buffer
+  /// the key is rebuilt in, so a single cursor is not thread-safe. Cursors
+  /// share no state with one another, so concurrent readers each take their
+  /// own rather than locking around a shared one.
+  class Cursor {
+   public:
+    virtual ~Cursor() = default;
+
+    /// Returns whether next() has another key to return. The cursor tracks
+    /// its own end, so callers do not carry the encoding's row count.
+    virtual bool hasNext() const = 0;
+
+    /// Returns the key at the cursor's row and advances by one row. The
+    /// returned view stays valid until the next next() call or until the
+    /// cursor is destroyed, whichever comes first. Throws when hasNext() is
+    /// false; advancing past the last row would otherwise read out of
+    /// bounds.
+    virtual std::string_view next() = 0;
+  };
+
   virtual ~KeyEncoding() = default;
 
   /// Creates the appropriate KeyEncoding from raw encoded data.
@@ -75,6 +102,11 @@ class KeyEncoding {
       uint32_t startRow,
       uint32_t count) const = 0;
 
+  /// Returns a cursor positioned at 'startRow', which must be a valid row.
+  /// The cursor reads through this encoding, which must outlive it.
+  /// Safe to call concurrently; the returned cursor is single-threaded.
+  virtual std::unique_ptr<Cursor> cursor(uint32_t startRow) const = 0;
+
   virtual EncodingType encodingType() const = 0;
 
   virtual uint32_t rowCount() const = 0;
@@ -94,6 +126,8 @@ class TrivialKeyEncoding final : public KeyEncoding {
 
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
+
+  std::unique_ptr<Cursor> cursor(uint32_t startRow) const override;
 
   EncodingType encodingType() const override {
     return EncodingType::Trivial;
@@ -125,6 +159,8 @@ class PrefixKeyEncoding final : public KeyEncoding {
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
 
+  std::unique_ptr<Cursor> cursor(uint32_t startRow) const override;
+
   EncodingType encodingType() const override {
     return EncodingType::Prefix;
   }
@@ -134,9 +170,6 @@ class PrefixKeyEncoding final : public KeyEncoding {
   }
 
  private:
-  static std::string_view
-  decodeEntryAt(const char*& pos, uint32_t& row, std::string& decoded);
-
   uint32_t restartOffset(uint32_t restartIndex) const;
 
   const char* restartPosition(uint32_t restartIndex) const {

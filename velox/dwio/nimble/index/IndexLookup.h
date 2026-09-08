@@ -230,6 +230,29 @@ class IndexLookup {
     const std::vector<uint32_t> resultOffsets_;
   };
 
+  /// Forward cursor over an index's encoded keys, one per file-level row, in
+  /// ascending row order.
+  ///
+  /// Yields the same bytes as keyAtRow() — the encoded key, not the key split
+  /// back into columns — but is meant for scanning rather than for one-off
+  /// resume-key lookups, so it amortizes the per-row search an index would
+  /// otherwise repeat.
+  ///
+  /// Not thread-safe; use one per thread. The index must outlive the cursor.
+  class KeyCursor {
+   public:
+    virtual ~KeyCursor() = default;
+
+    /// Returns whether next() has another key to return.
+    virtual bool hasNext() const = 0;
+
+    /// Returns the encoded key at the current row and advances by one row.
+    /// The returned view stays valid until the next next() call or until the
+    /// cursor is destroyed, whichever comes first. Throws when hasNext() is
+    /// false.
+    virtual std::string_view next() = 0;
+  };
+
   virtual ~IndexLookup() = default;
 
   /// Returns the type of this index.
@@ -261,6 +284,13 @@ class IndexLookup {
   /// Not all index types support this — the default throws.
   virtual std::string keyAtRow(uint32_t /*row*/) const {
     NIMBLE_NOT_IMPLEMENTED("keyAtRow is not supported by this index type");
+  }
+
+  /// Returns a cursor over the encoded keys of the rows in 'rows', which
+  /// must be within the index. Scanning callers should prefer this to a
+  /// keyAtRow() loop. Not all index types support this — the default throws.
+  virtual std::unique_ptr<KeyCursor> keyCursor(RowRange /*rows*/) const {
+    NIMBLE_NOT_IMPLEMENTED("keyCursor is not supported by this index type");
   }
 
   /// Returns runtime statistics accumulated during lookups.
