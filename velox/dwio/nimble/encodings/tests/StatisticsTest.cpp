@@ -107,6 +107,23 @@ TEST(StatisticsTest, minMaxBlocks) {
       nimble::Statistics<uint64_t>::create(empty).minMaxBlocks().empty());
 }
 
+TEST(StatisticsTest, mostFrequent) {
+  const std::vector<int32_t> data = {3, 2, 3, 2, 4};
+  const auto statistics = nimble::Statistics<int32_t>::create(data);
+  const auto& uniqueCounts = statistics.uniqueCounts().value();
+
+  EXPECT_EQ(uniqueCounts.mostFrequent(), std::make_pair(2, uint64_t{2}));
+  EXPECT_EQ(uniqueCounts.mostFrequent(), std::make_pair(2, uint64_t{2}));
+
+  const std::vector<int32_t> empty;
+  EXPECT_EQ(
+      nimble::Statistics<int32_t>::create(empty)
+          .uniqueCounts()
+          .value()
+          .mostFrequent(),
+      std::nullopt);
+}
+
 TYPED_TEST(StatisticsNumericTests, create) {
   using T = TypeParam;
   using ValueType = typename T::valueType;
