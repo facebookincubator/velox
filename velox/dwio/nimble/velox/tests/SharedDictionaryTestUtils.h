@@ -58,7 +58,7 @@ struct SharedDictionarySelectionPolicyOptions {
   // Force eligible shared-dictionary streams toward Dictionary encoding before
   // shared-dictionary wrapping. Integration tests disable this when they need a
   // mixed direct and shared-dictionary stripe sequence.
-  bool forceDictionaryForSharedTypes{true};
+  bool forceDictionaryForEligibleTypes{true};
 };
 
 /// Installs the shared-dictionary selection policy on writer options.
