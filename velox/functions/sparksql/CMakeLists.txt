@@ -70,6 +70,7 @@ velox_add_library(
   CharVarcharUtils.h
   Comparisons.h
   ConcatWs.h
+  ConvertTimezone.h
   DateTimeFunctions.h
   DecimalArithmetic.h
   DecimalCeil.h

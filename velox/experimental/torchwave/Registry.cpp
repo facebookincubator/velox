@@ -327,6 +327,12 @@ MetadataBuilder& MetadataBuilder::cgVariant(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::decompose(
+    std::function<bool(NodeCP, WaveGraph&)> func) {
+  md_.decompose = std::move(func);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::numBarriers(int32_t val) {
   md_.numBarriers = val;
   return *this;
@@ -470,6 +476,12 @@ MetadataBuilder& MetadataBuilder::specialForm(
     std::function<void(NodeCP, const std::vector<ResultSpec>&, CompileCtx*)>
         func) {
   md_.specialForm = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::generateTemplateArg(
+    std::function<std::string(NodeCP, CompileCtx*)> func) {
+  md_.generateTemplateArg = std::move(func);
   return *this;
 }
 

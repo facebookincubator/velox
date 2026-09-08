@@ -86,6 +86,27 @@ TEST(StatisticsTest, runValues) {
   EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runValues().empty());
 }
 
+TEST(StatisticsTest, minMaxBlocks) {
+  const std::vector<uint64_t> data = {9, 3, 7, 2, 10, 4, 5};
+  const auto statistics = nimble::Statistics<uint64_t>::create(data);
+  const auto& blocks = statistics.minMaxBlocks(/*blockSize=*/3);
+
+  ASSERT_EQ(blocks.size(), 3);
+  EXPECT_EQ(blocks[0].count, 3);
+  EXPECT_EQ(blocks[0].min, 3);
+  EXPECT_EQ(blocks[0].max, 9);
+  EXPECT_EQ(blocks[1].count, 3);
+  EXPECT_EQ(blocks[1].min, 2);
+  EXPECT_EQ(blocks[1].max, 10);
+  EXPECT_EQ(blocks[2].count, 1);
+  EXPECT_EQ(blocks[2].min, 5);
+  EXPECT_EQ(blocks[2].max, 5);
+
+  const std::vector<uint64_t> empty;
+  EXPECT_TRUE(
+      nimble::Statistics<uint64_t>::create(empty).minMaxBlocks().empty());
+}
+
 TYPED_TEST(StatisticsNumericTests, create) {
   using T = TypeParam;
   using ValueType = typename T::valueType;

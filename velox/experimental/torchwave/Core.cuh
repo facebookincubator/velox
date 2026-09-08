@@ -82,6 +82,40 @@ __device__ void __copy(Tensor* source, T* dest, BlockInfo& block) {
   }
 }
 
+// __copy into a destination that may be strided. A concat hands an operand the
+// band of the result it occupies, and off the outermost axis that band is
+// pitched rather than a contiguous run, so the element the source holds at i
+// does not land at dest[i]. Both sides are decomposed independently: the source
+// is read at its own layout, as __copy already does, and the destination is
+// written through its strides. The contiguous case keeps the plain indexing --
+// indexToOffset returns i for a contiguous tensor, but only after the address
+// arithmetic, and this is the loop every wide cat's copies run.
+template <typename T>
+__device__ void __copyStrided(Tensor* source, Tensor* dest, BlockInfo& block) {
+  if (source->storage == nullptr) {
+    return;
+  }
+  auto n = source->numEl;
+  uint32_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  uint32_t stride = block.numBlocksInOp * blockDim.x;
+  auto* out = storage<T>(dest);
+  if (dest->contiguous) {
+    __copy<T>(source, out, block);
+    return;
+  }
+  if (source->contiguous) {
+    auto* src = storage<T>(source);
+    for (uint32_t i = start; i < n; i += stride) {
+      out[dest->indexToOffset(i)] = src[i];
+    }
+  } else {
+    for (uint32_t i = start; i < n; i += stride) {
+      out[dest->indexToOffset(i)] =
+          storage<T>(source)[source->indexToOffset(i)];
+    }
+  }
+}
+
 // Like __copy, but value-converts each element from SrcT to DstT (e.g. a cat of
 // mixed dtypes, where torch promotes an int64 element into a float output).
 template <typename SrcT, typename DstT>
@@ -294,10 +328,12 @@ __device__ inline void opBarrier(BlockInfo& info, int32_t counterOffset) {
   __threadfence();
 }
 
-// Copies all elements from source to dest using grid-strided loop.
+// Copies all elements from source to dest using grid-strided loop. Goes through
+// the destination's strides, so a clone may be handed a pitched band of a
+// concat result to fill rather than a buffer of its own.
 template <typename T>
 __device__ void __copyTensor(Tensor* source, Tensor* dest, BlockInfo& block) {
-  __copy<T>(source, storage<T>(dest), block);
+  __copyStrided<T>(source, dest, block);
 }
 
 // Computes linear offset from scalar index values in registers.

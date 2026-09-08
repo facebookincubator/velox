@@ -21,6 +21,7 @@
 #include <deque>
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/LaunchPartition.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/wave/common/Buffer.h"
@@ -131,6 +132,15 @@ struct LaunchMeta {
   int32_t numFused{0};
   int32_t numStandalone{0};
   int32_t numShortcut{0};
+  // How balanced this step's grid came out, and how many launches it ran as.
+  GridStats gridStats;
+
+  /// The launches the step ran as, each owning a contiguous range of the block
+  /// array the DebugInfo of this step is indexed by. Empty for a step that was
+  /// not split. Kept so the balance report can score each launch on its own:
+  /// they run back to back, so a block in one was never able to run beside a
+  /// block in another.
+  std::vector<LaunchSegment> segments;
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -278,6 +288,38 @@ struct StepVectors {
   /// Used by makeGrid (output).
   std::vector<BlockInfo> blocks;
   std::vector<int32_t> launchIndices;
+
+  /// The kernel launches 'blocks' is run as, in order. Always at least one
+  /// entry; more only when WaveConfig::partitionLaunches split the step. Each
+  /// launch takes its own slice of 'blocks' and its own dynamic shared memory,
+  /// which is where the occupancy a split buys actually lands.
+  std::vector<LaunchSegment> segments;
+
+  /// How balanced this step's grid came out, from the last makeGrid that ran
+  /// for it. Reported per step under WaveConfig::kGrid and summarized in the
+  /// performance report; also what the partitioning gate reads.
+  GridStats gridStats;
+
+  /// Thread-block clocks this step spent per unit of cost, measured on its
+  /// previous execution. Turns WaveConfig::minBlockUs into the cost units the
+  /// block quantum is expressed in. 0 until the first execution has been
+  /// measured, which falls the quantum back to an even division of the step.
+  double clocksPerCost{0};
+
+  /// How well the blocks of this step's previous execution filled the time its
+  /// slowest one took: mean block clocks over max, the same figure the per-step
+  /// balance line reports. 0 until measured.
+  ///
+  /// This is the only honest signal that a step needs MORE blocks. The
+  /// cost-model skew in gridStats cannot tell -- it is derived from the same
+  /// costs the sizing uses, so a step whose costs are wrong looks balanced to
+  /// it. A step already near 1.0 here has nothing to gain from a wider grid and
+  /// everything to lose, since the extra blocks arrive as serialized launches.
+  double measuredUtil{0};
+
+  /// Blocks the previous execution actually ran, so a step that measured well
+  /// can be held to what already worked.
+  int32_t measuredBlocks{0};
 
   /// Used by makeGrid (internal temporaries).
   std::vector<float> costs;
@@ -788,11 +830,17 @@ void runShortcutStandalones(
 /// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
 /// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
 /// cooperative grid when an op in the step asks for dynamic shared memory.
+/// 'occupancyFor' answers the same question from the driver at a given dynamic
+/// shared memory, and supersedes the other two when given: a cooperative launch
+/// is packed to exactly that figure, so deriving it any other way risks a grid
+/// the driver refuses. See GridDevice::occupancyFor.
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
     int32_t maxBlocksPerSM = 0,
-    int32_t staticSharedPerBlock = 0);
+    int32_t staticSharedPerBlock = 0,
+    const std::function<int32_t(int32_t dynamicShared)>& occupancyFor =
+        nullptr);
 
 /// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
 at::Tensor paramTensor(
