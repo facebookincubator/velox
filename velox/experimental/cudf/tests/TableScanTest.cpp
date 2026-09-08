@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
@@ -30,6 +31,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
@@ -49,6 +51,9 @@
 #include <cudf/io/parquet.hpp>
 
 #include <fmt/ranges.h>
+#include <folly/ScopeGuard.h>
+
+#include <atomic>
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -95,6 +100,53 @@ StatsFilterMetrics readParquetWithStatsFilter(
 
 class TableScanTest : public virtual CudfHiveConnectorTestBase {
  protected:
+  struct BatchedFiles {
+    std::vector<std::shared_ptr<TempFilePath>> files;
+    std::vector<RowVectorPtr> vectors;
+    std::vector<std::string> paths;
+  };
+
+  class SuccessfulBufferedInputBuilder final
+      : public facebook::velox::connector::hive::BufferedInputBuilder {
+   public:
+    explicit SuccessfulBufferedInputBuilder(
+        std::shared_ptr<facebook::velox::connector::hive::BufferedInputBuilder>
+            delegate)
+        : delegate_(std::move(delegate)) {}
+
+    std::unique_ptr<dwio::common::BufferedInput> create(
+        const FileHandle& fileHandle,
+        const dwio::common::ReaderOptions& readerOptions,
+        const ConnectorQueryCtx* connectorQueryCtx,
+        std::shared_ptr<io::IoStatistics> ioStatistics,
+        std::shared_ptr<IoStats> ioStats,
+        folly::Executor* executor,
+        const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
+        override {
+      auto input = delegate_->create(
+          fileHandle,
+          readerOptions,
+          connectorQueryCtx,
+          std::move(ioStatistics),
+          std::move(ioStats),
+          executor,
+          fileReadOps);
+      if (input) {
+        successfulCreateCount_.fetch_add(1, std::memory_order_relaxed);
+      }
+      return input;
+    }
+
+    uint64_t successfulCreateCount() const {
+      return successfulCreateCount_.load(std::memory_order_relaxed);
+    }
+
+   private:
+    std::shared_ptr<facebook::velox::connector::hive::BufferedInputBuilder>
+        delegate_;
+    std::atomic_uint64_t successfulCreateCount_{0};
+  };
+
   void SetUp() override {
     CudfHiveConnectorTestBase::SetUp();
     ExchangeSource::factories().clear();
@@ -115,6 +167,28 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
     return Split(makeCudfHiveConnectorSplit(std::move(path), splitWeight));
+  }
+
+  BatchedFiles makeBatchedFiles(int32_t count, int32_t rowsPerFile = 1'000) {
+    BatchedFiles data;
+    data.files = makeFilePaths(count);
+    data.vectors.reserve(count);
+    data.paths.reserve(count);
+    for (size_t fileIndex = 0; fileIndex < data.files.size(); ++fileIndex) {
+      const auto& file = data.files[fileIndex];
+      auto vector = makeVectors(1, rowsPerFile).front();
+      vector->children()[0] = makeFlatVector<int32_t>(
+          rowsPerFile, [fileIndex, rowsPerFile](auto row) {
+            const auto magnitude =
+                static_cast<int32_t>(fileIndex) * rowsPerFile + row + 1;
+            return row % 2 == 0 ? -magnitude : magnitude;
+          });
+      writeToFile(file->getPath(), vector);
+      data.vectors.push_back(std::move(vector));
+      data.paths.push_back(file->getPath());
+    }
+    createDuckDbTable(data.vectors);
+    return data;
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -590,7 +664,8 @@ TEST_F(TableScanTest, DISABLED_decimalFilterPushdown) {
           .add(
               "c1",
               common::createHugeintValues(
-                  {int128_t{200}, int128_t{700}}, /*nullAllowed*/ false))
+                  {int128_t{200}, int128_t{700}},
+                  /*nullAllowed*/ false))
           .build();
 
   auto tableHandle = makeTableHandle(
@@ -787,6 +862,295 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   ASSERT_NE(it, scanStats.customStats.end());
   EXPECT_EQ(it->second.sum, 0)
       << "Expected no remaining filter time when filter is fully extracted";
+}
+
+TEST_F(TableScanTest, batchedMultiFileSplitReaderModes) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto data = makeBatchedFiles(5);
+  auto originalBuilder =
+      facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
+  auto countingBuilder =
+      std::make_shared<SuccessfulBufferedInputBuilder>(originalBuilder);
+  facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+      countingBuilder);
+  SCOPE_EXIT {
+    facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+        originalBuilder);
+  };
+
+  for (const bool useExperimentalReader : {false, true}) {
+    for (const bool useBufferedInput : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "experimental={}, buffered={}",
+              useExperimentalReader,
+              useBufferedInput));
+      resetCudfHiveConnector(
+          std::make_shared<
+              config::ConfigBase>(std::unordered_map<std::string, std::string>{
+              {cudf_velox::connector::hive::CudfHiveConfig::
+                   kUseExperimentalCudfReader,
+               useExperimentalReader ? "true" : "false"},
+              {cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput,
+               useBufferedInput ? "true" : "false"},
+              {cudf_velox::connector::hive::CudfHiveConfig::kMaxChunkReadLimit,
+               "16384"}}));
+
+      std::vector<Split> splits;
+      for (const auto& path : data.paths) {
+        splits.emplace_back(
+            facebook::velox::connector::hive::HiveConnectorSplitBuilder(path)
+                .connectorId(kCudfHiveConnectorId)
+                .fileFormat(dwio::common::FileFormat::PARQUET)
+                .build());
+      }
+      const auto successfulCreatesBefore =
+          countingBuilder->successfulCreateCount();
+      auto plan = tableScanNode();
+      auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                      .plan(plan)
+                      .beforeTaskStart([&](Task& task) {
+                        task.addSplit(plan->id(), std::move(splits));
+                        task.noMoreSplits(plan->id());
+                      })
+                      .assertResults("SELECT * FROM tmp");
+      const auto stats = toPlanStats(task->taskStats());
+      EXPECT_GT(stats.at(plan->id()).outputVectors, 2);
+      const auto& metrics = stats.at(plan->id()).customStats;
+      const auto multiFileReaders =
+          metrics.find("parquet.cudfMultiFileReaders");
+      if (useExperimentalReader) {
+        ASSERT_NE(multiFileReaders, metrics.end());
+        EXPECT_EQ(multiFileReaders->second.sum, 1);
+        EXPECT_EQ(metrics.at("parquet.cudfBatchedFiles").sum, 5);
+      } else {
+        EXPECT_EQ(multiFileReaders, metrics.end());
+      }
+      EXPECT_EQ(
+          countingBuilder->successfulCreateCount() - successfulCreatesBefore,
+          useBufferedInput ? data.paths.size() : 0);
+    }
+  }
+}
+
+TEST_F(TableScanTest, batchedMultiFileSplitWithFilter) {
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  config.batchSplitsEnabled = true;
+  auto data = makeBatchedFiles(4);
+  auto outputType = ROW({"c0", "c4"}, {INTEGER(), BIGINT()});
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add("c0", greaterThan(0, false))
+                     .build();
+  auto tableHandle =
+      makeTableHandle("parquet_table", nullptr, std::move(filters));
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(outputType)
+                  .tableHandle(tableHandle)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType_))
+                  .endTableScan()
+                  .planNode();
+  for (const bool useExperimentalReader : {false, true}) {
+    for (const bool useBufferedInput : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "experimental={}, buffered={}",
+              useExperimentalReader,
+              useBufferedInput));
+      resetCudfHiveConnector(
+          std::make_shared<
+              config::ConfigBase>(std::unordered_map<std::string, std::string>{
+              {cudf_velox::connector::hive::CudfHiveConfig::
+                   kUseExperimentalCudfReader,
+               useExperimentalReader ? "true" : "false"},
+              {cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput,
+               useBufferedInput ? "true" : "false"}}));
+
+      std::vector<Split> splits;
+      for (const auto& path : data.paths) {
+        splits.emplace_back(
+            facebook::velox::connector::hive::HiveConnectorSplitBuilder(path)
+                .connectorId(kCudfHiveConnectorId)
+                .fileFormat(dwio::common::FileFormat::PARQUET)
+                .build());
+      }
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .beforeTaskStart([&](Task& task) {
+            task.addSplit(plan->id(), std::move(splits));
+            task.noMoreSplits(plan->id());
+          })
+          .assertResults("SELECT c0, c4 FROM tmp WHERE c0 > 0");
+    }
+  }
+}
+
+TEST_F(TableScanTest, splitVectorPreservesByteRangesAndDisabledMode) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  auto& config = CudfConfig::getInstance();
+  const auto oldConfig = config;
+  SCOPE_EXIT {
+    config = oldConfig;
+  };
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  auto firstFile = TempFilePath::create();
+  auto secondFile = TempFilePath::create();
+  writeToFile(firstFile->getPath(), data);
+  writeToFile(secondFile->getPath(), data);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(asRowType(data->type()))
+                  .tableHandle(makeTableHandle("parquet_table"))
+                  .endTableScan()
+                  .planNode();
+  for (const bool enabled : {false, true}) {
+    config.batchSplitsEnabled = enabled;
+    for (const bool wholeFile : {false, true}) {
+      SCOPED_TRACE(fmt::format("enabled={}, wholeFile={}", enabled, wholeFile));
+      std::vector<Split> splits;
+      for (const auto& file : {firstFile, secondFile}) {
+        splits.emplace_back(
+            facebook::velox::connector::hive::HiveConnectorSplitBuilder(
+                file->getPath())
+                .connectorId(kCudfHiveConnectorId)
+                .fileFormat(dwio::common::FileFormat::PARQUET)
+                .length(wholeFile ? std::numeric_limits<uint64_t>::max() : 1)
+                .build());
+      }
+      std::vector<RowVectorPtr> expected = wholeFile
+          ? std::vector<RowVectorPtr>{data, data}
+          : std::vector<RowVectorPtr>{makeRowVector(
+                {makeFlatVector<int64_t>(std::vector<int64_t>{})})};
+      auto task = AssertQueryBuilder(plan)
+                      .connectorSessionProperty(
+                          kCudfHiveConnectorId,
+                          CudfHiveConfig::kUseExperimentalCudfReaderSession,
+                          "true")
+                      .beforeTaskStart([&](Task& task) {
+                        task.addSplit(plan->id(), std::move(splits));
+                        task.noMoreSplits(plan->id());
+                      })
+                      .assertResults(expected);
+      EXPECT_EQ(task->taskStats().numTotalSplits, enabled ? 1 : 2);
+      EXPECT_EQ(
+          toPlanStats(task->taskStats())
+              .at(plan->id())
+              .customStats.contains("parquet.cudfMultiFileReaders"),
+          enabled && wholeFile);
+    }
+  }
+}
+
+TEST_F(TableScanTest, multiFileHybridEmptyAndPrunedSources) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  using cudf_velox::connector::hive::CudfHiveConnectorSplit;
+  std::vector<std::shared_ptr<TempFilePath>> files;
+  std::vector<std::string> paths;
+  for (const auto& values : {std::vector<int64_t>{}, {1, 2, 3}, {}, {10, 11}}) {
+    auto file = TempFilePath::create();
+    writeToFile(
+        file->getPath(), makeRowVector({makeFlatVector<int64_t>(values)}));
+    paths.push_back(file->getPath());
+    files.push_back(std::move(file));
+  }
+  auto type = ROW({"c0"}, {BIGINT()});
+  for (const auto threshold : {5, 100}) {
+    SCOPED_TRACE(threshold);
+    auto filters = common::test::SubfieldFiltersBuilder()
+                       .add("c0", greaterThan(threshold, false))
+                       .build();
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(type)
+                    .tableHandle(makeTableHandle(
+                        "parquet_table", nullptr, std::move(filters)))
+                    .endTableScan()
+                    .planNode();
+    auto expected = makeRowVector({makeFlatVector<int64_t>(
+        threshold == 5 ? std::vector<int64_t>{10, 11}
+                       : std::vector<int64_t>{})});
+    auto task = AssertQueryBuilder(plan)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        CudfHiveConfig::kUseExperimentalCudfReaderSession,
+                        "true")
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        CudfHiveConfig::kMaxChunkReadLimitSession,
+                        "1024")
+                    .split(Split(
+                        CudfHiveConnectorSplit::makeBatch(
+                            kCudfHiveConnectorId, paths, 0)))
+                    .assertResults({expected});
+    const auto stats = toPlanStats(task->taskStats());
+    EXPECT_EQ(
+        stats.at(plan->id()).customStats.at("parquet.cudfMultiFileReaders").sum,
+        1);
+  }
+}
+
+TEST_F(TableScanTest, batchedSplitValidationAndSerialization) {
+  using cudf_velox::connector::hive::CudfHiveConnectorSplit;
+  using cudf_velox::connector::hive::CudfHiveConnectorSplitBuilder;
+  using facebook::velox::connector::ConnectorSplitBatch;
+
+  CudfHiveConnectorSplit singleSplit(
+      kCudfHiveConnectorId, {"file:/tmp/single.parquet"}, 123);
+  EXPECT_EQ(singleSplit.filePath, "/tmp/single.parquet");
+  EXPECT_EQ(singleSplit.start, 123);
+  auto builtSingle = CudfHiveConnectorSplitBuilder{"file:/tmp/single.parquet"}
+                         .connectorId(kCudfHiveConnectorId)
+                         .start(123)
+                         .build();
+  EXPECT_EQ(builtSingle->filePath, "/tmp/single.parquet");
+  EXPECT_EQ(builtSingle->start, 123);
+
+  EXPECT_THROW(
+      CudfHiveConnectorSplit::makeBatch(
+          kCudfHiveConnectorId, std::vector<std::string>{}, 0),
+      VeloxUserError);
+  EXPECT_THROW(
+      CudfHiveConnectorSplitBuilder::forFilePaths(
+          std::vector<std::string>{"a", "b"})
+          .connectorId(kCudfHiveConnectorId)
+          .start(1)
+          .build(),
+      VeloxUserError);
+
+  const auto makeWeightedChild = [](std::string path, int64_t weight) {
+    return CudfHiveConnectorSplitBuilder(std::move(path))
+        .connectorId(kCudfHiveConnectorId)
+        .splitWeight(weight)
+        .build();
+  };
+  std::vector<std::shared_ptr<ConnectorSplit>> weightedChildren{
+      makeWeightedChild("a", std::numeric_limits<int64_t>::max() - 1),
+      makeWeightedChild("b", 2),
+      makeWeightedChild("c", -1)};
+  EXPECT_THROW(
+      ConnectorSplitBatch(kCudfHiveConnectorId, std::move(weightedChildren)),
+      VeloxUserError);
+
+  auto split = CudfHiveConnectorSplit::makeBatch(
+      kCudfHiveConnectorId,
+      std::vector<std::string>{"file:/tmp/a.parquet", "s3a://bucket/b.parquet"},
+      7);
+  auto copy = CudfHiveConnectorSplit::create(split->serialize());
+  EXPECT_EQ(copy->filePaths, split->filePaths);
+  EXPECT_EQ(copy->splitWeight, 7);
+  EXPECT_EQ(copy->start, 0);
+  EXPECT_EQ(copy->size(), std::numeric_limits<uint64_t>::max());
 }
 
 TEST_F(TableScanTest, decimalSubfieldFilter) {

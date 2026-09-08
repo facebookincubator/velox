@@ -54,6 +54,8 @@ struct CudfConfig {
   static constexpr const char* kCudfStreamingGroupbyCapacityMultiplier{
       "cudf.streaming_groupby_capacity_multiplier"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
+  static constexpr const char* kCudfBatchSplitsEnabled{
+      "cudf.batch_splits_enabled"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -144,6 +146,9 @@ struct CudfConfig {
   /// "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns"
   /// (nanoseconds).
   cudf::type_id timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+
+  /// Whether cuDF connectors accept Task's vector submissions as batches.
+  bool batchSplitsEnabled{false};
 };
 
 } // namespace facebook::velox::cudf_velox

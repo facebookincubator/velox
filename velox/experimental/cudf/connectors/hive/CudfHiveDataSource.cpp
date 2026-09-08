@@ -215,29 +215,106 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   VLOG(1) << "Adding split " << split_->toString();
 }
 
+std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createBatchedSplitReader(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& batch,
+    dwio::common::RuntimeStats& runtimeStats) {
+  std::vector<std::string> paths;
+  std::vector<uint64_t> lengths;
+  for (const auto& child : batch) {
+    if (!child->cacheable || child->batchSizeHint != 0) {
+      return nullptr;
+    }
+    if (const auto* hiveSplit =
+            dynamic_cast<const hive::HiveConnectorSplit*>(child.get())) {
+      if (typeid(*hiveSplit) != typeid(hive::HiveConnectorSplit) ||
+          !hiveSplit->partitionKeys.empty() ||
+          !hiveSplit->customSplitInfo.empty() || hiveSplit->columnMappingMode ||
+          hiveSplit->tableBucketNumber || hiveSplit->bucketConversion ||
+          hiveSplit->rowIdProperties || hiveSplit->extraFileInfo ||
+          hiveSplit->properties ||
+          hiveSplit->fileFormat != dwio::common::FileFormat::PARQUET) {
+        return nullptr;
+      }
+    } else if (!dynamic_cast<const CudfHiveConnectorSplit*>(child.get())) {
+      return nullptr;
+    }
+    convertSplit(child);
+    if (split_->start != 0 || split_->filePaths.size() != 1) {
+      return nullptr;
+    }
+    for (const auto& name : readColumnNames_) {
+      if (split_->infoColumns.contains(name)) {
+        return nullptr;
+      }
+    }
+    paths.push_back(split_->filePath);
+    lengths.push_back(split_->length);
+  }
+  split_ =
+      CudfHiveConnectorSplit::makeBatch(batch.front()->connectorId, paths, 0);
+  auto reader = createCudfSplitReader();
+  return reader->tryPrepareBatch(lengths, runtimeStats) ? std::move(reader)
+                                                        : nullptr;
+}
+
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  // Virtual method for class-specific conversion of the split
-  convertSplit(split);
+  addSplit(std::vector<std::shared_ptr<ConnectorSplit>>{std::move(split)});
+}
+
+void CudfHiveDataSource::addSplit(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  cudfSplitReader_.reset();
+  splitBatch_ = splits;
+  nextSplitIndex_ = 0;
+  if (splits.size() > 1) {
+    if (auto reader = createBatchedSplitReader(splits, runtimeStats_)) {
+      cudfSplitReader_ = std::move(reader);
+      nextSplitIndex_ = splits.size();
+      updateCompletedBytes();
+      return;
+    }
+  }
+  VELOX_CHECK(prepareNextSplit(), "Cannot add an empty split batch");
+}
+
+bool CudfHiveDataSource::prepareNextSplit() {
+  if (nextSplitIndex_ >= splitBatch_.size()) {
+    return false;
+  }
+
+  auto connectorSplit = splitBatch_.at(nextSplitIndex_++);
+
+  // Virtual methods preserve connector-specific per-file state. In
+  // particular, the Iceberg data source refreshes delete, partition and schema
+  // metadata for every child.
+  convertSplit(connectorSplit);
 
   cudfSplitReader_ = createCudfSplitReader();
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
+  updateCompletedBytes();
+  return true;
+}
+
+void CudfHiveDataSource::updateCompletedBytes() {
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
-  try {
-    const auto fileHandleKey = FileHandleKey{
-        .filename = split_->filePath,
-        .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-    auto fileProperties = FileProperties{};
-    auto const fileHandleCachePtr = fileHandleFactory_->generate(
-        fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
-    if (fileHandleCachePtr.get() and fileHandleCachePtr.get()->file) {
-      completedBytes_ += fileHandleCachePtr->file->size();
+  for (const auto& path : split_->filePaths) {
+    try {
+      const auto fileHandleKey = FileHandleKey{
+          .filename = path,
+          .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+      auto fileProperties = FileProperties{};
+      auto const fileHandleCachePtr = fileHandleFactory_->generate(
+          fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
+      if (fileHandleCachePtr.get() and fileHandleCachePtr.get()->file) {
+        completedBytes_ += fileHandleCachePtr->file->size();
+      }
+    } catch (const std::exception& e) {
+      // Unable to get the file size, log a warning and continue.
+      LOG(WARNING) << "Failed to get file size for " << path << ": "
+                   << e.what();
     }
-  } catch (const std::exception& e) {
-    // Unable to get the file size, log a warning and continue
-    LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
-                 << e.what();
   }
 }
 
@@ -246,9 +323,15 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
-  auto chunkOpt = cudfSplitReader_->next(size);
-  if (!chunkOpt.has_value()) {
-    return nullptr;
+  std::optional<std::unique_ptr<cudf::table>> chunkOpt;
+  while (true) {
+    chunkOpt = cudfSplitReader_->next(size);
+    if (chunkOpt.has_value()) {
+      break;
+    }
+    if (not prepareNextSplit()) {
+      return nullptr;
+    }
   }
   auto cudfTable = std::move(chunkOpt.value());
   auto stream = cudfSplitReader_->stream();

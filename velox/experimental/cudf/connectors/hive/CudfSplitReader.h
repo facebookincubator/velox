@@ -31,11 +31,13 @@
 
 #include <cudf/io/datasource.hpp>
 #include <cudf/io/experimental/hybrid_scan.hpp>
+#include <cudf/io/experimental/hybrid_scan_multifile.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
 #include <functional>
+#include <optional>
 #include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -66,7 +68,7 @@ class CudfSplitReader : public NvtxHelper {
       bool useExperimentalCudfReader,
       cudf::ast::expression const* subfieldFilterExpr);
 
-  virtual ~CudfSplitReader() = default;
+  virtual ~CudfSplitReader();
 
   using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
       const cudf::io::parquet::FileMetaData&)>;
@@ -83,6 +85,12 @@ class CudfSplitReader : public NvtxHelper {
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
 
+  /// Prepares a batch if each range covers its whole file and cuDF accepts
+  /// their footers together. Otherwise the datasource retains per-file reads.
+  bool tryPrepareBatch(
+      const std::vector<uint64_t>& lengths,
+      dwio::common::RuntimeStats& runtimeStats);
+
   /// Read the next raw cudf table chunk. Returns nullopt when done.
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
 
@@ -92,6 +100,12 @@ class CudfSplitReader : public NvtxHelper {
   }
 
  protected:
+  // Resets reader state and acquires the stream for a new split.
+  void initializeSplit();
+
+  // Records successful reader preparation, including the selected batch path.
+  void recordPreparedSplit(dwio::common::RuntimeStats& runtimeStats) const;
+
   // Performs split-specific setup after base reader state is reset.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
@@ -113,6 +127,9 @@ class CudfSplitReader : public NvtxHelper {
 
   // Read file metadatas.
   void fileMetaDatas();
+
+  // File size after the data sources have been opened.
+  uint64_t fileSize(size_t index) const;
 
   // Return the logical subfield filter used after reading.
   cudf::ast::expression const* subfieldFilter() const;
@@ -145,7 +162,7 @@ class CudfSplitReader : public NvtxHelper {
   // Clear splitReaders and datasources after split has been fully processed.
   void resetSplit();
 
-  // Setup the cuDF reader options
+  // Setup cuDF reader options for all sources.
   void setupReaderOptions();
 
   // Create the chunked parquet reader.
@@ -154,14 +171,21 @@ class CudfSplitReader : public NvtxHelper {
   // Create the experimental hybrid scan reader.
   void createExperimentalReader();
 
+  // Reads one chunk with a single hybrid reader spanning every file.
+  std::optional<std::unique_ptr<cudf::table>> readMultiFileChunk();
+
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   memory::MemoryPool* pool_;
 
   // cuDF split reader stuff.
-  std::shared_ptr<cudf::io::datasource> dataSource_;
+  std::vector<std::shared_ptr<cudf::io::datasource>> dataSources_;
   cudf::io::parquet_reader_options readerOptions_;
   CudfParquetReaderPtr splitReader_;
   CudfHybridScanReaderPtr exptSplitReader_;
+  // Keeps one reader for a native batch; options and metadata outlive it.
+  std::unique_ptr<cudf::io::parquet::experimental::hybrid_scan_multifile>
+      multiFileReader_;
+
   std::unique_ptr<HybridScanState> hybridScanState_;
   bool useExperimentalCudfReader_;
 
