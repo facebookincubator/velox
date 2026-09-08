@@ -44,7 +44,6 @@ UcxExchange::UcxExchange(
           fmt::format("[{}]", planNode->id())),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
-      closeExchangeClientOnClose_{ucxExchangeClient == nullptr},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
       driverId_{driverCtx->driverId} {
@@ -59,8 +58,8 @@ UcxExchange::UcxExchange(
     exchangeClient_ = std::make_shared<UcxExchangeClient>(
         task->taskId(),
         task->destination(),
-        1 // number of consumers, is always 1.
-    );
+        1, // number of consumers, is always 1.
+        driverCtx->queryConfig().maxOutputBufferSize());
   }
 }
 
@@ -182,11 +181,27 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
   PackedTableWithStream& data = *currentData_;
   auto numRows = data.packedTable->table.num_rows();
   auto gpuDataSize = data.gpuDataSize();
+  auto stream = data.stream;
+  cudf_velox::CudfVector::ReleaseCallback releaseCallback;
+  if (exchangeClient_->tracksInFlightReceiveBytes()) {
+    std::weak_ptr<UcxExchangeClient> exchangeClient{exchangeClient_};
+    releaseCallback = [exchangeClient, gpuDataSize, stream]() {
+      stream.synchronize();
+      if (auto client = exchangeClient.lock()) {
+        client->releaseInFlightReceiveBytes(gpuDataSize);
+      }
+    };
+  }
 
   // Use the stream that was allocated in UcxExchangeSource::onMetadata
   // and the packed_table constructor of CudfVector to avoid copying data.
   auto result = std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, numRows, std::move(data.packedTable), data.stream);
+      pool(),
+      outputType_,
+      numRows,
+      std::move(data.packedTable),
+      stream,
+      std::move(releaseCallback));
 
   recordInputStats(gpuDataSize, result);
   // free the memory owned by PackedTableWithStream and set it to nullptr;
@@ -218,9 +233,7 @@ void UcxExchange::close() {
   currentData_.reset();
   if (exchangeClient_) {
     recordExchangeClientStats();
-    if (closeExchangeClientOnClose_) {
-      exchangeClient_->close();
-    }
+    exchangeClient_->close();
   }
   exchangeClient_ = nullptr;
 }

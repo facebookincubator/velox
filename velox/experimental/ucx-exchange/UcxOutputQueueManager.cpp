@@ -64,29 +64,173 @@ void UcxOutputQueueManager::updateOutputBuffers(
     std::string_view taskId,
     int numBuffers,
     bool noMoreBuffers) {
-  getQueue(taskId)->updateOutputBuffers(numBuffers, noMoreBuffers);
+  if (auto queue = getQueueIfActive(taskId)) {
+    queue->updateOutputBuffers(numBuffers, noMoreBuffers);
+  }
 }
 
 void UcxOutputQueueManager::enqueue(
     std::string_view taskId,
     int destination,
     std::unique_ptr<cudf::packed_columns> txData,
-    int numRows) {
-  getQueue(taskId)->enqueue(destination, std::move(txData), numRows);
+    int numRows,
+    int64_t transferReservationBytes) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    queue->enqueue(
+        destination, std::move(txData), numRows, transferReservationBytes);
+  }
 }
 
 bool UcxOutputQueueManager::checkBlocked(
     std::string_view taskId,
     ContinueFuture* future) {
-  return getQueue(taskId)->checkBlocked(future);
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->checkBlocked(future);
+  }
+  return false;
+}
+
+bool UcxOutputQueueManager::checkTransferCapacity(
+    std::string_view taskId,
+    int destination,
+    int64_t maxBytes,
+    ContinueFuture* future) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->checkTransferCapacity(destination, maxBytes, future);
+  }
+  return false;
+}
+
+bool UcxOutputQueueManager::reserveTransferBytes(
+    std::string_view taskId,
+    int destination,
+    int64_t bytes,
+    int64_t maxBytes,
+    ContinueFuture* future) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->reserveTransferBytes(destination, bytes, maxBytes, future);
+  }
+  return false;
+}
+
+bool UcxOutputQueueManager::reserveFullTransferBytes(
+    std::string_view taskId,
+    int destination,
+    int64_t bytes,
+    ContinueFuture* future) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->reserveFullTransferBytes(destination, bytes, future);
+  }
+  return false;
+}
+
+bool UcxOutputQueueManager::waitForFullTransferCapacity(
+    std::string_view taskId,
+    int64_t bytes,
+    ContinueFuture* future) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->waitForFullTransferCapacity(bytes, future);
+  }
+  return false;
+}
+
+void UcxOutputQueueManager::releaseTransferReservation(
+    std::string_view taskId,
+    int destination,
+    int64_t bytes) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->releaseTransferReservation(destination, bytes);
+  }
+}
+
+int64_t UcxOutputQueueManager::transferWindowBytes(
+    std::string_view taskId,
+    int destination,
+    int64_t baseBytes,
+    int64_t normalBytes,
+    int64_t maxBytes) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->transferWindowBytes(
+        destination, baseBytes, normalBytes, maxBytes);
+  }
+  return baseBytes;
+}
+
+void UcxOutputQueueManager::recordTransferCongestion(
+    std::string_view taskId,
+    int destination,
+    int64_t baseBytes) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->recordTransferCongestion(destination, baseBytes);
+  }
+}
+
+void UcxOutputQueueManager::recordTransferDemand(
+    std::string_view taskId,
+    int destination,
+    int64_t targetBytes,
+    int64_t baseBytes,
+    int64_t maxBytes) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->recordTransferDemand(destination, targetBytes, baseBytes, maxBytes);
+  }
+}
+
+void UcxOutputQueueManager::recordFullTransferCongestion(
+    std::string_view taskId) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->recordFullTransferCongestion();
+  }
+}
+
+UcxDestinationTransferStats UcxOutputQueueManager::transferStats(
+    std::string_view taskId,
+    int destination) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->transferStats(destination);
+  }
+  return {};
+}
+
+bool UcxOutputQueueManager::reserveOutputBytes(
+    std::string_view taskId,
+    int64_t bytes,
+    ContinueFuture* future) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->reserveOutputBytes(bytes, future);
+  }
+  return false;
+}
+
+void UcxOutputQueueManager::releaseOutputReservation(
+    std::string_view taskId,
+    int64_t bytes) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->releaseOutputReservation(bytes);
+  }
+}
+
+void UcxOutputQueueManager::releaseInFlightBytes(
+    std::string_view taskId,
+    int destination,
+    int64_t bytes,
+    int64_t numPackedCols) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->releaseInFlightBytes(destination, bytes, numPackedCols);
+  }
 }
 
 void UcxOutputQueueManager::noMoreData(std::string_view taskId) {
-  getQueue(taskId)->noMoreData();
+  if (auto queue = getQueueIfActive(taskId)) {
+    queue->noMoreData();
+  }
 }
 
 bool UcxOutputQueueManager::isFinished(std::string_view taskId) {
-  return getQueue(taskId)->isFinished();
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->isFinished();
+  }
+  return true;
 }
 
 void UcxOutputQueueManager::deleteResults(
@@ -108,21 +252,16 @@ void UcxOutputQueueManager::getData(
     auto it = queues.find(taskIdStr);
     if (it == queues.end()) {
       // Check if the task was already removed. If so, don't re-create a
-      // placeholder — the task is dead and any server calling getData() is a
+      // placeholder - the task is dead and any server calling getData() is a
       // stale leftover. Re-creating would produce an undersized queue that
       // crashes when deleteResults() is called for other destinations.
       if (removedTasks_.withLock(
               [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
-        VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
-                << " getData ignored (task already removed)";
         taskRemoved = true;
         return;
       }
       // create the queue structures such that the notify callback can be
       // stored. It will be later initialized once the task is being created.
-      VLOG(2)
-          << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
-          << " creating placeholder queue (server arrived before task init)";
       outputQueue = std::make_shared<UcxOutputQueue>(nullptr, destination, 0);
       queues[taskIdStr] = outputQueue;
     } else {
@@ -137,7 +276,7 @@ void UcxOutputQueueManager::getData(
   }
   // outside of lock. Queue must exist.
   // get the data or install the notify callback.
-  outputQueue->getData(destination, notify);
+  outputQueue->getData(destination, std::move(notify));
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
@@ -167,8 +306,6 @@ void UcxOutputQueueManager::removeTask(std::string_view taskId) {
             [&](auto& removed) { removed.insert(taskIdStr); });
         return taskQueue;
       });
-  VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
-          << " queueExists=" << (queue != nullptr);
   if (queue != nullptr) {
     queue->terminate();
   }
@@ -184,6 +321,22 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
     auto it = queues.find(taskIdStr);
     return it == queues.end() ? nullptr : it->second;
   });
+}
+
+std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfActive(
+    std::string_view taskId) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    return queue;
+  }
+  VELOX_CHECK(
+      isRemovedTask(taskId), "Output cudf queue for task not found: {}", taskId);
+  return nullptr;
+}
+
+bool UcxOutputQueueManager::isRemovedTask(std::string_view taskId) {
+  std::string taskIdStr{taskId};
+  return removedTasks_.withLock(
+      [&](auto& removed) { return removed.count(taskIdStr) > 0; });
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(

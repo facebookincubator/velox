@@ -22,6 +22,8 @@
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/prefetch.hpp>
 
+#include <cuda_runtime_api.h>
+
 #include <rmm/mr/arena_memory_resource.hpp>
 #include <rmm/mr/cuda_async_managed_memory_resource.hpp>
 #include <rmm/mr/cuda_async_memory_resource.hpp>
@@ -32,14 +34,29 @@
 
 #include <common/base/Exceptions.h>
 
+#include <glog/logging.h>
+
 #include <cstdlib>
 #include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
+namespace {
+
+std::optional<cudaMemPool_t> currentAsyncPoolHandle_;
+
+void trackCurrentAsyncPool(cudaMemPool_t poolHandle, bool trackAsCurrent) {
+  if (trackAsCurrent) {
+    currentAsyncPoolHandle_ = poolHandle;
+  }
+}
+
+} // namespace
+
 cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
     std::string_view mode,
-    int percent) {
+    int percent,
+    bool trackAsCurrent) {
   if (mode == "cuda") {
     return rmm::mr::cuda_memory_resource{};
   } else if (mode == "pool") {
@@ -47,7 +64,9 @@ cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
         rmm::mr::cuda_memory_resource{},
         rmm::percent_of_free_device_memory(percent));
   } else if (mode == "async") {
-    return rmm::mr::cuda_async_memory_resource{};
+    auto resource = rmm::mr::cuda_async_memory_resource{};
+    trackCurrentAsyncPool(resource.pool_handle(), trackAsCurrent);
+    return resource;
   } else if (mode == "arena") {
     return rmm::mr::arena_memory_resource(
         rmm::mr::cuda_memory_resource{},
@@ -59,7 +78,9 @@ cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
         rmm::mr::managed_memory_resource{},
         rmm::percent_of_free_device_memory(percent));
   } else if (mode == "managed_async") {
-    return rmm::mr::cuda_async_managed_memory_resource{};
+    auto resource = rmm::mr::cuda_async_managed_memory_resource{};
+    trackCurrentAsyncPool(resource.pool_handle(), trackAsCurrent);
+    return resource;
   } else if (mode == "prefetch_managed") {
     cudf::prefetch::enable();
     return rmm::mr::prefetch_resource_adaptor(
@@ -72,6 +93,8 @@ cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
             rmm::percent_of_free_device_memory(percent)));
   } else if (mode == "prefetch_managed_async") {
     cudf::prefetch::enable();
+    // The prefetch adaptor hides the underlying async pool handle, so callers
+    // fall back to raw cudaMemGetInfo for this mode.
     return rmm::mr::prefetch_resource_adaptor(
         rmm::mr::cuda_async_managed_memory_resource{});
   }
@@ -90,6 +113,50 @@ std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> output_mr_;
 
 rmm::device_async_resource_ref get_output_mr() {
   return output_mr_.value();
+}
+
+std::optional<CudfDeviceMemoryInfo> currentDeviceMemoryInfo() {
+  size_t freeBytes = 0;
+  size_t totalBytes = 0;
+  const auto memInfoStatus = cudaMemGetInfo(&freeBytes, &totalBytes);
+  if (memInfoStatus != cudaSuccess) {
+    VLOG(1) << "cudaMemGetInfo failed while reading cuDF memory info: "
+            << cudaGetErrorString(memInfoStatus);
+    return std::nullopt;
+  }
+
+  CudfDeviceMemoryInfo info{
+      .freeBytes = static_cast<uint64_t>(freeBytes),
+      .totalBytes = static_cast<uint64_t>(totalBytes)};
+  if (!currentAsyncPoolHandle_.has_value()) {
+    return info;
+  }
+
+  uint64_t reservedBytes = 0;
+  uint64_t usedBytes = 0;
+  const auto reservedStatus = cudaMemPoolGetAttribute(
+      *currentAsyncPoolHandle_,
+      cudaMemPoolAttrReservedMemCurrent,
+      &reservedBytes);
+  const auto usedStatus = cudaMemPoolGetAttribute(
+      *currentAsyncPoolHandle_, cudaMemPoolAttrUsedMemCurrent, &usedBytes);
+  if (reservedStatus != cudaSuccess || usedStatus != cudaSuccess) {
+    VLOG(1) << "cudaMemPoolGetAttribute failed while reading cuDF pool info: "
+            << "reservedStatus=" << cudaGetErrorString(reservedStatus)
+            << " usedStatus=" << cudaGetErrorString(usedStatus);
+    return info;
+  }
+
+  info.poolReservedBytes = reservedBytes;
+  info.poolUsedBytes = usedBytes;
+  info.poolReusableBytes =
+      reservedBytes > usedBytes ? reservedBytes - usedBytes : 0;
+  info.hasPoolStats = true;
+  return info;
+}
+
+void clearCurrentDeviceMemoryInfo() {
+  currentAsyncPoolHandle_.reset();
 }
 
 } // namespace facebook::velox::cudf_velox
