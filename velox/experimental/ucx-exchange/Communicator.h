@@ -18,6 +18,7 @@
 #include <ucxx/api.h>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <random>
 #include <string>
 #include <string_view>
@@ -84,6 +85,14 @@ class Communicator {
   /// such that "process" will be called on it.
   /// @param comms The element to be added to the work queue.
   void addToWorkQueue(std::shared_ptr<CommElement> comms);
+
+  /// @brief Schedules an action to run on the Communicator thread.
+  ///
+  /// UCXX endpoint operations must run on the thread that progresses the UCX
+  /// worker. This is used when another thread resolves state needed by a
+  /// communication operation, such as output-queue initialization completing
+  /// after an exchange handshake arrives.
+  void deferAction(std::function<void()> action);
 
   /// @brief Unregisters a communication element
   /// @brief comms The communication element.
@@ -197,6 +206,17 @@ class Communicator {
   // The work queue for communication elements that need to do things on
   // the communicator thread.
   WorkQueue<CommElement> workQueue_;
+
+  struct DeferredAction {
+    explicit DeferredAction(std::function<void()> action)
+        : action(std::move(action)) {}
+
+    std::function<void()> action;
+  };
+
+  // Actions submitted from non-Communicator threads for execution by the main
+  // UCX progress loop.
+  WorkQueue<DeferredAction> deferredActions_;
 
   // Protects endpoints_. Must be recursive because removeEndpointRef() holds
   // the lock and calls closeBlocking(), which progresses the worker and can

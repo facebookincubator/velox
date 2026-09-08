@@ -146,6 +146,11 @@ void Communicator::run() {
 
   VLOG(3) << "Communicator running.";
   const bool blockingMode = CudfConfig::getInstance().ucxxBlockingProgress;
+  // Intra-node sources poll the transfer registry by re-enqueuing themselves.
+  // Therefore workQueue_ can remain non-empty indefinitely. Process it in
+  // bounded batches so deferred handshakes, endpoint cleanup, and heartbeat
+  // work at the top of this loop cannot be starved.
+  constexpr size_t kMaxWorkItemsPerLoop = 256;
   while (running_) {
     try {
       // Periodic heartbeat for diagnostic logging.
@@ -185,6 +190,7 @@ void Communicator::run() {
                 << ")"
                 << " endpoints=" << numEndpoints
                 << " deferredCleanup=" << deferredEndpointCleanup_.size()
+                << " deferredActions=" << deferredActions_.size()
                 << " deferredRequests=" << deferredRequests_.size()
                 << " workItemsProcessed=" << workItemsProcessed_
                 << " GPU=" << gpuUsedMB << "/" << gpuTotalMB << "MB"
@@ -206,11 +212,24 @@ void Communicator::run() {
         removeEndpointRef(ep);
       }
 
-      // Process the work queue. Make sure that communication is progressed
-      // after each call to a comms element, otherwise we will deadlock.
-      while (auto comms = workQueue_.pop()) {
+      // Run actions submitted by other threads. These must execute here
+      // because they may issue UCXX operations on this worker.
+      while (auto deferredAction = deferredActions_.pop()) {
+        deferredAction->action();
+      }
+
+      // Process a bounded batch from the work queue. Make sure that
+      // communication is progressed after each call to a comms element,
+      // otherwise we will deadlock.
+      size_t workItemsThisLoop = 0;
+      while (workItemsThisLoop < kMaxWorkItemsPerLoop) {
+        auto comms = workQueue_.pop();
+        if (!comms) {
+          break;
+        }
         comms->process();
         ++workItemsProcessed_;
+        ++workItemsThisLoop;
         // Progress after each work item to allow UCXX to advance
         // its internal state (complete sends/receives, fire callbacks).
         // Use non-blocking progress here to avoid blocking between
@@ -230,11 +249,12 @@ void Communicator::run() {
             deferredRequests_.end());
       }
 
-      // All queues are drained. Now wait for UCXX network events.
-      // In blocking mode, this will block until a UCXX event arrives
-      // or worker_->signal() is called (from addToWorkQueue,
-      // deferEndpointCleanup, or stop).
-      if (blockingMode) {
+      // Wait for UCXX network events only if there is no process-local work.
+      // A bounded batch may intentionally leave workQueue_ non-empty; blocking
+      // in that case would strand it until an unrelated network event arrives.
+      const bool hasLocalWork = !deferredEndpointCleanup_.empty() ||
+          !deferredActions_.empty() || !workQueue_.empty();
+      if (blockingMode && !hasLocalWork) {
         worker_->progressWorkerEvent(0);
       } else {
         worker_->progress();
@@ -279,6 +299,14 @@ void Communicator::addToWorkQueue(std::shared_ptr<CommElement> comms) {
     return;
   }
   workQueue_.push(comms);
+  signalWorker();
+}
+
+void Communicator::deferAction(std::function<void()> action) {
+  if (!action) {
+    return;
+  }
+  deferredActions_.push(std::make_shared<DeferredAction>(std::move(action)));
   signalWorker();
 }
 

@@ -166,26 +166,59 @@ bool UcxOutputQueue::initialize(
     uint32_t numDestinations,
     uint32_t numDrivers,
     core::PartitionedOutputNode::Kind kind) {
-  std::lock_guard<std::mutex> l(mutex_);
-  if (task_) {
-    // already initialized!
-    return false;
+  std::vector<UcxIntraNodeEligibilityCallback> eligibilityCallbacks;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (task_) {
+      // already initialized!
+      return false;
+    }
+    kind_ = kind;
+    numDrivers_ = numDrivers;
+    task_ = task;
+    maxSize_ = task_->queryCtx()->queryConfig().maxOutputBufferSize();
+    continueSize_ = (maxSize_ * kContinuePct) / 100;
+    // Publish task metadata before destination queue expansion. Acceptor only
+    // needs task/kind to choose the intra-node path; getData() takes mutex_ and
+    // waits for any queue expansion in this function to finish.
+    initialized_.store(true, std::memory_order_release);
+    // create additional queues if there are more destinations.
+    for (int i = queues_.size(); i < numDestinations; ++i) {
+      // create the destination queues inside the vector using emplace_back.
+      queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
+    }
+    eligibilityCallbacks = std::move(intraNodeEligibilityCallbacks_);
   }
-  kind_ = kind;
-  numDrivers_ = numDrivers;
-  task_ = task;
-  maxSize_ = task_->queryCtx()->queryConfig().maxOutputBufferSize();
-  continueSize_ = (maxSize_ * kContinuePct) / 100;
-  // Publish task metadata before destination queue expansion. Acceptor only
-  // needs task/kind to choose the intra-node path; getData() takes mutex_ and
-  // waits for any queue expansion in this function to finish.
-  initialized_.store(true, std::memory_order_release);
-  // create additional queues if there are more destinations.
-  for (int i = queues_.size(); i < numDestinations; ++i) {
-    // create the destination queues inside the vector using emplace_back.
-    queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
+
+  const bool canUseIntraNode =
+      kind != core::PartitionedOutputNode::Kind::kBroadcast;
+  for (auto& callback : eligibilityCallbacks) {
+    callback(canUseIntraNode);
   }
   return true;
+}
+
+void UcxOutputQueue::notifyOnIntraNodeEligibility(
+    UcxIntraNodeEligibilityCallback callback) {
+  VELOX_CHECK(callback, "Intra-node eligibility callback must be set");
+
+  bool invokeNow = false;
+  bool canUseIntraNode = false;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (terminated_) {
+      invokeNow = true;
+    } else if (initialized_.load(std::memory_order_acquire)) {
+      invokeNow = true;
+      canUseIntraNode = kind_ != core::PartitionedOutputNode::Kind::kBroadcast;
+    } else {
+      intraNodeEligibilityCallbacks_.push_back(std::move(callback));
+    }
+  }
+
+  if (invokeNow) {
+    callback(canUseIntraNode);
+  }
 }
 
 void UcxOutputQueue::updateNumDrivers(uint32_t newNumDrivers) {
@@ -528,9 +561,11 @@ void UcxOutputQueue::deleteResults(int destination) {
 
 void UcxOutputQueue::terminate() {
   std::vector<UcxDataAvailable> pendingCallbacks;
+  std::vector<UcxIntraNodeEligibilityCallback> eligibilityCallbacks;
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
+    terminated_ = true;
     if (task_ && task_->isRunning()) {
       LOG(WARNING) << "UcxOutputQueue::terminate() called while task "
                    << task_->taskId() << " is still running";
@@ -546,11 +581,17 @@ void UcxOutputQueue::terminate() {
     }
     // Release any outstanding producer-side promises (blocked on queue-full).
     promises = std::move(promises_);
+    eligibilityCallbacks = std::move(intraNodeEligibilityCallbacks_);
   }
 
   // Fire callbacks outside of mutex to avoid potential deadlocks.
   for (auto& callback : pendingCallbacks) {
     callback.notify();
+  }
+  // A task removed before initialization cannot use the process-local path.
+  // Resolving these callbacks lets waiting handshakes terminate cleanly.
+  for (auto& callback : eligibilityCallbacks) {
+    callback(false);
   }
   // Unblock any blocked producers.
   for (auto& promise : promises) {
