@@ -524,6 +524,16 @@ class ForcePolicy : public CompressionPolicy {
   const CompressionType type_;
 };
 
+// Pattern names from --only_pattern, empty when the flag is unset.
+std::set<std::string> selectedPatternNames() {
+  std::set<std::string> names;
+  if (!FLAGS_only_pattern.empty()) {
+    folly::splitTo<std::string>(
+        ',', FLAGS_only_pattern, std::inserter(names, names.end()));
+  }
+  return names;
+}
+
 struct Method {
   std::string name;
   std::function<Encoded(const Vector<T>&)> encode;
@@ -562,7 +572,8 @@ std::vector<std::pair<EncodingType, float>> tunedReadFactors() {
 Encoded encodeSubIntSplitWith(
     const Vector<T>& data,
     std::vector<std::pair<EncodingType, float>> readFactors,
-    CompressionType compressionType) {
+    CompressionType compressionType,
+    bool deltaPreTransform = false) {
   auto& pool = benchmarkPool();
   Buffer buffer{*pool};
   std::span<const uint64_t> values{data.data(), data.size()};
@@ -587,8 +598,10 @@ Encoded encodeSubIntSplitWith(
       std::move(result),
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
-  auto encoded =
-      SubIntSplitEncoding<uint64_t>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  encodeOptions.subIntSplitDeltaPreTransform = deltaPreTransform;
+  auto encoded = SubIntSplitEncoding<uint64_t>::encode(
+      selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
@@ -635,6 +648,16 @@ std::vector<Method> makeMethods() {
        [](const Vector<T>& d) {
          return encodeSubIntSplitWith(
              d, tunedReadFactors(), CompressionType::OpenZL);
+       },
+       decodeSubIntSplit});
+  methods.push_back(
+      {"SubIntSplitDelta",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitWith(
+             d,
+             tunedReadFactors(),
+             CompressionType::Zstd,
+             /*deltaPreTransform=*/true);
        },
        decodeSubIntSplit});
   methods.push_back(
@@ -781,13 +804,7 @@ void emitCsv(int trials, int64_t onlySize) {
   const auto pats = patterns();
   const auto methods = makeMethods();
 
-  std::set<std::string> selectedPatterns;
-  if (!FLAGS_only_pattern.empty()) {
-    folly::splitTo<std::string>(
-        ',',
-        FLAGS_only_pattern,
-        std::inserter(selectedPatterns, selectedPatterns.end()));
-  }
+  const std::set<std::string> selectedPatterns = selectedPatternNames();
 
   std::cout << "pattern,size,method,trials,ratio_mean,ratio_stddev,"
                "encode_mb_s_mean,decode_mb_s_mean\n";
@@ -857,7 +874,11 @@ void emitLayout() {
       {"SubIntSplitUncompressed", CompressionType::Uncompressed},
       {"SubIntSplitTuned", CompressionType::Zstd},
   };
+  const std::set<std::string> selected = selectedPatternNames();
   for (const auto& pat : patterns()) {
+    if (!selected.empty() && !selected.contains(pat.name)) {
+      continue;
+    }
     const uint64_t seed = 0x9e3779b97f4a7c15ULL + 1'000'000ULL;
     const Vector<T> data = pat.gen(1'000'000u, seed);
     for (const auto& [label, compressionType] : regimes) {
