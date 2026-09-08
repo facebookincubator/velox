@@ -1329,7 +1329,15 @@ Set to 0 for adaptive mode. Session: <code class="docutils literal notranslate">
 <td><p>false</p></td>
 <td><p>Allow reading INT32 Parquet columns as a narrower integer type. Session: <code class="docutils literal notranslate"><span class="pre">parquet_allow_int32_narrowing</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">footer-memory-tracking-threshold</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">null-struct-if-all-fields-missing</span></code></p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>When name-based mapping is enabled and all requested fields of a struct
+are missing in a Parquet file, return a NULL struct instead of preserving
+the parent struct nullness and returning a non-null struct with all-null
+children. Session: <code class="docutils literal notranslate"><span class="pre">parquet_null_struct_if_all_fields_missing</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">footer-memory-tracking-threshold</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>disabled (max uint64)</p></td>
 <td><p>Serialized footer byte size above which the Parquet reader engages
@@ -1358,7 +1366,7 @@ per scan via the runtime stat <code class="docutils literal notranslate"><span c
 operators can compare it against actual pool usage. Session: <code class="docutils literal notranslate"><span class="pre">parquet_footer_memory_tracking_threshold</span></code>.</p>
 </td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
 <td><p>capacity</p></td>
 <td><p>0B</p></td>
 <td><p>Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
@@ -1372,61 +1380,61 @@ sorted writes.</p>
 the accumulated file size is visible and rotation can occur.</p>
 </td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-dictionary</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-dictionary</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to enable dictionary encoding when writing into Parquet through the Arrow bridge.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_dictionary</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.dictionary-page-size-limit</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.dictionary-page-size-limit</span></code></p></td>
 <td><p>string</p></td>
 <td><p>1MB</p></td>
 <td><p>Dictionary Page size used when writing into Parquet through Arrow bridge. This setting is applicable only when dictionary encoding is enabled.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.dictionary_page_size_limit</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.timestamp-unit</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.timestamp-unit</span></code></p></td>
 <td><p>tinyint</p></td>
 <td><p>9</p></td>
 <td><p>Timestamp unit used when writing timestamps into Parquet through Arrow bridge.
 Valid values are 3 (millisecond), 6 (microsecond), and 9 (nanosecond).
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.timestamp_unit</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.datapage-version</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.datapage-version</span></code></p></td>
 <td><p>string</p></td>
 <td><p>V1</p></td>
 <td><p>Data Page version used when writing into Parquet through Arrow bridge.
 Valid values are “V1” and “V2”. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.datapage_version</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.page-size</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.page-size</span></code></p></td>
 <td><p>string</p></td>
 <td><p>1MB</p></td>
 <td><p>Data Page size used when writing into Parquet through Arrow bridge. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.page_size</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.batch-size</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.batch-size</span></code></p></td>
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Batch size used when writing into Parquet through Arrow bridge. Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.batch_size</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.row-group-size</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.row-group-size</span></code></p></td>
 <td><p>string</p></td>
 <td><p>128MB</p></td>
 <td><p>Soft target for the serialized row group size. The estimate includes compressed bytes for
 encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
 row group may slightly exceed the target. Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_row_group_size</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
 <td><p>string</p></td>
 <td><p>parquet-cpp-velox version 0.0.0</p></td>
 <td><p>Created-by value used when writing to Parquet.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
 When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_store_decimal_as_integer</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to write the Parquet page index (column index and offset index) when writing into
