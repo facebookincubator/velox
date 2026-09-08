@@ -239,16 +239,96 @@ TEST_F(EliasFanoEncodingTest, factoryRoundTrip) {
   EXPECT_NE(encoding->debugString(0).find("lowerBits="), std::string::npos);
 }
 
-TEST_F(EliasFanoEncodingTest, estimateRejectsEmptyAndUnsortedValues) {
+TEST_F(EliasFanoEncodingTest, factoryRoundTripSignedLogicalOrder) {
+  const std::vector<int64_t> input{
+      std::numeric_limits<int64_t>::min(),
+      -7,
+      -7,
+      0,
+      9,
+      std::numeric_limits<int64_t>::max()};
+  auto values = toVector(input);
+  auto policy =
+      std::make_unique<nimble::ManualEncodingSelectionPolicy<int64_t>>(
+          std::vector<std::pair<nimble::EncodingType, float>>{
+              {nimble::EncodingType::EliasFano, 1.0}},
+          std::nullopt,
+          std::nullopt);
+  const auto encoded = nimble::EncodingFactory::encode<int64_t>(
+      std::move(policy), values, *buffer_);
+  auto encoding = nimble::EncodingFactory{}.create(
+      *pool_, encoded, /*stringBufferFactory=*/nullptr);
+  std::vector<int64_t> output(input.size());
+  encoding->materialize(static_cast<uint32_t>(input.size()), output.data());
+
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::EliasFano);
+  EXPECT_EQ(output, input);
+}
+
+TEST_F(EliasFanoEncodingTest, estimateMatchesEncodedSize) {
+  for (const uint32_t rowCount : {1, 127, 128, 255, 256, 257}) {
+    std::vector<uint64_t> input(rowCount);
+    for (uint32_t row{0}; row < rowCount; ++row) {
+      input[row] = row / 2;
+    }
+    const auto values = toVector(input);
+    const auto physicalValues =
+        std::span<const uint64_t>{values.data(), values.size()};
+    const auto statistics =
+        nimble::Statistics<uint64_t>::create(physicalValues);
+    for (const bool useVarintRowCount : {false, true}) {
+      SCOPED_TRACE(
+          ::testing::Message() << "rowCount=" << rowCount
+                               << ", useVarintRowCount=" << useVarintRowCount);
+      const nimble::Encoding::Options options{
+          .useVarintRowCount = useVarintRowCount};
+      const auto estimate = nimble::EliasFanoEncoding<uint64_t>::estimateSize(
+          physicalValues, statistics, options);
+      ASSERT_TRUE(estimate.has_value());
+      buffer_->reset();
+      const auto encoded =
+          nimble::test::Encoder<nimble::EliasFanoEncoding<uint64_t>>::encode(
+              *buffer_, values, nimble::CompressionType::Uncompressed, options);
+      EXPECT_EQ(*estimate, encoded.size());
+    }
+  }
+}
+
+TEST_F(EliasFanoEncodingTest, rejectsSerializedSizeAboveUint32) {
+  constexpr uint64_t kPayloadOffset{24};
+  constexpr uint64_t kPaddingSize{7};
+  constexpr uint64_t kMaxPayloadSize{
+      std::numeric_limits<uint32_t>::max() - kPayloadOffset - kPaddingSize};
+
   EXPECT_EQ(
-      nimble::EliasFanoEncoding<uint64_t>::estimateSize({}), std::nullopt);
+      nimble::detail::elias_fano::trySerializedSize(
+          kPayloadOffset, kMaxPayloadSize, kPaddingSize),
+      std::numeric_limits<uint32_t>::max());
+  EXPECT_EQ(
+      nimble::detail::elias_fano::trySerializedSize(
+          kPayloadOffset, kMaxPayloadSize + 1, kPaddingSize),
+      std::nullopt);
+  EXPECT_EQ(
+      nimble::detail::elias_fano::trySerializedSize(
+          kPayloadOffset, std::numeric_limits<uint64_t>::max(), kPaddingSize),
+      std::nullopt);
+}
+
+TEST_F(EliasFanoEncodingTest, estimateRejectsEmptyAndUnsortedValues) {
+  const auto emptyStatistics =
+      nimble::Statistics<uint64_t>::create(std::span<const uint64_t>{});
+  EXPECT_EQ(
+      nimble::EliasFanoEncoding<uint64_t>::estimateSize({}, emptyStatistics),
+      std::nullopt);
 
   const std::vector<uint32_t> input{1, 5, 4, 8};
   const auto values = toVector(input);
   const auto physicalValues = std::span<const uint32_t>{
       reinterpret_cast<const uint32_t*>(values.data()), values.size()};
+  const auto statistics = nimble::Statistics<uint32_t>::create(physicalValues);
   EXPECT_EQ(
-      nimble::EliasFanoEncoding<uint32_t>::estimateSize(physicalValues),
+      nimble::EliasFanoEncoding<uint32_t>::estimateSize(
+          physicalValues, statistics),
       std::nullopt);
 }
 
@@ -317,10 +397,10 @@ TEST_F(EliasFanoEncodingTest, rejectsMissingUpperBits) {
       "Invalid EliasFano upper bits.");
 }
 
-TEST_F(EliasFanoEncodingTest, alignsFollyPointerTables) {
-  std::vector<uint64_t> input(300);
+TEST_F(EliasFanoEncodingTest, alignsAndReadsFollyPointerTables) {
+  std::vector<uint64_t> input(600);
   for (size_t i{0}; i < input.size(); ++i) {
-    input[i] = i;
+    input[i] = i / 2;
   }
   for (const bool useVarint : {false, true}) {
     SCOPED_TRACE(::testing::Message() << "useVarint=" << useVarint);
@@ -349,6 +429,21 @@ TEST_F(EliasFanoEncodingTest, alignsFollyPointerTables) {
     for (size_t offset{headerEndOffset}; offset < payloadOffset; ++offset) {
       SCOPED_TRACE(::testing::Message() << "offset=" << offset);
       EXPECT_EQ(encoded[offset], 0);
+    }
+
+    auto encoding = nimble::EncodingFactory{}.create(
+        *pool_, encoded, /*stringBufferFactory=*/nullptr, options);
+    std::vector<uint64_t> output(input.size());
+    encoding->materialize(static_cast<uint32_t>(input.size()), output.data());
+    EXPECT_EQ(output, input);
+
+    const auto* eliasFano =
+        dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>*>(
+            encoding.get());
+    ASSERT_NE(eliasFano, nullptr);
+    for (const uint32_t row : {127, 128, 255, 256, 511, 512}) {
+      EXPECT_EQ(eliasFano->valueAt(row), input[row]);
+      EXPECT_EQ(eliasFano->lowerBound(input[row]), row - row % 2);
     }
   }
 }
