@@ -25,6 +25,7 @@
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -2847,6 +2848,43 @@ TEST_F(CastExprTest, intervalDayTimeToVarchar) {
   VELOX_ASSERT_THROW(
       evaluate("cast('5 14:20:52.088' as interval day to second)", data),
       "Cast from VARCHAR to INTERVAL DAY TO SECOND is not supported");
+}
+
+TEST_F(CastExprTest, calendarIntervalToVarchar) {
+  // 1 hour, 2 minutes, 3 seconds in microseconds.
+  const int64_t micros = 1L * 3600000000L + 2L * 60000000L + 3L * 1000000L;
+  auto data = makeRowVector({
+      makeNullableFlatVector<int128_t>(
+          {CalendarInterval(0, 0, 0).pack(),
+           CalendarInterval(14, 0, 0).pack(),
+           CalendarInterval(0, 5, 0).pack(),
+           CalendarInterval(0, 0, micros).pack(),
+           CalendarInterval(14, 5, micros).pack(),
+           CalendarInterval(-14, 0, 0).pack(),
+           CalendarInterval(0, 0, 1500000L).pack(),
+           std::nullopt},
+          CALENDAR_INTERVAL()),
+  });
+
+  auto result = evaluate("cast(c0 as varchar)", data);
+  auto expected = makeNullableFlatVector<std::string>({
+      "0 seconds",
+      "1 years 2 months",
+      "5 days",
+      "1 hours 2 minutes 3 seconds",
+      "1 years 2 months 5 days 1 hours 2 minutes 3 seconds",
+      "-1 years -2 months",
+      "1.5 seconds",
+      std::nullopt,
+  });
+
+  assertEqualVectors(expected, result);
+
+  // CalendarInterval cast to an unsupported target type hits the
+  // SAFE_VELOX_UNSUPPORTED fallback.
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as bigint)", data),
+      "Cast from INTERVAL to BIGINT is not supported");
 }
 
 class BigintTypeWithCustomComparisonCastOperator final

@@ -105,6 +105,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t, int32_t>(
       {prefix + "make_ym_interval"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_make_interval, prefix + "make_interval");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_make_timestamp, prefix + "make_timestamp");
   registerFunction<TimestampToMicrosFunction, int64_t, Timestamp>(
       {prefix + "unix_micros"});

@@ -16,6 +16,7 @@
 
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+#include "velox/type/CalendarInterval.h"
 
 #include <stdint.h>
 
@@ -84,6 +85,31 @@ TEST_F(HashTest, longDecimal) {
   EXPECT_EQ(hash<int128_t>(DecimalUtil::kLongDecimalMax), -817514053);
   EXPECT_EQ(hash<int128_t>(-12345678), -1198355617);
   EXPECT_EQ(hash<int128_t>(std::nullopt), 42);
+}
+
+// Spark: SELECT hash(make_interval(months, days, 0, 0, 0, 0, micros_as_secs))
+// Spark hashes CalendarInterval field-by-field:
+//   hashInt(months, hashInt(days, hashLong(microseconds, seed)))
+TEST_F(HashTest, calendarInterval) {
+  // Use vector path to exercise CalendarIntervalVectorHasher.
+  auto intervalVector = makeNullableFlatVector<int128_t>(
+      {CalendarInterval(0, 0, 0).pack(),
+       CalendarInterval(14, 5, 5400000000L).pack(),
+       CalendarInterval(-3, -10, -7200000000L).pack(),
+       CalendarInterval(0, 1, 0).pack(),
+       CalendarInterval(1, 0, 0).pack(),
+       std::nullopt},
+      CALENDAR_INTERVAL());
+
+  auto expected = makeFlatVector<int32_t>(
+      {1954791903, // (0, 0, 0)
+       1085818131, // (14, 5, 5400000000)
+       404949184, // (-3, -10, -7200000000)
+       -1328321721, // (0, 1, 0)
+       -1557981773, // (1, 0, 0)
+       42}); // null → seed
+
+  assertEqualVectors(expected, hash(intervalVector));
 }
 
 // Spark CLI select timestamp_micros(12345678) to get the Timestamp.

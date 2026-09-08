@@ -31,6 +31,7 @@
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
@@ -348,6 +349,8 @@ void Type::registerSerDe() {
   registry.Register("DateType", DateType::deserialize);
   registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
+  registry.Register(
+      "CalendarIntervalType", CalendarIntervalType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -1394,6 +1397,11 @@ std::string IntervalYearMonthType::valueToString(int32_t value) const {
   return oss.str();
 }
 
+std::string CalendarIntervalType::valueToString(int128_t value) const {
+  auto interval = CalendarInterval::unpack(value);
+  return interval.toString();
+}
+
 std::string DateType::toString(int32_t days) const {
   return DateType::toIso8601(days);
 }
@@ -1449,6 +1457,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
+      {"INTERVAL", CALENDAR_INTERVAL()},
       {"DATE", DATE()},
       {"TIME", TIME()},
       {"TIME MICRO UTC", TIME_MICRO_UTC()},

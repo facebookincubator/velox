@@ -19,6 +19,7 @@
 #include "folly/json.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/type/HugeInt.h"
@@ -271,6 +272,9 @@ std::string Variant::toString(const TypePtr& type) const {
       return str;
     }
     case TypeKind::HUGEINT: {
+      if (type->isCalendarInterval()) {
+        return CalendarInterval::unpack(value<TypeKind::HUGEINT>()).toString();
+      }
       if (type->isLongDecimal()) {
         return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
       }
@@ -487,6 +491,14 @@ std::string Variant::toJson(const Type& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
+      if (type.isCalendarInterval()) {
+        std::string target;
+        folly::json::escapeString(
+            CalendarInterval::unpack(value<TypeKind::HUGEINT>()).toString(),
+            target,
+            getOpts());
+        return target;
+      }
       if (type.isLongDecimal()) {
         return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
       }
@@ -616,12 +628,19 @@ std::string Variant::toJsonUnsafe(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
+      if (type && type->isCalendarInterval()) {
+        std::string target;
+        folly::json::escapeString(
+            CalendarInterval::unpack(value<TypeKind::HUGEINT>()).toString(),
+            target,
+            getOpts());
+        return target;
+      }
       if (type && type->isLongDecimal()) {
         return DecimalUtil::toString(value<TypeKind::HUGEINT>(), type);
       }
       return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
-    case TypeKind::TINYINT:
       [[fallthrough]];
     case TypeKind::SMALLINT:
       [[fallthrough]];

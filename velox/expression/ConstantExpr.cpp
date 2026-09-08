@@ -170,8 +170,15 @@ void appendSqlLiteral(
       }
       [[fallthrough]];
     }
-    case TypeKind::HUGEINT:
+    case TypeKind::HUGEINT: {
+      if (vector.type()->isCalendarInterval()) {
+        out << "INTERVAL '"
+            << vector.wrappedVector()->toString(vector.wrappedIndex(row))
+            << "'";
+        break;
+      }
       [[fallthrough]];
+    }
     case TypeKind::REAL:
       [[fallthrough]];
     case TypeKind::DOUBLE:

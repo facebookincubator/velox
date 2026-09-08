@@ -121,6 +121,10 @@ class UnsafeRowFast {
   const TypeKind typeKind_;
   DecodedVector decoded_;
 
+  /// True if this column is CalendarIntervalType (shares HUGEINT kind with
+  /// Decimal but has a different UnsafeRow serialization format).
+  bool isCalendarInterval_{false};
+
   /// True if values of 'typeKind_' have fixed width.
   bool fixedWidthTypeKind_{false};
 

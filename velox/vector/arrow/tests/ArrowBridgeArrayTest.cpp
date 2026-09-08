@@ -23,6 +23,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/type/CalendarInterval.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -2374,6 +2375,164 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, releaseCalled) {
 
   EXPECT_TRUE(TestReleaseCalled::schemaReleaseCalled);
   EXPECT_TRUE(TestReleaseCalled::arrayReleaseCalled);
+}
+
+// CalendarInterval Arrow bridge round-trip test.
+// Verifies microsecond→nanosecond (export) and nanosecond→microsecond (import)
+// conversion, including overflow clamping.
+TEST_F(ArrowBridgeArrayExportTest, calendarIntervalRoundTrip) {
+  auto type = CALENDAR_INTERVAL();
+  auto values = AlignedBuffer::allocate<int128_t>(5, pool_.get());
+  auto vec = std::make_shared<FlatVector<int128_t>>(
+      pool_.get(),
+      type,
+      BufferPtr(nullptr), // nulls
+      vector_size_t(5),
+      std::move(values),
+      std::vector<BufferPtr>{});
+
+  // Test values: zero, positive, negative, max micros, near-overflow.
+  vec->set(0, CalendarInterval(0, 0, 0).pack());
+  vec->set(1, CalendarInterval(14, 30, 3600000000L).pack()); // 1y2m, 30d, 1h
+  vec->set(2, CalendarInterval(-3, -10, -7200000000L).pack()); // negative
+  vec->set(3, CalendarInterval(0, 1, 1500L).pack()); // 1500 micros = 1.5ms
+  // Near overflow: max_int64 / 1000 micros (should not overflow on export).
+  vec->set(
+      4,
+      CalendarInterval(120, 365, std::numeric_limits<int64_t>::max() / 1000)
+          .pack());
+
+  // Export to Arrow.
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  // Verify Arrow schema is month-day-nano interval.
+  EXPECT_STREQ(schema.format, "tin");
+
+  // Import back to Velox.
+  auto result = importFromArrowAsOwner(schema, data, pool_.get());
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), 5);
+  EXPECT_TRUE(result->type()->isCalendarInterval());
+
+  auto* flat = result->as<FlatVector<int128_t>>();
+
+  // Values should round-trip exactly (micros * 1000 / 1000 = micros).
+  EXPECT_EQ(flat->valueAt(0), CalendarInterval(0, 0, 0).pack());
+  EXPECT_EQ(flat->valueAt(1), CalendarInterval(14, 30, 3600000000L).pack());
+  EXPECT_EQ(flat->valueAt(2), CalendarInterval(-3, -10, -7200000000L).pack());
+  EXPECT_EQ(flat->valueAt(3), CalendarInterval(0, 1, 1500L).pack());
+  EXPECT_EQ(
+      flat->valueAt(4),
+      CalendarInterval(120, 365, std::numeric_limits<int64_t>::max() / 1000)
+          .pack());
+}
+
+// Test that microsecond overflow is clamped on export.
+TEST_F(ArrowBridgeArrayExportTest, calendarIntervalOverflow) {
+  auto type = CALENDAR_INTERVAL();
+  auto values = AlignedBuffer::allocate<int128_t>(2, pool_.get());
+  auto vec = std::make_shared<FlatVector<int128_t>>(
+      pool_.get(),
+      type,
+      BufferPtr(nullptr),
+      vector_size_t(2),
+      std::move(values),
+      std::vector<BufferPtr>{});
+
+  // These micros values will overflow when multiplied by 1000.
+  vec->set(
+      0, CalendarInterval(1, 1, std::numeric_limits<int64_t>::max()).pack());
+  vec->set(
+      1, CalendarInterval(1, 1, std::numeric_limits<int64_t>::min()).pack());
+
+  // Export to Arrow — should clamp to INT64_MAX/MIN nanos.
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  // Import back — clamped nanos / 1000 gives clamped micros.
+  auto result = importFromArrowAsOwner(schema, data, pool_.get());
+  auto* flat = result->as<FlatVector<int128_t>>();
+
+  // After clamp: MAX_INT64 nanos / 1000 = MAX_INT64 / 1000 micros.
+  auto ci0 = CalendarInterval::unpack(flat->valueAt(0));
+  EXPECT_EQ(ci0.months, 1);
+  EXPECT_EQ(ci0.days, 1);
+  EXPECT_EQ(ci0.microseconds, std::numeric_limits<int64_t>::max() / 1000);
+
+  auto ci1 = CalendarInterval::unpack(flat->valueAt(1));
+  EXPECT_EQ(ci1.months, 1);
+  EXPECT_EQ(ci1.days, 1);
+  EXPECT_EQ(ci1.microseconds, std::numeric_limits<int64_t>::min() / 1000);
+}
+
+// Test CalendarInterval export as a struct child with parent nulls,
+// which exercises the compacted-index (j++) path and parentNulls propagation.
+// Mirrors rowVectorNullPropagationTimestamp.
+TEST_F(ArrowBridgeArrayExportTest, calendarIntervalParentNulls) {
+  auto type = CALENDAR_INTERVAL();
+  auto values = AlignedBuffer::allocate<int128_t>(5, pool_.get());
+  auto child = std::make_shared<FlatVector<int128_t>>(
+      pool_.get(),
+      type,
+      BufferPtr(nullptr), // no child-level nulls
+      vector_size_t(5),
+      std::move(values),
+      std::vector<BufferPtr>{});
+
+  child->set(0, CalendarInterval(1, 10, 1000000L).pack());
+  child->set(1, CalendarInterval(2, 20, 2000000L).pack());
+  child->set(2, CalendarInterval(3, 30, 3000000L).pack());
+  child->set(3, CalendarInterval(4, 40, 4000000L).pack());
+  child->set(4, CalendarInterval(5, 50, 5000000L).pack());
+
+  // Create parent with nulls at positions 1 and 3.
+  auto parent = vectorMaker_.rowVector({child});
+  parent->setNull(1, true);
+  parent->setNull(3, true);
+  parent->setNullCount(2);
+
+  ArrowArray arrowArray;
+  EXPECT_NO_THROW(
+      velox::exportToArrow(parent, arrowArray, pool_.get(), options_));
+
+  // Verify child has null propagation from parent.
+  ArrowArray* childArrow = arrowArray.children[0];
+  EXPECT_NE(nullptr, childArrow);
+  EXPECT_GE(childArrow->null_count, 2);
+
+  const uint64_t* childNulls =
+      static_cast<const uint64_t*>(childArrow->buffers[0]);
+  EXPECT_NE(nullptr, childNulls);
+  EXPECT_TRUE(bits::isBitNull(childNulls, 1));
+  EXPECT_TRUE(bits::isBitNull(childNulls, 3));
+
+  // Verify non-null values are correctly placed (compacted index).
+  const auto* rawValues = static_cast<const int128_t*>(childArrow->buffers[1]);
+  // Positions 0, 2, 4 are non-null; their values should be at indices 0, 2, 4
+  // in the exported buffer (Arrow keeps the same indexing for RowVector
+  // children since all rows are selected).
+  auto ci0 = CalendarInterval::unpack(rawValues[0]);
+  EXPECT_EQ(ci0.months, 1);
+  EXPECT_EQ(ci0.days, 10);
+  // micros converted to nanos: 1000000 * 1000 = 1000000000
+  EXPECT_EQ(ci0.microseconds, 1000000000L);
+
+  auto ci2 = CalendarInterval::unpack(rawValues[2]);
+  EXPECT_EQ(ci2.months, 3);
+  EXPECT_EQ(ci2.days, 30);
+  EXPECT_EQ(ci2.microseconds, 3000000000L);
+
+  auto ci4 = CalendarInterval::unpack(rawValues[4]);
+  EXPECT_EQ(ci4.months, 5);
+  EXPECT_EQ(ci4.days, 50);
+  EXPECT_EQ(ci4.microseconds, 5000000000L);
+
+  arrowArray.release(&arrowArray);
 }
 
 } // namespace
