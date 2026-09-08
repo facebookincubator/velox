@@ -86,6 +86,30 @@ target_link_libraries(
   Folly::folly
 )
 
+add_library(
+  nimble_vector_index
+  VectorIndex.cpp
+  VectorIndexWriter.cpp
+  VectorIndexUtility.cpp
+  VectorIndex.h
+  VectorIndexWriter.h
+  VectorIndexUtility.h
+  VectorIndexConfig.h
+)
+target_link_libraries(
+  nimble_vector_index
+  nimble_index
+  nimble_common
+  nimble_tablet_common
+  nimble_vector_index_fb
+  velox_buffer
+  velox_memory
+  velox_type
+  velox_vector
+  FAISS::faiss
+  Folly::folly
+)
+
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()

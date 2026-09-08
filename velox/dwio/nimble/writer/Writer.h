@@ -25,6 +25,7 @@
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
@@ -358,6 +359,8 @@ class Writer : public velox::dwio::common::Writer {
   std::unique_ptr<velox::WriteFile> file_;
   const std::unique_ptr<index::IndexWriter> clusterIndexWriter_;
   const std::vector<DenseIndexWriter> denseIndexWriters_;
+  // Accumulates vectors for all configured similarity-search indexes.
+  const std::unique_ptr<index::VectorIndexWriter> vectorIndexWriter_;
   const std::unique_ptr<TabletWriter> tabletWriter_;
   // Built once at construction from `options.bufferPolicyFactory`; null if
   // the caller didn't set the factory (legacy FlushPolicy path).

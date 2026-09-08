@@ -144,6 +144,22 @@ target_include_directories(
 )
 add_dependencies(nimble_sorted_index_fb nimble_sorted_index_schema_fb)
 
+build_flatbuffers(
+  "${CMAKE_CURRENT_SOURCE_DIR}/VectorIndex.fbs"
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  nimble_vector_index_schema_fb
+  ""
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  ""
+  ""
+)
+add_library(nimble_vector_index_fb INTERFACE)
+target_include_directories(
+  nimble_vector_index_fb
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
+)
+add_dependencies(nimble_vector_index_fb nimble_vector_index_schema_fb)
+
 add_library(
   nimble_tablet_common
   Compression.cpp
