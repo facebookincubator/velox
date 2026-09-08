@@ -330,6 +330,13 @@ NIMBLE_DECLARE_CHECK_FAIL_TEMPLATES(::facebook::nimble::NimbleInternalError);
       /* retryable */ false,                           \
       __VA_ARGS__)
 
+#define NIMBLE_FILE_FAIL(...)                        \
+  NIMBLE_RAISE_USER_ERROR(                           \
+      "",                                            \
+      ::facebook::nimble::error_code::CorruptedFile, \
+      /* retryable */ false,                         \
+      __VA_ARGS__)
+
 // Debug variants
 #ifndef NDEBUG
 #define NIMBLE_DCHECK(condition, ...) NIMBLE_CHECK(condition, ##__VA_ARGS__)
