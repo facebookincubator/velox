@@ -66,38 +66,22 @@ class StripeDictionaryCacheTest : public testing::Test {
 };
 } // namespace
 
-TEST_F(StripeDictionaryCacheTest, RegisterDictionary) {
-  {
-    StripeDictionaryCache cache{pool_.get()};
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
-    EXPECT_EQ(1, cache.intDictionaryFactories_.size());
-    EXPECT_EQ(1, cache.intDictionaryFactories_.count({9, 0}));
-  }
+TEST_F(StripeDictionaryCacheTest, registerDictionary) {
+  StripeDictionaryCache cache{pool_.get()};
+  cache.registerIntDictionary({1, 0}, genConsecutiveRangeBuffer(0, 100));
+  cache.registerIntDictionary({1, 1}, genConsecutiveRangeBuffer(100, 200));
+  cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(200, 300));
+
+  verifyRange(cache.getIntDictionary({1, 0}), 0, 100);
+  verifyRange(cache.getIntDictionary({1, 1}), 100, 200);
+  verifyRange(cache.getIntDictionary({9, 0}), 200, 300);
+
   // When a dictionary is registered multiple times, we only honor the
   // first invocation. In practice, all params are retrieved from the same
   // StripeStream, so it won't matter. For here, we have to test that
   // the content is not changed in getDictionaryBuffer tests.
-  {
-    StripeDictionaryCache cache{pool_.get()};
-
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(100, 200));
-
-    EXPECT_EQ(1, cache.intDictionaryFactories_.size());
-    EXPECT_EQ(1, cache.intDictionaryFactories_.count({9, 0}));
-  }
-  {
-    StripeDictionaryCache cache{pool_.get()};
-
-    cache.registerIntDictionary({1, 0}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({1, 1}, genConsecutiveRangeBuffer(0, 100));
-    cache.registerIntDictionary({9, 0}, genConsecutiveRangeBuffer(100, 200));
-
-    EXPECT_EQ(3, cache.intDictionaryFactories_.size());
-    EXPECT_EQ(1, cache.intDictionaryFactories_.count({1, 0}));
-    EXPECT_EQ(1, cache.intDictionaryFactories_.count({1, 1}));
-    EXPECT_EQ(1, cache.intDictionaryFactories_.count({9, 0}));
-  }
+  cache.registerIntDictionary({1, 0}, genConsecutiveRangeBuffer(300, 400));
+  verifyRange(cache.getIntDictionary({1, 0}), 0, 100);
 }
 
 TEST_F(StripeDictionaryCacheTest, getDictionaryBuffer) {

@@ -1,0 +1,78 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+include "Footer.fbs";
+
+namespace facebook.nimble.serialization;
+
+/// Distance metric for vector similarity search.
+enum VectorDistanceMetric : byte {
+  /// Squared Euclidean distance, where smaller scores are closer.
+  L2,
+  /// Cosine similarity over normalized vectors, where larger scores are closer.
+  Cosine,
+  /// Inner-product similarity over unnormalized vectors, where larger scores
+  /// are closer.
+  DotProduct,
+}
+
+/// Vector index types supported.
+/// IVF partitioning with configurable quantization or sub-index.
+enum VectorIndexType : byte {
+  IVF_FLAT,
+  IVF_SQ8,
+  IVF_PQ,
+  IVF_RABITQ,
+  HNSW_SQ8,
+}
+
+/// Serialized configuration for the vector index.
+table VectorIndexMeta {
+  /// Name of the indexed vector column.
+  column_name:string;
+  /// Fixed width of every indexed vector, measured in floating-point
+  /// coordinates (for example, 768 for a 768-dimensional embedding). Readers
+  /// require query vectors to have the same width before passing them to FAISS.
+  dimensions:uint32;
+  /// Distance metric used for similarity search.
+  metric:VectorDistanceMetric;
+  /// Index type (partitioning + compression/sub-index).
+  index_type:VectorIndexType;
+  /// Number of IVF partitions (clusters), or zero for non-IVF indexes.
+  num_partitions:uint32;
+  /// Number of top-level file rows represented by the index. The writer
+  /// requires one non-null vector per row, so this is also the vector column's
+  /// row count. FAISS labels are file row numbers in [0, num_vectors).
+  num_vectors:uint64;
+}
+
+/// Describes one vector index stored in a separate metadata section.
+table VectorIndex {
+  /// Index configuration metadata.
+  config:VectorIndexMeta (required);
+  /// Section containing the trained and populated FAISS index blob. Readers
+  /// pass its contents to faiss::read_index().
+  index_data:MetadataSection (required);
+}
+
+/// Root table for the vector index optional section.
+/// Supports independent vector indexes on multiple columns in one file.
+table VectorIndexDirectory {
+  /// Descriptors for all vector indexes stored in the file.
+  indices:[VectorIndex] (required);
+}
+
+root_type VectorIndexDirectory;

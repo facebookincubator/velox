@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
@@ -1889,6 +1890,13 @@ Writer::Writer(
           context_->options(),
           type,
           &(*context_->bufferMemoryPool()))},
+      vectorIndexWriter_{
+          context_->options().vectorIndexConfigs.empty()
+              ? nullptr
+              : index::VectorIndexWriter::create(
+                    context_->options().vectorIndexConfigs,
+                    velox::asRowType(type),
+                    &(*context_->bufferMemoryPool()))},
       tabletWriter_{TabletWriter::create(
           file_.get(),
           *encodingMemoryPool_,
@@ -2268,6 +2276,9 @@ void Writer::addIndexKey(const velox::VectorPtr& input) {
   for (const auto& denseIndex : denseIndexWriters_) {
     denseIndex.writer->write(input);
   }
+  if (vectorIndexWriter_ != nullptr) {
+    vectorIndexWriter_->write(input);
+  }
 }
 
 void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
@@ -2333,6 +2344,9 @@ void Writer::writeIndexes(
     }
   }
   writeIndexSection(descriptors, writeMetadataFn);
+  if (vectorIndexWriter_ != nullptr) {
+    vectorIndexWriter_->close(createMetadataFn, writeMetadataFn);
+  }
 }
 
 bool Writer::shouldFlush(FlushPolicy* policy) const {
