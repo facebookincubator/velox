@@ -143,6 +143,9 @@ void IcebergDataSource::addDynamicFilter(
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
   auto icebergSplit = checkedPointerCast<const HiveIcebergSplit>(split_);
+  auto* icebergTableHandle = tableHandle_->as<IcebergTableHandle>();
+  VELOX_CHECK_NOT_NULL(
+      icebergTableHandle, "tableHandle_ is not IcebergTableHandle");
 
   if (changelogScanContext_.has_value()) {
     // Pass readerOutputType_ (not outputType()) so that columns referenced

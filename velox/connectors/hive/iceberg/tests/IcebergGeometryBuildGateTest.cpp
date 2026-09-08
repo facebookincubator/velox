@@ -30,7 +30,6 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -72,11 +71,7 @@ TEST_F(IcebergGeometryBuildGateTest, geometryReadDependsOnBuildFlag) {
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {GEOMETRY()}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {GEOMETRY()}));
   auto splits = createSplitsForDirectory(dataPath);
 
 #ifdef VELOX_ENABLE_GEO
@@ -108,11 +103,7 @@ TEST_F(IcebergGeometryBuildGateTest, plainBinaryReadWorksInEitherBuild) {
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {VARBINARY()}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {VARBINARY()}));
   auto result = exec::test::AssertQueryBuilder(plan)
                     .splits(createSplitsForDirectory(dataPath))
                     .copyResults(pool());
