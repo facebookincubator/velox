@@ -62,6 +62,12 @@ void registerVeloxMetrics() {
       99,
       100);
 
+  // Tracks splits whose 'physicalFilePath' failed to open, falling back to
+  // 'filePath'.
+  DEFINE_METRIC(
+      kMetricHiveSplitPhysicalPathFallbackCount,
+      facebook::velox::StatType::COUNT);
+
   DEFINE_METRIC(kMetricCacheShrinkCount, facebook::velox::StatType::COUNT);
 
   // Tracks cache shrink latency in range of [0, 100s] with 10 buckets and

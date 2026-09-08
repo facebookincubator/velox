@@ -26,6 +26,9 @@ void registerVeloxMetrics();
 constexpr std::string_view kMetricHiveFileHandleGenerateLatencyMs{
     "velox.hive_file_handle_generate_latency_ms"};
 
+constexpr std::string_view kMetricHiveSplitPhysicalPathFallbackCount{
+    "velox.hive_split_physical_path_fallback_count"};
+
 constexpr std::string_view kMetricCacheShrinkCount{"velox.cache_shrink_count"};
 
 constexpr std::string_view kMetricCacheShrinkTimeMs{"velox.cache_shrink_ms"};

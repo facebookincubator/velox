@@ -75,6 +75,15 @@ void configureRowReaderOptions(
     folly::Executor* ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions);
 
+/// Opens the split's bytes at readPath(), retrying on 'filePath' when the two
+/// differ and the first open fails.
+FileHandleCachedPtr openSplitFile(
+    const FileConnectorSplit& split,
+    FileHandleFactory& fileHandleFactory,
+    const FileProperties& properties,
+    const std::shared_ptr<filesystems::TokenProvider>& tokenProvider,
+    IoStats* ioStats);
+
 /// Tests whether a file should be read based on partition key values and
 /// column statistics. Returns true if the file passes all filters, false
 /// if it can be skipped.

@@ -19,6 +19,7 @@
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -262,14 +263,13 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   readerOpts.setFileFormat(hiveSplit_->fileFormat);
   VELOX_CHECK_NULL(readerOpts.randomSkip());
 
-  FileHandleKey fileHandleKey{
-      .filename = hiveSplit_->filePath,
-      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-
-  auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
-  auto fileHandleCachePtr = fileHandleFactory_->generate(
-      fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
-  VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+  const auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
+  auto fileHandleCachePtr = openSplitFile(
+      *hiveSplit_,
+      *fileHandleFactory_,
+      fileProperties,
+      connectorQueryCtx_->fsTokenProvider(),
+      ioStats_ ? ioStats_.get() : nullptr);
 
   auto baseFileInput = BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
