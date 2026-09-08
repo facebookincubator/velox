@@ -98,7 +98,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
   VELOX_CHECK(
       payloadSize >= compactPayloadSize && payloadSize <= fullPayloadSize &&
           payloadSize % detail::kDecimalSumStateSize == 0,
-      "Decimal sum state requires a payload size that is a multiple of {} between {} and {} (got {})",
+      "Decimal sum state has an invalid payload size: expected a multiple of {} in [{}, {}], got {}",
       detail::kDecimalSumStateSize,
       compactPayloadSize,
       fullPayloadSize,
