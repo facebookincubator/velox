@@ -66,6 +66,11 @@ Extraction Functions
     valid when ``part`` is ``'QUERY'``. ``key`` is interpreted as a regular
     expression fragment.
 
+    Note: ``key`` is compiled with RE2. For non-constant keys, each distinct
+    pattern is compiled at most once per function instance, and the number of
+    compiled patterns is capped by ``expression.max_compiled_regexes``
+    (default 100); exceeding the cap fails the query.
+
     .. code-block::
 
         SELECT parse_url('http://facebook.com/path1/p.php?k1=v1&k2=v2#Ref1', 'QUERY', 'k1');
