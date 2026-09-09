@@ -63,6 +63,7 @@ add_library(
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
   views/BlockBitPackingEncodingView.h
+  views/BitRangeSplitEncodingView.h
   views/ALPEncodingView.h
   selection/Statistics.h
   selection/NestedAlpSizeEstimation.h
@@ -108,6 +109,7 @@ add_library(
   DeltaBlockEncoding.h
   ConstantEncoding.h
   BlockBitPackingEncoding.h
+  BitRangeSplitEncoding.h
   ALPEncoding.h
 )
 

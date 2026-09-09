@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -195,6 +196,14 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       NIMBLE_UNREACHABLE(
           "SimdForBitpack encoding only supports integral data types, got {}.",
           encoding.dataType());
+    case EncodingType::BitRangeSplit:
+      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return f(static_cast<BitRangeSplitEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNREACHABLE(
+          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
+          encoding.dataType());
     case EncodingType::Huffman:
       if constexpr (isIntegralType<T>()) {
         return f(static_cast<HuffmanEncoding<T>&>(encoding));
@@ -255,37 +264,41 @@ struct DefaultEncodingTrait {
 
 /// Dispatches readIndicesWithVisitor to the correct encoding type.
 /// Supports DictionaryEncoding, NullableEncoding, and MainlyConstantEncoding
-/// wrapping DictionaryEncoding. Currently only supports string
-/// (std::string_view) dictionary encodings. Non-legacy encodings only.
-template <typename V>
+/// wrapping DictionaryEncoding. Non-legacy encodings only.
+template <typename T, typename V>
 void callReadIndicesWithVisitor(
     Encoding& encoding,
     V& visitor,
     ReadWithVisitorParams& params) {
+  NIMBLE_CHECK_EQ(
+      encoding.dataType(),
+      TypeTraits<T>::dataType,
+      "Unexpected encoding data type: {}",
+      encoding.dataType());
   switch (encoding.encodingType()) {
     case EncodingType::Dictionary: {
-      static_cast<DictionaryEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<DictionaryEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::Nullable: {
-      static_cast<NullableEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<NullableEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::MainlyConstant: {
-      static_cast<MainlyConstantEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<MainlyConstantEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::RLE: {
-      static_cast<RLEEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<RLEEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     case EncodingType::Constant: {
-      static_cast<ConstantEncoding<std::string_view>&>(encoding)
-          .readIndicesWithVisitor(visitor, params);
+      static_cast<ConstantEncoding<T>&>(encoding).readIndicesWithVisitor(
+          visitor, params);
       return;
     }
     default:

@@ -186,7 +186,8 @@ struct EncodingSizeEstimation {
       }
       case EncodingType::EliasFano: {
         if constexpr (isIntegralType<T>()) {
-          return EliasFanoEncoding<T>::estimateSize(values);
+          return EliasFanoEncoding<T>::estimateSize(
+              values, statistics, options);
         } else {
           return std::nullopt;
         }
