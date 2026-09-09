@@ -237,6 +237,7 @@ FieldReaderParams Deserializer::createFieldReaderParams() const {
   params.decodeExecutor = options_.decodeExecutor;
   params.maxDecodeParallelism = options_.maxDecodeParallelism;
   params.minStreamsPerDecodeTask = options_.minStreamsPerDecodeTask;
+  params.decodePools = options_.decodePools;
   if (options_.outputType == nullptr) {
     return params;
   }

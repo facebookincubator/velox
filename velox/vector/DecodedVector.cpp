@@ -288,9 +288,28 @@ void DecodedVector::applyDictionaryWrapper(
   });
 }
 
+bool DecodedVector::ownsNulls(const SelectivityVector* rows) {
+  const auto* bits = nulls(rows);
+  return bits != nullptr && !copiedNulls_.empty() &&
+      bits == copiedNulls_.data();
+}
+
+bool DecodedVector::ownsIndices() const {
+  // Before indices() has run there is no pointer yet, so answer for the one it
+  // would produce rather than for the absence of one.
+  return indices_ == nullptr ? wouldCopyIndices() : !indicesNotCopied();
+}
+
+bool DecodedVector::wouldCopyIndices() const {
+  if (isConstantMapping_) {
+    return size_ > zeroIndices().size() || constantIndex_ != 0;
+  }
+  return isIdentityMapping_ && size_ > consecutiveIndices().size();
+}
+
 void DecodedVector::fillInIndices() const {
   if (isConstantMapping_) {
-    if (size_ > zeroIndices().size() || constantIndex_ != 0) {
+    if (wouldCopyIndices()) {
       copiedIndices_.resize(size_);
       std::fill(copiedIndices_.begin(), copiedIndices_.end(), constantIndex_);
       indices_ = copiedIndices_.data();
@@ -300,7 +319,7 @@ void DecodedVector::fillInIndices() const {
     return;
   }
   if (isIdentityMapping_) {
-    if (size_ > consecutiveIndices().size()) {
+    if (wouldCopyIndices()) {
       copiedIndices_.resize(size_);
       std::iota(copiedIndices_.begin(), copiedIndices_.end(), 0);
       indices_ = &copiedIndices_[0];

@@ -323,17 +323,7 @@ class PARQUET_EXPORT PrimitiveNode : public Node {
   DecimalMetadata decimalMetadata_;
   ColumnOrder columnOrder_;
 
-  // For FIXED_LEN_BYTE_ARRAY.
-  void setTypeLength(int32_t length) {
-    typeLength_ = length;
-  }
-
   bool equalsInternal(const PrimitiveNode* other) const;
-
-  FRIEND_TEST(TestPrimitiveNode, Attrs);
-  FRIEND_TEST(TestPrimitiveNode, equals);
-  FRIEND_TEST(TestPrimitiveNode, PhysicalLogicalMapping);
-  FRIEND_TEST(TestPrimitiveNode, fromParquet);
 };
 
 class PARQUET_EXPORT GroupNode : public Node {
@@ -409,11 +399,6 @@ class PARQUET_EXPORT GroupNode : public Node {
 
   // Mapping between field name to the field index.
   std::unordered_multimap<std::string, int> fieldNameToIdx_;
-
-  FRIEND_TEST(TestGroupNode, Attrs);
-  FRIEND_TEST(TestGroupNode, equals);
-  FRIEND_TEST(TestGroupNode, fieldIndex);
-  FRIEND_TEST(TestGroupNode, FieldIndexDuplicateName);
 };
 
 // ----------------------------------------------------------------------.

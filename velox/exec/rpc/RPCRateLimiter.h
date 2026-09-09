@@ -97,7 +97,15 @@ class RPCRateLimiter {
     /// High-water in-flight count over the backend's lifetime.
     int64_t peakPending{0};
 
-    /// Lowest capacity ever reached. Zero means capacity never shrank.
+    /// Lowest capacity ever reached, or the ceiling when capacity never
+    /// shrank. Reporting the ceiling rather than a sentinel zero means the
+    /// value is always meaningful, so readers need no special case.
+    ///
+    /// Scoped to the backend's lifetime in this process, not to one query:
+    /// the mark is never cleared on recovery, so a query that saw no overload
+    /// still reports a dip an earlier query produced. A reader comparing this
+    /// against the ceiling learns that the backend has backed off at some
+    /// point, not that this query did.
     int64_t lowWaterCapacity{0};
   };
 
@@ -295,8 +303,8 @@ class RPCRateLimiter {
   // Adapted capacity. Zero means unshrunk, i.e. defer to the ceiling.
   int64_t capacity_{0};
 
-  // Lowest capacity ever reached. Zero means never shrank, and Stats reports
-  // it unchanged.
+  // Lowest capacity ever reached. Zero means never shrank; Stats resolves that
+  // to the ceiling so a reader never has to special-case a sentinel.
   int64_t lowWater_{0};
 
   // Units currently in flight against this backend. Atomic so acquire() and

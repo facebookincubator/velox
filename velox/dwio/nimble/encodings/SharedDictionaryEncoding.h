@@ -452,6 +452,16 @@ class SharedDictionaryAlphabet {
   const std::unique_ptr<EncodingView> entryView_;
 };
 
+/// Resolves external shared dictionaries referenced by a tablet.
+class ExternalDictionaryResolver {
+ public:
+  virtual ~ExternalDictionaryResolver() = default;
+
+  virtual std::shared_ptr<const SharedDictionaryAlphabet> resolve(
+      uint32_t dictionaryId,
+      DataType dataType) const = 0;
+};
+
 /// The layout for a shared dictionary encoding is an encoding prefix followed
 /// by encoded indices. The value stream's catalog binding supplies the
 /// alphabet.

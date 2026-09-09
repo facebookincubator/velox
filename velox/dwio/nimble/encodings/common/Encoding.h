@@ -17,7 +17,6 @@
 
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/base/BitUtil.h"
-#include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/DecoderUtil.h"
@@ -31,6 +30,7 @@
 #include <memory>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 /// The Encoding class defines an interface for interacting with encodings
 /// (aka vectors, aka arrays) of encoded data. The API is tailored for

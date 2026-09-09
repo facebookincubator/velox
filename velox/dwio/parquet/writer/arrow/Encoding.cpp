@@ -524,10 +524,6 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
     return kDataPageBitWidthBytes + encoder.len();
   }
 
-  void setTypeLength(int typeLength) {
-    this->typeLength_ = typeLength;
-  }
-
   /// Returns a conservative estimate of the number of bytes needed to encode
   /// the buffered indices. Used to size the buffer passed to WriteIndices().
   int64_t estimatedDataEncodedSize() override {

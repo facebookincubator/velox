@@ -107,10 +107,21 @@ constexpr uint32_t kMetaHeaderSize = sizeof(kMagicNumber) + sizeof(uint32_t);
 using WireLengthType = uint64_t;
 using WireDataSizeType = int64_t;
 using WireRemainingElementType = int64_t;
+/// A cuDF table's row count is a cudf::size_type, so it cannot exceed
+/// 2^31 - 1 and needs no more than 32 bits on the wire.
+using WireRowCountType = int32_t;
 
 struct MetadataMsg {
   std::unique_ptr<std::vector<uint8_t>> cudfMetadata;
   WireDataSizeType dataSizeBytes;
+
+  /// Logical rows in the payload. Sent explicitly because cuDF derives a
+  /// table's row count from its columns, so a payload with no columns — an
+  /// exchange fragment whose output layout is empty — cannot report its own
+  /// row count once it has been packed. Bounded by cudf::size_type, which is
+  /// also what bounds the CudfVector the consumer rebuilds.
+  WireRowCountType numRows;
+
   std::vector<WireRemainingElementType> remainingBytes;
   bool atEnd;
 
@@ -123,6 +134,8 @@ struct MetadataMsg {
     totalSize += cudfSize;
     // dataSizeBytes
     totalSize += sizeof(dataSizeBytes);
+    // numRows
+    totalSize += sizeof(numRows);
     // remainingBytes: length and then the data.
     totalSize += sizeof(WireLengthType); // for numRemaining count
     totalSize += remainingBytes.size() * sizeof(remainingBytes[0]);

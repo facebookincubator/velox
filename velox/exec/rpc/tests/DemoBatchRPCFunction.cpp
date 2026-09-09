@@ -170,6 +170,19 @@ int32_t DemoBatchRPCFunction::pendingBatchSize() const {
   return static_cast<int32_t>(pendingRows_.size());
 }
 
+AsyncRPCFunction::CongestionSignal DemoBatchRPCFunction::evaluateCongestion(
+    const std::vector<RPCResponse>& responses) const {
+  if (responses.empty()) {
+    return CongestionSignal::kNone;
+  }
+  for (const auto& response : responses) {
+    if (response.hasError()) {
+      return CongestionSignal::kError;
+    }
+  }
+  return CongestionSignal::kSuccess;
+}
+
 std::vector<std::shared_ptr<exec::FunctionSignature>>
 DemoBatchRPCFunction::signatures() {
   auto sig = exec::FunctionSignatureBuilder()

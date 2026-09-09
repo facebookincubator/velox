@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -47,6 +48,7 @@
 #include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
@@ -1764,6 +1766,28 @@ void configureAddedFlatMapField(
         context.schemaBuilder());
   }
 }
+
+// Returns nullptr when no vector index is configured. The implementation comes
+// from the caller so that this target links no similarity-search library.
+std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
+    const WriterOptions& options,
+    const velox::TypePtr& type,
+    velox::memory::MemoryPool* pool) {
+  if (options.vectorIndexConfigs.empty()) {
+    return nullptr;
+  }
+  NIMBLE_USER_CHECK(
+      options.vectorIndexWriterFactory != nullptr,
+      "WriterOptions::vectorIndexWriterFactory must be set when "
+      "vectorIndexConfigs is not empty. Depend on "
+      "//velox/dwio/nimble/index:vector_index and use "
+      "index::VectorIndexWriter::create.");
+  auto writer = options.vectorIndexWriterFactory(
+      options.vectorIndexConfigs, velox::asRowType(type), pool);
+  NIMBLE_CHECK_NOT_NULL(
+      writer, "Vector index writer factory returned a null writer");
+  return writer;
+}
 } // namespace
 
 std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
@@ -1886,6 +1910,10 @@ Writer::Writer(
           type,
           &(*context_->bufferMemoryPool()))},
       denseIndexWriters_{createDenseIndexWriters(
+          context_->options(),
+          type,
+          &(*context_->bufferMemoryPool()))},
+      vectorIndexWriter_{createVectorIndexWriter(
           context_->options(),
           type,
           &(*context_->bufferMemoryPool()))},
@@ -2268,6 +2296,9 @@ void Writer::addIndexKey(const velox::VectorPtr& input) {
   for (const auto& denseIndex : denseIndexWriters_) {
     denseIndex.writer->write(input);
   }
+  if (vectorIndexWriter_ != nullptr) {
+    vectorIndexWriter_->write(input);
+  }
 }
 
 void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
@@ -2333,6 +2364,9 @@ void Writer::writeIndexes(
     }
   }
   writeIndexSection(descriptors, writeMetadataFn);
+  if (vectorIndexWriter_ != nullptr) {
+    vectorIndexWriter_->close(createMetadataFn, writeMetadataFn);
+  }
 }
 
 bool Writer::shouldFlush(FlushPolicy* policy) const {
@@ -2651,6 +2685,42 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   return std::min({streamCount, options.maxEncodeParallelism, maxByStreams});
 }
 
+namespace {
+
+// Encode tasks are dispatched in fixed-size batches that each wait on their
+// slowest member, so a batch mixing one large stream with small ones leaves
+// most of it idle. Grouping comparable sizes into the same batch keeps the
+// batch maximum close to its mean. Sizes are read before materialize(), so
+// this is the buffered size rather than the encoded one -- good enough to
+// rank by, and it costs no extra pass over the data.
+void sortByBufferedSizeDescending(
+    std::vector<uint32_t>& indices,
+    const std::vector<std::pair<uint32_t, std::unique_ptr<StreamData>>>&
+        streams) {
+  std::stable_sort(
+      indices.begin(), indices.end(), [&streams](uint32_t lhs, uint32_t rhs) {
+        return streams[lhs].second->memoryUsed() >
+            streams[rhs].second->memoryUsed();
+      });
+}
+
+} // namespace
+
+std::vector<uint32_t> Writer::encodeOrder(uint32_t streamCount) const {
+  std::vector<uint32_t> orderedIndices(streamCount);
+  std::iota(orderedIndices.begin(), orderedIndices.end(), 0u);
+  sortByBufferedSizeDescending(orderedIndices, context_->streams());
+  return orderedIndices;
+}
+
+std::vector<uint32_t> Writer::encodeOrder(
+    std::span<const uint32_t> streamIndices) const {
+  std::vector<uint32_t> orderedIndices{
+      streamIndices.begin(), streamIndices.end()};
+  sortByBufferedSizeDescending(orderedIndices, context_->streams());
+  return orderedIndices;
+}
+
 void Writer::ensureEncodingScratchBufferPools(uint32_t poolCount) {
   if (context_->options().maxCachedEncodingScratchBuffers == 0) {
     NIMBLE_CHECK(
@@ -2739,6 +2809,7 @@ void Writer::writeStreams() {
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
+      const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
@@ -2752,11 +2823,12 @@ void Writer::writeStreams() {
                   const_cast<uint32_t*>(&taskId));
               const auto startCpuNanos = velox::process::threadCpuNanos();
               while (true) {
-                const auto streamIndex =
+                const auto fetchIndex =
                     nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (streamIndex >= streamCount) {
+                if (fetchIndex >= streamCount) {
                   break;
                 }
+                const auto streamIndex = orderedIndices[fetchIndex];
                 auto& [nodeId, streamData] = streams[streamIndex];
                 uint64_t streamSize{0};
                 processStream(
@@ -2978,6 +3050,7 @@ bool Writer::writeChunks(
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
+      const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
@@ -2995,7 +3068,7 @@ bool Writer::writeChunks(
             if (inputIndex >= streamCount) {
               break;
             }
-            const auto streamIndex = streamIndices[inputIndex];
+            const auto streamIndex = orderedIndices[inputIndex];
             auto& [nodeId, streamData] = streams[streamIndex];
             const auto offset = streamData->descriptor().offset();
             uint64_t streamSize{0};

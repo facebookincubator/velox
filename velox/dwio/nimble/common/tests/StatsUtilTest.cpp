@@ -18,6 +18,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -74,6 +75,34 @@ TEST(StatsUtilTest, findMinMaxHandlesIntegralTypes) {
   unsignedValues[211] = std::numeric_limits<uint64_t>::max();
   expectIntegralMinMax<uint64_t>(
       0, std::numeric_limits<uint64_t>::max(), unsignedValues);
+}
+
+TEST(StatsUtilTest, findMinMaxHandlesStringViews) {
+  using namespace std::string_view_literals;
+
+  // Bounds trail the first value, so seeding from values.front() and skipping
+  // the max check when a value lowers the min must still find both.
+  std::vector<std::string_view> values = {"mmm"sv, "aaa"sv, "zzz"sv, "qqq"sv};
+  auto minMax = findMinMax(std::span<std::string_view>(values));
+  EXPECT_EQ(minMax.min, "aaa"sv);
+  EXPECT_EQ(minMax.max, "zzz"sv);
+
+  // Ordering is by bytes and length, not NUL termination.
+  std::vector<std::string_view> withNuls = {"a\0a"sv, "a\0"sv, "a\0z"sv};
+  minMax = findMinMax(std::span<std::string_view>(withNuls));
+  EXPECT_EQ(minMax.min, "a\0"sv);
+  EXPECT_EQ(minMax.max, "a\0z"sv);
+
+  std::vector<std::string_view> single = {"only"sv};
+  minMax = findMinMax(std::span<std::string_view>(single));
+  EXPECT_EQ(minMax.min, "only"sv);
+  EXPECT_EQ(minMax.max, "only"sv);
+
+  // The returned bounds are views into the input, not copies.
+  std::vector<std::string_view> aliased = {"beta"sv, "alpha"sv};
+  minMax = findMinMax(std::span<std::string_view>(aliased));
+  EXPECT_EQ(minMax.min.data(), aliased[1].data());
+  EXPECT_EQ(minMax.max.data(), aliased[0].data());
 }
 
 TEST(StatsUtilTest, findMinMaxHandlesFloatingPointTypes) {
