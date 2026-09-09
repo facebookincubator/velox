@@ -25,7 +25,7 @@
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
-#include "velox/dwio/nimble/index/VectorIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
