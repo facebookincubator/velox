@@ -527,14 +527,19 @@ bool scanIpv4Address(
   auto rest = candidate;
   for (int byteIndex = 0; byteIndex < 4; ++byteIndex) {
     const auto digits = leadingRun<isDigit>(rest);
-    // More than three digits cannot be a byte; parsing them into an int
-    // would wrap around, so reject the whole address up front.
-    if (digits.empty() || digits.size() > 3) {
+    if (digits.empty()) {
       return false;
     }
-    int value = 0;
+    // Leading zeros do not change the value, so a digit run of any length
+    // is a valid byte as long as its value fits in 0..255. Accumulate in
+    // a wider type and bail out before it wraps: a run like
+    // "99999999999999999999" is not an IPv4 byte at all.
+    int64_t value = 0;
     for (const char c : digits) {
       value = value * 10 + (c - '0');
+      if (value > std::numeric_limits<int32_t>::max()) {
+        return false;
+      }
     }
     if (value > 255) {
       return false;
