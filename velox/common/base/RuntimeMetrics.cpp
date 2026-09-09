@@ -14,25 +14,20 @@
  * limitations under the License.
  */
 
-#include <mutex>
-#include <unordered_set>
-
-#include <folly/ThreadLocal.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/SuccinctPrinter.h"
+
+#include <folly/Synchronized.h>
+#include <folly/container/F14Set.h>
 
 namespace facebook::velox {
 
 namespace {
 
-struct RuntimeMetricAggregationRegistry {
-  std::mutex mutex;
-  std::unordered_set<std::string> names;
-};
-
-RuntimeMetricAggregationRegistry& runtimeMetricAggregationRegistry() {
-  static RuntimeMetricAggregationRegistry registry;
+folly::Synchronized<folly::F14FastSet<std::string>>&
+operatorAggregatedMetrics() {
+  static folly::Synchronized<folly::F14FastSet<std::string>> registry;
   return registry;
 }
 
@@ -50,22 +45,19 @@ void RuntimeMetric::aggregate() {
   min = max = sum;
 }
 
-void registerRuntimeMetricForOperatorAggregation(std::string name) {
-  auto& registry = runtimeMetricAggregationRegistry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  registry.names.insert(std::move(name));
+void OperatorAggregatedMetrics::add(std::string name) {
+  operatorAggregatedMetrics().withWLock(
+      [&](auto& metrics) { metrics.insert(std::move(name)); });
 }
 
-void unregisterRuntimeMetricForOperatorAggregation(std::string_view name) {
-  auto& registry = runtimeMetricAggregationRegistry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  registry.names.erase(std::string(name));
+void OperatorAggregatedMetrics::remove(std::string_view name) {
+  operatorAggregatedMetrics().withWLock(
+      [&](auto& metrics) { metrics.erase(std::string(name)); });
 }
 
-bool isRuntimeMetricAggregatedPerOperator(std::string_view name) {
-  auto& registry = runtimeMetricAggregationRegistry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  return registry.names.contains(std::string(name));
+bool OperatorAggregatedMetrics::contains(std::string_view name) {
+  return operatorAggregatedMetrics().withRLock(
+      [&](const auto& metrics) { return metrics.contains(std::string(name)); });
 }
 
 void RuntimeMetric::merge(const RuntimeCounter& value) {

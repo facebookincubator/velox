@@ -616,9 +616,9 @@ TEST_F(OperatorUtilsTest, setOperatorRuntimeStats) {
   ASSERT_EQ(stats[std::string(statsName)].min, 100);
 }
 
-TEST_F(OperatorUtilsTest, registeredRuntimeMetricAggregation) {
+TEST_F(OperatorUtilsTest, operatorAggregatedMetrics) {
   constexpr std::string_view kMetricName = "registeredMetric";
-  registerRuntimeMetricForOperatorAggregation(std::string(kMetricName));
+  OperatorAggregatedMetrics::add(std::string(kMetricName));
 
   std::unordered_map<std::string, RuntimeMetric> stats;
   auto& metric =
@@ -632,7 +632,7 @@ TEST_F(OperatorUtilsTest, registeredRuntimeMetricAggregation) {
   EXPECT_EQ(metric.min, 30);
   EXPECT_EQ(metric.max, 30);
 
-  unregisterRuntimeMetricForOperatorAggregation(kMetricName);
+  OperatorAggregatedMetrics::remove(kMetricName);
 }
 
 TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {

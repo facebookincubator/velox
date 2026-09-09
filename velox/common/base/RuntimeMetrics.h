@@ -82,15 +82,18 @@ struct RuntimeMetric {
   std::string toString() const;
 };
 
-/// Registers a runtime metric to be aggregated per operator. Registration is
-/// idempotent.
-void registerRuntimeMetricForOperatorAggregation(std::string name);
+/// Process-global registry of runtime metrics aggregated per operator.
+class OperatorAggregatedMetrics {
+ public:
+  /// Adds a metric name. Registration is idempotent.
+  static void add(std::string name);
 
-/// Removes a runtime metric from per-operator aggregation.
-void unregisterRuntimeMetricForOperatorAggregation(std::string_view name);
+  /// Removes a metric name.
+  static void remove(std::string_view name);
 
-/// Returns true if 'name' is registered for per-operator aggregation.
-bool isRuntimeMetricAggregatedPerOperator(std::string_view name);
+  /// Returns true if 'name' is registered.
+  static bool contains(std::string_view name);
+};
 
 /// Simple interface to implement writing of runtime stats to Velox Operator
 /// stats.

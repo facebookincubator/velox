@@ -155,8 +155,7 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "ssdCacheReadWallNanos",
       "waitForPreloadSplitNanos",
   };
-  if (metricNames.contains(name) ||
-      isRuntimeMetricAggregatedPerOperator(name)) {
+  if (metricNames.contains(name) || OperatorAggregatedMetrics::contains(name)) {
     return true;
   }
 
