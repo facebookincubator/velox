@@ -29,7 +29,8 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
       {CudfConfig::kCudfStreamingGroupbyEnabled, "true"},
       {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
-      {CudfConfig::kCudfAllowCpuFallback, "false"}};
+      {CudfConfig::kCudfAllowCpuFallback, "false"},
+      {CudfConfig::kCudfHashJoinLoadFactor, "0.8"}};
 
   CudfConfig config;
   ASSERT_FALSE(config.streamingGroupbyEnabled);
@@ -43,5 +44,6 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.streamingGroupbyEnabled, true);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 3.5);
   ASSERT_EQ(config.allowCpuFallback, false);
+  ASSERT_DOUBLE_EQ(config.hashJoinLoadFactor, 0.8);
 }
 } // namespace facebook::velox::cudf_velox::test

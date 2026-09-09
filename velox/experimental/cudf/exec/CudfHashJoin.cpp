@@ -375,7 +375,9 @@ void CudfHashJoinBuild::doNoMoreInput() {
     hashObjects.push_back(
         (buildHashJoin) ? std::make_shared<cudf::hash_join>(
                               tbls[i]->view().select(buildKeyIndices),
+                              cudf::nullable_join::YES,
                               cudf::null_equality::UNEQUAL,
+                              CudfConfig::getInstance().hashJoinLoadFactor,
                               stream,
                               get_temp_mr())
                         : nullptr);
