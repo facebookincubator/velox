@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/nimble/index/FaissVectorIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h"
 
 #include <algorithm>
 #include <cmath>
@@ -288,7 +288,7 @@ void validateTopLevelRows(const velox::RowVector& input, uint64_t fileRow) {
 
 } // namespace
 
-std::unique_ptr<FaissVectorIndexWriter> FaissVectorIndexWriter::create(
+std::unique_ptr<VectorIndexWriter> VectorIndexWriter::create(
     std::span<const VectorIndexConfig> configs,
     const velox::RowTypePtr& inputType,
     velox::memory::MemoryPool* pool) {
@@ -313,11 +313,11 @@ std::unique_ptr<FaissVectorIndexWriter> FaissVectorIndexWriter::create(
         });
   }
 
-  return std::unique_ptr<FaissVectorIndexWriter>(
-      new FaissVectorIndexWriter(std::move(accumulators), pool));
+  return std::unique_ptr<VectorIndexWriter>(
+      new VectorIndexWriter(std::move(accumulators), pool));
 }
 
-FaissVectorIndexWriter::FaissVectorIndexWriter(
+VectorIndexWriter::VectorIndexWriter(
     std::vector<Accumulator> accumulators,
     velox::memory::MemoryPool* pool)
     : pool_{pool}, accumulators_{std::move(accumulators)} {
@@ -326,7 +326,7 @@ FaissVectorIndexWriter::FaissVectorIndexWriter(
       !accumulators_.empty(), "Vector index configs must not be empty");
 }
 
-FaissVectorIndexWriter::~FaissVectorIndexWriter() = default;
+VectorIndexWriter::~VectorIndexWriter() = default;
 
 namespace {
 
@@ -439,8 +439,8 @@ void appendVectors(
 
 } // namespace
 
-void FaissVectorIndexWriter::write(const velox::VectorPtr& input) {
-  NIMBLE_CHECK(!closed_, "FaissVectorIndexWriter has been closed");
+void VectorIndexWriter::write(const velox::VectorPtr& input) {
+  NIMBLE_CHECK(!closed_, "VectorIndexWriter has been closed");
   NIMBLE_USER_CHECK_NOT_NULL(input, "Input vector must not be null");
   if (input->size() == 0) {
     return;
@@ -480,7 +480,7 @@ void FaissVectorIndexWriter::write(const velox::VectorPtr& input) {
   }
 }
 
-void FaissVectorIndexWriter::ensureVectorCapacity(
+void VectorIndexWriter::ensureVectorCapacity(
     Accumulator& accumulator,
     size_t numValues) const {
   const auto maxValues = static_cast<size_t>(
@@ -510,7 +510,7 @@ void FaissVectorIndexWriter::ensureVectorCapacity(
   accumulator.vectors->setSize(numValues * sizeof(float));
 }
 
-FaissVectorIndexWriter::SerializedIndex FaissVectorIndexWriter::buildIndex(
+VectorIndexWriter::SerializedIndex VectorIndexWriter::buildIndex(
     Accumulator& accumulator) const {
   const auto& config = accumulator.config;
   NIMBLE_CHECK_GT(accumulator.numVectors, 0, "No vectors to index");
@@ -549,7 +549,7 @@ FaissVectorIndexWriter::SerializedIndex FaissVectorIndexWriter::buildIndex(
   };
 }
 
-std::string FaissVectorIndexWriter::serializeDirectory(
+std::string VectorIndexWriter::serializeDirectory(
     std::span<const PersistedIndex> indexes) const {
   NIMBLE_CHECK(!indexes.empty(), "Persisted vector indexes must not be empty");
   flatbuffers::FlatBufferBuilder builder;
@@ -587,7 +587,7 @@ std::string FaissVectorIndexWriter::serializeDirectory(
   };
 }
 
-void FaissVectorIndexWriter::close(
+void VectorIndexWriter::close(
     const CreateMetadataSectionFn& createMetadataFn,
     const WriteOptionalSectionFn& writeMetadataFn) {
   NIMBLE_CHECK(!closed_, "close() already called");
@@ -640,15 +640,6 @@ void FaissVectorIndexWriter::close(
   NIMBLE_CHECK_EQ(persistedIndexes.size(), accumulators_.size());
   writeMetadataFn(
       std::string(kVectorIndexSection), serializeDirectory(persistedIndexes));
-}
-
-VectorIndexWriterFactory faissVectorIndexWriterFactory() {
-  return [](std::span<const VectorIndexConfig> configs,
-            const velox::RowTypePtr& inputType,
-            velox::memory::MemoryPool* pool)
-             -> std::unique_ptr<VectorIndexWriter> {
-    return FaissVectorIndexWriter::create(configs, inputType, pool);
-  };
 }
 
 } // namespace facebook::nimble::index

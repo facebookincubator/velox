@@ -23,7 +23,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/tablet/FileLayout.h"
+#include "velox/dwio/nimble/tablet/Postscript.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
 namespace facebook::nimble {

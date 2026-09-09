@@ -91,10 +91,9 @@ target_link_libraries(
 add_library(
   nimble_vector_index
   VectorIndex.cpp
-  FaissVectorIndexWriter.cpp
+  VectorIndexWriter.cpp
   VectorIndexUtility.cpp
   VectorIndex.h
-  FaissVectorIndexWriter.h
   VectorIndexUtility.h
 )
 target_link_libraries(

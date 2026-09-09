@@ -23,21 +23,12 @@
 #include "folly/container/F14Map.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/tablet/MetadataCache.h"
 
 namespace facebook::nimble {
 
 class TabletReader;
-
-/// Resolves External shared dictionaries referenced by a tablet.
-class ExternalDictionaryResolver {
- public:
-  virtual ~ExternalDictionaryResolver() = default;
-
-  virtual std::shared_ptr<const SharedDictionaryAlphabet> resolve(
-      uint32_t dictionaryId,
-      DataType dataType) const = 0;
-};
 
 /// Resolves file-wide value-stream bindings and caches decoded alphabets.
 class SharedDictionaryReaderFactory {

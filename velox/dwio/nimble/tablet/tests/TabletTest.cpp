@@ -42,6 +42,7 @@
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/SortedIndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndex.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
@@ -1108,6 +1109,8 @@ TEST_P(TabletTest, vectorIndex) {
               .indexType = nimble::VectorIndexType::kIvfFlat,
               .numPartitions = 1,
           });
+      writerOptions.vectorIndexWriterFactory =
+          nimble::index::VectorIndexWriter::create;
     }
 
     std::string file;
