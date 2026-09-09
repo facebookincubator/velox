@@ -317,6 +317,9 @@ class GroupingSet {
   // initializeRow().
   void initializeRow(SpillMergeStream& stream, char* row);
 
+  // Returns true if the grouping keys in 'stream' equal those in 'row'.
+  bool hasSameKey(SpillMergeStream& stream, const char* row) const;
+
   // Updates the accumulators in 'row' with the intermediate type data from
   // 'keys'. This is called for each row received from a merge of spilled data.
   void updateRow(SpillMergeStream& keys, char* row);
