@@ -33,10 +33,6 @@ void ByteRangeFetch::wait() {
   }
 }
 
-void ByteRangeFetch::abandon() {
-  wait();
-}
-
 std::pair<
     std::vector<std::unique_ptr<cudf::io::datasource::buffer>>,
     std::vector<cudf::host_span<const uint8_t>>>

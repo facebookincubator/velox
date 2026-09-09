@@ -43,9 +43,6 @@ struct ByteRangeFetch {
 
   // Waits for reads and rethrows any failure. No-op when complete.
   void wait();
-
-  // Waits for active reads before releasing their destination buffers.
-  void abandon();
 };
 
 // Starts cuDF's asynchronous byte-range fetch. Wait for returned fetch before

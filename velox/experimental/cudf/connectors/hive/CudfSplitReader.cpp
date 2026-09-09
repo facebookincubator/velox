@@ -340,8 +340,8 @@ void CudfSplitReader::setupChunkingForCurrentPass(
 }
 
 void CudfSplitReader::releaseCurrentPassData() {
-  // Reads still in flight write into the buffers about to be released.
-  passState_->fetch.abandon();
+  // Queued or active reads can still write into the buffers being released.
+  passState_->fetch.wait();
   passState_->fetch = {};
 }
 
