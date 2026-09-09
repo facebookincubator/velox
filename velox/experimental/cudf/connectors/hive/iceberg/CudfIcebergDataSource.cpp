@@ -74,6 +74,7 @@ CudfIcebergDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
+      readerTimestampType_,
       subfieldFilterExpr_);
 }
 

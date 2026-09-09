@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/DecimalUtil.h"
 
 #include <cudf/ast/detail/expression_parser.hpp>
@@ -28,6 +29,247 @@
 
 namespace facebook::velox::cudf_velox {
 namespace {
+
+// Converts a Velox timestamp to days since Unix epoch, rounding down for
+// timestamps before the epoch.
+int32_t timestampToDays(const Timestamp& timestamp) {
+  constexpr int64_t kSecondsPerDay = 24 * 60 * 60;
+  const auto seconds = timestamp.getSeconds();
+  auto days = seconds / kSecondsPerDay;
+  if (seconds % kSecondsPerDay < 0) {
+    --days;
+  }
+  VELOX_CHECK_GE(days, std::numeric_limits<int32_t>::min());
+  VELOX_CHECK_LE(days, std::numeric_limits<int32_t>::max());
+  return static_cast<int32_t>(days);
+}
+
+// Pushes a typed cuDF timestamp scalar and its corresponding AST literal to the
+// tree.
+template <typename CudfTimestamp>
+const cudf::ast::expression* addTimestampLiteral(
+    const Timestamp& timestamp,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  scalars.emplace_back(
+      std::make_unique<cudf::timestamp_scalar<CudfTimestamp>>(
+          CudfTimestamp{typename CudfTimestamp::duration{
+              static_cast<typename CudfTimestamp::duration::rep>(
+                  std::is_same_v<CudfTimestamp, cudf::timestamp_D>
+                      ? timestampToDays(timestamp)
+                      : std::is_same_v<CudfTimestamp, cudf::timestamp_s>
+                      ? timestamp.getSeconds()
+                      : std::is_same_v<CudfTimestamp, cudf::timestamp_ms>
+                      ? timestamp.toMillis()
+                      : std::is_same_v<CudfTimestamp, cudf::timestamp_us>
+                      ? timestamp.toMicros()
+                      : timestamp.toNanos())}},
+          true,
+          stream,
+          mr));
+  stream.synchronize();
+  return &tree.push(
+      cudf::ast::literal{*static_cast<cudf::timestamp_scalar<CudfTimestamp>*>(
+          scalars.back().get())});
+}
+
+// Dispatches the `addTimestampLiteral` function with the appropriate cuDF
+// timestamp type
+const cudf::ast::expression* dispatchAddTimestampLiteral(
+    const Timestamp& timestamp,
+    cudf::data_type timestampType,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  switch (timestampType.id()) {
+    case cudf::type_id::TIMESTAMP_DAYS:
+      return addTimestampLiteral<cudf::timestamp_D>(
+          timestamp, tree, scalars, stream, mr);
+    case cudf::type_id::TIMESTAMP_SECONDS:
+      return addTimestampLiteral<cudf::timestamp_s>(
+          timestamp, tree, scalars, stream, mr);
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return addTimestampLiteral<cudf::timestamp_ms>(
+          timestamp, tree, scalars, stream, mr);
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return addTimestampLiteral<cudf::timestamp_us>(
+          timestamp, tree, scalars, stream, mr);
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return addTimestampLiteral<cudf::timestamp_ns>(
+          timestamp, tree, scalars, stream, mr);
+    default:
+      VELOX_FAIL(
+          "Unsupported Parquet reader timestamp type: {}",
+          static_cast<int>(timestampType.id()));
+  }
+}
+
+int64_t timestampTicksPerMilli(cudf::data_type timestampType) {
+  switch (timestampType.id()) {
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return 1;
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return 1'000;
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return 1'000'000;
+    default:
+      VELOX_FAIL(
+          "TIMESTAMP WITH TIME ZONE pushdown requires a millisecond, "
+          "microsecond, or nanosecond reader type");
+  }
+}
+
+Timestamp timestampFromTicks(int64_t ticks, cudf::data_type timestampType) {
+  switch (timestampType.id()) {
+    case cudf::type_id::TIMESTAMP_MILLISECONDS:
+      return Timestamp::fromMillis(ticks);
+    case cudf::type_id::TIMESTAMP_MICROSECONDS:
+      return Timestamp::fromMicros(ticks);
+    case cudf::type_id::TIMESTAMP_NANOSECONDS:
+      return Timestamp::fromNanos(ticks);
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
+// Translates an inclusive range over packed TIMESTAMP WITH TIME ZONE values
+// into the exact inclusive range over raw Parquet timestamp ticks. Packed
+// values emitted by this reader use the UTC key (zero).
+std::pair<int64_t, int64_t> translatePackedTimestampRange(
+    const common::BigintRange& filter,
+    cudf::data_type timestampType) {
+  constexpr __int128_t kPackUnit = __int128_t{1} << kMillisShift;
+  const auto floorDiv = [](__int128_t dividend, __int128_t divisor) {
+    auto quotient = dividend / divisor;
+    if (dividend % divisor != 0 && dividend < 0) {
+      --quotient;
+    }
+    return quotient;
+  };
+  const auto ceilDiv = [&](const __int128_t dividend,
+                           const __int128_t divisor) {
+    return -floorDiv(-dividend, divisor);
+  };
+
+  const auto millisLow =
+      ceilDiv(static_cast<__int128_t>(filter.lower()), kPackUnit);
+  const auto millisHigh =
+      floorDiv(static_cast<__int128_t>(filter.upper()), kPackUnit);
+  if (millisLow > millisHigh) {
+    return {1, 0};
+  }
+
+  const __int128_t ticks = timestampTicksPerMilli(timestampType);
+  // Narrowing to milliseconds truncates toward zero. Millisecond zero
+  // therefore contains both negative and positive sub-millisecond ticks.
+  const auto lowEdge =
+      millisLow <= 0 ? millisLow * ticks - ticks + 1 : millisLow * ticks;
+  const auto highEdge =
+      millisHigh >= 0 ? millisHigh * ticks + ticks - 1 : millisHigh * ticks;
+  const auto clamp = [](__int128_t value) {
+    if (value < std::numeric_limits<int64_t>::min()) {
+      return std::numeric_limits<int64_t>::min();
+    }
+    if (value > std::numeric_limits<int64_t>::max()) {
+      return std::numeric_limits<int64_t>::max();
+    }
+    return static_cast<int64_t>(value);
+  };
+  return {clamp(lowEdge), clamp(highEdge)};
+}
+
+// Builds a cuDF AST expression for a TimestampRange or packed TIMESTAMP WITH
+// TIME ZONE BigintRange filter.
+const cudf::ast::expression& createTimestampRangeExpr(
+    const common::Filter& filter,
+    cudf::data_type timestampType,
+    const tz::TimeZone* sessionTimezone,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const cudf::ast::expression& columnRef,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr) {
+  // Extrace timestamp lower and upper bounds from the filter.
+  auto lower = Timestamp{};
+  auto upper = Timestamp{};
+  bool isLowerUnbounded = false;
+  bool isUpperUnbounded = false;
+  switch (filter.kind()) {
+    case common::FilterKind::kTimestampRange: {
+      const auto& range = static_cast<const common::TimestampRange&>(filter);
+      lower = range.lower();
+      upper = range.upper();
+      isLowerUnbounded = lower == Timestamp::min();
+      isUpperUnbounded = upper == Timestamp::max();
+      break;
+    }
+    case common::FilterKind::kBigintRange: {
+      const auto& range = static_cast<const common::BigintRange&>(filter);
+      isLowerUnbounded = range.lower() == std::numeric_limits<int64_t>::min();
+      isUpperUnbounded = range.upper() == std::numeric_limits<int64_t>::max();
+      const auto [lowerTicks, upperTicks] =
+          translatePackedTimestampRange(range, timestampType);
+      lower = isLowerUnbounded ? Timestamp{}
+                               : timestampFromTicks(lowerTicks, timestampType);
+      upper = isUpperUnbounded ? Timestamp{}
+                               : timestampFromTicks(upperTicks, timestampType);
+      break;
+    }
+    default:
+      VELOX_FAIL("Expected a timestamp range filter");
+  }
+
+  // TimestampRange bounds are session-local wall-clock values. Parquet
+  // timestamp values are UTC, so convert the bounded literals before creating
+  // cuDF scalars. Packed TIMESTAMP WITH TIME ZONE bounds are already UTC.
+  if (filter.kind() == common::FilterKind::kTimestampRange and
+      sessionTimezone != nullptr) {
+    if (not isLowerUnbounded) {
+      lower.toGMT(*sessionTimezone);
+    }
+    if (not isUpperUnbounded) {
+      upper.toGMT(*sessionTimezone);
+    }
+  }
+
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  // Convert the inclusive lower bound to the reader's timestamp unit.
+  const cudf::ast::expression* lowerExpr = nullptr;
+  if (not isLowerUnbounded) {
+    const auto* literal = dispatchAddTimestampLiteral(
+        lower, timestampType, tree, scalars, stream, mr);
+    lowerExpr = &tree.push(Operation{Op::GREATER_EQUAL, columnRef, *literal});
+  }
+
+  // Convert the inclusive upper bound to the reader's timestamp unit.
+  const cudf::ast::expression* upperExpr = nullptr;
+  if (not isUpperUnbounded) {
+    const auto* literal = dispatchAddTimestampLiteral(
+        upper, timestampType, tree, scalars, stream, mr);
+    upperExpr = &tree.push(Operation{Op::LESS_EQUAL, columnRef, *literal});
+  }
+
+  if (lowerExpr and upperExpr) {
+    // Both bounds are bounded => Combine the lower and upper bounds into a
+    // single expression.
+    return tree.push(Operation{Op::NULL_LOGICAL_AND, *lowerExpr, *upperExpr});
+  } else if (lowerExpr) {
+    // Only the lower bound is bounded => Return the lower bound expression.
+    return *lowerExpr;
+  } else if (upperExpr) {
+    // Only the upper bound is bounded => Return the upper bound expression.
+    return *upperExpr;
+  } else {
+    // An unbounded range accepts every non-null value.
+    return tree.push(Operation{Op::EQUAL, columnRef, columnRef});
+  }
+}
+
 std::pair<int128_t, int128_t> getInt128BoundsForType(const TypePtr& type) {
   if (type->isDecimal()) {
     const auto [precision, _] = getDecimalPrecisionScale(*type);
@@ -341,7 +583,9 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    std::optional<cudf::data_type> timestampType,
+    const tz::TimeZone* sessionTimezone) {
   // First, create column reference from subfield
   // For now, only support simple field references
   if (subfield.path().empty() ||
@@ -359,7 +603,8 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
   }
 
   auto columnIndex = inputRowSchema->getChildIdx(fieldName);
-  auto const& columnRef = tree.push(cudf::ast::column_reference(columnIndex));
+  const auto& columnType = inputRowSchema->childAt(columnIndex);
+  const auto& columnRef = tree.push(cudf::ast::column_reference(columnIndex));
 
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
@@ -369,7 +614,20 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
   switch (filter.kind()) {
     case common::FilterKind::kBigintRange: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
+      if (isTimestampWithTimeZoneType(columnType)) {
+        VELOX_CHECK(
+            timestampType.has_value(),
+            "Timestamp filter requires a reader timestamp type");
+        return createTimestampRangeExpr(
+            filter,
+            *timestampType,
+            sessionTimezone,
+            tree,
+            scalars,
+            columnRef,
+            stream,
+            mr);
+      }
       auto result = VELOX_DYNAMIC_TYPE_DISPATCH(
           buildBigintRangeExpr,
           columnType->kind(),
@@ -382,14 +640,12 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     }
 
     case common::FilterKind::kHugeintRange: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
       auto const& expr =
           buildHugeintRangeExpr(filter, tree, scalars, columnRef, columnType);
       return expr.get();
     }
 
     case common::FilterKind::kBigintValuesUsingHashTable: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
       return buildValuesListExpr<
           TypeKind::BIGINT,
           common::BigintValuesUsingHashTable,
@@ -397,7 +653,6 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     }
 
     case common::FilterKind::kBigintValuesUsingBitmask: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
       // Dispatch by the column's integer kind and cast filter values to it.
       auto result = VELOX_DYNAMIC_TYPE_DISPATCH(
           buildIntegerInListExpr,
@@ -413,7 +668,6 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     }
 
     case common::FilterKind::kHugeintValuesUsingHashTable: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
       return buildValuesListExpr<
           TypeKind::HUGEINT,
           common::HugeintValuesUsingHashTable,
@@ -421,7 +675,6 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     }
 
     case common::FilterKind::kBytesValues: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
       return buildValuesListExpr<
           TypeKind::VARCHAR,
           common::BytesValues,
@@ -429,7 +682,6 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     }
 
     case common::FilterKind::kNegatedBytesValues: {
-      auto const& columnType = inputRowSchema->childAt(columnIndex);
       return buildValuesListExpr<
           TypeKind::VARCHAR,
           common::NegatedBytesValues,
@@ -448,6 +700,21 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
 
     case common::FilterKind::kBytesRange: {
       return createBytesRangeExpr(filter, tree, scalars, columnRef, stream, mr);
+    }
+
+    case common::FilterKind::kTimestampRange: {
+      VELOX_CHECK(
+          timestampType.has_value(),
+          "Timestamp filter requires a reader timestamp type");
+      return createTimestampRangeExpr(
+          filter,
+          *timestampType,
+          sessionTimezone,
+          tree,
+          scalars,
+          columnRef,
+          stream,
+          mr);
     }
 
     case common::FilterKind::kBoolValue: {
@@ -495,7 +762,13 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       exprRefs.reserve(subFilters.size());
       for (const auto* subFilter : subFilters) {
         auto const& subExpr = createAstFromSubfieldFilter(
-            subfield, *subFilter, tree, scalars, inputRowSchema);
+            subfield,
+            *subFilter,
+            tree,
+            scalars,
+            inputRowSchema,
+            timestampType,
+            sessionTimezone);
         exprRefs.push_back(&subExpr);
       }
 
@@ -543,7 +816,9 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema) {
+    const RowTypePtr& inputRowSchema,
+    std::optional<cudf::data_type> timestampType,
+    const tz::TimeZone* sessionTimezone) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
@@ -555,7 +830,13 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
       continue;
     }
     auto const& expr = createAstFromSubfieldFilter(
-        subfield, *filterPtr, tree, scalars, inputRowSchema);
+        subfield,
+        *filterPtr,
+        tree,
+        scalars,
+        inputRowSchema,
+        timestampType,
+        sessionTimezone);
     exprRefs.push_back(&expr);
   }
 

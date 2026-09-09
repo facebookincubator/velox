@@ -63,6 +63,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
+      cudf::data_type readerTimestampType,
       cudf::ast::expression const* subfieldFilterExpr);
 
  protected:

@@ -16,6 +16,7 @@
 
 /// Basic end-to-end read tests for the cudf Iceberg connector.
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
@@ -32,6 +33,7 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
 
@@ -469,6 +471,73 @@ TEST_F(CudfIcebergReadTest, basicRead) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
   AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+TEST_F(CudfIcebergReadTest, timestampWithTimeZoneRead) {
+  auto& cudfConfig = CudfConfig::getInstance();
+  const auto originalTimestampUnit = cudfConfig.timestampUnit;
+  cudfConfig.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  SCOPE_EXIT {
+    cudfConfig.timestampUnit = originalTimestampUnit;
+  };
+
+  const std::vector<std::optional<Timestamp>> timestamps{
+      Timestamp::fromMicros(0),
+      Timestamp::fromMicros(123'456),
+      Timestamp::fromMicros(-499'999),
+      Timestamp::fromMicros(1'623'758'400'123'456),
+      std::nullopt,
+  };
+  const std::vector<std::optional<Timestamp>> expectedPlainTimestamps{
+      Timestamp::fromMillis(0),
+      Timestamp::fromMillis(123),
+      Timestamp::fromMillis(-500),
+      Timestamp::fromMillis(1'623'758'400'123),
+      std::nullopt,
+  };
+  auto data = makeRowVector(
+      {"id", "ts", "plain_ts"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
+          makeNullableFlatVector<Timestamp>(timestamps, TIMESTAMP()),
+      });
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+  cudfConfig.timestampUnit = originalTimestampUnit;
+
+  const auto timestampWithTimeZoneType = TIMESTAMP_WITH_TIME_ZONE();
+  const auto tableType =
+      ROW({"id", "ts", "plain_ts"},
+          {INTEGER(), timestampWithTimeZoneType, TIMESTAMP()});
+  auto expected = makeRowVector(
+      {"id", "ts", "plain_ts"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
+          makeNullableFlatVector<int64_t>(
+              {
+                  pack(0, 0),
+                  pack(123, 0),
+                  pack(-499, 0),
+                  pack(1'623'758'400'123, 0),
+                  std::nullopt,
+              },
+              timestampWithTimeZoneType),
+          makeNullableFlatVector<Timestamp>(
+              expectedPlainTimestamps, TIMESTAMP()),
+      });
+
+  for (const bool useExperimentalReader : {false, true}) {
+    SCOPED_TRACE(useExperimentalReader);
+    AssertQueryBuilder(makeTableScanPlan(tableType))
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::
+                kUseExperimentalCudfReaderSession,
+            useExperimentalReader ? "true" : "false")
+        .splits(makeIcebergSplits(dataFile->getPath()))
+        .assertResults({expected});
+  }
 }
 
 TEST_F(CudfIcebergReadTest, reusesFooterMetadataDuringReaderSetup) {

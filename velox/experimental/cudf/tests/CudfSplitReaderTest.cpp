@@ -104,6 +104,7 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
       std::make_shared<io::IoStatistics>(),
       std::make_shared<IoStats>(),
       false,
+      cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
       &logicalFilter);
 
   EXPECT_EQ(reader.logicalFilter(), &logicalFilter);
