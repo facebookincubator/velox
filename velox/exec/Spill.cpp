@@ -543,7 +543,9 @@ SpillPartition::createOrderedReader(
     VELOX_CHECK_GT(orderedFiles.size(), 1);
     const uint64_t numMergeFiles = std::min(
         static_cast<uint64_t>(numMaxMergeFiles),
-        std::min(orderedFiles.size(), totalFiles + 1 - numMaxMergeFiles));
+        std::min(
+            static_cast<uint64_t>(orderedFiles.size()),
+            totalFiles + 1 - numMaxMergeFiles));
     // Choose the top 'numMergeFiles' smallest files for merging to minimize IO.
     for (uint32_t i = 0; i < numMergeFiles; i++) {
       files.push_back(orderedFiles.top());
