@@ -36,6 +36,7 @@ constexpr std::string_view kMetadataSection = "columnar.metadata";
 constexpr std::string_view kStatsSection = "columnar.stats";
 constexpr std::string_view kVectorizedStatsSection =
     "columnar.vectorized_stats";
+constexpr std::string_view kStripeStatsSection = "columnar.stripe_stats";
 constexpr std::string_view kIndexSection = "columnar.indexes";
 constexpr std::string_view kChunkStatsSection = "columnar.chunk.stats";
 constexpr std::string_view kPropertiesSection = "columnar.properties";
