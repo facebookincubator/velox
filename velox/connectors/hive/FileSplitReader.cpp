@@ -32,12 +32,14 @@
 namespace facebook::velox::connector::hive {
 namespace {
 
-// Parses a TIMESTAMP WITH TIME ZONE value with the same semantics as
-// CAST(varchar AS TIMESTAMP WITH TIME ZONE) and returns its UTC milliseconds
-// packed with its time zone key. A value naming a zone or carrying an offset is
-// shifted to UTC and recorded with that zone; a value with no zone is taken as
-// already UTC. Sub-millisecond precision is truncated, since the packed layout
-// has no room for it.
+// Parses a TIMESTAMP WITH TIME ZONE value using CAST(varchar AS TIMESTAMP WITH
+// TIME ZONE) syntax and returns its UTC milliseconds packed with its time zone
+// key. A value naming a zone or carrying an offset is shifted to UTC and
+// recorded with that zone. A value with no zone is taken as already UTC, which
+// diverges from the cast: CAST would interpret it in the session time zone,
+// but a partition value has no session and would otherwise be ambiguous.
+// Sub-millisecond precision is truncated, since the packed layout has no room
+// for it.
 //
 // Returns nullopt if 'value' is not a timestamp string at all, leaving the
 // caller to decide how to interpret it.
