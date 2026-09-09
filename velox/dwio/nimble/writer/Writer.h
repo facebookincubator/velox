@@ -327,6 +327,13 @@ class Writer : public velox::dwio::common::Writer {
   // task because EncodingBufferPool is not thread-safe.
   std::unique_ptr<EncodingBufferPool> makeEncodingBufferPool() const;
   uint32_t encodingConcurrency(uint32_t streamCount) const;
+
+  // Orders stream indices largest-first, so that parallel encode batches group
+  // comparably sized streams together. The streamCount overload orders the
+  // identity range [0, streamCount) without materializing it first.
+  std::vector<uint32_t> encodeOrder(uint32_t streamCount) const;
+  std::vector<uint32_t> encodeOrder(
+      std::span<const uint32_t> streamIndices) const;
   void ensureEncodingScratchBufferPools(uint32_t poolCount);
   void ensureEncodingBufferPools(uint32_t poolCount);
   velox::BufferPool* encodingScratchBufferPool(uint32_t index = 0);
