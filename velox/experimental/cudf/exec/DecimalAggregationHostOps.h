@@ -38,18 +38,18 @@ namespace facebook::velox::cudf_velox {
 void validateIntermediateColumnType(cudf::column_view const& column);
 
 /**
- * Casts a DECIMAL64 column up to DECIMAL128 (scale preserved) so a subsequent
- * SUM accumulates in 128 bits instead of wrapping. Allocates the casted column
- * from the temporary memory resource into holder and returns its view. Lifetime
- * stays valid only while holder is alive.
+ * Casts a DECIMAL32 or DECIMAL64 column up to DECIMAL128 (scale preserved) so
+ * a subsequent SUM accumulates in 128 bits instead of wrapping. Allocates the
+ * casted column from the temporary memory resource into holder and returns its
+ * view. Lifetime stays valid only while holder is alive.
  *
- * @param inputCol DECIMAL64 input column.
+ * @param inputCol DECIMAL32, DECIMAL64, or DECIMAL128 input column.
  * @param holder receives ownership of the casted column when inputCol is
- *        DECIMAL64; unchanged otherwise.
+ *        DECIMAL32 or DECIMAL64; unchanged otherwise.
  * @param stream CUDA stream for device work.
  * @return view of inputCol or of the column stored in holder.
  */
-cudf::column_view castDecimal64InputToDecimal128(
+cudf::column_view castDecimalInputToDecimal128(
     cudf::column_view inputCol,
     std::unique_ptr<cudf::column>& holder,
     rmm::cuda_stream_view stream);

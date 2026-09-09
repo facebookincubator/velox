@@ -42,16 +42,24 @@ cudf::ast::literal makeLiteralFromScalar(
     const TypePtr& type) {
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
-      if (type->kind() == TypeKind::BIGINT) {
-        using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal64>;
-        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+      switch (scalar.type().id()) {
+        case cudf::type_id::DECIMAL32: {
+          using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal32>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        case cudf::type_id::DECIMAL64: {
+          using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal64>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        case cudf::type_id::DECIMAL128: {
+          using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal128>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        default:
+          VELOX_UNREACHABLE(
+              "Invalid cuDF decimal scalar type: {}",
+              static_cast<int32_t>(scalar.type().id()));
       }
-      if (type->kind() == TypeKind::HUGEINT) {
-        using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal128>;
-        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
-      }
-      VELOX_UNREACHABLE(
-          "Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
@@ -140,29 +148,50 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       // Velox DECIMAL scale is positive for fractional digits
       // cuDF scale is negative for fractional digits
       // @TODO check the bigger picture here!
+      numeric::scale_type cudfScale{0};
+      cudf::type_id defaultType{cudf::type_id::EMPTY};
       if (type->kind() == TypeKind::BIGINT) {
         auto const decimalType =
             std::dynamic_pointer_cast<const ShortDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
-        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
-        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal64>;
-        auto scalar = std::make_unique<CudfDecimalType>(
-            value, cudfScale, !isNull, stream, mr);
-        stream.synchronize();
-        return scalar;
+        cudfScale = numeric::scale_type{-decimalType->scale()};
+        defaultType = cudf::type_id::DECIMAL64;
       } else if (type->kind() == TypeKind::HUGEINT) {
         auto const decimalType =
             std::dynamic_pointer_cast<const LongDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
-        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
-        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal128>;
-        auto scalar = std::make_unique<CudfDecimalType>(
-            value, cudfScale, !isNull, stream, mr);
-        stream.synchronize();
-        return scalar;
+        cudfScale = numeric::scale_type{-decimalType->scale()};
+        defaultType = cudf::type_id::DECIMAL128;
+      } else {
+        VELOX_UNREACHABLE(
+            "Invalid Decimal Type (bad TypeKind: {})", type->kind());
       }
-      VELOX_UNREACHABLE(
-          "Invalid Decimal Type (bad TypeKind: {})", type->kind());
+
+      std::unique_ptr<cudf::scalar> scalar;
+      const auto targetType = toType.value_or(defaultType);
+      switch (targetType) {
+        case cudf::type_id::DECIMAL32:
+          scalar =
+              std::make_unique<cudf::fixed_point_scalar<numeric::decimal32>>(
+                  static_cast<int32_t>(value), cudfScale, !isNull, stream, mr);
+          break;
+        case cudf::type_id::DECIMAL64:
+          scalar =
+              std::make_unique<cudf::fixed_point_scalar<numeric::decimal64>>(
+                  static_cast<int64_t>(value), cudfScale, !isNull, stream, mr);
+          break;
+        case cudf::type_id::DECIMAL128:
+          scalar =
+              std::make_unique<cudf::fixed_point_scalar<numeric::decimal128>>(
+                  static_cast<int128_t>(value), cudfScale, !isNull, stream, mr);
+          break;
+        default:
+          VELOX_UNREACHABLE(
+              "Invalid target cuDF decimal type: {}",
+              static_cast<int32_t>(targetType));
+      }
+      stream.synchronize();
+      return scalar;
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {
@@ -272,16 +301,17 @@ cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
     bool isNull,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    std::optional<cudf::type_id> toType = std::nullopt) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR) {
     if (isNull) {
-      auto scalar = makeScalarFromValue<T>(type, T{}, true);
+      auto scalar = makeScalarFromValue<T>(type, T{}, true, toType);
       scalars.emplace_back(std::move(scalar));
       return makeLiteralFromScalar<T>(*(scalars.back()), type);
     }
     auto value = var.value<T>();
-    auto scalar = makeScalarFromValue(type, value, false);
+    auto scalar = makeScalarFromValue(type, value, false, toType);
     scalars.emplace_back(std::move(scalar));
     return makeLiteralFromScalar<T>(*(scalars.back()), type);
   }
@@ -292,8 +322,9 @@ template <TypeKind kind>
 cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
-  return makeScalarAndLiteral<kind>(type, var, false, scalars);
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    std::optional<cudf::type_id> toType = std::nullopt) {
+  return makeScalarAndLiteral<kind>(type, var, false, scalars, toType);
 }
 
 /// Returns true if expr is non-null and its output type is one the AST/JIT

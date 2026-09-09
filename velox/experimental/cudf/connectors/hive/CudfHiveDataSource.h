@@ -141,9 +141,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
 
-  // Expression evaluator for subfield filter.
+  // Logical and split-specific physical AST storage for subfield filters.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
+  std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
+  cudf::ast::tree pushdownFilterTree_;
   common::SubfieldFilters subfieldFilters_;
 };
 

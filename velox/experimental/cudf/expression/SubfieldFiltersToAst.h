@@ -23,6 +23,8 @@
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace cudf {
@@ -33,13 +35,18 @@ class tree;
 
 namespace facebook::velox::cudf_velox {
 
+// Physical cuDF decimal storage type for each top-level input field.
+using SubfieldFilterDecimalTypes =
+    std::unordered_map<std::string, cudf::type_id>;
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
@@ -48,6 +55,7 @@ cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    const RowTypePtr& inputRowSchema);
+    const RowTypePtr& inputRowSchema,
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
 
 } // namespace facebook::velox::cudf_velox
