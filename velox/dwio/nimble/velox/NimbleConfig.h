@@ -181,6 +181,16 @@ class Config : public velox::config::ConfigBase {
   /// first encoding of each stream and replay it on subsequent chunks/stripes.
   static Entry<bool> ENABLE_ENCODING_SELECTION_CACHE;
 
+  /// Groups and orders FlatMap features on disk so features read together are
+  /// physically adjacent. Base64 of a compact-serialized
+  /// Apache::Hadoop::Hive::FeatureOrdering, whose column ids are top-level
+  /// ordinals in the write input schema.
+  ///
+  /// Overrides WriterOptions::featureReordering when set; leaves it alone when
+  /// unset, so a caller that resolved an order elsewhere keeps it.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> FEATURE_ORDERING_OVERRIDE;
+
   /// Compresses stripe-group metadata only when it exceeds this many bytes.
   /// Unset leaves the writer's own threshold; UINT32_MAX disables metadata
   /// compression outright.

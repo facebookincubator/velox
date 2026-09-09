@@ -24,6 +24,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
@@ -145,6 +146,11 @@ struct WriterOptions {
   /// EXPERIMENTAL: Vector indexes are not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   std::vector<VectorIndexConfig> vectorIndexConfigs{};
+
+  /// Builds the writer for vectorIndexConfigs. Required when
+  /// vectorIndexConfigs is non-empty. Set it to
+  /// index::VectorIndexWriter::create
+  index::VectorIndexWriterFactory vectorIndexWriterFactory{};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
   /// of predefined key strings. When the set is empty, the column is

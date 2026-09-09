@@ -35,7 +35,9 @@
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
 #include <folly/Synchronized.h>
+#include <folly/synchronization/CallOnce.h>
 
+#include "velox/common/io/Options.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
@@ -316,7 +318,50 @@ MetadataSection parseVectorIndexSection(
 
 } // namespace
 
-VectorIndexDirectory VectorIndexDirectory::create(Section directorySection) {
+// Owns the state required to create the index input on first use.
+struct VectorIndexDirectory::InputState {
+  explicit InputState(const IndexLookup::Options& sourceOptions)
+      : ioOptions{[&] {
+          NIMBLE_CHECK_NOT_NULL(sourceOptions.ioOptions);
+          return std::make_shared<velox::io::ReaderOptions>(
+              *sourceOptions.ioOptions);
+        }()},
+        options{
+            .file = sourceOptions.file,
+            .ioOptions = ioOptions.get(),
+            .fileHandle = sourceOptions.fileHandle,
+            .cache = sourceOptions.cache,
+            .pinIndex = sourceOptions.pinIndex,
+            .preloadIndex = sourceOptions.preloadIndex,
+        } {
+    NIMBLE_CHECK_NOT_NULL(options.file);
+  }
+
+  std::shared_ptr<MetadataInput> input() {
+    folly::call_once(initializeOnce, [this] {
+      options.validate();
+      metadataInput = createIndexMetadataInput(options);
+    });
+    NIMBLE_CHECK_NOT_NULL(metadataInput);
+    return metadataInput;
+  }
+
+  // Keeps the ReaderOptions referenced by options alive.
+  std::shared_ptr<velox::io::ReaderOptions> ioOptions;
+
+  // Preserves index-specific statistics and cache behavior.
+  IndexLookup::Options options;
+
+  // Serializes construction while allowing concurrent reads afterward.
+  folly::once_flag initializeOnce;
+
+  // Remains null until the first vector index is materialized.
+  std::shared_ptr<MetadataInput> metadataInput;
+};
+
+VectorIndexDirectory VectorIndexDirectory::create(
+    Section directorySection,
+    const IndexLookup::Options& options) {
   const auto directoryData = directorySection.content();
   NIMBLE_CHECK_FILE(
       !directoryData.empty(), "Vector index directory must not be empty");
@@ -359,31 +404,35 @@ VectorIndexDirectory VectorIndexDirectory::create(Section directorySection) {
         });
   }
 
-  return VectorIndexDirectory{std::move(entries)};
+  return VectorIndexDirectory{
+      std::move(entries), std::make_shared<InputState>(options)};
 }
 
 VectorIndexDirectory::VectorIndexDirectory(
-    folly::F14FastMap<std::string, Entry> entries)
-    : entries_{std::move(entries)} {}
+    folly::F14FastMap<std::string, Entry> entries,
+    std::shared_ptr<InputState> inputState)
+    : entries_{std::move(entries)}, inputState_{std::move(inputState)} {
+  NIMBLE_CHECK_NOT_NULL(inputState_);
+}
 
 size_t VectorIndexDirectory::numIndexes() const {
   return entries_.size();
 }
 
 bool VectorIndexDirectory::contains(std::string_view columnName) const {
-  return entries_.contains(std::string{columnName});
+  return entries_.contains(columnName);
 }
 
 std::shared_ptr<const VectorIndex> VectorIndexDirectory::load(
-    std::string_view columnName,
-    MetadataInput& metadataInput) const {
-  const auto entry = entries_.find(std::string{columnName});
+    std::string_view columnName) const {
+  const auto entry = entries_.find(columnName);
   NIMBLE_USER_CHECK(
       entry != entries_.end(),
       "Vector index column does not exist: {}",
       columnName);
 
-  const auto indexData = metadataInput.load({&entry->second.indexSection, 1});
+  const auto indexData =
+      inputState_->input()->load({&entry->second.indexSection, 1});
   NIMBLE_CHECK_EQ(indexData.size(), 1);
   NIMBLE_CHECK_NOT_NULL(indexData.front().get());
   return VectorIndex::create(

@@ -24,6 +24,7 @@
 
 #include <folly/container/F14Map.h>
 
+#include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 
@@ -144,8 +145,11 @@ class VectorIndex {
 /// Call load() to materialize only the index needed for a query.
 class VectorIndexDirectory {
  public:
-  /// Parses a vector-index directory and validates its descriptors.
-  static VectorIndexDirectory create(Section directorySection);
+  /// Parses a vector-index directory and captures options used to create its
+  /// index data input on the first load.
+  static VectorIndexDirectory create(
+      Section directorySection,
+      const IndexLookup::Options& options);
 
   /// Returns the number of indexes described by the directory.
   size_t numIndexes() const;
@@ -154,11 +158,11 @@ class VectorIndexDirectory {
   bool contains(std::string_view columnName) const;
 
   /// Loads an immutable index that callers may retain and reuse.
-  std::shared_ptr<const VectorIndex> load(
-      std::string_view columnName,
-      MetadataInput& metadataInput) const;
+  std::shared_ptr<const VectorIndex> load(std::string_view columnName) const;
 
  private:
+  struct InputState;
+
   struct Entry {
     // Defines the index and validates its serialized FAISS representation.
     VectorIndex::Metadata metadata;
@@ -167,10 +171,15 @@ class VectorIndexDirectory {
     MetadataSection indexSection;
   };
 
-  explicit VectorIndexDirectory(folly::F14FastMap<std::string, Entry> entries);
+  VectorIndexDirectory(
+      folly::F14FastMap<std::string, Entry> entries,
+      std::shared_ptr<InputState> inputState);
 
   // Keys descriptors by top-level column name for direct lookup.
   folly::F14FastMap<std::string, Entry> entries_;
+
+  // Lazily creates and owns the index-specific metadata input.
+  std::shared_ptr<InputState> inputState_;
 };
 
 } // namespace facebook::nimble::index

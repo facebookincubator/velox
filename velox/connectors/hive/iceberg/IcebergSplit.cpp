@@ -104,7 +104,7 @@ HiveIcebergSplit::HiveIcebergSplit(
       identityPartitionKeys(identityPartitionKeys) {}
 
 std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
-  return std::make_shared<HiveIcebergSplit>(
+  auto split = std::make_shared<HiveIcebergSplit>(
       connectorId_,
       filePath_,
       fileFormat_,
@@ -121,5 +121,7 @@ std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
       dataSequenceNumber_,
       identityPartitionKeys_,
       columnMappingMode_);
+  split->physicalFilePath = physicalFilePath_;
+  return split;
 }
 } // namespace facebook::velox::connector::hive::iceberg

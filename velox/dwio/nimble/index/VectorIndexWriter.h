@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -44,14 +45,14 @@ class VectorIndexWriter {
       const velox::RowTypePtr& inputType,
       velox::memory::MemoryPool* pool);
 
-  ~VectorIndexWriter();
+  virtual ~VectorIndexWriter();
 
   /// Extracts float vectors from the configured column and buffers them.
-  void write(const velox::VectorPtr& input);
+  virtual void write(const velox::VectorPtr& input);
 
   /// Writes each FAISS blob as a metadata section and their directory as an
   /// optional section.
-  void close(
+  virtual void close(
       const CreateMetadataSectionFn& createMetadataFn,
       const WriteOptionalSectionFn& writeMetadataFn);
 
@@ -119,5 +120,19 @@ class VectorIndexWriter {
   // Prevents writes and duplicate finalization after close().
   bool closed_{false};
 };
+
+/// Creates a non-null writer for one or more index configurations. The
+/// implementation must consume or copy configs during the call and must not
+/// retain the span storage.
+///
+/// Injected through WriterOptions rather than resolved from a global so that a
+/// writer which never configures a vector index does not have to link an index
+/// implementation, and the heavyweight similarity-search libraries it depends
+/// on.
+using VectorIndexWriterFactory =
+    std::function<std::unique_ptr<VectorIndexWriter>(
+        std::span<const VectorIndexConfig> configs,
+        const velox::RowTypePtr& inputType,
+        velox::memory::MemoryPool* pool)>;
 
 } // namespace facebook::nimble::index
