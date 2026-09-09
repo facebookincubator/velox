@@ -3152,17 +3152,20 @@ bool Writer::writeChunks(
 bool Writer::flushChunks(
     const std::vector<uint32_t>& indices,
     bool ensureFullChunks,
-    FlushPolicy* flushPolicy) {
+    FlushPolicy* flushPolicy,
+    bool stopWhenPressureRelieved) {
   const size_t indicesCount = indices.size();
   const auto batchSize = context_->options().chunkedStreamBatchSize;
   for (size_t index = 0; index < indicesCount; index += batchSize) {
     const size_t currentBatchSize = std::min(batchSize, indicesCount - index);
     std::span<const uint32_t> batchIndices(
         indices.begin() + index, currentBatchSize);
-    // Stop attempting chunking once streams are too small to chunk or
-    // memory pressure is relieved.
-    if (!writeChunks(batchIndices, ensureFullChunks) ||
-        !shouldChunk(flushPolicy)) {
+    // Stop attempting chunking once streams are too small to chunk or, when
+    // the caller is relieving memory pressure, once it is relieved.
+    if (!writeChunks(batchIndices, ensureFullChunks)) {
+      return false;
+    }
+    if (stopWhenPressureRelieved && !shouldChunk(flushPolicy)) {
       return false;
     }
   }
@@ -3237,30 +3240,53 @@ bool Writer::evaluateFlushPolicy() {
   // NOTE that flush policy factory is stateful, so we need to get a new
   // policy every time we check.
   auto flushPolicy = context_->options().flushPolicyFactory();
-  if (context_->options().enableChunking && shouldChunk(flushPolicy.get())) {
-    // Relieve memory pressure by chunking streams above max size.
-    const auto& streams = context_->streams();
-    std::vector<uint32_t> streamIndices;
-    const auto streamCount = streams.size();
-    streamIndices.reserve(streamCount);
-
-    // Determine size threshold for soft chunking based on schema width.
+  if (context_->options().enableChunking) {
+    // Decides only whether the writer is over its aggregate memory budget.
+    // flushChunks() consults the policy again between batches when it is the
+    // one relieving that pressure, so this is not the policy's only call.
+    const bool underMemoryPressure = shouldChunk(flushPolicy.get());
     const auto& options = context_->options();
-    const auto maxChunkSize = streamCount > options.largeSchemaThreshold
-        ? options.wideSchemaMaxStreamChunkRawSize
-        : options.maxStreamChunkRawSize;
-    for (auto streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
-      if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
-        streamIndices.push_back(streamIndex);
+    const auto& streams = context_->streams();
+    const auto streamCount = streams.size();
+    std::vector<uint32_t> streamIndices;
+
+    // Only scan when the result can be acted on. Without the cap, soft
+    // chunking runs solely under aggregate memory pressure, and this is an
+    // O(numStreams) pass plus an allocation on every batch.
+    if (options.enforceStreamChunkSizeCap || underMemoryPressure) {
+      streamIndices.reserve(streamCount);
+
+      // Determine size threshold for soft chunking based on schema width.
+      const auto maxChunkSize = streamCount > options.largeSchemaThreshold
+          ? options.wideSchemaMaxStreamChunkRawSize
+          : options.maxStreamChunkRawSize;
+      for (auto streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+          streamIndices.push_back(streamIndex);
+        }
       }
     }
 
-    // Soft chunking.
-    const bool continueChunking = flushChunks(
-        streamIndices, /*ensureFullChunks=*/true, flushPolicy.get());
-    // Hard chunking when chunking streams above maxChunkSize fails to
-    // relieve memory pressure.
-    if (continueChunking) {
+    // Soft chunking, bounded by maxChunkSize. With enforceStreamChunkSizeCap
+    // an oversized stream is chunked on its own account, without waiting for
+    // the writer's total to come under pressure too. See
+    // WriterOptions::enforceStreamChunkSizeCap for why that is worth doing.
+    const bool chunkOversizedStreams =
+        options.enforceStreamChunkSizeCap && !streamIndices.empty();
+    // Giving up once pressure clears would leave the oversized streams after
+    // the first batch above the cap, so cap enforcement walks all of them.
+    const bool stopWhenPressureRelieved =
+        underMemoryPressure && !options.enforceStreamChunkSizeCap;
+    const bool continueChunking = (chunkOversizedStreams ||
+                                   underMemoryPressure) &&
+        flushChunks(streamIndices,
+                    /*ensureFullChunks=*/true,
+                    flushPolicy.get(),
+                    stopWhenPressureRelieved);
+    // Hard chunking reaches below maxChunkSize, so it stays gated on aggregate
+    // memory pressure: it is the escalation for when capping each stream was
+    // not enough.
+    if (continueChunking && underMemoryPressure) {
       // Relieve memory pressure by chunking small streams.
       // Sort streams for chunking based on raw memory usage.
       // TODO(T240072104): Improve performance by bucketing the streams
@@ -3275,7 +3301,11 @@ bool Writer::evaluateFlushPolicy() {
             return streams[a].second->memoryUsed() >
                 streams[b].second->memoryUsed();
           });
-      flushChunks(streamIndices, /*ensureFullChunks=*/false, flushPolicy.get());
+      flushChunks(
+          streamIndices,
+          /*ensureFullChunks=*/false,
+          flushPolicy.get(),
+          /*stopWhenPressureRelieved=*/true);
     }
   }
 

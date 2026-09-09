@@ -206,10 +206,15 @@ class Writer : public velox::dwio::common::Writer {
 
   bool shouldChunk(FlushPolicy* policy) const;
 
+  // Chunks 'indices' in batches of chunkedStreamBatchSize. When
+  // 'stopWhenPressureRelieved', gives up as soon as the policy reports the
+  // writer is no longer over its memory budget; cap enforcement passes false
+  // so that every oversized stream is chunked, not just the first batch.
   bool flushChunks(
       const std::vector<uint32_t>& indices,
       bool ensureFullChunks,
-      FlushPolicy* policy);
+      FlushPolicy* policy,
+      bool stopWhenPressureRelieved);
 
   bool encodeStreamChunk(
       StreamData& streamData,

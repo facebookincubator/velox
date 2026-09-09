@@ -4333,6 +4333,110 @@ TEST_F(WriterTest, batchedChunkingRelievesMemoryPressure) {
   }
 }
 
+// The per-stream maxStreamChunkRawSize cap is applied when a stripe is written
+// either way; what enforceStreamChunkSizeCap changes is whether a stream is
+// also cut into chunks *while the stripe accumulates*. Without it that only
+// happens when the flush policy reports aggregate memory pressure, which a
+// Spark task whose whole budget is below chunking.writer.memory.high.threshold
+// never does, so a single stream buffers the entire stripe's raw data. Measure
+// that: same input, same output chunking, different peak writer memory.
+TEST_F(WriterTest, enforceStreamChunkSizeCapBoundsBufferedRawData) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"c0"}, {vectorMaker.flatVector<int64_t>(65'536, [](auto row) {
+        return static_cast<int64_t>(row);
+      })});
+  constexpr int kBatches = 16;
+  constexpr uint64_t kMaxChunkRawSize = 64 << 10;
+
+  auto peakBytes = [&](bool enforceCap) {
+    nimble::WriterOptions options;
+    options.maxStreamChunkRawSize = kMaxChunkRawSize;
+    options.enforceStreamChunkSizeCap = enforceCap;
+    // Never report aggregate memory pressure and never close a stripe early,
+    // so the cap is the only thing that can chunk during the writes.
+    options.flushPolicyFactory = []() {
+      return std::make_unique<nimble::LambdaFlushPolicy>();
+    };
+
+    // A dedicated root so peakBytes() covers this writer alone.
+    auto rootPool = velox::memory::memoryManager()->addRootPool(
+        fmt::format("chunk_cap_{}", enforceCap));
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        vector->type(), std::move(writeFile), *rootPool, std::move(options));
+    for (int i = 0; i < kBatches; ++i) {
+      writer.write(vector);
+    }
+    writer.close();
+    return rootPool->peakBytes();
+  };
+
+  const auto uncapped = peakBytes(/*enforceCap=*/false);
+  const auto capped = peakBytes(/*enforceCap=*/true);
+  // 8 MB of raw int64 accumulates in one stream when the cap is not enforced.
+  EXPECT_GT(uncapped, kBatches * 65'536 * sizeof(int64_t));
+  EXPECT_LT(capped, uncapped / 2)
+      << "capped=" << capped << " uncapped=" << uncapped;
+}
+
+// Chunking to relieve aggregate memory pressure walks the oversized streams in
+// batches and stops as soon as the policy reports the pressure gone. Cap
+// enforcement must not inherit that: the streams after the first batch are
+// still over maxStreamChunkRawSize, and dropping them there buffers the rest
+// of the stripe -- the cap would be weakest in the case it exists for.
+TEST_F(WriterTest, enforceStreamChunkSizeCapSurvivesTransientPressure) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto column = [&]() {
+    return vectorMaker.flatVector<int64_t>(
+        65'536, [](auto row) { return static_cast<int64_t>(row); });
+  };
+  auto vector = vectorMaker.rowVector(
+      {"c0", "c1", "c2", "c3"}, {column(), column(), column(), column()});
+  constexpr int kBatches = 16;
+  constexpr uint64_t kMaxChunkRawSize = 64 << 10;
+
+  auto peakBytes = [&](bool enforceCap, bool transientPressure) {
+    nimble::WriterOptions options;
+    options.maxStreamChunkRawSize = kMaxChunkRawSize;
+    options.enforceStreamChunkSizeCap = enforceCap;
+    // One stream per batch, so a policy whose pressure clears right after the
+    // first batch leaves the remaining oversized streams untouched.
+    options.chunkedStreamBatchSize = 1;
+    options.flushPolicyFactory = [transientPressure]() {
+      auto calls = std::make_shared<int>(0);
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          [](const auto&) { return false; },
+          [transientPressure, calls](const auto&) {
+            // On for the writer's own pressure check, off by the time
+            // flushChunks() asks again after the first batch.
+            return transientPressure && (*calls)++ % 2 == 0;
+          });
+    };
+
+    // A dedicated root so peakBytes() covers this writer alone.
+    auto rootPool = velox::memory::memoryManager()->addRootPool(
+        fmt::format("chunk_cap_pressure_{}_{}", enforceCap, transientPressure));
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        vector->type(), std::move(writeFile), *rootPool, std::move(options));
+    for (int i = 0; i < kBatches; ++i) {
+      writer.write(vector);
+    }
+    writer.close();
+    return rootPool->peakBytes();
+  };
+
+  const auto uncapped =
+      peakBytes(/*enforceCap=*/false, /*transientPressure=*/false);
+  const auto capped =
+      peakBytes(/*enforceCap=*/true, /*transientPressure=*/true);
+  EXPECT_LT(capped, uncapped / 2)
+      << "capped=" << capped << " uncapped=" << uncapped;
+}
+
 TEST_F(WriterTest, ignoreTopLevelNulls) {
   auto seed = folly::randomNumberSeed();
   LOG(INFO) << "seed: " << seed;
