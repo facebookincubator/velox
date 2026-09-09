@@ -17,6 +17,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -55,11 +56,11 @@ struct ParseURLFunction {
       const arg_type<Varchar>* /* part */,
       const arg_type<Varchar>* key) {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
-    // A constant key compiles its regex once here; a non-constant key is
-    // looked up in the regex cache in call().
+    // A constant key's pattern is only remembered here; the regex itself is
+    // compiled lazily on the first call that extracts a query parameter, so
+    // an invalid key does not fail rows that never use it.
     if (key) {
-      constPattern_ = std::make_unique<re2::RE2>(buildQueryPattern(key->str()));
-      VELOX_USER_CHECK(constPattern_->ok(), "invalid key: {}", key->str());
+      constQueryPattern_ = buildQueryPattern(key->str());
     }
   }
 
@@ -91,8 +92,18 @@ struct ParseURLFunction {
         !parsed.query.has_value()) {
       return false;
     }
-    const re2::RE2* pattern = constPattern_.get();
-    if (pattern == nullptr) {
+    const re2::RE2* pattern = nullptr;
+    if (constQueryPattern_.has_value()) {
+      // A constant key compiles its regex once, on the first call that uses
+      // it; an invalid key fails the query here.
+      if (constPattern_ == nullptr) {
+        constPattern_ =
+            std::make_unique<re2::RE2>(*constQueryPattern_);
+        VELOX_USER_CHECK(
+            constPattern_->ok(), "invalid key: {}", *constQueryPattern_);
+      }
+      pattern = constPattern_.get();
+    } else {
       // A non-constant key is looked up in the regex cache so each distinct
       // key compiles at most once instead of once per row. An invalid key or
       // a full cache fails the query, like the regexp functions.
@@ -184,7 +195,9 @@ struct ParseURLFunction {
     return true;
   }
 
-  // The regex for a constant query key, compiled once in initialize().
+  // The pattern of a constant query key, remembered in initialize(). The
+  // compiled regex is built lazily on first use in call().
+  std::optional<std::string> constQueryPattern_;
   std::unique_ptr<re2::RE2> constPattern_;
 
   // Cache of compiled regexes for non-constant query keys, bounded by
