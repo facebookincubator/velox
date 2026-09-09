@@ -1765,6 +1765,28 @@ void configureAddedFlatMapField(
         context.schemaBuilder());
   }
 }
+
+// Returns nullptr when no vector index is configured. The implementation comes
+// from the caller so that this target links no similarity-search library.
+std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
+    const WriterOptions& options,
+    const velox::TypePtr& type,
+    velox::memory::MemoryPool* pool) {
+  if (options.vectorIndexConfigs.empty()) {
+    return nullptr;
+  }
+  NIMBLE_USER_CHECK(
+      options.vectorIndexWriterFactory != nullptr,
+      "WriterOptions::vectorIndexWriterFactory must be set when "
+      "vectorIndexConfigs is not empty. Depend on "
+      "//velox/dwio/nimble/index:vector_index and use "
+      "index::faissVectorIndexWriterFactory().");
+  auto writer = options.vectorIndexWriterFactory(
+      options.vectorIndexConfigs, velox::asRowType(type), pool);
+  NIMBLE_CHECK_NOT_NULL(
+      writer, "Vector index writer factory returned a null writer");
+  return writer;
+}
 } // namespace
 
 std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
@@ -1890,13 +1912,10 @@ Writer::Writer(
           context_->options(),
           type,
           &(*context_->bufferMemoryPool()))},
-      vectorIndexWriter_{
-          context_->options().vectorIndexConfigs.empty()
-              ? nullptr
-              : index::VectorIndexWriter::create(
-                    context_->options().vectorIndexConfigs,
-                    velox::asRowType(type),
-                    &(*context_->bufferMemoryPool()))},
+      vectorIndexWriter_{createVectorIndexWriter(
+          context_->options(),
+          type,
+          &(*context_->bufferMemoryPool()))},
       tabletWriter_{TabletWriter::create(
           file_.get(),
           *encodingMemoryPool_,

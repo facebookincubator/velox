@@ -33,6 +33,8 @@ add_library(
   IndexLookup.cpp
   IndexWriter.cpp
   SortOrder.cpp
+  VectorIndexWriter.h
+  VectorIndexConfig.h
   SortedIndexWriter.h
   SortedIndexConfig.h
   SortedIndex.h
@@ -89,12 +91,11 @@ target_link_libraries(
 add_library(
   nimble_vector_index
   VectorIndex.cpp
-  VectorIndexWriter.cpp
+  FaissVectorIndexWriter.cpp
   VectorIndexUtility.cpp
   VectorIndex.h
-  VectorIndexWriter.h
+  FaissVectorIndexWriter.h
   VectorIndexUtility.h
-  VectorIndexConfig.h
 )
 target_link_libraries(
   nimble_vector_index
