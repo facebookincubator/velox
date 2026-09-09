@@ -354,6 +354,24 @@ TEST_F(ParseUrlTest, javaAuthorityEdgeCases) {
   EXPECT_EQ(
       "99999999999.0.0.1", parseUrl("http://99999999999.0.0.1/", "AUTHORITY"));
 
+  // Leading zeros are valid IPv4 bytes and the host is returned verbatim;
+  // there is no limit on the number of digits as long as the value fits
+  // in 0..255.
+  EXPECT_EQ("0000.0.0.1", parseUrl("http://0000.0.0.1/", "HOST"));
+  EXPECT_EQ("01.2.3.4", parseUrl("http://01.2.3.4/", "HOST"));
+  EXPECT_EQ(
+      "00000000000000000000000000000000.0.0.1",
+      parseUrl("http://00000000000000000000000000000000.0.0.1/", "HOST"));
+  EXPECT_EQ("0.0.0.0000000000", parseUrl("http://0.0.0.0000000000/", "HOST"));
+  // A digit run whose value overflows a 32-bit integer is not an IPv4
+  // address; the host falls back to registry form.
+  EXPECT_EQ(
+      std::nullopt,
+      parseUrl("http://99999999999999999999.0.0.1/", "HOST"));
+  EXPECT_EQ(
+      "99999999999999999999.0.0.1",
+      parseUrl("http://99999999999999999999.0.0.1/", "AUTHORITY"));
+
   // Userinfo handling.
   EXPECT_EQ("h", parseUrl("http://user@h/", "HOST"));
   EXPECT_EQ("user", parseUrl("http://user@h/", "USERINFO"));
