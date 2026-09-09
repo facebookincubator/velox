@@ -62,6 +62,63 @@ class StatisticsBoolTests : public ::testing::Test {};
 template <typename C>
 class StatisticsStringTests : public ::testing::Test {};
 
+TYPED_TEST(StatisticsIntegerTests, isNonDecreasing) {
+  using ValueType = typename TypeParam::valueType;
+
+  const std::vector<ValueType> sorted{
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(3),
+  };
+  const std::vector<ValueType> unsorted{
+      static_cast<ValueType>(1),
+      static_cast<ValueType>(3),
+      static_cast<ValueType>(2),
+  };
+
+  EXPECT_TRUE(TypeParam::create(sorted).template isNonDecreasing<ValueType>());
+  EXPECT_FALSE(
+      TypeParam::create(unsorted).template isNonDecreasing<ValueType>());
+  EXPECT_TRUE(
+      TypeParam::create(std::span<const ValueType>{})
+          .template isNonDecreasing<ValueType>());
+}
+
+template <typename SignedType>
+void testNaturalAndSignedOrderCachesAreIndependent() {
+  using UnsignedType = std::make_unsigned_t<SignedType>;
+  const std::vector<UnsignedType> signedSorted{
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::min()),
+      static_cast<UnsignedType>(-1),
+      static_cast<UnsignedType>(0),
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::max()),
+  };
+  const auto signedFirst =
+      nimble::Statistics<UnsignedType>::create(signedSorted);
+  EXPECT_TRUE(signedFirst.template isNonDecreasing<SignedType>());
+  EXPECT_FALSE(signedFirst.template isNonDecreasing<UnsignedType>());
+
+  const auto naturalFirst =
+      nimble::Statistics<UnsignedType>::create(signedSorted);
+  EXPECT_FALSE(naturalFirst.template isNonDecreasing<UnsignedType>());
+  EXPECT_TRUE(naturalFirst.template isNonDecreasing<SignedType>());
+
+  const std::vector<UnsignedType> signedUnsorted{
+      static_cast<UnsignedType>(-1),
+      static_cast<UnsignedType>(-2),
+  };
+  EXPECT_FALSE(
+      nimble::Statistics<UnsignedType>::create(signedUnsorted)
+          .template isNonDecreasing<SignedType>());
+}
+
+TEST(StatisticsTest, naturalAndSignedOrderCachesAreIndependent) {
+  testNaturalAndSignedOrderCachesAreIndependent<int8_t>();
+  testNaturalAndSignedOrderCachesAreIndependent<int16_t>();
+  testNaturalAndSignedOrderCachesAreIndependent<int32_t>();
+  testNaturalAndSignedOrderCachesAreIndependent<int64_t>();
+}
+
 TEST(StatisticsTest, runValues) {
   const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3};
   const std::vector<int32_t> expected = {1, 2, 1, 3};
@@ -105,6 +162,23 @@ TEST(StatisticsTest, minMaxBlocks) {
   const std::vector<uint64_t> empty;
   EXPECT_TRUE(
       nimble::Statistics<uint64_t>::create(empty).minMaxBlocks().empty());
+}
+
+TEST(StatisticsTest, mostFrequent) {
+  const std::vector<int32_t> data = {3, 2, 3, 2, 4};
+  const auto statistics = nimble::Statistics<int32_t>::create(data);
+  const auto& uniqueCounts = statistics.uniqueCounts().value();
+
+  EXPECT_EQ(uniqueCounts.mostFrequent(), std::make_pair(2, uint64_t{2}));
+  EXPECT_EQ(uniqueCounts.mostFrequent(), std::make_pair(2, uint64_t{2}));
+
+  const std::vector<int32_t> empty;
+  EXPECT_EQ(
+      nimble::Statistics<int32_t>::create(empty)
+          .uniqueCounts()
+          .value()
+          .mostFrequent(),
+      std::nullopt);
 }
 
 TYPED_TEST(StatisticsNumericTests, create) {

@@ -54,6 +54,14 @@ struct CudfConfig {
   static constexpr const char* kCudfStreamingGroupbyCapacityMultiplier{
       "cudf.streaming_groupby_capacity_multiplier"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
+  static constexpr const char* kUcxExchange{"cudf.exchange"};
+  static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
+  static constexpr const char* kUcxIntraNodeExchange{
+      "cudf.intra_node_exchange"};
+  static constexpr const char* kUcxxBlockingProgress{"ucxx.blocking_progress"};
+  static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
+  static constexpr const char* kUcxPartitionedOutputBatchRows{
+      "cudf.partitioned_output_batch_rows"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -73,6 +81,42 @@ struct CudfConfig {
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};
+
+  /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput). This
+  /// is a capability, not a request: it is read once at registerCudf() to
+  /// decide whether the UCX transports are registered in this process at all.
+  /// Which transport a given edge uses is named per node in the plan, so
+  /// different edges of one plan may differ. Naming a transport nothing
+  /// registered -- kUcx while this is false, or on a worker built without the
+  /// UCX exchange -- is a user error from exec::Task, never a silent fallback.
+  bool exchange{false};
+
+  /// Whether to enable error handling in UCXX endpoints.
+  bool ucxxErrorHandling{true};
+
+  /// Whether intra-node exchange optimization is enabled.
+  bool intraNodeExchange{false};
+
+  /// Whether the UCX worker is set up for UCXX blocking progress mode: the
+  /// wakeup feature on the context plus an epoll file descriptor on the worker,
+  /// which is also what lets enqueueing work signal it. False creates a
+  /// tag/active-message-only worker that the progress loop polls.
+  ///
+  /// Requesting a feature the fabric cannot provide removes that transport from
+  /// UCX's selection instead of failing, so setting this on a fabric without
+  /// wakeup support silently costs RDMA. Tested with this and
+  /// kUcxxErrorHandling both true on InfiniBand / A100, and both false on AWS
+  /// SRD, which supports neither and otherwise stops using RDMA.
+  bool ucxxBlockingProgress{true};
+
+  /// VLOG level for ucx-exchange source files.
+  int32_t exchangeLogLevel{0};
+
+  /// Minimum number of rows to accumulate in UCX partitioned output before
+  /// flushing. Small inputs are buffered and concatenated when this threshold
+  /// is reached, avoiding pathologically small exchange chunks. Set to 0 to
+  /// disable accumulation.
+  int64_t partitionedOutputBatchRows{10'000};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).

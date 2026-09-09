@@ -642,11 +642,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   friend class velox::memory::TestArbitrator;
   friend class MemoryPoolArbitrationSection;
   friend class ArbitrationParticipant;
-
-  VELOX_FRIEND_TEST(MemoryPoolTest, shrinkAndGrowAPIs);
-  VELOX_FRIEND_TEST(MemoryPoolTest, grow);
-  VELOX_FRIEND_TEST(MemoryPoolTest, growFailures);
-  VELOX_FRIEND_TEST(MemoryPoolTest, grownonContiguousAllocateFailures);
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
