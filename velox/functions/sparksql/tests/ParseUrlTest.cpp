@@ -488,6 +488,38 @@ TEST_F(ParseUrlTest, queryKeyExtraction) {
           std::optional<std::string>("http://h/p?a=1")));
 }
 
+// Pins lazy key compilation: the query-key regex is only compiled when a
+// call actually extracts a query parameter, so an invalid key is harmless
+// for rows without a query or with a part other than QUERY.
+TEST_F(ParseUrlTest, lazyKeyCompilation) {
+  // No query in the URL: the key regex is never used, so even an invalid
+  // key yields null rather than failing the query.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a[')",
+          std::optional<std::string>("http://h/p")));
+  // A part other than QUERY never reaches the key either.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'HOST', 'a[')",
+          std::optional<std::string>("http://h/p?a=1")));
+  // An invalid URL never reaches the key.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a[')",
+          std::optional<std::string>("#a#b")));
+  // A URL with an empty query still extracts, so the key is compiled and
+  // an invalid one fails the query, as in Spark.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a[')",
+          std::optional<std::string>("http://h/p?#")),
+      "invalid key");
+}
+
 // Pins the non-constant key path: a per-row key column bypasses
 // initialize()'s constant-key compilation and goes through the bounded
 // regex cache in call().
@@ -513,18 +545,10 @@ TEST_F(ParseUrlTest, nonConstantKey) {
       run({"http://h/p?a=1"}, {std::nullopt}));
 
   // An invalid key fails the query with the raw regex error, like the
-  // regexp functions; a constant invalid key fails in initialize() with
-  // 'invalid key'. Spark fails both forms identically with
-  // PatternSyntaxException, so silently returning null here would diverge.
+  // regexp functions. Spark compiles the key lazily: only a call that
+  // actually extracts a query parameter ever compiles it.
   VELOX_ASSERT_THROW(
       run({"http://h/p?a=1"}, {"a["}), "invalid regular expression:");
-
-  // A constant invalid key, pinned for symmetry with the case above.
-  VELOX_ASSERT_THROW(
-      evaluateOnce<std::string>(
-          "parse_url(c0, 'QUERY', 'a[')",
-          std::optional<std::string>("http://h/p?a=1")),
-      "invalid key: a[");
 
   // More than "expression.max_compiled_regexes" distinct keys fails the
   // query, matching how regexp_replace treats its pattern column.
