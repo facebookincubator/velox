@@ -15,9 +15,12 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/s3fs/S3ReadFile.h"
+#include "velox/buffer/Buffer.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
+
+#include <memory>
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -48,6 +51,10 @@ class S3ReadFile ::Impl {
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
   void initialize(const filesystems::FileOptions& options) {
+    // Captured before the early return below so a second initialize() still
+    // picks the pool up.
+    pool_ = options.pool;
+
     if (options.fileSize.has_value()) {
       VELOX_CHECK_GE(
           options.fileSize.value(), 0, "File size must be non-negative");
@@ -106,13 +113,32 @@ class S3ReadFile ::Impl {
     for (const auto range : buffers) {
       length += range.size();
     }
-    // TODO: allocate from a memory pool
-    std::string result(length, 0);
-    preadInternal(offset, length, static_cast<char*>(result.data()));
+
+    // One range needs no staging buffer, read straight into it.
+    if (buffers.size() == 1 && buffers[0].data() != nullptr) {
+      preadInternal(offset, length, buffers[0].data());
+      return length;
+    }
+
+    // Staged through one buffer because S3 GetObject cannot serve multiple
+    // ranges. Allocated from the query's pool so the memory is accounted for,
+    // left uninitialised because preadInternal overwrites it anyway.
+    char* staging;
+    BufferPtr pooled;
+    std::unique_ptr<char[]> owned;
+    if (pool_ != nullptr) {
+      pooled = AlignedBuffer::allocate<char>(length, pool_);
+      staging = pooled->asMutable<char>();
+    } else {
+      owned.reset(new char[length]);
+      staging = owned.get();
+    }
+
+    preadInternal(offset, length, staging);
     size_t resultOffset = 0;
     for (auto range : buffers) {
       if (range.data()) {
-        memcpy(range.data(), &(result.data()[resultOffset]), range.size());
+        memcpy(range.data(), staging + resultOffset, range.size());
       }
       resultOffset += range.size();
     }
@@ -164,6 +190,7 @@ class S3ReadFile ::Impl {
   }
 
   Aws::S3::S3Client* client_;
+  memory::MemoryPool* pool_{nullptr};
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
