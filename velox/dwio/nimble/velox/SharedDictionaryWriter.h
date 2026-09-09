@@ -54,10 +54,16 @@ class SharedDictionaryWriter {
     /// - Stripe: auxiliary stream id in the current stripe that stores the
     ///   alphabet.
     /// - File: entry id in the file shared dictionary catalog.
-    /// - External: id passed through to the external resolver.
+    /// - External: id recorded in the catalog for the reader to resolve.
     /// The sentinel default catches accidental use before the writer assigns an
     /// id in the selected scope.
     uint32_t dictionaryId{};
+
+    /// Key handed to |resolver| when this dictionary reads a provided
+    /// alphabet. Distinct from dictionaryId because that one names the
+    /// dictionary inside the file and is writer-assigned for Stripe and File,
+    /// while this one names it in the caller's store.
+    uint32_t resolverKey{};
 
     /// Uses an externally resolved logical alphabet instead of growing one
     /// while encoding values. External-scope dictionaries always resolve their
@@ -517,6 +523,16 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
     useDictionary_ = false;
   }
 
+  // Names this dictionary in the caller's store. External dictionaries are
+  // caller-named end to end, so the id the reader resolves with is the key
+  // itself. A file dictionary with a provided alphabet gets a writer-assigned
+  // catalog id instead, so it carries the caller's key separately.
+  uint32_t resolverKey() const {
+    return options_.scope == SharedDictionaryScope::External
+        ? options_.dictionaryId
+        : options_.resolverKey;
+  }
+
   Encoding::Options alphabetEncodingOptions() const {
     auto options = options_.encodingOptions;
     // Stored alphabet streams do not carry the row-count encoding mode.
@@ -593,20 +609,20 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         options_.resolver,
         "{} shared dictionary {} requires a dictionary resolver.",
         scope,
-        options_.dictionaryId);
-    externalAlphabet_ = options_.resolver->resolve(
-        options_.dictionaryId, TypeTraits<T>::dataType);
+        resolverKey());
+    externalAlphabet_ =
+        options_.resolver->resolve(resolverKey(), TypeTraits<T>::dataType);
     NIMBLE_USER_CHECK_NOT_NULL(
         externalAlphabet_,
         "{} shared dictionary {} was not found.",
         scope,
-        options_.dictionaryId);
+        resolverKey());
     NIMBLE_USER_CHECK_EQ(
         externalAlphabet_->dataType(),
         TypeTraits<T>::dataType,
         "{} shared dictionary {} has the wrong type.",
         scope,
-        options_.dictionaryId);
+        resolverKey());
     NIMBLE_CHECK(
         materializedAlphabet_.empty(),
         "{} shared dictionary {} already materialized its external alphabet.",

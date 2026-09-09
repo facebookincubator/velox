@@ -148,6 +148,10 @@ TestSharedDictionaryWriter::Options writerOptions(
   return TestSharedDictionaryWriter::Options{
       .scope = scope,
       .dictionaryId = dictionaryId,
+      // These tests drive the writer directly rather than through
+      // configureDictionary(), so one id names the dictionary both inside the
+      // file and in the test resolver.
+      .resolverKey = dictionaryId,
       .useExternalAlphabet = useExternalAlphabet,
       .alphabetEncodings = std::move(alphabetEncodings),
       .encodingSelectionPolicyCreator = testEncodingSelectionPolicyCreator(

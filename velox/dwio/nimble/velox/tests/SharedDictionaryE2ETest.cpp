@@ -674,7 +674,9 @@ class SharedDictionaryE2ETest : public testing::Test {
       SharedDictionaryScope scope,
       uint32_t dictionaryId) {
     SharedDictionaryConfig dictionary{.scope = scope};
-    if (scope != SharedDictionaryScope::Stripe) {
+    // Stripe and file dictionaries are named by the writer; only external ones
+    // carry a caller-chosen id.
+    if (scope == SharedDictionaryScope::External) {
       dictionary.dictionaryId = dictionaryId;
     }
     return dictionary;
@@ -865,8 +867,7 @@ class SharedDictionaryE2ETest : public testing::Test {
     addDictionary(
         options,
         InputType::FlatMapScalar,
-        SharedDictionaryConfig{
-            .scope = SharedDictionaryScope::File, .dictionaryId = 17});
+        SharedDictionaryConfig{.scope = SharedDictionaryScope::File});
 
     return writeInput(
         std::vector<velox::RowVectorPtr>(stripeCount, input),
@@ -889,8 +890,8 @@ class SharedDictionaryE2ETest : public testing::Test {
         InputType::FlatMapScalar,
         SharedDictionaryConfig{
             .scope = SharedDictionaryScope::File,
-            .dictionaryId = 17,
             .useExternalAlphabet = true,
+            .resolverKey = 17,
             // Ignored for prebuilt external alphabets; the resolver's
             // FixedBitWidth encoding should be preserved instead.
             .alphabetEncodings = {EncodingType::DeltaBlock}});
@@ -1181,7 +1182,8 @@ class SharedDictionaryE2ETest : public testing::Test {
         SharedDictionaryCatalog::deserialize(section->content());
     const auto& fileDictionaries = catalog.fileDictionaries();
     NIMBLE_CHECK_EQ(fileDictionaries.size(), 1);
-    NIMBLE_CHECK_EQ(fileDictionaries[0].dictionaryId, 17);
+    // First file dictionary in the file, so the writer assigns id 0.
+    NIMBLE_CHECK_EQ(fileDictionaries[0].dictionaryId, 0);
     NIMBLE_CHECK_EQ(fileDictionaries[0].dataType, DataType::Int32);
     const auto encoded = std::string_view{file}.substr(
         fileDictionaries[0].offset, fileDictionaries[0].length);
@@ -1735,6 +1737,67 @@ TEST_F(SharedDictionaryE2ETest, stripeScopeRejectsConfiguredDictionaryId) {
   NIMBLE_ASSERT_USER_THROW(
       writer.write(input),
       "Stripe shared dictionary config must leave dictionaryId unset.");
+}
+
+TEST_F(SharedDictionaryE2ETest, fileScopeRejectsConfiguredDictionaryId) {
+  auto input = makeDictionaryStripe(InputType::FlatMapScalar);
+  WriterOptions options;
+  addDictionary(
+      options,
+      InputType::FlatMapScalar,
+      SharedDictionaryConfig{
+          .scope = SharedDictionaryScope::File, .dictionaryId = 7});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  Writer writer{
+      input->type(), std::move(writeFile), *rootPool_, std::move(options)};
+  NIMBLE_ASSERT_USER_THROW(
+      writer.write(input),
+      "File shared dictionary config must leave dictionaryId unset.");
+}
+
+TEST_F(SharedDictionaryE2ETest, fileScopeAssignsSequentialDictionaryIds) {
+  // Two configured columns, so the writer hands out 0 and 1 without the caller
+  // tracking uniqueness. Before ids were writer-assigned, configuring two file
+  // dictionaries meant picking two distinct values by hand, and reusing one
+  // was rejected outright.
+  velox::test::VectorMaker maker{leafPool_.get()};
+  auto input = maker.rowVector(
+      {"a", "b"},
+      {maker.flatVector<int32_t>(
+           kStripeRows,
+           [](auto row) {
+             return stripeValue(StripeValueType::Dictionary, row);
+           }),
+       maker.flatVector<int32_t>(kStripeRows, [](auto row) {
+         return stripeValue(StripeValueType::Dictionary, row);
+       })});
+
+  auto options = makeSharedDictionaryWriterOptions();
+  addColumnDictionary(
+      options,
+      SharedDictionaryConfig{.scope = SharedDictionaryScope::File},
+      "a");
+  addColumnDictionary(
+      options,
+      SharedDictionaryConfig{.scope = SharedDictionaryScope::File},
+      "b");
+
+  const auto file = writeInput({input}, std::move(options));
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tabletOptions = test::makeTestTabletOptions(leafPool_.get());
+  auto tablet = TabletReader::create(readFile, leafPool_.get(), tabletOptions);
+  auto section = tablet->loadOptionalSection(std::string(kDictionarySection));
+  ASSERT_TRUE(section.has_value());
+
+  const auto catalog = SharedDictionaryCatalog::deserialize(section->content());
+  std::vector<uint32_t> ids;
+  for (const auto& fileDictionary : catalog.fileDictionaries()) {
+    ids.push_back(fileDictionary.dictionaryId);
+  }
+  std::sort(ids.begin(), ids.end());
+  EXPECT_EQ(ids, (std::vector<uint32_t>{0, 1}));
 }
 
 TEST_P(SharedDictionaryE2ETabletReaderApiTest, dictionaryApis) {
