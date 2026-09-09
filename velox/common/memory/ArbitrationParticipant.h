@@ -94,8 +94,9 @@ class ArbitrationParticipant
     /// Limits how much free capacity memory arbitration can shrink from a query
     /// memory pool, so that the pool keeps enough free capacity for its future
     /// allocations to reduce the chance of another arbitration. When both
-    /// settings are non-zero, a normal shrink of an active pool never reduces
-    /// free capacity below the smaller of:
+    /// 'minFreeCapacity' and 'minFreeCapacityRatio' are set to non-zero, a
+    /// normal shrink of an active pool never reduces free capacity below the
+    /// smaller of:
     /// - capacity * 'minFreeCapacityRatio'
     /// - 'minFreeCapacity'
     ///
