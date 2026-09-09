@@ -26,7 +26,6 @@ add_library(
   CudfGroupby.cpp
   CudfHashJoin.cpp
   CudfJoin.cpp
-  CudfJoin.h
   CudfLimit.cpp
   CudfLocalMerge.cpp
   CudfLocalPartition.cpp
