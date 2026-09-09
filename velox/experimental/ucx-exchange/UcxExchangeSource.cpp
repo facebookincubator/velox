@@ -278,8 +278,19 @@ folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeSource::metrics()
   map["ucxExchangeSource.intraNodeBytes"] = metrics_.intraNodeBytes_;
   map["ucxExchangeSource.remotePackedColumns"] = metrics_.remotePackedColumns_;
   map["ucxExchangeSource.remoteBytes"] = metrics_.remoteBytes_;
+  map["ucxExchangeSource.intraNodeSources"] = metrics_.intraNodeSources_;
+  map["ucxExchangeSource.remoteSources"] = metrics_.remoteSources_;
   map["ucxExchangeSource.rttPerRequest"] = metrics_.rttPerRequest_;
   return map;
+}
+
+void UcxExchangeSource::recordTransportDecisionMetric() {
+  std::lock_guard<std::mutex> lock(metricsMutex_);
+  if (isIntraNodeTransfer_) {
+    metrics_.intraNodeSources_.addValue(1);
+  } else {
+    metrics_.remoteSources_.addValue(1);
+  }
 }
 
 void UcxExchangeSource::recordPayloadMetrics(uint64_t dataBytes) {
@@ -708,6 +719,7 @@ void UcxExchangeSource::onHandshakeResponse(
       std::static_pointer_cast<HandshakeResponse>(arg);
 
   isIntraNodeTransfer_ = response->isIntraNodeTransfer;
+  recordTransportDecisionMetric();
 
   VLOG(3) << toString() << " + onHandshakeResponse isIntraNodeTransfer="
           << isIntraNodeTransfer_;

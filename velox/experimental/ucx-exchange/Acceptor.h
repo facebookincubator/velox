@@ -16,7 +16,6 @@
 #pragma once
 
 #include <ucxx/api.h>
-#include <cstdint>
 #include <map>
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 
@@ -31,14 +30,6 @@ struct Acceptor {
   static void cStyleAMCallback(
       std::shared_ptr<ucxx::Request> request,
       ucp_ep_h ep);
-
-  /// Number of completed handshakes routed through the process-local path.
-  /// Exposed for diagnostics and regression tests.
-  static uint64_t numIntraNodeHandshakes();
-
-  /// Number of completed handshakes routed through the remote UCX path.
-  /// Exposed for diagnostics and regression tests.
-  static uint64_t numRemoteHandshakes();
 
   /// @brief Adds the endpoint reference to the handleToEndpointRef_ map such
   /// that endpoint handles can be resolved

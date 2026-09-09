@@ -21,14 +21,9 @@
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 
-#include <atomic>
-
 namespace facebook::velox::ucx_exchange {
 
 namespace {
-
-std::atomic<uint64_t> gNumIntraNodeHandshakes{0};
-std::atomic<uint64_t> gNumRemoteHandshakes{0};
 
 void completeHandshake(
     const std::shared_ptr<Communicator>& communicator,
@@ -46,12 +41,6 @@ void completeHandshake(
   const std::string peerIp = epRef->getPeerIp();
   auto exchangeServer =
       UcxExchangeServer::create(communicator, epRef, key, isIntraNodeTransfer);
-
-  if (isIntraNodeTransfer) {
-    gNumIntraNodeHandshakes.fetch_add(1, std::memory_order_relaxed);
-  } else {
-    gNumRemoteHandshakes.fetch_add(1, std::memory_order_relaxed);
-  }
 
   // Add this exchangeServer to the endpoint reference.
   epRef->addCommElem(exchangeServer);
@@ -94,14 +83,6 @@ void completeHandshake(
 }
 
 } // namespace
-
-uint64_t Acceptor::numIntraNodeHandshakes() {
-  return gNumIntraNodeHandshakes.load(std::memory_order_relaxed);
-}
-
-uint64_t Acceptor::numRemoteHandshakes() {
-  return gNumRemoteHandshakes.load(std::memory_order_relaxed);
-}
 
 /*static*/
 void Acceptor::cStyleAMCallback(

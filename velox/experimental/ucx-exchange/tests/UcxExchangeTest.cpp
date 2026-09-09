@@ -1113,11 +1113,52 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
   };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string pollingSrcTaskId = taskPrefix + "pollingSrc";
+  const std::string pollingSinkTaskId = taskPrefix + "pollingSink";
   const std::string srcTaskId = taskPrefix + "partitionedPlaceholderSrc";
   const std::string sinkTaskId = taskPrefix + "partitionedPlaceholderSink";
   constexpr int numChunks = 2;
   constexpr int numRowsPerChunk = 1000;
 
+  auto waitForMetric = [&metricSum](
+                           const std::shared_ptr<SinkDriverMock>& sinkDriver,
+                           std::string_view name,
+                           int64_t target) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (metricSum(sinkDriver->exchangeClientStats(), name) < target &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return metricSum(sinkDriver->exchangeClientStats(), name) >= target;
+  };
+
+  // Establish one intra-node source with no data. It continuously re-enqueues
+  // itself while polling the transfer registry, keeping the communicator work
+  // queue non-empty. A later deferred handshake must still make progress.
+  auto pollingSrcTask =
+      createSourceTask(pollingSrcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      pollingSrcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+
+  core::PlanNodeId pollingExchangeNodeId;
+  auto pollingSinkTask = createExchangeTask(
+      pollingSinkTaskId,
+      UcxTestData::kTestRowType,
+      /*partitionId=*/0,
+      pollingExchangeNodeId);
+  auto pollingSinkDriver =
+      std::make_shared<SinkDriverMock>(pollingSinkTask, /*numDrivers=*/1);
+  std::vector<exec::Split> pollingSplits;
+  pollingSplits.emplace_back(remoteSplit(pollingSrcTaskId, /*partitionId=*/0));
+  pollingSinkDriver->addSplits(pollingSplits);
+  pollingSinkDriver->run();
+  EXPECT_TRUE(waitForMetric(
+      pollingSinkDriver, "ucxExchangeSource.intraNodeSources", 1));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
   core::PlanNodeId exchangeNodeId;
   auto sinkTask = createExchangeTask(
       sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
@@ -1140,19 +1181,37 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
       /*numDestinations=*/1,
       /*numDrivers=*/1);
 
+  // This specifically catches starvation in Communicator::run(): the polling
+  // source above keeps workQueue_ non-empty while this handshake is submitted
+  // through deferredActions_.
+  EXPECT_TRUE(
+      waitForMetric(sinkDriver, "ucxExchangeSource.intraNodeSources", 1));
   auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
       srcTaskId,
       /*numDrivers=*/1,
       /*numPartitions=*/1,
       numChunks,
       numRowsPerChunk);
+  auto pollingSourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      pollingSrcTaskId,
+      /*numDrivers=*/1,
+      /*numPartitions=*/1,
+      numChunks,
+      numRowsPerChunk);
   sourceMock->run();
+  pollingSourceMock->run();
 
   sourceMock->joinThreads();
+  pollingSourceMock->joinThreads();
   sinkDriver->joinThreads();
+  pollingSinkDriver->joinThreads();
 
   EXPECT_EQ(
       sinkDriver->numRows(),
+      static_cast<uint64_t>(numChunks * numRowsPerChunk));
+
+  EXPECT_EQ(
+      pollingSinkDriver->numRows(),
       static_cast<uint64_t>(numChunks * numRowsPerChunk));
 
   const auto sinkStats = sinkDriver->exchangeClientStats();
@@ -1163,7 +1222,18 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
   EXPECT_EQ(metricSum(sinkStats, "ucxExchangeSource.remotePackedColumns"), 0);
   EXPECT_EQ(metricSum(sinkStats, "ucxExchangeSource.remoteBytes"), 0);
 
+  const auto pollingSinkStats = pollingSinkDriver->exchangeClientStats();
+  EXPECT_EQ(
+      metricSum(pollingSinkStats, "ucxExchangeSource.intraNodePackedColumns"),
+      numChunks);
+  EXPECT_GT(
+      metricSum(pollingSinkStats, "ucxExchangeSource.intraNodeBytes"), 0);
+  EXPECT_EQ(
+      metricSum(pollingSinkStats, "ucxExchangeSource.remotePackedColumns"), 0);
+  EXPECT_EQ(metricSum(pollingSinkStats, "ucxExchangeSource.remoteBytes"), 0);
+
   queueManager_->removeTask(srcTaskId);
+  queueManager_->removeTask(pollingSrcTaskId);
 }
 
 // Regression test for broadcast + intra-node SIGSEGV.
