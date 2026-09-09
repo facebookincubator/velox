@@ -1,4 +1,5 @@
 %{
+#define yyFlexLexer veloxtcFlexLexer
 #include <FlexLexer.h>
 #include <velox/common/base/Exceptions.h>
 %}

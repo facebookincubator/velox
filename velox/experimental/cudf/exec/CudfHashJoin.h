@@ -113,6 +113,7 @@ class CudfHashJoinBuild : public CudfOperatorBase {
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
   void doNoMoreInput() override;
+  void doClose() override;
 
  private:
   std::shared_ptr<const core::HashJoinNode> joinNode_;

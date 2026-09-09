@@ -66,9 +66,10 @@ class IcebergSplitReader : public FileSplitReader {
 
   // Builds the requested-schema field-id trees, one per top-level column,
   // aligned to tableHandle_->dataColumns(). Projected and filter-only Iceberg
-  // handles provide field IDs. Data columns without an Iceberg handle get a
+  // handles provide field IDs. Data columns without an Iceberg handle fall back
+  // to the table handle's full-schema field IDs when available, otherwise a
   // negative sentinel id that matches no physical field. Returns empty when no
-  // Iceberg handles are available.
+  // Iceberg handles and no full-schema field IDs are available.
   std::vector<dwio::common::ParquetFieldId> buildFieldIds() const;
 
   /// Adapts the data file schema to match the table schema expected by the
@@ -130,20 +131,22 @@ class IcebergSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  // Resolves the equality field IDs of an equality-delete file to the
-  // corresponding column names and types in the table schema. In Iceberg,
-  // field IDs for top-level columns are assigned sequentially starting from
-  // 1, matching the column order in the table schema.
+  // Resolves equality-delete field IDs to column names and types using the
+  // table handle's full-schema field IDs. Falls back to the legacy one-based
+  // ordinal mapping when those IDs are unavailable or incomplete.
   std::pair<std::vector<std::string>, std::vector<TypePtr>>
   resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
 
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
-  // read and made available in the output RowVector. For partition columns
-  // the partition value is set as a constant on the scan-spec child so the
-  // augmentation works regardless of whether the data file physically
-  // contains the partition column. Augmented columns are appended at the end
-  // of 'readerOutputType_' so the upstream FileDataSource's positional
+  // read and made available in the output RowVector. When the split proves
+  // the column's Iceberg field ID belongs to an identity partition field
+  // (see 'HiveIcebergSplit::identityPartitionKeys'), the partition value is
+  // set as a constant on the scan-spec child so the augmentation works
+  // regardless of whether the data file physically contains the column;
+  // every other column, including one partitioned by a transform, is read
+  // from the file. Augmented columns are appended at the end of
+  // 'readerOutputType_' so the upstream FileDataSource's positional
   // projection naturally drops them from the operator output.
   void configureEqualityDeleteColumns();
 

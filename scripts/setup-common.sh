@@ -21,7 +21,6 @@ source "$SCRIPT_DIR"/setup-versions.sh
 
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
 VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
-VELOX_FBTHRIFT_CMAKE_PATCH=${VELOX_FBTHRIFT_CMAKE_PATCH:-""}
 VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
@@ -123,31 +122,7 @@ function install_mvfst {
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
-
-  # This patch is integrated into the latest FBOS version of folly and can be removed on upgrade.
-  if [ -z "${VELOX_FBTHRIFT_CMAKE_PATCH}" ]; then
-    # We need to set a different path when building the Dockerfile.
-    ABSOLUTE_SCRIPTDIR=$(realpath "${SCRIPT_DIR}")
-
-    VELOX_FBTHRIFT_CMAKE_PATCH="${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch"
-  fi
-  (
-    cd "$DEPENDENCY_DIR"/fbthrift || exit 1
-    # Skip applying the patch if it is already applied.
-    git apply --reverse --check "${VELOX_FBTHRIFT_CMAKE_PATCH}" 2>/dev/null ||
-      git apply "${VELOX_FBTHRIFT_CMAKE_PATCH}" || exit 1
-  )
-
-  # Apple Clang's libc++ no longer defines _LIBCPP_HAS_NO_ASAN (renamed to
-  # _LIBCPP_INSTRUMENTED_WITH_ASAN), so folly's UninitializedMemoryHacks.h
-  # causing undefined symbol. This is fixed in the latest FBOS versions and
-  # can be removed on FBOS upgrade.
-  local FBTHRIFT_EXTRA_CXXFLAGS=""
-  if [[ "$(uname)" == "Darwin" ]]; then
-    FBTHRIFT_EXTRA_CXXFLAGS=" -D_LIBCPP_HAS_NO_ASAN"
-  fi
-  EXTRA_PKG_CXXFLAGS="$FBTHRIFT_EXTRA_CXXFLAGS" \
-    cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_duckdb {
@@ -471,7 +446,11 @@ function install_azure_storage_sdk_cpp {
 
 function install_hdfs_deps {
   # Dependencies for Hadoop testing
-  wget_and_untar https://dlcdn.apache.org/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
+  local arch
+  arch=$(uname -m)
+  local hadoop_tarball="hadoop-${HADOOP_VERSION}.tar.gz"
+  [[ ${arch} == "aarch64" ]] && hadoop_tarball="hadoop-${HADOOP_VERSION}-aarch64.tar.gz"
+  wget_and_untar "https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/${hadoop_tarball}" hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
   wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
   # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.

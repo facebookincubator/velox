@@ -35,6 +35,9 @@ class HashAggregation : public Operator {
   /// Number of rows emitted after partial aggregation was abandoned.
   static constexpr std::string_view kAbandonedPartialAggregationRows =
       "abandonedPartialAggregationRows";
+  /// Number of calls to the Aggregate::toIntermediate() fast path.
+  static constexpr std::string_view kToIntermediateFastPathCalls =
+      "toIntermediateFastPathCalls";
 
   HashAggregation(
       int32_t operatorId,

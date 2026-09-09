@@ -126,7 +126,7 @@ class InTest : public SparkFunctionBaseTest {
   }
 };
 
-TEST_F(InTest, Int64) {
+TEST_F(InTest, int64) {
   EXPECT_EQ(in<int64_t>(1, {1, 2}), true);
   EXPECT_EQ(in<int64_t>(2, {1, 2}), true);
   EXPECT_EQ(in<int64_t>(3, {1, 2}), false);
@@ -137,7 +137,7 @@ TEST_F(InTest, Int64) {
   EXPECT_EQ(in<int64_t>(std::nullopt, {1, std::nullopt, 2}), std::nullopt);
 }
 
-TEST_F(InTest, Float) {
+TEST_F(InTest, float) {
   EXPECT_EQ(in<float>(1.0, {-1.0, 1.0, 2.0}), true);
   EXPECT_EQ(in<float>(0, {-1.0, 1.0}), false);
   EXPECT_EQ(in<float>(0, {std::nullopt, 1.0}), std::nullopt);
@@ -147,7 +147,7 @@ TEST_F(InTest, Float) {
   EXPECT_EQ(in<float>(std::nanf("1"), {kNan, -1.0, 0.0, 1.0}), true);
 }
 
-TEST_F(InTest, Double) {
+TEST_F(InTest, double) {
   EXPECT_EQ(in<double>(1.0, {-1.0, 1.0, 2.0}), true);
   EXPECT_EQ(in<double>(0, {-1.0, 1.0}), false);
   EXPECT_EQ(in<double>(-0.0, {-1.0, 0.0, 1.0}), true);
@@ -161,7 +161,7 @@ TEST_F(InTest, Double) {
   EXPECT_EQ(in<double>(-kInf, {kNan, -1.0, 0.0, 1.0, -kInf}), true);
 }
 
-TEST_F(InTest, String) {
+TEST_F(InTest, string) {
   EXPECT_EQ(in<std::string>("", {"", std::nullopt}), true);
   EXPECT_EQ(in<std::string>("a", {"", std::nullopt}), std::nullopt);
   EXPECT_EQ(in<std::string>("a", {"", "b"}), false);
@@ -173,7 +173,7 @@ TEST_F(InTest, String) {
       std::nullopt);
 }
 
-TEST_F(InTest, Timestamp) {
+TEST_F(InTest, timestamp) {
   EXPECT_EQ(
       in<Timestamp>(Timestamp(0, 0), {Timestamp(1, 0), std::nullopt}),
       std::nullopt);
@@ -193,12 +193,12 @@ TEST_F(InTest, Timestamp) {
       true);
 }
 
-TEST_F(InTest, Date) {
+TEST_F(InTest, date) {
   EXPECT_EQ(in<int32_t>(0, {1, std::nullopt}, DATE()), std::nullopt);
   EXPECT_EQ(in<int32_t>(0, {0}, DATE()), true);
 }
 
-TEST_F(InTest, Bool) {
+TEST_F(InTest, bool) {
   EXPECT_EQ(in<bool>(true, {true, false, std::nullopt}), true);
   EXPECT_EQ(in<bool>(true, {false, std::nullopt}), std::nullopt);
   EXPECT_EQ(in<bool>(true, {false}), false);
@@ -243,7 +243,7 @@ TEST_F(InTest, longDecimal) {
       true);
 }
 
-TEST_F(InTest, Const) {
+TEST_F(InTest, const) {
   const auto eval = [&](const std::string& expr) {
     return evaluateOnce<bool, bool>(expr, false);
   };
@@ -255,7 +255,7 @@ TEST_F(InTest, Const) {
 
 /// Test IN applied to first argument that is dictionary encoded, but has the
 /// same value in all requested rows.
-TEST_F(InTest, ConstantDictionary) {
+TEST_F(InTest, constantDictionary) {
   auto data = makeFlatVector<int32_t>({1, 2, 3, 4});
   EXPECT_EQ(
       evaluateOnce<bool>(

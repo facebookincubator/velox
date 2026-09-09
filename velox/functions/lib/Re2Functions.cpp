@@ -1900,7 +1900,7 @@ class PatternStringIterator {
   // Return true if the cursor is advanced successfully, false otherwise(reached
   // the end of the pattern string).
   bool next() {
-    if (nextStart_ == pattern_.size()) {
+    if (nextStart_ >= pattern_.size()) {
       return false;
     }
 
@@ -1938,9 +1938,18 @@ class PatternStringIterator {
       } else {
         charKind_ = CharKind::kNormal;
 
-        // Unicode.
+        // Unicode. Advance a single byte when the sequence is invalid or
+        // truncated: it must not run past the end of the pattern, and the
+        // bytes that follow can still be pattern syntax, for example the '%'
+        // at the end of '%abc\xf0%'.
         if (currentChar & 0x80) {
-          auto numBytes = unicodeCharLength(pattern_.data() + currentStart_);
+          int numBytes = 1;
+          if (utf8proc_codepoint(
+                  pattern_.data() + currentStart_,
+                  pattern_.data() + pattern_.size(),
+                  numBytes) < 0) {
+            numBytes = 1;
+          }
           nextStart_ = currentStart_ + numBytes;
         } else {
           nextStart_ = currentStart_ + 1;

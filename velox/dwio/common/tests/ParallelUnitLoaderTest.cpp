@@ -37,31 +37,31 @@ class ParallelUnitLoaderTest
       std::make_unique<folly::CPUThreadPoolExecutor>(10);
 };
 
-TEST_F(ParallelUnitLoaderTest, NoUnitButSkip) {
+TEST_F(ParallelUnitLoaderTest, noUnitButSkip) {
   testNoUnitButSkip();
 }
 
-TEST_F(ParallelUnitLoaderTest, InitialSkip) {
+TEST_F(ParallelUnitLoaderTest, initialSkip) {
   testInitialSkip();
 }
 
-TEST_F(ParallelUnitLoaderTest, CanRequestUnitMultipleTimes) {
+TEST_F(ParallelUnitLoaderTest, canRequestUnitMultipleTimes) {
   testCanRequestUnitMultipleTimes();
 }
 
-TEST_F(ParallelUnitLoaderTest, UnitOutOfRange) {
+TEST_F(ParallelUnitLoaderTest, unitOutOfRange) {
   testUnitOutOfRange();
 }
 
-TEST_F(ParallelUnitLoaderTest, SeekOutOfRange) {
+TEST_F(ParallelUnitLoaderTest, seekOutOfRange) {
   testSeekOutOfRange();
 }
 
-TEST_F(ParallelUnitLoaderTest, SeekOutOfRangeReaderError) {
+TEST_F(ParallelUnitLoaderTest, seekOutOfRangeReaderError) {
   testSeekOutOfRangeReaderError();
 }
 
-TEST_F(ParallelUnitLoaderTest, LoadsCorrectlyWithReader) {
+TEST_F(ParallelUnitLoaderTest, loadsCorrectlyWithReader) {
   auto factory = createFactory();
   ReaderMock readerMock{{10, 20, 30}, {0, 0, 0}, factory, 0};
 
@@ -92,7 +92,7 @@ TEST_F(ParallelUnitLoaderTest, LoadsCorrectlyWithReader) {
 }
 
 // Performance comparison test
-TEST_F(ParallelUnitLoaderTest, PerformanceComparison) {
+TEST_F(ParallelUnitLoaderTest, performanceComparison) {
   std::vector<uint64_t> rowsPerUnit = {100, 100, 100, 100, 100, 100, 100, 100};
   std::vector<uint64_t> ioSizes = {
       1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024};

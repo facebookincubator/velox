@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <array>
+#include <vector>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/OneWayStatusFlag.h"
@@ -189,6 +192,58 @@ class BaseHashTable {
   /// produce multiple batches of results. This is initialized from HashLookup,
   /// which is expected to stay constant while 'this' is being used.
   struct JoinResultIterator {
+    /// Number of probe rows whose chains are walked in an interleaved
+    /// fashion to overlap K next-pointer loads.
+    static constexpr int32_t kNumParallelChains = 8;
+    /// Maximum number of hits a non-head slot can buffer before pausing.
+    static constexpr int32_t kAheadWindow = 8;
+
+    /// Internal state for the interleaved chain walker. Not read outside
+    /// of HashTable.cpp; grouped here to keep the outer iterator focused
+    /// on its public state.
+    struct InterleavedWalkerState {
+      /// Current chain node for each in-flight probe row. Only the head
+      /// slot emits inline; the others buffer hits into `bufferData` to
+      /// preserve probe-row order.
+      std::array<char*, kNumParallelChains> slotCursors{};
+
+      /// Probe row index paired with each slot cursor.
+      std::array<vector_size_t, kNumParallelChains> slotProbeRows{};
+
+      /// Hits buffered for each non-head slot, drained when the slot
+      /// becomes head.
+      std::array<std::array<char*, kAheadWindow>, kNumParallelChains>
+          bufferData{};
+
+      /// Number of buffered entries per slot, in [0, kAheadWindow]. A
+      /// non-head slot pauses its walk once this reaches kAheadWindow.
+      std::array<int32_t, kNumParallelChains> bufferLength{};
+
+      /// Index of the current head slot; advances 0..numActive per batch.
+      int32_t slotHead{0};
+
+      /// Number of slots holding a live probe row in the current batch,
+      /// in [0, kNumParallelChains].
+      int32_t numActive{0};
+
+      /// Resume position within the head slot's buffer across calls.
+      int32_t drainPosition{0};
+
+      /// Marks the walker as holding no active slots so a fresh probe
+      /// batch starts empty. Stale `slotCursors` / `slotProbeRows` /
+      /// `bufferData` entries from a previous batch are left in place;
+      /// they are ignored until `numActive` grows past their index and
+      /// the walker overwrites them when refilling.
+      void reset() {
+        slotHead = 0;
+        numActive = 0;
+        drainPosition = 0;
+        for (auto& length : bufferLength) {
+          length = 0;
+        }
+      }
+    };
+
     JoinResultIterator(
         std::vector<vector_size_t>&& _varSizeListColumns,
         uint64_t _fixedSizeListColumnsSizeSum,
@@ -201,11 +256,22 @@ class BaseHashTable {
       rows = &lookup.rows;
       hits = &lookup.hits;
       lastRowIndex = 0;
-      nextHit = nullptr;
+      walker.reset();
     }
 
     bool atEnd() const {
-      return !rows || lastRowIndex == rows->size();
+      if (!rows) {
+        return true;
+      }
+      if (lastRowIndex < rows->size()) {
+        return false;
+      }
+      for (int32_t i = walker.slotHead; i < walker.numActive; ++i) {
+        if (walker.slotCursors[i] != nullptr || walker.bufferLength[i] > 0) {
+          return false;
+        }
+      }
+      return true;
     }
 
     /// The row size estimation of the projected output columns, if applicable.
@@ -220,7 +286,9 @@ class BaseHashTable {
     const raw_vector<char*>* hits{nullptr};
 
     vector_size_t lastRowIndex{0};
-    char* nextHit{nullptr};
+
+    /// Cross-call state for the interleaved walker.
+    InterleavedWalkerState walker;
   };
 
   struct RowsIterator {
@@ -913,6 +981,32 @@ class HashTable : public BaseHashTable {
   // Fast path for join results when there are no duplicates in the table and
   // only fixed size rows are to be extract.
   int32_t listJoinResultsFastPath(
+      JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes);
+
+  // Returns the projected size in bytes of one build-side row, used for the
+  // byte-budget accounting in listJoinResults*.
+  uint64_t projectedRowSize(const JoinResultIterator& iter, char* hit) const {
+    return iter.estimatedRowSize.has_value()
+        ? iter.estimatedRowSize.value()
+        : joinProjectedVarColumnsSize(iter.varSizeListColumns, hit) +
+            iter.fixedSizeListColumnsSizeSum;
+  }
+
+  // Lists results when each probe row has at most one matching build row.
+  int32_t listJoinResultsSingleHit(
+      JoinResultIterator& iter,
+      bool includeMisses,
+      folly::Range<vector_size_t*> inputRows,
+      folly::Range<char**> hits,
+      uint64_t maxBytes);
+
+  // Interleaves K chain walks to overlap next-pointer loads while preserving
+  // probe-row output order via per-slot buffering.
+  int32_t listJoinResultsInterleaved(
       JoinResultIterator& iter,
       bool includeMisses,
       folly::Range<vector_size_t*> inputRows,

@@ -86,7 +86,7 @@ TEST_F(GenericWriterTest, integer) {
       result);
 }
 
-TEST_F(GenericWriterTest, ArrayOfGeneric) {
+TEST_F(GenericWriterTest, arrayOfGeneric) {
   VectorPtr result;
   BaseVector::ensureWritable(
       SelectivityVector(2), ARRAY(BIGINT()), pool(), result);
@@ -127,7 +127,7 @@ struct ArrayTrimFunction {
   }
 };
 
-TEST_F(GenericWriterTest, ArrayTrim) {
+TEST_F(GenericWriterTest, arrayTrim) {
   registerFunction<
       ArrayTrimFunction,
       Array<Generic<T1>>,

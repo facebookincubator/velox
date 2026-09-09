@@ -43,7 +43,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     filesystems::registerS3FileSystem();
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector =
-        factory.newConnector(kHiveConnectorId, minioServer_->hiveConfig());
+        factory.newConnector(kHiveConnectorId, minioServer_->s3Config());
     connector::ConnectorRegistry::global().insert(
         hiveConnector->connectorId(), hiveConnector);
     parquet::registerParquetReaderFactory();

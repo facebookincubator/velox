@@ -7,9 +7,9 @@
   border-bottom: 1px solid rgba(0,0,0,0.12);
 
   background:
-    radial-gradient(circle at 20% 30%, rgba(76,201,240,0.22), transparent 35%),
-    radial-gradient(circle at 80% 20%, rgba(67,97,238,0.20), transparent 35%),
-    linear-gradient(135deg, #0b1426 0%, #10203f 55%, #132a52 100%);
+    radial-gradient(circle at 20% 25%, rgba(255,158,87,0.28), transparent 40%),
+    radial-gradient(circle at 85% 20%, rgba(255,77,77,0.30), transparent 40%),
+    linear-gradient(135deg, #4a0404 0%, #7a0c0c 45%, #b91c1c 100%);
 }
 
 .banner::before {
@@ -61,8 +61,8 @@
 
 .button {
   display: inline-block;
-  background: linear-gradient(135deg,#6ee7ff,#60a5fa);
-  color: #081220;
+  background: linear-gradient(135deg,#ffd166,#fca311);
+  color: #3f0d0d;
   padding: 8px 18px;
   border-radius: 999px;
   font-weight: 700;
@@ -72,5 +72,5 @@
 
 .button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 20px rgba(96,165,250,0.35);
+  box-shadow: 0 8px 20px rgba(252,163,17,0.35);
 }

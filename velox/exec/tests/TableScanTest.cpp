@@ -18,6 +18,7 @@
 
 #include <fmt/ranges.h>
 #include <folly/OperationCancelled.h>
+#include <folly/ScopeGuard.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/EventCount.h>
 #include <folly/synchronization/Latch.h>
@@ -30,6 +31,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/file/tests/FaultyFileSystemOperations.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
@@ -162,6 +164,101 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
       rawInputBytes + overreadBytes);
   ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
   ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
+}
+
+TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
+  // Fuzzed rather than sequential, so the data does not compress down to a
+  // read too short to time.
+  VectorFuzzer::Options fuzzerOptions;
+  fuzzerOptions.vectorSize = 2'000;
+  fuzzerOptions.nullRatio = 0;
+  VectorFuzzer fuzzer(fuzzerOptions, pool_.get());
+  const auto tableType =
+      ROW({"c0", "c1", "c2", "c3"}, {BIGINT(), BIGINT(), BIGINT(), BIGINT()});
+  constexpr int kNumBatches = 5;
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(kNumBatches);
+  for (int i = 0; i < kNumBatches; ++i) {
+    vectors.push_back(fuzzer.fuzzInputRow(tableType));
+  }
+  auto filePath = TempFilePath::create(/*enableFaultInjection=*/true);
+  createDuckDbTable(vectors);
+  writeToFile(filePath->tempFilePath(), vectors);
+
+  // Slow every read down so IO dominates the scan. That makes the operator's
+  // own wall time a tight bound on how long it can have been blocked.
+  constexpr uint64_t kReadDelayUs = 50'000;
+  faultyFileSystem()->setFileInjectionDelay(
+      kReadDelayUs,
+      {FaultFileOperation::Type::kRead, FaultFileOperation::Type::kReadv});
+  SCOPE_EXIT {
+    faultyFileSystem()->clearFileFaultInjections();
+  };
+
+  gflags::FlagSaver gflagSaver;
+  // Make every data stream eligible for coalescing, so the scan goes through
+  // DirectCoalescedLoad rather than the standalone loadSync() path.
+  FLAGS_cache_prefetch_min_pct = 0;
+
+  // Without an IO executor the coalesced loads stay kPlanned and the query
+  // thread runs them inline from DirectInputStream::loadPosition(). Disable
+  // whole-file preload too, which would serve the data with no coalesced load.
+  connector::ConnectorRegistry::global().erase(kHiveConnectorId);
+  connector::hive::HiveConnectorFactory factory;
+  auto hiveConnector = factory.newConnector(
+      kHiveConnectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {connector::hive::HiveConfig::kFilePreloadThreshold, "0"}}),
+      /*ioExecutor=*/nullptr);
+  connector::ConnectorRegistry::global().insert(
+      hiveConnector->connectorId(), hiveConnector);
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .startTableScan()
+          .outputType(ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), BIGINT()}))
+          .endTableScan()
+          .planNode();
+
+  std::unordered_map<std::string, std::string> config;
+  std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
+      connectorConfigs = {};
+  // Create query ctx without cache to read through direct buffer input.
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig(std::move(config)),
+      connectorConfigs,
+      /*cache=*/nullptr);
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .plan(plan)
+                  .splits(makeHiveConnectorSplits({filePath}))
+                  .queryCtx(queryCtx)
+                  .assertResults("SELECT c0, c1, c2 FROM tmp");
+
+  const auto scanStats = getTableScanStats(task);
+  const auto& stats = scanStats.customStats;
+  // Nothing prefetched, so the query thread read every coalesced load itself.
+  ASSERT_EQ(stats.count("numPrefetch"), 0);
+  // Both timers ran, so the comparisons below are not vacuous.
+  ASSERT_GT(stats.at("coalescedStorageLoadWallNanos").sum, 0);
+  ASSERT_GT(stats.at("storageReadWallNanos").sum, 0);
+
+  // Every read happened on the driver thread inside getOutput(), so the thread
+  // cannot have been blocked for longer than the operator ran. Timing an
+  // inline coalesced load twice pushes the reported wait past that.
+  EXPECT_LE(
+      stats.at("ioWaitWallNanos").sum, scanStats.getOutputTiming.wallNanos);
+
+  // An inline coalesced load is timed into coalescedStorageLoadWallNanos by
+  // loadPosition() and into storageReadWallNanos by loadData(). The query
+  // thread waited out one of those intervals, not both, so its wait has to
+  // come in strictly under their sum.
+  EXPECT_LT(
+      stats.at("ioWaitWallNanos").sum,
+      stats.at("coalescedStorageLoadWallNanos").sum +
+          stats.at("storageReadWallNanos").sum);
 }
 
 DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
@@ -6182,6 +6279,135 @@ TEST_F(TableScanTest, rowNumberInRemainingFilter) {
   AssertQueryBuilder(plan)
       .split(makeHiveConnectorSplit(file->getPath()))
       .assertResults(expected);
+}
+
+// A scan that projects only columns which are not read from the file has no
+// child readers. If such a scan also has a filter, outputRows() returns the
+// empty outputRows_, and the synthesized row-index column used to come out
+// shorter than the vector containing it.
+TEST_F(TableScanTest, rowIndexWithFilterOnPartitionKeyOnly) {
+  constexpr vector_size_t kNumRows = 10;
+  auto data = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  const auto fileSchema = asRowType(data->type());
+
+  // Neither output column is read from the file: 'row_index' is synthesized and
+  // 'p' is a partition key, so the struct reader ends up with no child readers.
+  auto outputType = ROW({"row_index", "p"}, {BIGINT(), INTEGER()});
+
+  connector::ColumnHandleMap assignments;
+  assignments["row_index"] = std::make_shared<HiveColumnHandle>(
+      "row_index", FileColumnHandle::ColumnType::kRowIndex, BIGINT(), BIGINT());
+  assignments["p"] = makeColumnHandle(
+      "p",
+      INTEGER(),
+      INTEGER(),
+      {},
+      FileColumnHandle::ColumnType::kPartitionKey);
+
+  // The filter is satisfied by this split, so it eliminates no row. Its only
+  // effect is to make ScanSpec::hasFilter() true.
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("p"),
+      std::make_unique<common::BigintRange>(1, 1, /*nullAllowed=*/false));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(fileSchema)
+                  .subfieldFiltersMap(filters)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys{
+      {"p", "1"}};
+  auto splits = makeHiveConnectorSplits(
+      filePath->getPath(), 1, dwio::common::FileFormat::DWRF, partitionKeys);
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .split(splits[0])
+          .config(core::QueryConfig::kValidateOutputFromOperators, "true")
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), kNumRows);
+  ASSERT_EQ(result->childAt(0)->size(), result->size());
+  auto* rowIndex = result->childAt(0)->asFlatVector<int64_t>();
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    EXPECT_FALSE(result->childAt(0)->isNullAt(row));
+    EXPECT_EQ(rowIndex->valueAt(row), row);
+  }
+}
+
+// The same defect reached through a dynamic filter rather than a static one.
+// This is the shape a real engine hits: there is no constant partition
+// predicate anywhere in the query, so nothing could have been resolved during
+// split generation. The filter appears on the scan spec only at runtime, pushed
+// down from the join whose key is the partition column.
+TEST_F(TableScanTest, rowIndexWithDynamicFilterOnPartitionKey) {
+  constexpr vector_size_t kNumRows = 10;
+  auto data = makeRowVector(
+      {"c0"},
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+  const auto fileSchema = asRowType(data->type());
+
+  auto outputType = ROW({"row_index", "p"}, {BIGINT(), INTEGER()});
+
+  connector::ColumnHandleMap assignments;
+  assignments["row_index"] = std::make_shared<HiveColumnHandle>(
+      "row_index", FileColumnHandle::ColumnType::kRowIndex, BIGINT(), BIGINT());
+  assignments["p"] = makeColumnHandle(
+      "p",
+      INTEGER(),
+      INTEGER(),
+      {},
+      FileColumnHandle::ColumnType::kPartitionKey);
+
+  // No subfield filter here. The build side supplies the only filter, and it
+  // matches the partition value, so it eliminates no row.
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto build =
+      PlanBuilder(planNodeIdGenerator)
+          .values({makeRowVector(
+              {"bk"}, {makeFlatVector<int32_t>(std::vector<int32_t>{1})})})
+          .planNode();
+
+  core::PlanNodeId scanId;
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(fileSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .capturePlanNodeId(scanId)
+                  .hashJoin({"p"}, {"bk"}, build, "", {"row_index", "p"})
+                  .planNode();
+
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys{
+      {"p", "1"}};
+  auto splits = makeHiveConnectorSplits(
+      filePath->getPath(), 1, dwio::common::FileFormat::DWRF, partitionKeys);
+
+  auto result =
+      AssertQueryBuilder(plan)
+          .split(scanId, splits[0])
+          .config(core::QueryConfig::kValidateOutputFromOperators, "true")
+          .copyResults(pool());
+
+  ASSERT_EQ(result->size(), kNumRows);
+  ASSERT_EQ(result->childAt(0)->size(), result->size());
+  auto* dynamicRowIndex = result->childAt(0)->asFlatVector<int64_t>();
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    EXPECT_FALSE(result->childAt(0)->isNullAt(row));
+    EXPECT_EQ(dynamicRowIndex->valueAt(row), row);
+  }
 }
 
 TEST_F(TableScanTest, hugeStripe) {

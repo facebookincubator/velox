@@ -29,7 +29,14 @@ namespace facebook::velox::connector::hive {
 /// HiveIcebergSplit) extend this to add synthesized columns, serde parameters,
 /// and other format-specific fields.
 struct FileConnectorSplit : public ConnectorSplit {
+  /// Identity of the file this split covers. Use it to name the file; use
+  /// readPath() to open it.
   const std::string filePath;
+
+  /// Alternate location holding the same content as 'filePath', opened in its
+  /// place. Empty when there is none. The split builders set it.
+  std::string physicalFilePath;
+
   dwio::common::FileFormat fileFormat;
   const uint64_t start;
   const uint64_t length;
@@ -43,6 +50,10 @@ struct FileConnectorSplit : public ConnectorSplit {
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys;
 
+  /// Optional split-level override for table-to-file column matching. When not
+  /// set, the connector session property decides the mode.
+  const std::optional<dwio::common::ColumnMappingMode> columnMappingMode;
+
   FileConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
@@ -53,19 +64,27 @@ struct FileConnectorSplit : public ConnectorSplit {
       bool cacheable = true,
       std::optional<FileProperties> _properties = std::nullopt,
       const std::unordered_map<std::string, std::optional<std::string>>&
-          _partitionKeys = {})
+          _partitionKeys = {},
+      std::optional<dwio::common::ColumnMappingMode> _columnMappingMode =
+          std::nullopt)
       : ConnectorSplit(connectorId, splitWeight, cacheable),
         filePath(_filePath),
         fileFormat(_fileFormat),
         start(_start),
         length(_length),
         properties(std::move(_properties)),
-        partitionKeys(_partitionKeys) {}
+        partitionKeys(_partitionKeys),
+        columnMappingMode(_columnMappingMode) {}
 
   ~FileConnectorSplit() override = default;
 
   uint64_t size() const override {
     return length;
+  }
+
+  /// Location to open to read this split's bytes.
+  const std::string& readPath() const {
+    return physicalFilePath.empty() ? filePath : physicalFilePath;
   }
 
   std::string getFileName() const {
