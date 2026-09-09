@@ -114,8 +114,8 @@ class TimestampColumnReader : public IntegerColumnReader {
             logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP);
         isAdjustedToUtc = *logicalType->get_TIMESTAMP().isAdjustedToUTC();
         auto unit = logicalType->get_TIMESTAMP().unit();
-        const auto unittype = unit->gettype();
-        if (unittype == thrift::timeunit::type::millis) {
+        const auto unitType = unit->getType();
+        if (unitType == thrift::TimeUnit::Type::MILLIS) {
           filePrecision_ = TimestampPrecision::kMilliseconds;
         } else if (unitType == thrift::TimeUnit::Type::MICROS) {
           filePrecision_ = TimestampPrecision::kMicroseconds;
