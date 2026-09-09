@@ -25,6 +25,7 @@
 #include <lz4.h>
 #include <snappy.h>
 #include <zlib.h>
+#include <limits>
 // Expose ZSTD static APIs (e.g. ZSTD_decompressBound) used to size the output
 // buffer when a compressed block decompresses to more than expected.
 #define ZSTD_STATIC_LINKING_ONLY
@@ -453,16 +454,29 @@ std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
   // back to the upper bound ZSTD_decompressBound(), which never returns
   // UNKNOWN -- correct, at the cost of that bound ('exact' false, so such a
   // block cannot be skipped without decoding).
-  if (auto exact = ZSTD_findDecompressedSize(src, srcLength);
-      exact != ZSTD_CONTENTSIZE_UNKNOWN && exact != ZSTD_CONTENTSIZE_ERROR) {
-    return {static_cast<int64_t>(exact), true};
+  uint64_t decompressedLength = ZSTD_findDecompressedSize(src, srcLength);
+  bool isExact = true;
+  if (decompressedLength == ZSTD_CONTENTSIZE_UNKNOWN ||
+      decompressedLength == ZSTD_CONTENTSIZE_ERROR) {
+    // Streaming frames: the exact size is unknowable, fall back to the bound.
+    decompressedLength = ZSTD_decompressBound(src, srcLength);
+    isExact = false;
+    if (decompressedLength == ZSTD_CONTENTSIZE_ERROR) {
+      // Unrecognized or corrupt frame header.
+      return {blockSize_, false};
+    }
   }
-  if (auto bound = ZSTD_decompressBound(src, srcLength);
-      bound != ZSTD_CONTENTSIZE_ERROR) {
-    return {static_cast<int64_t>(bound), false};
-  }
-  // Unrecognized/corrupt frame header: fall back to the block size.
-  return {blockSize_, false};
+  // The sizes above are read straight out of the frame header and are never
+  // validated against the payload, so a corrupt stream can declare a value
+  // that does not fit the signed return type; guard against that before
+  // narrowing, otherwise static_cast<int64_t> would make it negative.
+  DWIO_ENSURE_LE_FMT(
+      decompressedLength,
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+      "ZSTD decompressed length ({}) out of range for int64_t. Info: {}",
+      decompressedLength,
+      streamDebugInfo_);
+  return {static_cast<int64_t>(decompressedLength), isExact};
 }
 
 class SnappyDecompressor : public Decompressor {
