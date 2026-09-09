@@ -48,6 +48,8 @@ struct UcxExchangeMetrics {
         intraNodeBytes_(RuntimeCounter::Unit::kBytes),
         remotePackedColumns_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
         remoteBytes_(RuntimeCounter::Unit::kBytes),
+        intraNodeSources_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
+        remoteSources_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
         rttPerRequest_(RuntimeMetric(RuntimeCounter::Unit::kNanos)) {}
   RuntimeMetric numPackedColumns_; // total number of packed columns received.
   RuntimeMetric totalBytes_; // total number of bytes received
@@ -55,6 +57,8 @@ struct UcxExchangeMetrics {
   RuntimeMetric intraNodeBytes_;
   RuntimeMetric remotePackedColumns_;
   RuntimeMetric remoteBytes_;
+  RuntimeMetric intraNodeSources_;
+  RuntimeMetric remoteSources_;
   RuntimeMetric rttPerRequest_;
 };
 
@@ -255,6 +259,8 @@ class UcxExchangeSource
   /// @param desired The desired state
   /// @return Returns true if state was changed, false otherwise.
   bool setStateIf(ReceiverState expected, ReceiverState desired);
+
+  void recordTransportDecisionMetric();
 
   void recordPayloadMetrics(uint64_t dataBytes);
 
