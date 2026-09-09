@@ -69,11 +69,23 @@ class HuffmanEncoding final
   static constexpr uint32_t kCheckpointStride{256};
   // OpenZL's standard Huffman codec supports 256 symbols with a maximum
   // 12-bit table. Its Large Huffman codec supports 65,536 symbols with a
-  // maximum 20-bit table and length-limits deeper trees. Nimble keeps the
-  // 12-bit table and supports up to 4,096 integral symbols, length-limiting the
-  // tree to kMaxCodeBits so a skewed distribution never requires a deeper tree.
-  static constexpr uint32_t kMaxSymbols{4096};
-  static constexpr uint8_t kMaxCodeBits{12};
+  // maximum 20-bit table and length-limits deeper trees. Nimble matches the
+  // Large Huffman alphabet at 65,536 integral symbols with a 16-bit table,
+  // length-limiting the tree to kMaxCodeBits so a skewed distribution never
+  // requires a deeper tree.
+  //
+  // 65,536 is the max addressable by the uint16_t alphabet index in
+  // DecodeEntry, and 2^16 == kMaxSymbols leaves enough code space for every
+  // symbol; 16-bit canonical codes still fit the uint16_t code storage.
+  //
+  // TODO(T280425209): These limits are not yet justified by measurement. A
+  // 16-bit tableLog makes decodeTable_ 2^16 entries (256 KB) instead of 2^12
+  // (16 KB), paid by every stream that triggers length-limiting, and a file
+  // written at these limits is rejected by a reader still on 12/4,096. Both
+  // costs need to be weighed against measured gains on the higher-cardinality
+  // SubIntSplit sub-streams this is meant to serve before it lands.
+  static constexpr uint32_t kMaxSymbols{65536};
+  static constexpr uint8_t kMaxCodeBits{16};
 
   // Working maximum tree depth for the encoder. Leaves deeper than this are
   // capped so per-symbol lengths always fit uint8_t; overflow beyond
