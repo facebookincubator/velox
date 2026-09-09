@@ -25,7 +25,10 @@
 #include "velox/common/file/File.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/common/Mutation.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/json/RegisterJsonReader.h"
+#include "velox/type/Filter.h"
 #include "velox/type/Timestamp.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -213,6 +216,117 @@ TEST_F(JsonReaderTest, emptyFileReturnsZeroRows) {
 
   VectorPtr result;
   EXPECT_EQ(rowReader->next(10, result), 0);
+}
+
+TEST_F(JsonReaderTest, scanSpecWithoutFilterIsAccepted) {
+  // Connectors attach a scan spec to every scan. One that only names columns
+  // asks for nothing the reader cannot do, so it must not be rejected.
+  auto schema = ROW({{"a", BIGINT()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+  dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileSchema(schema);
+
+  auto readFile =
+      std::make_shared<InMemoryReadFile>(std::string{"{\"a\":1}\n{\"a\":2}\n"});
+  auto reader = factory->createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      readerOptions);
+
+  auto spec = std::make_shared<velox::common::ScanSpec>("<root>");
+  spec->addFieldRecursively("a", *BIGINT(), 0);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(spec);
+
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+  VectorPtr result;
+  EXPECT_EQ(rowReader->next(10, result), 2);
+}
+
+TEST_F(JsonReaderTest, scanSpecWithFilterThrows) {
+  // Filter pushdown is not implemented. Accepting a filter and then not
+  // applying it would hand back rows the caller asked to have removed, with
+  // nothing to signal it, so an unhonored filter is refused instead.
+  auto schema = ROW({{"a", BIGINT()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+  dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileSchema(schema);
+
+  auto readFile =
+      std::make_shared<InMemoryReadFile>(std::string{"{\"a\":1}\n{\"a\":2}\n"});
+  auto reader = factory->createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      readerOptions);
+
+  auto spec = std::make_shared<velox::common::ScanSpec>("<root>");
+  spec->addFieldRecursively("a", *BIGINT(), 0);
+  spec->childByName("a")->setFilter(
+      velox::common::createBigintValues({2}, false));
+  dwio::common::RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(spec);
+
+  VELOX_ASSERT_USER_THROW(
+      reader->createRowReader(rowReaderOptions),
+      "JSON reader does not support filter pushdown");
+}
+
+TEST_F(JsonReaderTest, mutationWithDeletedRowsThrows) {
+  // Row-level deletes are not honored. As with a filter, silently returning a
+  // deleted row is worse than refusing the read.
+  auto schema = ROW({{"a", BIGINT()}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+  dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileSchema(schema);
+
+  auto readFile =
+      std::make_shared<InMemoryReadFile>(std::string{"{\"a\":1}\n{\"a\":2}\n"});
+  auto reader = factory->createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      readerOptions);
+  auto rowReader = reader->createRowReader(dwio::common::RowReaderOptions{});
+
+  // Marks row 0 deleted.
+  uint64_t deletedRows{1};
+  dwio::common::Mutation mutation;
+  mutation.deletedRows = &deletedRows;
+
+  VectorPtr result;
+  VELOX_ASSERT_USER_THROW(
+      rowReader->next(10, result, &mutation),
+      "JSON reader does not support row-level deletes");
+
+  // A mutation carrying no deletions asks for nothing and is accepted.
+  dwio::common::Mutation empty;
+  EXPECT_EQ(rowReader->next(10, result, &empty), 2);
+}
+
+TEST_F(JsonReaderTest, shortBatchShrinksChildVectors) {
+  // next() is asked for more rows than the file holds. Every child must be
+  // trimmed to the number of rows actually read; leaving children at the
+  // requested batch size exposes trailing rows that were never written but
+  // are not marked null, which any consumer iterating a child by its own
+  // size() would read as real data.
+  auto schema = ROW({{"a", BIGINT()}, {"b", ARRAY(BIGINT())}});
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::JSON);
+
+  dwio::common::ReaderOptions readerOptions{pool()};
+  readerOptions.setFileSchema(schema);
+
+  auto readFile = std::make_shared<InMemoryReadFile>(
+      std::string{"{\"a\":1,\"b\":[1,2]}\n{\"a\":2,\"b\":[3]}\n"});
+  auto reader = factory->createReader(
+      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      readerOptions);
+  auto rowReader = reader->createRowReader(dwio::common::RowReaderOptions{});
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(1'000, result), 2);
+  auto* row = result->as<RowVector>();
+  ASSERT_EQ(row->size(), 2);
+  EXPECT_EQ(row->childAt(0)->size(), 2);
+  EXPECT_EQ(row->childAt(1)->size(), 2);
 }
 
 TEST_F(JsonReaderTest, parseSingleBigint) {
@@ -599,6 +713,32 @@ TEST_F(JsonReaderTest, parseDateDefaultFormat) {
 TEST_F(JsonReaderTest, parseDateCustomFormat) {
   dwio::common::JsonSerDeOptions options;
   options.dateFormat = "MM/dd/yyyy";
+  auto row = read("{\"a\":\"03/15/2021\"}\n", ROW({{"a", DATE()}}), options);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int32_t>()->valueAt(0), 18701);
+}
+
+TEST_F(JsonReaderTest, parseDateHonorsTimezoneOffset) {
+  // A format carrying a timezone token means the value names an instant, not a
+  // wall-clock date, so it must be normalized to UTC before the day number is
+  // taken — exactly as the TIMESTAMP path does. Local midnight at +14:00 is
+  // 10:00 UTC on the *previous* day, so this is 2021-03-14 (18700), not
+  // 2021-03-15 (18701).
+  dwio::common::JsonSerDeOptions options;
+  options.dateFormat = "yyyy-MM-dd ZZ";
+  auto row =
+      read("{\"a\":\"2021-03-15 +14:00\"}\n", ROW({{"a", DATE()}}), options);
+  EXPECT_EQ(row->childAt(0)->asFlatVector<int32_t>()->valueAt(0), 18700);
+}
+
+TEST_F(JsonReaderTest, parseDateComputedFormatOutlivesItsSource) {
+  // A caller that builds the pattern at runtime — as a connector reading it
+  // out of table properties does — must not have to keep the source string
+  // alive until the read. JsonSerDeOptions has to own its format strings.
+  dwio::common::JsonSerDeOptions options;
+  {
+    std::string computed = fmt::format("{}/dd/{}", "MM", "yyyy");
+    options.dateFormat = computed;
+  }
   auto row = read("{\"a\":\"03/15/2021\"}\n", ROW({{"a", DATE()}}), options);
   EXPECT_EQ(row->childAt(0)->asFlatVector<int32_t>()->valueAt(0), 18701);
 }

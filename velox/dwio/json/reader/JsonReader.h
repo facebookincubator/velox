@@ -162,6 +162,16 @@ class JsonRowReader : public dwio::common::RowReader {
       std::shared_ptr<FileContents> contents,
       const dwio::common::RowReaderOptions& options);
 
+  /// Reads up to size records from this reader's split into result.
+  ///
+  /// Column projection and filter pushdown are not implemented. Projection is
+  /// ignored: every column of the file schema is materialized regardless of
+  /// what the scan spec selects, which a caller can see in the result's type. A
+  /// filter or a row-level delete cannot be ignored the same way — the rows it
+  /// asked to remove would come back with nothing to say the request was
+  /// dropped — so a scan spec carrying a filter is refused when the reader is
+  /// built, and a mutation carrying deletions throws here. Callers needing
+  /// either must apply them above this reader.
   uint64_t next(
       uint64_t size,
       VectorPtr& result,

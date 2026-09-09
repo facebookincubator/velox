@@ -25,6 +25,8 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/common/encode/Base64.h"
+#include "velox/dwio/common/Mutation.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/common/exception/Exceptions.h"
 #include "velox/functions/lib/string/StringImpl.h"
@@ -612,6 +614,8 @@ Timestamp coerceToTimestamp(
 // Joda formatter. The parsed timestamp lands at midnight of the date; flooring
 // its UTC seconds by the seconds-per-day count yields the day number, correct
 // for pre-epoch dates where integer division alone would round toward zero.
+// A format carrying a timezone token names an instant rather than a wall-clock
+// date, so it is normalized to UTC first, matching coerceToTimestamp.
 int32_t coerceToDate(
     simdjson::ondemand::value& value,
     const functions::DateTimeFormatter& formatter) {
@@ -621,7 +625,11 @@ int32_t coerceToDate(
     VELOX_USER_FAIL(
         "Failed to parse DATE from JSON string: '{}'", std::string{str});
   }
-  const int64_t seconds = result.value().timestamp.getSeconds();
+  auto parsed = result.value();
+  if (parsed.timezone != nullptr) {
+    parsed.timestamp.toGMT(*parsed.timezone);
+  }
+  const int64_t seconds = parsed.timestamp.getSeconds();
   int64_t days = seconds / Timestamp::kSecondsInDay;
   if (seconds < 0 && seconds % Timestamp::kSecondsInDay != 0) {
     --days;
@@ -1064,6 +1072,17 @@ JsonRowReader::JsonRowReader(
       options_{options},
       splitStart_{options.offset()},
       splitEnd_{options.limit()} {
+  // Refuse a filter rather than ignore one. Connectors attach a scan spec to
+  // every scan, so its mere presence says nothing; a filter on it does, and
+  // reading past it would return rows the caller asked to have removed with no
+  // indication that the filter went unapplied. Column projection carried by the
+  // spec is ignored rather than refused: next() materializes the full file
+  // schema, which a caller can see in the result's type.
+  const auto& scanSpec = options_.scanSpec();
+  VELOX_USER_CHECK(
+      scanSpec == nullptr || !scanSpec->hasFilter(),
+      "JSON reader does not support filter pushdown.");
+
   if (contents_->compression != common::CompressionKind::CompressionKind_NONE) {
     // Compressed files are not byte-addressable and so cannot be split: the
     // split that starts at offset 0 decompresses and reads the whole file,
@@ -1188,7 +1207,14 @@ void JsonRowReader::parseRecord(RowVector& row, vector_size_t rowIndex) {
 uint64_t JsonRowReader::next(
     uint64_t size,
     VectorPtr& result,
-    const dwio::common::Mutation* /*mutation*/) {
+    const dwio::common::Mutation* mutation) {
+  // As with a filter, a delete that goes unapplied hands back rows the caller
+  // asked to have removed. A mutation with nothing deleted asks for nothing, so
+  // it is the deletions rather than the mutation that are refused.
+  VELOX_USER_CHECK(
+      !dwio::common::hasDeletion(mutation),
+      "JSON reader does not support row-level deletes.");
+
   // Guard, not boundary enforcement: readNextLine() would return 0 rows
   // anyway. Returning early avoids allocating a RowVector and leaves result
   // untouched at end of split, matching TextRowReader and DwrfRowReader.
@@ -1205,6 +1231,17 @@ uint64_t JsonRowReader::next(
     ++rowsRead;
   }
 
+  // The batch was sized to the caller's request, which is an upper bound; trim
+  // it to what was actually read. RowVector::resize deliberately does not
+  // propagate a shrink to its children, so trim them first: otherwise a short
+  // batch leaves each child holding trailing rows that were never written and
+  // are not marked null, which a consumer iterating a child by its own size()
+  // would read as real data.
+  for (auto& child : rowVector->children()) {
+    if (child != nullptr) {
+      child->resize(rowsRead);
+    }
+  }
   rowVector->resize(rowsRead);
   result = rowVector;
   return static_cast<uint64_t>(rowsRead);

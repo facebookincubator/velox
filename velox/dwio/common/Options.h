@@ -218,14 +218,18 @@ class SerDeOptions {
 /// toggle is needed there. The temporal format strings below are Joda-style
 /// patterns (see velox/functions/lib/DateTimeFormatter.h); SimpleDateFormat
 /// parity is intentionally out of scope for v1.
+/// The format strings are owned rather than viewed: these options are stored in
+/// ReaderOptions, which outlives the call that sets them, so a caller passing a
+/// pattern computed at runtime (a connector reading it out of table properties,
+/// say) must not have to keep the source string alive until the read.
 struct JsonSerDeOptions {
   /// Joda-style pattern used to parse DATE columns from JSON string values.
-  std::string_view dateFormat{"yyyy-MM-dd"};
+  std::string dateFormat{"yyyy-MM-dd"};
 
   /// Joda-style pattern used to parse TIMESTAMP columns from JSON string
   /// values. A trailing timezone token (e.g. ` ZZ`) is honored when present;
   /// inputs without one are interpreted as UTC.
-  std::string_view timestampFormat{"yyyy-MM-dd HH:mm:ss"};
+  std::string timestampFormat{"yyyy-MM-dd HH:mm:ss"};
 };
 
 struct TableParameter {
