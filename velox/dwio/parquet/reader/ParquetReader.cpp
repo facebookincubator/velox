@@ -188,16 +188,17 @@ bool isInt32Compatible(
   }
 }
 
-// Checks whether the given type is compatible with a Parquet INT64 source.
-// Accepts BIGINT identity mapping and Decimal targets with sufficient
-// precision (precision - scale >= 20, covering the full INT64 range).
-// Accepts TIMESTAMP itself and TIMESTAMP WITH TIME ZONE, whose kind is BIGINT
-// and so has to be recognized by type identity.
+// Checks whether 'type' is a timestamp target the reader can materialize from a
+// Parquet timestamp column. Accepts TIMESTAMP itself and TIMESTAMP WITH TIME
+// ZONE, whose kind is BIGINT and so has to be recognized by type identity.
 bool isTimestampCompatible(const TypePtr& type) {
   return type->kind() == TypeKind::TIMESTAMP ||
       isTimestampWithTimeZoneType(type);
 }
 
+// Checks whether 'type' is compatible with a Parquet INT64 source. Accepts
+// BIGINT identity mapping and Decimal targets with sufficient precision
+// (precision - scale >= 20, covering the full INT64 range).
 bool isInt64Compatible(const TypePtr& type) {
   if (type->isDecimal()) {
     return hasEnoughDecimalPrecision(type, 20);
