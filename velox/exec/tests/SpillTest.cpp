@@ -586,9 +586,19 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
             finalStats.spillReads,
             succinctNanos(finalStats.spillReadTimeNanos),
             succinctNanos(finalStats.spillDeserializationTimeNanos)));
-    // Verify the spilled files are still there after spill state destruction.
-    for (const auto& spilledFile : spilledFileSet) {
-      ASSERT_TRUE(fs->exists(spilledFile));
+    if (!usePreMerge) {
+      // Verify the spilled files are still there after spill state destruction.
+      for (const auto& spilledFile : spilledFileSet) {
+        ASSERT_TRUE(fs->exists(spilledFile));
+      }
+    } else {
+      uint32_t numRemovedFiles{0};
+      for (const auto& spilledFile : spilledFileSet) {
+        if (!fs->exists(spilledFile)) {
+          ++numRemovedFiles;
+        }
+      }
+      ASSERT_GT(numRemovedFiles, 0);
     }
     // Verify stats.
     const auto spillFileSizeCount =

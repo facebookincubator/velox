@@ -485,6 +485,12 @@ SpillFileInfo mergeSpillFiles(
   }
   auto resultFiles = writer->finish();
   VELOX_CHECK_EQ(resultFiles.size(), 1);
+  // Release input readers before removing their files.
+  mergeTree.reset();
+  for (const auto& fileInfo : files) {
+    auto fs = filesystems::getFileSystem(fileInfo.path, nullptr);
+    fs->remove(fileInfo.path);
+  }
   return std::move(resultFiles[0]);
 }
 
@@ -501,7 +507,8 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReader(
     const common::SpillConfig& spillConfig,
     memory::MemoryPool* pool,
-    exec::SpillStats* spillStats) {
+    exec::SpillStats* spillStats,
+    const std::optional<size_t> initDistinctFiles) {
   const auto numMaxMergeFiles = spillConfig.numMaxMergeFiles;
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
@@ -509,22 +516,45 @@ SpillPartition::createOrderedReader(
         spillConfig.readBufferSize, pool, spillStats);
   }
 
-  SpillFileHeap orderedFiles(files_.begin(), files_.end());
+  SpillFileHeap distinctFiles;
+  SpillFileHeap nonDistinctFiles;
+  for (const auto& file : files_) {
+    if (initDistinctFiles.has_value() && file.id < initDistinctFiles.value()) {
+      distinctFiles.push(file);
+    } else {
+      nonDistinctFiles.push(file);
+    }
+  }
   SpillFiles files;
   files.reserve(numMaxMergeFiles);
   const auto mergeFilePathPrefix = files_[0].path;
   SpillFileMergeParams mergeParams(files_[0].type, pool);
 
-  // Recursively merge the files.
-  for (uint32_t round = 0; orderedFiles.size() > numMaxMergeFiles; ++round) {
+  // Recursively merge files until the final reader observes no more than the
+  // configured number of streams. When a DISTINCT boundary is specified,
+  // merge only within a provenance group.
+  uint64_t totalFiles = distinctFiles.size() + nonDistinctFiles.size();
+  for (uint32_t round = 0; totalFiles > numMaxMergeFiles; ++round) {
+    auto& orderedFiles = distinctFiles.size() > 1 &&
+            (nonDistinctFiles.size() <= 1 ||
+             distinctFiles.top().size < nonDistinctFiles.top().size)
+        ? distinctFiles
+        : nonDistinctFiles;
+    VELOX_CHECK_GT(orderedFiles.size(), 1);
     const uint64_t numMergeFiles = std::min(
         static_cast<uint64_t>(numMaxMergeFiles),
-        static_cast<uint64_t>(orderedFiles.size() + 1 - numMaxMergeFiles));
+        std::min(orderedFiles.size(), totalFiles + 1 - numMaxMergeFiles));
     // Choose the top 'numMergeFiles' smallest files for merging to minimize IO.
     for (uint32_t i = 0; i < numMergeFiles; i++) {
       files.push_back(orderedFiles.top());
       orderedFiles.pop();
     }
+    const auto mergedFileId =
+        std::min_element(
+            files.begin(),
+            files.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.id < rhs.id; })
+            ->id;
     auto mergedFile = mergeSpillFiles(
         files,
         fmt::format("{}-merge-round-{}", mergeFilePathPrefix, round),
@@ -535,14 +565,18 @@ SpillPartition::createOrderedReader(
         mergeParams,
         pool,
         spillStats);
-    orderedFiles.push(mergedFile);
+    mergedFile.id = mergedFileId;
+    orderedFiles.push(std::move(mergedFile));
     files.clear();
+    totalFiles = distinctFiles.size() + nonDistinctFiles.size();
   }
 
   files_.clear();
-  while (!orderedFiles.empty()) {
-    files_.push_back(orderedFiles.top());
-    orderedFiles.pop();
+  for (auto* orderedFiles : {&distinctFiles, &nonDistinctFiles}) {
+    while (!orderedFiles->empty()) {
+      files_.push_back(orderedFiles->top());
+      orderedFiles->pop();
+    }
   }
   return createOrderedReaderInternal(
       spillConfig.readBufferSize, pool, spillStats);
