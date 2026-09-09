@@ -15,9 +15,12 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include "velox/dwio/nimble/common/Constants.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -88,13 +91,35 @@ class UniqueValueCounts {
     return uniqueCounts_.size();
   }
 
+  std::optional<std::pair<T, uint64_t>> mostFrequent() const noexcept {
+    if (uniqueCounts_.empty()) {
+      return std::nullopt;
+    }
+    if (!mostFrequent_.has_value()) {
+      const auto it = std::max_element(
+          uniqueCounts_.cbegin(),
+          uniqueCounts_.cend(),
+          [](const auto& left, const auto& right) {
+            if (left.second != right.second) {
+              return left.second < right.second;
+            }
+            return left.first > right.first;
+          });
+      mostFrequent_.emplace(it->first, it->second);
+    }
+    return mostFrequent_;
+  }
+
   uint64_t uniqueStringBytes() const noexcept {
     static_assert(nimble::isStringType<T>());
-    uint64_t totalBytes = 0;
-    for (const auto& unique : uniqueCounts_) {
-      totalBytes += unique.first.size();
+    if (!uniqueStringBytes_.has_value()) {
+      uint64_t totalBytes = 0;
+      for (const auto& unique : uniqueCounts_) {
+        totalBytes += unique.first.size();
+      }
+      uniqueStringBytes_ = totalBytes;
     }
-    return totalBytes;
+    return uniqueStringBytes_.value();
   }
 
   const_iterator begin() const noexcept {
@@ -117,6 +142,8 @@ class UniqueValueCounts {
 
  private:
   MapType uniqueCounts_;
+  mutable std::optional<std::pair<T, uint64_t>> mostFrequent_;
+  mutable std::optional<uint64_t> uniqueStringBytes_;
 };
 
 template <typename T, typename InputType = T>
