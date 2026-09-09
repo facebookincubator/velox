@@ -319,6 +319,35 @@ TEST_F(TimestampWithTimeZoneTest, nullFiltersArePushedDown) {
       {std::nullopt});
 }
 
+// AlwaysTrue and AlwaysFalse never inspect a value, so checkNoValueFilter must
+// let them through rather than treat them as value filters. Guards against a
+// future dispatch change that would reject them or evaluate them in the packed
+// domain.
+TEST_F(TimestampWithTimeZoneTest, alwaysTrueAndAlwaysFalseArePushedDown) {
+  const auto data =
+      makeRowVector({makeFlatVector<Timestamp>({Timestamp(0, 0)})});
+
+  // AlwaysTrue must not throw. Downstream row counts depend on how the reader
+  // treats an explicit AlwaysTrue vs. an absent filter, and that behavior is
+  // not what this test is guarding.
+  auto trueReader = writeAndCreateReader(data, readType_);
+  EXPECT_NO_THROW(read(
+      *trueReader,
+      readType_,
+      std::nullopt,
+      std::make_unique<common::AlwaysTrue>()));
+
+  // AlwaysFalse must not throw and must produce an empty result.
+  auto falseReader = writeAndCreateReader(data, readType_);
+  auto values = read(
+      *falseReader,
+      readType_,
+      std::nullopt,
+      std::make_unique<common::AlwaysFalse>());
+  ASSERT_TRUE(isTimestampWithTimeZoneType(values->type()));
+  EXPECT_EQ(values->size(), 0);
+}
+
 // A column the file does not declare UTC normalized holds wall clock readings
 // in a zone the file does not record, so there is no instant to pack.
 TEST_F(TimestampWithTimeZoneTest, notUtcNormalizedIsRejected) {
