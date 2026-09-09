@@ -75,6 +75,49 @@ TEST_F(S3FileSystemTest, writeAndRead) {
   readData(readFile.get());
 }
 
+TEST_F(S3FileSystemTest, preadvStagesInCallerPool) {
+  const char* bucketName = "data";
+  const char* file = "preadv.txt";
+  const auto filename = localPath(bucketName) + "/" + file;
+  const auto s3File = s3URI(bucketName, file);
+  addBucket(bucketName);
+  {
+    LocalWriteFile writeFile(filename);
+    writeData(&writeFile);
+  }
+  filesystems::S3FileSystem s3fs(bucketName, minioServer_->s3Config());
+  auto readFile = s3fs.openFileForRead(s3File);
+  auto rootPool =
+      memory::memoryManager()->addRootPool("preadvStagesInCallerPool");
+  auto pool = rootPool->addLeafChild("leaf");
+  FileIoContext context;
+  context.pool = pool.get();
+
+  // A single range is read straight into its buffer, so nothing is staged.
+  char single[10];
+  ASSERT_EQ(
+      readFile->preadv(
+          0, {folly::Range<char*>(single, sizeof(single))}, context),
+      sizeof(single));
+  EXPECT_EQ(std::string_view(single, sizeof(single)), "aaaaabbbbb");
+  EXPECT_EQ(pool->peakBytes(), 0);
+
+  // Ranges split by a gap are read as one span staged in the caller's pool,
+  // which is released before preadv returns.
+  char head[5];
+  char tail[5];
+  const std::vector<folly::Range<char*>> buffers = {
+      folly::Range<char*>(head, sizeof(head)),
+      folly::Range<char*>(nullptr, (char*)(uint64_t)(5 + kOneMB)),
+      folly::Range<char*>(tail, sizeof(tail)),
+  };
+  ASSERT_EQ(readFile->preadv(0, buffers, context), 15 + kOneMB);
+  EXPECT_EQ(std::string_view(head, sizeof(head)), "aaaaa");
+  EXPECT_EQ(std::string_view(tail, sizeof(tail)), "ddddd");
+  EXPECT_GE(pool->peakBytes(), 15 + kOneMB);
+  EXPECT_EQ(pool->usedBytes(), 0);
+}
+
 TEST_F(S3FileSystemTest, invalidCredentialsConfig) {
   {
     std::unordered_map<std::string, std::string> config(

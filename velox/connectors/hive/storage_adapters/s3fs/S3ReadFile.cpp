@@ -51,10 +51,6 @@ class S3ReadFile ::Impl {
   // Gets the length of the file.
   // Checks if there are any issues reading the file.
   void initialize(const filesystems::FileOptions& options) {
-    // Captured before the early return below so a second initialize() still
-    // picks the pool up.
-    pool_ = options.pool;
-
     if (options.fileSize.has_value()) {
       VELOX_CHECK_GE(
           options.fileSize.value(), 0, "File size must be non-negative");
@@ -121,13 +117,13 @@ class S3ReadFile ::Impl {
     }
 
     // Staged through one buffer because S3 GetObject cannot serve multiple
-    // ranges. Allocated from the query's pool so the memory is accounted for,
+    // ranges. Allocated from the caller's pool so the memory is accounted for,
     // left uninitialised because preadInternal overwrites it anyway.
     char* staging;
     BufferPtr pooled;
     std::unique_ptr<char[]> owned;
-    if (pool_ != nullptr) {
-      pooled = AlignedBuffer::allocate<char>(length, pool_);
+    if (context.pool != nullptr) {
+      pooled = AlignedBuffer::allocate<char>(length, context.pool);
       staging = pooled->asMutable<char>();
     } else {
       owned.reset(new char[length]);
@@ -190,7 +186,6 @@ class S3ReadFile ::Impl {
   }
 
   Aws::S3::S3Client* client_;
-  memory::MemoryPool* pool_{nullptr};
   std::string bucket_;
   std::string key_;
   int64_t length_ = -1;
