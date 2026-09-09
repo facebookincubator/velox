@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/EvictionPolicy.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/caching/SsdFile.h"
@@ -137,10 +138,18 @@ memory::MachinePageCount AsyncDataCacheEntry::setPrefetch(bool flag) {
   return shard_->cache()->incrementPrefetchPages(flag ? numPages : -numPages);
 }
 
-void AsyncDataCacheEntry::initialize(FileCacheKey key, bool contiguous) {
+void AsyncDataCacheEntry::setKeyLocked(
+    RawFileCacheKey key,
+    int32_t entryIndex) {
   VELOX_CHECK(isExclusive());
+  key_ = FileCacheKey{StringIdLease(fileIds(), key.fileNum), key.offset};
+  entryIndex_ = entryIndex;
+}
+
+void AsyncDataCacheEntry::initialize(bool contiguous) {
+  VELOX_CHECK(isExclusive());
+  VELOX_CHECK(key_.fileNum.hasValue());
   setSsdFile(nullptr, 0);
-  key_ = std::move(key);
   auto* cache = shard_->cache();
   ClockTimer t(shard_->allocClocks());
   if (size_ < AsyncDataCacheEntry::kTinyDataSize) {
@@ -279,6 +288,7 @@ std::optional<CachePin> CacheShard::lookupLocked(
     return std::nullopt;
   }
   foundEntry->touch();
+  policy_->onEntryAccessLocked(*foundEntry, *policyState_);
   if (foundEntry->isPrefetch()) {
     foundEntry->isFirstUse_ = true;
     foundEntry->setPrefetch(false);
@@ -311,20 +321,24 @@ CachePin CacheShard::findOrCreate(
     newEntry->promise_ = nullptr;
     entryToInit = newEntry.get();
     entryMap_[key] = newEntry.get();
+    int32_t entryIndex;
     if (emptySlots_.empty()) {
       entries_.push_back(std::move(newEntry));
+      entryIndex = static_cast<int32_t>(entries_.size() - 1);
     } else {
-      const auto index = emptySlots_.back();
+      entryIndex = emptySlots_.back();
       emptySlots_.pop_back();
-      entries_[index] = std::move(newEntry);
+      entries_[entryIndex] = std::move(newEntry);
     }
     ++numNew_;
     // Inside the shard mutex.
     VELOX_CHECK_EQ(entryToInit->size_, 0);
     entryToInit->size_ = size;
     entryToInit->isFirstUse_ = true;
+    entryToInit->setKeyLocked(key, entryIndex);
+    policy_->onEntryInsertedLocked(*entryToInit, *policyState_);
   }
-  return initEntry(key, contiguous, entryToInit);
+  return initEntry(contiguous, entryToInit);
 }
 
 std::optional<CachePin> CacheShard::find(
@@ -364,18 +378,13 @@ bool CacheShard::testingIsEvictable(RawFileCacheKey key) const {
   return it->second->testingIsEvictable();
 }
 
-CachePin CacheShard::initEntry(
-    RawFileCacheKey key,
-    bool contiguous,
-    AsyncDataCacheEntry* entry) {
+CachePin CacheShard::initEntry(bool contiguous, AsyncDataCacheEntry* entry) {
   // The new entry is in the map and is in exclusive mode and is otherwise
   // uninitialized. Other threads may find it and may add a promise or wait for
   // a promise that another one has added. The new entry is otherwise volatile
   // and uninterpretable except for this thread. Non access serializing members
   // can be set outside of 'mutex_'.
-  entry->initialize(
-      FileCacheKey{StringIdLease(fileIds(), key.fileNum), key.offset},
-      contiguous);
+  entry->initialize(contiguous);
   cache_->incrementNew(entry->size());
   CachePin pin;
   pin.setEntry(entry);
@@ -457,6 +466,7 @@ std::unique_ptr<folly::SharedPromise<bool>> CacheShard::removeEntry(
 }
 
 void CacheShard::removeEntryLocked(AsyncDataCacheEntry* entry) {
+  policy_->onEntryRemovedLocked(*entry, *policyState_);
   if (entry->key_.fileNum.hasValue()) {
     const auto it = entryMap_.find(
         RawFileCacheKey{entry->key_.fileNum.id(), entry->key_.offset});
@@ -522,75 +532,51 @@ uint64_t CacheShard::evict(
   auto* ssdCache = cache_->ssdCache();
   const bool skipSsdSaveable =
       (ssdCache != nullptr) && ssdCache->writeInProgress();
-  auto now = accessTime();
   AcquiredMemory toFree;
   int64_t tinyEvicted = 0;
   int64_t largeEvicted = 0;
   int32_t evictSaveableSkipped = 0;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    const size_t size = entries_.size();
-    if (size == 0) {
+    if (entries_.empty()) {
       return 0;
     }
-    int32_t counter = 0;
-    int32_t numChecked = 0;
-    auto entryIndex = (clockHand_ % size);
-    auto iter = entries_.begin() + entryIndex;
-    while (++counter <= size) {
-      if (++iter == entries_.end()) {
-        iter = entries_.begin();
-        entryIndex = 0;
-      } else {
-        ++entryIndex;
+    auto cursor = policy_->createEvictionCursorLocked(
+        *policyState_, entries_, clockHand_, eventCounter_, evictAllUnpinned);
+    while (true) {
+      auto candidate = cursor->next();
+      if (candidate.entry == nullptr) {
+        break;
       }
-
       ++numEvictChecks_;
-      ++clockHand_;
-      auto candidate = iter->get();
-      if (candidate == nullptr) {
+      if (candidate.entry->numPins_ != 0) {
         continue;
       }
-
-      ++numChecked;
-      if (evictionThreshold_ == kNoThreshold ||
-          eventCounter_ > entries_.size() / 4 ||
-          numChecked > entries_.size() / 8) {
-        now = accessTime();
-        calibrateThresholdLocked();
-        numChecked = 0;
-        eventCounter_ = 0;
+      if (skipSsdSaveable && candidate.entry->ssdSaveable() &&
+          !evictAllUnpinned) {
+        ++evictSaveableSkipped;
+        continue;
       }
+      if (candidate.entry->ssdSaveable()) {
+        ++numSavableEvict_;
+      }
+      acquireEvictedData(
+          candidate.entry,
+          bytesToAcquire,
+          acquired,
+          toFree,
+          largeEvicted,
+          tinyEvicted);
 
-      int32_t score = 0;
-      if (candidate->numPins_ == 0 &&
-          (!candidate->key_.fileNum.hasValue() || evictAllUnpinned ||
-           (score = candidate->score(now)) >= evictionThreshold_)) {
-        if (skipSsdSaveable && candidate->ssdSaveable() && !evictAllUnpinned) {
-          ++evictSaveableSkipped;
-          continue;
-        }
-        if (candidate->ssdSaveable()) {
-          ++numSavableEvict_;
-        }
-        acquireEvictedData(
-            candidate,
-            bytesToAcquire,
-            acquired,
-            toFree,
-            largeEvicted,
-            tinyEvicted);
-
-        removeEntryLocked(candidate);
-        emptySlots_.push_back(entryIndex);
-        tryAddFreeEntry(std::move(*iter));
-        ++numEvict_;
-        if (score > 0) {
-          sumEvictScore_ += score;
-        }
-        if (largeEvicted + tinyEvicted > bytesToFree) {
-          break;
-        }
+      removeEntryLocked(candidate.entry);
+      emptySlots_.push_back(candidate.entryIndex);
+      tryAddFreeEntry(std::move(entries_[candidate.entryIndex]));
+      ++numEvict_;
+      if (candidate.score > 0) {
+        sumEvictScore_ += candidate.score;
+      }
+      if (largeEvicted + tinyEvicted > bytesToFree) {
+        break;
       }
     }
   }
@@ -621,29 +607,6 @@ void CacheShard::tryAddFreeEntry(std::unique_ptr<AsyncDataCacheEntry>&& entry) {
   if (freeEntries_.size() >= kMaxFreeEntries) {
     freeEntries_.resize(kMaxFreeEntries >> 1);
   }
-}
-
-void CacheShard::calibrateThresholdLocked() {
-  auto numSamples = std::min<int32_t>(kMaxEvictionSamples, entries_.size());
-  auto now = accessTime();
-  auto entryIndex = (clockHand_ % entries_.size());
-  auto step = entries_.size() / numSamples;
-  auto iter = entries_.begin() + entryIndex;
-  evictionThreshold_ = percentile<int32_t>(
-      [&]() -> int32_t {
-        AsyncDataCacheEntry* element = iter->get();
-        int32_t score = element ? element->score(now) : 0;
-        if (entryIndex + step >= entries_.size()) {
-          entryIndex = (entryIndex + step) % entries_.size();
-          iter = entries_.begin() + entryIndex;
-        } else {
-          entryIndex += step;
-          iter += step;
-        }
-        return score;
-      },
-      numSamples,
-      kEvictionPercentile);
 }
 
 void CacheShard::updateStats(CacheStats& stats) {
@@ -801,18 +764,40 @@ CacheStats CacheStats::operator-(const CacheStats& other) const {
 
 AsyncDataCache::AsyncDataCache(
     memory::MemoryAllocator* allocator,
-    std::unique_ptr<SsdCache> ssdCache)
-    : AsyncDataCache({}, allocator, std::move(ssdCache)) {}
+    std::unique_ptr<SsdCache> ssdCache,
+    std::unique_ptr<EvictionPolicy> evictionPolicy)
+    : AsyncDataCache(
+          {},
+          allocator,
+          std::move(ssdCache),
+          std::move(evictionPolicy)) {}
+
+AsyncDataCache::Options::Options(
+    double _maxWriteRatio,
+    double _ssdSavableRatio,
+    int32_t _minSsdSavableBytes,
+    int32_t _numShards,
+    uint64_t _ssdFlushThresholdBytes)
+    : maxWriteRatio(_maxWriteRatio),
+      ssdSavableRatio(_ssdSavableRatio),
+      minSsdSavableBytes(_minSsdSavableBytes),
+      numShards(_numShards),
+      ssdFlushThresholdBytes(_ssdFlushThresholdBytes) {}
 
 AsyncDataCache::AsyncDataCache(
     const Options& options,
     memory::MemoryAllocator* allocator,
-    std::unique_ptr<SsdCache> ssdCache)
+    std::unique_ptr<SsdCache> ssdCache,
+    std::unique_ptr<EvictionPolicy> evictionPolicy)
     : opts_(options),
       numShards_(opts_.numShards),
       shardMask_(numShards_ - 1),
       allocator_(allocator),
       ssdCache_(std::move(ssdCache)),
+      evictionPolicy_(
+          evictionPolicy
+              ? std::move(evictionPolicy)
+              : EvictionPolicy::create(EvictionPolicyKind::kApproxLrfu)),
       cachedPages_(0) {
   VELOX_CHECK_GT(numShards_, 0, "numShards must be positive");
   VELOX_CHECK_EQ(
@@ -821,9 +806,20 @@ AsyncDataCache::AsyncDataCache(
       "numShards must be a power of 2, got {}",
       numShards_);
   for (auto i = 0; i < numShards_; ++i) {
-    shards_.push_back(std::make_unique<CacheShard>(this, opts_.maxWriteRatio));
+    shards_.push_back(
+        std::make_unique<CacheShard>(
+            this, opts_.maxWriteRatio, evictionPolicy_.get()));
   }
 }
+
+CacheShard::CacheShard(
+    AsyncDataCache* cache,
+    double maxWriteRatio,
+    EvictionPolicy* policy)
+    : cache_(cache),
+      maxWriteRatio_(maxWriteRatio),
+      policy_(policy),
+      policyState_(policy_->makeShardState()) {}
 
 AsyncDataCache::~AsyncDataCache() = default;
 
@@ -831,9 +827,10 @@ AsyncDataCache::~AsyncDataCache() = default;
 std::shared_ptr<AsyncDataCache> AsyncDataCache::create(
     memory::MemoryAllocator* allocator,
     std::unique_ptr<SsdCache> ssdCache,
-    const AsyncDataCache::Options& options) {
-  auto cache =
-      std::make_shared<AsyncDataCache>(options, allocator, std::move(ssdCache));
+    const AsyncDataCache::Options& options,
+    std::unique_ptr<EvictionPolicy> evictionPolicy) {
+  auto cache = std::make_shared<AsyncDataCache>(
+      options, allocator, std::move(ssdCache), std::move(evictionPolicy));
   allocator->registerCache(cache);
   return cache;
 }
