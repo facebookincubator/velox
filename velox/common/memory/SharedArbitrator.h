@@ -88,8 +88,9 @@ class SharedArbitrator : public memory::MemoryArbitrator {
 
     /// Limits how much free capacity memory arbitration can shrink from a query
     /// memory pool, so that the pool keeps enough free capacity for its future
-    /// allocations without triggering another arbitration round.
-    /// A shrink never reduces free capacity below the smaller of the following:
+    /// allocations to reduce the chance of another arbitration. When both
+    /// settings are non-zero, a normal shrink of an active pool never reduces
+    /// free capacity below the smaller of:
     /// - capacity * 'memoryPoolMinFreeCapacityPct'
     /// - 'memoryPoolMinFreeCapacity'
     ///
