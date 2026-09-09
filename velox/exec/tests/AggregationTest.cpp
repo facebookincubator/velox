@@ -5346,4 +5346,45 @@ TEST_F(
           .copyResults(pool());
   EXPECT_EQ(result->size(), totalRows);
 }
+
+// Regression test for duplicate keys with spilling merge enabled:
+// The first spill file contains 100 aggregate states. The next two files
+// each contain one state for key 100, pre-merge combines them into one stream
+// containing consecutive duplicate keys: [100, 100].
+TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
+  const std::vector<RowVectorPtr> inputs{
+      makeRowVector({
+          makeFlatVector<int64_t>(100, [](vector_size_t row) { return row; }),
+          makeFlatVector<int64_t>(
+              100, [](vector_size_t /* row */) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              1, [](vector_size_t /* row */) { return 100; }),
+          makeFlatVector<int64_t>(1, [](vector_size_t /* row */) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              1, [](vector_size_t /* row */) { return 100; }),
+          makeFlatVector<int64_t>(1, [](vector_size_t /* row */) { return 1; }),
+      }),
+  };
+  createDuckDbTable(inputs);
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(spillDirectory->getPath())
+      .config(QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kAggregationSpillEnabled, true)
+      .config(QueryConfig::kSpillNumPartitionBits, "0")
+      .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
+      .maxDrivers(1)
+      .plan(
+          PlanBuilder()
+              .values(inputs)
+              .singleAggregation({"c0"}, {"sum(c1)"})
+              .planNode())
+      .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+}
 } // namespace facebook::velox::exec::test
