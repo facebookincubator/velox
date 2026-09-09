@@ -102,7 +102,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
 
       for (int i = 0; i < vector->size(); ++i) {
         if (fieldVec->isNullAt(i)) {
-          continue; // skip null comparison
+          if (filter.testNull()) {
+            EXPECT_FALSE(boolVector->isNullAt(i)) << "Mismatch at row " << i;
+            EXPECT_TRUE(boolVector->valueAt(i)) << "Mismatch at row " << i;
+          }
+          continue;
         }
 
         bool veloxExpected = false;
@@ -182,6 +186,42 @@ TEST_F(SubfieldFilterAstTest, int32RangeInclusive) {
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
   testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, nullAllowed) {
+  const std::string columnName = "c0";
+  auto rowType = ROW({{columnName, BIGINT()}});
+  auto vector = makeRowVector(
+      {columnName},
+      {makeNullableFlatVector<int64_t>({std::nullopt, 10, 15, 20, 30})});
+
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  filters.push_back(
+      std::make_unique<common::BigintRange>(10, 20, /*nullAllowed*/ true));
+  filters.push_back(
+      common::createBigintValues(
+          std::vector<int64_t>{10, 20}, /*nullAllowed*/ true));
+  filters.push_back(
+      std::make_unique<common::NegatedBigintRange>(
+          10, 20, /*nullAllowed*/ true));
+
+  std::vector<std::unique_ptr<common::BigintRange>> ranges;
+  ranges.push_back(
+      std::make_unique<common::BigintRange>(10, 12, /*nullAllowed*/ false));
+  ranges.push_back(
+      std::make_unique<common::BigintRange>(18, 20, /*nullAllowed*/ false));
+  filters.push_back(
+      std::make_unique<common::BigintMultiRange>(
+          std::move(ranges), /*nullAllowed*/ true));
+
+  for (const auto& filter : filters) {
+    common::Subfield subfield(columnName);
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const auto& expr =
+        createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
+    testFilterExecution(rowType, columnName, *filter, vector, expr);
+  }
 }
 
 TEST_F(SubfieldFilterAstTest, doubleRange) {
