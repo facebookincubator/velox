@@ -174,23 +174,27 @@ uint64_t SerializedPageFileWriter::write(
     for (const auto& range : indices) {
       numRows += range.size;
     }
-    std::vector<vector_size_t> rowSizes(numRows, 0);
-    std::vector<vector_size_t*> rowSizePointers(numRows);
-    std::vector<IndexRange> rowRanges;
-    rowRanges.reserve(numRows);
+    if (numRows > rowSize_.size()) {
+      rowNumbers_.resize(numRows);
+      rowSize_.resize(numRows);
+      sizePointers_.resize(numRows);
+      for (vector_size_t i = 0; i < numRows; ++i) {
+        sizePointers_[i] = &rowSize_[i];
+      }
+    }
+
     vector_size_t rowIndex = 0;
     for (const auto& range : indices) {
       for (vector_size_t offset = 0; offset < range.size; ++offset) {
-        rowRanges.push_back(IndexRange{range.begin + offset, 1});
-        rowSizePointers[rowIndex] = &rowSizes[rowIndex];
-        ++rowIndex;
+        rowNumbers_[rowIndex++] = range.begin + offset;
       }
     }
+    std::fill(rowSize_.begin(), rowSize_.begin() + numRows, 0);
     Scratch scratch;
     serde_->estimateSerializedSize(
         rows.get(),
-        folly::Range(rowRanges.data(), rowRanges.size()),
-        rowSizePointers.data(),
+        folly::Range(rowNumbers_.data(), numRows),
+        sizePointers_.data(),
         scratch);
 
     uint64_t bufferedSize = batch_ == nullptr ? 0 : batch_->size();
@@ -199,8 +203,13 @@ uint64_t SerializedPageFileWriter::write(
       vector_size_t chunkBegin = range.begin;
       vector_size_t chunkSize = 0;
       uint64_t chunkBytes = 0;
+      if (range.size > 0 && bufferedSize > 0 &&
+          bufferedSize + rowSize_[rowIndex] > writeBufferSize_) {
+        writtenBytes += flush();
+        bufferedSize = 0;
+      }
       for (vector_size_t offset = 0; offset < range.size; ++offset) {
-        const auto rowSize = rowSizes[rowIndex++];
+        const auto rowSize = rowSize_[rowIndex++];
         if (chunkSize > 0 &&
             bufferedSize + chunkBytes + rowSize > writeBufferSize_) {
           append(chunkBegin, chunkSize);
@@ -211,11 +220,6 @@ uint64_t SerializedPageFileWriter::write(
           chunkBytes = 0;
         }
 
-        if (chunkSize == 0 && bufferedSize > 0 &&
-            bufferedSize + rowSize > writeBufferSize_) {
-          writtenBytes += flush();
-          bufferedSize = 0;
-        }
         ++chunkSize;
         chunkBytes += rowSize;
       }

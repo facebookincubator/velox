@@ -99,9 +99,17 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
   auto rawValues = strings->rawValues();
   if (!rawNulls) {
     for (auto i = 0; i < rows.size(); ++i) {
-      *sizes[i] += rawValues[rows[i]].size();
+      // Add the size of the length and the string data.
+      *sizes[i] += sizeof(int32_t) + rawValues[rows[i]].size();
     }
   } else {
+    for (auto i = 0; i < numRows; ++i) {
+      *sizes[i] += sizeof(int32_t);
+      if (bits::isBitNull(rawNulls, rows[i])) {
+        *sizes[i] += bits::nbytes(1);
+      }
+    }
+
     ScratchPtr<uint64_t, 4> nullsHolder(scratch);
     ScratchPtr<int32_t, 64> nonNullsHolder(scratch);
     auto nulls = nullsHolder.get(bits::nwords(numRows));
@@ -467,6 +475,9 @@ void estimateSerializedSizeInt(
       auto* innerRows = rows.data();
       auto* innerSizes = sizes;
       const auto numRows = rows.size();
+      for (auto i = 0; i < numRows; ++i) {
+        *sizes[i] += sizeof(int32_t);
+      }
       int32_t numInner = numRows;
       if (vector->mayHaveNulls()) {
         auto nulls = nullsHolder.get(bits::nwords(numRows));
