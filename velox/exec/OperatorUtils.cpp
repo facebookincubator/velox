@@ -126,36 +126,7 @@ void gatherCopy(
 // We want to aggregate some operator runtime metrics per operator rather than
 // per event. This function returns true for such metrics.
 bool shouldAggregateRuntimeMetric(const std::string& name) {
-  static const folly::F14FastSet<std::string> metricNames{
-      "cacheWaitWallNanos",
-      "coalescedSsdLoadWallNanos",
-      "coalescedStorageLoadWallNanos",
-      "dataSourceAddSplitWallNanos",
-      "dataSourceLazyCpuNanos",
-      "dataSourceLazyWallNanos",
-      "dataSourceLazyInputBytes",
-      "dataSourceReadWallNanos",
-      "driverCpuTimeNanos",
-      "flushTimes",
-      "ioWaitWallNanos",
-      "prefetchBytes",
-      "preloadSplitPrepareTimeNanos",
-      "preloadedSplits",
-      "ramReadBytes",
-      "readyPreloadedSplits",
-      "rpcCongestionWindowFinal",
-      "rpcPeakInFlight",
-      "rpcBaselineRttNanos",
-      "rpcRttMinWallNanos",
-      "rpcRttMaxWallNanos",
-      "rpcStreamingMode",
-      "queuedWallNanos",
-      "storageReadWallNanos",
-      "storageReadBytes",
-      "ssdCacheReadWallNanos",
-      "waitForPreloadSplitNanos",
-  };
-  if (metricNames.contains(name) || OperatorAggregatedMetrics::contains(name)) {
+  if (OperatorAggregatedMetrics::contains(name)) {
     return true;
   }
 

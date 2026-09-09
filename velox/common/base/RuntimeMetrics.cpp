@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/SuccinctPrinter.h"
 
 #include <folly/Synchronized.h>
@@ -29,6 +29,39 @@ folly::Synchronized<folly::F14FastSet<std::string>>&
 operatorAggregatedMetrics() {
   static folly::Synchronized<folly::F14FastSet<std::string>> registry;
   return registry;
+}
+
+const folly::F14FastSet<std::string>& defaultOperatorAggregatedMetrics() {
+  static const folly::F14FastSet<std::string> metrics{
+      "cacheWaitWallNanos",
+      "coalescedSsdLoadWallNanos",
+      "coalescedStorageLoadWallNanos",
+      "dataSourceAddSplitWallNanos",
+      "dataSourceLazyCpuNanos",
+      "dataSourceLazyWallNanos",
+      "dataSourceLazyInputBytes",
+      "dataSourceReadWallNanos",
+      "driverCpuTimeNanos",
+      "flushTimes",
+      "ioWaitWallNanos",
+      "prefetchBytes",
+      "preloadSplitPrepareTimeNanos",
+      "preloadedSplits",
+      "ramReadBytes",
+      "readyPreloadedSplits",
+      "rpcCongestionWindowFinal",
+      "rpcPeakInFlight",
+      "rpcBaselineRttNanos",
+      "rpcRttMinWallNanos",
+      "rpcRttMaxWallNanos",
+      "rpcStreamingMode",
+      "queuedWallNanos",
+      "storageReadWallNanos",
+      "storageReadBytes",
+      "ssdCacheReadWallNanos",
+      "waitForPreloadSplitNanos",
+  };
+  return metrics;
 }
 
 } // namespace
@@ -46,18 +79,39 @@ void RuntimeMetric::aggregate() {
 }
 
 void OperatorAggregatedMetrics::add(std::string name) {
-  operatorAggregatedMetrics().withWLock(
-      [&](auto& metrics) { metrics.insert(std::move(name)); });
+  VELOX_CHECK(
+      !defaultOperatorAggregatedMetrics().contains(name),
+      "Metric is built in for operator aggregation: {}",
+      name);
+  operatorAggregatedMetrics().withWLock([&](auto& metrics) {
+    const auto inserted = metrics.insert(name).second;
+    VELOX_CHECK(
+        inserted,
+        "Metric is already registered for operator aggregation: {}",
+        name);
+  });
 }
 
-void OperatorAggregatedMetrics::remove(std::string_view name) {
-  operatorAggregatedMetrics().withWLock(
-      [&](auto& metrics) { metrics.erase(std::string(name)); });
+void OperatorAggregatedMetrics::remove(const std::string& name) {
+  VELOX_CHECK(
+      !defaultOperatorAggregatedMetrics().contains(name),
+      "Metric is built in for operator aggregation: {}",
+      name);
+  operatorAggregatedMetrics().withWLock([&](auto& metrics) {
+    VELOX_CHECK_EQ(
+        metrics.erase(name),
+        1,
+        "Metric is not registered for operator aggregation: {}",
+        name);
+  });
 }
 
-bool OperatorAggregatedMetrics::contains(std::string_view name) {
+bool OperatorAggregatedMetrics::contains(const std::string& name) {
+  if (defaultOperatorAggregatedMetrics().contains(name)) {
+    return true;
+  }
   return operatorAggregatedMetrics().withRLock(
-      [&](const auto& metrics) { return metrics.contains(std::string(name)); });
+      [&](const auto& metrics) { return metrics.contains(name); });
 }
 
 void RuntimeMetric::merge(const RuntimeCounter& value) {
