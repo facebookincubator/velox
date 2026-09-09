@@ -51,8 +51,8 @@ struct ParseURLFunction {
   void initialize(
       const std::vector<TypePtr>& /* inputTypes */,
       const core::QueryConfig& config,
-      const arg_type<Varchar>* urlStr,
-      const arg_type<Varchar>* part,
+      const arg_type<Varchar>* /* urlStr */,
+      const arg_type<Varchar>* /* part */,
       const arg_type<Varchar>* key) {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
     // A constant key compiles its regex once here; a non-constant key is
@@ -121,14 +121,14 @@ struct ParseURLFunction {
     output = StringView(value.data(), static_cast<int32_t>(value.size()));
   }
 
-  /// Builds the query-parameter extraction regex for key: the same
-  /// (&|^)key=([^&]*) pattern Spark compiles.
+  // Builds the query-parameter extraction regex for key: the same
+  // (&|^)key=([^&]*) pattern Spark compiles.
   static std::string buildQueryPattern(std::string_view key) {
     return fmt::format("{}{}{}", kRegexPrefix, key, kRegexSuffix);
   }
 
-  /// Returns the requested part, or false for null. A view field with
-  /// data() == nullptr means the component is absent.
+  // Returns the requested part, or false for null. A view field with
+  // data() == nullptr means the component is absent.
   static bool extractPart(
       out_type<Varchar>& output,
       const detail::ParsedUrl& parsed,
@@ -189,7 +189,7 @@ struct ParseURLFunction {
 
   // Cache of compiled regexes for non-constant query keys, bounded by
   // 'expression.max_compiled_regexes'.
-  mutable facebook::velox::functions::detail::ReCache cache_;
+  facebook::velox::functions::detail::ReCache cache_;
 };
 
 } // namespace facebook::velox::functions::sparksql
