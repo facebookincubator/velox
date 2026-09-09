@@ -57,7 +57,6 @@
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
-#include "velox/dwio/nimble/velox/RawSizeUtils.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
@@ -2061,27 +2060,6 @@ bool Writer::flushInputBuffers(bool finalize) {
 void Writer::writeBatch(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   const auto storedData = storedDataInput(input);
-  // When enableStatsConsistencyCheck is true, compute raw size using
-  // RawSizeUtils to verify consistency with column statistics.
-  // Otherwise, skip this computation as column statistics will provide
-  // the raw size.
-  // Skip entirely when stats collection is disabled — there is no
-  // writeColumnStats() call to consume this value.
-  if (context_->options().enableStatsCollection &&
-      context_->options().enableStatsConsistencyCheck) {
-    // Calculate raw size using schema information to correctly handle
-    // passthrough flatmaps.
-    RawSizeContext context;
-    const auto rawSize = nimble::getRawSizeFromVector(
-        storedData,
-        velox::common::Ranges::of(0, numRows),
-        context,
-        schema_.get(),
-        context_->flatMapNodeIds(),
-        context_->ignoreTopLevelNulls());
-    context_->updateFileRawSize(rawSize);
-  }
-
   {
     velox::CpuWallTimer ingestionTimer{context_->ingestionTiming()};
     rootWriter_->write(storedData, OrderedRanges::of(0, numRows));
@@ -2146,13 +2124,13 @@ void Writer::writeMetadata() {
 }
 
 void Writer::writeColumnStats() {
-  // When enableStatsConsistencyCheck is true, verify that fileRawSize
-  // (accumulated via RawSizeUtils) matches the root column statistics.
-  if (context_->options().enableStatsConsistencyCheck) {
-    NIMBLE_CHECK_EQ(
-        context_->fileRawSize(),
-        context_->columnStats().front()->getLogicalSize(),
-        "Mismatched raw sizes!");
+  // Raw size now comes from the column statistics rather than a second pass
+  // over the input with RawSizeUtils. The consistency check that validated the
+  // two against each other has served its purpose and is gone, along with the
+  // duplicate computation it existed to justify.
+  if (!context_->columnStats().empty()) {
+    context_->updateFileRawSize(
+        context_->columnStats().front()->getLogicalSize());
   }
 
   if (context_->options().enableVectorizedStats) {

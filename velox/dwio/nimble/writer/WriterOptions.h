@@ -406,13 +406,6 @@ struct WriterOptions {
   /// This enables incremental memory reclamation during chunking.
   bool disableSharedStringBuffers{false};
 
-  /// When true, enables consistency check between fileRawSize (accumulated via
-  /// RawSizeUtils) and the root column statistics during file close.
-  /// This is used to validate that column statistics accurately track raw
-  /// sizes, with the goal of eventually replacing RawSizeUtils accumulation
-  /// with column statistics for non-deduplicated columns.
-  bool enableStatsConsistencyCheck{true};
-
   // Cache the encoding layout from the first encoding of each stream and
   // replay it on subsequent chunks/stripes, skipping the full encoding
   // selection cascade.
