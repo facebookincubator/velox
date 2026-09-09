@@ -59,7 +59,7 @@ struct SerializationHeader {
   static constexpr uint8_t kStreamVarintRowCountFlag{0x02};
   static constexpr uint8_t kStreamChunkHeaderFlag{0x04};
 
-  SerializationVersion version{SerializationVersion::kLegacy};
+  SerializationVersion version{SerializationVersion::kSerialization};
   uint32_t rowCount{0};
   /// Parsed flag values; defaults represent headers without a flags byte.
   HeaderFlags flags;
@@ -168,15 +168,6 @@ inline HeaderFlags readHeaderFlags(
 }
 
 inline HeaderFlags readHeaderFlags(
-    const char*& pos,
-    std::optional<SerializationVersion> version) {
-  if (!version.has_value()) {
-    return {};
-  }
-  return readHeaderFlags(pos, version.value());
-}
-
-inline HeaderFlags readHeaderFlags(
     folly::io::Cursor& cursor,
     SerializationVersion version) {
   if (!hasSerializationHeaderFlags(version)) {
@@ -185,80 +176,44 @@ inline HeaderFlags readHeaderFlags(
   return detail::parseVersionedHeaderFlags(cursor.read<uint8_t>(), version);
 }
 
-inline HeaderFlags readHeaderFlags(
-    folly::io::Cursor& cursor,
-    std::optional<SerializationVersion> version) {
-  if (!version.has_value()) {
-    return {};
-  }
-  return readHeaderFlags(cursor, version.value());
-}
-
 inline bool readRequiresNullBarrierFlag(
     const char*& pos,
-    std::optional<SerializationVersion> version) {
+    SerializationVersion version) {
   return readHeaderFlags(pos, version).requiresNullBarrier;
 }
 
 inline bool readRequiresNullBarrierFlag(
-    const char*& pos,
-    SerializationVersion version) {
-  return readRequiresNullBarrierFlag(
-      pos, std::optional<SerializationVersion>{version});
-}
-
-inline bool readRequiresNullBarrierFlag(
     folly::io::Cursor& cursor,
-    std::optional<SerializationVersion> version) {
+    SerializationVersion version) {
   return readHeaderFlags(cursor, version).requiresNullBarrier;
 }
 
-inline bool readRequiresNullBarrierFlag(
-    folly::io::Cursor& cursor,
-    SerializationVersion version) {
-  return readRequiresNullBarrierFlag(
-      cursor, std::optional<SerializationVersion>{version});
-}
-
 /// Reads the serialization header from `*pos`, detecting the version from the
-/// first byte when `hasHeader` is true (otherwise defaults to kLegacy).
-/// Advances `*pos` past all header fields. For kTablet, also reads the
-/// row range and resume key length fields.
-SerializationHeader
-readSerializationHeader(const char*& pos, const char* end, bool hasHeader);
+/// first byte. Advances `*pos` past all header fields. For kTablet, also reads
+/// the row range and resume key length fields.
+SerializationHeader readSerializationHeader(const char*& pos, const char* end);
 
 /// Writes a legacy serialization header that has no flags byte.
-/// Writes [optional_version:1B][rowCount]. For kLegacy / nullopt, rowCount is
-/// u32. For legacy encoded formats without a flags byte, rowCount is varint.
-/// kSerialization / kProjection must use writeSerializationHeader() returning
-/// the flags byte offset.
-/// kTablet headers must use createTabletChunkHeader() instead.
-///
-/// This is only used for legacy versions (kLegacy without header, or kLegacy
-/// with header but no flags). Non-legacy versions with headers are normalized
-/// to kSerialization and use writeSerializationHeader() with flags.
+/// Writes [version:1B][rowCount:varint]. Valid only for the read-only legacy
+/// encoded formats (kLegacyCompact, kLegacySerialization), which compatibility
+/// tooling still synthesizes. kSerialization / kProjection must use
+/// writeSerializationHeader(), which returns the flags byte offset; kTablet
+/// headers must use createTabletChunkHeader().
 template <typename T>
 void writeLegacySerializationHeader(
     T& buffer,
-    std::optional<SerializationVersion> version,
+    SerializationVersion version,
     uint32_t rowCount) {
   NIMBLE_CHECK(
       !hasSerializationHeaderFlags(version),
       "Serialization headers without flags cannot write versions with header flags. Got: {}",
-      version.has_value() ? toString(version.value()) : "nullopt");
+      toString(version));
 
-  if (version.has_value()) {
-    auto* versionPos = detail::extend(buffer, 1);
-    *versionPos = static_cast<char>(version.value());
-  }
+  auto* versionPos = detail::extend(buffer, 1);
+  *versionPos = static_cast<char>(version);
 
-  if (usesVarintRowCount(version)) {
-    auto* rowCountPos = detail::extend(buffer, varint::varintSize(rowCount));
-    varint::writeVarint(rowCount, &rowCountPos);
-  } else {
-    auto* rowCountPos = detail::extend(buffer, sizeof(uint32_t));
-    encoding::writeUint32(rowCount, rowCountPos);
-  }
+  auto* rowCountPos = detail::extend(buffer, varint::varintSize(rowCount));
+  varint::writeVarint(rowCount, &rowCountPos);
 }
 
 /// Writes a nullable-format serialization header to buffer.

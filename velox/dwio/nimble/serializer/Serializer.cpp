@@ -34,18 +34,12 @@ class FlatmapEncodingLayoutContext : public TypeBuilderContext {
       keyEncodings_;
 };
 
-// Legacy writer spellings with a version header are read-only / migration-only.
-// Callers that still pass them are silently upgraded to kSerialization so
-// round-trips use the current wire format while call sites migrate. A missing
-// version is the production no-header legacy format and must remain stable.
+// Legacy writer spellings are read-only / migration-only. Callers that still
+// pass them are silently upgraded to kSerialization so round-trips use the
+// current wire format while call sites migrate.
 SerializerOptions normalizeWriterVersion(SerializerOptions options) {
-  if (!options.version.has_value()) {
-    return options;
-  }
-
-  const auto version = options.version.value();
-  if (version == SerializationVersion::kLegacy ||
-      version == SerializationVersion::kLegacyCompact ||
+  const auto version = options.version;
+  if (version == SerializationVersion::kLegacyCompact ||
       version == SerializationVersion::kLegacySerialization) {
     LOG_FIRST_N(WARNING, 10)
         << "Serializer constructed with " << toString(version)
@@ -65,8 +59,7 @@ Serializer::Serializer(
     : options_{normalizeWriterVersion(std::move(options))},
       context_{*pool},
       nestedEncodingBufferPool_{
-          options_.enableEncoding() &&
-                  options_.maxCachedNestedEncodingBuffers > 0
+          options_.maxCachedNestedEncodingBuffers > 0
               ? std::make_unique<EncodingBufferPool>(
                     context_.bufferMemoryPool().get(),
                     options_.maxCachedNestedEncodingBuffers)
@@ -74,12 +67,10 @@ Serializer::Serializer(
       buffer_{context_.bufferMemoryPool().get()} {
   options_.encodingOptions.encodingBufferPool = nestedEncodingBufferPool_.get();
 
-  const auto version = options_.serializationVersion();
   NIMBLE_CHECK(
-      version == SerializationVersion::kLegacy ||
-          version == SerializationVersion::kSerialization,
-      "Serializer writes must use kLegacy or kSerialization. Got: {}",
-      version);
+      options_.version == SerializationVersion::kSerialization,
+      "Serializer writes must use kSerialization. Got: {}",
+      options_.version);
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(type);
 

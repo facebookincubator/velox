@@ -90,7 +90,7 @@ void constructProjectedDeserializer(uint32_t iters) {
         state.schema,
         state.selectedSubfields,
         pool.get(),
-        DeserializerOptions{.hasHeader = true}};
+        DeserializerOptions{}};
     folly::doNotOptimizeAway(deserializer);
   }
 }
@@ -103,7 +103,7 @@ void constructAndDeserialize(uint32_t iters) {
         state.schema,
         state.selectedSubfields,
         pool.get(),
-        DeserializerOptions{.hasHeader = true}};
+        DeserializerOptions{}};
     velox::VectorPtr output;
     deserializer.deserialize(state.serialized, output);
     folly::doNotOptimizeAway(output);
