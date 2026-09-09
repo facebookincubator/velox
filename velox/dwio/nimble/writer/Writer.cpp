@@ -48,7 +48,7 @@
 #include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
-#include "velox/dwio/nimble/index/VectorIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
@@ -1781,7 +1781,7 @@ std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
       "WriterOptions::vectorIndexWriterFactory must be set when "
       "vectorIndexConfigs is not empty. Depend on "
       "//velox/dwio/nimble/index:vector_index and use "
-      "index::faissVectorIndexWriterFactory().");
+      "index::VectorIndexWriter::create.");
   auto writer = options.vectorIndexWriterFactory(
       options.vectorIndexConfigs, velox::asRowType(type), pool);
   NIMBLE_CHECK_NOT_NULL(

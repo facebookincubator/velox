@@ -24,7 +24,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
-#include "velox/dwio/nimble/index/VectorIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
@@ -149,9 +149,7 @@ struct WriterOptions {
 
   /// Builds the writer for vectorIndexConfigs. Required when
   /// vectorIndexConfigs is non-empty. Set it to
-  /// index::faissVectorIndexWriterFactory() and depend on
-  /// //velox/dwio/nimble/index:vector_index to build FAISS indexes; the writer
-  /// itself links no similarity-search library.
+  /// index::VectorIndexWriter::create
   index::VectorIndexWriterFactory vectorIndexWriterFactory{};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
