@@ -43,7 +43,6 @@
 #include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/VectorIndexGenerated.h"
 #include "velox/dwio/nimble/writer/Writer.h"
@@ -214,23 +213,21 @@ class VectorIndexTest : public ::testing::Test {
   VectorIndexDirectory readDirectory(const WrittenIndexes& written) {
     auto directoryBuffer = MetadataBuffer::decompress(
         written.directoryData, CompressionType::Uncompressed, pool());
+    velox::io::ReaderOptions ioOptions(pool());
+    ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    IndexLookup::Options indexOptions{
+        .file = std::make_shared<velox::InMemoryReadFile>(written.indexData),
+        .ioOptions = &ioOptions,
+    };
     return VectorIndexDirectory::create(
-        Section{MetadataBuffer{std::move(directoryBuffer)}});
+        Section{MetadataBuffer{std::move(directoryBuffer)}}, indexOptions);
   }
 
   // Materializes the single index expected by most focused tests.
   std::shared_ptr<const VectorIndex> readIndex(const WrittenIndexes& written) {
     const auto directory = readDirectory(written);
     NIMBLE_CHECK_EQ(directory.numIndexes(), 1);
-    auto readFile =
-        std::make_unique<velox::InMemoryReadFile>(written.indexData);
-    auto metadataInput = MetadataInput::create(
-        readFile.get(),
-        MetadataInput::Options{
-            .pool = pool(),
-            .ioStats = std::make_shared<velox::io::IoStatistics>(),
-        });
-    return directory.load("embedding", *metadataInput);
+    return directory.load("embedding");
   }
 
   // Returns one descriptor from the captured directory FlatBuffer.
@@ -766,14 +763,14 @@ TEST_F(VectorIndexTest, writerRoundTripWithMultipleIndexes) {
       tablet->loadOptionalSection(std::string{kVectorIndexSection});
   ASSERT_TRUE(directory.has_value());
 
-  auto metadataInput = MetadataInput::create(
-      readFile.get(),
-      MetadataInput::Options{
-          .pool = pool(),
-          .ioStats = std::make_shared<velox::io::IoStatistics>(),
-      });
+  velox::io::ReaderOptions indexIoOptions(pool());
+  indexIoOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  IndexLookup::Options indexOptions{
+      .file = readFile,
+      .ioOptions = &indexIoOptions,
+  };
   const auto vectorIndexDirectory =
-      VectorIndexDirectory::create(std::move(directory.value()));
+      VectorIndexDirectory::create(std::move(directory.value()), indexOptions);
   ASSERT_EQ(vectorIndexDirectory.numIndexes(), 2);
 
   const std::array expectedColumns{"first_embedding", "second_embedding"};
@@ -784,8 +781,7 @@ TEST_F(VectorIndexTest, writerRoundTripWithMultipleIndexes) {
   for (size_t i = 0; i < expectedColumns.size(); ++i) {
     SCOPED_TRACE(fmt::format("column={}", expectedColumns[i]));
     EXPECT_TRUE(vectorIndexDirectory.contains(expectedColumns[i]));
-    const auto vectorIndex =
-        vectorIndexDirectory.load(expectedColumns[i], *metadataInput);
+    const auto vectorIndex = vectorIndexDirectory.load(expectedColumns[i]);
     const auto queryBegin = data[i]->begin() + kQueryRow * kDimensions;
     const std::vector<float> query(queryBegin, queryBegin + kDimensions);
     const auto results = vectorIndex->search({
@@ -799,7 +795,7 @@ TEST_F(VectorIndexTest, writerRoundTripWithMultipleIndexes) {
 
   EXPECT_FALSE(vectorIndexDirectory.contains("missing"));
   NIMBLE_ASSERT_THROW(
-      vectorIndexDirectory.load("missing", *metadataInput),
+      vectorIndexDirectory.load("missing"),
       "Vector index column does not exist");
 }
 
@@ -1226,6 +1222,26 @@ TEST_F(VectorIndexTest, dimensionMismatchOnSearch) {
 TEST_F(VectorIndexTest, emptyDirectoryRejected) {
   NIMBLE_ASSERT_THROW(
       readDirectory({}), "Vector index directory must not be empty");
+}
+
+TEST_F(VectorIndexTest, missingIoStatsDeferredUntilLoad) {
+  constexpr uint32_t kNumVectors{100};
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfFlat),
+      {makeInputFromVectors(
+          generateRandomVectors(kNumVectors, kDimensions), kDimensions)});
+  auto directoryBuffer = MetadataBuffer::decompress(
+      written.directoryData, CompressionType::Uncompressed, pool());
+  velox::io::ReaderOptions ioOptions(pool());
+  IndexLookup::Options indexOptions{
+      .file = std::make_shared<velox::InMemoryReadFile>(written.indexData),
+      .ioOptions = &ioOptions,
+  };
+
+  const auto directory = VectorIndexDirectory::create(
+      Section{MetadataBuffer{std::move(directoryBuffer)}}, indexOptions);
+  EXPECT_TRUE(directory.contains("embedding"));
+  NIMBLE_ASSERT_THROW(directory.load("embedding"), "indexIoStats must be set");
 }
 
 TEST_F(VectorIndexTest, invalidDirectoryLimitsRejected) {

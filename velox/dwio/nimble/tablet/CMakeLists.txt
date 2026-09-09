@@ -214,6 +214,7 @@ target_link_libraries(
   PUBLIC
     nimble_encodings
     nimble_index
+    nimble_vector_index
     nimble_tablet_common
     nimble_cluster_index_fb
     nimble_chunk_stats_fb

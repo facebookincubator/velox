@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
+#include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
@@ -254,6 +255,11 @@ TabletReader::TabletReader(
             return loadStripeGroup(stripeGroupIndex);
           },
           options.pinMetadata},
+      vectorIndexCache_{
+          [this](const std::string& columnName) {
+            return loadVectorIndex(columnName);
+          },
+          /*pinEntries=*/true},
       chunkStatsCache_{
           [this](uint32_t stripeGroupIndex) {
             return loadChunkStatsGroup(stripeGroupIndex);
@@ -341,6 +347,7 @@ void TabletReader::init(const Options& options) {
   initClusterIndex();
   initChunkStats(footerView, footerOffset);
   initDenseIndexes();
+  initVectorIndexes();
 
   cacheMetadata(footerView, footerOffset);
 }
@@ -468,6 +475,7 @@ bool TabletReader::initFromCache(const Options& options) {
   initClusterIndex();
   initChunkStats();
   initDenseIndexes();
+  initVectorIndexes();
   return true;
 }
 
@@ -775,7 +783,7 @@ void TabletReader::initSharedDictionaries(const Options& options) {
 std::vector<std::string> TabletReader::preloadSectionNames(
     const Options& options) const {
   std::vector<std::string> names;
-  names.reserve(options.preloadOptionalSections.size() + 3);
+  names.reserve(options.preloadOptionalSections.size() + 4);
   auto addName = [&names](std::string name) {
     if (std::find(names.begin(), names.end(), name) == names.end()) {
       names.emplace_back(std::move(name));
@@ -789,6 +797,7 @@ std::vector<std::string> TabletReader::preloadSectionNames(
   }
   addName(std::string{kPropertiesSection});
   addName(std::string{kDictionarySection});
+  addName(std::string{kVectorIndexSection});
   return names;
 }
 
@@ -1262,6 +1271,39 @@ const index::IndexLookup* TabletReader::denseIndex(
     return nullptr;
   }
   return denseIndexRegistry_->findIndex(name, columns);
+}
+
+void TabletReader::initVectorIndexes() {
+  auto section = loadOptionalSection(std::string{kVectorIndexSection});
+  if (!section.has_value()) {
+    return;
+  }
+  NIMBLE_CHECK_NULL(
+      vectorIndexDirectory_, "Vector indexes already initialized");
+  vectorIndexDirectory_ = std::make_unique<index::VectorIndexDirectory>(
+      index::VectorIndexDirectory::create(
+          std::move(section.value()), indexOptions_));
+}
+
+bool TabletReader::hasVectorIndex(std::string_view columnName) const {
+  return vectorIndexDirectory_ != nullptr &&
+      vectorIndexDirectory_->contains(columnName);
+}
+
+std::shared_ptr<const index::VectorIndex> TabletReader::vectorIndex(
+    std::string_view columnName) const {
+  if (vectorIndexDirectory_ == nullptr ||
+      !vectorIndexDirectory_->contains(columnName)) {
+    return nullptr;
+  }
+
+  return vectorIndexCache_.getOrCreate(std::string{columnName});
+}
+
+std::shared_ptr<const index::VectorIndex> TabletReader::loadVectorIndex(
+    const std::string& columnName) const {
+  NIMBLE_CHECK_NOT_NULL(vectorIndexDirectory_);
+  return vectorIndexDirectory_->load(columnName);
 }
 
 void TabletReader::initDenseIndexes() {
