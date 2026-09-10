@@ -118,6 +118,8 @@ std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
 std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
     argValuesGenerators = {
         {"at_timezone", std::make_shared<AtTimezoneArgValuesGenerator>()},
+        {"at_timezone_convert",
+         std::make_shared<AtTimezoneArgValuesGenerator>()},
         {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
         {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
         {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},

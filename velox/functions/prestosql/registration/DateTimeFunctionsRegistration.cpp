@@ -334,6 +334,26 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimeWithTimezone,
       Varchar>({prefix + "at_timezone"});
 
+  registerFunction<
+      AtTimezoneConvertToTimestampFunction,
+      Timestamp,
+      TimestampWithTimezone,
+      Varchar>({prefix + "at_timezone_convert"});
+
+  registerFunction<
+      AtTimezoneConvertToTimestampWithTimezoneFunction,
+      TimestampWithTimezone,
+      Timestamp,
+      Varchar>({prefix + "at_timezone_convert"});
+
+  // Reuses at_timezone's implementation, which accepts only a +HH:mm offset,
+  // not a named zone as the signatures above do.
+  registerFunction<
+      AtTimezoneTimeWithTimezoneFunction,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      Varchar>({prefix + "at_timezone_convert"});
+
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"});
 
