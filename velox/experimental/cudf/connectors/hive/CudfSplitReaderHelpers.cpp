@@ -30,9 +30,13 @@
 #include <cuda/iterator>
 #include <cuda/std/tuple>
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
+#include <folly/executors/thread_factory/NamedThreadFactory.h>
 #include <folly/futures/Future.h>
+#include <folly/system/HardwareConcurrency.h>
 
+#include <cstdlib>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -69,6 +73,33 @@ std::future<T> toStdFuture(folly::Future<T> follyFuture) {
 } // namespace
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+// Executor for reads that must fetch from remote storage.
+//
+// Such a read blocks its thread on the network, so the useful width here is
+// set by how many requests the storage backend can carry, not by core count.
+// The connector IO executor is sized for CPU-bound work; running remote reads
+// on it caps concurrent fetches far below what KvikIO sustains when the cache
+// is not in the path. Reads served from the cache stay on the connector
+// executor: they are memcpy-bound, and widening them only adds contention for
+// host memory bandwidth.
+folly::Executor* remoteReadExecutor() {
+  static auto* executor = [] {
+    // These threads spend nearly all their time blocked on the network, so
+    // useful width is a multiple of core count rather than equal to it.
+    constexpr size_t kThreadsPerCore = 5;
+    size_t numThreads = folly::available_concurrency() * kThreadsPerCore;
+    if (const char* value = std::getenv("KVIKIO_NTHREADS")) {
+      if (const auto parsed = std::strtoull(value, nullptr, 10); parsed > 0) {
+        numThreads = parsed;
+      }
+    }
+    return new folly::CPUThreadPoolExecutor(
+        numThreads,
+        std::make_shared<folly::NamedThreadFactory>("CudfRemoteIO"));
+  }();
+  return executor;
+}
 
 // A host buffer drawn from cuDF's pinned memory pool.
 class PinnedStagingBuffer {
@@ -234,10 +265,17 @@ std::future<size_t> CachingDataSource::device_read_async(
   if (cache_ == nullptr || executor_ == nullptr) {
     return delegate_->device_read_async(offset, size, dst, stream);
   }
-  auto future = folly::via(executor_).thenValue(
-      [this, offset, size, dst, stream](auto&&) -> size_t {
-        return this->device_read(offset, size, dst, stream);
-      });
+  // Route by whether the range is already resident. A resident range is
+  // memcpy-bound and belongs on the connector executor; anything else has to
+  // fetch from storage and belongs on the wider one. This only reads the cache
+  // index, so it is cheap enough to do on the calling thread.
+  const velox::cache::RawFileCacheKey key{fileNum_.id(), offset};
+  auto* readExecutor = cache_->exists(key) ? executor_ : remoteReadExecutor();
+  auto future =
+      folly::via(readExecutor)
+          .thenValue([this, offset, size, dst, stream](auto&&) -> size_t {
+            return this->device_read(offset, size, dst, stream);
+          });
   return toStdFuture(std::move(future));
 }
 
