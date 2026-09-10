@@ -44,7 +44,6 @@ COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
 COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
-COPY CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch /
 COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
 
 ARG VELOX_BUILD_SHARED=ON
@@ -54,6 +53,12 @@ ENV VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED}
 
 ARG ARM_BUILD_TARGET=local
 ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
+
+# Build type for the bundled dependencies. Must match the build type of the
+# Velox that links against them, or folly's F14 hash table breaks at runtime.
+# See https://github.com/facebookincubator/velox/issues/18793.
+ARG DEPS_BUILD_TYPE=Release
+ENV BUILD_TYPE=${DEPS_BUILD_TYPE}
 
 RUN mkdir build
 WORKDIR /build
@@ -71,7 +76,6 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
 # https://github.com/apache/arrow/pull/45424
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
     VELOX_ARROW_CMAKE_PATCH="/arrow-testing-boost.patch /cmake-compatibility.patch" \
-    VELOX_FBTHRIFT_CMAKE_PATCH="/compactv1-protocol-refiller.patch" \
     VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch"
 
 # Ensure libraries installed to INSTALL_PREFIX are found at runtime (e.g.
@@ -109,7 +113,7 @@ RUN /bin/bash -c 'source /setup-centos9.sh && \
       install_velox_deps_from_dnf && \
       dnf clean all'
 
-RUN ln -s $(which python3) /usr/bin/python
+RUN ln -sf $(which python3) /usr/bin/python
 
 COPY --from=base-build /deps /usr/local
 
@@ -158,6 +162,10 @@ COPY scripts/setup-centos-adapters.sh /
 
 ARG ARM_BUILD_TARGET=local
 ENV ARM_BUILD_TARGET=${ARM_BUILD_TARGET}
+
+# Keep the adapter dependencies on the same build type as the base ones.
+ARG DEPS_BUILD_TYPE=Release
+ENV BUILD_TYPE=${DEPS_BUILD_TYPE}
 
 RUN mkdir build
 WORKDIR /build

@@ -66,6 +66,7 @@ list(
 include(ResolveDependency)
 include(VeloxUtils)
 include(CMakeDependentOption)
+include(CheckIPOSupported)
 
 velox_set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -91,6 +92,7 @@ option(VELOX_MONO_LIBRARY "Build single unified library." ON)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
 option(VELOX_BUILD_CMAKE_PACKAGE "Build CMake package for Velox." OFF)
+option(VELOX_ENABLE_LTO "Enable link-time optimization (IPO/LTO)." OFF)
 option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test." OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
@@ -114,6 +116,18 @@ if(VELOX_BUILD_SHARED)
     "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
+endif()
+
+if(VELOX_ENABLE_LTO)
+  check_ipo_supported(RESULT VELOX_IPO_SUPPORTED OUTPUT VELOX_IPO_ERROR LANGUAGES CXX)
+  if(NOT VELOX_IPO_SUPPORTED)
+    message(
+      FATAL_ERROR
+      "VELOX_ENABLE_LTO requested, but IPO/LTO is not supported: ${VELOX_IPO_ERROR}"
+    )
+  endif()
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+  message(STATUS "VELOX_ENABLE_LTO enabled")
 endif()
 
 # option() always creates a BOOL variable so we have to use a normal cache
@@ -159,6 +173,11 @@ option(VELOX_ENABLE_NIMBLE "Enable Nimble support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
+option(
+  VELOX_ENABLE_LOCAL_RUNNER_SERVICE
+  "Enable LocalRunnerService and VeloxQueryRunner for expression fuzzer regression testing"
+  OFF
+)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
@@ -281,7 +300,7 @@ if(${VELOX_ENABLE_DUCKDB})
   velox_resolve_dependency(DuckDB)
 endif()
 
-if(VELOX_ENABLE_FAISS)
+if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
   velox_set_source(faiss)
   velox_resolve_dependency(faiss)
   if(NOT TARGET FAISS::faiss)
@@ -661,8 +680,13 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   velox_resolve_dependency(pybind11 2.10.0)
 endif()
 
-# DWIO (ORC/DWRF) depends on protobuf.
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_ENABLE_GCS)
+# DWIO (ORC/DWRF) depends on protobuf. Nimble's serializer does too.
+if(
+  ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+  OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+  OR VELOX_ENABLE_GCS
+  OR VELOX_ENABLE_NIMBLE
+)
   # Locate or build protobuf.
   velox_set_source(Protobuf)
   velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
@@ -692,9 +716,14 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
-  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
-  # requires clients to explicitly install fizz and wangle.
+# FBThrift is required by remote functions and LocalRunnerService.
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET OR VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
+  set(VELOX_NEEDS_FBTHRIFT ON)
+endif()
+
+# TODO: Move this to use resolve_dependency(). For some reason, FBThrift
+# requires clients to explicitly install fizz and wangle.
+if(VELOX_NEEDS_FBTHRIFT)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)

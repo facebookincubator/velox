@@ -44,7 +44,7 @@ class BufferedWriterTest : public testing::TestWithParam<bool> {
   const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
-TEST_P(BufferedWriterTest, Basic) {
+TEST_P(BufferedWriterTest, basic) {
   const int bufferSize = 1024;
 
   struct {

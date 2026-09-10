@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
@@ -249,6 +250,19 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   // if buildStream_ was never fetched (e.g. build side never ran).
   void recordReadCompletion(rmm::cuda_stream_view probeStream);
 
+  /// Evaluates a join condition that isn't AST-representable (e.g. `probe.col
+  /// LIKE build.pattern`) by materializing the probe x build cross product
+  /// and running filterEvaluator_ over it. Returns (probeIndex, buildIndex)
+  /// pairs where the condition holds, matching cudf::conditional_inner_join's
+  /// output shape. `needBuildIndices=false` skips building the build-index
+  /// column for callers that don't need it (e.g. left semi project).
+  std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
+  crossJoinConditionalIndices(
+      cudf::table_view probeTableView,
+      cudf::table_view buildView,
+      rmm::cuda_stream_view stream,
+      bool needBuildIndices = true);
+
   bool isLeftOrFullJoin() const {
     return joinType_ == core::JoinType::kLeft ||
         joinType_ == core::JoinType::kFull;
@@ -273,12 +287,15 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   std::vector<PrecomputeInstruction> leftPrecomputeInstructions_;
   std::vector<PrecomputeInstruction> rightPrecomputeInstructions_;
 
-  // Output column mapping resolved by name from the output type.
-  // Handles arbitrary column ordering (e.g., {"b0", "p0"}).
-  std::vector<cudf::size_type> probeColumnIndicesToGather_;
-  std::vector<cudf::size_type> buildColumnIndicesToGather_;
-  std::vector<size_t> probeColumnOutputIndices_;
-  std::vector<size_t> buildColumnOutputIndices_;
+  CudfJoinOutputLayout outputLayout_;
+
+  // False when the join condition has a non-AST-representable
+  // sub-expression spanning both sides (see crossJoinConditionalIndices).
+  // In that case tree_/scalars_/*PrecomputeInstructions_ above are unused
+  // (left empty) and filterEvaluator_ below evaluates the whole condition
+  // instead.
+  bool useAstFilter_{true};
+  std::shared_ptr<CudfExpression> filterEvaluator_;
 
   // Probe and build types (cached for null column creation in left joins).
   RowTypePtr probeType_;

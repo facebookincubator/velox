@@ -167,7 +167,7 @@ TEST_F(BinaryFunctionsTest, spookyHashV264) {
       spookyHashV264("more_than_12_characters_string"));
 }
 
-TEST_F(BinaryFunctionsTest, HmacSha1) {
+TEST_F(BinaryFunctionsTest, hmacSha1) {
   const auto hmacSha1 = [&](std::optional<std::string> arg,
                             std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -205,7 +205,7 @@ TEST_F(BinaryFunctionsTest, HmacSha1) {
   EXPECT_EQ(std::nullopt, hmacSha1("velox", std::nullopt));
 }
 
-TEST_F(BinaryFunctionsTest, HmacSha256) {
+TEST_F(BinaryFunctionsTest, hmacSha256) {
   const auto hmacSha256 = [&](std::optional<std::string> arg,
                               std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -237,7 +237,7 @@ TEST_F(BinaryFunctionsTest, HmacSha256) {
   EXPECT_EQ(std::nullopt, hmacSha256(std::nullopt, "velox"));
 }
 
-TEST_F(BinaryFunctionsTest, HmacSha512) {
+TEST_F(BinaryFunctionsTest, hmacSha512) {
   const auto hmacSha512 = [&](std::optional<std::string> arg,
                               std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -259,7 +259,7 @@ TEST_F(BinaryFunctionsTest, HmacSha512) {
 
 // Note: this test fails in a FIPS enabled environment because OpenSSL restricts
 // usage of MD5 for hmacs.
-TEST_F(BinaryFunctionsTest, HmacMd5) {
+TEST_F(BinaryFunctionsTest, hmacMd5) {
   const auto hmacMd5 = [&](std::optional<std::string> arg,
                            std::optional<std::string> key) {
     return evaluateOnce<std::string>(
@@ -367,7 +367,7 @@ TEST_F(BinaryFunctionsTest, xxhash128WithSeed) {
       xxhash128WithSeed("hashme", 0));
 }
 
-TEST_F(BinaryFunctionsTest, fnv1_32) {
+TEST_F(BinaryFunctionsTest, fnv132) {
   const auto fnv1_32 = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t>("fnv1_32(c0)", VARBINARY(), arg);
   };
@@ -380,7 +380,7 @@ TEST_F(BinaryFunctionsTest, fnv1_32) {
   EXPECT_EQ(0x9f2263f3, fnv1_32(hexToDec("232706FC6BF50919")));
 }
 
-TEST_F(BinaryFunctionsTest, fnv1_64) {
+TEST_F(BinaryFunctionsTest, fnv164) {
   const auto fnv1_64 = [&](std::optional<std::string> arg) {
     return evaluateOnce<int64_t>("fnv1_64(c0)", VARBINARY(), arg);
   };
@@ -390,7 +390,7 @@ TEST_F(BinaryFunctionsTest, fnv1_64) {
   EXPECT_EQ(0x4a65ff96675a9f33L, fnv1_64(hexToDec("232706FC6BF50919")));
 }
 
-TEST_F(BinaryFunctionsTest, fnv1a_32) {
+TEST_F(BinaryFunctionsTest, fnv1a32) {
   const auto fnv1a_32 = [&](std::optional<std::string> arg) {
     return evaluateOnce<int32_t>("fnv1a_32(c0)", VARBINARY(), arg);
   };
@@ -404,7 +404,7 @@ TEST_F(BinaryFunctionsTest, fnv1a_32) {
   EXPECT_EQ(0x0951d55f, fnv1a_32(hexToDec("232706FC6BF50919")));
 }
 
-TEST_F(BinaryFunctionsTest, fnv1a_64) {
+TEST_F(BinaryFunctionsTest, fnv1a64) {
   const auto fnv1a_64 = [&](std::optional<std::string> arg) {
     return evaluateOnce<int64_t>("fnv1a_64(c0)", VARBINARY(), arg);
   };
@@ -975,7 +975,7 @@ TEST_F(BinaryFunctionsTest, lpad) {
   VELOX_ASSERT_USER_THROW(lpad("2312", 1, ""), "padString must not be empty");
 }
 
-TEST_F(BinaryFunctionsTest, murmur3_x64_128) {
+TEST_F(BinaryFunctionsTest, murmur3X64128) {
   const auto murmur3_x64_128 = [&](std::optional<std::string> arg) {
     return evaluateOnce<std::string>(
         "murmur3_x64_128(c0)", VARBINARY(), std::move(arg));

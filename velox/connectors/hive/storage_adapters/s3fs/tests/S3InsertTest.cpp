@@ -37,7 +37,7 @@ class S3InsertTest : public S3Test, public test::InsertTest {
 
   void SetUp() override {
     S3Test::SetUp();
-    InsertTest::SetUp(minioServer_->hiveConfig(), ioExecutor_.get());
+    InsertTest::SetUp(minioServer_->s3Config(), ioExecutor_.get());
   }
 
   void TearDown() override {

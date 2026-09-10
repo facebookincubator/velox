@@ -35,6 +35,11 @@ StepAwareAggregationRegistry& getGroupbyAggregationRegistry() {
   return registry;
 }
 
+std::unordered_set<std::string>& maskSupportedAggregations() {
+  static std::unordered_set<std::string> names;
+  return names;
+}
+
 StepAwareAggregationRegistry& getReduceAggregationRegistry() {
   static StepAwareAggregationRegistry registry;
   return registry;
@@ -331,6 +336,14 @@ void registerCommonAggregationFunctions(
       prefix + "max",
       core::AggregationNode::Step::kIntermediate,
       minMaxSignatures);
+
+  // sum/count/min/max honor a FILTER mask (masked rows are null-injected, or
+  // excluded via the validity column for count). Declared here, alongside their
+  // registration, so mask eligibility stays with the function rather than being
+  // duplicated as a name list in the groupby/reduce validators. avg and the
+  // engine-specific aggregates below intentionally do not opt in.
+  maskSupportedAggregations().insert(
+      {prefix + "sum", prefix + "count", prefix + "min", prefix + "max"});
 
   auto avgSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
@@ -686,6 +699,7 @@ void appendReduceAggregationFunctionForStep(
 void unregisterAggregateFunctions() {
   getGroupbyAggregationRegistry().clear();
   getReduceAggregationRegistry().clear();
+  maskSupportedAggregations().clear();
 }
 
 } // namespace facebook::velox::cudf_velox

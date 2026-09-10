@@ -100,6 +100,10 @@ void addOperationStatsToRuntimeStats(
     add("localThrottleCount", counters.localThrottleCount);
     add("globalThrottleCount", counters.globalThrottleCount);
     add("resourceThrottleCount", counters.resourceThrottleCount);
+    add("retryCount", counters.retryCount);
+    // Cumulative across requests, so consumers must divide by requestCount to
+    // recover a per-request mean.
+    add("latencyInMs", counters.latencyInMs);
   }
 }
 

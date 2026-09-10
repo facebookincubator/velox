@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 #include <fstream>
+#include <limits>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/functions/lib/KllSketch.h"
@@ -223,6 +225,46 @@ TEST_F(KllSketchTest, mergeEmpty) {
 
 TEST_F(KllSketchTest, kFromEpsilon) {
   EXPECT_EQ(kFromEpsilon(kEpsilon), kDefaultK);
+  EXPECT_EQ(kFromEpsilon(1e-5), 326'408);
+  VELOX_ASSERT_THROW(
+      kFromEpsilon(1e-9),
+      "Accuracy is too small: 1e-09 produces K 4243845673, but maximum K is 1073741824");
+  VELOX_ASSERT_THROW(
+      kFromEpsilon(0), "Accuracy must be positive and finite: 0");
+  VELOX_ASSERT_THROW(
+      kFromEpsilon(std::numeric_limits<double>::infinity()),
+      "Accuracy must be positive and finite: inf");
+}
+
+TEST_F(KllSketchTest, maxK) {
+  KllSketch<double> sketch(kMaxK);
+  VELOX_ASSERT_THROW(
+      KllSketch<double>(kMaxK + 1), "K must be at most 1073741824: 1073741825");
+  VELOX_ASSERT_THROW(
+      sketch.setK(kMaxK + 1), "K must be at most 1073741824: 1073741825");
+}
+
+TEST_F(KllSketchTest, totalCapacityOverflow) {
+  VELOX_ASSERT_THROW(
+      detail::computeTotalCapacity(std::numeric_limits<uint32_t>::max(), 2),
+      "KLL total capacity exceeds uint32_t");
+}
+
+TEST_F(KllSketchTest, mergeSparseSketchAtMaxK) {
+  KllSketch<int64_t> result(kMaxK, {}, 0);
+  result.merge(KllSketch<int64_t>::fromRepeatedValue(0, 67'001, kMaxK, {}, 0));
+  result.insert(13);
+  EXPECT_LT(result.serializedByteSize(), 1024);
+
+  for (int i = 1; i < 3; ++i) {
+    result.merge(
+        KllSketch<int64_t>::fromRepeatedValue(i, 67'001, kMaxK, {}, i));
+  }
+
+  EXPECT_EQ(result.totalCount(), 3 * 67'001 + 1);
+  result.finish();
+  EXPECT_EQ(result.estimateQuantile(0), 0);
+  EXPECT_EQ(result.estimateQuantile(1), 13);
 }
 
 TEST_F(KllSketchTest, serialize) {

@@ -51,17 +51,11 @@ TrackedExecutor::Func TrackedExecutor::wrapFunc(Func func) {
   };
 }
 
-void TrackedExecutor::reportTo(
-    BaseRuntimeStatWriter& writer,
-    std::string_view prefix) const {
+void TrackedExecutor::reportTo(BaseRuntimeStatWriter& writer) const {
+  writer.setRuntimeStat(kExecutorWaitNanos, metrics_->waitTime);
   writer.setRuntimeStat(
-      fmt::format("{}-{}", prefix, kExecutorWaitNanos), metrics_->waitTime);
-  writer.setRuntimeStat(
-      fmt::format("{}-{}", prefix, kExecutorExecutionWallNanos),
-      metrics_->executionWallTime);
-  writer.setRuntimeStat(
-      fmt::format("{}-{}", prefix, kExecutorExecutionCpuNanos),
-      metrics_->executionCpuTime);
+      kExecutorExecutionWallNanos, metrics_->executionWallTime);
+  writer.setRuntimeStat(kExecutorExecutionCpuNanos, metrics_->executionCpuTime);
 }
 
 } // namespace facebook::velox

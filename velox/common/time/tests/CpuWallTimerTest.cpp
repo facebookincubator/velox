@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#include <atomic>
+#include <latch>
 #include <thread>
 
 #include "velox/common/time/CpuWallTimer.h"
+#include "velox/common/time/Timer.h"
 
 using namespace facebook::velox;
 
@@ -102,6 +106,45 @@ TEST_F(CpuWallTimerTest, cpuWallTimer) {
   EXPECT_EQ(2, timing.count);
   EXPECT_LT(sleepTime.count() * 2, timing.wallNanos);
   EXPECT_LT(cpuFirstTime, timing.cpuNanos);
+}
+
+TEST_F(CpuWallTimerTest, processCpuWallTimerIncludesBackgroundThreads) {
+  constexpr uint32_t numWorkers{4};
+  folly::CPUThreadPoolExecutor executor{numWorkers};
+  std::latch allStarted{numWorkers};
+  std::latch startWork{1};
+  std::latch finished{numWorkers};
+  std::atomic<uint64_t> totalIterations{0};
+  constexpr uint64_t iterationsPerWorker{2'000'000};
+  for (uint32_t worker = 0; worker < numWorkers; ++worker) {
+    executor.add([&] {
+      allStarted.count_down();
+      startWork.wait();
+      for (uint64_t iteration = 0; iteration < iterationsPerWorker;
+           ++iteration) {
+        totalIterations.fetch_add(1, std::memory_order_relaxed);
+      }
+      finished.count_down();
+    });
+  }
+  allStarted.wait();
+
+  CpuWallTiming threadTiming;
+  CpuWallTiming processTiming;
+  {
+    ProcessCpuWallTimer processTimer{processTiming};
+    CpuWallTimer threadTimer{threadTiming};
+    startWork.count_down();
+    finished.wait();
+  }
+
+  EXPECT_EQ(
+      totalIterations.load(std::memory_order_relaxed),
+      numWorkers * iterationsPerWorker);
+  EXPECT_EQ(processTiming.count, 1);
+  EXPECT_EQ(threadTiming.count, 1);
+  EXPECT_GT(processTiming.cpuNanos, threadTiming.cpuNanos + 10'000'000);
+  EXPECT_GE(processTiming.wallNanos, threadTiming.wallNanos);
 }
 
 TEST_F(CpuWallTimerTest, deltaCpuWallTimer) {

@@ -51,6 +51,16 @@ class ParquetConfig {
       false,
       "Allow reading INT32 Parquet columns as a narrower integer type.")
 
+  VELOX_FORMAT_CONFIG(
+      kNullStructIfAllFieldsMissingSession,
+      kNullStructIfAllFieldsMissing,
+      nullStructIfAllFieldsMissing,
+      "null_struct_if_all_fields_missing",
+      "null-struct-if-all-fields-missing",
+      bool,
+      false,
+      "When name-based mapping is enabled and all requested struct children are missing, return NULL struct instead of a non-null struct with all-null children.")
+
   static constexpr uint64_t kDefaultFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
   VELOX_FORMAT_CONFIG(
@@ -134,6 +144,16 @@ class ParquetConfig {
       "Parquet writer. When enabled, per-page statistics are stored in the "
       "page index instead of the data page headers.")
   VELOX_FORMAT_CONFIG_PROPERTY(
+      kWriterRowGroupSizeSession,
+      kWriterRowGroupSize,
+      "writer_row_group_size",
+      "writer.row-group-size",
+      std::string_view,
+      "128MB",
+      "Soft target for the serialized row group size in bytes for the Parquet "
+      "writer.")
+
+  VELOX_FORMAT_CONFIG_PROPERTY(
       kWriterSizeStatisticsLevelSession,
       kWriterSizeStatisticsLevel,
       "writer_size_statistics_level",
@@ -209,6 +229,13 @@ class ParquetConfig {
         kWriterEnablePageIndexSession, connectorConfig, kWriterEnablePageIndex);
   }
 
+  static std::optional<std::string> writerRowGroupSize(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) {
+    return session.getLegacyWithFallback<std::string>(
+        kWriterRowGroupSizeSession, connectorConfig, kWriterRowGroupSize);
+  }
+
   static std::optional<std::string> writerSizeStatisticsLevel(
       const config::ConfigBase& connectorConfig,
       const config::ConfigBase& session) {
@@ -229,8 +256,8 @@ class ParquetConfig {
   static constexpr std::string_view kWriterSerdeTimestampUnit =
       "parquet.writer.timestamp.unit";
 
-  /// Serde parameter key for overriding the Parquet writer timestamp timezone.
-  /// Empty string disables timezone conversion.
+  /// Serde parameter key for overriding the Parquet writer timestamp
+  /// timezone. Empty string disables timezone conversion.
   static constexpr std::string_view kWriterSerdeTimestampTimezone =
       "parquet.writer.timestamp.timezone";
 
@@ -264,7 +291,12 @@ class ParquetConfig {
     dwio::common::registerFormatConfigProperty<
         kWriterEnablePageIndexSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
+        kWriterRowGroupSizeSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
         kWriterSizeStatisticsLevelSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kNullStructIfAllFieldsMissingSessionProperty>(
+        properties, sessionPrefix);
   }
 };
 

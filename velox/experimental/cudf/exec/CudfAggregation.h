@@ -21,6 +21,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/expression/FunctionSignature.h"
 
+#include <cudf/copying.hpp>
+
 #include <optional>
 #include <string_view>
 
@@ -42,6 +44,23 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(const std::string& kind);
 
+// Returns true if the cuDF aggregator for 'aggregateName' honors a FILTER mask.
+// Eligibility is declared at registration (maskSupportedAggregations) rather
+// than hardcoded here: sum/count/min/max opt in, so masked rows are excluded
+// via null-injection (or the validity column for count(*)/count(const)); every
+// other aggregate ignores the mask and would silently produce an unmasked
+// result, so callers must fall back to CPU for them.
+bool aggregationSupportsMask(const std::string& aggregateName);
+
+// Returns true if cuDF can honor 'aggregate's FILTER mask at 'step' (no mask is
+// trivially true). The mask must sit at a raw-input step, be a bare boolean
+// field access, and target an aggregate in aggregationSupportsMask. Shared by
+// groupby and reduce validation so the two paths cannot diverge on what they
+// accept.
+bool maskSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate,
+    core::AggregationNode::Step step);
+
 enum class CountInputKind {
   kColumn,
   kCountAll,
@@ -62,6 +81,9 @@ struct ResolvedAggregateInfo {
   VectorPtr constant;
   TypePtr resultType;
   std::optional<CountInputKind> countInputKind;
+  // Post-permutation index of this aggregate's boolean mask column. Set only
+  // for masked aggregates at raw-input steps; nullopt otherwise.
+  std::optional<uint32_t> maskIndex;
   // True if the aggregate was declared on a decimal raw input in the plan.
   // Routing keys off the function family, not the physical batch type (which is
   // VARBINARY/STRING on intermediate and final steps).
@@ -70,18 +92,57 @@ struct ResolvedAggregateInfo {
 
 // Parse aggregate inputs from the aggregation node and resolve companion steps,
 // original names, and result types. Returns one entry per aggregate.
+// 'maskChannels' carries the post-permutation mask column index per aggregate
+// (parallel to aggregationNode.aggregates()); resolved maskIndex is gated to
+// raw-input steps only.
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels);
+
+// Returns a copy of 'values' where rows with a false or null 'mask' entry are
+// NULL (mask[i] ? values[i] : NULL). Both columns must have equal length.
+// Used by groupby and reduce to honor per-aggregate masks via null-exclusion.
+std::unique_ptr<cudf::column> applyMask(
+    cudf::column_view values,
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+// Materializes the masked raw-input value column for an aggregate: when
+// 'maskIndex' is set, returns applyMask(values, mask); when it is unset,
+// returns nullptr (callers then use input.column(inputIndex) directly). Returns
+// the OWNING column so both callers manage its lifetime — groupby stores it in
+// a member, reduce keeps it as a local through the reduce call. Shared by
+// groupby and reduce so both materialize masked input the same way.
+std::unique_ptr<cudf::column> materializeMaskedColumn(
+    cudf::table_view const& input,
+    uint32_t inputIndex,
+    std::optional<uint32_t> maskIndex,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
+
+// Returns a BOOL8 column whose validity is exactly "mask is true": a true entry
+// is valid, a false or null entry is null. Counting valid entries (COUNT_VALID)
+// over the result yields the number of mask-true rows, used for masked
+// count(*)/count(const).
+std::unique_ptr<cudf::column> maskToValidityColumn(
+    cudf::column_view mask,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 // Result of buildAggregationInputChannels: a channel permutation that places
 // grouping keys first, followed by aggregate input columns in aggregate order,
-// plus per-aggregate constants.
+// then one mask channel per masked raw-input aggregate; plus per-aggregate
+// constants and per-aggregate mask indices.
 struct AggregationInputChannels {
   std::vector<column_index_t> channels;
   std::vector<VectorPtr> constants;
+  // Per-aggregate post-permutation index of the mask column, or nullopt.
+  // Parallel to aggregationNode.aggregates().
+  std::vector<std::optional<uint32_t>> maskChannels;
 };
 
 // Build the input channel permutation for an aggregation node.  The returned

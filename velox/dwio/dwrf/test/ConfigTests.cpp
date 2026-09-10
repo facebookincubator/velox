@@ -46,7 +46,7 @@ std::shared_ptr<const Config> createWriterConfig(
   return Writer::makeWriterConfig(options, *dwrfOptions);
 }
 
-TEST(ConfigTests, Set) {
+TEST(ConfigTests, set) {
   Config config;
   // set
   auto val = folly::Random::rand32();
@@ -63,7 +63,7 @@ TEST(ConfigTests, Set) {
   EXPECT_TRUE(config.get(Config::CREATE_INDEX));
 }
 
-TEST(ConfigTests, EnumConfig) {
+TEST(ConfigTests, enumConfig) {
   Config config;
   config.set(Config::COMPRESSION, CompressionKind::CompressionKind_ZLIB);
   EXPECT_EQ(
@@ -73,14 +73,14 @@ TEST(ConfigTests, EnumConfig) {
       config.get(Config::COMPRESSION), CompressionKind::CompressionKind_NONE);
 }
 
-TEST(ConfigTests, UInt32Config) {
+TEST(ConfigTests, uint32Config) {
   Config config;
   auto val = folly::Random::rand32();
   config.set(Config::ROW_INDEX_STRIDE, val);
   EXPECT_EQ(config.get(Config::ROW_INDEX_STRIDE), val);
 }
 
-TEST(ConfigTests, BoolConfig) {
+TEST(ConfigTests, boolConfig) {
   Config config;
   config.set(Config::CREATE_INDEX, false);
   EXPECT_FALSE(config.get(Config::CREATE_INDEX));
@@ -162,7 +162,7 @@ TEST(ConfigTests, writerOptionsOverrideSession) {
 }
 
 class ConfigTests : public ::testing::TestWithParam<ConfigTestParams> {};
-TEST_P(ConfigTests, FlatMapCols) {
+TEST_P(ConfigTests, flatMapCols) {
   const auto& params = GetParam();
   std::map<std::string, std::string> inputConfigMap{
       {"orc.map.flat.cols", params.inputCols}};

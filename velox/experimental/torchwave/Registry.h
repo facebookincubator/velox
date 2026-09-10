@@ -91,6 +91,8 @@ enum class StandaloneShortcut {
   kSplitWithSizes,
   kSqueezeDim,
   kExpand,
+  kSymSize,
+  kSymNumel,
 };
 
 /// Specifies which arguments determine the number of elements a kernel
@@ -128,6 +130,14 @@ struct ArgumentMeta {
   /// For outputs that are materialized tensors, function that determines the
   /// size to allocate based on inputs and execution state.
   OutputReserveFunc reserveShape{nullptr};
+
+  /// Ordinal of the input whose shape 'reserveShape' returns, or -1 when the
+  /// shape is the reserve's own business. An elementwise or *_like output has
+  /// the extent of an operand, so anything that only needs to know WHEN the
+  /// shape becomes computable -- rather than what it is -- can look at that
+  /// input instead of treating the reserve as opaque. Concat layout is the
+  /// caller: one operand it cannot place early refuses the whole concat.
+  int32_t shapeFromInput{-1};
 
   /// True if actual size is determined on device, e.g. stream compaction.
   bool shapeSetOnDevice{false};
@@ -171,6 +181,20 @@ struct ArgumentMeta {
   /// is present with a non-None value. Absent arguments and None-valued
   /// attributes both produce false.
   bool hasPresentTemplateParam{false};
+
+  /// For an output: the kernel maps its writes through the output tensor's
+  /// strides rather than indexing its storage linearly, so it stays correct
+  /// when the output is a pitched view. This is what lets a concat hand the
+  /// producer a strided band of the result to write in place; a producer
+  /// without it gets a dense buffer of its own and the concat copies it in.
+  ///
+  /// It is the output-side dual of Metadata::layoutAgnostic, which is about the
+  /// strides an op READS, and it is not implied by an output's contiguity
+  /// ValueConstraint -- that states what the value IS, not what its writer
+  /// could cope with.
+  ///
+  /// On a TensorList (or a list of lists) it applies to every element.
+  bool mayWriteStrided{false};
 
   SizeShortcut sizeShortcut{SizeShortcut::kNone};
 
@@ -233,6 +257,13 @@ struct Metadata {
   /// regardless of input size.
   bool alwaysSingleBlock{false};
 
+  /// If true, the grid is sized by the sum of the op's input element counts
+  /// rather than the largest one. Set this when an op's work is the total over
+  /// a tensor list, not the largest member: sizing by the largest gives a grid
+  /// that ignores the list length, so the op runs far fewer blocks than it has
+  /// independent work.
+  bool gridSizeSumsInputs{false};
+
   /// If true, the op reads tensor metadata (shape, size) rather than
   /// computing on tensor data. When used as a size arg producer, it runs as
   /// a standalone rather than a fused op.
@@ -253,6 +284,14 @@ struct Metadata {
 
   /// Like makeMultiKernelVariant but for code generation variants.
   std::function<nativert::Node*(NodeCP single, WaveGraph* waveGraph)> cgVariant;
+
+  /// Rewrites one node into a form that produces its outputs tensor by tensor
+  /// instead of as a TensorList, so each column becomes a node the rest of the
+  /// compiler can see: consumer counting, aliasing, cost-based block shares and
+  /// CSE all work per value rather than per bundle. Returns true if it rewrote
+  /// the node. Called by decomposeListOps in one traversal, so an op supplies
+  /// only its own rule and no pass walks the graph on its behalf.
+  std::function<bool(NodeCP node, WaveGraph& waveGraph)> decompose;
 
   int32_t numBarriers{0};
 
@@ -402,6 +441,20 @@ struct Metadata {
       CompileCtx* ctx)>
       specialForm;
 
+  /// Custom code generation for a non-elementwise op, alongside the default
+  /// call rather than instead of it (which is what specialForm is for).
+  /// Returns the text of one more template argument, emitted after
+  /// templateAttrs, and may declare what that argument names at
+  /// translation-unit scope through CompileCtx::emitHelperCode. Lets an op
+  /// whose shape arrives as data pass that shape as a type, so the device
+  /// function can hold per-shape state in registers instead of in an array a
+  /// runtime index subscripts.
+  ///
+  /// Whatever it reads must be part of the node's dedup identity, or two nodes
+  /// sharing one KernelOperation would run the first one's generated type. The
+  /// int-list attributes and templateAttrs are; the operands are not.
+  std::function<std::string(NodeCP, CompileCtx*)> generateTemplateArg;
+
   /// device side header to include in the NVRTC translation unit.
   std::string headerFile;
 
@@ -421,6 +474,19 @@ struct Metadata {
   /// "counter" + "Float" -> "counterFloat") to avoid collisions when multiple
   /// types appear in one translation unit.
   std::vector<std::pair<int32_t, std::string>> dynamicSharedDecls;
+
+  /// If non-zero, the kernel containing this node is compiled with
+  /// __launch_bounds__ for at least this many blocks per SM. Set it on an op
+  /// whose device function the compiler would otherwise give so many registers
+  /// that it lowers the occupancy of every other op sharing the kernel.
+  int32_t minBlocksPerSm{0};
+
+  /// If set, returns the bytes of dynamic (extern __shared__) shared memory
+  /// this node's device function needs. The kernel op takes the max over its
+  /// nodes and the launch passes that as the kernel's dynamic shared memory
+  /// size, so an op that needs a large scratch buffer only costs occupancy in
+  /// the launches that contain it.
+  std::function<int64_t(NodeCP)> dynamicSharedMemory;
 
   /// Ordinal value meaning the type comes from the node's dtype attribute.
   static constexpr int32_t kTypeFromDtype = -1;
@@ -587,17 +653,24 @@ class MetadataBuilder {
   MetadataBuilder& defaultInputMeta();
   MetadataBuilder& returnMeta(std::vector<ArgumentMeta> meta);
   MetadataBuilder& defaultOutputMeta();
+
+  /// Marks every output as one the kernel writes through the output's strides,
+  /// so a concat may hand it a pitched band of the result instead of a dense
+  /// buffer to be copied in. See ArgumentMeta::mayWriteStrided.
+  MetadataBuilder& mayWriteStrided(bool val = true);
   MetadataBuilder& hasBarrier(bool val = true);
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
   MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
+  MetadataBuilder& gridSizeSumsInputs(bool val = true);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
       std::function<nativert::Node*(NodeCP, WaveGraph*)> func);
   MetadataBuilder& cgVariant(
       std::function<nativert::Node*(NodeCP, WaveGraph*)> func);
+  MetadataBuilder& decompose(std::function<bool(NodeCP, WaveGraph&)> func);
   MetadataBuilder& numBarriers(int32_t val);
   MetadataBuilder& arithmeticPromotion(bool val = true);
   MetadataBuilder& inPlaceIfLastUse(bool val = true);
@@ -636,12 +709,16 @@ class MetadataBuilder {
   MetadataBuilder& specialForm(
       std::function<void(NodeCP, const std::vector<ResultSpec>&, CompileCtx*)>
           func);
+  MetadataBuilder& generateTemplateArg(
+      std::function<std::string(NodeCP, CompileCtx*)> func);
   MetadataBuilder& headerFile(std::string file);
   MetadataBuilder& deviceFunc(std::string func);
   MetadataBuilder& sharedDecls(
       std::vector<std::pair<std::string, std::string>> decls);
   MetadataBuilder& dynamicSharedDecls(
       std::vector<std::pair<int32_t, std::string>> decls);
+  MetadataBuilder& dynamicSharedMemory(std::function<int64_t(NodeCP)> func);
+  MetadataBuilder& minBlocksPerSm(int32_t blocks);
   MetadataBuilder& typeTemplateParams(std::vector<int32_t> params);
   MetadataBuilder& hasBlockSizeTemplateParam(bool val = true);
   MetadataBuilder& hasDtypeTemplateParam(bool val = true);
@@ -681,5 +758,17 @@ class MetadataBuilder {
 };
 
 void registerBuiltins();
+
+/// True if the kernel that produces 'value' maps its writes through the output
+/// tensor's strides, so it stays correct when handed a pitched view. A concat
+/// uses this to decide whether an operand can be given a strided band of the
+/// result to fill directly, or whether it needs a dense buffer of its own that
+/// the concat then copies in.
+///
+/// False -- the conservative answer -- for a value with no producer, a producer
+/// with no registered metadata, and any op that has not declared
+/// ArgumentMeta::mayWriteStrided. A value that is an element of a TensorList
+/// output takes the flag from the list, since the flag covers every element.
+bool producerMayWriteStrided(ValueCP value);
 
 } // namespace torch::wave

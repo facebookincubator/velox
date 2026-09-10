@@ -47,7 +47,7 @@ std::shared_ptr<HashTableCacheEntry> HashTableCache::get(
         taskId,
         // Add memory reclaimer that is not reclaimable.
         queryPool->addLeafChild(
-            fmt::format("cached_table_{}", key),
+            fmt::format("cached_table_{}_{}", key, tablePoolId_++),
             /* threadsafe */ true,
             exec::MemoryReclaimer::create()));
     tables_.insert({key, entry});

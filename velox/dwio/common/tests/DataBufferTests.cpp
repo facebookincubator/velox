@@ -36,7 +36,7 @@ class DataBufferTest : public testing::Test {
   const std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 
-TEST_F(DataBufferTest, ZeroOut) {
+TEST_F(DataBufferTest, zeroOut) {
   const uint8_t VALUE = 13;
   DataBuffer<uint8_t> buffer(*pool_, 16);
   for (auto i = 0; i < buffer.size(); i++) {
@@ -64,7 +64,7 @@ TEST_F(DataBufferTest, ZeroOut) {
   }
 }
 
-TEST_F(DataBufferTest, At) {
+TEST_F(DataBufferTest, at) {
   DataBuffer<uint8_t> buffer{*pool_};
   for (auto i = 0; i != 15; ++i) {
     buffer.append(i);
@@ -84,7 +84,7 @@ TEST_F(DataBufferTest, At) {
   }
 }
 
-TEST_F(DataBufferTest, Reset) {
+TEST_F(DataBufferTest, reset) {
   DataBuffer<uint8_t> buffer{*pool_};
   buffer.reserve(16);
   for (auto i = 0; i != 15; ++i) {
@@ -138,7 +138,7 @@ TEST_F(DataBufferTest, Reset) {
   }
 }
 
-TEST_F(DataBufferTest, Wrap) {
+TEST_F(DataBufferTest, wrap) {
   auto size = 26;
   auto buffer = velox::AlignedBuffer::allocate<char>(size, pool_.get());
   auto raw = buffer->asMutable<char>();
@@ -154,7 +154,7 @@ TEST_F(DataBufferTest, Wrap) {
   }
 }
 
-TEST_F(DataBufferTest, Move) {
+TEST_F(DataBufferTest, move) {
   {
     DataBuffer<uint8_t> buffer{*pool_};
     buffer.reserve(16);

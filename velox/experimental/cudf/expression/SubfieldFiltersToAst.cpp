@@ -333,10 +333,7 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
-} // namespace
-
-// Convert subfield filters to cudf AST
-cudf::ast::expression const& createAstFromSubfieldFilter(
+cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
@@ -494,7 +491,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       std::vector<const cudf::ast::expression*> exprRefs;
       exprRefs.reserve(subFilters.size());
       for (const auto* subFilter : subFilters) {
-        auto const& subExpr = createAstFromSubfieldFilter(
+        auto const& subExpr = createAstFromSubfieldFilterImpl(
             subfield, *subFilter, tree, scalars, inputRowSchema);
         exprRefs.push_back(&subExpr);
       }
@@ -535,6 +532,31 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           "Filter type {} not yet supported for subfield filter conversion",
           static_cast<int>(filter.kind()));
   }
+}
+
+} // namespace
+
+// Convert subfield filters to cudf AST
+cudf::ast::expression const& createAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema) {
+  auto const& expression = createAstFromSubfieldFilterImpl(
+      subfield, filter, tree, scalars, inputRowSchema);
+  if (filter.testNull() && filter.kind() != common::FilterKind::kIsNull &&
+      filter.kind() != common::FilterKind::kIsNotNull) {
+    using Op = cudf::ast::ast_operator;
+    using Operation = cudf::ast::operation;
+
+    auto const& columnRef = tree.push(
+        cudf::ast::column_reference(
+            inputRowSchema->getChildIdx(subfield.toString())));
+    auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+    return tree.push(Operation{Op::NULL_LOGICAL_OR, isNull, expression});
+  }
+  return expression;
 }
 
 // Create a combined AST from a set of subfield filters by chaining them with
