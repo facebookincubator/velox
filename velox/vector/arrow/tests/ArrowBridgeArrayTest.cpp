@@ -877,6 +877,37 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
   EXPECT_EQ(values.Value(3), 5);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, arrayGapWithAllNullTimestampValues) {
+  constexpr vector_size_t kElementCount = 5;
+  auto nulls = AlignedBuffer::allocate<bool>(kElementCount, pool_.get());
+  bits::fillBits(nulls->asMutable<uint64_t>(), 0, kElementCount, bits::kNull);
+  auto elements = std::make_shared<FlatVector<Timestamp>>(
+      pool_.get(),
+      TIMESTAMP(),
+      nulls,
+      kElementCount,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>{});
+  // The gap between the two arrays forces the child selection to change.
+  auto offsets = makeBuffer<vector_size_t>({0, 3});
+  auto sizes = makeBuffer<vector_size_t>({2, 2});
+  auto vec = std::make_shared<ArrayVector>(
+      pool_.get(), ARRAY(TIMESTAMP()), nullptr, 2, offsets, sizes, elements);
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  ASSERT_EQ(1, data.n_children);
+  ASSERT_NE(nullptr, data.children[0]);
+  EXPECT_NE(nullptr, data.children[0]->buffers[1]);
+
+  ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
+  ASSERT_OK(array->ValidateFull());
+}
+
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   auto elements = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
   elements->setNull(3, true);
