@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/Cat.h"
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/KernelOperation.h"
 #include "velox/experimental/torchwave/Registry.h"
@@ -66,19 +67,6 @@ int64_t concatDimAttribute(NodeCP node) {
   return 0;
 }
 
-// The axis a cat/stack joins its operands on and the rank of its result. 'dim'
-// is normalized to a non-negative index in the RESULT's coordinates, which for
-// a stack is one wider than the operands'.
-struct ConcatSpec {
-  bool isStack{false};
-  int32_t dim{0};
-  int8_t outRank{-1};
-
-  int8_t elementRank() const {
-    return isStack ? static_cast<int8_t>(outRank - 1) : outRank;
-  }
-};
-
 ConcatSpec concatSpec(NodeCP node, const ValueTypes& types) {
   ConcatSpec spec;
   spec.isStack = node->target() == kStackTarget;
@@ -125,6 +113,29 @@ void normalizeConcatDim(NodeCP node, const ValueTypes& types) {
 // an unknown or too-large rank, a join axis outside the result, a dim that is
 // only known at run time, or operands of differing rank (torch's legacy
 // empty-operand cat).
+// Says once per node that a concat fell back to the eager op only because a
+// value's rank was never recorded. Unlike the other fallbacks this is not a
+// property of the graph -- ValueConstraint::rank defaults to -1, so a value
+// some rewrite created without setting it reads as "rank unknown" and takes
+// the whole concat off the fused path. It is a defect in whatever made the
+// value, so it is reported whether or not tracing is on.
+void warnUnknownRank(NodeCP node, nativert::ValueId valueId, const char* what) {
+  // NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+  static thread_local std::unordered_set<NodeCP> warned;
+  if (!warned.insert(node).second) {
+    return;
+  }
+  std::cout << "  WARNING " << node->target() << " %"
+            << node->outputs()[0]->id() << " runs standalone because " << what
+            << " %" << valueId
+            << " has no recorded rank. This is a missing"
+               " types.constraints[id].rank on whatever created that value,"
+               " not a property of the graph: it costs the concat its fused"
+               " form, its allocation group and its parallel fill. Needs a"
+               " code fix."
+            << std::endl;
+}
+
 bool concatIsStandalone(NodeCP node, const ValueTypes& types) {
   const auto& inputs = node->inputs();
   if (inputs.empty() ||
@@ -141,6 +152,9 @@ bool concatIsStandalone(NodeCP node, const ValueTypes& types) {
   }
   auto spec = concatSpec(node, types);
   if (spec.outRank < 1 || spec.outRank > kMaxDims) {
+    if (spec.outRank < 0) {
+      warnUnknownRank(node, node->outputs()[0]->id(), "its own result");
+    }
     return true;
   }
   if (spec.dim < 0 || spec.dim >= spec.outRank) {
@@ -154,6 +168,9 @@ bool concatIsStandalone(NodeCP node, const ValueTypes& types) {
   }
   for (auto* element : elements) {
     if (types.rank(element) != elementRank) {
+      if (types.rank(element) < 0) {
+        warnUnknownRank(node, element->id(), "operand");
+      }
       return true;
     }
   }
@@ -210,14 +227,44 @@ bool hasShapeOnDeviceInChain(
   return false;
 }
 
-struct ConcatInputInfo {
-  nativert::ValueId formalId;
-  SizeExpr sizeExpr;
-  OutputReserveFunc reserveShape;
-  bool hasShapeOnDevice{false};
-  bool isSubgraphInput{false};
-  bool isView{false};
-};
+// Returns true if any node in the producer chain of 'node' (stopping at
+// subgraphInputs) sizes a return with a reserve function whose answer cannot be
+// known before it runs. See ConcatInputInfo::hasReserveInChain. The walk stops
+// at subgraph inputs on purpose: an earlier kernel's output is in the frame by
+// the time the group is carved, however its shape was arrived at.
+//
+// A reserve that returns the shape of one of its inputs (ArgumentMeta::
+// shapeFromInput -- ones_like and the rest of the *_like factories, _to_copy,
+// cumsum) is not such a reserve: its answer is that input's extent, which the
+// recursion below reaches on its own. Treating it as opaque used to refuse the
+// whole concat, since one operand unmeasurable at every point leaves no point
+// where all of them are.
+bool hasReserveShapeInChain(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return false;
+  }
+  auto* meta = Registry::metadata(node->target());
+  if (meta) {
+    for (const auto& rm : meta->returnMeta) {
+      if (rm.reserveShape != nullptr && rm.shapeFromInput < 0) {
+        return true;
+      }
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    if (subgraphInputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer && hasReserveShapeInChain(producer, subgraphInputs, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // The launch-time shape of one operand, coerced to 'rank' dimensions.
 std::vector<Dim> concatInputShape(
@@ -254,7 +301,7 @@ std::vector<Dim> concatInputShape(
   TORCH_CHECK(
       shapeRank < rank,
       "Concat operand %",
-      info.formalId,
+      info.valueId,
       " resolved to a rank-",
       static_cast<int>(shapeRank),
       " shape, expected rank ",
@@ -282,24 +329,7 @@ std::vector<std::vector<Dim>> reserveConcatOutput(
   for (const auto& info : inputInfos) {
     shapes.push_back(concatInputShape(info, elementRank, frame, map));
   }
-
-  // The result takes its non-joined extents from the operands (which agree on
-  // them) and its joined extent from their sum, or from their count for a
-  // stack, where each operand occupies one position along a new dimension.
-  std::vector<Dim> outShape(spec.outRank, 0);
-  for (const auto& shape : shapes) {
-    for (int8_t d = 0; d < elementRank; ++d) {
-      auto outDim = spec.isStack && d >= spec.dim ? d + 1 : d;
-      if (!spec.isStack && d == spec.dim) {
-        outShape[outDim] += shape[d];
-      } else {
-        outShape[outDim] = std::max(outShape[outDim], shape[d]);
-      }
-    }
-  }
-  if (spec.isStack) {
-    outShape[spec.dim] = static_cast<Dim>(inputInfos.size());
-  }
+  auto outShape = concatResultShape(spec, shapes);
 
   auto concatActualId = concatFormalId;
   if (auto it = map.find(concatFormalId); it != map.end()) {
@@ -308,23 +338,24 @@ std::vector<std::vector<Dim>> reserveConcatOutput(
   const std::vector<int64_t> outSizes(outShape.begin(), outShape.end());
   auto& existing = frame.getIValue(concatActualId);
   at::Tensor concatTensor;
-  if (existing.isTensor() && existing.toTensor().is_cuda()) {
+  if (existing.isTensor() && existing.toTensor().is_cuda() &&
+      (existing.toTensor().sizes() == c10::IntArrayRef(outSizes) ||
+       existing.toTensor().storage().use_count() == 1)) {
     concatTensor = existing.toTensor();
     if (concatTensor.sizes() != c10::IntArrayRef(outSizes)) {
       concatTensor.resize_(outSizes);
     }
   } else {
+    // Either there is nothing to keep, or the result is a different shape than
+    // the tensor already there AND something else holds its storage -- views of
+    // it a concat allocation group carved for the operands, which resize_ would
+    // reallocate out from under. Those views stay valid on their own reference,
+    // so starting again leaves the operands to be copied in rather than losing
+    // what they wrote.
     concatTensor =
         at::empty(outSizes, at::TensorOptions().dtype(dtype).device(at::kCUDA));
     frame.setIValue(concatActualId, concatTensor);
   }
-
-  const auto baseSizes = concatTensor.sizes();
-  const auto baseStrides = concatTensor.strides();
-  const auto baseOffset = concatTensor.storage_offset();
-  const auto joinStride = baseStrides[spec.dim];
-  c10::SmallVector<int64_t, kMaxDims> viewSizes;
-  c10::SmallVector<int64_t, kMaxDims> viewStrides;
 
   bool canComputeOffset = true;
   int64_t offset = 0;
@@ -335,11 +366,16 @@ std::vector<std::vector<Dim>> reserveConcatOutput(
     const int64_t extent =
         spec.isStack ? 1 : static_cast<int64_t>(shapes.at(i).at(spec.dim));
     if (inputInfos[i].isSubgraphInput || inputInfos[i].isView) {
+      // An operand a copy op of its own fills gets the band from the concat's
+      // allocation group, which is materialized ahead of the copy. Binding it
+      // here instead would be too late: the copy has already run by the time
+      // the concat's own reserve executes, so the band would replace what it
+      // wrote. See materializeConcatGroup.
       offset += extent;
       continue;
     }
-    auto inputActualId = inputInfos[i].formalId;
-    if (auto it = map.find(inputInfos[i].formalId); it != map.end()) {
+    auto inputActualId = inputInfos[i].valueId;
+    if (auto it = map.find(inputInfos[i].valueId); it != map.end()) {
       inputActualId = it->second;
     }
     // An earlier operand whose length the kernel itself computes leaves this
@@ -351,21 +387,7 @@ std::vector<std::vector<Dim>> reserveConcatOutput(
     // operand occupies the single position 'i', which drops that axis.
     const int64_t start =
         spec.isStack ? static_cast<int64_t>(i) : (pending ? 0 : offset);
-    viewSizes.clear();
-    viewStrides.clear();
-    for (int32_t d = 0; d < static_cast<int32_t>(baseSizes.size()); ++d) {
-      if (spec.isStack && d == spec.dim) {
-        continue;
-      }
-      viewSizes.push_back(d == spec.dim ? extent : baseSizes[d]);
-      viewStrides.push_back(baseStrides[d]);
-    }
-    // aliasTensor rather than narrow/select: this runs per operand per launch,
-    // where the dispatch would dominate (see Utils.h). The geometry above is
-    // this function's own -- the output was allocated as the sum of exactly
-    // these extents -- so there is nothing left to bounds-check.
-    auto view = aliasTensor(
-        concatTensor, viewSizes, viewStrides, baseOffset + start * joinStride);
+    auto view = concatOperandView(concatTensor, spec, start, extent);
     if (WaveConfig::get().trace & WaveConfig::kTensors) {
       std::cout << "  concat view v" << inputActualId << " of v"
                 << concatActualId << " dim=" << spec.dim << " offset=";
@@ -411,13 +433,44 @@ void concatSetOutputs(
 
   std::vector<ConcatInputInfo> inputInfos;
   inputInfos.reserve(elements.size());
-  for (auto* elem : elements) {
+  auto* compileCtx = waveGraph()->compileCtx();
+  for (size_t elemIdx = 0; elemIdx < elements.size(); ++elemIdx) {
+    auto* elem = elements[elemIdx];
+    // Whether this operand writes its own band, as placement decided it. The
+    // allocation group applies this rather than deciding again, which is what
+    // keeps the copy and the carve from both claiming the same band.
+    const auto* carveDecision = compileCtx != nullptr
+        ? compileCtx->concatCarve(node, static_cast<int32_t>(elemIdx))
+        : nullptr;
+    const bool carve = carveDecision != nullptr && carveDecision->groupCarves;
+    std::string carveReason =
+        carveDecision != nullptr ? carveDecision->reason : std::string{};
+    // Placement resolved the operand through list plumbing to the value a
+    // launch writes; the group binds the band to that one. Decided there
+    // because only the main graph has the plumbing -- a subgraph copy of the
+    // operand has no producer to walk back through.
+    const auto writerId =
+        carveDecision != nullptr ? carveDecision->writerId : -1;
     if (subgraphInputs.count(elem)) {
       SizeExpr sizeExpr;
       sizeExpr.op = SizeShortcut::kMax;
       sizeExpr.values.push_back(elem->id());
+      // Placement gives an operand no launch here writes a copy of its own.
+      // Recording where that copy lands is what lets reserveConcatOutput bind
+      // it to the band, and tells the kernel below not to move the operand.
+      const auto copyDest = compileCtx != nullptr
+          ? compileCtx->concatCopyDest(
+                compileCtx->originalFromVariant(node),
+                static_cast<int32_t>(elemIdx))
+          : -1;
       inputInfos.push_back(
-          {elem->id(), std::move(sizeExpr), nullptr, false, true});
+          {.valueId = elem->id(),
+           .writerId = writerId,
+           .sizeExpr = std::move(sizeExpr),
+           .isSubgraphInput = true,
+           .copyDestId = copyDest,
+           .carve = carve,
+           .carveReason = std::move(carveReason)});
       continue;
     }
     int32_t descIdx = -1;
@@ -439,6 +492,13 @@ void concatSetOutputs(
     if (!hasSod && elem->producer()) {
       hasSod =
           hasShapeOnDeviceInChain(elem->producer(), subgraphInputs, visited);
+    }
+
+    std::unordered_set<NodeCP> reserveVisited;
+    bool hasReserveInChain = false;
+    if (elem->producer() != nullptr) {
+      hasReserveInChain = hasReserveShapeInChain(
+          elem->producer(), subgraphInputs, reserveVisited);
     }
 
     bool elemIsView = desc.viewNode != nullptr;
@@ -466,12 +526,17 @@ void concatSetOutputs(
       };
     }
     inputInfos.push_back(
-        {elem->id(),
-         std::move(inputSizeExpr),
-         std::move(catReserve),
-         hasSod,
-         false,
-         elemIsView});
+        {.valueId = elem->id(),
+         .writerId = writerId,
+         .sizeExpr = std::move(inputSizeExpr),
+         .reserveShape = std::move(catReserve),
+         .hasShapeOnDevice = hasSod,
+         .hasReserveInChain = hasReserveInChain,
+         .mayWriteStrided = producerMayWriteStrided(elem),
+         .isSubgraphInput = false,
+         .isView = elemIsView,
+         .carve = carve,
+         .carveReason = std::move(carveReason)});
   }
 
   // Create the concat output desc.
@@ -522,25 +587,32 @@ void concatSetOutputs(
   if (originalNode == nullptr) {
     originalNode = node;
   }
+  // Also handed to the allocation-group pass, which recognizes the concat from
+  // it and can then place the whole result before any operand is produced. The
+  // reserve below is one of its two readers, so the two cannot describe
+  // different operands.
+  const auto* layoutPoint =
+      compileCtx != nullptr ? compileCtx->concatLayoutPoint(node) : nullptr;
+  auto layout = std::make_shared<ConcatLayout>(ConcatLayout{
+      .spec = spec,
+      .dtype = dtype,
+      .inputs = std::move(inputInfos),
+      .outputFormalId = concatFormalId,
+      .originalNode = originalNode,
+      .types = valueTypes,
+      .layoutNode = layoutPoint != nullptr ? layoutPoint->node : -1,
+      .layoutStep = layoutPoint != nullptr ? layoutPoint->step : -1});
+
   concatDesc.reserveShape =
-      [inputInfos, spec, originalNode, valueTypes, concatFormalId, dtype](
+      [layout, concatFormalId](
           nativert::ExecutionFrame& frame,
           const FormalToActual& map,
           const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-    auto actual = nodeMap.find(originalNode);
-    if (actual == nodeMap.end() || actual->second == originalNode) {
-      return reserveConcatOutput(
-          inputInfos, spec, concatFormalId, dtype, frame, map);
-    }
-    auto actualId = actual->second->outputs()[0]->id();
+    auto [actualSpec, actualDtype] = layout->resolve(nodeMap);
     return reserveConcatOutput(
-        inputInfos,
-        concatSpec(actual->second, *valueTypes),
-        concatFormalId,
-        valueTypes->types.at(actualId)->dtype(),
-        frame,
-        map);
+        layout->inputs, actualSpec, concatFormalId, actualDtype, frame, map);
   };
+  concatDesc.concatLayout = std::move(layout);
 
   addOrUpdateOutput(
       outputValues, outputDescs, concatOutputValue, std::move(concatDesc));
@@ -594,6 +666,12 @@ NodeCP FOLLY_NULLABLE isExclusiveSumPattern(NodeCP node) {
   return cumsumProducer;
 }
 
+// True if 'operand' cannot itself fill the region of the result it occupies, so
+// something has to move its bytes there. A value with no producer, or one whose
+// producer only makes a view, has no write of its own to redirect; a value of
+// another dtype cannot be written through a view that would have to convert it;
+// and a pitched band needs a producer that indexes its output through strides.
+
 std::vector<std::pair<ValueCP, ValueCP>>
 concatMaybeReplace(NodeCP node, ValueTypes& types, WaveGraph& waveGraph) {
   normalizeConcatDim(node, types);
@@ -646,6 +724,12 @@ concatMaybeReplace(NodeCP node, ValueTypes& types, WaveGraph& waveGraph) {
     graph->insertBefore(exclusiveSum, const_cast<nativert::Node*>(node));
     auto* newOutput =
         waveGraph.newTensorValue(exclusiveSum, "exclusive_sum", dtype);
+    // newTensorValue records a dtype and no shape. The guard above established
+    // the input is rank 1 and the prefix sum has its shape, so the rank is
+    // known here and has to be written down: left at the -1 default it reads
+    // as "rank unknown" wherever this feeds a concat, which sends that concat
+    // to the eager op.
+    types.constraints.at(newOutput->id()).rank = 1;
     return {{node->outputs()[0], newOutput}};
   }
 
@@ -686,6 +770,13 @@ concatMaybeReplace(NodeCP node, ValueTypes& types, WaveGraph& waveGraph) {
   newCat->addAttribute({"dim", dim});
   graph->insertBefore(newCat, const_cast<nativert::Node*>(node));
   auto* newOutput = waveGraph.newTensorValue(newCat, "cat_result", dtype);
+  // Flattening joins the same values on the same axis, so the result has the
+  // rank of the concat being replaced. Without carrying it over the new concat
+  // disqualifies ITSELF: concatIsStandalone reads the result's rank, finds the
+  // -1 default and falls back to the eager op -- so widening a nested concat,
+  // which is done to make it worth carving, would instead cost it the fused
+  // path entirely.
+  types.constraints.at(newOutput->id()).rank = types.rank(node->outputs()[0]);
 
   return {{node->outputs()[0], newOutput}};
 }
@@ -769,7 +860,17 @@ void concatSpecialForm(
     bool isSubgraphInput = !producer || ctx->generatingOp()->isInput(elem);
     bool producerIsView = producerMeta && producerMeta->isView();
     bool isCopyInput = isSubgraphInput || producerIsView;
-    if (isCopyInput) {
+    // An operand an op of its own copies into its band needs nothing emitted
+    // here. That is what takes the chain out of a wide concat's kernel: with
+    // every operand either written in place or copied by its own launch, no
+    // element reaches the accumulator. The rest of the iteration still runs --
+    // 'accumulate' sums the extents of ALL preceding operands, copied or not,
+    // so the offsets of any that remain stay right.
+    const bool copiedByOwnOp =
+        ctx->concatOperandIsCopied(node, static_cast<int32_t>(i));
+    if (copiedByOwnOp) {
+      // Nothing to emit.
+    } else if (isCopyInput) {
       // A view element (e.g. slice(cumsum(...)) in an exclusive-prefix
       // cat([zeros, cumsum[:-1]])) is metadata-only, but its producer chain
       // holds interior fused compute that must still run -- otherwise the copy
@@ -865,6 +966,140 @@ void concatSpecialForm(
 
 } // namespace
 
+const char* concatCopyCauseText(ConcatCopyCause cause) {
+  switch (cause) {
+    case ConcatCopyCause::kNone:
+      return "";
+    case ConcatCopyCause::kNoProducer:
+      return "it has no producer";
+    case ConcatCopyCause::kNoMetadata:
+      return "its producer has no metadata";
+    case ConcatCopyCause::kView:
+      return "its producer only makes a view";
+    case ConcatCopyCause::kShapeOnDevice:
+      return "its extent is settled on device";
+    case ConcatCopyCause::kDtype:
+      return "the concat promotes its dtype";
+    case ConcatCopyCause::kPitchedBand:
+      return "the band is pitched and its producer indexes linearly";
+  }
+  return "";
+}
+
+ConcatCopyCause concatOperandCopyCause(
+    ValueCP operand,
+    int64_t dim,
+    c10::ScalarType resultDtype,
+    const ValueTypes& types) {
+  auto* producer = operand->producer();
+  if (producer == nullptr) {
+    return ConcatCopyCause::kNoProducer;
+  }
+  const auto* producerMeta = Registry::metadata(producer->target());
+  if (producerMeta == nullptr) {
+    return ConcatCopyCause::kNoMetadata;
+  }
+  if (producerMeta->isView()) {
+    return ConcatCopyCause::kView;
+  }
+  // An operand whose extent the device settles is always copied. The concat's
+  // own size is not known until that extent has been read back, so such an
+  // operand is necessarily materialized before the result exists -- there is no
+  // band to give its producer, exactly as for a value the graph handed us. Once
+  // the extent is back the layout can be computed, the operand's region is
+  // known, and a copy fills it like any other.
+  //
+  // This used to refuse the copy. That was right when the copy replaced the
+  // operand in the concat's list: the copy reserves a static shape, which
+  // laundered the shapeSetOnDevice marking the layout depends on, so the host
+  // laid the result out from a stale extent and the regions overlapped. The
+  // copy is a node beside the concat now and the list still names the operand,
+  // so the marking survives and the layout still measures the real extent.
+  for (const auto& returnMeta : producerMeta->returnMeta) {
+    if (returnMeta.shapeSetOnDevice) {
+      return ConcatCopyCause::kShapeOnDevice;
+    }
+  }
+  const auto operandId = operand->id();
+  if (operandId >= 0 && static_cast<size_t>(operandId) < types.types.size() &&
+      types.types[operandId] &&
+      types.types[operandId]->dtype() != resultDtype) {
+    return ConcatCopyCause::kDtype;
+  }
+  if (dim != 0 && !producerMayWriteStrided(operand)) {
+    return ConcatCopyCause::kPitchedBand;
+  }
+  return ConcatCopyCause::kNone;
+}
+
+bool concatOperandNeedsCopy(
+    ValueCP operand,
+    int64_t dim,
+    c10::ScalarType resultDtype,
+    const ValueTypes& types) {
+  return concatOperandCopyCause(operand, dim, resultDtype, types) !=
+      ConcatCopyCause::kNone;
+}
+
+std::vector<Dim> concatResultShape(
+    const ConcatSpec& spec,
+    const std::vector<std::vector<Dim>>& operandShapes) {
+  // The result takes its non-joined extents from the operands (which agree on
+  // them) and its joined extent from their sum, or from their count for a
+  // stack, where each operand occupies one position along a new dimension.
+  const auto elementRank = spec.elementRank();
+  std::vector<Dim> outShape(spec.outRank, 0);
+  for (const auto& shape : operandShapes) {
+    for (int8_t d = 0; d < elementRank; ++d) {
+      auto outDim = spec.isStack && d >= spec.dim ? d + 1 : d;
+      if (!spec.isStack && d == spec.dim) {
+        outShape[outDim] += shape[d];
+      } else {
+        outShape[outDim] = std::max(outShape[outDim], shape[d]);
+      }
+    }
+  }
+  if (spec.isStack) {
+    outShape[spec.dim] = static_cast<Dim>(operandShapes.size());
+  }
+  return outShape;
+}
+
+at::Tensor concatOperandView(
+    const at::Tensor& result,
+    const ConcatSpec& spec,
+    int64_t start,
+    int64_t extent) {
+  const auto baseSizes = result.sizes();
+  const auto baseStrides = result.strides();
+  c10::SmallVector<int64_t, kMaxDims> viewSizes;
+  c10::SmallVector<int64_t, kMaxDims> viewStrides;
+  for (int32_t d = 0; d < static_cast<int32_t>(baseSizes.size()); ++d) {
+    if (spec.isStack && d == spec.dim) {
+      continue;
+    }
+    viewSizes.push_back(d == spec.dim ? extent : baseSizes[d]);
+    viewStrides.push_back(baseStrides[d]);
+  }
+  return aliasTensor(
+      result,
+      viewSizes,
+      viewStrides,
+      result.storage_offset() + start * baseStrides[spec.dim]);
+}
+
+std::pair<ConcatSpec, c10::ScalarType> ConcatLayout::resolve(
+    const NodeMap& nodeMap) const {
+  auto actual = nodeMap.find(originalNode);
+  if (actual == nodeMap.end() || actual->second == originalNode ||
+      types == nullptr) {
+    return {spec, dtype};
+  }
+  auto actualId = actual->second->outputs()[0]->id();
+  return {
+      concatSpec(actual->second, *types), types->types.at(actualId)->dtype()};
+}
+
 bool concatNeedsHostShapes(NodeCP node, const ValueTypes& types) {
   if (node->target() != kCatTarget && node->target() != kStackTarget) {
     return false;
@@ -872,7 +1107,38 @@ bool concatNeedsHostShapes(NodeCP node, const ValueTypes& types) {
   if (concatIsStandalone(node, types)) {
     return false;
   }
-  return concatSpec(node, types).outRank > 1;
+  if (concatSpec(node, types).outRank > 1) {
+    return true;
+  }
+  // More than two operands is the allocation group's path, which lays the
+  // result out on the host and hands every operand the region it fills. There
+  // is no serial fallback that walks the operands incrementing an offset, so an
+  // operand whose extent is only settled inside the concat's own kernel has to
+  // end that kernel first and be read back as a host-side shape.
+  auto* listPack = node->inputs()[0].value->producer();
+  return listPack != nullptr && listPack->inputs().size() > 2;
+}
+
+bool concatFillsInParallel(NodeCP node, const ValueTypes& types) {
+  // The copies write bands of the result, and the result is the concat
+  // allocation group's: it is the group that allocates it early enough to hand
+  // each operand its region before the copy runs. Without the group there is
+  // no band to write, so the operands stay on the concat's own fill.
+  if (!concatAllocGroupEnabled()) {
+    return false;
+  }
+  if (node->target() != kCatTarget && node->target() != kStackTarget) {
+    return false;
+  }
+  if (concatIsStandalone(node, types)) {
+    return false;
+  }
+  // Two operands are not worth a step of their own: the pushdown costs a
+  // kernel boundary, which only pays once there are enough operands for the
+  // serial chain of copies to be the problem. Matches the threshold the concat
+  // allocation group uses.
+  auto* listPack = node->inputs()[0].value->producer();
+  return listPack && listPack->inputs().size() > 2;
 }
 
 void registerConcatMetadata() {

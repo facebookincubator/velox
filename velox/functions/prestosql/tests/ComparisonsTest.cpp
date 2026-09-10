@@ -935,7 +935,7 @@ TEST_F(ComparisonsTest, nanComparison) {
   testNaN("", input, false);
 }
 
-TEST_F(ComparisonsTest, TimestampWithTimezone) {
+TEST_F(ComparisonsTest, timestampWithTimezone) {
   auto makeTimestampWithTimezone = [](int64_t millis, const std::string& tz) {
     return pack(millis, tz::getTimeZoneID(tz));
   };
@@ -1167,7 +1167,7 @@ TEST_F(ComparisonsTest, TimestampWithTimezone) {
            false}));
 }
 
-TEST_F(ComparisonsTest, IPPrefixType) {
+TEST_F(ComparisonsTest, ipPrefixType) {
   auto ipprefix = [](const std::string& ipprefixString) {
     auto tryIpPrefix = ipaddress::tryParseIpPrefixString(ipprefixString);
     return variant::row(
@@ -1449,7 +1449,7 @@ TEST_F(ComparisonsTest, IPPrefixType) {
   }
 }
 
-TEST_F(ComparisonsTest, IpAddressType) {
+TEST_F(ComparisonsTest, ipAddressType) {
   auto makeIpAdressFromString = [](std::string_view ipAddr) -> int128_t {
     auto ret = ipaddress::tryGetIPv6asInt128FromString(ipAddr);
     return ret.value();
@@ -1712,7 +1712,7 @@ TEST_F(ComparisonsTest, IpAddressType) {
            std::nullopt}));
 }
 
-TEST_F(ComparisonsTest, CustomComparisonWithGenerics) {
+TEST_F(ComparisonsTest, customComparisonWithGenerics) {
   // Tests that functions that support signatures with generics handle custom
   // comparison correctly.
   auto input = makeRowVector({

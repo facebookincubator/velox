@@ -408,6 +408,20 @@ std::vector<std::string> deserializeStrings(const folly::dynamic& array) {
   return ISerializable::deserialize<std::vector<std::string>>(array);
 }
 
+std::vector<std::optional<std::string>> deserializeOptionalStrings(
+    const folly::dynamic& array) {
+  std::vector<std::optional<std::string>> names;
+  names.reserve(array.size());
+  for (const auto& name : array) {
+    if (name.isNull()) {
+      names.emplace_back(std::nullopt);
+    } else {
+      names.emplace_back(name.asString());
+    }
+  }
+  return names;
+}
+
 RowTypePtr deserializeRowType(const folly::dynamic& obj) {
   return ISerializable::deserialize<RowType>(obj);
 }
@@ -1278,6 +1292,26 @@ void TableScanNode::accept(
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
   stream << tableHandle_->toString();
+
+  // Assignments are expected to name every output column, but some frontends
+  // build scans with no assignments at all.
+  if (assignments_.empty()) {
+    return;
+  }
+
+  bool first = true;
+  for (auto i = 0; i < outputType_->size(); ++i) {
+    if (outputType_->childAt(i)->isPrimitiveType()) {
+      continue;
+    }
+    const auto& outputName = outputType_->nameOf(i);
+    stream << (first ? ", assignments: [" : ", ");
+    first = false;
+    stream << outputName << " := " << assignments_.at(outputName)->toString();
+  }
+  if (!first) {
+    stream << "]";
+  }
 }
 
 void TableScanNode::addSummaryDetails(
@@ -1342,12 +1376,14 @@ const std::vector<PlanNodePtr>& ExchangeNode::sources() const {
 
 void ExchangeNode::addDetails(std::stringstream& stream) const {
   addVectorSerdeKind(serdeKind_, stream);
+  stream << " " << transportKind_;
 }
 
 folly::dynamic ExchangeNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["outputType"] = ExchangeNode::outputType()->serialize();
   obj["serdeKind"] = serdeKind_;
+  obj["transportKind"] = transportKind_;
   return obj;
 }
 
@@ -1362,14 +1398,16 @@ PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<ExchangeNode>(
       deserializePlanNodeId(obj),
       deserializeRowType(obj["outputType"]),
-      obj["serdeKind"].asString());
+      obj["serdeKind"].asString(),
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString());
 }
 
 UnnestNode::UnnestNode(
     const PlanNodeId& id,
     std::vector<FieldAccessTypedExprPtr> replicateVariables,
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
-    std::vector<std::string> unnestNames,
+    std::vector<std::optional<std::string>> unnestNames,
     std::optional<std::string> ordinalityName,
     std::optional<std::string> markerName,
     const PlanNodePtr& source)
@@ -1387,7 +1425,7 @@ UnnestNode::UnnestNode(
     const PlanNodeId& id,
     std::vector<FieldAccessTypedExprPtr> replicateVariables,
     std::vector<FieldAccessTypedExprPtr> unnestVariables,
-    std::vector<std::string> unnestNames,
+    std::vector<std::optional<std::string>> unnestNames,
     std::optional<std::string> ordinalityName,
     std::optional<std::string> markerName,
     std::optional<bool> splitOutput,
@@ -1428,16 +1466,25 @@ UnnestNode::UnnestNode(
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(variable->type()->asArray().elementType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(variable->type()->asArray().elementType());
+      }
+      ++unnestIndex;
     } else if (variable->type()->isMap()) {
       const auto& mapType = variable->type()->asMap();
 
-      names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(mapType.keyType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.keyType());
+      }
+      ++unnestIndex;
 
-      names.emplace_back(unnestNames_[unnestIndex++]);
-      types.emplace_back(mapType.valueType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.valueType());
+      }
+      ++unnestIndex;
     } else {
       VELOX_FAIL(
           "Unexpected type of unnest variable. Expected ARRAY or MAP, but got {}.",
@@ -1466,7 +1513,13 @@ folly::dynamic UnnestNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["replicateVariables"] = ISerializable::serialize(replicateVariables_);
   obj["unnestVariables"] = ISerializable::serialize(unnestVariables_);
-  obj["unnestNames"] = ISerializable::serialize(unnestNames_);
+  folly::dynamic unnestNames = folly::dynamic::array;
+  for (const auto& name : unnestNames_) {
+    unnestNames.push_back(
+        name.has_value() ? folly::dynamic(name.value())
+                         : folly::dynamic(nullptr));
+  }
+  obj["unnestNames"] = std::move(unnestNames);
 
   if (ordinalityName_.has_value()) {
     obj["ordinalityName"] = ordinalityName_.value();
@@ -1492,7 +1545,7 @@ PlanNodePtr UnnestNode::create(const folly::dynamic& obj, void* context) {
   auto replicateVariables =
       deserializeFields(obj["replicateVariables"], context);
   auto unnestVariables = deserializeFields(obj["unnestVariables"], context);
-  auto unnestNames = deserializeStrings(obj["unnestNames"]);
+  auto unnestNames = deserializeOptionalStrings(obj["unnestNames"]);
   std::optional<std::string> ordinalityName = std::nullopt;
   if (obj.count("ordinalityName")) {
     ordinalityName = obj["ordinalityName"].asString();
@@ -3069,6 +3122,18 @@ void validateGroupingKeys(
 }
 } // namespace
 
+InsertTableHandle::InsertTableHandle(
+    const std::string& connectorId,
+    const connector::ConnectorInsertTableHandlePtr& connectorInsertTableHandle,
+    folly::F14FastSet<std::string> notNullColumns)
+    : connectorId_(connectorId),
+      connectorInsertTableHandle_(connectorInsertTableHandle),
+      notNullColumns_(std::move(notNullColumns)) {
+  for (const auto& name : notNullColumns_) {
+    VELOX_USER_CHECK(!name.empty(), "NOT NULL column name must not be empty");
+  }
+}
+
 TableWriteNode::TableWriteNode(
     const PlanNodeId& id,
     const RowTypePtr& columns,
@@ -3096,6 +3161,17 @@ TableWriteNode::TableWriteNode(
         sources_[0]->outputType()->containsChild(column),
         "Column not found in TableWrite input: {}",
         column);
+  }
+  const auto& notNullColumns = insertTableHandle_->notNullColumns();
+  if (!notNullColumns.empty()) {
+    const folly::F14FastSet<std::string> columnNameSet(
+        columnNames_.begin(), columnNames_.end());
+    for (const auto& name : notNullColumns) {
+      VELOX_USER_CHECK(
+          columnNameSet.contains(name),
+          "NOT NULL column is not in the table schema: {}",
+          name);
+    }
   }
   if (columnStatsSpec_.has_value()) {
     VELOX_USER_CHECK(
@@ -3146,8 +3222,14 @@ void addStatsSpecDetails(
 } // namespace
 
 void TableWriteNode::addDetails(std::stringstream& stream) const {
-  stream << insertTableHandle_->connectorId() << ", "
-         << folly::join(", ", columnNames_);
+  stream << insertTableHandle_->connectorId();
+  const auto& notNullColumns = insertTableHandle_->notNullColumns();
+  for (const auto& columnName : columnNames_) {
+    stream << ", " << columnName;
+    if (notNullColumns.contains(columnName)) {
+      stream << " not null";
+    }
+  }
   if (columnStatsSpec_.has_value()) {
     stream << ", ";
     addStatsSpecDetails(stream, columnStatsSpec_);
@@ -3227,6 +3309,14 @@ folly::dynamic TableWriteNode::serialize() const {
   obj["outputType"] = outputType_->serialize();
   obj["commitStrategy"] =
       std::string(connector::CommitStrategyName::toName(commitStrategy_));
+  const auto& notNullColumns = insertTableHandle_->notNullColumns();
+  if (!notNullColumns.empty()) {
+    // Sorted to keep the serialized form stable across runs.
+    std::vector<std::string> sortedNotNullColumns(
+        notNullColumns.begin(), notNullColumns.end());
+    std::sort(sortedNotNullColumns.begin(), sortedNotNullColumns.end());
+    obj["notNullColumns"] = ISerializable::serialize(sortedNotNullColumns);
+  }
   return obj;
 }
 
@@ -3254,13 +3344,19 @@ PlanNodePtr TableWriteNode::create(const folly::dynamic& obj, void* context) {
   if (obj.count("columnStatsSpec") != 0) {
     columnStatsSpec = ColumnStatsSpec::create(obj["columnStatsSpec"], context);
   }
+  folly::F14FastSet<std::string> notNullColumns;
+  if (obj.count("notNullColumns") != 0) {
+    const auto names = ISerializable::deserialize<std::vector<std::string>>(
+        obj["notNullColumns"]);
+    notNullColumns.insert(names.begin(), names.end());
+  }
   return std::make_shared<TableWriteNode>(
       id,
       columns,
       columnNames,
       std::move(columnStatsSpec),
       std::make_shared<InsertTableHandle>(
-          connectorId, connectorInsertTableHandle),
+          connectorId, connectorInsertTableHandle, std::move(notNullColumns)),
       hasPartitioningScheme,
       outputType,
       commitStrategy,
@@ -3337,8 +3433,9 @@ MergeExchangeNode::MergeExchangeNode(
     const RowTypePtr& type,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders,
-    std::string serdeKind)
-    : ExchangeNode(id, type, std::move(serdeKind)),
+    std::string serdeKind,
+    std::string transportKind)
+    : ExchangeNode(id, type, std::move(serdeKind), std::move(transportKind)),
       sortingKeys_(sortingKeys),
       sortingOrders_(sortingOrders) {}
 
@@ -3346,6 +3443,7 @@ void MergeExchangeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(sortingKeys_, sortingOrders_, stream);
   stream << ", ";
   addVectorSerdeKind(serdeKind(), stream);
+  stream << " " << transportKind();
 }
 
 folly::dynamic MergeExchangeNode::serialize() const {
@@ -3354,6 +3452,7 @@ folly::dynamic MergeExchangeNode::serialize() const {
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
   obj["serdeKind"] = serdeKind();
+  obj["transportKind"] = transportKind();
   return obj;
 }
 
@@ -3371,12 +3470,16 @@ PlanNodePtr MergeExchangeNode::create(
   const auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
   const auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
   const auto serdeKind = obj["serdeKind"].asString();
+  const auto transportKind =
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString();
   return std::make_shared<MergeExchangeNode>(
       deserializePlanNodeId(obj),
       outputType,
       sortingKeys,
       sortingOrders,
-      serdeKind);
+      serdeKind,
+      transportKind);
 }
 
 void LocalPartitionNode::addDetails(std::stringstream& stream) const {

@@ -25,6 +25,7 @@
 namespace facebook::velox::dwio::common {
 
 class DirectBufferedInput;
+struct LoadedBuffer;
 
 /// An input stream over possibly coalesced loads. Created by
 /// DirectBufferedInput. Similar to CacheInputStream but does not use cache.
@@ -56,15 +57,15 @@ class DirectInputStream : public SeekableInputStream {
       memory::Allocation*& data,
       std::string*& tinyData) {
     loadedRegion = loadedRegion_;
-    data = &data_;
-    tinyData = &tinyData_;
+    data = &loadedData_.owned;
+    tinyData = &loadedData_.tiny;
   }
 
  private:
-  // Ensures that the current position is covered by 'data_'.
+  // Ensures that the current position is covered by 'loadedData_'.
   void loadPosition();
 
-  // Synchronously sets 'data_' to cover loadedRegion_'.
+  // Synchronously sets 'loadedData_' to cover 'loadedRegion_'.
   void loadSync();
 
   DirectBufferedInput* const bufferedInput_;
@@ -80,28 +81,59 @@ class DirectInputStream : public SeekableInputStream {
   // Maximum number of bytes read from 'input' at a time.
   const int32_t loadQuantum_;
 
-  // The part of 'region_' that is loaded into 'data_'/'tinyData_'. Relative to
-  // file start.
+  // The part of 'region_' that is loaded into 'loadedData_'. Relative to file
+  // start.
   velox::common::Region loadedRegion_;
 
-  // Allocation with loaded data. Has space for region.length or loadQuantum_
-  // bytes, whichever is less.
-  memory::Allocation data_;
+  // The loaded bytes for 'loadedRegion_', held in exactly one of three
+  // representations.
+  struct LoadedData {
+    // Allocation with loaded data. Has space for region.length or loadQuantum_
+    // bytes, whichever is less.
+    memory::Allocation owned;
 
-  // Contains the data if the range is too small for Allocation.
-  std::string tinyData_;
+    // Contains the data if the range is too small for Allocation.
+    std::string tiny;
+
+    // Borrowed slice of the load's shared allocation plus a hold on the owning
+    // load, bundled so the pointer and keep-alive can never desync. Null when
+    // the bytes are not backed by the shared allocation.
+    const char* sharedPtr{nullptr};
+    std::shared_ptr<void> sharedHolder;
+
+    // Adopts the buffers of a completed coalesced load. 'load' is retained only
+    // when the bytes are a borrowed slice of that load's shared allocation, so
+    // the slice cannot outlive its owner.
+    void set(LoadedBuffer&& loaded, std::shared_ptr<void> load);
+
+    // True when at most one representation holds bytes. The priority dispatch
+    // in loadPosition() picks the first live one, so a double-set would be
+    // silently masked rather than caught.
+    bool valid() const;
+
+    // Drops the borrowed slice. 'owned' is deliberately left in place: an
+    // Allocation is only freeable through its pool, and loadSync() reuses it
+    // whenever it is already large enough, so clearing it here would force a
+    // fresh allocation on every quantum advance.
+    void resetShared();
+
+    bool hasShared() const {
+      return sharedPtr != nullptr;
+    }
+  };
+  LoadedData loadedData_;
 
   // Pointer to start of current run in 'entry->nonContiguousData()' or
   // 'entry->contiguousData()'.
   uint8_t* run_{nullptr};
 
-  // Offset of current run from start of 'data_'
+  // Offset of current run from start of 'loadedData_.owned'
   uint64_t offsetOfRun_;
 
   // Position of stream relative to 'run_'.
   int offsetInRun_{0};
 
-  // Index of run in 'data_'
+  // Index of run in 'loadedData_.owned'
   int runIndex_ = -1;
 
   // Number of valid bytes starting at 'run_'

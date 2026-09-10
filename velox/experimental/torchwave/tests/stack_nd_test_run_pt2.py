@@ -30,6 +30,10 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     torch.manual_seed(2)
+    # Uneven repeats, so o7's gather moves the elements it places and a densely
+    # filled slice differs from the right answer rather than matching one.
+    reps = torch.tensor([2, 0, 1, 1, 2, 0, 1], dtype=torch.long)
+    areps = torch.tensor([2, 0, 1, 1, 2, 0], dtype=torch.long)
     inputs = (
         torch.randn(7),
         torch.randn(7),
@@ -37,6 +41,8 @@ def main() -> None:
         torch.randn(6, 5),
         torch.randn(2, 3, 4),
         torch.randn(2, 3, 4),
+        reps,
+        areps,
     )
 
     module = StackNdTest()

@@ -2718,6 +2718,37 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
+// Sorted aggregation where the input batch is split at a pre-grouped key
+// boundary. The grouping set processes only the rows up to the boundary and
+// defers the rest, so 'groups' has entries for those rows only. The sorted
+// aggregation must not look at the rest.
+TEST_F(AggregationTest, sortedAggregationWithPreGroupedKeys) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 10, 20, 10, 20}),
+      makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+  });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .aggregation(
+                      {"c0", "c1"},
+                      /*preGroupedKeys=*/{"c0"},
+                      {"array_agg(c2 ORDER BY c2)"},
+                      /*masks=*/{},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false)
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3, 3}),
+      makeFlatVector<int64_t>({10, 20, 10, 20, 10, 20}),
+      makeArrayVector<int64_t>({{1}, {2}, {3}, {4}, {5}, {6}}),
+  });
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(AggregationTest, adaptiveOutputBatchRows) {
   int32_t defaultOutputBatchRows = 10;
   vector_size_t size = defaultOutputBatchRows * 5;

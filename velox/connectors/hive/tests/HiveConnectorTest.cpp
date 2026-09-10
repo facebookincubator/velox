@@ -631,10 +631,9 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
       extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
   ASSERT_EQ(sampleRate, 1);
   ASSERT_GT(filters.count(Subfield("c2")), 0);
-  // Change these once HUGEINT filter merge is fixed.
-  ASSERT_TRUE(remaining);
-  ASSERT_EQ(
-      remaining->toString(), "not(lt(ROW[\"c2\"],cast(0 as DECIMAL(20, 0))))");
+  auto expectedFilter = exec::betweenHugeint(0, 1);
+  ASSERT_TRUE(expectedFilter->testingEquals(*filters.at(Subfield("c2"))));
+  ASSERT_FALSE(remaining);
 
   // parseExpr gives AND/OR with 2 arguments.  We need to construct the node
   // manually to have more than 2.

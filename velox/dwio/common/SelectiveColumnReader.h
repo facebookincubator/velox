@@ -296,15 +296,17 @@ class SelectiveColumnReader {
     numValues_ = size;
   }
 
-  // The number of passing after filtering.
+  // The number of result rows after filtering.
   int32_t numRows() const {
     return outputRows_.size();
   }
 
-  // The number of values copied into the results.
+  // The number of result positions produced so far. This includes null
+  // positions; it is not the count of decoded non-null values.
   int32_t numValues() const {
     return numValues_;
   }
+
   void setNumRows(vector_size_t size) {
     outputRows_.resize(size);
   }
@@ -430,7 +432,7 @@ class SelectiveColumnReader {
   /// is used at read time and is expected to produce the same result.
   bool useBulkPath() const {
     auto* filter = scanSpec_->filter();
-    return hasBulkPath() && process::hasAvx2() &&
+    return hasBulkPath() && process::hasSimd() &&
         (!filter ||
          (filter->isDeterministic() &&
           (!nullsInReadRange_ || !filter->testNull()))) &&

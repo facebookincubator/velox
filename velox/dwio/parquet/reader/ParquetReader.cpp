@@ -222,6 +222,8 @@ ParquetReaderFactory::createFormatOptions(
       ParquetConfig::allowInt32Narrowing(connectorConfig, session));
   options->setFooterMemoryTrackingThreshold(
       ParquetConfig::footerMemoryTrackingThreshold(connectorConfig, session));
+  options->setNullStructIfAllFieldsMissing(
+      ParquetConfig::nullStructIfAllFieldsMissing(connectorConfig, session));
   return options;
 }
 
@@ -264,6 +266,10 @@ class ReaderBase {
 
   const std::shared_ptr<const dwio::common::TypeWithId>& schemaWithId() {
     return schemaWithId_;
+  }
+
+  bool nullStructIfAllFieldsMissing() const {
+    return parquetReaderOptions_.nullStructIfAllFieldsMissing();
   }
 
   bool isFileColumnNamesReadAsLowerCase() const {
@@ -1102,6 +1108,25 @@ TypePtr ReaderBase::convertType(
   const bool isRepeated = schemaElement.repetition_type() &&
       *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
   const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing();
+
+  if (schemaElement.logicalType() &&
+      schemaElement.logicalType()->getType() ==
+          thrift::LogicalType::Type::UNKNOWN) {
+    VELOX_CHECK(
+        !requestedType ||
+            isCompatible(
+                requestedType,
+                isRepeated,
+                [](const TypePtr& type) {
+                  return type->kind() == TypeKind::UNKNOWN;
+                }),
+        kTypeMappingErrorFmtStr,
+        "UNKNOWN",
+        requestedType->toString(),
+        *schemaElement.name());
+    return UNKNOWN();
+  }
+
   if (schemaElement.converted_type()) {
     switch (*schemaElement.converted_type()) {
       case thrift::ConvertedType::INT_8:
@@ -1591,7 +1616,8 @@ class ParquetRowReader::Impl {
         splitStats_,
         readerBase_->fileMetaData(),
         readerBase->sessionTimezone(),
-        options_.timestampPrecision());
+        options_.timestampPrecision(),
+        readerBase_->nullStructIfAllFieldsMissing());
     requestedType_ = options_.requestedType() ? options_.requestedType()
                                               : readerBase_->schema();
     columnReader_ = ParquetColumnReader::build(

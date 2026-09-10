@@ -47,6 +47,7 @@ velox_add_cudf_test(
     velox_exec_test_lib
     velox_test_util
     fmt::fmt
+    gmock
   TIMEOUT 3000
 )
 

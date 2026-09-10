@@ -119,6 +119,50 @@ file_types = OrderedDict(
     }
 )
 
+# Copyright lines that also count as an existing license header. The canonical
+# line lives in the header file passed via --header and is the one written into
+# files that have none. These variants are only recognised, never inserted, so
+# that code imported with an equally valid Meta copyright line is not given a
+# second header on top of the one it already carries.
+ALTERNATE_COPYRIGHT_LINES = [
+    " Copyright (c) Meta Platforms, Inc. and affiliates.",
+]
+
+
+def header_variants(header_text):
+    """Canonical header first, then the same header with each accepted
+    copyright line substituted for the first."""
+    return [header_text] + [
+        [line] + header_text[1:] for line in ALTERNATE_COPYRIGHT_LINES
+    ]
+
+
+def find_header(content, header_comment, args):
+    """Locate an existing license header, exactly or fuzzily. Returns the
+    (start, end) span of the match, or None."""
+    found = content.find(header_comment, 0, len(header_comment) + args.extra)
+    if found >= 0:
+        return found, found + len(header_comment)
+
+    # Look for a fuzzy match in the first 60 chars.
+    found = regex.search(
+        "(?be)(%s){e<=%d}" % (regex.escape(header_comment[0:60]), 6),
+        content[0 : 80 + args.extra],
+    )
+    if not found:
+        return None
+
+    # If the first 80 chars match, try harder for the rest of the header.
+    fuzzy = regex.compile(
+        "(?be)(%s){e<=%d}" % (regex.escape(header_comment), args.editdist)
+    )
+    found = fuzzy.search(content[0 : len(header_comment) + args.extra], found.start())
+    if not found:
+        return None
+
+    return found.start(), found.end()
+
+
 file_pattern = regex.compile(
     "|".join(
         [
@@ -169,6 +213,7 @@ def main():
             log_to = sys.stdout
 
     header_text = file_lines(args.header)
+    variants = header_variants(header_text)
 
     if len(args.files) == 1 and args.files[0] == "-":
         files = [file.strip() for file in sys.stdin.readlines()]
@@ -192,36 +237,20 @@ def main():
         start = 0
         end = 0
 
-        # Look for an exact substr match
-        #
-        found = content.find(header_comment, 0, len(header_comment) + args.extra)
-        if found >= 0:
+        # A file is licensed if it carries the canonical header or any accepted
+        # variant of it.
+        span = None
+        for variant in variants:
+            span = find_header(content, wrap.wrapper(variant, args), args)
+            if span:
+                break
+
+        if span:
             if not args.remove:
                 message(log_to, "OK   : " + filepath)
                 continue
 
-            start = found
-            end = found + len(header_comment)
-        else:
-            # Look for a fuzzy match in the first 60 chars
-            #
-            found = regex.search(
-                "(?be)(%s){e<=%d}" % (regex.escape(header_comment[0:60]), 6),
-                content[0 : 80 + args.extra],
-            )
-            if found:
-                fuzzy = regex.compile(
-                    "(?be)(%s){e<=%d}" % (regex.escape(header_comment), args.editdist)
-                )
-
-                # If the first 80 chars match - try harder for the rest of the header
-                #
-                found = fuzzy.search(
-                    content[0 : len(header_comment) + args.extra], found.start()
-                )
-                if found:
-                    start = found.start()
-                    end = found.end()
+            start, end = span
 
         if args.remove:
             if start == 0 and end == 0:

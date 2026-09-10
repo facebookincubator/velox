@@ -487,46 +487,48 @@ TypePtr CaseCallToSpecialForm::resolveTypeWithCoercions(
     }
   }
 
+  // Records the coercion the first 'numClauses' THEN clauses need to reach
+  // 'type'. A clause already of that type needs none.
+  auto setThenCoercions = [&](size_t numClauses, const TypePtr& type) {
+    for (size_t i = 0; i < numClauses; i++) {
+      const auto index = 2 * i + 2;
+      coercions[index] = *argTypes[index] == *type ? nullptr : type;
+    }
+  };
+
   // Resolve the result type from THEN (and optional ELSE) clauses with
   // widening coercions, mirroring the logic in SwitchCallToSpecialForm.
   TypePtr resultType = argTypes[2];
   for (size_t i = 0; i < numCases; i++) {
     const auto& thenType = argTypes[2 * i + 2];
     if (*thenType != *resultType) {
-      if (coercer.coerce(thenType, resultType)) {
-        coercions[2 * i + 2] = resultType;
-      } else if (coercer.coerce(resultType, thenType)) {
-        resultType = thenType;
-        for (size_t j = 0; j < i; j++) {
-          coercions[2 * j + 2] = resultType;
-        }
-      } else {
-        VELOX_FAIL(
-            "All THEN clauses in case must have the same type. "
-            "Expected {}, but got {}.",
-            resultType->toString(),
-            thenType->toString());
-      }
+      const auto common = coercer.leastCommonSuperType(resultType, thenType);
+      VELOX_CHECK_NOT_NULL(
+          common,
+          "All THEN clauses in case must have the same type. "
+          "Expected {}, but got {}.",
+          resultType->toString(),
+          thenType->toString());
+
+      resultType = common;
+      setThenCoercions(i + 1, resultType);
     }
   }
 
   if (hasElse) {
     const auto& elseType = argTypes.back();
     if (*elseType != *resultType) {
-      if (coercer.coerce(elseType, resultType)) {
-        coercions.back() = resultType;
-      } else if (coercer.coerce(resultType, elseType)) {
-        resultType = elseType;
-        for (size_t i = 0; i < numCases; i++) {
-          coercions[2 * i + 2] = resultType;
-        }
-      } else {
-        VELOX_FAIL(
-            "ELSE clause in case must match THEN clause type. "
-            "Expected {}, but got {}.",
-            resultType->toString(),
-            elseType->toString());
-      }
+      const auto common = coercer.leastCommonSuperType(resultType, elseType);
+      VELOX_CHECK_NOT_NULL(
+          common,
+          "ELSE clause in case must match THEN clause type. "
+          "Expected {}, but got {}.",
+          resultType->toString(),
+          elseType->toString());
+
+      resultType = common;
+      setThenCoercions(numCases, resultType);
+      coercions.back() = *elseType == *resultType ? nullptr : resultType;
     }
   }
 

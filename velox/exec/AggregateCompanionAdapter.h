@@ -99,6 +99,13 @@ struct AggregateCompanionAdapter {
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
 
+    bool supportsToIntermediate() const override;
+
+    void toIntermediate(
+        const SelectivityVector& rows,
+        std::vector<VectorPtr>& args,
+        VectorPtr& result) const override;
+
     void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
         override;
   };

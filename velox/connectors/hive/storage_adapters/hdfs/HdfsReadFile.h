@@ -20,7 +20,7 @@
 namespace facebook::velox {
 
 namespace filesystems::arrow::io::internal {
-class LibHdfsShim;
+struct LibHdfsShim;
 }
 
 /**
@@ -28,10 +28,22 @@ class LibHdfsShim;
  */
 class HdfsReadFile final : public ReadFile {
  public:
+  /// @param maxReadAttempts Total number of read attempts for a transient
+  /// failure, including the initial one. 1 (the default) means fail-fast with
+  /// no retries, preserving the original behavior; set >1 to enable retries.
+  /// This is opt-in because backends differ: the JNI-backed libhdfs.so already
+  /// retries and fails over internally via DFSInputStream, whereas libhdfs3
+  /// does not.
+  /// @param retryBaseDelayMs Base delay for the exponential backoff between
+  /// retries: the Nth retry waits retryBaseDelayMs * 2^(N-1) milliseconds,
+  /// capped at an internal maximum so a large maxReadAttempts cannot stall a
+  /// read for an unbounded amount of time.
   explicit HdfsReadFile(
       filesystems::arrow::io::internal::LibHdfsShim* driver,
       hdfsFS hdfs,
-      std::string_view path);
+      std::string_view path,
+      int maxReadAttempts = 1,
+      int retryBaseDelayMs = 100);
   ~HdfsReadFile() override;
 
   std::string_view pread(

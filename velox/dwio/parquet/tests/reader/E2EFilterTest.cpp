@@ -17,6 +17,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/parquet/reader/ParquetReader.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -116,6 +117,21 @@ class E2EFilterTest : public E2EFilterTestBase,
     return false;
   }
 
+  // Returns the Parquet physical type of the leaf column at 'columnIndex' in
+  // the most recently written file. Used to confirm that a decimal column was
+  // actually stored as INT64 rather than FIXED_LEN_BYTE_ARRAY.
+  thrift::Type leafColumnPhysicalType(int32_t columnIndex) {
+    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    auto reader = std::make_unique<ParquetReader>(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
+            readerOpts.memoryPool()),
+        readerOpts);
+    auto column = std::static_pointer_cast<const ParquetTypeWithId>(
+        reader->typeWithId()->childAt(columnIndex));
+    return column->parquetType_.value();
+  }
+
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
@@ -126,6 +142,27 @@ class E2EFilterTest : public E2EFilterTestBase,
   uint64_t rowsInRowGroup_ = 10'000;
   int64_t bytesInRowGroup_ = 128 * 1'024 * 1'024;
 };
+
+TEST_F(E2EFilterTest, unknownType) {
+  rowType_ = ROW({"bigint_val", "unknown_val"}, {BIGINT(), UNKNOWN()});
+  filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
+
+  std::vector<RowVectorPtr> batches;
+  for (auto batch = 0; batch < batchCount_; ++batch) {
+    auto bigintValues = makeFlatVector<int64_t>(
+        batchSize_, [batch, this](vector_size_t row) -> int64_t {
+          return static_cast<int64_t>(batch) * batchSize_ + row;
+        });
+    auto unknownValues =
+        BaseVector::createNullConstant(UNKNOWN(), batchSize_, leafPool_.get());
+    batches.push_back(makeRowVector(
+        rowType_->names(),
+        std::vector<VectorPtr>{bigintValues, unknownValues}));
+  }
+
+  writeToMemory(rowType_, batches, false);
+  testNoRowGroupSkip(batches, {"bigint_val"}, 10);
+}
 
 TEST_F(E2EFilterTest, boolean) {
   testWithTypes(
@@ -443,6 +480,41 @@ TEST_F(E2EFilterTest, shortDecimalDirect) {
       false,
       {"shortdecimal_val"},
       20);
+}
+
+TEST_F(E2EFilterTest, shortDecimalStoredAsInt64Direct) {
+  // A short decimal with precision in [10, 18] and dictionary disabled is
+  // written as PLAIN INT64 (8-byte little-endian). This exercises the bulk /
+  // SIMD filter path enabled in IntegerColumnReader::hasBulkPath() for
+  // non-dictionary INT64 decimals. Verify filtering returns the expected rows.
+  options_.enableDictionary = false;
+  options_.enableStoreDecimalAsInteger = true;
+  options_.dataPageSize = 4 * 1024;
+
+  for (const auto& type : {
+           "shortdecimal_val:decimal(10, 5)",
+           "shortdecimal_val:decimal(18, 5)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+    // Confirm the column is physically stored as INT64 (not FLBA), so the
+    // bulk path under test is actually taken.
+    EXPECT_EQ(leafColumnPhysicalType(0), thrift::Type::INT64);
+  }
 }
 
 TEST_F(E2EFilterTest, longDecimalDictionary) {

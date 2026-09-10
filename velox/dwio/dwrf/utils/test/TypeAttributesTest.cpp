@@ -47,7 +47,7 @@ proto::Type buildTypeWithAttributes(
 
 } // namespace
 
-TEST(TypeAttributesTest, AttributesAbsentByDefault) {
+TEST(TypeAttributesTest, attributesAbsentByDefault) {
   // A Type built without attributes -- the existing wire format for every
   // DWRF file written today -- must round-trip and surface as an empty
   // attributes list. Protects the no-op upgrade path for existing files.
@@ -63,7 +63,7 @@ TEST(TypeAttributesTest, AttributesAbsentByDefault) {
   EXPECT_EQ(parsed.attributes_size(), 0);
 }
 
-TEST(TypeAttributesTest, AttributesRoundTripIcebergKeys) {
+TEST(TypeAttributesTest, attributesRoundTripIcebergKeys) {
   // All Iceberg ORC-spec attribute keys must survive the proto round-trip
   // with their string values, exactly mirroring the Apache ORC attribute
   // convention.
@@ -91,7 +91,7 @@ TEST(TypeAttributesTest, AttributesRoundTripIcebergKeys) {
   }
 }
 
-TEST(TypeAttributesTest, LegacyBufferIsForwardCompatible) {
+TEST(TypeAttributesTest, legacyBufferIsForwardCompatible) {
   // A buffer produced before this proto change has no attributes field set.
   // The new proto schema must parse it cleanly with an empty attributes
   // list, leaving the other fields intact. Forward-compat invariant for

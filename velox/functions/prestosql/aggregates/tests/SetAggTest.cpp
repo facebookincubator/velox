@@ -873,7 +873,7 @@ TEST_F(SetAggTest, nans) {
       {data}, {"c1"}, {"set_agg(c0)"}, {"array_sort(a0)", "c1"}, {expected});
 }
 
-TEST_F(SetAggTest, TimestampWithTimezone) {
+TEST_F(SetAggTest, timestampWithTimezone) {
   // Global aggregation, Primitive type.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(
