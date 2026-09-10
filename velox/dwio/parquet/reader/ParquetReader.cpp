@@ -1539,6 +1539,7 @@ void ReaderBase::scheduleRowGroups(
 
   if (currentGroup >= 1) {
     inputs_.erase(rowGroupIds[currentGroup - 1]);
+    reader.releaseRowGroup(rowGroupIds[currentGroup - 1]);
   }
 }
 
@@ -1628,6 +1629,10 @@ class ParquetRowReader::Impl {
         params,
         *options_.scanSpec());
     columnReader_->setIsTopLevel();
+    if (auto* root = dynamic_cast<StructColumnReader*>(columnReader_.get())) {
+      root->setDeferLazyColumnPrefetch(
+          readerBase_->options().deferLazyColumnPrefetch());
+    }
 
     filterRowGroups();
     if (!rowGroupIds_.empty()) {
@@ -1788,6 +1793,12 @@ class ParquetRowReader::Impl {
     stats.mergeFrom(splitStats_);
   }
 
+  void hintLazyColumnsNeeded() {
+    if (auto* root = dynamic_cast<StructColumnReader*>(columnReader_.get())) {
+      root->markAllLazyColumnsNeeded();
+    }
+  }
+
   void resetFilterCaches() {
     columnReader_->resetFilterCaches();
   }
@@ -1870,6 +1881,10 @@ uint64_t ParquetRowReader::next(
 void ParquetRowReader::updateRuntimeStats(
     dwio::common::RuntimeStats& stats) const {
   impl_->updateRuntimeStats(stats);
+}
+
+void ParquetRowReader::hintLazyColumnsNeeded() {
+  impl_->hintLazyColumnsNeeded();
 }
 
 void ParquetRowReader::resetFilterCaches() {

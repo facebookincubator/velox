@@ -120,6 +120,12 @@ class RowReader {
     return false;
   }
 
+  /// Hint that the columns produced as LazyVectors are about to be read (a
+  /// row passed all filters). Readers that defer the prefetch of such columns
+  /// (ReaderOptions::deferLazyColumnPrefetch()) start it now. No-op by
+  /// default.
+  virtual void hintLazyColumnsNeeded() {}
+
   enum class FetchResult {
     kFetched, // This function did the fetch
     kInProgress, // Another thread already started the IO

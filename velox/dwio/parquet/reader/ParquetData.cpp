@@ -106,11 +106,18 @@ bool ParquetData::rowGroupMatches(
   return true;
 }
 
+void ParquetData::setLazyColumnCallback(
+    std::function<void(uint32_t)> onNeeded) {
+  onLazyColumnNeeded_ = std::move(onNeeded);
+}
+
 void ParquetData::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
   auto chunk = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
   streams_.resize(fileMetaDataPtr_.numRowGroups());
+  enqueued_.resize(fileMetaDataPtr_.numRowGroups(), false);
+  enqueued_[index] = true;
   VELOX_CHECK(
       chunk.hasMetadata(),
       "ColumnMetaData does not exist for schema Id ",
@@ -129,6 +136,20 @@ void ParquetData::enqueueRowGroup(
 
 dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
   static std::vector<uint64_t> empty;
+  if (!isRowGroupEnqueued(index)) {
+    // Lazily loaded column whose prefetch was deferred: create the stream on
+    // first use, see ensureReader().
+    VELOX_CHECK(onLazyColumnNeeded_, "Stream not enqueued for non-lazy column");
+    reader_.reset();
+    pendingRowGroup_ = index;
+    return dwio::common::PositionProvider(empty);
+  }
+  pendingRowGroup_ = -1;
+  createReader(index);
+  return dwio::common::PositionProvider(empty);
+}
+
+void ParquetData::createReader(uint32_t index) {
   VELOX_CHECK_LT(index, streams_.size());
   VELOX_CHECK(streams_[index], "Stream not enqueued for column");
   auto metadata = fileMetaDataPtr_.rowGroup(index).columnChunk(type_->column());
@@ -140,7 +161,25 @@ dwio::common::PositionProvider ParquetData::seekToRowGroup(int64_t index) {
       metadata.totalCompressedSize(),
       stats_,
       sessionTimezone_);
-  return dwio::common::PositionProvider(empty);
+}
+
+void ParquetData::ensureReader() {
+  if (reader_) {
+    return;
+  }
+  VELOX_CHECK_GE(pendingRowGroup_, 0, "No row group selected for column");
+  const auto index = static_cast<uint32_t>(pendingRowGroup_);
+  pendingRowGroup_ = -1;
+  if (!isRowGroupEnqueued(index)) {
+    // No hint arrived before the first read: the owner enqueues and loads the
+    // chunk now, and keeps enqueueing this column with the following row
+    // groups.
+    onLazyColumnNeeded_(index);
+    VELOX_CHECK(
+        isRowGroupEnqueued(index),
+        "Deferred lazy column was not enqueued on demand");
+  }
+  createReader(index);
 }
 
 std::pair<int64_t, int64_t> ParquetData::getRowGroupRegion(
