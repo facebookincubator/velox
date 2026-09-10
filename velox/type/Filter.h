@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include <folly/Range.h>
 #include <folly/container/F14Set.h>
 #include <xsimd/xsimd.hpp>
@@ -1337,6 +1339,15 @@ class BigintValuesUsingBloomFilter final : public Filter {
   folly::dynamic serialize() const override;
 
   static std::unique_ptr<Filter> create(const folly::dynamic& obj);
+
+  /// Appends the filter to 'out' in a host-native binary form that is only
+  /// readable by the same binary on the same architecture.
+  void serializeBinary(std::string& out) const;
+
+  /// Returns the number of bytes 'serializeBinary' appends.
+  size_t serializedBinarySize() const;
+
+  static std::unique_ptr<Filter> deserializeBinary(std::string_view data);
 
   bool testingEquals(const Filter& other) const override;
 
