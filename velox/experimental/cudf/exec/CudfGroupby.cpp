@@ -1573,6 +1573,11 @@ void CudfGroupby::computePartialGroupbyIncrementally(CudfVectorPtr tbl) {
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
+    // The old state has been copied into `concatenatedTable`; drop our
+    // reference so it is not held through the re-aggregation (see
+    // computeFinalGroupbyIncrementally). Deallocation is ordered after the
+    // concat on `partialOutputStream` by getConcatenatedTable.
+    bufferedResult_.reset();
 
     // Now we have to groupby again but this time with intermediate aggregators.
     // Keep concatenatedTable alive while we use its view.
@@ -1621,6 +1626,15 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
 
   auto concatenatedTable =
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
+  // The concatenate above copied the accumulated state into
+  // `concatenatedTable`, so the old state is dead from here on. Release it now
+  // rather than at the final assignment: otherwise it stays resident through
+  // the re-aggregation below, which already holds the concatenated input, the
+  // hash table and the new output. For a high-cardinality final aggregation
+  // (TPC-H Q18 groups ~1.5 B keys) that is a full extra copy of the state at
+  // the peak. The free is stream-ordered on `finalStream`, the same stream the
+  // concatenate ran on, so it cannot race the copy.
+  bufferedResult_.reset();
   cudf::detail::join_streams(
       std::vector<rmm::cuda_stream_view>{finalStream}, inputTableStream);
   auto compactedOutput = doGroupByAggregation(
@@ -1655,6 +1669,9 @@ void CudfGroupby::computeSingleGroupbyIncrementally(CudfVectorPtr tbl) {
         bufferedResultType_,
         partialOutputStream,
         get_temp_mr());
+    // Same as the partial path: the state is already copied, release it before
+    // re-aggregating so it is not part of the peak.
+    bufferedResult_.reset();
 
     auto compactedOutput = doGroupByAggregation(
         concatenatedTable->view(),
