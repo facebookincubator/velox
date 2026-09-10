@@ -301,6 +301,33 @@ TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
   }
 }
 
+TEST_F(QueryConfigTest, legacyTimestampWithTimezone) {
+  // Defaults to legacy rendering, so enabling the config is opt-in.
+  {
+    auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.legacyTimestampWithTimezone());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kLegacyTimestampWithTimezone, "false"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.legacyTimestampWithTimezone());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{QueryConfig::kLegacyTimestampWithTimezone, "true"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.legacyTimestampWithTimezone());
+  }
+}
+
 TEST_F(QueryConfigTest, operatorSpillFileCreateConfig) {
   // Test default values (empty strings)
   {
