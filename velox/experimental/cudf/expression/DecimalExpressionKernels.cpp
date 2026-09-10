@@ -95,19 +95,6 @@ void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   }
 }
 
-/// Output column whose null stencil is already applied (bitmask_and /
-/// copy_bitmask). The divide kernel skips null rows instead of set_null.
-std::unique_ptr<cudf::column> makeDivideResultColumn(
-    cudf::size_type size,
-    cudf::data_type outputType,
-    rmm::device_buffer&& nullMask,
-    cudf::size_type nullCount,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  return cudf::make_fixed_width_column(
-      outputType, size, std::move(nullMask), nullCount, stream, mr);
-}
-
 } // namespace
 
 template <typename Lhs, typename Rhs>
@@ -182,8 +169,8 @@ std::unique_ptr<cudf::column> decimalDivide(
   // Precompute the null stencil so the kernel never calls set_null.
   auto [nullMask, nullCount] =
       cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
-  auto out = makeDivideResultColumn(
-      lhs.size(), outputType, std::move(nullMask), nullCount, stream, mr);
+  auto out = cudf::make_fixed_width_column(
+      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
   checkDecimalBinaryOpStatus(
@@ -221,10 +208,11 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
   }
 
+  // The scalar is valid here, so the column's mask is the whole stencil.
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
-  auto out = makeDivideResultColumn(
-      lhs.size(),
+  auto out = cudf::make_fixed_width_column(
       outputType,
+      lhs.size(),
       std::move(nullMask),
       lhs.null_count(),
       stream,
@@ -271,10 +259,11 @@ std::unique_ptr<cudf::column> decimalDivide(
     return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
   }
 
+  // The scalar is valid here, so the column's mask is the whole stencil.
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
-  auto out = makeDivideResultColumn(
-      rhs.size(),
+  auto out = cudf::make_fixed_width_column(
       outputType,
+      rhs.size(),
       std::move(nullMask),
       rhs.null_count(),
       stream,

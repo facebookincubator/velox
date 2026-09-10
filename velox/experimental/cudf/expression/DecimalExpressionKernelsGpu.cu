@@ -842,17 +842,6 @@ void validateDecimalBinaryOp(cudf::binary_operator op) {
       "Unsupported decimal binary operator for overflow-checked execution");
 }
 
-std::unique_ptr<cudf::column> makeResultColumn(
-    cudf::size_type size,
-    cudf::data_type outputType,
-    rmm::device_buffer&& nullMask,
-    cudf::size_type nullCount,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr) {
-  return cudf::make_fixed_width_column(
-      outputType, size, std::move(nullMask), nullCount, stream, mr);
-}
-
 template <typename LhsRep, typename RhsRep, typename OutRep>
 std::pair<std::unique_ptr<cudf::column>, int32_t>
 decimalBinaryOperationColColImpl(
@@ -866,8 +855,8 @@ decimalBinaryOperationColColImpl(
   CUDF_EXPECTS(lhs.size() == rhs.size(), "Decimal binop requires equal sizes");
   auto [nullMask, nullCount] =
       cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
-  auto result = makeResultColumn(
-      lhs.size(), outputType, std::move(nullMask), nullCount, stream, mr);
+  auto result = cudf::make_fixed_width_column(
+      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
   int32_t const statusFlag =
       launchDecimalBinaryColColKernel<LhsRep, RhsRep, OutRep>(
@@ -1017,9 +1006,9 @@ decimalBinaryOperationWithOverflow(
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
   auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
-  auto result = makeResultColumn(
-      lhs.size(),
+  auto result = cudf::make_fixed_width_column(
       outputType,
+      lhs.size(),
       std::move(nullMask),
       lhs.null_count(),
       stream,
@@ -1046,9 +1035,9 @@ decimalBinaryOperationWithOverflow(
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
   auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
-  auto result = makeResultColumn(
-      rhs.size(),
+  auto result = cudf::make_fixed_width_column(
       outputType,
+      rhs.size(),
       std::move(nullMask),
       rhs.null_count(),
       stream,
