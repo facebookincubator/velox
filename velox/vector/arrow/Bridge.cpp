@@ -890,12 +890,21 @@ void exportValues(
   const auto& type = vec.type();
   out.n_buffers = 2;
 
+  // Arrow C Data requires a values buffer large enough for the exported
+  // length, even when every value is null. Its contents are never read in
+  // that case. Handle this before gathering so a changed selection cannot
+  // dereference the missing Velox values buffer.
+  if (!vec.values()) {
+    auto values = type->isBoolean()
+        ? AlignedBuffer::allocate<bool>(out.length, pool)
+        : AlignedBuffer::allocate<uint8_t>(
+              out.length * getArrowElementSize(type, options), pool);
+    holder.setBuffer(1, std::move(values));
+    return;
+  }
+
   if (!rows.changed() && isFlatScalarZeroCopy(type, options)) {
-    // Arrow does not allow a nullptr for the values buffer. If the input vector
-    // has no values buffer (all-null case), allocate an empty buffer of size 0.
-    auto values =
-        vec.values() ? vec.values() : AlignedBuffer::allocate<uint8_t>(0, pool);
-    holder.setBuffer(1, values);
+    holder.setBuffer(1, vec.values());
     return;
   }
 
