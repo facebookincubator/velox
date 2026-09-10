@@ -1263,26 +1263,41 @@ class GreatestLeastFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
+    // Readers may preserve narrower physical types, e.g. DECIMAL32 for a
+    // logical short decimal, while literals use Velox's DECIMAL64. cuDF
+    // requires both binary_operation operands to share a physical type. The
+    // greatest/least signatures pin every operand and the result to the same
+    // decimal(p,s), so scales already agree and normalizing straight to type_
+    // only widens storage.
+    std::unique_ptr<cudf::scalar> convertedScalar;
+    const cudf::scalar* folded = foldedScalar_
+        ? scalarWithType(*foldedScalar_, type_, convertedScalar, stream, mr)
+        : nullptr;
+
     // All inputs were constant -- return the pre-folded scalar as a column.
     if (order_.empty()) {
-      return cudf::make_column_from_scalar(*foldedScalar_, 1, stream, mr);
+      return cudf::make_column_from_scalar(*folded, 1, stream, mr);
     }
+
+    // Holds the normalized first column for as long as views of it are read.
+    std::unique_ptr<cudf::column> firstColumn;
+    auto const first =
+        columnWithType(inputColumns[order_[0]], type_, firstColumn, stream, mr);
 
     // Accumulate across column inputs.
     std::unique_ptr<cudf::column> result;
     for (size_t i = 1; i < order_.size(); ++i) {
-      cudf::column_view lhs =
-          result ? result->view() : asView(inputColumns[order_[0]]);
-      result = cudf::binary_operation(
-          lhs, asView(inputColumns[order_[i]]), op_, type_, stream, mr);
+      cudf::column_view lhs = result ? result->view() : first;
+      std::unique_ptr<cudf::column> convertedColumn;
+      auto const rhs = columnWithType(
+          inputColumns[order_[i]], type_, convertedColumn, stream, mr);
+      result = cudf::binary_operation(lhs, rhs, op_, type_, stream, mr);
     }
 
     // Apply the folded constant as a final (column, scalar) operation.
-    if (foldedScalar_) {
-      cudf::column_view lhs =
-          result ? result->view() : asView(inputColumns[order_[0]]);
-      result =
-          cudf::binary_operation(lhs, *foldedScalar_, op_, type_, stream, mr);
+    if (folded) {
+      cudf::column_view lhs = result ? result->view() : first;
+      result = cudf::binary_operation(lhs, *folded, op_, type_, stream, mr);
     }
     return result;
   }

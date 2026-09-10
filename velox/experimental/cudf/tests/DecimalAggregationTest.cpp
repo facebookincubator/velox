@@ -486,6 +486,140 @@ TEST_F(CudfDecimalTest, coalescePreservesOwnedFirstInput) {
       (std::vector<int64_t>{100, 200, 300}));
 }
 
+TEST_F(CudfDecimalTest, greatestLeastNormalizesDecimal32Literal) {
+  auto rowType = ROW({"price"}, {DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto expression = test_utils::optimizeTypedExpr(
+      "greatest(price, CAST('1.00' AS DECIMAL(7, 2)))",
+      rowType,
+      queryCtx.get(),
+      &execCtx);
+  auto evaluator = createCudfExpression(expression, rowType, pool());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto price =
+      makeDecimalColumn<int32_t>({98, 99, 100, 149, 150}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{price->view()};
+
+  auto result = evaluator->eval(inputs, stream, mr);
+  auto resultView = asView(result);
+  auto expectedType =
+      cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+  EXPECT_EQ(resultView.type(), expectedType);
+  EXPECT_EQ(resultView.null_count(), 0);
+  EXPECT_EQ(
+      copyColumnData<int64_t>(resultView, stream),
+      (std::vector<int64_t>{100, 100, 100, 149, 150}));
+}
+
+TEST_F(CudfDecimalTest, greatestLeastNormalizesMixedDecimalWidths) {
+  auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  // Both columns are logically DECIMAL(7, 2), but a reader may hand back the
+  // narrower DECIMAL32 storage for one of them.
+  auto a = makeDecimalColumn<int32_t>({100, 500, -300}, 2, nullptr, stream);
+  auto b = makeDecimalColumn<int64_t>({400, 200, -100}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{a->view(), b->view()};
+
+  auto assertExpression = [&](const std::string& sql,
+                              const std::vector<int64_t>& expected) {
+    auto expression =
+        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+    auto evaluator = createCudfExpression(expression, rowType, pool());
+    auto result = evaluator->eval(inputs, stream, mr);
+    auto resultView = asView(result);
+    auto expectedType =
+        cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+    EXPECT_EQ(resultView.type(), expectedType);
+    EXPECT_EQ(resultView.null_count(), 0);
+    EXPECT_EQ(copyColumnData<int64_t>(resultView, stream), expected);
+  };
+
+  assertExpression("greatest(a, b)", {400, 500, -100});
+  assertExpression("least(a, b)", {100, 200, -300});
+}
+
+TEST_F(CudfDecimalTest, greatestLeastNormalizesAllDecimal32Columns) {
+  auto rowType =
+      ROW({"a", "b", "c"}, {DECIMAL(7, 2), DECIMAL(7, 2), DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto a = makeDecimalColumn<int32_t>({100, 500, -300}, 2, nullptr, stream);
+  auto b = makeDecimalColumn<int32_t>({400, 200, -100}, 2, nullptr, stream);
+  auto c = makeDecimalColumn<int32_t>({300, 300, -200}, 2, nullptr, stream);
+  std::vector<cudf::column_view> inputs{a->view(), b->view(), c->view()};
+
+  auto assertExpression = [&](const std::string& sql,
+                              const std::vector<int64_t>& expected) {
+    auto expression =
+        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+    auto evaluator = createCudfExpression(expression, rowType, pool());
+    auto result = evaluator->eval(inputs, stream, mr);
+    auto resultView = asView(result);
+    auto expectedType =
+        cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+    EXPECT_EQ(resultView.type(), expectedType);
+    EXPECT_EQ(resultView.null_count(), 0);
+    EXPECT_EQ(copyColumnData<int64_t>(resultView, stream), expected);
+  };
+
+  // More than two column inputs exercises the accumulation loop, where the
+  // first iteration reads the normalized first column and later ones read the
+  // running result.
+  assertExpression("greatest(a, b, c)", {400, 500, -100});
+  assertExpression("least(a, b, c)", {100, 200, -300});
+}
+
+TEST_F(CudfDecimalTest, greatestLeastDecimal32PreservesNulls) {
+  auto rowType = ROW({"a", "b"}, {DECIMAL(7, 2), DECIMAL(7, 2)});
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<bool> aValid{true, false, false};
+  auto a = makeDecimalColumn<int32_t>({100, 999, 999}, 2, &aValid, stream);
+  std::vector<bool> bValid{true, true, false};
+  auto b = makeDecimalColumn<int32_t>({400, 200, 999}, 2, &bValid, stream);
+  std::vector<cudf::column_view> inputs{a->view(), b->view()};
+
+  // NULL_MAX / NULL_MIN skip nulls and only produce a null when every input is
+  // null. Verify the null mask survives the widening cast.
+  auto assertExpression = [&](const std::string& sql,
+                              const std::vector<int64_t>& expected) {
+    auto expression =
+        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+    auto evaluator = createCudfExpression(expression, rowType, pool());
+    auto result = evaluator->eval(inputs, stream, mr);
+    auto resultView = asView(result);
+    auto expectedType =
+        cudf::data_type{cudf::type_id::DECIMAL64, numeric::scale_type{-2}};
+    EXPECT_EQ(resultView.type(), expectedType);
+    EXPECT_EQ(resultView.null_count(), 1);
+
+    auto values = copyColumnData<int64_t>(resultView, stream);
+    auto nullMask = copyNullMask(resultView, stream);
+    ASSERT_EQ(values.size(), expected.size());
+    EXPECT_TRUE(isValidAt(nullMask, 0));
+    EXPECT_EQ(values[0], expected[0]);
+    EXPECT_TRUE(isValidAt(nullMask, 1));
+    EXPECT_EQ(values[1], expected[1]);
+    EXPECT_FALSE(isValidAt(nullMask, 2));
+  };
+
+  assertExpression("greatest(a, b)", {400, 200, 0});
+  assertExpression("least(a, b)", {100, 200, 0});
+}
+
 TEST_F(CudfDecimalTest, decimalAvgDecimalInput) {
   auto rowType = ROW({
       {"d", DECIMAL(12, 2)},
