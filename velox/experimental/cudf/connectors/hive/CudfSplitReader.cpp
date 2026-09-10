@@ -212,8 +212,11 @@ CudfSplitReader::~CudfSplitReader() {
 }
 
 void CudfSplitReader::prepareSplitInternal(
-    dwio::common::RuntimeStats& /*runtimeStats*/) {
+    dwio::common::RuntimeStats& runtimeStats) {
   createCudfReader();
+
+  // Update runtime stats
+  runtimeStats.processedSplits++;
 }
 
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
@@ -225,9 +228,6 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
 
   // Perform split-specific setup.
   prepareSplitInternal(runtimeStats);
-
-  // Update runtime stats
-  runtimeStats.processedSplits++;
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
@@ -289,7 +289,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     passState_->isChunkingSetup = false;
     ++passState_->currentPass;
     if (passState_->currentPass < passState_->passes.size()) {
-      startCurrentPassFetch();
+      startColumnChunkFetch();
     } else {
       passState_->passes.clear();
     }
@@ -298,7 +298,9 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
   return table;
 }
 
-void CudfSplitReader::startCurrentPassFetch() {
+void CudfSplitReader::startColumnChunkFetch() {
+  // Return if there's no more passes or if the fetch is already started or if
+  // the chunking is already setup
   if (passState_->currentPass >= passState_->passes.size() or
       passState_->fetch.pending.valid() or passState_->isChunkingSetup) {
     return;
@@ -322,7 +324,7 @@ void CudfSplitReader::startCurrentPassFetch() {
 void CudfSplitReader::setupChunkingForCurrentPass(
     rmm::device_async_resource_ref mr) {
   // No-op when the fetch was already started while preparing the split.
-  startCurrentPassFetch();
+  startColumnChunkFetch();
 
   // Wait for all reads of the pass to complete.
   passState_->fetch.wait();
@@ -571,12 +573,6 @@ void CudfSplitReader::createCudfReader() {
 
   passState_ = std::make_unique<RowGroupPassState>();
   passState_->passes = selectRowGroupPasses();
-
-  // Issue the reads of the first pass without waiting for them. When the split
-  // is prepared by the preloader, this overlaps its I/O with the work the
-  // driver is still doing on the previous split, at the cost of holding the
-  // buffers of one pass per preloaded split rather than per driver.
-  startCurrentPassFetch();
 }
 
 void CudfSplitReader::setupPageIndexes() {

@@ -1609,6 +1609,11 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - bool
      - true
      - Whether to use BufferedInput for CudfHiveDataSource (can use AsyncDataCache when HiveConfig file handle cache is enabled).
+   * - cudf.hive.preload-column-chunks
+     - cudf.hive.preload_column_chunks
+     - bool
+     - false
+     - Whether background split preparation starts fetching the first column-chunk pass. Active splits always start fetching when activated. Enabling this can overlap I/O with the previous split, but retains one pass of device buffers per preloaded split.
    * - parquet.reader.use-pandas-metadata
      - parquet.reader.use_pandas_metadata
      - bool
@@ -1638,7 +1643,7 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - parquet.reader.pass_read_limit
      - integer
      - 0
-     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. When preloading is enabled, the first column chunk pass is fetched for up to ``max_split_preload_per_driver`` additional splits per driver. Budget this limit against the number of passes held at once rather than against a single pass. Maps to ``pass_read_limit`` in ``construct_row_group_passes`` and ``setup_chunking_for_all_columns`` of `libcudf hybrid_scan_multifile <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile>`_.
+     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. When ``cudf.hive.preload-column-chunks`` is enabled, the first column chunk pass is fetched for up to ``max_split_preload_per_driver`` additional splits per driver. Budget this limit against the number of passes held at once rather than against a single pass. Maps to ``pass_read_limit`` in ``construct_row_group_passes`` and ``setup_chunking_for_all_columns`` of `libcudf hybrid_scan_multifile <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile>`_.
    * - parquet.reader.convert-strings-to-categories
      - parquet.reader.convert_strings_to_categories
      - bool

@@ -217,6 +217,15 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   cudfSplitReader_ = createCudfSplitReader();
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
+  // Check if preloaded splits should start pre-fetching the first pass of
+  // column chunks.
+  const bool isPreloadedSplit = split->dataSource != nullptr;
+  if (isPreloadedSplit &&
+      cudfHiveConfig_->preloadColumnChunksSession(
+          connectorQueryCtx_->sessionProperties())) {
+    cudfSplitReader_->startColumnChunkFetch();
+  }
+
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
   try {
@@ -266,6 +275,9 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   // 'source' owns the query context the reader was prepared with and is
   // freed right after this call.
   cudfSplitReader_->setConnectorQueryCtx(connectorQueryCtx_);
+
+  // Start column chunk fetch if it is not already started
+  cudfSplitReader_->startColumnChunkFetch();
 
   // The adopted reader keeps writing I/O statistics to the objects of
   // 'source', so carry the balance accumulated here over to those.

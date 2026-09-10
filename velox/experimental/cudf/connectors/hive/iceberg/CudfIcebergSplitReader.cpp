@@ -175,6 +175,10 @@ void CudfIcebergSplitReader::prepareSplitInternal(
 
   if (not noColumnsToRead_) {
     createCudfReader();
+    // Update runtime stats
+    runtimeStats.processedSplits++;
+  } else {
+    runtimeStats.skippedSplits++;
   }
 }
 

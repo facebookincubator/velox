@@ -65,6 +65,11 @@ DEFINE_bool(
     true,
     "Use BufferedInputDataSource instead of KvikIO for cuDF Hive reads");
 
+DEFINE_bool(
+    cudf_hive_preload_column_chunks,
+    false,
+    "Load column chunks while preloading cuDF Hive splits");
+
 DEFINE_string(
     cudf_properties,
     "",
@@ -97,6 +102,9 @@ void CudfTpchBenchmark::initialize() {
     cudfHiveConfigurationValues
         [cudf_velox::connector::hive::CudfHiveConfig::kUseBufferedInput] =
             std::to_string(FLAGS_cudf_hive_use_buffered_input);
+    cudfHiveConfigurationValues
+        [cudf_velox::connector::hive::CudfHiveConfig::kPreloadColumnChunks] =
+            std::to_string(FLAGS_cudf_hive_preload_column_chunks);
     auto cudfHiveProperties = std::make_shared<const config::ConfigBase>(
         std::move(cudfHiveConfigurationValues));
 
@@ -134,6 +142,9 @@ CudfTpchBenchmark::makeConnectorProperties() {
   cfg->set(
       CudfHiveCfg::kUseBufferedInput,
       std::to_string(FLAGS_cudf_hive_use_buffered_input));
+  cfg->set(
+      CudfHiveCfg::kPreloadColumnChunks,
+      std::to_string(FLAGS_cudf_hive_preload_column_chunks));
   cfg->set(CudfHiveCfg::kAllowMismatchedCudfHiveSchemas, "true");
 
   return cfg;

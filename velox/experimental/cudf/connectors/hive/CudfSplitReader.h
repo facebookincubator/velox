@@ -87,6 +87,10 @@ class CudfSplitReader : public NvtxHelper {
   /// from a reader that outlives the context it was prepared with.
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
+  /// Start the reads of the column chunks of the current pass without waiting
+  /// for them. Does nothing when they are already in flight or complete.
+  void startColumnChunkFetch();
+
   /// Get the stream.
   rmm::cuda_stream_view stream() const {
     return stream_;
@@ -180,10 +184,6 @@ class CudfSplitReader : public NvtxHelper {
   // Return the row groups to read, grouped into passes bounded by the pass
   // read limit. Empty when the split has no row groups left after pruning.
   RowGroupPasses selectRowGroupPasses() const;
-
-  // Start the reads of the column chunks of the current pass without waiting
-  // for them. Does nothing when they are already in flight or complete.
-  void startCurrentPassFetch();
 
   // Wait for the column chunks of the current pass, fetching them first if
   // that has not started yet, and set up its chunked read.

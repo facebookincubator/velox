@@ -132,6 +132,17 @@ bool CudfHiveConfig::useBufferedInputSession(
       kUseBufferedInputSession, config_->get<bool>(kUseBufferedInput, true));
 }
 
+bool CudfHiveConfig::preloadColumnChunks() const {
+  return config_->get<bool>(kPreloadColumnChunks, false);
+}
+
+bool CudfHiveConfig::preloadColumnChunksSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kPreloadColumnChunksSession,
+      config_->get<bool>(kPreloadColumnChunks, false));
+}
+
 bool CudfHiveConfig::immutableFiles() const {
   return config_->get<bool>(kImmutableFiles, false);
 }
