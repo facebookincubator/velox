@@ -97,8 +97,7 @@ struct ParseURLFunction {
       // A constant key compiles its regex once, on the first call that uses
       // it; an invalid key fails the query here.
       if (constPattern_ == nullptr) {
-        constPattern_ =
-            std::make_unique<re2::RE2>(*constQueryPattern_);
+        constPattern_ = std::make_unique<re2::RE2>(*constQueryPattern_);
         VELOX_USER_CHECK(
             constPattern_->ok(), "invalid key: {}", *constQueryPattern_);
       }
