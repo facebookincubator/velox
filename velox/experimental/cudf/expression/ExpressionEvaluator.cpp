@@ -1294,6 +1294,21 @@ class GreatestLeastFunction : public CudfFunction {
   std::vector<size_t> order_;
 };
 
+// A switch without an else clause produces its null results from a scalar
+// built by cudf::make_default_constructed_scalar, which has no implementation
+// for nested types. Velox arrays, maps and rows all reach it as one, so only
+// the flat types can take that path.
+bool canMakeNullScalar(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW:
+      return false;
+    default:
+      return true;
+  }
+}
+
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
@@ -2634,21 +2649,34 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("varchar")
            .build()});
 
-  // No prefix because switch and if are special form
+  // No prefix because switch and if are special form. The two arities are
+  // registered separately so that the implicit null else of the two-argument
+  // form can be restricted to the types that can produce one.
+  auto switchFactory = [](const std::string&,
+                          const core::TypedExprPtr& expr,
+                          memory::MemoryPool* pool) {
+    return std::make_shared<SwitchFunction>(expr, pool);
+  };
+
   registerCudfFunctions(
       {"switch", "if"},
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        return std::make_shared<SwitchFunction>(expr, pool);
-      },
+      switchFactory,
       {FunctionSignatureBuilder()
            .typeVariable("T")
            .returnType("T")
            .argumentType("boolean")
            .argumentType("T")
-           .build(),
-       FunctionSignatureBuilder()
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[0]->isConstantKind() &&
+            canMakeNullScalar(expr->type());
+      });
+
+  registerCudfFunctions(
+      {"switch", "if"},
+      switchFactory,
+      {FunctionSignatureBuilder()
            .typeVariable("T")
            .returnType("T")
            .argumentType("boolean")
