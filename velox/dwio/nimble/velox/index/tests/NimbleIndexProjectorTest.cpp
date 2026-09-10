@@ -202,6 +202,45 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
     TabletReaderCache::testingReset();
   }
 
+  // Rows per batch produced by singleFeatureBatch().
+  static constexpr vector_size_t kFeatureRowsPerBatch = 4;
+
+  static RowTypePtr singleFeatureRowType() {
+    return ROW({{"key", BIGINT()}, {"features", MAP(VARCHAR(), DOUBLE())}});
+  }
+
+  // Builds a batch whose flat map carries exactly one key, so writing several
+  // with different keys yields stripes that project nothing for a projection
+  // pinned to one of them.
+  RowVectorPtr singleFeatureBatch(int64_t keyBase, StringView featureKey) {
+    auto offsets = allocateOffsets(kFeatureRowsPerBatch, leafPool_.get());
+    auto sizes = allocateSizes(kFeatureRowsPerBatch, leafPool_.get());
+    auto* rawOffsets = offsets->asMutable<vector_size_t>();
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    for (vector_size_t row = 0; row < kFeatureRowsPerBatch; ++row) {
+      rawOffsets[row] = row;
+      rawSizes[row] = 1;
+    }
+    auto features = std::make_shared<MapVector>(
+        leafPool_.get(),
+        MAP(VARCHAR(), DOUBLE()),
+        nullptr,
+        kFeatureRowsPerBatch,
+        offsets,
+        sizes,
+        vectorMaker_->flatVector<StringView>(
+            kFeatureRowsPerBatch, [&](auto /*row*/) { return featureKey; }),
+        vectorMaker_->flatVector<double>(kFeatureRowsPerBatch, [](auto row) {
+          return static_cast<double>(row);
+        }));
+    return vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             kFeatureRowsPerBatch,
+             [keyBase](auto row) { return keyBase + row; }),
+         features});
+  }
+
   // Writes sorted data with an index on the key column.
   void writeData(
       const std::vector<RowVectorPtr>& batches,
@@ -678,6 +717,133 @@ TEST_P(NimbleIndexProjectorTest, resultSlicesAreManaged) {
         << "slice " << s << "/" << response.slices.size()
         << " has an unmanaged (wrapBuffer) IOBuf node";
   }
+}
+
+// A stripe holding none of the requested flat map keys projects no streams at
+// all. Such a stripe has nothing to read and nothing to pack, and both paths
+// reject an empty stripe, so planning one used to abort the whole scan.
+TEST_P(NimbleIndexProjectorTest, stripeProjectingNoStreams) {
+  auto rowType = singleFeatureRowType();
+
+  // stripeSize=1 cuts a stripe per batch. Alternating the feature key leaves
+  // stripes 1 and 3 projecting nothing: one in the middle of the plan and one
+  // at its end, which used to fail through different checks.
+  writeData(
+      {singleFeatureBatch(0, StringView("a")),
+       singleFeatureBatch(kFeatureRowsPerBatch, StringView("b")),
+       singleFeatureBatch(2 * kFeatureRowsPerBatch, StringView("a")),
+       singleFeatureBatch(3 * kFeatureRowsPerBatch, StringView("b"))},
+      {"key"},
+      {{"features", {}}},
+      /*stripeSize=*/1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"a\"]");
+  auto projector = createProjector(subfields);
+
+  // Spans every stripe, so the ones without "a" are still planned.
+  auto bounds = makeRangeLookup(rowType, {"key"}, 0, 4 * kFeatureRowsPerBatch);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds};
+
+  auto result = projector->project(request, {});
+  ASSERT_EQ(result.responses.size(), 1);
+  // Only the two stripes carrying "a" contribute; the others hold no projected
+  // data, so they produce no slice.
+  ASSERT_EQ(result.responses[0].slices.size(), 2);
+  for (const auto& slice : result.responses[0].slices) {
+    EXPECT_EQ(readEmbeddedRowRange(slice), RowRange(0, kFeatureRowsPerBatch));
+  }
+  // Nothing truncated the scan, so there is nothing to resume from. The retry
+  // path this fix also guards needs global truncation to run at all, and is
+  // covered by emptyStripeCountsAsReachedUnderTruncation below.
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+}
+
+// A request whose only stripe projects no streams was still reached, so global
+// truncation must not hand it back its own lower key: it has nothing left to
+// read, and retrying would re-scan the same empty ground forever. Reaching
+// that path needs needResumeKey and a truncated plan, plus a following stripe
+// that still carries ranges, so it takes two requests to set up.
+TEST_P(NimbleIndexProjectorTest, emptyStripeCountsAsReachedUnderTruncation) {
+  auto rowType = singleFeatureRowType();
+
+  // stripe 0 holds only "b"; stripes 1 and 2 hold "a".
+  writeData(
+      {singleFeatureBatch(0, StringView("b")),
+       singleFeatureBatch(kFeatureRowsPerBatch, StringView("a")),
+       singleFeatureBatch(2 * kFeatureRowsPerBatch, StringView("a"))},
+      {"key"},
+      {{"features", {}}},
+      /*stripeSize=*/1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"a\"]");
+  auto projector = createProjector(subfields);
+
+  // Request 0 covers only the "b" stripe, so it is reached but gets no data.
+  // Request 1 covers both "a" stripes; the first of them trips maxRows, so the
+  // plan truncates with the second still unprocessed.
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(rowType, {"key"}, 0, kFeatureRowsPerBatch),
+      makeRangeLookup(
+          rowType, {"key"}, kFeatureRowsPerBatch, 3 * kFeatureRowsPerBatch)};
+
+  NimbleIndexProjector::Options options;
+  options.needResumeKey = true;
+  options.maxRows = kFeatureRowsPerBatch;
+
+  auto result = projector->project(request, options);
+  ASSERT_EQ(result.responses.size(), 2);
+
+  // Request 0: reached, nothing to read, and — the point of the test — not
+  // told to start over.
+  EXPECT_TRUE(result.responses[0].slices.empty());
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+
+  // Request 1: genuinely cut short, so it does carry a resume key.
+  ASSERT_EQ(result.responses[1].slices.size(), 1);
+  EXPECT_TRUE(result.responses[1].resumeKey.has_value());
+}
+
+// A stripe that projects nothing must not spend the request's row budget. The
+// caller receives none of its rows, so charging them would prune later stripes
+// that do carry data, and hand back a resume key past rows never returned.
+TEST_P(NimbleIndexProjectorTest, emptyStripeDoesNotConsumeRowBudget) {
+  auto rowType = singleFeatureRowType();
+
+  // stripeSize=1 cuts a stripe per batch, so stripe 0 carries only "b" and
+  // stripe 1 only "a". A projection pinned to "a" gets nothing from stripe 0.
+  writeData(
+      {singleFeatureBatch(0, StringView("b")),
+       singleFeatureBatch(kFeatureRowsPerBatch, StringView("a"))},
+      {"key"},
+      {{"features", {}}},
+      /*stripeSize=*/1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"a\"]");
+  auto projector = createProjector(subfields);
+
+  auto bounds = makeRangeLookup(rowType, {"key"}, 0, 2 * kFeatureRowsPerBatch);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds};
+
+  // Budget for exactly one stripe. Spending it on the stripe that projects
+  // nothing would leave the "a" stripe pruned and the response empty.
+  NimbleIndexProjector::Options options;
+  options.maxRowsPerRequest = kFeatureRowsPerBatch;
+  options.needResumeKey = true;
+
+  auto result = projector->project(request, options);
+  ASSERT_EQ(result.responses.size(), 1);
+  ASSERT_EQ(result.responses[0].slices.size(), 1);
+  EXPECT_EQ(
+      readEmbeddedRowRange(result.responses[0].slices[0]),
+      RowRange(0, kFeatureRowsPerBatch));
+  // All matching data was returned, so there is nothing to resume from.
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
 }
 
 TEST_P(NimbleIndexProjectorTest, emptyResult) {

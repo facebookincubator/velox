@@ -68,4 +68,15 @@ namespace facebook::nimble {
           "an incompatible data type {}.",                                     \
           toString(dataType)))
 
+/// Creates an encoding for a 32- or 64-bit integer data type.
+#define RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(Encoding, dataType)               \
+  NIMBLE_RETURN_BY_WIDE_INTEGER_DATA_TYPE_OR(                                  \
+      dataType,                                                                \
+      T,                                                                       \
+      std::make_unique<Encoding<T>>(pool, data, stringBufferFactory, options), \
+      NIMBLE_INCOMPATIBLE_ENCODING(                                            \
+          #Encoding " only supports 32- and 64-bit integer data types, got "   \
+                    "{}.",                                                     \
+          dataType))
+
 } // namespace facebook::nimble

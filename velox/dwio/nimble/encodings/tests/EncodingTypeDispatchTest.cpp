@@ -122,6 +122,15 @@ std::unique_ptr<ConstructedEncodingBase> makeEncodingByIntegerType(
   RETURN_ENCODING_BY_INTEGER_TYPE(ConstructedEncoding, dataType);
 }
 
+std::unique_ptr<ConstructedEncodingBase> makeEncodingByWideIntegerType(
+    nimble::DataType dataType) {
+  int pool{0};
+  std::string_view data;
+  int stringBufferFactory{0};
+  int options{0};
+  RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(ConstructedEncoding, dataType);
+}
+
 } // namespace
 
 TEST(EncodingTypeDispatchTest, encodingConstructionMacrosDispatchDataTypes) {
@@ -148,6 +157,12 @@ TEST(
       "double");
   EXPECT_EQ(
       makeEncodingByIntegerType(nimble::DataType::Int16)->typeName(), "int16");
+  EXPECT_EQ(
+      makeEncodingByWideIntegerType(nimble::DataType::Int32)->typeName(),
+      "int32");
+  EXPECT_EQ(
+      makeEncodingByWideIntegerType(nimble::DataType::Uint64)->typeName(),
+      "uint64");
 
   NIMBLE_ASSERT_THROW(
       makeEncodingByVarintType(nimble::DataType::Int16),
@@ -161,4 +176,7 @@ TEST(
   NIMBLE_ASSERT_THROW(
       makeEncodingByIntegerType(nimble::DataType::Double),
       "Trying to deserialize an integer stream");
+  NIMBLE_ASSERT_THROW(
+      makeEncodingByWideIntegerType(nimble::DataType::Uint16),
+      "only supports 32- and 64-bit integer data types");
 }
