@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderIOHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderByteFetch.h"
 
 #include <cudf/io/parquet_io_utils.hpp>
 

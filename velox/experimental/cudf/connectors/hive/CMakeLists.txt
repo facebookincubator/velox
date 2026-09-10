@@ -22,7 +22,7 @@ add_library(
   CudfHiveDataSource.cpp
   CudfHiveTableHandle.cpp
   CudfSplitReader.cpp
-  CudfSplitReaderIOHelpers.cpp
+  CudfSplitReaderByteFetch.cpp
 )
 
 target_link_libraries(

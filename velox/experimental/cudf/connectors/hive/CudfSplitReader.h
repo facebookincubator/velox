@@ -18,7 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderIOHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderByteFetch.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/io/IoStatistics.h"
