@@ -25,6 +25,7 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h" // @manual
 #include "velox/dwio/parquet/reader/PageReader.h" // @manual
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
+#include "velox/dwio/parquet/tests/reader/ParquetTableScanTestBase.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
@@ -40,6 +41,7 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::connector::hive;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::parquet;
+using namespace facebook::velox::parquet::test;
 using namespace facebook::velox::test;
 using namespace facebook::velox::common::testutil;
 
@@ -60,20 +62,9 @@ void assertDynamicFilterProduced(
 
 } // namespace
 
-class ParquetTableScanTest : public HiveConnectorTestBase {
+class ParquetTableScanTest : public ParquetTableScanTestBase {
  protected:
   using OperatorTestBase::assertQuery;
-
-  static std::string parquetSessionProperty(std::string_view key) {
-    return dwio::common::formatConfigPrefix(
-               dwio::common::FileFormat::PARQUET, "_") +
-        std::string(key);
-  }
-
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    parquet::registerParquetReaderFactory();
-  }
 
   void assertSelect(
       std::vector<std::shared_ptr<connector::ConnectorSplit>> splits,
@@ -209,55 +200,6 @@ class ParquetTableScanTest : public HiveConnectorTestBase {
   std::string getExampleFilePath(const std::string& fileName) {
     return getDataFilePath(
         "velox/dwio/parquet/tests/reader", "../examples/" + fileName);
-  }
-
-  std::shared_ptr<connector::hive::HiveConnectorSplit> makeSplit(
-      const std::string& filePath,
-      const std::optional<
-          std::unordered_map<std::string, std::optional<std::string>>>&
-          partitionKeys = std::nullopt,
-      const std::optional<std::unordered_map<std::string, std::string>>&
-          infoColumns = std::nullopt) {
-    return makeHiveConnectorSplits(
-        filePath,
-        1,
-        dwio::common::FileFormat::PARQUET,
-        partitionKeys,
-        infoColumns)[0];
-  }
-
-  // Write data to a parquet file on specified path.
-  void writeToParquetFile(
-      const std::string& path,
-      const std::vector<RowVectorPtr>& data,
-      ParquetWriterOptions options) {
-    dwio::common::WriterOptions writerOptions;
-    writeToParquetFile(
-        path, data, std::move(writerOptions), std::move(options));
-  }
-
-  void writeToParquetFile(
-      const std::string& path,
-      const std::vector<RowVectorPtr>& data,
-      dwio::common::WriterOptions writerOptions,
-      ParquetWriterOptions options) {
-    VELOX_CHECK_GT(data.size(), 0);
-
-    auto writeFile = std::make_unique<LocalWriteFile>(path, true, false);
-    auto sink = std::make_unique<dwio::common::WriteFileSink>(
-        std::move(writeFile), path);
-    auto childPool =
-        rootPool_->addAggregateChild("ParquetTableScanTest.Writer");
-    writerOptions.memoryPool = childPool.get();
-    writerOptions.formatSpecificOptions =
-        std::make_shared<ParquetWriterOptions>(std::move(options));
-    auto writer = std::make_unique<Writer>(
-        std::move(sink), writerOptions, asRowType(data[0]->type()));
-
-    for (const auto& vector : data) {
-      writer->write(vector);
-    }
-    writer->close();
   }
 
   void testTimestampRead(
@@ -1453,6 +1395,13 @@ TEST_F(ParquetTableScanTest, structFilterByIndex) {
                         .planNode();
   const auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
   AssertQueryBuilder(plan)
+      // The null-struct policy is name-mapping-only. Empty child specs under
+      // position mapping must preserve the physical structs' nullness.
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          parquetSessionProperty(
+              ParquetConfig::kNullStructIfAllFieldsMissingSession),
+          "true")
       .split(makeSplit(file->getPath()))
       .assertResults(expected);
 }
@@ -1573,203 +1522,6 @@ TEST_F(ParquetTableScanTest, structElementsByName) {
           kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
       .split(makeSplit(file->getPath()))
       .assertResults(expected);
-}
-
-TEST_F(ParquetTableScanTest, schemaMatchWithComplexTypes) {
-  vector_size_t kSize = 100;
-  auto valuesVector = makeRowVector(
-      {"aa", "bb"},
-      {makeFlatVector<int64_t>(kSize * 4, [](auto row) { return row; }),
-       makeFlatVector<int32_t>(kSize * 4, [](auto row) { return row; })});
-  auto keysVector =
-      makeFlatVector<int64_t>(kSize * 4, [](auto row) { return row % 4; });
-  std::vector<vector_size_t> offsets;
-  for (auto i = 0; i < kSize; i++) {
-    offsets.push_back(i * 4);
-  }
-  auto mapVector = makeMapVector(offsets, keysVector, valuesVector);
-  auto arrayVector = makeArrayVector(offsets, valuesVector);
-  auto primitiveVector = makeFlatVector(offsets);
-
-  RowVectorPtr dataFileVectors = makeRowVector(
-      {"p", "m", "a"},
-      {primitiveVector, mapVector, arrayVector}); // columns in data file
-
-  const std::shared_ptr<TempDirectoryPath> dataFileFolder =
-      TempDirectoryPath::create();
-  auto filePath = dataFileFolder->getPath() + "/" + "nested_data.parquet";
-  ParquetWriterOptions options;
-  options.writeInt96AsTimestamp = false;
-  writeToParquetFile(filePath, {dataFileVectors}, options);
-
-  // Create a row type with columns having different names than in the file.
-  auto structType = ROW({"aa1", "bb1"}, {BIGINT(), INTEGER()});
-  auto rowType =
-      ROW({"p1", "m1", "a1"},
-          {{INTEGER(),
-            MAP(BIGINT(), structType),
-            ARRAY(structType)}}); // column names in table metadata
-
-  auto op =
-      PlanBuilder()
-          .startTableScan()
-          .outputType(rowType)
-          .dataColumns(rowType)
-          .endTableScan()
-          .project({"p1", "m1[0].aa1", "m1[1].bb1", "a1[1].aa1", "a1[2].bb1"})
-          .planNode();
-
-  auto result =
-      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
-
-  ASSERT_EQ(result->size(), kSize);
-  auto rows = result->as<RowVector>();
-  ASSERT_TRUE(rows);
-  ASSERT_EQ(rows->childrenSize(), 5);
-
-  assertEqualVectors(rows->childAt(0), primitiveVector);
-
-  auto expected1 =
-      makeFlatVector<int64_t>(kSize, [](auto row) { return row * 4; });
-  assertEqualVectors(rows->childAt(1), expected1);
-  assertEqualVectors(rows->childAt(3), expected1);
-
-  auto expected2 =
-      makeFlatVector<int>(kSize, [](auto row) { return row * 4 + 1; });
-  assertEqualVectors(rows->childAt(2), expected2);
-  assertEqualVectors(rows->childAt(4), expected2);
-
-  // Now run query with column mapping using names - we should not be able to
-  // find any names.
-  result = AssertQueryBuilder(op)
-               .connectorSessionProperty(
-                   kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
-               .split(makeSplit(filePath))
-               .copyResults(pool());
-  rows = result->as<RowVector>();
-  // check for rest of the selected columns
-  auto nullBigIntVector = makeFlatVector<int64_t>(
-      kSize, [](auto row) { return row; }, [](auto row) { return true; });
-  auto nullIntVector = makeFlatVector<int>(
-      kSize, [](auto row) { return row; }, [](auto row) { return true; });
-  for (const auto index : std::vector<int>({0, 2, 4})) {
-    assertEqualVectors(rows->childAt(index), nullIntVector);
-  }
-  for (const auto index : std::vector<int>({1, 3})) {
-    assertEqualVectors(rows->childAt(index), nullBigIntVector);
-  }
-}
-
-TEST_F(ParquetTableScanTest, schemaMatch) {
-  vector_size_t kSize = 100;
-  std::shared_ptr<memory::MemoryPool> leafPool =
-      rootPool_->addLeafChild("ParquetTableScanTest");
-  RowVectorPtr dataFileVectors = makeRowVector(
-      {"c1", "c2"},
-      {makeFlatVector<int64_t>(kSize, [](auto row) { return row; }),
-       makeFlatVector<int64_t>(kSize, [](auto row) { return row * 4; })});
-
-  const std::shared_ptr<TempDirectoryPath> dataFileFolder =
-      TempDirectoryPath::create();
-  auto filePath = dataFileFolder->getPath() + "/" + "data.parquet";
-  ParquetWriterOptions options;
-  options.writeInt96AsTimestamp = false;
-  writeToParquetFile(filePath, {dataFileVectors}, options);
-
-  auto rowType = ROW({"c2", "c3"}, {BIGINT(), BIGINT()});
-  auto op = PlanBuilder()
-                .startTableScan()
-                .outputType(rowType)
-                .dataColumns(rowType)
-                .endTableScan()
-                .planNode();
-
-  auto result =
-      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
-  auto rows = result->as<RowVector>();
-
-  assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
-  assertEqualVectors(rows->childAt(1), dataFileVectors->childAt(1));
-
-  // test when schema has same column name as file schema but different data
-  // type for column c3 as varchar
-  auto rowType1 = ROW({"c2", "c3"}, {BIGINT(), VARCHAR()});
-  op = PlanBuilder()
-           .startTableScan()
-           .outputType(rowType1)
-           .dataColumns(rowType1)
-           .endTableScan()
-           .planNode();
-  EXPECT_THROW(
-      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool()),
-      VeloxRuntimeError);
-
-  // Now run query with column mapping using names, now c2 columns will match in
-  // fileschema & tableschema
-  op = PlanBuilder()
-           .startTableScan()
-           .outputType(rowType1)
-           .dataColumns(rowType1)
-           .endTableScan()
-           .planNode();
-
-  result = AssertQueryBuilder(op)
-               .connectorSessionProperty(
-                   kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
-               .split(makeSplit(filePath))
-               .copyResults(pool());
-
-  rows = result->as<RowVector>();
-  auto nullVector = makeFlatVector<std::string>(
-      kSize, [](auto row) { return "row"; }, [](auto row) { return true; });
-  assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(1));
-  assertEqualVectors(rows->childAt(1), nullVector);
-
-  // Scan with type mismatch in the 1st item (BIGINT vs REAL)
-  rowType = ROW({"c1", "c2"}, {{REAL(), BIGINT()}});
-  op = PlanBuilder()
-           .startTableScan()
-           .outputType(rowType)
-           .dataColumns(rowType)
-           .endTableScan()
-           .project({"c1"})
-           .planNode();
-
-  EXPECT_THROW(
-      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool()),
-      VeloxRuntimeError);
-
-  // Schema evolution remove column.
-  rowType = ROW({"c1"}, {{BIGINT()}});
-  op = PlanBuilder()
-           .startTableScan()
-           .outputType(rowType)
-           .dataColumns(rowType)
-           .endTableScan()
-           .project({"c1"})
-           .planNode();
-
-  result =
-      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
-  rows = result->as<RowVector>();
-  assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
-
-  // Schema evolution add column.
-  rowType = ROW({"c1", "c2", "c3"}, {{BIGINT(), BIGINT(), VARCHAR()}});
-  op = PlanBuilder()
-           .startTableScan()
-           .outputType(rowType)
-           .dataColumns(rowType)
-           .endTableScan()
-           .project({"c1", "c2", "c3"})
-           .planNode();
-
-  result =
-      AssertQueryBuilder(op).split(makeSplit(filePath)).copyResults(pool());
-  rows = result->as<RowVector>();
-  assertEqualVectors(rows->childAt(0), dataFileVectors->childAt(0));
-  assertEqualVectors(rows->childAt(1), dataFileVectors->childAt(1));
-  assertEqualVectors(rows->childAt(2), nullVector);
 }
 
 TEST_F(ParquetTableScanTest, deltaByteArray) {

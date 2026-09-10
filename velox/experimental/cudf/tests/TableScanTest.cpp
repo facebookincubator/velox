@@ -491,7 +491,7 @@ TEST_F(TableScanTest, filterPushdown) {
           .endTableScan()
           .planNode(),
       filePaths,
-      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
   auto tableScanStats = getTableScanStats(task);
   // EXPECT_EQ(tableScanStats.rawInputRows, 10'000);

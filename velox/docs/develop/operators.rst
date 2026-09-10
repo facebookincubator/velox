@@ -678,7 +678,7 @@ output rows with empty unnest values are not produced.
    * - unnestVariables
      - Input columns of type array or map to expand.
    * - unnestNames
-     - Names to use for expanded columns. One name per array column. Two names per map column.
+     - Names to use for expanded columns. One name per array column. Two names per map column. A name may be absent (null) to prune the corresponding expanded column, which is then neither emitted nor materialized.
    * - ordinalityName
      - Optional name for the ordinality column.
    * - emptyUnnestValueName

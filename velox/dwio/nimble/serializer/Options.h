@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <vector>
 
 #include "folly/Executor.h"
 #include "folly/container/F14Map.h"
@@ -33,6 +34,10 @@
 
 #include <set>
 #include "velox/type/Type.h"
+
+namespace facebook::velox::memory {
+class MemoryPool;
+}
 
 namespace facebook::nimble {
 
@@ -300,16 +305,20 @@ struct DeserializerOptions {
   /// When nullptr (default), child reads are performed sequentially.
   folly::Executor* decodeExecutor{nullptr};
 
-  /// Maximum number of parallel coroutine tasks scheduled by each field
-  /// reader. Children are grouped into this many batches, each decoded
-  /// sequentially within a single coroutine task. This is a per-reader limit;
-  /// the executor bounds the number of tasks that run concurrently across the
-  /// reader tree. 0 disables parallel decoding.
+  /// Maximum planned decode parallelism across the field reader tree. Nested
+  /// scalar stream counts determine how many child-field tasks to create. 0
+  /// disables parallel decoding.
   uint32_t maxDecodeParallelism{0};
 
-  /// Minimum number of child streams per parallel decode task. Ensures each
-  /// coroutine task has enough work to amortize threading overhead.
+  /// Minimum number of nested scalar streams per planned decode task. Ensures
+  /// each coroutine task has enough work to amortize threading overhead.
   uint32_t minStreamsPerDecodeTask{1};
+
+  /// Optional leaf pools distributed round-robin among independently decoded
+  /// row children and FlatMap-as-struct values. When provided, the pool count
+  /// must match maxDecodeParallelism. The caller must keep the pools alive
+  /// while returned vectors exist.
+  std::vector<velox::memory::MemoryPool*> decodePools{};
 };
 
 } // namespace facebook::nimble

@@ -113,7 +113,11 @@ Device* setDriverDevice(int32_t deviceId) {
   device->sharedMemPerSM = prop.sharedMemPerMultiprocessor;
   device->L2Size = prop.l2CacheSize;
   device->persistingL2MaxSize = prop.persistingL2CacheMaxSize;
+#if CUDART_VERSION < 13000
+  // singleToDoublePrecisionPerfRatio is gone from cudaDeviceProp in CUDA 13, so
+  // float32To64Ratio keeps its default of 1 there.
   device->float32To64Ratio = prop.singleToDoublePrecisionPerfRatio;
+#endif
   CU_CHECK(cuCtxSetCurrent(contexts[deviceId]));
   return devices[deviceId].get();
 }
@@ -198,6 +202,18 @@ class CudaHostAllocator : public GpuAllocator {
   }
 };
 
+#if CUDART_VERSION >= 13000
+// CUDA 13 replaced the device ordinal argument of the unified memory APIs with
+// a cudaMemLocation.
+cudaMemLocation memLocation(int32_t deviceId) {
+  cudaMemLocation location;
+  location.type = deviceId == cudaCpuDeviceId ? cudaMemLocationTypeHost
+                                              : cudaMemLocationTypeDevice;
+  location.id = deviceId;
+  return location;
+}
+#endif
+
 } // namespace
 
 GpuAllocator* getAllocator(Device* /*device*/) {
@@ -247,8 +263,13 @@ void Stream::wait() {
 }
 
 void Stream::prefetch(Device* device, void* ptr, size_t size) {
+  const int32_t deviceId = device ? device->deviceId : cudaCpuDeviceId;
+#if CUDART_VERSION >= 13000
   CUDA_CHECK(cudaMemPrefetchAsync(
-      ptr, size, device ? device->deviceId : cudaCpuDeviceId, stream_->stream));
+      ptr, size, memLocation(deviceId), /*flags=*/0, stream_->stream));
+#else
+  CUDA_CHECK(cudaMemPrefetchAsync(ptr, size, deviceId, stream_->stream));
+#endif
 }
 
 void Stream::memset(void* ptr, int32_t value, size_t size) {

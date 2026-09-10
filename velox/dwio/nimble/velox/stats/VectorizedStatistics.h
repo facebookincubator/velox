@@ -135,6 +135,8 @@ class VectorizedFileStats {
       const std::shared_ptr<const nimble::Type>& nimbleType);
 
  private:
+  friend class VectorizedStripeStats;
+
   VectorizedFileStats(
       const std::vector<StatStreamType>& streamTypes,
       const std::vector<uint64_t>& streamLengths,
@@ -161,6 +163,50 @@ class VectorizedFileStats {
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
     return encodingFactory.createPolicy(dataType);
   };
+};
+
+// Not thread-safe. toStripeColumnStatistics() lazily populates stripeStats_ as
+// a memoization cache on first call, so a single VectorizedStripeStats instance
+// must not be shared across threads. Readers construct one transiently and copy
+// the result out on a single thread (see ReaderBase).
+class VectorizedStripeStats {
+ public:
+  VectorizedStripeStats(
+      const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+          stripeStats,
+      velox::memory::MemoryPool* pool);
+
+  std::string_view serialize(nimble::Buffer& buffer);
+
+  static std::unique_ptr<VectorizedStripeStats> deserialize(
+      std::string_view payload,
+      velox::memory::MemoryPool& pool);
+
+  // Lazily materializes and caches the per-stripe column statistics. Mutates
+  // stripeStats_ on first call; see the thread-safety note above.
+  const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+  toStripeColumnStatistics(
+      const velox::TypePtr& schema,
+      const std::shared_ptr<const nimble::Type>& nimbleType);
+
+  // Materializes if needed, then transfers ownership of the cached stats to the
+  // caller. Use this for single-use extraction when the VectorizedStripeStats
+  // instance will be discarded afterward.
+  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>
+  takeStripeColumnStatistics(
+      const velox::TypePtr& schema,
+      const std::shared_ptr<const nimble::Type>& nimbleType);
+
+ private:
+  VectorizedStripeStats(
+      uint32_t numStripes,
+      uint32_t numColumns,
+      std::vector<std::unique_ptr<VectorizedFileStats>> stripeFileStats);
+
+  uint32_t numStripes_{0};
+  uint32_t numColumns_{0};
+  std::vector<std::unique_ptr<VectorizedFileStats>> stripeFileStats_;
+  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> stripeStats_;
 };
 
 } // namespace facebook::nimble

@@ -87,6 +87,21 @@ std::string dispatchIntegerDataType(nimble::DataType dataType) {
   NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(dataType, T, TypeName{}.operator()<T>());
 }
 
+std::string dispatchUnsignedIntegerDataType(nimble::DataType dataType) {
+  NIMBLE_RETURN_BY_UNSIGNED_INTEGER_DATA_TYPE(
+      dataType, T, TypeName{}.operator()<T>());
+}
+
+std::string tryDispatchUnsignedIntegerDataType(nimble::DataType dataType) {
+  NIMBLE_TRY_RETURN_BY_UNSIGNED_INTEGER_DATA_TYPE(
+      dataType, T, TypeName{}.operator()<T>());
+}
+
+std::string dispatchWideIntegerDataType(nimble::DataType dataType) {
+  NIMBLE_RETURN_BY_WIDE_INTEGER_DATA_TYPE(
+      dataType, T, TypeName{}.operator()<T>());
+}
+
 } // namespace
 
 TEST(DataTypeDispatchTest, dispatchesAllDataTypes) {
@@ -175,4 +190,38 @@ TEST(DataTypeDispatchTest, dispatchesIntegerDataTypes) {
   NIMBLE_ASSERT_THROW(
       dispatchIntegerDataType(nimble::DataType::Bool),
       "Unsupported integer data type");
+}
+
+TEST(DataTypeDispatchTest, dispatchesUnsignedIntegerDataTypes) {
+  EXPECT_EQ(dispatchUnsignedIntegerDataType(nimble::DataType::Uint8), "uint8");
+  EXPECT_EQ(
+      dispatchUnsignedIntegerDataType(nimble::DataType::Uint16), "uint16");
+  EXPECT_EQ(
+      dispatchUnsignedIntegerDataType(nimble::DataType::Uint32), "uint32");
+  EXPECT_EQ(
+      dispatchUnsignedIntegerDataType(nimble::DataType::Uint64), "uint64");
+
+  NIMBLE_ASSERT_THROW(
+      dispatchUnsignedIntegerDataType(nimble::DataType::Int32),
+      "Unsupported unsigned integer data type");
+}
+
+TEST(DataTypeDispatchTest, tryDispatchUnsignedIntegerDataTypes) {
+  EXPECT_EQ(
+      tryDispatchUnsignedIntegerDataType(nimble::DataType::Uint32), "uint32");
+  EXPECT_EQ(tryDispatchUnsignedIntegerDataType(nimble::DataType::Int32), "");
+}
+
+TEST(DataTypeDispatchTest, dispatchesWideIntegerDataTypes) {
+  EXPECT_EQ(dispatchWideIntegerDataType(nimble::DataType::Int32), "int32");
+  EXPECT_EQ(dispatchWideIntegerDataType(nimble::DataType::Uint32), "uint32");
+  EXPECT_EQ(dispatchWideIntegerDataType(nimble::DataType::Int64), "int64");
+  EXPECT_EQ(dispatchWideIntegerDataType(nimble::DataType::Uint64), "uint64");
+
+  NIMBLE_ASSERT_THROW(
+      dispatchWideIntegerDataType(nimble::DataType::Uint16),
+      "Unsupported wide integer data type");
+  NIMBLE_ASSERT_THROW(
+      dispatchWideIntegerDataType(nimble::DataType::Double),
+      "Unsupported wide integer data type");
 }

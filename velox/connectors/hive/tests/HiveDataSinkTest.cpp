@@ -2283,10 +2283,16 @@ TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
           dwio::common::FileFormat::PARQUET,
           parquet::ParquetConfig::kWriterBatchSizeSession),
       "97");
+  connectorSessionProperties_->set(
+      dwio::common::formatSessionProperty(
+          dwio::common::FileFormat::PARQUET,
+          parquet::ParquetConfig::kWriterRowGroupSizeSession),
+      "2MB");
 
   auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
   auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
   parquetOptions->batchSize = 11;
+  parquetOptions->rowGroupSizeBytes = 1 << 20;
   parquetOptions->bufferGrowRatio = 1.7;
   writerOptions->formatSpecificOptions = parquetOptions;
 
@@ -2315,12 +2321,14 @@ TEST_F(HiveDataSinkTest, sessionParquetConfigsMergeIntoProvidedFormatOptions) {
   ASSERT_NE(effectiveOptions, nullptr);
   EXPECT_NE(effectiveOptions, parquetOptions);
   EXPECT_EQ(effectiveOptions->batchSize, 97);
+  EXPECT_EQ(effectiveOptions->rowGroupSizeBytes, 2 << 20);
   EXPECT_EQ(effectiveOptions->bufferGrowRatio, 1.7);
 
   // The caller's object is shared by every sink in the query, so the merge must
   // not be visible through it.
   EXPECT_EQ(writerOptions->formatSpecificOptions, parquetOptions);
   EXPECT_EQ(parquetOptions->batchSize, 11);
+  EXPECT_EQ(parquetOptions->rowGroupSizeBytes, 1 << 20);
   EXPECT_EQ(parquetOptions->bufferGrowRatio, 1.7);
 }
 #endif

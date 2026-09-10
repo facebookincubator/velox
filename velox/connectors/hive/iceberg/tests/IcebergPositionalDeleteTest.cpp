@@ -443,6 +443,41 @@ TEST_F(
       {2, 5, 7});
 }
 
+// Positional deletes match the data file by its recorded path, so redirecting
+// the read must not change which deletes apply. The replica holds different
+// values, so the returned rows show which file was opened.
+TEST_F(IcebergPositionalDeleteTest, readsPhysicalFileButDeletesKeyOffFilePath) {
+  auto dataFilePath = writeBigintDataFile({0, 1, 2, 3, 4});
+  auto replicaFilePath = writeBigintDataFile({5, 6, 7, 8, 9});
+
+  auto deleteFilePath = TempFilePath::create();
+  auto deleteFile =
+      makePositionalDeleteFile(dataFilePath->getPath(), {1, 3}, deleteFilePath);
+
+  // Real replicas are byte-identical; these two are not, so size the split to
+  // cover both.
+  auto split = IcebergSplitBuilder(dataFilePath->getPath())
+                   .connectorId(test::kIcebergConnectorId)
+                   .fileFormat(fileFormat_)
+                   .length(
+                       std::max(
+                           getFileSize(dataFilePath->getPath()),
+                           getFileSize(replicaFilePath->getPath())))
+                   .deleteFiles({deleteFile})
+                   .physicalFilePath(replicaFilePath->getPath())
+                   .build();
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(ROW({"c0"}, {BIGINT()}))
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({5, 7, 9})});
+  exec::test::AssertQueryBuilder(plan).splits({split}).assertResults(
+      {expected});
+}
+
 TEST_F(IcebergPositionalDeleteTest, positionalDeletesMultipleSplits) {
   assertMultipleSplits(
       {1, 2, 3, 4},

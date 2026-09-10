@@ -53,7 +53,8 @@ class RPCStubFunction : public exec::VectorFunction {
 
 void registerRPCFunctionStub(
     const std::string& name,
-    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures) {
+    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures,
+    exec::VectorFunctionMetadata metadata) {
   LOG(INFO) << "[RPC] registerRPCFunctionStub: registering Velox stub '" << name
             << "' with " << signatures.size() << " signature(s)";
   exec::registerStatefulVectorFunction(
@@ -64,7 +65,8 @@ void registerRPCFunctionStub(
           const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
           const core::QueryConfig& /*config*/) {
         return std::make_shared<RPCStubFunction>(name);
-      });
+      },
+      std::move(metadata));
   LOG(INFO) << "[RPC] registerRPCFunctionStub: successfully registered '"
             << name << "' in Velox function registry";
 }

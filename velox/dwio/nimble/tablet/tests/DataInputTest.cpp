@@ -22,6 +22,9 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileIds.h"
+#include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/IoUringReader.h"
 #include "velox/common/file/LocalFile.h"
@@ -116,6 +119,17 @@ class DataInputTest : public ::testing::Test {
 class DataInputParamTest : public DataInputTest,
                            public ::testing::WithParamInterface<OptionParams> {
 };
+
+struct CachedLocalReadMode {
+  const char* name;
+  bool bufferIo;
+  bool useIoUring;
+  uint64_t expectedReadBytes;
+};
+
+class CachedDataInputLocalFileTest
+    : public DataInputTest,
+      public ::testing::WithParamInterface<CachedLocalReadMode> {};
 
 TEST_P(DataInputParamTest, singleGroup) {
   // Use alignment-friendly size (multiple of 4096).
@@ -303,6 +317,281 @@ INSTANTIATE_TEST_SUITE_P(
     [](const auto& info) { return info.param.toString(); });
 
 // --- Non-parameterized tests ---
+
+TEST_F(DataInputTest, cachesWholeGroups) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = createFile(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.cachesWholeGroups"};
+
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = cache.get(),
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    for (int32_t cycle{0}; cycle < 2; ++cycle) {
+      SCOPED_TRACE(fmt::format("cycle={}", cycle));
+      input.reserve(4);
+      input.startGroup(DataInput::Region{100, 1'000});
+      const auto first = input.enqueue(DataInput::Region{180, 80});
+      const auto duplicate = input.enqueue(DataInput::Region{180, 80});
+      const auto second = input.enqueue(DataInput::Region{500, 50});
+      input.startGroup(DataInput::Region{2'000, 500});
+      const auto third = input.enqueue(DataInput::Region{2'100, 100});
+
+      auto handle = input.load();
+      EXPECT_EQ(refData(input.bufferRef(first)), data.substr(180, 80));
+      EXPECT_EQ(refData(input.bufferRef(duplicate)), data.substr(180, 80));
+      EXPECT_EQ(refData(input.bufferRef(second)), data.substr(500, 50));
+      EXPECT_EQ(refData(input.bufferRef(third)), data.substr(2'100, 100));
+      EXPECT_EQ(input.bufferRef(duplicate).canonicalIndex, first);
+      EXPECT_EQ(input.bufferRef(first).data, input.bufferRef(duplicate).data);
+
+      if (cycle == 0) {
+        EXPECT_EQ(ioStats_->read().count(), 2);
+        EXPECT_EQ(ioStats_->read().sum(), 1'500);
+        EXPECT_EQ(ioStats_->ramHit().count(), 0);
+        EXPECT_EQ(ioStats_->rawBytesRead(), 230);
+        EXPECT_EQ(ioStats_->rawOverreadBytes(), 1'270);
+      } else {
+        EXPECT_EQ(ioStats_->read().count(), 2);
+        EXPECT_EQ(ioStats_->read().sum(), 1'500);
+        EXPECT_EQ(ioStats_->ramHit().count(), 2);
+        EXPECT_EQ(ioStats_->ramHit().sum(), 1'500);
+        EXPECT_EQ(ioStats_->rawBytesRead(), 460);
+        EXPECT_EQ(ioStats_->rawOverreadBytes(), 1'270);
+      }
+
+      handle.reset();
+      input.clear();
+    }
+  }
+  cache->shutdown();
+}
+
+TEST_F(DataInputTest, loadHandlePinsCachedGroups) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = createFile(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.loadHandlePinsCachedGroups"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = cache.get(),
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+
+  DataInput::Handle handle;
+  const char* cachedData{nullptr};
+  {
+    CachedDataInput input{file.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    const auto stream = input.enqueue(DataInput::Region{180, 80});
+    handle = input.load();
+    cachedData = input.bufferRef(stream).data;
+    input.clear();
+  }
+
+  cache->clear();
+  auto cacheStats = cache->refreshStats();
+  EXPECT_EQ(cacheStats.numEntries, 1);
+  EXPECT_EQ(cacheStats.numShared, 1);
+  EXPECT_GT(cacheStats.sharedPinnedBytes, 0);
+  EXPECT_EQ(std::string_view(cachedData, 80), data.substr(180, 80));
+
+  handle.reset();
+  cache->clear();
+  cacheStats = cache->refreshStats();
+  EXPECT_EQ(cacheStats.numEntries, 0);
+  EXPECT_EQ(cacheStats.numShared, 0);
+  EXPECT_EQ(cacheStats.sharedPinnedBytes, 0);
+  cache->shutdown();
+}
+
+TEST_F(DataInputTest, cacheMissFailureReleasesEntries) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.cacheMissFailureReleasesEntries"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = cache.get(),
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+
+  {
+    auto failingFile = std::make_unique<FailingPreadvInMemoryReadFile>(data);
+    CachedDataInput input{failingFile.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    input.enqueue(DataInput::Region{180, 80});
+    NIMBLE_ASSERT_THROW(input.load(), "Injected preadv failure");
+  }
+  auto cacheStats = cache->refreshStats();
+  EXPECT_EQ(cacheStats.numEntries, 0);
+  EXPECT_EQ(cacheStats.numExclusive, 0);
+
+  {
+    auto file = createFile(data);
+    CachedDataInput input{file.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    const auto stream = input.enqueue(DataInput::Region{180, 80});
+    auto handle = input.load();
+    EXPECT_EQ(refData(input.bufferRef(stream)), data.substr(180, 80));
+  }
+  cache->shutdown();
+}
+
+TEST_P(CachedDataInputLocalFileTest, cachesWholeGroups) {
+  const auto& readMode = GetParam();
+  if (readMode.useIoUring && !velox::IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+
+  constexpr uint64_t kPageSize = velox::memory::AllocationTraits::kPageSize;
+  std::string data(8 * kPageSize, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>((i * 131) % 251);
+  }
+  auto tempFile = velox::common::testutil::TempFilePath::create();
+  {
+    velox::LocalWriteFile writeFile(
+        tempFile->getPath(),
+        /*shouldCreateParentDirectories=*/false,
+        /*shouldThrowOnFileAlreadyExists=*/false);
+    writeFile.append(data);
+    writeFile.close();
+  }
+
+  velox::ThreadLocalIoUringReader::testingClear();
+  auto file = std::make_unique<velox::LocalReadFile>(
+      tempFile->getPath(),
+      /*executor=*/nullptr,
+      readMode.bufferIo,
+      readMode.useIoUring);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  velox::StringIdLease fileId{
+      velox::fileIds(),
+      fmt::format("CachedDataInputLocalFileTest.{}", readMode.name)};
+
+  constexpr uint64_t kCachedBytes = 1'000 + 700 + kPageSize;
+  constexpr uint64_t kPayloadBytes = 80 + 50 + 100 + 256;
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = cache.get(),
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    for (int32_t cycle{0}; cycle < 2; ++cycle) {
+      SCOPED_TRACE(fmt::format("cycle={}", cycle));
+      input.reserve(5);
+      input.startGroup(DataInput::Region{100, 1'000});
+      const auto first = input.enqueue(DataInput::Region{180, 80});
+      const auto duplicate = input.enqueue(DataInput::Region{180, 80});
+      const auto second = input.enqueue(DataInput::Region{500, 50});
+      input.startGroup(DataInput::Region{2 * kPageSize + 200, 700});
+      const auto third =
+          input.enqueue(DataInput::Region{2 * kPageSize + 300, 100});
+      input.startGroup(DataInput::Region{5 * kPageSize, kPageSize});
+      const auto fourth =
+          input.enqueue(DataInput::Region{5 * kPageSize + 300, 256});
+
+      auto handle = input.load();
+      const auto cacheStats = cache->refreshStats();
+      EXPECT_EQ(cacheStats.numEntries, 3);
+      EXPECT_EQ(cacheStats.numShared, 3);
+      EXPECT_EQ(cacheStats.numExclusive, 0);
+      EXPECT_EQ(refData(input.bufferRef(first)), data.substr(180, 80));
+      EXPECT_EQ(refData(input.bufferRef(duplicate)), data.substr(180, 80));
+      EXPECT_EQ(refData(input.bufferRef(second)), data.substr(500, 50));
+      EXPECT_EQ(
+          refData(input.bufferRef(third)),
+          data.substr(2 * kPageSize + 300, 100));
+      EXPECT_EQ(
+          refData(input.bufferRef(fourth)),
+          data.substr(5 * kPageSize + 300, 256));
+      EXPECT_EQ(input.bufferRef(duplicate).canonicalIndex, first);
+      EXPECT_EQ(input.bufferRef(first).data, input.bufferRef(duplicate).data);
+
+      EXPECT_EQ(file->bytesRead(), readMode.expectedReadBytes);
+      EXPECT_EQ(ioStats_->read().count(), 3);
+      EXPECT_EQ(ioStats_->read().sum(), readMode.expectedReadBytes);
+      EXPECT_EQ(ioStats_->rawBytesRead(), (cycle + 1) * kPayloadBytes);
+      EXPECT_EQ(
+          ioStats_->rawOverreadBytes(),
+          readMode.expectedReadBytes - kPayloadBytes);
+      EXPECT_EQ(ioStats_->ramHit().count(), cycle * 3);
+      EXPECT_EQ(ioStats_->ramHit().sum(), cycle * kCachedBytes);
+
+      uint64_t numIoUringReaders{0};
+      const auto ioUringStats = velox::getIoUringReaderStats(numIoUringReaders);
+      if (readMode.useIoUring) {
+        EXPECT_EQ(numIoUringReaders, 1);
+        EXPECT_EQ(ioUringStats.readCalls, 1);
+        EXPECT_EQ(ioUringStats.regions, 3);
+        EXPECT_EQ(ioUringStats.batches, 1);
+      } else {
+        EXPECT_EQ(numIoUringReaders, 0);
+        EXPECT_EQ(ioUringStats.readCalls, 0);
+      }
+
+      handle.reset();
+      input.clear();
+    }
+  }
+  cache->shutdown();
+  velox::ThreadLocalIoUringReader::testingClear();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LocalReadModes,
+    CachedDataInputLocalFileTest,
+    ::testing::Values(
+        CachedLocalReadMode{
+            "buffered",
+            /*bufferIo=*/true,
+            /*useIoUring=*/false,
+            /*expectedReadBytes=*/1'000 + 700 +
+                velox::memory::AllocationTraits::kPageSize,
+        },
+        CachedLocalReadMode{
+            "direct",
+            /*bufferIo=*/false,
+            /*useIoUring=*/false,
+            /*expectedReadBytes=*/
+            3 * velox::memory::AllocationTraits::kPageSize,
+        },
+        CachedLocalReadMode{
+            "directIoUring",
+            /*bufferIo=*/false,
+            /*useIoUring=*/true,
+            /*expectedReadBytes=*/
+            3 * velox::memory::AllocationTraits::kPageSize,
+        }),
+    [](const auto& info) { return info.param.name; });
 
 TEST_F(DataInputTest, alignment) {
   std::string data(16'384, '\0');

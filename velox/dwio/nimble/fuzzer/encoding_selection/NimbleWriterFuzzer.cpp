@@ -212,6 +212,7 @@ constexpr uint64_t kMinPairFiles = 10;
 bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
       encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -911,7 +912,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
   if (encodingType == EncodingType::ALP) {
     return isFloatingPointDataType(dataType);
   }
-  if (encodingType == EncodingType::DeltaBlock) {
+  if (encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::EliasFano) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -925,6 +927,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
+      encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;

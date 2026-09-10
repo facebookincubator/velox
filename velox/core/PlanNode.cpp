@@ -1292,6 +1292,26 @@ void TableScanNode::accept(
 
 void TableScanNode::addDetails(std::stringstream& stream) const {
   stream << tableHandle_->toString();
+
+  // Assignments are expected to name every output column, but some frontends
+  // build scans with no assignments at all.
+  if (assignments_.empty()) {
+    return;
+  }
+
+  bool first = true;
+  for (auto i = 0; i < outputType_->size(); ++i) {
+    if (outputType_->childAt(i)->isPrimitiveType()) {
+      continue;
+    }
+    const auto& outputName = outputType_->nameOf(i);
+    stream << (first ? ", assignments: [" : ", ");
+    first = false;
+    stream << outputName << " := " << assignments_.at(outputName)->toString();
+  }
+  if (!first) {
+    stream << "]";
+  }
 }
 
 void TableScanNode::addSummaryDetails(
@@ -1356,12 +1376,14 @@ const std::vector<PlanNodePtr>& ExchangeNode::sources() const {
 
 void ExchangeNode::addDetails(std::stringstream& stream) const {
   addVectorSerdeKind(serdeKind_, stream);
+  stream << " " << transportKind_;
 }
 
 folly::dynamic ExchangeNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["outputType"] = ExchangeNode::outputType()->serialize();
   obj["serdeKind"] = serdeKind_;
+  obj["transportKind"] = transportKind_;
   return obj;
 }
 
@@ -1376,7 +1398,9 @@ PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<ExchangeNode>(
       deserializePlanNodeId(obj),
       deserializeRowType(obj["outputType"]),
-      obj["serdeKind"].asString());
+      obj["serdeKind"].asString(),
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString());
 }
 
 UnnestNode::UnnestNode(
@@ -1442,16 +1466,25 @@ UnnestNode::UnnestNode(
   int unnestIndex = 0;
   for (const auto& variable : unnestVariables_) {
     if (variable->type()->isArray()) {
-      names.emplace_back(unnestNames_[unnestIndex++].value());
-      types.emplace_back(variable->type()->asArray().elementType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(variable->type()->asArray().elementType());
+      }
+      ++unnestIndex;
     } else if (variable->type()->isMap()) {
       const auto& mapType = variable->type()->asMap();
 
-      names.emplace_back(unnestNames_[unnestIndex++].value());
-      types.emplace_back(mapType.keyType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.keyType());
+      }
+      ++unnestIndex;
 
-      names.emplace_back(unnestNames_[unnestIndex++].value());
-      types.emplace_back(mapType.valueType());
+      if (unnestNames_[unnestIndex].has_value()) {
+        names.emplace_back(unnestNames_[unnestIndex].value());
+        types.emplace_back(mapType.valueType());
+      }
+      ++unnestIndex;
     } else {
       VELOX_FAIL(
           "Unexpected type of unnest variable. Expected ARRAY or MAP, but got {}.",
@@ -3400,8 +3433,9 @@ MergeExchangeNode::MergeExchangeNode(
     const RowTypePtr& type,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders,
-    std::string serdeKind)
-    : ExchangeNode(id, type, std::move(serdeKind)),
+    std::string serdeKind,
+    std::string transportKind)
+    : ExchangeNode(id, type, std::move(serdeKind), std::move(transportKind)),
       sortingKeys_(sortingKeys),
       sortingOrders_(sortingOrders) {}
 
@@ -3409,6 +3443,7 @@ void MergeExchangeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(sortingKeys_, sortingOrders_, stream);
   stream << ", ";
   addVectorSerdeKind(serdeKind(), stream);
+  stream << " " << transportKind();
 }
 
 folly::dynamic MergeExchangeNode::serialize() const {
@@ -3417,6 +3452,7 @@ folly::dynamic MergeExchangeNode::serialize() const {
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
   obj["serdeKind"] = serdeKind();
+  obj["transportKind"] = transportKind();
   return obj;
 }
 
@@ -3434,12 +3470,16 @@ PlanNodePtr MergeExchangeNode::create(
   const auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
   const auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
   const auto serdeKind = obj["serdeKind"].asString();
+  const auto transportKind =
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString();
   return std::make_shared<MergeExchangeNode>(
       deserializePlanNodeId(obj),
       outputType,
       sortingKeys,
       sortingOrders,
-      serdeKind);
+      serdeKind,
+      transportKind);
 }
 
 void LocalPartitionNode::addDetails(std::stringstream& stream) const {

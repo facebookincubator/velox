@@ -46,6 +46,9 @@ class ColumnChunkMetaDataPtr {
   /// ranges) for this column chunk.
   bool hasOffsetIndex() const;
 
+  /// Check the presence of the index page offset in ColumnChunk metadata.
+  bool hasIndexPage() const;
+
   /// Return the ColumnChunk statistics. Timestamp columns require
   /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
