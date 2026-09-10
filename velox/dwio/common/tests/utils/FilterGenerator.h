@@ -41,7 +41,7 @@ struct FilterSpec {
       float startPct = 50,
       float selectPct = 20,
       FilterKind filterKind = FilterKind::kBigintRange,
-      bool isForRowGroupSkip = true,
+      bool isForRowGroupSkip = false,
       bool allowNulls = true)
       : field(field),
         startPct(startPct),
@@ -89,8 +89,11 @@ class AbstractColumnStats {
   // ASCII string greater than test data values. Used for row group skipping
   // tests.
   static constexpr const char* kMaxString = "~~~~~";
-  AbstractColumnStats(TypePtr type, RowTypePtr rootType)
-      : type_(type), rootType_(rootType) {}
+  AbstractColumnStats(
+      TypePtr type,
+      RowTypePtr rootType,
+      folly::Random::DefaultGenerator& rng)
+      : type_(type), rootType_(rootType), rng_(rng) {}
 
   virtual ~AbstractColumnStats() = default;
 
@@ -118,14 +121,21 @@ class AbstractColumnStats {
   int32_t numNulls_ = 0;
   int32_t numSamples_ = 0;
   std::unordered_map<size_t, int> uniques_;
-  static uint32_t counter_;
+  // Borrowed from the owning FilterGenerator so that filter kind selection is
+  // driven by the run's seed. This used to be a process-global counter, which
+  // made the choice depend on how many columns happened to be processed
+  // earlier and left it outside the seed's control entirely.
+  folly::Random::DefaultGenerator& rng_;
 };
 
 template <typename T>
 class ColumnStats : public AbstractColumnStats {
  public:
-  explicit ColumnStats(TypePtr type, RowTypePtr rootTypePtr)
-      : AbstractColumnStats(type, rootTypePtr) {}
+  ColumnStats(
+      TypePtr type,
+      RowTypePtr rootTypePtr,
+      folly::Random::DefaultGenerator& rng)
+      : AbstractColumnStats(type, rootTypePtr, rng) {}
 
   void sample(
       const std::vector<RowVectorPtr>& batches,
@@ -297,19 +307,20 @@ class ColumnStats : public AbstractColumnStats {
       return std::make_unique<velox::common::BigintRange>(
           getIntegerValue(lower), getIntegerValue(upper), false);
     }
-    if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
+    if (upperIndex - lowerIndex < 1000 &&
+        folly::Random::rand32(10, rng_) <= 3) {
       std::vector<int64_t> in;
       for (auto i = lowerIndex; i <= upperIndex; ++i) {
         in.push_back(getIntegerValue(values_[i]));
       }
       // make sure we don't accidentally generate an AlwaysFalse filter
-      if (counter_ % 2 == 1 && filterSpec.selectPct < 100.0) {
+      if (folly::Random::oneIn(2, rng_) && filterSpec.selectPct < 100.0) {
         return velox::common::createNegatedBigintValues(in, true);
       }
       return velox::common::createBigintValues(in, true);
     }
     // sometimes make a negated filter instead (1/4 chance)
-    if (counter_ % 4 == 1 && filterSpec.selectPct < 100.0) {
+    if (folly::Random::oneIn(4, rng_) && filterSpec.selectPct < 100.0) {
       return std::make_unique<velox::common::NegatedBigintRange>(
           getIntegerValue(lower),
           getIntegerValue(upper),
@@ -362,8 +373,11 @@ class ColumnStats : public AbstractColumnStats {
 
 class ComplexColumnStats : public AbstractColumnStats {
  public:
-  explicit ComplexColumnStats(TypePtr type, RowTypePtr rootTypePtr)
-      : AbstractColumnStats(type, rootTypePtr) {}
+  ComplexColumnStats(
+      TypePtr type,
+      RowTypePtr rootTypePtr,
+      folly::Random::DefaultGenerator& rng)
+      : AbstractColumnStats(type, rootTypePtr, rng) {}
 
   void sample(
       const std::vector<RowVectorPtr>& batches,
@@ -488,30 +502,34 @@ std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRowGroupSkipRangeFilter(
 template <TypeKind Kind>
 std::unique_ptr<AbstractColumnStats> makeStats(
     TypePtr type,
-    RowTypePtr rootType) {
+    RowTypePtr rootType,
+    folly::Random::DefaultGenerator& rng) {
   using T = typename TypeTraits<Kind>::NativeType;
-  return std::make_unique<ColumnStats<T>>(type, rootType);
+  return std::make_unique<ColumnStats<T>>(type, rootType, rng);
 }
 
 template <>
 inline std::unique_ptr<AbstractColumnStats> makeStats<TypeKind::ROW>(
     TypePtr type,
-    RowTypePtr rootType) {
-  return std::make_unique<ComplexColumnStats>(type, rootType);
+    RowTypePtr rootType,
+    folly::Random::DefaultGenerator& rng) {
+  return std::make_unique<ComplexColumnStats>(type, rootType, rng);
 }
 
 template <>
 inline std::unique_ptr<AbstractColumnStats> makeStats<TypeKind::ARRAY>(
     TypePtr type,
-    RowTypePtr rootType) {
-  return std::make_unique<ComplexColumnStats>(type, rootType);
+    RowTypePtr rootType,
+    folly::Random::DefaultGenerator& rng) {
+  return std::make_unique<ComplexColumnStats>(type, rootType, rng);
 }
 
 template <>
 inline std::unique_ptr<AbstractColumnStats> makeStats<TypeKind::MAP>(
     TypePtr type,
-    RowTypePtr rootType) {
-  return std::make_unique<ComplexColumnStats>(type, rootType);
+    RowTypePtr rootType,
+    folly::Random::DefaultGenerator& rng) {
+  return std::make_unique<ComplexColumnStats>(type, rootType, rng);
 }
 
 class FilterGenerator {
