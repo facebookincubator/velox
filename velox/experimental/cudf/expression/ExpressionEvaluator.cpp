@@ -2862,15 +2862,25 @@ MaskedInputs maskInputRows(
   masked.views.reserve(inputs.size());
   masked.masks.reserve(inputs.size());
   for (const auto& input : inputs) {
+    if (input.size() == 0) {
+      masked.views.push_back(input);
+      continue;
+    }
     // rowMask is indexed from row 0, so a view carrying its own offset would
     // read it out of step. Leaving such an input unmasked is not merely a lost
     // optimization: the branch would see the rows the conditional discards,
     // which is the abort this masking exists to prevent. No operator hands one
     // down today, because those that slice (CudfLimit, CudfTopN,
     // CudfLocalPartition) each materialize into a fresh cudf::table, so
-    // CudfVector columns start at offset 0. Revisit if a CudfVector is ever
-    // allowed to hold a sliced view directly.
-    if (input.size() == 0 || input.offset() != 0) {
+    // CudfVector columns start at offset 0. The DCHECK below turns a future
+    // violation into a debug-build failure, so the fix is to teach this
+    // function to apply the offset rather than let the fallback silently
+    // leave the input unmasked.
+    VELOX_DCHECK_EQ(
+        input.offset(),
+        0,
+        "Non-zero column_view offset not yet supported in branch masking");
+    if (input.offset() != 0) {
       masked.views.push_back(input);
       continue;
     }
