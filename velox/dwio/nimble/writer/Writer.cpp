@@ -38,6 +38,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -83,6 +84,9 @@ class WriterContext : public FieldWriterContext {
       : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
         options_{std::move(options)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
+        stripeStatsWriteEnabled_{featureGate()->enabled(
+            FeatureGate::FeatureSet::kStripeStatsWrite,
+            /*defaultValue=*/false)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -96,6 +100,12 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
+  // is enabled. Resolved once at construction so it cannot flip mid-file.
+  bool stripeStatsWriteEnabled() const {
+    return stripeStatsWriteEnabled_;
   }
 
   bool hasStripeDictionaryConfig() const {
@@ -244,6 +254,7 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions options_;
   const bool hasStripeDictionaryConfig_;
+  const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -2162,6 +2173,7 @@ void Writer::writeMetadata() {
 }
 
 void Writer::writeColumnStats() {
+  context_->finalizeFileStatsFromStripes();
   // When enableStatsConsistencyCheck is true, verify that fileRawSize
   // (accumulated via RawSizeUtils) matches the root column statistics.
   if (context_->options().enableStatsConsistencyCheck) {
@@ -2177,6 +2189,14 @@ void Writer::writeColumnStats() {
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
+    if (context_->stripeStatsWriteEnabled()) {
+      VectorizedStripeStats stripeStats{
+          context_->stripeStats(), encodingMemoryPool_.get()};
+      Buffer stripeStatsBuffer{*encodingMemoryPool_};
+      tabletWriter_->writeOptionalSection(
+          std::string(kStripeStatsSection),
+          stripeStats.serialize(stripeStatsBuffer));
+    }
   } else {
     flatbuffers::FlatBufferBuilder builder;
     builder.Finish(
@@ -2420,9 +2440,6 @@ std::unique_ptr<velox::dwio::common::FileMetadata> Writer::close() {
     }
     writeStripe();
     rootWriter_->close();
-    if (context_->options().enableStatsCollection) {
-      context_->finalizeStatsCollectors();
-    }
 
     writeMetadata();
     if (context_->options().enableStatsCollection) {
@@ -3198,8 +3215,15 @@ bool Writer::writeStripe() {
   } else {
     writeStreams();
   }
-
   writeStripeDictionaryStreams();
+
+  // Must run after writeStripeDictionaryStreams(), which still charges the
+  // stripe's alphabet bytes to the stats collectors: snapshotting first would
+  // shift those bytes into the next stripe and drop them for the last one.
+  if (context_->options().enableStatsCollection &&
+      context_->stripeStatsWriteEnabled()) {
+    context_->finalizeStripeStatsCollectors();
+  }
 
   uint64_t stripeSize{0};
   {
