@@ -581,12 +581,13 @@ std::string_view FsstEncoding::encode(
   {
     auto compressedValues = compressValues(values, &buffer.getMemoryPool());
 
-    Buffer lengthsBuffer{buffer.getMemoryPool()};
+    ScopedEncodingBuffer lengthsBuffer{
+        &buffer.getMemoryPool(), options.encodingBufferPool};
     const std::string_view serializedLengths = encodeCompressedLengths(
         selection,
         {compressedValues.compressedLengths.data(),
          compressedValues.compressedLengths.size()},
-        lengthsBuffer,
+        lengthsBuffer.get(),
         options);
 
     const bool useVarint = options.useVarintRowCount;
@@ -602,8 +603,7 @@ std::string_view FsstEncoding::encode(
             compressedValues.totalInputSize,
             encodingSize,
             options.fsstCompressionTargetRatio)) {
-      Buffer fsstBuffer{buffer.getMemoryPool()};
-      char* reserved = fsstBuffer.reserve(encodingSize);
+      char* reserved = buffer.reserve(encodingSize);
       char* pos = reserved;
       Encoding::serializePrefix(
           EncodingType::Fsst, DataType::String, valueCount, useVarint, pos);
@@ -620,14 +620,11 @@ std::string_view FsstEncoding::encode(
       }
 
       NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
-      std::string_view fsstEncoded{reserved, encodingSize};
-      return buffer.writeString(fsstEncoded);
+      return {reserved, encodingSize};
     }
   }
 
-  Buffer trivialBuffer{buffer.getMemoryPool()};
-  return buffer.writeString(
-      encodeTrivialFallback(selection, values, trivialBuffer, options));
+  return encodeTrivialFallback(selection, values, buffer, options);
 }
 
 std::string_view FsstEncoding::slice(
