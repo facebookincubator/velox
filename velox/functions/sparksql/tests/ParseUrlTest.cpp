@@ -366,8 +366,7 @@ TEST_F(ParseUrlTest, javaAuthorityEdgeCases) {
   // A digit run whose value overflows a 32-bit integer is not an IPv4
   // address; the host falls back to registry form.
   EXPECT_EQ(
-      std::nullopt,
-      parseUrl("http://99999999999999999999.0.0.1/", "HOST"));
+      std::nullopt, parseUrl("http://99999999999999999999.0.0.1/", "HOST"));
   EXPECT_EQ(
       "99999999999999999999.0.0.1",
       parseUrl("http://99999999999999999999.0.0.1/", "AUTHORITY"));
@@ -509,8 +508,7 @@ TEST_F(ParseUrlTest, lazyKeyCompilation) {
   EXPECT_EQ(
       std::nullopt,
       evaluateOnce<std::string>(
-          "parse_url(c0, 'QUERY', 'a[')",
-          std::optional<std::string>("#a#b")));
+          "parse_url(c0, 'QUERY', 'a[')", std::optional<std::string>("#a#b")));
   // A URL with an empty query still extracts, so the key is compiled and
   // an invalid one fails the query, as in Spark.
   VELOX_ASSERT_THROW(
