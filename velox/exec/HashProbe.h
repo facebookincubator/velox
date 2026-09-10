@@ -198,9 +198,10 @@ class HashProbe : public Operator {
   // for right join and full join.
   RowVectorPtr getBuildSideOutput();
 
-  // Applies 'filter_' to 'outputTableRows_' and updates 'outputRowMapping_'.
+  // Applies 'filter_' to 'numRows' joined rows and compacts the passing rows
+  // directly into the accumulation buffers starting at 'outputOffset'.
   // Returns the number of passing rows.
-  vector_size_t evalFilter(vector_size_t numRows);
+  vector_size_t evalFilter(vector_size_t numRows, vector_size_t outputOffset);
 
   inline bool filterPassed(vector_size_t row) {
     return filterInputRows_.isValid(row) &&
@@ -554,6 +555,14 @@ class HashProbe : public Operator {
   // Rows of table found by join probe, later filtered by 'filter_'.
   BufferPtr outputTableRows_;
   vector_size_t outputTableRowsCapacity_;
+
+  // Accumulation buffers used to combine low-selectivity filter results across
+  // multiple listJoinResults iterations into a single dense output batch.
+  BufferPtr accumulatedRowMapping_;
+  BufferPtr accumulatedTableRows_;
+  // Accumulated null flags for the 'match' column of a null-aware left semi
+  // project join.
+  SelectivityVector accumulatedLeftSemiProjectIsNull_;
 
   // For left join with filter, we could overwrite the row which we have not
   // checked if there is a carryover.  Use a temporary buffer in this case.
