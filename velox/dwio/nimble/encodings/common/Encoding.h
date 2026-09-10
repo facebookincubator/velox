@@ -157,6 +157,21 @@ class Encoding {
     /// until ALP is production-ready.
     bool allowNestedAlpSelection{false};
 
+    /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
+    /// splitting it into bit ranges, keeping whichever form encodes smaller.
+    ///
+    /// A monotone counter's low bits are maximally random viewed absolutely
+    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
+    /// compress them while the delta form is trivial. This mirrors OpenZL,
+    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
+    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
+    /// huge unsigned values.
+    ///
+    /// Delta-encoded streams can only be read sequentially from row 0, so
+    /// skip() and readWithVisitor() reject them. Do not enable for production
+    /// until restatement points are added.
+    bool subIntSplitDeltaPreTransform{false};
+
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
 
