@@ -353,6 +353,14 @@ namespace {
 std::vector<RPCResponse> degradeBatchFailureToRowErrors(
     const std::vector<int64_t>& rowIds,
     const folly::exception_wrapper& error) {
+  // A VeloxRuntimeError here is the framework's own invariant failing -- a
+  // payload read back as the wrong type, a broken function contract -- not the
+  // backend refusing. Degrading it to per-row errors would turn a programming
+  // error into a column of NULLs, which is what the checks exist to prevent.
+  if (error.is_compatible_with<VeloxRuntimeError>()) {
+    error.throw_exception();
+  }
+
   // Mirrors the client-layer fan-out but covers every backend and the
   // operator-level timeout uniformly. Both AIMD controllers still back off,
   // since evaluateCongestion reads a batch failure as overload.
@@ -363,9 +371,9 @@ std::vector<RPCResponse> degradeBatchFailureToRowErrors(
     // Batch-position rowId, so the scatter stamps global ids the same way it
     // does on the success path.
     errored[i].rowId = static_cast<int64_t>(i);
-    errored[i].error =
-        std::string("[RPC_BATCH] batch error: ") + error.what().toStdString();
-    errored[i].errorKind = velox::rpc::RPCErrorKind::kBackendError;
+    errored[i].setError(
+        velox::rpc::RPCErrorKind::kBackendError,
+        std::string("[RPC_BATCH] batch error: ") + error.what().toStdString());
   }
   return errored;
 }
@@ -630,7 +638,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
     const bool hasError = row.response.hasError();
     if (hasError) {
       numErrors_++;
-      recordErrorKind(row.response.errorKind);
+      recordErrorKind(row.response.errorKind());
     }
     // Only successful rows feed the gradient. Errored rows (e.g. null_input,
     // client-side rejections) complete without a real round trip, so their
@@ -670,7 +678,7 @@ RowVectorPtr RPCOperator::outputBatch() {
   for (const auto& response : claimedBatch_->responses) {
     if (response.hasError()) {
       numErrors_++;
-      recordErrorKind(response.errorKind);
+      recordErrorKind(response.errorKind());
     }
   }
 
@@ -977,6 +985,18 @@ void RPCOperator::initOutputProjections() {
       }
     }
   }
+
+  // RPCNode checks the CALL expression against the declared column; neither
+  // knows what the registered function actually returns. This is where the
+  // two meet.
+  const auto& declaredType = outputType->childAt(rpcResultOutputChannel_);
+  VELOX_CHECK(
+      declaredType->equivalent(*function_->resultType()),
+      "RPC function '{}' returns {} but the plan declares column '{}' as {}",
+      function_->name(),
+      function_->resultType()->toString(),
+      outputColumn,
+      declaredType->toString());
 
   RPC_OP_VLOG(1) << "initOutputProjections: rpcResultChannel="
                  << rpcResultOutputChannel_ << ", passthroughProjections="

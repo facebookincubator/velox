@@ -200,7 +200,9 @@ void RPCState::addPendingRow(
                     << "RPC failed for rowId=" << rowId << ": " << ew.what();
                 RPCResponse errorResponse;
                 errorResponse.rowId = rowId;
-                errorResponse.error = ew.what().toStdString();
+                errorResponse.setError(
+                    velox::rpc::RPCErrorKind::kBackendError,
+                    ew.what().toStdString());
                 const auto rttNs = steadyNowNs() - dispatchTimeNs;
                 state->completeRow(
                     rowId, location, std::move(errorResponse), rttNs);

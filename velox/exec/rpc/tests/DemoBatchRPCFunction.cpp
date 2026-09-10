@@ -46,7 +46,7 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
       }
     }
   }
-  return AsyncRPCFunction::buildOutput(responses, pool);
+  return buildTextOutput(responses, pool);
 }
 
 void DemoBatchRPCFunction::initialize(
@@ -123,11 +123,13 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
     response.rowId = i;
 
     if (toFlush[i].isNull) {
-      response.error = "null_input";
+      response.setError(velox::rpc::RPCErrorKind::kNullInput, "null_input");
     } else if (failingRowIndices_.count(startOffset + i)) {
-      response.error = "simulated_failure";
+      response.setError(
+          velox::rpc::RPCErrorKind::kBackendError, "simulated_failure");
     } else {
-      response.result = "Batch response for: " + toFlush[i].prompt;
+      response.setPayload(
+          makeTextPayload("Batch response for: " + toFlush[i].prompt));
     }
     responses.push_back(std::move(response));
   }
