@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -61,7 +62,7 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  if (cudfIsRegistered()) {
+  if (cudfIsRegistered() && isTypeSupportedByCudf(outputType)) {
     return std::make_unique<CudfIcebergDataSource>(
         outputType,
         tableHandle,

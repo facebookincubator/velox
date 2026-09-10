@@ -40,7 +40,10 @@
 
 namespace facebook::velox::cudf_velox {
 
-cudf::data_type veloxToCudfDataType(const TypePtr& type) {
+std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return std::nullopt;
+  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::data_type{cudf::type_id::BOOL8};
@@ -49,20 +52,23 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::SMALLINT:
       return cudf::data_type{cudf::type_id::INT16};
     case TypeKind::INTEGER:
-      // TODO: handle interval types (durations?)
-      // if (type->isIntervalYearMonth()) {
-      //   return cudf::type_id::...;
-      // }
+      if (type->isIntervalYearMonth()) {
+        return std::nullopt;
+      }
       if (type->isDate()) {
         return cudf::data_type{cudf::type_id::TIMESTAMP_DAYS};
       }
       return cudf::data_type{cudf::type_id::INT32};
     case TypeKind::BIGINT:
-      // BIGINT is used for both INT64 and DECIMAL64
+      if (type->isTime()) {
+        return std::nullopt;
+      }
       if (type->isDecimal()) {
         auto const decimalType =
             std::dynamic_pointer_cast<const ShortDecimalType>(type);
-        VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+        if (!decimalType) {
+          return std::nullopt;
+        }
         auto const cudfScale = numeric::scale_type{-decimalType->scale()};
         return cudf::data_type{cudf::type_id::DECIMAL64, cudfScale};
       }
@@ -70,12 +76,14 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
     case TypeKind::HUGEINT: {
       // HUGEINT is used only for DECIMAL128
       // per facebookincubator/velox PR 4434 (May 2, 2023)
-      // although see commented-out HUGEINT -> DURATION_DAYS below
-      VELOX_CHECK(
-          type->isDecimal(), "HUGEINT should only be used for DECIMAL128");
+      if (!type->isDecimal()) {
+        return std::nullopt;
+      }
       auto const decimalType =
           std::dynamic_pointer_cast<const LongDecimalType>(type);
-      VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
+      if (!decimalType) {
+        return std::nullopt;
+      }
       auto const cudfScale = numeric::scale_type{-decimalType->scale()};
       return cudf::data_type{cudf::type_id::DECIMAL128, cudfScale};
     }
@@ -89,27 +97,40 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
       return cudf::data_type{cudf::type_id::STRING};
     case TypeKind::TIMESTAMP:
       return cudf::data_type{CudfConfig::getInstance().timestampUnit};
-    // case TypeKind::HUGEINT: return cudf::type_id::DURATION_DAYS;
-    // TODO: DATE was converted to a logical type:
-    // https://github.com/facebookincubator/velox/commit/e480f5c03a6c47897ef4488bd56918a89719f908
-    // case TypeKind::DATE: return cudf::type_id::DURATION_DAYS;
-    // case TypeKind::INTERVAL_DAY_TIME: return cudf::type_id::EMPTY;
     case TypeKind::ARRAY:
+      if (!tryVeloxToCudfDataType(type->childAt(0))) {
+        return std::nullopt;
+      }
       return cudf::data_type{cudf::type_id::LIST};
     case TypeKind::ROW:
+      for (auto i = 0; i < type->size(); ++i) {
+        if (!tryVeloxToCudfDataType(type->childAt(i))) {
+          return std::nullopt;
+        }
+      }
       return cudf::data_type{cudf::type_id::STRUCT};
-    // case TypeKind::MAP: return cudf::type_id::EMPTY;
-    // case TypeKind::UNKNOWN: return cudf::type_id::EMPTY;
-    // case TypeKind::FUNCTION: return cudf::type_id::EMPTY;
-    // case TypeKind::OPAQUE: return cudf::type_id::EMPTY;
-    // case TypeKind::INVALID: return cudf::type_id::EMPTY;
+    case TypeKind::MAP:
+    case TypeKind::UNKNOWN:
+    case TypeKind::FUNCTION:
+    case TypeKind::OPAQUE:
+    case TypeKind::INVALID:
     default:
-      break;
+      return std::nullopt;
   }
-  CUDF_FAIL(
-      "Unsupported Velox type: " +
-      std::string(TypeKindName::toName(type->kind())));
-  return cudf::data_type{cudf::type_id::EMPTY};
+}
+
+cudf::data_type veloxToCudfDataType(const TypePtr& type) {
+  auto result = tryVeloxToCudfDataType(type);
+  if (!result) {
+    CUDF_FAIL(
+        "Unsupported Velox type: " +
+        std::string(TypeKindName::toName(type->kind())));
+  }
+  return *result;
+}
+
+bool isTypeSupportedByCudf(const TypePtr& type) {
+  return tryVeloxToCudfDataType(type).has_value();
 }
 
 namespace with_arrow {
@@ -187,6 +208,12 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
       }
       for (size_t i = 0; i < type->size(); ++i) {
         setArrowFormatBackToVarbinary(schema->children[i], type->childAt(i));
+      }
+      break;
+    }
+    case TypeKind::ARRAY: {
+      if (schema->n_children == 1) {
+        setArrowFormatBackToVarbinary(schema->children[0], type->childAt(0));
       }
       break;
     }
