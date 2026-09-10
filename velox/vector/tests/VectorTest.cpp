@@ -4338,6 +4338,41 @@ TEST_F(VectorTest, estimateFlatSize) {
   arrayVector->prepareForReuse();
 }
 
+TEST_F(VectorTest, unsafeSetPoolDoesNotTransferBuffersOrChildren) {
+  auto sourceRoot = memory::memoryManager()->addRootPool("source");
+  auto sourcePool = sourceRoot->addLeafChild("source leaf");
+  auto destinationRoot = memory::memoryManager()->addRootPool("destination");
+  auto destinationPool = destinationRoot->addLeafChild("destination leaf");
+
+  test::VectorMaker maker{sourcePool.get()};
+  auto child = maker.flatVector<int64_t>({1, 2});
+  auto vector = std::make_shared<RowVector>(
+      sourcePool.get(),
+      ROW({"c0"}, {BIGINT()}),
+      allocateNulls(2, sourcePool.get()),
+      2,
+      std::vector<VectorPtr>{child});
+
+  const auto nulls = vector->nulls();
+  const auto values = child->values();
+  vector->unsafeSetPool(destinationPool.get());
+
+  EXPECT_EQ(vector->pool(), destinationPool.get());
+  EXPECT_EQ(vector->nulls(), nulls);
+  EXPECT_EQ(vector->nulls()->pool(), sourcePool.get());
+  EXPECT_EQ(vector->childAt(0), child);
+  EXPECT_EQ(child->pool(), sourcePool.get());
+  EXPECT_EQ(child->values(), values);
+  EXPECT_EQ(child->values()->pool(), sourcePool.get());
+
+  // Holding a reference makes the existing nulls buffer non-unique, forcing
+  // appendNulls() to allocate a replacement from the reset pool.
+  vector->appendNulls(1);
+  EXPECT_EQ(vector->nulls()->pool(), destinationPool.get());
+  EXPECT_EQ(nulls->pool(), sourcePool.get());
+  EXPECT_EQ(child->pool(), sourcePool.get());
+}
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 TEST_F(VectorTest, transferOrCopyTo) {

@@ -19,7 +19,6 @@
 #include <array>
 #include <cstring>
 #include <type_traits>
-#include <vector>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
@@ -114,25 +113,29 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
 
  private:
   T readTypedAt(uint32_t index) const final {
+    return detail::castFromPhysicalType<T>(readPhysicalAt(index));
+  }
+
+  physicalType readPhysicalAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
     const auto indexBlock = blockIndex(index);
     const auto blockOffset = index - blockRowOffsets_[indexBlock];
-    const auto& block = blocks_[indexBlock];
+    return readBlockValue(indexBlock, blockOffset);
+  }
+
+  physicalType readBlockValue(uint32_t blockIndex, uint32_t blockOffset) const {
+    const auto& block = blocks_[blockIndex];
     if (block.bitWidth == BlockBitPackingEncoding<T>::kRawBlockBitWidth) {
       const auto* values =
           reinterpret_cast<const physicalType*>(packedData_ + block.offset);
-      return detail::castFromPhysicalType<T>(values[blockOffset]);
+      return values[blockOffset];
     }
     if (block.bitWidth == 0) {
-      return detail::castFromPhysicalType<T>(block.baseline);
+      return block.baseline;
     }
-    const auto numRows = blockRowCount(indexBlock);
-    FixedBitArray fba{
-        {packedData_ + block.offset,
-         FixedBitArray::bufferSize(numRows, block.bitWidth)},
-        block.bitWidth};
-    return detail::castFromPhysicalType<T>(
-        static_cast<physicalType>(fba.get(blockOffset) + block.baseline));
+    FixedBitArray fixedBitArray{packedData_ + block.offset, block.bitWidth};
+    return static_cast<physicalType>(
+        fixedBitArray.get(blockOffset) + block.baseline);
   }
 
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
@@ -219,10 +222,7 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
 
     // Rows after the full fastpack groups are stored as a FixedBitArray tail.
     if (blockOffset >= numFullGroupRows) {
-      FixedBitArray fba{
-          {remainderInput,
-           FixedBitArray::bufferSize(numRows - numFullGroupRows, bitWidth)},
-          bitWidth};
+      FixedBitArray fba{remainderInput, bitWidth};
       const auto remainderOffset = blockOffset - numFullGroupRows;
       fba.bulkGetWithBaseline(remainderOffset, length, output, baseline);
       return;
@@ -261,10 +261,7 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
     }
 
     if (outputOffset < length) {
-      FixedBitArray fba{
-          {remainderInput,
-           FixedBitArray::bufferSize(numRows - numFullGroupRows, bitWidth)},
-          bitWidth};
+      FixedBitArray fba{remainderInput, bitWidth};
       fba.bulkGetWithBaseline(
           blockOffset - numFullGroupRows,
           length - outputOffset,

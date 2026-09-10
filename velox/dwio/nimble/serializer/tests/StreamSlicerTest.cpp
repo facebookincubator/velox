@@ -320,6 +320,32 @@ class StreamSlicerTest : public ::testing::Test {
     return std::string(encoded);
   }
 
+  std::string encodeBoolStream(
+      EncodingType encodingType,
+      const std::vector<bool>& values,
+      bool useVarintRowCount) {
+    nimble::Vector<bool> nimbleValues{pool_.get()};
+    nimbleValues.reserve(values.size());
+    for (const bool value : values) {
+      nimbleValues.push_back(value);
+    }
+
+    Buffer buffer{*pool_};
+    ManualEncodingSelectionPolicyFactory factory{
+        {{encodingType, 1.0}}, /*compressionOptions=*/std::nullopt};
+    auto policyBase = factory.createPolicy(DataType::Bool);
+    auto policy = std::unique_ptr<EncodingSelectionPolicy<bool>>(
+        static_cast<EncodingSelectionPolicy<bool>*>(policyBase.release()));
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    const auto encoded = EncodingFactory::encode<bool>(
+        std::move(policy),
+        std::span<const bool>{nimbleValues.data(), nimbleValues.size()},
+        buffer,
+        options);
+    return std::string(encoded);
+  }
+
   std::string makeTabletPayload(
       uint32_t rowCount,
       uint32_t streamId,
@@ -672,6 +698,101 @@ TEST_P(StreamSlicerRawStreamApiTest, fuzzesRawStreamApi) {
           values.begin() + offset, values.begin() + offset + length};
       EXPECT_EQ(actual, expected);
     }
+  }
+}
+
+TEST_P(StreamSlicerRawStreamApiTest, slicesFlatMapBoolInMapFastPath) {
+  const bool useOutputBuffer = GetParam();
+  auto type = ROW({{"features", MAP(INTEGER(), INTEGER())}});
+  auto input = makeRowVector(
+      {"features"},
+      {makeMapVector(
+          {1, 1},
+          makeFlatVector<int32_t>({10, 10}),
+          makeFlatVector<int32_t>({1, 2}))});
+  auto [_, schema] = serialize(
+      input,
+      type,
+      /*encodingType=*/std::nullopt,
+      /*compressionOptions=*/std::nullopt,
+      /*flatMapColumns=*/{{"features", {}}});
+
+  const auto& flatMap = schema->asRow().childAt(0)->asFlatMap();
+  const auto keyIndex = flatMap.findChild("10");
+  ASSERT_TRUE(keyIndex.has_value());
+  const auto inMapStreamId =
+      flatMap.inMapDescriptorAt(keyIndex.value()).offset();
+  const auto valueStreamId =
+      flatMap.childAt(keyIndex.value())->asScalar().scalarDescriptor().offset();
+  std::vector<std::string_view> inputStreams(
+      std::max(inMapStreamId, valueStreamId) + 1);
+
+  struct Case {
+    EncodingType encodingType;
+    std::vector<bool> inMap;
+    std::vector<int32_t> values;
+    std::vector<bool> expectedInMap;
+    std::vector<int32_t> expectedValues;
+  };
+  const std::vector<Case> cases{
+      {
+          .encodingType = EncodingType::Constant,
+          .inMap = {true, true, true, true, true, true, true, true},
+          .values = {10, 20, 30, 40, 50, 60, 70, 80},
+          .expectedInMap = {true, true, true, true, true},
+          .expectedValues = {30, 40, 50, 60, 70},
+      },
+      {
+          .encodingType = EncodingType::RLE,
+          .inMap = {true, true, false, false, true, true, true, false},
+          .values = {10, 20, 40, 50, 60},
+          .expectedInMap = {false, false, true, true, true},
+          .expectedValues = {40, 50, 60},
+      },
+      {
+          .encodingType = EncodingType::SparseBool,
+          .inMap = {false, true, false, true, false, false, true, false},
+          .values = {11, 33, 66},
+          .expectedInMap = {false, true, false, false, true},
+          .expectedValues = {33, 66},
+      },
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(toString(testCase.encodingType));
+    const auto encodedInMap = encodeBoolStream(
+        testCase.encodingType, testCase.inMap, /*useVarintRowCount=*/true);
+    const auto encodedValues =
+        encodeIntStream(testCase.values, /*useVarintRowCount=*/true);
+    inputStreams[inMapStreamId] = encodedInMap;
+    inputStreams[valueStreamId] = encodedValues;
+
+    StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
+    std::optional<Buffer> outputBuffer;
+    if (useOutputBuffer) {
+      outputBuffer.emplace(*pool_, inputStreamBytes(inputStreams));
+    }
+    auto sliced = slicer.slice(
+        inputStreams,
+        /*offset=*/2,
+        /*length=*/5,
+        outputBuffer.has_value() ? &outputBuffer.value() : nullptr);
+
+    Encoding::Options encodingOptions;
+    encodingOptions.useVarintRowCount = true;
+    auto inMapEncoding = EncodingFactory{encodingOptions}.create(
+        *pool_, sliced.streams[inMapStreamId], nullptr);
+    nimble::Vector<bool> actualInMap{pool_.get(), 5};
+    inMapEncoding->materialize(5, actualInMap.data());
+    for (size_t i = 0; i < testCase.expectedInMap.size(); ++i) {
+      EXPECT_EQ(actualInMap[i], testCase.expectedInMap[i]);
+    }
+
+    auto valuesEncoding = EncodingFactory{encodingOptions}.create(
+        *pool_, sliced.streams[valueStreamId], nullptr);
+    std::vector<int32_t> actualValues(testCase.expectedValues.size());
+    valuesEncoding->materialize(actualValues.size(), actualValues.data());
+    EXPECT_EQ(actualValues, testCase.expectedValues);
   }
 }
 

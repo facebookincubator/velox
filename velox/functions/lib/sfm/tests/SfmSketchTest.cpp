@@ -113,6 +113,43 @@ TEST_F(SfmSketchTest, merge) {
   ASSERT_TRUE(a.privacyEnabled());
 }
 
+TEST_F(SfmSketchTest, mergePrivatePrivate) {
+  // Private-private merges should be unbiased: merging two disjoint
+  // private sketches should estimate the union cardinality. Average over
+  // multiple runs with different seeds to reduce variance.
+  auto testPrivateMerge = [&](double epsilon,
+                              int32_t numPerSketch,
+                              double relativeTolerance) {
+    const int32_t totalCardinality = numPerSketch * 2;
+    static constexpr int32_t kNumRuns = 10;
+    double sumEstimates{0};
+    for (int32_t run = 0; run < kNumRuns; ++run) {
+      SfmSketch firstSketch(&allocator_, 42 + run * 2);
+      SfmSketch secondSketch(&allocator_, 43 + run * 2);
+      firstSketch.initialize(numBuckets_, precision_);
+      secondSketch.initialize(numBuckets_, precision_);
+      for (int32_t i = 0; i < numPerSketch; ++i) {
+        firstSketch.add(i);
+        secondSketch.add(numPerSketch + i);
+      }
+      firstSketch.enablePrivacy(epsilon);
+      secondSketch.enablePrivacy(epsilon);
+      firstSketch.mergeWith(secondSketch);
+      sumEstimates += static_cast<double>(firstSketch.cardinality());
+    }
+    const double averageEstimate = sumEstimates / kNumRuns;
+    ASSERT_NEAR(
+        averageEstimate, totalCardinality, totalCardinality * relativeTolerance)
+        << "epsilon=" << epsilon << " numPerSketch=" << numPerSketch;
+  };
+
+  // Tolerances are ~6x the theoretical standard error of the 10-run average
+  // (see Eq. 2 of https://arxiv.org/pdf/2302.02056.pdf).
+  testPrivateMerge(1.0, 10'000, 0.10);
+  testPrivateMerge(2.0, 10'000, 0.04);
+  testPrivateMerge(5.0, 10'000, 0.02);
+}
+
 TEST_F(SfmSketchTest, cardinality) {
   SfmSketch sketch(&allocator_, 3);
   VELOX_ASSERT_THROW(sketch.cardinality(), "Sketch is not initialized.");
@@ -319,4 +356,5 @@ TEST_F(SfmSketchTest, javaSerializationCompatibility) {
   // Test that the deserialized sketch is the same as the original.
   ASSERT_EQ(sketch.cardinality(), 927499);
 }
+
 } // namespace facebook::velox::functions::sfm

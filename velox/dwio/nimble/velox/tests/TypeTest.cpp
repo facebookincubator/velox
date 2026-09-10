@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
@@ -72,7 +72,7 @@ TEST_F(TypeTests, matchingSchema) {
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(vector->type()));
-  nimble::VeloxReader reader(&readFile, *leafPool_, std::move(selector));
+  nimble::BatchReader reader(&readFile, *leafPool_, std::move(selector));
 
   velox::VectorPtr result;
   ASSERT_TRUE(reader.next(batchSize, result));
@@ -137,7 +137,7 @@ TEST_F(TypeTests, extraColumnWithRename) {
   velox::InMemoryReadFile readFile(file);
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(newType));
-  nimble::VeloxReader reader(&readFile, *leafPool_, std::move(selector));
+  nimble::BatchReader reader(&readFile, *leafPool_, std::move(selector));
 
   velox::VectorPtr result;
   ASSERT_TRUE(reader.next(batchSize, result));
@@ -196,7 +196,7 @@ TEST_F(TypeTests, sameTypeWithProjection) {
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(type),
       std::vector<std::string>{"array", "nested", "arraywithoffsets"});
-  nimble::VeloxReader reader(&readFile, *leafPool_, std::move(selector));
+  nimble::BatchReader reader(&readFile, *leafPool_, std::move(selector));
 
   velox::VectorPtr result;
   ASSERT_TRUE(reader.next(batchSize, result));
@@ -272,7 +272,7 @@ TEST_F(TypeTests, projectingNewColumn) {
   auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(
       std::dynamic_pointer_cast<const velox::RowType>(newType),
       std::vector<std::string>{"struct_rename", "new"});
-  nimble::VeloxReader reader(&readFile, *leafPool_, std::move(selector));
+  nimble::BatchReader reader(&readFile, *leafPool_, std::move(selector));
 
   velox::VectorPtr result;
   ASSERT_TRUE(reader.next(batchSize, result));
@@ -360,7 +360,7 @@ TEST_F(TypeTests, flatMapFeatureSelection) {
   auto expectedInnerType =
       velox::ROW({velox::BIGINT(), velox::BIGINT(), velox::BIGINT()});
 
-  nimble::VeloxReadParams params;
+  nimble::BatchReadParams params;
   params.readFlatMapFieldAsStruct = {"map"},
   params.flatMapFeatureSelector = {
       {"map",
@@ -368,7 +368,7 @@ TEST_F(TypeTests, flatMapFeatureSelection) {
          folly::to<std::string>(existingKey),
          folly::to<std::string>(nonExistingKey2)}}}};
 
-  nimble::VeloxReader reader(
+  nimble::BatchReader reader(
       &readFile, *leafPool_, std::move(selector), std::move(params));
 
   velox::VectorPtr result;

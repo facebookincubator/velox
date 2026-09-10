@@ -59,6 +59,10 @@ inline bool isSetDigestType(const TypePtr& type) {
   return SetDigestType::get() == type;
 }
 
+inline bool isSetDigestType(const Type& type) {
+  return SetDigestType::get().get() == &type;
+}
+
 inline std::shared_ptr<const SetDigestType> SETDIGEST() {
   return SetDigestType::get();
 }

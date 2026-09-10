@@ -28,6 +28,7 @@
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
 #include <array>
+#include <cmath>
 #include <limits>
 #include <random>
 #include <string_view>
@@ -340,6 +341,186 @@ void expectInterleavedMaterializeAndSkip(
       EXPECT_TRUE(
           nimble::NimbleCompare<D>::equals(output[i], values[target + i]));
     }
+  }
+}
+
+// batchTransform (xsimd) must produce lane-by-lane byte-identical output to
+// the scalar path (scalarTransformOne). This is the correctness contract that
+// lets the encode loop and the selection grid route through the vectorized
+// helper without changing encoded bytes.
+//
+// Covers:
+//   * pathological finite inputs (0, +/-0, denormals, huge, tiny)
+//   * non-finite inputs (NaN, +/-Inf)
+//   * out-of-int64-range scaled values
+//   * halfway cases where round-half-away-from-zero rules matter
+//   * randomized fuzz over a moderately-sized sample
+// for every (exponent, factor) pair in the search grid.
+TYPED_TEST(ALPEncodingTest, batchTransformMatchesScalar) {
+  using D = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<D>::physicalType;
+  using Alp = nimble::ALPEncoding<D>;
+
+  // Pathological + edge-case inputs. Chosen so at least one lane in each
+  // batch tickles: NaN, +/-Inf, +/-0, subnormal, huge, tiny, and negatives
+  // of half-values. Padded to a multiple of kBatchSize so we cover the
+  // full-batch path (the scalar tail is separately covered by the fuzz
+  // block below).
+  std::vector<D> edge{
+      D{0.0},
+      -D{0.0},
+      D{0.5},
+      -D{0.5},
+      D{1.25},
+      -D{1.25},
+      D{2.5},
+      -D{2.5},
+      D{1e-6},
+      -D{1e-6},
+      std::numeric_limits<D>::min(),
+      std::numeric_limits<D>::denorm_min(),
+      D{1e6},
+      -D{1e6},
+      D{1.234567},
+      -D{7.654321},
+      std::numeric_limits<D>::infinity(),
+      -std::numeric_limits<D>::infinity(),
+      std::numeric_limits<D>::quiet_NaN(),
+      -std::numeric_limits<D>::quiet_NaN(),
+      D{9.2233720368547758e18}, // ~int64::max as double
+      -D{9.2233720368547758e18},
+      D{1e30}, // Overflows int64 after any positive exponent.
+      -D{1e30},
+  };
+  // Pad to a multiple of kBatchSize by repeating a benign representable value.
+  while (edge.size() % Alp::kBatchSize != 0) {
+    edge.push_back(D{1.0});
+  }
+
+  // Randomized fuzz block: 4096 samples across [-1e6, 1e6], mostly two-decimal
+  // to keep exception counts realistic. Same seed for reproducibility.
+  std::mt19937_64 rng(0xA1FDA1FD01D3B0FDULL);
+  std::uniform_int_distribution<int64_t> centDist(-100'000'000, 100'000'000);
+  std::vector<D> fuzz;
+  fuzz.reserve(4096);
+  for (int i = 0; i < 4096; ++i) {
+    fuzz.push_back(static_cast<D>(centDist(rng)) / static_cast<D>(100));
+  }
+
+  auto checkSpan = [&](const std::vector<D>& logicals, int e, int f) {
+    std::vector<PhysicalType> physicals;
+    physicals.reserve(logicals.size());
+    for (const auto value : logicals) {
+      physicals.push_back(nimble::detail::alp::toPhysical<D>(value));
+    }
+    const double exponentMultiplier = Alp::kPow10Double[e];
+    const double factorMultiplier = Alp::kPow10Double[f];
+
+    const std::size_t batches = logicals.size() / Alp::kBatchSize;
+    for (std::size_t b = 0; b < batches; ++b) {
+      const std::size_t base = b * Alp::kBatchSize;
+      // Upper-bounded by any real kBatchSize the build produces.
+      std::array<uint64_t, 64> batchZigZag{};
+      std::array<bool, 64> batchOk{};
+      Alp::batchTransform(
+          logicals.data() + base,
+          physicals.data() + base,
+          exponentMultiplier,
+          factorMultiplier,
+          batchZigZag.data(),
+          batchOk.data());
+      for (std::size_t k = 0; k < Alp::kBatchSize; ++k) {
+        uint64_t scalarZigZag = 0;
+        const bool scalarOk = Alp::scalarTransformOne(
+            logicals[base + k],
+            physicals[base + k],
+            exponentMultiplier,
+            factorMultiplier,
+            scalarZigZag);
+        EXPECT_EQ(batchOk[k], scalarOk)
+            << "mask mismatch at lane " << (base + k) << " (e=" << e
+            << ", f=" << f << ", value=" << +logicals[base + k] << ")";
+        if (scalarOk) {
+          EXPECT_EQ(batchZigZag[k], scalarZigZag)
+              << "zigzag mismatch at lane " << (base + k) << " (e=" << e
+              << ", f=" << f << ", value=" << +logicals[base + k] << ")";
+        }
+      }
+    }
+  };
+
+  // Enumerate the complete (exponent, factor) grid walked by production
+  // selection. Only combinations with f <= e are ever considered.
+  constexpr int kMaxExponent = 23;
+  for (int e = 0; e <= kMaxExponent; ++e) {
+    for (int f = 0; f <= e; ++f) {
+      checkSpan(edge, e, f);
+      checkSpan(fuzz, e, f);
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, int64BoundariesAndScalarTail) {
+  using D = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<D>;
+
+  const auto expectTransform = [](D value,
+                                  double exponentMultiplier,
+                                  double factorMultiplier,
+                                  bool expected) {
+    uint64_t zigZag = 0;
+    EXPECT_EQ(
+        Alp::scalarTransformOne(
+            value,
+            nimble::detail::alp::toPhysical<D>(value),
+            exponentMultiplier,
+            factorMultiplier,
+            zigZag),
+        expected)
+        << "value=" << value << " exponentMultiplier=" << exponentMultiplier
+        << " factorMultiplier=" << factorMultiplier;
+  };
+
+  const D positiveBound = static_cast<D>(0x1p63);
+  const D negativeBound = -positiveBound;
+  expectTransform(positiveBound, 1.0, 1.0, false);
+  expectTransform(negativeBound, 1.0, 1.0, true);
+  expectTransform(std::nextafter(positiveBound, D{0}), 1.0, 1.0, true);
+  expectTransform(
+      std::nextafter(negativeBound, -std::numeric_limits<D>::infinity()),
+      1.0,
+      1.0,
+      false);
+
+  if constexpr (std::is_same_v<D, double>) {
+    // scaled is exactly +2^63, but the factor division brings the integer
+    // conversion back into range. The scaled upper bound must stay inclusive.
+    expectTransform(0x1p63 / 10.0, 10.0, 10.0, true);
+  }
+
+  // Exercise both production loops with one full SIMD batch followed by the
+  // scalar tail. Keeping +2^63 in the last position specifically covers the
+  // former out-of-range llround in both selection and final encoding.
+  nimble::Vector<D> values{this->pool_.get(), Alp::kBatchSize + 1};
+  values.fill(D{1.25});
+  values.back() = positiveBound;
+
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const auto serialized = encodeWithLayout<D>(
+      *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options);
+
+  const char* pos = serialized.data() +
+      nimble::EncodingPrefix::prefixSize(serialized, options.useVarintRowCount);
+  EXPECT_TRUE(nimble::detail::alp::readHeader(pos).hasExceptions);
+
+  std::vector<velox::BufferPtr> stringBuffers;
+  auto encoding =
+      createEncoding(this->pool_.get(), serialized, options, stringBuffers);
+  nimble::Vector<D> decoded{this->pool_.get(), values.size()};
+  encoding->materialize(values.size(), decoded.data());
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    EXPECT_TRUE(nimble::NimbleCompare<D>::equals(decoded[i], values[i]));
   }
 }
 

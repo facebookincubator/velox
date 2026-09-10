@@ -182,12 +182,14 @@ class StreamSlicer {
   Range nonNullRange(
       std::string_view encoded,
       Range range,
+      Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
   // Maps a boolean stream range to the range covering true positions.
   Range trueRange(
       std::string_view encoded,
       Range range,
+      Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
   // Maps an offsets stream range to the child-element range it references.
@@ -200,12 +202,14 @@ class StreamSlicer {
   uint32_t countNonNull(
       std::string_view encoded,
       Range range,
+      Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
   // Counts true values in the range.
   uint32_t countTrue(
       std::string_view encoded,
       Range range,
+      Buffer& outputBuffer,
       const Encoding::Options& encodingOptions) const;
 
   const std::shared_ptr<const Type> schema_;

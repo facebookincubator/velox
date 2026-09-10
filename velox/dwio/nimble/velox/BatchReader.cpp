@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -22,6 +22,7 @@
 #include <vector>
 #include "fmt/core.h"
 #include "folly/container/F14Map.h"
+#include "folly/coro/BlockingWait.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/common/OnDemandUnitLoader.h"
 #include "velox/dwio/common/UnitLoader.h"
@@ -211,7 +212,7 @@ uint64_t NimbleUnit::getIoSize() {
   return ioSize_.value();
 }
 
-// Builds `TabletReader::Options` for `VeloxReader`'s convenience constructors.
+// Builds `TabletReader::Options` for `BatchReader`'s convenience constructors.
 TabletReader::Options tabletReaderOptions(
     velox::memory::MemoryPool* pool,
     std::shared_ptr<const ExternalDictionaryResolver>
@@ -227,12 +228,12 @@ TabletReader::Options tabletReaderOptions(
 
 } // namespace
 
-VeloxReader::VeloxReader(
+BatchReader::BatchReader(
     velox::ReadFile* file,
     velox::memory::MemoryPool& pool,
     std::shared_ptr<const velox::dwio::common::ColumnSelector> selector,
-    const VeloxReadParams& params)
-    : VeloxReader(
+    const BatchReadParams& params)
+    : BatchReader(
           TabletReader::create(
               std::shared_ptr<velox::ReadFile>(file, [](auto*) {}),
               &pool,
@@ -241,12 +242,12 @@ VeloxReader::VeloxReader(
           std::move(selector),
           params) {}
 
-VeloxReader::VeloxReader(
+BatchReader::BatchReader(
     std::shared_ptr<velox::ReadFile> file,
     velox::memory::MemoryPool& pool,
     std::shared_ptr<const velox::dwio::common::ColumnSelector> selector,
-    const VeloxReadParams& params)
-    : VeloxReader(
+    const BatchReadParams& params)
+    : BatchReader(
           TabletReader::create(
               std::move(file),
               &pool,
@@ -255,11 +256,11 @@ VeloxReader::VeloxReader(
           std::move(selector),
           params) {}
 
-VeloxReader::VeloxReader(
+BatchReader::BatchReader(
     std::shared_ptr<const TabletReader> tabletReader,
     velox::memory::MemoryPool& pool,
     std::shared_ptr<const velox::dwio::common::ColumnSelector> selector,
-    VeloxReadParams params)
+    BatchReadParams params)
     : pool_{pool},
       tabletReader_{std::move(tabletReader)},
       parameters_{std::move(params)},
@@ -354,13 +355,13 @@ VeloxReader::VeloxReader(
   unitLoader_ = getUnitLoader();
 }
 
-void VeloxReader::loadStripeIfAny() {
+void BatchReader::loadStripeIfAny() {
   if (nextStripe_ < lastStripe_) {
     loadNextStripe();
   }
 }
 
-VeloxReadParams::StreamEncodingFactory VeloxReader::createStreamEncodingFactory(
+BatchReadParams::StreamEncodingFactory BatchReader::createStreamEncodingFactory(
     uint32_t valueStreamId,
     std::unique_ptr<StreamLoader> dictionaryStream) const {
   if (dictionaryStream == nullptr &&
@@ -400,7 +401,7 @@ VeloxReadParams::StreamEncodingFactory VeloxReader::createStreamEncodingFactory(
   };
 }
 
-void VeloxReader::loadNextStripe() {
+void BatchReader::loadNextStripe() {
   if (loadedStripe_.has_value() && loadedStripe_.value() == nextStripe_) {
     // We are not reloading the current stripe, but we expect all
     // decoders/readers to be reset after calling loadNextStripe(), therefore,
@@ -491,7 +492,7 @@ void VeloxReader::loadNextStripe() {
   }
 }
 
-uint64_t VeloxReader::estimatedRowSize() {
+uint64_t BatchReader::estimatedRowSize() {
   if (!loadedStripe_.has_value() || rowsRemainingInStripe_ == 0) {
     // We don't load to do the estimation if there isn't any stripe loaded or we
     // are currently at stripe boundary. Instead we return a highly conservative
@@ -510,7 +511,7 @@ uint64_t VeloxReader::estimatedRowSize() {
   return cachedRowSizeEstimation_;
 }
 
-bool VeloxReader::next(uint64_t rowCount, velox::VectorPtr& result) {
+bool BatchReader::next(uint64_t rowCount, velox::VectorPtr& result) {
   if (rowsRemainingInStripe_ == 0) {
     if (nextStripe_ < lastStripe_) {
       loadNextStripe();
@@ -526,7 +527,7 @@ bool VeloxReader::next(uint64_t rowCount, velox::VectorPtr& result) {
   }
   unitLoader_->onRead(
       getUnitIndex(loadedStripe_.value()), getCurrentRowInStripe(), rowsToRead);
-  rootReader_->next(rowsToRead, result);
+  folly::coro::blockingWait(rootReader_->co_next(rowsToRead, result));
   if (barrier_) {
     // Wait for all reader tasks to complete.
     barrier_->waitAll();
@@ -541,19 +542,19 @@ bool VeloxReader::next(uint64_t rowCount, velox::VectorPtr& result) {
   return true;
 }
 
-const TabletReader& VeloxReader::tabletReader() const {
+const TabletReader& BatchReader::tabletReader() const {
   return *tabletReader_;
 }
 
-const std::shared_ptr<const velox::RowType>& VeloxReader::type() const {
+const std::shared_ptr<const velox::RowType>& BatchReader::type() const {
   return type_;
 }
 
-const std::shared_ptr<const Type>& VeloxReader::schema() const {
+const std::shared_ptr<const Type>& BatchReader::schema() const {
   return schema_;
 }
 
-const std::map<std::string, std::string>& VeloxReader::metadata() const {
+const std::map<std::string, std::string>& BatchReader::metadata() const {
   if (!metadata_.has_value()) {
     metadata_ = loadMetadata(*tabletReader_);
   }
@@ -561,7 +562,7 @@ const std::map<std::string, std::string>& VeloxReader::metadata() const {
   return metadata_.value();
 }
 
-uint64_t VeloxReader::seekToRow(uint64_t rowNumber) {
+uint64_t BatchReader::seekToRow(uint64_t rowNumber) {
   if (isEmptyFile()) {
     return 0;
   }
@@ -592,7 +593,7 @@ uint64_t VeloxReader::seekToRow(uint64_t rowNumber) {
   return rowNumber;
 }
 
-uint64_t VeloxReader::skipRows(uint64_t numberOfRowsToSkip) {
+uint64_t BatchReader::skipRows(uint64_t numberOfRowsToSkip) {
   if (isEmptyFile() || numberOfRowsToSkip == 0) {
     LOG(INFO) << "Nothing to skip!";
     return 0;
@@ -625,7 +626,7 @@ uint64_t VeloxReader::skipRows(uint64_t numberOfRowsToSkip) {
   return numberOfRowsToSkip;
 }
 
-uint64_t VeloxReader::skipStripes(
+uint64_t BatchReader::skipStripes(
     uint32_t startStripeIndex,
     uint64_t rowsToSkip) {
   NIMBLE_DCHECK(
@@ -647,19 +648,19 @@ uint64_t VeloxReader::skipStripes(
   return totalRowsToSkip - rowsToSkip;
 }
 
-void VeloxReader::skipInCurrentStripe(uint64_t rowsToSkip) {
+void BatchReader::skipInCurrentStripe(uint64_t rowsToSkip) {
   NIMBLE_DCHECK(
       rowsToSkip <= rowsRemainingInStripe_,
       "Not Enough rows to skip in stripe!");
   rowsRemainingInStripe_ -= rowsToSkip;
   unitLoader_->onSeek(
       getUnitIndex(loadedStripe_.value()), getCurrentRowInStripe());
-  rootReader_->skip(rowsToSkip);
+  folly::coro::blockingWait(rootReader_->co_skip(rowsToSkip));
 }
 
-VeloxReader::~VeloxReader() = default;
+BatchReader::~BatchReader() = default;
 
-std::unique_ptr<velox::dwio::common::UnitLoader> VeloxReader::getUnitLoader() {
+std::unique_ptr<velox::dwio::common::UnitLoader> BatchReader::getUnitLoader() {
   if (lastStripe_ <= firstStripe_) {
     return nullptr;
   }
@@ -681,16 +682,16 @@ std::unique_ptr<velox::dwio::common::UnitLoader> VeloxReader::getUnitLoader() {
   return factory.create(std::move(units), 0);
 }
 
-uint32_t VeloxReader::getUnitIndex(uint32_t stripeIndex) const {
+uint32_t BatchReader::getUnitIndex(uint32_t stripeIndex) const {
   return stripeIndex - firstStripe_;
 }
 
-uint32_t VeloxReader::getCurrentRowInStripe() const {
+uint32_t BatchReader::getCurrentRowInStripe() const {
   return tabletReader_->stripeRowCount(loadedStripe_.value()) -
       static_cast<uint32_t>(rowsRemainingInStripe_);
 }
 
-uint64_t VeloxReader::getRowNumber() {
+uint64_t BatchReader::getRowNumber() {
   if (!loadedStripe_.has_value()) {
     return firstRow_;
   }

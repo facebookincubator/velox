@@ -67,15 +67,17 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
   DefaultFlushPolicy()
       : rowsInRowGroup_(kDefaultRowsInGroup),
         bytesInRowGroup_(kDefaultBytesInRowGroup) {}
-  DefaultFlushPolicy(uint64_t rowsInRowGroup, int64_t bytesInRowGroup)
+  DefaultFlushPolicy(uint64_t rowsInRowGroup, uint64_t bytesInRowGroup)
       : rowsInRowGroup_(rowsInRowGroup), bytesInRowGroup_(bytesInRowGroup) {}
 
   static constexpr uint64_t kDefaultRowsInGroup{1'024 * 1'024};
-  static constexpr int64_t kDefaultBytesInRowGroup{128 * 1'024 * 1'024};
+  static constexpr uint64_t kDefaultBytesInRowGroup{128 * 1'024 * 1'024};
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+    return stripeProgress.stripeSizeEstimate >= 0 &&
+        static_cast<uint64_t>(stripeProgress.stripeSizeEstimate) >=
+        bytesInRowGroup_;
   }
 
   void onClose() override {
@@ -86,20 +88,20 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
     return rowsInRowGroup_;
   }
 
-  int64_t bytesInRowGroup() const {
+  uint64_t bytesInRowGroup() const {
     return bytesInRowGroup_;
   }
 
  private:
   const uint64_t rowsInRowGroup_;
-  const int64_t bytesInRowGroup_;
+  const uint64_t bytesInRowGroup_;
 };
 
 class LambdaFlushPolicy : public DefaultFlushPolicy {
  public:
   explicit LambdaFlushPolicy(
       uint64_t rowsInRowGroup,
-      int64_t bytesInRowGroup,
+      uint64_t bytesInRowGroup,
       std::function<bool()> lambda)
       : DefaultFlushPolicy(rowsInRowGroup, bytesInRowGroup) {
     lambda_ = std::move(lambda);
@@ -141,6 +143,7 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<int64_t> batchSize;
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
+  std::optional<uint64_t> rowGroupSizeBytes;
   std::optional<bool> enableDictionary;
   /// Controls how DECIMAL values are stored by the Writer.
   /// - If unset, the Writer defaults to storing as integer (true),

@@ -23,6 +23,8 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
@@ -136,6 +138,19 @@ struct WriterOptions {
   /// EXPERIMENTAL: Dense indexes are not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   std::vector<std::shared_ptr<const index::IndexConfig>> denseIndexConfigs{};
+
+  /// Vector index configurations. Each entry builds a FAISS similarity index
+  /// over a top-level ARRAY<REAL> column, where each row contains one vector of
+  /// floating-point values. Every array must have exactly the configured
+  /// dimensions; null rows and null elements are rejected.
+  /// EXPERIMENTAL: Vector indexes are not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  std::vector<VectorIndexConfig> vectorIndexConfigs{};
+
+  /// Builds the writer for vectorIndexConfigs. Required when
+  /// vectorIndexConfigs is non-empty. Set it to
+  /// index::VectorIndexWriter::create
+  index::VectorIndexWriterFactory vectorIndexWriterFactory{};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
   /// of predefined key strings. When the set is empty, the column is
@@ -365,11 +380,13 @@ struct WriterOptions {
   /// until all KeepAlive references are destructed.
   folly::Executor::KeepAlive<> encodingExecutor{};
 
-  /// When maxEncodeParallelism > 0 and encodingExecutor is set,
-  /// FieldWriter::write() operations will be parallelized using coroutines
-  /// scheduled on encodingExecutor.
+  /// Caps concurrent stream-encoding tasks. Callers should not set this above
+  /// the executor's available thread count.
   uint32_t maxEncodeParallelism{0};
-  uint32_t minStreamsPerEncodeUnit{1};
+
+  /// Targets at least this many streams per parallel encoding task. Zero is
+  /// treated as one.
+  uint32_t minStreamsPerEncodingTask{1};
 
   bool enableChunking{true};
 

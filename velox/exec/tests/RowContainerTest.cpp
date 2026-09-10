@@ -2081,6 +2081,58 @@ TEST_F(RowContainerTest, partialWriteComplexTypedRow) {
   rowContainer->eraseRows(folly::Range<char**>(&row, 1));
 }
 
+TEST_F(RowContainerTest, extractSerializedRowWithNonNullableKeys) {
+  RowContainer rowContainer(
+      {BIGINT()},
+      false, // nullableKeys
+      std::vector<Accumulator>{},
+      {BIGINT()}, // dependentTypes
+      false, // hasNext
+      true, // isJoinBuild
+      true, // hasProbedFlag
+      false, // hasCountFlag
+      false, // hasNormalizedKey
+      false, // useListRowIndex
+      pool());
+
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({123}),
+      makeNullableFlatVector<int64_t>({std::nullopt}),
+  });
+  DecodedVector decodedKey(*input->childAt(0));
+  DecodedVector decodedDependent(*input->childAt(1));
+
+  auto* row = rowContainer.newRow();
+  rowContainer.store(decodedKey, 0, row, 0);
+  rowContainer.store(decodedDependent, 0, row, 1);
+  rowContainer.setProbedFlag(&row, 1);
+
+  auto serialized =
+      BaseVector::create<FlatVector<StringView>>(VARBINARY(), 1, pool());
+  rowContainer.extractSerializedRows(folly::Range<char**>(&row, 1), serialized);
+
+  rowContainer.clear();
+  row = rowContainer.newRow();
+  rowContainer.storeSerializedRow(*serialized, 0, row);
+
+  auto key = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 1, pool());
+  rowContainer.extractColumn(&row, 1, 0, key);
+  EXPECT_EQ(key->valueAt(0), 123);
+
+  auto dependent = BaseVector::create<FlatVector<int64_t>>(BIGINT(), 1, pool());
+  rowContainer.extractColumn(&row, 1, 1, dependent);
+  EXPECT_TRUE(dependent->isNullAt(0));
+
+  auto probed = BaseVector::create<FlatVector<bool>>(BOOLEAN(), 1, pool());
+  rowContainer.extractProbedFlags(
+      &row,
+      1,
+      false, // setNullForNullKeysRow
+      false, // setNullForNonProbedRow
+      probed);
+  EXPECT_TRUE(probed->valueAt(0));
+}
+
 TEST_F(RowContainerTest, extractSerializedRow) {
   VectorFuzzer fuzzer(
       {

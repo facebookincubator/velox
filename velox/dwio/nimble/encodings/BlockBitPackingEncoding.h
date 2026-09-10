@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -270,23 +271,6 @@ class BlockBitPackingEncoding final
     return std::min(trivialSize, fixedBitWidthSize);
   }
 
-  struct BlockSliceInfo {
-    // Source block that contributes rows to this output block.
-    uint32_t blockIndex{0};
-    // Byte offset of the source block payload, adjusted for raw partial blocks.
-    uint32_t packedOffset{0};
-    // First row copied from the source block.
-    uint32_t rowOffset{0};
-    // Bytes written for this output block.
-    uint32_t packedSize{0};
-    // Rows written for this output block.
-    uint32_t rowCount{0};
-    // Output bit width; zero also represents constant blocks.
-    uint8_t bitWidth{0};
-    // True when the payload is copied as raw physical values.
-    bool skipEncoding{false};
-  };
-
   // Parsed stream metadata. lastBlockRows is derived from rowCount and the
   // first-block override; it is not serialized.
   struct Header {
@@ -469,13 +453,25 @@ class BlockBitPackingEncoding final
     return static_cast<uint32_t>(FixedBitArray::bufferSize(rowCount, bitWidth));
   }
 
-  static void writeBlockSlicesPayload(
-      const Header& header,
+  // Writes a BlockBitPacking encoding that covers the source's blocks
+  // [firstBlock, firstBlock + numBlocks) whole -- baselines / bit widths
+  // structurally sliced, block offsets rebased and re-encoded, packed payload
+  // memcpy'd verbatim from the source.
+  //
+  // `rowCount` is the row count written into the emitted encoding's prefix.
+  // slice() passes the request length for block-aligned requests -- the
+  // emitted encoding is the final output. For mid-block requests it passes
+  // the sum of touched block row counts (larger than the request), and then
+  // wraps the result in a SliceEncoding whose leadingSkipRows and length
+  // trim the boundary-block overhang at decode time.
+  static std::string_view sliceBlockRange(
+      const Header& source,
       std::string_view packedData,
-      std::span<const BlockSliceInfo> blockSlices,
-      std::span<const uint32_t> sliceOffsets,
-      uint32_t totalPackedSize,
-      char*& pos);
+      uint32_t rowCount,
+      uint32_t firstBlock,
+      uint32_t numBlocks,
+      Buffer& buffer,
+      const Encoding::Options& options);
 
   // Reads a single decoded value at the given absolute row index.
   physicalType readSingleValue(uint32_t row) const;
@@ -603,69 +599,6 @@ BlockBitPackingEncoding<T>::makeBlockInfo(
       start,
       count,
       false};
-}
-
-template <typename T>
-void BlockBitPackingEncoding<T>::writeBlockSlicesPayload(
-    const Header& header,
-    std::string_view packedData,
-    std::span<const BlockSliceInfo> blockSlices,
-    std::span<const uint32_t> sliceOffsets,
-    uint32_t totalPackedSize,
-    char*& pos) {
-  std::memset(pos, 0, totalPackedSize);
-  uint32_t dataOffset{0};
-  const auto needsBitCopy = [&](const BlockSliceInfo& blockSlice) {
-    return !blockSlice.skipEncoding && blockSlice.bitWidth != 0 &&
-        (blockSlice.rowOffset != 0 ||
-         blockSlice.rowCount != blockRowCount(header, blockSlice.blockIndex));
-  };
-  const auto copyBlockBitsRange = [&](uint32_t blockIndex) {
-    const auto& blockSlice = blockSlices[blockIndex];
-
-    const auto sourceBitOffset =
-        static_cast<uint64_t>(blockSlice.rowOffset) * blockSlice.bitWidth;
-    const auto sliceBits =
-        static_cast<uint64_t>(blockSlice.rowCount) * blockSlice.bitWidth;
-    encoding::copyPackedBits(
-        packedData.substr(blockSlice.packedOffset),
-        sourceBitOffset,
-        sliceBits,
-        pos + dataOffset);
-    dataOffset += blockSlice.packedSize;
-  };
-
-  const auto numBlocks = static_cast<uint32_t>(blockSlices.size());
-  const bool firstNeedsBitCopy = needsBitCopy(blockSlices[0]);
-  const bool lastNeedsBitCopy =
-      numBlocks > 1 && needsBitCopy(blockSlices[numBlocks - 1]);
-  if (firstNeedsBitCopy) {
-    copyBlockBitsRange(/*blockIndex=*/0);
-  }
-
-  uint32_t packedBegin = firstNeedsBitCopy ? 1 : 0;
-  const uint32_t packedEnd = lastNeedsBitCopy ? numBlocks - 1 : numBlocks;
-  // Constant blocks have rows but no packed payload (bit width 0). They still
-  // participate in slice offsets, but cannot anchor the source byte range for
-  // the coalesced copy.
-  while (packedBegin < packedEnd && blockSlices[packedBegin].packedSize == 0) {
-    ++packedBegin;
-  }
-  if (packedBegin < packedEnd) {
-    NIMBLE_CHECK_EQ(dataOffset, sliceOffsets[packedBegin]);
-    const auto packedEndOffset = sliceOffsets[packedEnd];
-    const auto packedBytes = packedEndOffset - sliceOffsets[packedBegin];
-    std::memcpy(
-        pos + dataOffset,
-        packedData.data() + blockSlices[packedBegin].packedOffset,
-        packedBytes);
-    dataOffset += packedBytes;
-  }
-
-  if (lastNeedsBitCopy) {
-    copyBlockBitsRange(numBlocks - 1);
-  }
-  pos += totalPackedSize;
 }
 
 template <typename T>
@@ -1288,9 +1221,44 @@ std::string_view BlockBitPackingEncoding<T>::slice(
       kMaxBlockCount,
       "Row count too large for BlockBitPacking encoding.");
 
+  // Write a BlockBitPacking that covers the touched source blocks whole. When
+  // the request lines up with block boundaries this is the final output; when
+  // either boundary is mid-block, the output covers more rows than requested
+  // and a SliceEncoding wrapper trims the overhang at decode time. Boundary
+  // blocks are copied byte-for-byte either way -- no per-value bit-shift work.
+  const auto startRow = blockRowOffset(source, firstBlock);
+  const auto endRow =
+      blockRowOffset(source, lastBlock) + blockRowCount(source, lastBlock);
+  const auto encodedRows = endRow - startRow;
+  const auto skipLeadingRows = offset - startRow;
+
+  const auto encodedBlockRange = sliceBlockRange(
+      source, packedData, encodedRows, firstBlock, numBlocks, buffer, options);
+  if (encodedRows == length) {
+    return encodedBlockRange;
+  }
+  return SliceEncoding<T>::wrap(
+      encodedBlockRange, skipLeadingRows, length, buffer, options);
+}
+
+template <typename T>
+std::string_view BlockBitPackingEncoding<T>::sliceBlockRange(
+    const Header& source,
+    std::string_view packedData,
+    uint32_t rowCount,
+    uint32_t firstBlock,
+    uint32_t numBlocks,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto* pool = &buffer.getMemoryPool();
+
+  // Read the touched blocks' per-block byte offsets, then rebase them so the
+  // first is at 0 (positions in the output's own packedData). The rebase
+  // happens in place -- the source values are only needed to derive the
+  // payload byte range below, which is captured first.
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   ScopedVector<uint32_t> blockOffsets{
       static_cast<uint64_t>(numBlocks) + 1, pool, options.bufferPool};
-  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   readBlockOffsets(
       source,
       firstBlock,
@@ -1299,60 +1267,27 @@ std::string_view BlockBitPackingEncoding<T>::slice(
       blockOffsets,
       scopedBuffer.get(),
       options);
-
-  const auto getPackedSize = [&](uint32_t blockIndex) {
-    const auto blockOffset = blockIndex - firstBlock;
-    return blockOffsets[blockOffset + 1] - blockOffsets[blockOffset];
-  };
-  ScopedVector<uint8_t> bitWidths{numBlocks, pool, options.bufferPool};
-  readMetadataRange(
-      source.encodedBitWidths,
-      firstBlock,
-      numBlocks,
-      bitWidths,
-      scopedBuffer.get(),
-      options);
-  const auto getBlockBitWidth = [&](uint32_t blockIndex) {
-    return bitWidths[blockIndex - firstBlock];
-  };
-
-  ScopedVector<BlockSliceInfo> blockSlices{numBlocks, pool, options.bufferPool};
-  ScopedVector<uint32_t> sliceOffsets{
-      static_cast<uint64_t>(numBlocks) + 1, pool, options.bufferPool};
-  uint32_t totalPackedSize{0};
-  uint32_t curRow{offset};
-  const auto endRow = offset + length;
-  for (uint16_t sliceIndex = 0; sliceIndex < numBlocks; ++sliceIndex) {
-    const auto position = blockPosition(source, curRow);
-    const auto blockIndex = position.blockIndex;
-    NIMBLE_CHECK_EQ(blockIndex, firstBlock + sliceIndex);
-    const auto rowOffset = position.rowOffset;
-    const auto rowCount =
-        std::min<uint32_t>(endRow - curRow, position.rowCount - rowOffset);
-    const auto fullBlock = rowOffset == 0 && rowCount == position.rowCount;
-    const auto bitWidth = fullBlock ? uint8_t{0} : getBlockBitWidth(blockIndex);
-    const auto skipEncoding = bitWidth == kRawBlockBitWidth;
-    const uint32_t packedOffsetAdjustment = skipEncoding
-        ? static_cast<uint32_t>(rowOffset * sizeof(physicalType))
-        : uint32_t{0};
-    blockSlices[sliceIndex] = {
-        .blockIndex = blockIndex,
-        .packedOffset =
-            blockOffsets[blockIndex - firstBlock] + packedOffsetAdjustment,
-        .rowOffset = rowOffset,
-        .packedSize = fullBlock
-            ? getPackedSize(blockIndex)
-            : BlockBitPackingEncoding::getPackedSize(rowCount, bitWidth),
-        .rowCount = rowCount,
-        .bitWidth = skipEncoding ? uint8_t{0} : bitWidth,
-        .skipEncoding = skipEncoding};
-    sliceOffsets[sliceIndex] = totalPackedSize;
-    totalPackedSize += blockSlices[sliceIndex].packedSize;
-    curRow += rowCount;
+  const uint32_t sourcePayloadStart = blockOffsets[0];
+  const uint32_t packedPayloadSize =
+      blockOffsets[numBlocks] - sourcePayloadStart;
+  for (uint32_t i = 0; i < numBlocks; ++i) {
+    blockOffsets[i] -= sourcePayloadStart;
   }
-  sliceOffsets[numBlocks] = totalPackedSize;
-  NIMBLE_CHECK_EQ(curRow, endRow);
+  // TODO: An OffsetEncoding wrapper that carries a constant delta over an
+  // inner encoding could replace this re-encode with a structural slice -- the
+  // rebase becomes "wrap the source offsets and record -sourcePayloadStart".
+  // Same shape would let FixedBitWidth / PFOR skip their own baseline
+  // re-encodes on slice too; worth a look if the offset re-encode ever shows
+  // up on a profile.
+  const auto encodedOffsets =
+      EncodingFactory::encodeWithCapturedLayout<uint32_t>(
+          source.encodedBlockOffsets,
+          std::span<const uint32_t>{blockOffsets.data(), numBlocks},
+          scopedBuffer.get(),
+          options,
+          "Captured BlockBitPacking offset layout");
 
+  // Structurally slice the metadata sub-encodings -- values are unchanged.
   const auto encodedBaselines = EncodingFactory::slice(
       source.encodedBaselines,
       firstBlock,
@@ -1365,15 +1300,8 @@ std::string_view BlockBitPackingEncoding<T>::slice(
       numBlocks,
       scopedBuffer.get(),
       options);
-  const auto encodedOffsets =
-      EncodingFactory::encodeWithCapturedLayout<uint32_t>(
-          source.encodedBlockOffsets,
-          std::span<const uint32_t>{sliceOffsets.data(), numBlocks},
-          scopedBuffer.get(),
-          options,
-          "Captured BlockBitPacking offset layout");
 
-  const auto firstBlockRows = blockSlices[0].rowCount;
+  const auto firstBlockRows = blockRowCount(source, firstBlock);
   const uint32_t headerSize = BlockBitPackingEncoding<T>::headerSize(
       source.blockSize,
       numBlocks,
@@ -1382,18 +1310,18 @@ std::string_view BlockBitPackingEncoding<T>::slice(
       static_cast<uint32_t>(encodedOffsets.size()),
       firstBlockRows);
   const uint32_t encodingSize = Encoding::serializePrefixSize(
-                                    length, options.useVarintRowCount) +
+                                    rowCount, options.useVarintRowCount) +
       headerSize +
       static_cast<uint32_t>(encodedBaselines.size() + encodedBitWidths.size() +
                             encodedOffsets.size()) +
-      totalPackedSize;
+      packedPayloadSize;
 
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
   Encoding::serializePrefix(
       EncodingType::BlockBitPacking,
       TypeTraits<T>::dataType,
-      length,
+      rowCount,
       options.useVarintRowCount,
       pos);
   encoding::writeChar(static_cast<char>(CompressionType::Uncompressed), pos);
@@ -1404,15 +1332,12 @@ std::string_view BlockBitPackingEncoding<T>::slice(
   encoding::writeVarintString(encodedOffsets, pos);
   varint::writeVarint(firstBlockRows, &pos);
 
-  writeBlockSlicesPayload(
-      source,
-      packedData,
-      std::span<const BlockSliceInfo>{blockSlices.data(), blockSlices.size()},
-      std::span<const uint32_t>{sliceOffsets.data(), sliceOffsets.size()},
-      totalPackedSize,
-      pos);
-
-  NIMBLE_CHECK_EQ(encodingSize, pos - reserved, "Encoding size mismatch.");
+  // Touched blocks are contiguous in the source's packedData, so a single
+  // memcpy carries the payload -- constant blocks contribute 0 bytes, raw
+  // blocks are wholesale, bit-packed blocks are byte-copied as-is.
+  std::memcpy(pos, packedData.data() + sourcePayloadStart, packedPayloadSize);
+  pos += packedPayloadSize;
+  NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
   return {reserved, encodingSize};
 }
 
