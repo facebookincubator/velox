@@ -83,6 +83,9 @@ void estimateFlatSerializedSize(
     for (int32_t i = 0; i < numNonNull; ++i) {
       *sizes[nonNulls[i]] += valueSize;
     }
+    if (numNonNull != numRows) {
+      *sizes[0] += bits::nbytes(numRows);
+    }
   } else {
     VELOX_UNREACHABLE("Non null fixed width case handled before this");
   }
@@ -105,9 +108,6 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
   } else {
     for (auto i = 0; i < numRows; ++i) {
       *sizes[i] += sizeof(int32_t);
-      if (bits::isBitNull(rawNulls, rows[i])) {
-        *sizes[i] += bits::nbytes(1);
-      }
     }
 
     ScratchPtr<uint64_t, 4> nullsHolder(scratch);
@@ -119,6 +119,9 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
 
     for (int32_t i = 0; i < numNonNull; ++i) {
       *sizes[nonNulls[i]] += rawValues[rows[nonNulls[i]]].size();
+    }
+    if (numNonNull != numRows) {
+      *sizes[0] += bits::nbytes(numRows);
     }
   }
 }
@@ -210,6 +213,9 @@ void estimateWrapperSerializedSize(
       }
     }
   }
+  if (numInner != numRows) {
+    *sizes[0] += bits::nbytes(numRows);
+  }
   if (numInner == 0) {
     return;
   }
@@ -248,7 +254,8 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
         bytes += sizeof(int32_t) + rawValues[offset].size();
       }
     }
-    *(sizes[i]) += bytes + bits::nbytes(numNulls) + 4 * numNulls;
+    *(sizes[i]) += bytes + 4 * numNulls +
+        (numNulls == 0 ? 0 : bits::nbytes(ranges[i].size));
   }
 }
 
@@ -384,7 +391,7 @@ void estimateWrapperSerializedSize(
         ++numNulls;
       }
     }
-    *sizes[i] += bits::nbytes(numNulls);
+    *sizes[i] += numNulls == 0 ? 0 : bits::nbytes(ranges[i].size);
   }
   estimateSerializedSizeInt(wrapped, newRanges, newSizes.data(), scratch);
 }
@@ -484,6 +491,9 @@ void estimateSerializedSizeInt(
         simd::gatherBits(vector->rawNulls(), rows, nulls);
         auto mutableInnerRows = innerRowsHolder.get(numRows);
         numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableInnerRows);
+        if (numInner != numRows) {
+          *sizes[0] += bits::nbytes(numRows);
+        }
         innerSizes = innerSizesHolder.get(numInner);
         for (auto i = 0; i < numInner; ++i) {
           innerSizes[i] = sizes[mutableInnerRows[i]];
