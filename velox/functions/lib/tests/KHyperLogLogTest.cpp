@@ -19,6 +19,7 @@
 #include <folly/Random.h>
 #include <folly/String.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <set>
 #include <unordered_set>
 #include "velox/type/Timestamp.h"
@@ -258,6 +259,56 @@ TEST_F(KHyperLogLogTest, uiiVarcharIsPreHashedWithXxHash64) {
   }
 
   EXPECT_EQ(serialized(asVarchar), serialized(asBigint));
+}
+
+// Presto hashes a string join key once, not twice.
+TEST_F(KHyperLogLogTest, varcharJoinKeyIsHashedOnce) {
+  const std::string key = "abc";
+  EXPECT_EQ(
+      common::hll::detail::hashKey(StringView(key)),
+      -5'434'086'359'492'102'041LL);
+}
+
+// Presto carries a REAL as its floatToIntBits() pattern, so a REAL key must
+// hash to the same value as an INTEGER key holding those bits.
+TEST_F(KHyperLogLogTest, realJoinKeyUsesFloatToIntBits) {
+  for (float value :
+       {3.5f,
+        -3.5f,
+        0.0f,
+        -0.0f,
+        1e-30f,
+        std::numeric_limits<float>::quiet_NaN()}) {
+    int32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    EXPECT_EQ(
+        common::hll::detail::hashKey(value), common::hll::detail::hashKey(bits))
+        << "value=" << value;
+  }
+
+  // -0.0f and 0.0f compare equal but carry different bit patterns, so they are
+  // distinct keys. NaN is not canonicalized: the raw payload is hashed, which
+  // matches HllAccumulator but differs from Java's floatToIntBits(), which
+  // collapses every NaN to 0x7fc00000.
+  EXPECT_NE(
+      common::hll::detail::hashKey(0.0f), common::hll::detail::hashKey(-0.0f));
+}
+
+// Expected values come from the airlift/slice definition, not from the code
+// under test, so a change to toLongBits() or hash64ForLong() is caught here.
+TEST_F(KHyperLogLogTest, numericJoinKeysHashTheirLongBits) {
+  EXPECT_EQ(
+      common::hll::detail::hashKey(int64_t{42}), -5'283'633'198'602'748'424LL);
+  EXPECT_EQ(common::hll::detail::hashKey(1.5), -981'000'774'749'194'061LL);
+  EXPECT_EQ(
+      common::hll::detail::hashKey(Timestamp(1'234, 0)),
+      1'508'765'520'729'823'031LL);
+
+  // A narrow integral key is widened, so it agrees with the BIGINT of the same
+  // value.
+  EXPECT_EQ(
+      common::hll::detail::hashKey(int32_t{42}),
+      common::hll::detail::hashKey(int64_t{42}));
 }
 
 namespace {
