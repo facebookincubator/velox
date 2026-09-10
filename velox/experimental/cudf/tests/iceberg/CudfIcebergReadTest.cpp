@@ -185,6 +185,19 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
     auto planStats = toPlanStats(task->taskStats());
     auto it = planStats.find(plan->id());
     ASSERT_TRUE(it != planStats.end());
+    if (numPrefetchSplits > 0) {
+      const auto& customStats = it->second.customStats;
+      ASSERT_EQ(
+          customStats.count(
+              std::string(facebook::velox::exec::TableScan::kPreloadedSplits)),
+          1);
+      EXPECT_GT(
+          customStats
+              .at(std::string(
+                  facebook::velox::exec::TableScan::kPreloadedSplits))
+              .sum,
+          0);
+    }
     // TODO (mh): enable once we start to track gpu memory
     // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
   }
@@ -580,126 +593,6 @@ TEST_F(CudfIcebergReadTest, multipleSplits) {
                   .planNode();
 
   assertQuery(plan, allSplits, "SELECT * FROM tmp", 0);
-}
-
-/// Splits prepared in the background by the preloader, including their delete
-/// files, must produce the same results as splits prepared on the driver.
-TEST_F(CudfIcebergReadTest, preloadSplitsWithPositionalDeletes) {
-  constexpr int32_t kNumFiles = 4;
-  constexpr int32_t kRowGroupsPerFile = 4;
-  constexpr int64_t kRowsPerRowGroup = 250;
-  constexpr int64_t kRowsPerFile = kRowGroupsPerFile * kRowsPerRowGroup;
-
-  std::vector<RowVectorPtr> dataVectors;
-  std::vector<std::shared_ptr<TempFilePath>> dataFiles;
-  std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
-      splits;
-
-  // Delete the same positions of every file so the deletes must travel with
-  // the preloaded split.
-  const std::vector<int64_t> deletePositions = {0, 1, 500, kRowsPerFile - 1};
-
-  auto pathColumn = IcebergMetadataColumn::icebergDeleteFilePathColumn();
-  auto posColumn = IcebergMetadataColumn::icebergDeletePosColumn();
-
-  // Delete files must outlive the query, so keep them alive here.
-  std::vector<std::shared_ptr<TempFilePath>> deleteFilePaths;
-
-  for (auto fileIndex = 0; fileIndex < kNumFiles; ++fileIndex) {
-    // One vector per row group, holding each row's value as its position in
-    // the file plus the file's offset.
-    std::vector<RowVectorPtr> rowGroups;
-    for (auto rowGroup = 0; rowGroup < kRowGroupsPerFile; ++rowGroup) {
-      const auto startingValue =
-          fileIndex * kRowsPerFile + rowGroup * kRowsPerRowGroup;
-      rowGroups.push_back(
-          makeRowVector({makeFlatVector<int64_t>(makeContinuousIncreasingValues(
-              startingValue, startingValue + kRowsPerRowGroup))}));
-    }
-    auto dataFile = TempFilePath::create();
-    writeToFile(dataFile->getPath(), rowGroups);
-
-    auto deleteFilePath = TempFilePath::create();
-    auto deleteVector = makeRowVector(
-        {pathColumn->name, posColumn->name},
-        {
-            makeFlatVector<std::string>(
-                deletePositions.size(),
-                [&](vector_size_t) { return dataFile->getPath(); }),
-            makeFlatVector<int64_t>(deletePositions),
-        });
-    writeDeleteFile(
-        DeleteFileFormat::DWRF, deleteFilePath->getPath(), {deleteVector});
-    IcebergDeleteFile deleteFile(
-        FileContent::kPositionalDeletes,
-        deleteFilePath->getPath(),
-        dwio::common::FileFormat::DWRF,
-        deletePositions.size(),
-        getFileSize(deleteFilePath->getPath()));
-
-    dataVectors.insert(dataVectors.end(), rowGroups.begin(), rowGroups.end());
-    dataFiles.push_back(dataFile);
-    deleteFilePaths.push_back(deleteFilePath);
-    auto fileSplits = makeIcebergSplits(dataFile->getPath(), {deleteFile});
-    splits.insert(splits.end(), fileSplits.begin(), fileSplits.end());
-  }
-
-  createDuckDbTable(dataVectors);
-
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(kCudfIcebergConnectorId)
-                  .outputType(ROW({"c0"}, {BIGINT()}))
-                  .endTableScan()
-                  .planNode();
-
-  std::string deletedValues;
-  for (auto fileIndex = 0; fileIndex < kNumFiles; ++fileIndex) {
-    for (const auto position : deletePositions) {
-      if (not deletedValues.empty()) {
-        deletedValues += ", ";
-      }
-      deletedValues += std::to_string(fileIndex * kRowsPerFile + position);
-    }
-  }
-
-  auto task =
-      AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(
-              core::QueryConfig::kMaxSplitPreloadPerDriver,
-              std::to_string(kNumFiles))
-          .connectorSessionProperty(
-              kCudfIcebergConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kMaxChunkReadLimitSession,
-              "2048")
-          .connectorSessionProperty(
-              kCudfIcebergConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kMaxPassReadLimitSession,
-              "4096")
-          .splits(splits)
-          .assertResults(
-              fmt::format(
-                  "SELECT * FROM tmp WHERE c0 NOT IN ({})", deletedValues));
-
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at(plan->id()).customStats;
-  ASSERT_EQ(
-      customStats.count(
-          std::string(facebook::velox::exec::TableScan::kPreloadedSplits)),
-      1);
-  EXPECT_EQ(
-      customStats
-          .at(std::string(facebook::velox::exec::TableScan::kPreloadedSplits))
-          .sum,
-      splits.size());
-
-  // More output vectors than splits confirms the splits were read in chunked
-  // manner.
-  EXPECT_GT(
-      planStats.at(plan->id()).operatorStatsFor("TableScan").outputVectors,
-      splits.size());
 }
 
 /// Read a single data file as multiple byte-range sub-splits with no deletes

@@ -594,8 +594,7 @@ void CudfSplitReader::setupPageIndexes() {
   splitReader_->setup_page_indexes(pageIndexData);
 }
 
-std::vector<std::vector<std::vector<cudf::size_type>>>
-CudfSplitReader::selectRowGroupPasses() const {
+CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
   auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
   // Filter row groups using row group byte ranges

@@ -143,10 +143,20 @@ class CudfSplitReader : public NvtxHelper {
   bool prependRowIndex_{false};
 
  private:
+  // Stores row group indices for one Parquet source.
+  using RowGroupIndices = std::vector<cudf::size_type>;
+
+  // Stores row group indices by split.
+  using RowGroupIndicesBySplit = std::vector<RowGroupIndices>;
+
+  // Stores per-split row group indices by read pass.
+  using RowGroupPasses = std::vector<RowGroupIndicesBySplit>;
+
   // Tracks how far the row group passes of the current split have been read.
   struct RowGroupPassState {
-    // Row groups to read, one entry per pass, in read order.
-    std::vector<std::vector<std::vector<cudf::size_type>>> passes;
+    // Row groups to read, indexed as passes[pass][split][rowGroup], in read
+    // order.
+    RowGroupPasses passes;
 
     // The pass being materialized.
     size_t currentPass{0};
@@ -169,8 +179,7 @@ class CudfSplitReader : public NvtxHelper {
 
   // Return the row groups to read, grouped into passes bounded by the pass
   // read limit. Empty when the split has no row groups left after pruning.
-  std::vector<std::vector<std::vector<cudf::size_type>>> selectRowGroupPasses()
-      const;
+  RowGroupPasses selectRowGroupPasses() const;
 
   // Start the reads of the column chunks of the current pass without waiting
   // for them. Does nothing when they are already in flight or complete.
