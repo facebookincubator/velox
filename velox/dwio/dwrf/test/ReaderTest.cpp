@@ -207,7 +207,7 @@ void verifyFlatMapReading(
     EXPECT_EQ(root->size(), expectedBatchSize[batchId++]);
 
     // try to read first map as map<int, list<float>>
-    auto map1 = root->childAt(1)->as<MapVector>();
+    auto map1 = root->childAt(1)->loadedVector()->as<MapVector>();
     auto map1KeyInt = map1->mapKeys()->as<SimpleVector<int32_t>>();
     auto map1ValueList = map1->mapValues();
 
@@ -216,7 +216,7 @@ void verifyFlatMapReading(
     EXPECT_EQ(0, map1KeyInt->getNullCount().value_or(0));
 
     // try to verify map2 as map<string, map<smallint, bigint>>
-    auto map2 = root->childAt(2)->as<MapVector>();
+    auto map2 = root->childAt(2)->loadedVector()->as<MapVector>();
     auto map2Key = map2->mapKeys();
     FlatVectorPtr<StringView> map2KeyString =
         std::dynamic_pointer_cast<FlatVector<StringView>>(map2Key);
@@ -250,7 +250,7 @@ void verifyFlatMapReading(
     }
 
     // try to verify map3 as map<int, int>
-    auto map3 = root->childAt(3)->as<MapVector>();
+    auto map3 = root->childAt(3)->loadedVector()->as<MapVector>();
     auto map3KeyInt = map3->mapKeys()->as<SimpleVector<int32_t>>();
     auto map3ValueInt = map3->mapValues()->as<SimpleVector<int32_t>>();
 
@@ -259,7 +259,7 @@ void verifyFlatMapReading(
 
     // try to verify map4 as
     // map<int,struct<field1:int,field2:float,field3:string>>
-    auto map4 = root->childAt(4)->as<MapVector>();
+    auto map4 = root->childAt(4)->loadedVector()->as<MapVector>();
     auto map4KeyInt = map4->mapKeys()->as<SimpleVector<int32_t>>();
     auto map4ValueStruct = map4->mapValues();
 
@@ -438,7 +438,8 @@ TEST_F(TestFlatMapReader, testReadFlatMapEmptyMap) {
   auto rowReader = dynamic_cast<DwrfRowReader*>(rowReaderOwner.get());
   VectorPtr batch;
   ASSERT_TRUE(rowReader->next(1, batch));
-  auto map = batch->as<RowVector>()->childAt(1)->as<MapVector>();
+  auto map =
+      batch->as<RowVector>()->childAt(1)->loadedVector()->as<MapVector>();
   EXPECT_EQ(0, map->mapKeys()->size());
   EXPECT_EQ(0, map->mapValues()->size());
   EXPECT_EQ(0, map->mapKeys()->getNullCount().value_or(0));
@@ -456,9 +457,11 @@ TEST_F(TestFlatMapReader, testStringKeyLifeCycle) {
         readerOptions);
     auto rowReader = reader->createRowReader(rowReaderOptions);
     ASSERT_TRUE(rowReader->next(100, batch));
+    batch->as<RowVector>()->childAt(2)->loadedVector();
   }
 
-  auto map2 = batch->as<RowVector>()->childAt(2)->as<MapVector>();
+  auto map2 =
+      batch->as<RowVector>()->childAt(2)->loadedVector()->as<MapVector>();
   auto keys =
       std::dynamic_pointer_cast<FlatVector<StringView>>(map2->mapKeys());
   ASSERT_NE(keys, nullptr);
@@ -927,6 +930,10 @@ std::pair<std::unique_ptr<DwrfReader>, RowVectorPtr> readWithColumnMapping(
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr result;
   rowReader->next(fileData->size(), result);
+  auto* rowResult = result->as<RowVector>();
+  for (auto& child : rowResult->children()) {
+    child = BaseVector::loadedVectorShared(child);
+  }
   return {std::move(reader), std::dynamic_pointer_cast<RowVector>(result)};
 }
 } // namespace
