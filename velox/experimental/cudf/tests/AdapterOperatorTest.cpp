@@ -46,25 +46,16 @@ class AdapterOperatorTest : public OperatorTestBase {
     OperatorTestBase::TearDown();
   }
 
-  // Puts 'adapter' ahead of every built-in adapter, because
-  // OperatorAdapterRegistry::findAdapter() returns the first match and
-  // registerAdapter() appends. The built-ins are restored behind it so every
-  // other operator in the plan still resolves; clearing them instead would make
-  // those operators pure-CPU and trip the allowCpuFallback check for a reason
-  // that has nothing to do with the case under test.
+  // Gives the test adapter priority while preserving built-ins for other
+  // operators.
   void registerAdapterFirst(
       std::unique_ptr<cudf_velox::OperatorAdapter> adapter) {
-    // registerCudf() in SetUp() already installed the built-ins. Put the test
-    // adapter ahead of them; calling registerAllOperatorAdapters() here would
-    // clear the registry and discard it.
     cudf_velox::OperatorAdapterRegistry::getInstance().registerAdapterFront(
         std::move(adapter));
   }
 
-  // Rebuilds the cuDF registration with CPU fallback enabled, because
-  // CudfDriverAdapter captures allowCpuFallback when registerCudf() runs, so
-  // setting the config afterwards has no effect on the driver adapter already
-  // installed by SetUp().
+  // Re-registers the driver adapter to capture the updated CPU fallback
+  // setting.
   void enableCpuFallback() {
     cudf_velox::unregisterCudf();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
@@ -75,10 +66,7 @@ class AdapterOperatorTest : public OperatorTestBase {
 };
 
 namespace {
-// Claims FilterProject and reports it as GPU-capable, but contributes no
-// operators. Whether that is a failure depends on keepOperator(): a replacing
-// adapter has produced nothing to replace 'op' with, while a keeping adapter
-// has simply nothing to append.
+// Returns no replacements to exercise both keep and replace contracts.
 class EmptyReplacementAdapter : public cudf_velox::OperatorAdapter {
  public:
   EmptyReplacementAdapter(bool keepOperator, bool producesGpuOutput = false)
@@ -122,15 +110,8 @@ class EmptyReplacementAdapter : public cudf_velox::OperatorAdapter {
   const bool producesGpuOutput_;
 };
 
-// Keeps its operator and describes two operators that must run after it. The
-// pair converts to GPU and back so the appended span is type-balanced whatever
-// the neighbours are, which keeps the case about insertion and renumbering
-// rather than about conversion placement.
-//
-// The plan node ids carry the "-from-velox" and "-to-velox" suffixes because
-// CudfFromVelox and CudfToVelox recover the plan node they belong to by
-// stripping exactly those strings, so any other suffix files their stats under
-// a plan node of its own instead of the one being expanded.
+// Keeps FilterProject and appends a GPU round trip. The standard conversion
+// suffixes preserve plan-node stat attribution.
 class AppendingAdapter : public cudf_velox::OperatorAdapter {
  public:
   AppendingAdapter() : cudf_velox::OperatorAdapter("Appending") {}
@@ -179,10 +160,7 @@ class AppendingAdapter : public cudf_velox::OperatorAdapter {
     return appended;
   }
 };
-// Claims FilterProject but declines it, which is how an adapter reports that it
-// cannot implement a particular operator. createReplacements() is never called
-// on this path, so the operator stays on the CPU and allowCpuFallback alone
-// decides whether that is acceptable.
+// Declines FilterProject; createReplacements() must not be called.
 class DecliningAdapter : public cudf_velox::OperatorAdapter {
  public:
   DecliningAdapter() : cudf_velox::OperatorAdapter("Declining") {}
@@ -241,10 +219,7 @@ TEST_F(AdapterOperatorTest, adapterStatsMergedIntoPlanNode) {
   EXPECT_TRUE(projStats.operatorStats.count("CudfToVelox"));
 }
 
-// A replacing adapter that contributes nothing has not replaced the operator,
-// so with fallback disabled the pipeline must be rejected rather than run with
-// the CPU operator still in place. The decision has to come from what
-// createReplacements() returned, not from having called it.
+// An empty replacement is an adapter error, not CPU fallback.
 TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithoutFallback) {
   registerAdapterFirst(
       std::make_unique<EmptyReplacementAdapter>(/*keepOperator=*/false));
@@ -258,10 +233,7 @@ TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithoutFallback) {
       "Adapter replaced an operator with nothing");
 }
 
-// The mirror case, so that rejecting an empty replacement cannot be implemented
-// by rejecting every empty result: a keeping adapter that appends nothing
-// leaves the operator running on its own, which is what lets one plan node
-// expand into several operators.
+// Empty additions are valid when the original operator is kept.
 TEST_F(AdapterOperatorTest, keptOperatorNeedsNoAppendedOperators) {
   registerAdapterFirst(
       std::make_unique<EmptyReplacementAdapter>(/*keepOperator=*/true));
@@ -274,12 +246,7 @@ TEST_F(AdapterOperatorTest, keptOperatorNeedsNoAppendedOperators) {
   EXPECT_EQ(results->size(), 5);
 }
 
-// The same failure with the adapter also claiming GPU output, which is the
-// shape that used to be destructive: the CudfToVelox appended behind the empty
-// replacement took the operator's place and the plan node dropped out of the
-// pipeline. The rejection has to name the adapter rather than surface later as
-// a conversion operator receiving the wrong vector type, so this case pins the
-// error to the contract check.
+// Reject before CudfToVelox can make an empty replacement appear non-empty.
 TEST_F(
     AdapterOperatorTest,
     emptyReplacementIsRejectedDespiteConversionOperator) {
@@ -296,12 +263,7 @@ TEST_F(
       "Adapter replaced an operator with nothing");
 }
 
-// The same defect with CPU fallback enabled, which is the configuration that
-// used to lose the operator silently: the conversion operator appended behind
-// the empty replacement took its place and the plan node dropped out of the
-// pipeline. An adapter returning nothing while not keeping its operator is a
-// defect in the adapter rather than a plan that cannot run on GPU, so it is
-// rejected whatever allowCpuFallback says.
+// Adapter errors are rejected even when CPU fallback is enabled.
 TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithCpuFallbackEnabled) {
   enableCpuFallback();
   registerAdapterFirst(
@@ -317,10 +279,7 @@ TEST_F(AdapterOperatorTest, emptyReplacementIsRejectedWithCpuFallbackEnabled) {
       "Adapter replaced an operator with nothing");
 }
 
-// An adapter declining its operator is the other reason the operator stays on
-// the CPU, and it is a different failure from returning nothing: the plan
-// cannot run on GPU rather than the adapter being broken, so allowCpuFallback
-// decides it and the error names the fallback rather than the adapter.
+// A declined GPU path requires CPU fallback.
 TEST_F(AdapterOperatorTest, declinedOperatorIsRejectedWithoutFallback) {
   registerAdapterFirst(std::make_unique<DecliningAdapter>());
 
@@ -333,10 +292,7 @@ TEST_F(AdapterOperatorTest, declinedOperatorIsRejectedWithoutFallback) {
       "Replacement with cuDF operator failed");
 }
 
-// The same declined operator with fallback enabled has to run, on the CPU
-// operator that was left in place. Checking the plan node reports FilterProject
-// and no cuDF operator is what distinguishes running on the CPU from having
-// been replaced after all.
+// Verify that fallback keeps FilterProject on CPU.
 TEST_F(AdapterOperatorTest, declinedOperatorRunsOnCpuWithFallback) {
   enableCpuFallback();
   registerAdapterFirst(std::make_unique<DecliningAdapter>());
@@ -361,10 +317,7 @@ TEST_F(AdapterOperatorTest, declinedOperatorRunsOnCpuWithFallback) {
   EXPECT_EQ(projStats.operatorStats.count("CudfFilterProject"), 0);
 }
 
-// The capability this contract change exists for: a kept operator describing
-// operators that run after it, which is how one plan node expands into several.
-// No built-in adapter both keeps its operator and returns any, so nothing else
-// exercises the insert-behind path or the operator-id renumbering it relies on.
+// Exercises appending after a kept operator and operator-ID renumbering.
 TEST_F(AdapterOperatorTest, keptOperatorGetsAppendedOperators) {
   registerAdapterFirst(std::make_unique<AppendingAdapter>());
 
@@ -383,11 +336,7 @@ TEST_F(AdapterOperatorTest, keptOperatorGetsAppendedOperators) {
       makeRowVector({"x"}, {makeFlatVector<int64_t>({2, 4, 6, 8, 10})}),
       results);
 
-  // The kept operator and both appended operators report under the one plan
-  // node, which is the expansion of a single plan node into several operators
-  // that keepOperator() together with a non-empty createReplacements() exists
-  // to express. FilterProject still being there is what distinguishes the
-  // append from a replacement.
+  // All three operators must report under the original plan node.
   auto stats = toPlanStats(task->taskStats());
   auto& projStats = stats.at(projNodeId);
   EXPECT_TRUE(projStats.isMultiOperatorTypeNode());

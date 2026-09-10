@@ -43,11 +43,9 @@ class OperatorAdapter {
   /// if this adapter handles this operator type.
   virtual bool canHandle(const exec::Operator* op) const = 0;
 
-  /// Check if the operator is supported for GPU execution. Returns true if
-  /// the operator can be executed on GPU. Returning false is how an adapter
-  /// declines an operator it cannot implement, which leaves the operator in
-  /// place for CPU execution; createReplacements() must not be used for that,
-  /// see below.
+  /// Returns whether the operator can use this adapter's GPU path.
+  /// createReplacements() is called only when this returns true.
+  /// keepOperator() independently determines whether the original remains.
   virtual bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -81,33 +79,18 @@ class OperatorAdapter {
     return props;
   }
 
-  /// Create the GPU operator(s) this adapter contributes to the driver.
-  ///
-  /// When keepOperator() is false the returned operators replace 'op', and at
-  /// least one operator must be returned. Returning none is a defect in the
-  /// adapter rather than a plan that cannot run on GPU, so CompileState fails
-  /// the query whatever allowCpuFallback says. An adapter that cannot implement
-  /// a particular operator returns false from canRunOnGPU() instead, which
-  /// keeps 'op' in place for CPU execution.
-  ///
-  /// When keepOperator() is true the returned operators are inserted after
-  /// 'op', which is how a plan node that expands into several operators is
-  /// described; returning none then simply keeps 'op' alone.
-  ///
-  /// Either way the caller renumbers the driver's operator ids afterwards, so
-  /// 'operatorId' need not be unique across the returned operators.
+  /// Creates operators for a GPU-capable input. If keepOperator() is false,
+  /// returns one or more operators that replace 'op'; returning none is an
+  /// adapter error. Otherwise, returns operators to append after 'op'. The
+  /// caller renumbers operator IDs, so 'operatorId' need not be unique.
   virtual std::vector<std::unique_ptr<exec::Operator>> createReplacements(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const = 0;
 
-  /// Check if the original operator should be kept (not replaced). Returns
-  /// true if the original operator should be kept, in which case anything
-  /// createReplacements() returns runs after it rather than instead of it. The
-  /// decision is a property of the adapter and the plan, not of per-query
-  /// state: the transport an exchange uses is resolved from the plan node
-  /// through the transport registries before this runs.
+  /// Whether to keep 'op'. Operators returned by createReplacements() follow
+  /// it when true and replace it when false.
   virtual bool keepOperator() const {
     return false;
   }
@@ -133,10 +116,8 @@ class OperatorAdapterRegistry {
   /// Register an adapter with the registry.
   void registerAdapter(std::unique_ptr<OperatorAdapter> adapter);
 
-  /// Registers 'adapter' ahead of everything already registered, so it wins
-  /// findAdapter() for an operator a built-in adapter also handles. For
-  /// substituting an adapter in a test; production registration appends with
-  /// registerAdapter(). Relies on findAdapter() returning the first match.
+  /// Inserts an adapter at highest lookup priority. Intended for tests that
+  /// override a built-in adapter.
   void registerAdapterFront(std::unique_ptr<OperatorAdapter> adapter);
 
   /// Find an adapter that can handle the given operator. Returns a pointer
