@@ -43,13 +43,13 @@ JoinTableBuilder::JoinTableBuilder(Options options)
 
   // Identify the non-key build side columns and make a decoder for each.
   if (!dropDuplicates_) {
+    // The number of join keys (numKeys) may be greater than the number of
+    // input columns (inputType->size()), which makes 'numDependents' negative
+    // and unusable for 'reserve'. This happens when we join different probe
+    // side keys with the same build side key: SELECT * FROM t LEFT JOIN u ON
+    // t.k1 = u.k AND t.k2 = u.k.
     const int32_t numDependents = options_.inputType->size() - numKeys;
     if (numDependents > 0) {
-      // Number of join keys (numKeys) may be less then number of input columns
-      // (inputType->size()). In this case numDependents is negative and cannot
-      // be used to call 'reserve'. This happens when we join different probe
-      // side keys with the same build side key: SELECT * FROM t LEFT JOIN u ON
-      // t.k1 = u.k AND t.k2 = u.k.
       dependentChannels_.reserve(numDependents);
       decoders_.reserve(numDependents);
     }
@@ -175,6 +175,30 @@ void JoinTableBuilder::resetForSpillInput() {
 
   setupTable();
   numHashInputRows_ = 0;
+  phase_ = Phase::kIdle;
+}
+
+void JoinTableBuilder::advancePhase(Phase required, Phase next) {
+  const auto name = [](Phase phase) -> std::string_view {
+    switch (phase) {
+      case Phase::kIdle:
+        return "none";
+      case Phase::kKeysDecoded:
+        return "decodeKeys()";
+      case Phase::kNullKeysProcessed:
+        return "processNullKeys()";
+      case Phase::kDependentsDecoded:
+        return "decodeDependents()";
+    }
+    VELOX_UNREACHABLE();
+  };
+  VELOX_CHECK(
+      phase_ == required,
+      "The phases of JoinTableBuilder::addInput() must be called in order. "
+      "Last completed phase should be {}, but it is {}",
+      name(required),
+      name(phase_));
+  phase_ = next;
 }
 
 void JoinTableBuilder::setupFilterChannels(
@@ -258,6 +282,8 @@ bool JoinTableBuilder::addInput(const RowVectorPtr& input) {
 
 void JoinTableBuilder::decodeKeys(const RowVectorPtr& input) {
   VELOX_CHECK_NOT_NULL(table_, "JoinTableBuilder is not initialized");
+  // A new input starts the sequence over, whatever the previous one reached.
+  phase_ = Phase::kKeysDecoded;
 
   activeRows_.resize(input->size());
   activeRows_.setAll();
@@ -270,6 +296,8 @@ void JoinTableBuilder::decodeKeys(const RowVectorPtr& input) {
 }
 
 bool JoinTableBuilder::processNullKeys() {
+  advancePhase(Phase::kKeysDecoded, Phase::kNullKeysProcessed);
+
   const auto joinType = options_.joinType;
   auto& hashers = table_->hashers();
 
@@ -305,6 +333,8 @@ bool JoinTableBuilder::processNullKeys() {
 }
 
 void JoinTableBuilder::decodeDependents(const RowVectorPtr& input) {
+  advancePhase(Phase::kNullKeysProcessed, Phase::kDependentsDecoded);
+
   for (auto i = 0; i < dependentChannels_.size(); ++i) {
     decoders_[i]->decode(
         *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
@@ -319,6 +349,8 @@ void JoinTableBuilder::decodeDependents(const RowVectorPtr& input) {
 void JoinTableBuilder::insertRows(
     const RowVectorPtr& input,
     const FlatVector<bool>* spillProbedFlags) {
+  advancePhase(Phase::kDependentsDecoded, Phase::kIdle);
+
   if (!activeRows_.hasSelections()) {
     return;
   }

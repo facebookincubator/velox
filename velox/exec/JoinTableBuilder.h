@@ -108,8 +108,16 @@ class JoinTableBuilder {
   /// owners which have nothing to do in between.
   bool addInput(const RowVectorPtr& input);
 
-  /// The phases of 'addInput()'. Decodes the join keys of 'input' into the
-  /// hashers and resets 'activeRows()' to all the rows of 'input'.
+  /// The phases of 'addInput()'. Each one consumes the state the previous one
+  /// leaves behind, so they must be called once per input and in this order:
+  /// 'decodeKeys()', 'processNullKeys()', 'decodeDependents()',
+  /// 'insertRows()'. Skipping one, or calling one twice, throws.
+  /// 'decodeKeys()' starts a new input and is therefore accepted at any point,
+  /// which is what lets the owner abandon an input half way, e.g. after
+  /// 'processNullKeys()' returned false.
+  ///
+  /// Decodes the join keys of 'input' into the hashers and resets
+  /// 'activeRows()' to all the rows of 'input'.
   void decodeKeys(const RowVectorPtr& input);
 
   /// Deselects the rows of 'activeRows()' with a null join key unless the join
@@ -150,12 +158,6 @@ class JoinTableBuilder {
   std::unique_ptr<BaseHashTable> takeTable() {
     lookup_.reset();
     return std::move(table_);
-  }
-
-  /// Replaces the table, e.g. with one restored from a serialized image.
-  void setTable(std::unique_ptr<BaseHashTable> table) {
-    lookup_.reset();
-    table_ = std::move(table);
   }
 
   const std::vector<std::unique_ptr<VectorHasher>>& hashers() const {
@@ -210,6 +212,19 @@ class JoinTableBuilder {
   }
 
  private:
+  // How far the current input has moved through the phases of 'addInput()'.
+  enum class Phase {
+    // Before the first 'decodeKeys()' and after 'insertRows()'.
+    kIdle,
+    kKeysDecoded,
+    kNullKeysProcessed,
+    kDependentsDecoded,
+  };
+
+  // Checks that the current input has completed 'required' and records that it
+  // has now completed 'next'.
+  void advancePhase(Phase required, Phase next);
+
   // Invoked to set up the hash table to build.
   void setupTable();
 
@@ -292,6 +307,9 @@ class JoinTableBuilder {
   // Counts the number of hash table input rows for building the deduped hash
   // table. It is not updated after 'abandonHashBuildDedup_' is true.
   int64_t numHashInputRows_{0};
+
+  // Where the input being processed has got to. Reset by 'decodeKeys()'.
+  Phase phase_{Phase::kIdle};
 };
 
 } // namespace facebook::velox::exec
