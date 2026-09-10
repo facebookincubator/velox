@@ -22,6 +22,7 @@ source "$SCRIPT_DIR"/setup-versions.sh
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
 VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
 VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
+VELOX_FOLLY_SVE_PATCH=${VELOX_FOLLY_SVE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 BUILD_GEOS="${BUILD_GEOS:-true}"
@@ -49,6 +50,24 @@ function install_fmt {
 
 function install_folly {
   wget_and_untar https://github.com/facebook/folly/archive/refs/tags/"${FB_OS_VERSION}".tar.gz folly
+  (
+    # folly's aarch64 SVE tag-match path hands a uint64x2_t to svset_neonq_u8(),
+    # which takes a uint8x16_t; GCC rejects the implicit vector conversion that
+    # clang allows. Apply the same patch the BUNDLED CMake resolver uses so both
+    # resolution modes build on GCC.
+    if [ -z "$VELOX_FOLLY_SVE_PATCH" ]; then
+      # A different path is needed when building the Dockerfile.
+      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+      VELOX_FOLLY_SVE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/folly/folly-sve-neonq-reinterpret.patch"
+    fi
+
+    cd "$DEPENDENCY_DIR"/folly || exit 1
+    if command -v patch >/dev/null 2>&1; then
+      patch -p1 -i "$VELOX_FOLLY_SVE_PATCH" || exit 1
+    else
+      git apply "$VELOX_FOLLY_SVE_PATCH" || exit 1
+    fi
+  ) || exit 1
   local FOLLY_FLAGS=(-DBUILD_SHARED_LIBS="$VELOX_BUILD_SHARED" -DBUILD_TESTS=OFF -DFOLLY_HAVE_INT128_T=ON -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
   # When folly is static, use static gflags to avoid dual gflags flag
   # registration when .so plugins are dlopen'd (both the binary and plugin
