@@ -1,0 +1,44 @@
+Fix the aarch64 SVE tag-match path in folly's ConcurrentHashMap so it builds
+under GCC.
+
+SIMDTable::Chunk::tagMatchIter() packs the two 64-bit tag words into a
+uint64x2_t and hands it straight to svset_neonq_u8(), whose second parameter is
+a uint8x16_t. clang's default of -flax-vector-conversions=integer lets that
+implicit bitcast through; GCC defaults to no lax vector conversions and rejects
+it:
+
+  folly/concurrency/detail/ConcurrentHashMap-detail.h:1035:63:
+  error: cannot convert 'uint64x2_t' to '__Uint8x16_t'
+
+So under GCC every translation unit that instantiates ConcurrentHashMap fails to
+compile once the target has SVE and <arm_neon_sve_bridge.h> is available - which
+is what get_cxx_flags() selects on Neoverse N2/V1/V2 and NVIDIA Olympus hosts
+(-mcpu=neoverse-v2 and friends). Velox CI never sees it: its arm64 runners are
+Neoverse N1, which has no SVE, so the guarded block is not compiled there.
+
+Introduced upstream in folly 12fa4cb487 ("Enhance concurrent hashmap with SVE",
+2026-03-02), so it first bites at FB_OS_VERSION v2026.07.13.00. folly CI builds
+with clang only and never sees it either.
+
+Add the explicit reinterpret. It is a pure type pun that emits no instruction,
+and it is exactly what the NEON fallback branch of the same function already
+does a dozen lines below (vceqq_u8(vreinterpretq_u8_u64(vec), needleV)), so
+codegen under clang is unchanged.
+
+Upstream: https://github.com/facebook/folly/pull/PR_NUMBER
+Drop this patch once folly carries the fix.
+
+--- a/folly/concurrency/detail/ConcurrentHashMap-detail.h
++++ b/folly/concurrency/detail/ConcurrentHashMap-detail.h
+@@ -1032,7 +1032,10 @@
+       vec[0] = low;
+       vec[1] = hi;
+       // test if any match is found
+-      outPred = svmatch_u8(pred, svset_neonq_u8(svundef_u8(), vec), needleV);
++      outPred = svmatch_u8(
++          pred,
++          svset_neonq_u8(svundef_u8(), vreinterpretq_u8_u64(vec)),
++          needleV);
+       // get info from every byte into the bottom half of every uint16_t
+       // by shifting right 4, then round to get it into a 64-bit vector
+       uint8x8_t maskV = vshrn_n_u16(
