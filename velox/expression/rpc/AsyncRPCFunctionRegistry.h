@@ -97,7 +97,7 @@ class AsyncRPCFunctionRegistry {
   ///
   /// For each registered function with signatures, registers a stub using
   /// the given namespace prefix: namespacePrefix + functionName
-  /// e.g., "presto.default.fb_llm_inference"
+  /// e.g., "presto.default.my_rpc_function"
   ///
   /// @param namespacePrefix The catalog.schema with trailing dot (e.g.,
   /// "presto.default.")
