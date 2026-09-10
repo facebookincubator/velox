@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/parquet/reader/Metadata.h"
 #include "velox/dwio/parquet/reader/PageReader.h"
@@ -88,6 +90,22 @@ class ParquetData : public dwio::common::FormatData {
   /// Prepares to read data for 'index'th row group.
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
+  /// True if 'this' is a physical column (has a column chunk per row group).
+  bool isLeaf() const {
+    return type_->isLeaf();
+  }
+
+  /// Marks 'this' as a lazily loaded column whose chunk may not be enqueued
+  /// with its row group. 'onNeeded(rowGroup)' is called on the first read of
+  /// a row group whose chunk is not enqueued; it must enqueue the chunk (see
+  /// enqueueRowGroup()) before returning.
+  void setLazyColumnCallback(std::function<void(uint32_t)> onNeeded);
+
+  /// True if the chunk of 'index'th row group has been enqueued.
+  bool isRowGroupEnqueued(uint32_t index) const {
+    return index < enqueued_.size() && enqueued_[index];
+  }
+
   /// Positions 'this' at 'index'th row group. loadRowGroup must be called
   /// first. The returned PositionProvider is empty and should not be used.
   /// Other formats may use it.
@@ -99,7 +117,12 @@ class ParquetData : public dwio::common::FormatData {
       const dwio::common::StatsContext& writerContext,
       FilterRowGroupsResult&) override;
 
-  PageReader* reader() const {
+  PageReader* reader() {
+    ensureReader();
+    VELOX_CHECK_NOT_NULL(
+        reader_,
+        "No PageReader for column {}: not a leaf or not positioned at a row group",
+        type_->column());
     return reader_.get();
   }
 
@@ -107,7 +130,7 @@ class ParquetData : public dwio::common::FormatData {
   // 'numValues' bits of 'nulls' are set and the reader is advanced by
   // numValues'.
   void readNullsOnly(int32_t numValues, BufferPtr& nulls) {
-    reader_->readNullsOnly(numValues, nulls);
+    reader()->readNullsOnly(numValues, nulls);
   }
 
   bool hasNulls() const override {
@@ -174,8 +197,7 @@ class ParquetData : public dwio::common::FormatData {
     // 'nullsOnly' set and is responsible for reading however many nulls or
     // pages it takes to skip 'numValues' top level rows.
     if (nullsOnly) {
-      VELOX_CHECK_NOT_NULL(reader_);
-      reader_->skipNullsOnly(numValues);
+      reader()->skipNullsOnly(numValues);
     }
     if (presetNulls_) {
       VELOX_DCHECK_LE(numValues, presetNullsSize_ - presetNullsConsumed_);
@@ -185,7 +207,7 @@ class ParquetData : public dwio::common::FormatData {
   }
 
   uint64_t skip(uint64_t numRows) override {
-    reader_->skip(numRows);
+    reader()->skip(numRows);
     return numRows;
   }
 
@@ -193,27 +215,27 @@ class ParquetData : public dwio::common::FormatData {
   /// PageReader::readWithVisitor().
   template <typename Visitor>
   void readWithVisitor(Visitor visitor) {
-    reader_->readWithVisitor(visitor);
+    reader()->readWithVisitor(visitor);
   }
 
   const VectorPtr& dictionaryValues(const TypePtr& type) {
-    return reader_->dictionaryValues(type);
+    return reader()->dictionaryValues(type);
   }
 
   void clearDictionary() {
-    reader_->clearDictionary();
+    reader()->clearDictionary();
   }
 
-  bool hasDictionary() const {
-    return reader_->isDictionary();
+  bool hasDictionary() {
+    return reader()->isDictionary();
   }
 
-  bool isDeltaBinaryPacked() const {
-    return reader_->isDeltaBinaryPacked();
+  bool isDeltaBinaryPacked() {
+    return reader()->isDeltaBinaryPacked();
   }
 
-  bool isDeltaByteArray() const {
-    return reader_->isDeltaByteArray();
+  bool isDeltaByteArray() {
+    return reader()->isDeltaByteArray();
   }
 
   bool parentNullsInLeaves() const override {
@@ -235,6 +257,8 @@ class ParquetData : public dwio::common::FormatData {
   // Streams for this column in each of 'rowGroups_'. Will be created on or
   // ahead of first use, not at construction.
   std::vector<std::unique_ptr<dwio::common::SeekableInputStream>> streams_;
+  // Whether the stream of each row group has been enqueued.
+  std::vector<bool> enqueued_;
 
   const uint32_t maxDefine_;
   const uint32_t maxRepeat_;
@@ -242,6 +266,15 @@ class ParquetData : public dwio::common::FormatData {
   dwio::common::ColumnRuntimeStats& stats_;
   const tz::TimeZone* sessionTimezone_;
   std::unique_ptr<PageReader> reader_;
+
+  // Lazily loaded column support. seekToRowGroup() on a row group whose
+  // stream was not enqueued records it here; the stream and PageReader are
+  // created on first use by ensureReader().
+  int64_t pendingRowGroup_{-1};
+  std::function<void(uint32_t)> onLazyColumnNeeded_;
+
+  void ensureReader();
+  void createReader(uint32_t index);
 
   // Nulls derived from leaf repdefs for non-leaf readers.
   BufferPtr presetNulls_;
