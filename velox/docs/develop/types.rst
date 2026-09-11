@@ -287,7 +287,26 @@ It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixe
 GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
 Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
 are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
-`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_. Velox's own encoding is based on Esri's shape
+format and is what the Presto coordinator interprets; it is neither WKT nor WKB.
+
+An Iceberg v3 ``geometry`` column is stored on disk as a plain ``binary`` column holding standard ISO WKB. The Iceberg
+connector, and only the Iceberg connector, re-encodes those bytes into Velox's internal encoding while reading a split
+(see ``velox/connectors/hive/iceberg/IcebergGeometryConverter.h``). The format-generic Parquet, DWRF and ORC readers
+never inspect GEOMETRY: they read the column by its physical file type. An unannotated ``binary`` column, a non-Iceberg
+table, or a file written from an existing Velox GEOMETRY vector is therefore never reinterpreted as WKB.
+
+This is initial, two-dimensional (XY) support: WKB carrying Z or M coordinates, and extended WKB (EWKB), are rejected
+with an explicit error rather than silently flattened, and no SRID is inferred from the Iceberg CRS. Only Parquet data
+files are supported; a geometry column in an ORC or DWRF data file is rejected. A build with ``VELOX_ENABLE_GEO=ON`` is
+required; otherwise the read fails naming the flag and never exposes raw WKB inside a GEOMETRY vector.
+
+Geometry support in the Iceberg connector is **read-only**. Reading re-encodes ISO WKB into Velox's internal encoding,
+but the write side does not perform the inverse conversion, and GEOMETRY is backed by VARBINARY -- so writing a GEOMETRY
+vector would place Velox's internal bytes on disk where the Iceberg specification requires ISO WKB, producing a file
+that neither this reader nor any other Iceberg engine could interpret. ``IcebergDataSink`` therefore rejects a GEOMETRY
+column, at any nesting depth, rather than emitting a non-conforming file. Writes become symmetric once the writer
+converts internal encoding to WKB.
 
 SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
