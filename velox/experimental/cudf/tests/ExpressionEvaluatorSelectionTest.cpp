@@ -509,6 +509,8 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
+  // canExprRunOnGpu reads this setting directly; no driver re-registration is
+  // needed.
   CudfConfig::getInstance().allowCpuFallback = true;
   SCOPE_EXIT {
     CudfConfig::getInstance().allowCpuFallback = false;
