@@ -67,7 +67,8 @@ StructColumnReader::StructColumnReader(
   if (params.hasLazyIoColumns()) {
     lazyInput_ = params.streams().createLazyInput();
   }
-  for (auto* childSpec : scanSpec.stableChildren()) {
+  const auto stableChildren = scanSpec.stableChildren();
+  for (const auto& childSpec : *stableChildren) {
     if (childSpec->isConstant() || isChildMissing(*childSpec)) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;

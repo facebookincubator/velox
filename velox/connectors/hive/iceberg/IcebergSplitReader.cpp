@@ -543,6 +543,7 @@ void IcebergSplitReader::prepareSplit(
             resolveEqualityColumns(deleteFile);
 
         if (!equalityColumnNames.empty()) {
+          checkEqualityDeleteColumnsAreReadable(equalityColumnNames);
           equalityDeleteFileReaders_.push_back(
               std::make_unique<EqualityDeleteFileReader>(
                   deleteFile,
@@ -711,6 +712,38 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
   names.insert(names.end(), extraNames.begin(), extraNames.end());
   types.insert(types.end(), extraTypes.begin(), extraTypes.end());
   readerOutputType_ = ROW(std::move(names), std::move(types));
+}
+
+void IcebergSplitReader::checkEqualityDeleteColumnsAreReadable(
+    const std::vector<std::string>& equalityColumnNames) const {
+  // A split covering no stripe or row group builds no reader tree, which
+  // 'nextRowNumber()' reports by returning 'kAtEnd'. Nothing to check.
+  if (static_cast<int64_t>(splitOffset_) == dwio::common::RowReader::kAtEnd) {
+    return;
+  }
+
+  for (const auto& name : equalityColumnNames) {
+    auto* fieldSpec = scanSpec_->childByName(name);
+    VELOX_CHECK_NOT_NULL(
+        fieldSpec, "Iceberg equality delete column has no scan spec: {}", name);
+    VELOX_CHECK(
+        fieldSpec->projectOut(),
+        "Iceberg equality delete column is not projected out: {}",
+        name);
+    VELOX_CHECK(
+        readerOutputType_->containsChild(name),
+        "Iceberg equality delete column is missing from the reader output "
+        "type: {}",
+        name);
+    // A constant carries its own value and needs no reader; otherwise a
+    // negative subscript means the tree has none. Best-effort: a struct reader
+    // skips a child not read from the file without clearing the subscript, so a
+    // stale positive value from an earlier split's tree also passes.
+    VELOX_CHECK(
+        fieldSpec->isConstant() || fieldSpec->subscript() >= 0,
+        "Iceberg equality delete column has no column reader: {}",
+        name);
+  }
 }
 
 std::pair<std::vector<std::string>, std::vector<TypePtr>>

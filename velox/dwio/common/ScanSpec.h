@@ -38,6 +38,17 @@ namespace common {
 /// SelectiveColumnReader. This is owned by the TableScan Operator and
 /// is passed to SelectiveColumnReaders at construction.  This is
 /// mutable by readers to reflect filter order and other adaptations.
+///
+/// Not thread safe. One scan owns a spec and alone adds children, reorders
+/// them and sets filters; a preloaded split builds its own and hands it over
+/// whole. Only 'stableChildren()' is called from another thread, by read-ahead
+/// building the next reader tree, which also writes 'subscript_' on the
+/// children it lists.
+///
+/// Adding a child needs exclusive access. 'mutex_' only keeps the snapshot
+/// container consistent: a child is published before its caller configures it,
+/// and 'children()', 'childByName()' and 'hasFilter()' read unlocked. The
+/// mid-scan add runs during split preparation, which never overlaps a snapshot.
 class ScanSpec {
  public:
   enum class ColumnType : int8_t {
@@ -181,12 +192,14 @@ class ScanSpec {
     return children_;
   }
 
-  /// Returns 'children in a stable order. May be used for parallel
-  /// construction and read-ahead of reader trees while the main user
-  /// of 'this' is running. 'children_' may be reordered while running
-  /// but the tree being constructed must see a single, unchanging
-  /// order.
-  const std::vector<ScanSpec*>& stableChildren();
+  /// Snapshot handed to reader trees. Shares ownership of the specs it lists.
+  using StableChildren =
+      std::shared_ptr<const std::vector<std::shared_ptr<ScanSpec>>>;
+
+  /// Returns 'children' in an order that never changes, for building a reader
+  /// tree while a running scan reorders 'children_'. A child added later
+  /// appears at the end of a later snapshot.
+  StableChildren stableChildren();
 
   /// Returns a read sequence number. This can b used for tagging
   /// lazy vectors with a generation number so that we can check that
@@ -199,7 +212,8 @@ class ScanSpec {
   uint64_t newRead();
 
   /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
-  /// any intermediate level.
+  /// any intermediate level. Requires exclusive access: the child is reachable
+  /// through 'stableChildren()' before the caller configures it.
   ScanSpec* getOrCreateChild(const std::string& name);
 
   /// Returns the ScanSpec corresponding to 'subfield'. Creates it if
@@ -483,7 +497,8 @@ class ScanSpec {
 
   bool disableStatsBasedFilterReorder_{false};
 
-  // Serializes stableChildren().
+  // Keeps 'stableOrder_' and 'stableChildren_' consistent across an add.
+  // Guards nothing else.
   std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
@@ -528,10 +543,13 @@ class ScanSpec {
 
   std::vector<std::shared_ptr<ScanSpec>> children_;
 
-  // Read-only copy of children, not subject to reordering. Used when
-  // asynchronously constructing reader trees for read-ahead, while
-  // 'children_' is reorderable by a running scan.
-  std::vector<ScanSpec*> stableChildren_;
+  // Children in the order they were added, never reordered. Append-only, so an
+  // earlier snapshot is a prefix of a later one.
+  std::vector<std::shared_ptr<ScanSpec>> stableOrder_;
+
+  // Snapshot of 'stableOrder_' handed to reader trees. Never mutated once
+  // published: an add drops it and the next 'stableChildren()' republishes.
+  StableChildren stableChildren_;
 
   folly::F14FastMap<std::string, ScanSpec*> childByFieldName_;
 
