@@ -176,7 +176,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   std::pair<
       std::vector<VectorPtr>,
-      std::unordered_map<std::string, exec::ExprStats>>
+      folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateMultipleWithStats(
       const std::vector<std::string>& texts,
       const RowVectorPtr& input,
@@ -199,13 +199,13 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return evaluateMultiple({text}, input)[0];
   }
 
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(const std::string& expression, const RowVectorPtr& input) {
     auto exprSet = compileExpression(expression, asRowType(input->type()));
     return evaluateWithStats(exprSet.get(), input);
   }
 
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(
       exec::ExprSet* exprSetPtr,
       const RowVectorPtr& input,

@@ -17,6 +17,8 @@
 
 #include <string_view>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/time/CpuWallTimer.h"
@@ -204,7 +206,7 @@ struct OperatorStats {
   // A map of expression name to its respective stats.
   // These are only populated when a copy of the stats is returned via
   // Operator::stats(bool) API.
-  std::unordered_map<std::string, ExprStats> expressionStats;
+  folly::F14FastMap<std::string, ExprStats> expressionStats;
 
   int numDrivers = 0;
 
