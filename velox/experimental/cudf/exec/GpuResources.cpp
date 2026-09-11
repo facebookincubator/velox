@@ -87,9 +87,22 @@ cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
 
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> mr_;
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> output_mr_;
+std::optional<rmm::mr::statistics_resource_adaptor> statsMr_;
+std::optional<rmm::mr::statistics_resource_adaptor> outputStatsMr_;
 
 rmm::device_async_resource_ref get_output_mr() {
   return output_mr_.value();
+}
+
+int64_t cudfAllocatedBytes() {
+  if (!statsMr_.has_value()) {
+    return -1;
+  }
+  int64_t bytes = statsMr_->get_bytes_counter().value;
+  if (outputStatsMr_.has_value()) {
+    bytes += outputStatsMr_->get_bytes_counter().value;
+  }
+  return bytes;
 }
 
 } // namespace facebook::velox::cudf_velox
