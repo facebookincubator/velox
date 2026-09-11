@@ -24,9 +24,9 @@ void registerUrlFunctions(const std::string& prefix) {
       {prefix + "url_encode"});
   registerFunction<UrlDecodeFunction, Varchar, Varchar>(
       {prefix + "url_decode"});
-  registerFunction<ParseURLFunction, Varchar, Varchar, Varchar>(
+  registerFunction<ParseUrlFunction, Varchar, Varchar, Varchar>(
       {prefix + "parse_url"});
-  registerFunction<ParseURLFunction, Varchar, Varchar, Varchar, Varchar>(
+  registerFunction<ParseUrlFunction, Varchar, Varchar, Varchar, Varchar>(
       {prefix + "parse_url"});
 }
 
