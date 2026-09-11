@@ -231,12 +231,11 @@ TEST_F(DynamicLinkTest, dynamicLoadFuncNonDefaultRegistry) {
 
   EXPECT_EQ(3, dynamicFunctionNestedCall());
 
-  // Testing missing default registry function name.
+  // Testing missing default registry function name. Everything after the
+  // prefix comes from dlerror() and is worded differently by each platform's
+  // dynamic loader, so only match the part Velox produces.
   VELOX_ASSERT_THROW(
-      loadDynamicLibrary(libraryPath),
-      fmt::format(
-          "Couldn't find Velox registry symbol: {}: undefined symbol: registerExtensions",
-          libraryPath));
+      loadDynamicLibrary(libraryPath), "Couldn't find Velox registry symbol");
 }
 
 } // namespace facebook::velox::functions::test

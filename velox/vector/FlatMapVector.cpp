@@ -51,12 +51,19 @@ std::optional<column_index_t> getKeyChannelImpl(
 
   // Here there was at least one hash match. Need to compare to the keys vector
   // to ensure it's an actual match and not a hash collision.
+  //
+  // The same key may be mapped to more than one channel, in which case the
+  // last channel that set it wins. std::unordered_multimap does not specify
+  // the order in which equivalent elements are returned, so pick the largest
+  // matching channel explicitly rather than the first one encountered.
+  std::optional<column_index_t> channel;
   for (auto it = range.first; it != range.second; ++it) {
-    if (simpleKeys->valueAt(it->second) == keyValue) {
-      return it->second;
+    if (simpleKeys->valueAt(it->second) == keyValue &&
+        (!channel.has_value() || it->second > channel.value())) {
+      channel = it->second;
     }
   }
-  return std::nullopt;
+  return channel;
 }
 
 } // namespace
@@ -87,12 +94,16 @@ std::optional<column_index_t> FlatMapVector::getKeyChannel(
     return std::nullopt;
   }
 
+  // See getKeyChannelImpl(): the last channel that set a key wins, and the
+  // order of equivalent elements in the multimap is unspecified.
+  std::optional<column_index_t> channel;
   for (auto it = range.first; it != range.second; ++it) {
-    if (keysVector->equalValueAt(distinctKeys_.get(), index, it->second)) {
-      return it->second;
+    if (keysVector->equalValueAt(distinctKeys_.get(), index, it->second) &&
+        (!channel.has_value() || it->second > channel.value())) {
+      channel = it->second;
     }
   }
-  return std::nullopt;
+  return channel;
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
