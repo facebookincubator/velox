@@ -25,14 +25,21 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_io_utils.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <cuda/iterator>
 #include <cuda/std/tuple>
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/QueuedImmediateExecutor.h>
+#include <folly/executors/thread_factory/NamedThreadFactory.h>
 #include <folly/futures/Future.h>
+#include <folly/system/HardwareConcurrency.h>
 
+#include <cstdlib>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -66,6 +73,230 @@ std::future<T> toStdFuture(folly::Future<T> follyFuture) {
 } // namespace
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+// Executor for remote read with a number of threads equal to:
+// - Environment variable KVIKIO_NTHREADS if specified.
+// - Otherwise, 5 * CPUs.
+folly::Executor* remoteReadExecutor() {
+  static auto* executor = [] {
+    constexpr size_t kThreadsPerCore = 5;
+    size_t numThreads = folly::available_concurrency() * kThreadsPerCore;
+    if (const char* value = std::getenv("KVIKIO_NTHREADS")) {
+      if (const auto parsed = std::strtoull(value, nullptr, 10); parsed > 0) {
+        numThreads = parsed;
+      }
+    }
+    return new folly::CPUThreadPoolExecutor(
+        numThreads,
+        std::make_shared<folly::NamedThreadFactory>("CudfRemoteIO"));
+  }();
+  return executor;
+}
+
+// A host buffer drawn from cuDF's pinned memory pool.
+class PinnedStagingBuffer {
+ public:
+  explicit PinnedStagingBuffer(size_t size)
+      : mr_(cudf::get_pinned_memory_resource()),
+        size_(size),
+        data_(static_cast<uint8_t*>(mr_.allocate_sync(size))) {}
+
+  ~PinnedStagingBuffer() {
+    mr_.deallocate_sync(data_, size_);
+  }
+
+  PinnedStagingBuffer(const PinnedStagingBuffer&) = delete;
+  PinnedStagingBuffer& operator=(const PinnedStagingBuffer&) = delete;
+
+  uint8_t* data() const {
+    return data_;
+  }
+
+ private:
+  rmm::host_device_async_resource_ref mr_;
+  size_t size_;
+  uint8_t* data_;
+};
+
+// One reusable pinned staging buffer per thread, plus the event marking its
+// last H2D copy.
+struct PinnedStagingSlot {
+  PinnedStagingBuffer* buffer{nullptr};
+  size_t capacity{0};
+  cudaEvent_t event{nullptr};
+
+  uint8_t* reserve(size_t size) {
+    // First wait for this slot's previous copy to land so the memory is safe to
+    // overwrite
+    if (event != nullptr) {
+      CUDF_CUDA_TRY(cudaEventSynchronize(event));
+    }
+    if (capacity < size) {
+      delete buffer;
+      buffer = new PinnedStagingBuffer(size);
+      capacity = size;
+    }
+    return buffer->data();
+  }
+
+  void recordCopy(cudaStream_t stream) {
+    if (event == nullptr) {
+      CUDF_CUDA_TRY(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+    }
+    CUDF_CUDA_TRY(cudaEventRecord(event, stream));
+  }
+};
+
+CachingDataSource::CachingDataSource(
+    std::unique_ptr<cudf::io::datasource> delegate,
+    const std::string& path,
+    folly::Executor* executor)
+    : delegate_(std::move(delegate)),
+      fileSize_(delegate_->size()),
+      executor_(executor),
+      cache_(velox::cache::AsyncDataCache::getInstance()),
+      fileNum_(fileIds(), path) {}
+
+CachingDataSource::~CachingDataSource() = default;
+
+size_t CachingDataSource::size() const {
+  return fileSize_;
+}
+
+bool CachingDataSource::supports_device_read() const {
+  return true;
+}
+
+bool CachingDataSource::is_device_read_preferred(size_t size) const {
+  return delegate_->is_device_read_preferred(size);
+}
+
+velox::cache::CachePin CachingDataSource::pinRange(
+    uint64_t offset,
+    uint64_t size) {
+  const velox::cache::RawFileCacheKey key{fileNum_.id(), offset};
+  constexpr int kMaxAttempts = 32;
+  for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+    folly::SemiFuture<bool> wait(false);
+    velox::cache::CachePin pin;
+    try {
+      pin = cache_->findOrCreate(key, size, /*contiguous=*/true, &wait);
+    } catch (const VeloxRuntimeError&) {
+      // Fall back to an uncached read.
+      return {};
+    }
+    if (pin.empty()) {
+      if (!wait.valid()) {
+        return {};
+      }
+      std::move(wait).via(&folly::QueuedImmediateExecutor::instance()).wait();
+      continue;
+    }
+    auto* entry = pin.checkedEntry();
+    entry->getAndClearFirstUseFlag();
+    // Hit
+    if (!entry->isExclusive()) {
+      return pin;
+    }
+    // Miss
+    if (!entry->hasContiguousData()) {
+      return {};
+    }
+    delegate_->host_read(
+        offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
+    entry->setExclusiveToShared();
+    return pin;
+  }
+  return {};
+}
+
+void CachingDataSource::readThroughCache(
+    size_t offset,
+    size_t size,
+    uint8_t* dst) {
+  auto pin = pinRange(offset, size);
+  if (pin.empty()) {
+    delegate_->host_read(offset, size, dst);
+    return;
+  }
+  std::memcpy(dst, pin.checkedEntry()->contiguousData(), size);
+}
+
+std::unique_ptr<cudf::io::datasource::buffer> CachingDataSource::host_read(
+    size_t offset,
+    size_t size) {
+  if (cache_ == nullptr) {
+    return delegate_->host_read(offset, size);
+  }
+  if (offset >= fileSize_) {
+    return cudf::io::datasource::buffer::create(std::vector<uint8_t>{});
+  }
+  const size_t readSize = std::min(size, fileSize_ - offset);
+  std::vector<uint8_t> data(readSize);
+  readThroughCache(offset, readSize, data.data());
+  return cudf::io::datasource::buffer::create(std::move(data));
+}
+
+size_t CachingDataSource::host_read(size_t offset, size_t size, uint8_t* dst) {
+  if (cache_ == nullptr) {
+    return delegate_->host_read(offset, size, dst);
+  }
+  if (offset >= fileSize_) {
+    return 0;
+  }
+  const size_t readSize = std::min(size, fileSize_ - offset);
+  readThroughCache(offset, readSize, dst);
+  return readSize;
+}
+
+std::future<size_t> CachingDataSource::device_read_async(
+    size_t offset,
+    size_t size,
+    uint8_t* dst,
+    rmm::cuda_stream_view stream) {
+  if (cache_ == nullptr || executor_ == nullptr) {
+    return delegate_->device_read_async(offset, size, dst, stream);
+  }
+  const velox::cache::RawFileCacheKey key{fileNum_.id(), offset};
+  auto* readExecutor = cache_->exists(key) ? executor_ : remoteReadExecutor();
+  auto future =
+      folly::via(readExecutor)
+          .thenValue([this, offset, size, dst, stream](auto&&) -> size_t {
+            return this->device_read(offset, size, dst, stream);
+          });
+  return toStdFuture(std::move(future));
+}
+
+size_t CachingDataSource::device_read(
+    size_t offset,
+    size_t size,
+    uint8_t* dst,
+    rmm::cuda_stream_view stream) {
+  if (cache_ == nullptr) {
+    return delegate_->device_read(offset, size, dst, stream);
+  }
+  if (offset >= fileSize_) {
+    return 0;
+  }
+  const size_t readSize = std::min(size, fileSize_ - offset);
+  if (readSize == 0) {
+    return 0;
+  }
+  static thread_local PinnedStagingSlot slot;
+  uint8_t* staging = slot.reserve(readSize);
+  readThroughCache(offset, readSize, staging);
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      dst, staging, readSize, cudaMemcpyDefault, stream.value()));
+  slot.recordCopy(stream.value());
+  return readSize;
+}
+
+std::unique_ptr<cudf::io::datasource::buffer> CachingDataSource::device_read(
+    size_t offset,
+    size_t size,
+    rmm::cuda_stream_view stream) {
+  return delegate_->device_read(offset, size, stream);
+}
 
 BufferedInputDataSource::BufferedInputDataSource(
     std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input)

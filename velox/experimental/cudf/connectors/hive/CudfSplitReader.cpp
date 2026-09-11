@@ -345,6 +345,20 @@ bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
   return hasSplitSpecificPushdownFilter_;
 }
 
+namespace {
+
+// Helper to build the KvikIO datasource. CachingDataSource is a pass-through
+// when no cache is configured, so is safe to use unconditionally.
+std::unique_ptr<cudf::io::datasource> makeKvikioDataSource(
+    const std::string& path,
+    folly::Executor* executor) {
+  auto sources = cudf::io::make_datasources(cudf::io::source_info{path});
+  return std::make_unique<CachingDataSource>(
+      std::move(sources.front()), path, executor);
+}
+
+} // namespace
+
 void CudfSplitReader::setupCudfDataSource() {
   if (dataSource_) {
     return;
@@ -366,9 +380,7 @@ void CudfSplitReader::setupCudfDataSource() {
   if (not useBufferedInput) {
     VLOG(1) << fmt::format(
         "Using KvikIO data source for file: {}", split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    dataSource_ = makeKvikioDataSource(split_->filePath, executor_);
     return;
   }
 
@@ -396,9 +408,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    dataSource_ = makeKvikioDataSource(split_->filePath, executor_);
     return;
   }
 
@@ -430,9 +440,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    dataSource_ = makeKvikioDataSource(split_->filePath, executor_);
     return;
   }
   dataSource_ =
