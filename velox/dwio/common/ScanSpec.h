@@ -38,6 +38,19 @@ namespace common {
 /// SelectiveColumnReader. This is owned by the TableScan Operator and
 /// is passed to SelectiveColumnReaders at construction.  This is
 /// mutable by readers to reflect filter order and other adaptations.
+///
+/// One scan owns a spec and is the only thread that adds children, reorders
+/// them and sets filters. That thread adds children mid-scan, when a split is
+/// the first to reference a column outside the projection. A preloaded split
+/// builds its own spec on the preloading thread and hands it over whole, so
+/// there is one owner at a time.
+///
+/// 'stableChildren()' is the one accessor another thread may call, to build the
+/// next reader tree while the owner reads; that tree construction also sets
+/// 'subscript_' on the children the snapshot lists. Only the
+/// add-versus-snapshot pairing is synchronized, by 'mutex_'. 'children()',
+/// 'childByName()' and 'hasFilter()' read 'children_' and 'childByFieldName_'
+/// unlocked, so calling any of them concurrently with an add is a data race.
 class ScanSpec {
  public:
   enum class ColumnType : int8_t {
@@ -206,9 +219,10 @@ class ScanSpec {
   /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
   /// any intermediate level.
   ///
-  /// Locks only to keep an add from interleaving with 'stableChildren()'.
-  /// Building a spec tree is otherwise single threaded: 'addField' sets the
-  /// channel after the add, and readers walk 'children_' unlocked.
+  /// Must be called on the owning thread. Taking 'mutex_' only keeps an add
+  /// from interleaving with 'stableChildren()'; it does not make concurrent
+  /// adds safe, since a caller finishes the child after this returns, as
+  /// 'addField' does when it sets 'projectOut_' and 'channel_'.
   ScanSpec* getOrCreateChild(const std::string& name);
 
   /// Returns the ScanSpec corresponding to 'subfield'. Creates it if
@@ -492,8 +506,9 @@ class ScanSpec {
 
   bool disableStatsBasedFilterReorder_{false};
 
-  // Serializes an add in 'getOrCreateChild' with the snapshot in
-  // 'stableChildren()'. Nothing else; 'reorder()' sorts 'children_' unlocked.
+  // Orders an add in 'getOrCreateChild' against the snapshot in
+  // 'stableChildren()', which is the only cross-thread pairing. Guards nothing
+  // else: 'reorder()' sorts 'children_' and the accessors read it unlocked.
   std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This

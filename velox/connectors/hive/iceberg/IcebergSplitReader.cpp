@@ -716,9 +716,9 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
 
 void IcebergSplitReader::checkEqualityDeleteColumnsAreReadable(
     const std::vector<std::string>& equalityColumnNames) const {
-  // A split covering no stripe or row group builds no reader tree, so no
-  // subscript is set.
-  if (splitOffset_ == static_cast<uint64_t>(dwio::common::RowReader::kAtEnd)) {
+  // A split covering no stripe or row group builds no reader tree, which
+  // 'nextRowNumber()' reports by returning 'kAtEnd'. Nothing to check.
+  if (static_cast<int64_t>(splitOffset_) == dwio::common::RowReader::kAtEnd) {
     return;
   }
 
@@ -737,6 +737,12 @@ void IcebergSplitReader::checkEqualityDeleteColumnsAreReadable(
         name);
     // A constant carries its own value and needs no reader. Otherwise a
     // negative subscript means the selective reader tree has none.
+    //
+    // A positive subscript can be stale rather than current: a struct reader
+    // skips a child that is not read from the file without clearing the
+    // subscript, so a spec shared across splits can still carry the one a
+    // previous split's tree assigned. Such a column passes here while having
+    // no reader in this tree.
     VELOX_CHECK(
         fieldSpec->isConstant() || fieldSpec->subscript() >= 0,
         "Iceberg equality delete column has no column reader: {}",
