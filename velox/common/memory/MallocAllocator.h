@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <thread>
+
 #include "velox/common/base/ConcurrentCounter.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryAllocator.h"
@@ -66,7 +68,7 @@ class MallocAllocator : public MemoryAllocator {
   }
 
   size_t totalUsedBytes() const override {
-    return allocatedBytes_ - reservations_.read();
+    return allocatedBytes_ - static_cast<int64_t>(readReservations());
   }
 
   MachinePageCount numAllocated() const override {
@@ -160,22 +162,35 @@ class MallocAllocator : public MemoryAllocator {
   }
 
   inline bool incrementUsageWithReservationFunc(
-      uint32_t& counter,
-      uint32_t increment,
-      std::mutex& lock) {
+      std::atomic<uint64_t>& counter,
+      uint64_t increment) {
     VELOX_CHECK_LT(increment, reservationByteLimit_);
-    std::lock_guard<std::mutex> l(lock);
-    if (counter > increment) {
-      counter -= increment;
+    while (true) {
+      uint64_t current = loadReservationCounter(counter);
+      if (current > increment) {
+        if (counter.compare_exchange_weak(
+                current, current - increment, std::memory_order_relaxed)) {
+          return true;
+        }
+        continue;
+      }
+      // Hide the depleted shard until the matching global reservation has
+      // been reflected locally, so another allocation cannot miss the credit.
+      if (!counter.compare_exchange_weak(
+              current,
+              current | kReservationTransferInProgress,
+              std::memory_order_relaxed)) {
+        continue;
+      }
+      if (!incrementUsageWithoutReservation(reservationByteLimit_)) {
+        counter.store(current, std::memory_order_release);
+        return false;
+      }
+      const uint64_t desired = current + reservationByteLimit_ - increment;
+      VELOX_CHECK_GT(desired, 0);
+      counter.store(desired, std::memory_order_release);
       return true;
     }
-    if (!incrementUsageWithoutReservation(reservationByteLimit_)) {
-      return false;
-    }
-    counter += reservationByteLimit_;
-    counter -= increment;
-    VELOX_CHECK_GT(counter, 0);
-    return true;
   }
 
   // Increments the memory usage from the global 'allocatedBytes_' counter
@@ -214,17 +229,69 @@ class MallocAllocator : public MemoryAllocator {
   }
 
   inline void decrementUsageWithReservationFunc(
-      uint32_t& counter,
-      uint32_t decrement,
-      std::mutex& lock) {
+      std::atomic<uint64_t>& counter,
+      uint64_t decrement) {
     VELOX_CHECK_LT(decrement, reservationByteLimit_);
-    std::lock_guard<std::mutex> l(lock);
-    counter += decrement;
-    if (counter >= 2 * reservationByteLimit_) {
-      decrementUsageWithoutReservation(reservationByteLimit_);
-      counter -= reservationByteLimit_;
+    uint64_t desired;
+    while (true) {
+      uint64_t current = loadReservationCounter(counter);
+      const uint64_t combined = current + decrement;
+      if (combined >= uint64_t{2} * reservationByteLimit_) {
+        desired = combined - reservationByteLimit_;
+        if (tryReleaseReservation(counter, current, desired)) {
+          break;
+        }
+      } else {
+        desired = combined;
+        if (counter.compare_exchange_weak(
+                current, desired, std::memory_order_relaxed)) {
+          break;
+        }
+      }
     }
-    VELOX_CHECK_LT(counter, 2 * reservationByteLimit_);
+    VELOX_CHECK_LT(desired, uint64_t{2} * reservationByteLimit_);
+  }
+
+  static constexpr uint64_t kReservationTransferInProgress = uint64_t{1} << 63;
+
+  static uint64_t loadReservationCounter(const std::atomic<uint64_t>& counter) {
+    while (true) {
+      const auto current = counter.load(std::memory_order_acquire);
+      if ((current & kReservationTransferInProgress) == 0) {
+        return current;
+      }
+      // Only a shard-to-global transfer sets the marker, and it spans one
+      // global atomic update. Waiting preserves the old mutex ordering.
+      std::this_thread::yield();
+    }
+  }
+
+  uint64_t readReservations() const {
+    return reservations_.read([](const std::atomic<uint64_t>& counter) {
+      return loadReservationCounter(counter);
+    });
+  }
+
+  bool tryReleaseReservation(
+      std::atomic<uint64_t>& counter,
+      uint64_t& current,
+      uint64_t desired) {
+    // Keep the new shard value hidden until its matching global release is
+    // visible, so another allocation cannot miss both sources of capacity.
+    if (!counter.compare_exchange_weak(
+            current,
+            desired | kReservationTransferInProgress,
+            std::memory_order_relaxed)) {
+      return false;
+    }
+    try {
+      decrementUsageWithoutReservation(reservationByteLimit_);
+    } catch (...) {
+      counter.store(desired + reservationByteLimit_, std::memory_order_release);
+      throw;
+    }
+    counter.store(desired, std::memory_order_release);
+    return true;
   }
 
   // Decrements the memory usage from the global 'allocatedBytes_' counter
@@ -253,10 +320,10 @@ class MallocAllocator : public MemoryAllocator {
   const size_t capacity_;
   const uint32_t reservationByteLimit_;
 
-  const ConcurrentCounter<uint32_t>::UpdateFn reserveFunc_;
-  const ConcurrentCounter<uint32_t>::UpdateFn releaseFunc_;
+  const ConcurrentCounter<uint64_t>::UpdateFn reserveFunc_;
+  const ConcurrentCounter<uint64_t>::UpdateFn releaseFunc_;
 
-  ConcurrentCounter<uint32_t> reservations_;
+  ConcurrentCounter<uint64_t> reservations_;
 
   // Current total allocated bytes by this 'MallocAllocator'.
   std::atomic<int64_t> allocatedBytes_{0};
