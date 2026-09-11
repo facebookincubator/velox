@@ -17,6 +17,7 @@
 #include "velox/vector/arrow/Bridge.h"
 
 #include <cstring>
+#include <limits>
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/EnumDefine.h"
@@ -1452,6 +1453,16 @@ TypePtr parseDecimalFormat(const std::string_view format) {
       int bitWidth = std::stoi(&format[secondCommaIdx + 1], &sz);
       // Return type depends on bitWidth.
       if (bitWidth == 32 || bitWidth == 64) {
+        const auto maxPrecision = bitWidth == 32
+            ? std::numeric_limits<int32_t>::digits10
+            : ShortDecimalType::kMaxPrecision;
+        VELOX_USER_CHECK_LE(
+            precision,
+            maxPrecision,
+            "Conversion failed for '{}'. Precision of {}-bit decimals must not exceed {}.",
+            format,
+            bitWidth,
+            maxPrecision);
         return std::make_shared<ShortDecimalType>(precision, scale);
       } else if (bitWidth == 128) {
         return std::make_shared<LongDecimalType>(precision, scale);

@@ -48,6 +48,7 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/io/parquet.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/error.hpp>
 
@@ -77,15 +78,18 @@ struct StatsFilterMetrics {
 void writeDecimal32Parquet(
     const std::string& filePath,
     const std::vector<int32_t>& decimalValues,
-    const std::vector<int64_t>& ids) {
+    const std::vector<int64_t>& ids,
+    const std::vector<bool>& valid = {}) {
   VELOX_CHECK_EQ(decimalValues.size(), ids.size());
+  VELOX_CHECK(valid.empty() || valid.size() == decimalValues.size());
 
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
   auto decimals = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::DECIMAL32, numeric::scale_type{-2}},
       decimalValues.size(),
-      cudf::mask_state::UNALLOCATED,
+      valid.empty() ? cudf::mask_state::UNALLOCATED
+                    : cudf::mask_state::ALL_VALID,
       stream,
       mr);
   auto idColumn = cudf::make_fixed_width_column(
@@ -106,6 +110,25 @@ void writeDecimal32Parquet(
       ids.size() * sizeof(int64_t),
       cudaMemcpyHostToDevice,
       stream.value()));
+  std::vector<cudf::bitmask_type> nullMask;
+  if (!valid.empty()) {
+    nullMask.resize(cudf::num_bitmask_words(valid.size()), 0);
+    cudf::size_type nullCount = 0;
+    for (size_t i = 0; i < valid.size(); ++i) {
+      if (valid[i]) {
+        nullMask[i / 32] |= cudf::bitmask_type{1} << (i % 32);
+      } else {
+        ++nullCount;
+      }
+    }
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        decimals->mutable_view().null_mask(),
+        nullMask.data(),
+        nullMask.size() * sizeof(cudf::bitmask_type),
+        cudaMemcpyHostToDevice,
+        stream.value()));
+    decimals->set_null_count(nullCount);
+  }
   stream.synchronize();
 
   std::vector<std::unique_ptr<cudf::column>> columns;
@@ -1038,6 +1061,78 @@ TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
           .maxDrivers(1)
           .splits(makeCudfHiveConnectorSplits(paths))
           .assertResults(expected);
+    }
+  }
+}
+
+TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
+  auto rowType = ROW({"c0", "c1"}, {DECIMAL(12, 2), BIGINT()});
+  auto outputType = ROW({"c1"}, {BIGINT()});
+  auto mixedPath = TempFilePath::create();
+  auto allNullPath = TempFilePath::create();
+  auto nonNullPath = TempFilePath::create();
+  writeDecimal32Parquet(
+      mixedPath->getPath(), {100, -500, 200}, {1, 2, 3}, {false, true, true});
+  writeDecimal32Parquet(
+      allNullPath->getPath(),
+      {100, -500, 200},
+      {4, 5, 6},
+      {false, false, false});
+  writeDecimal32Parquet(nonNullPath->getPath(), {100, -500, 200}, {7, 8, 9});
+
+  for (const bool useExperimentalReader : {false, true}) {
+    auto config = std::unordered_map<std::string, std::string>{
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseExperimentalCudfReader,
+         useExperimentalReader ? "true" : "false"}};
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(std::move(config)));
+
+    for (const bool nullAllowed : {false, true}) {
+      auto check = [&](std::unique_ptr<common::Filter> filter,
+                       bool matchesNonNull) {
+        SCOPED_TRACE(filter->toString());
+        common::SubfieldFilters filters;
+        filters.emplace(common::Subfield("c0"), std::move(filter));
+        auto tableHandle = makeTableHandle(
+            "parquet_table", rowType, std::move(filters), nullptr);
+        auto plan = PlanBuilder()
+                        .startTableScan()
+                        .outputType(outputType)
+                        .tableHandle(tableHandle)
+                        .assignments(
+                            facebook::velox::exec::test::HiveConnectorTestBase::
+                                allRegularColumns(outputType))
+                        .endTableScan()
+                        .planNode();
+        std::vector<int64_t> expectedIds;
+        if (nullAllowed) {
+          expectedIds = {1, 4, 5, 6};
+        }
+        if (matchesNonNull) {
+          expectedIds.insert(expectedIds.end(), {2, 8});
+        }
+        auto expected =
+            makeRowVector({"c1"}, {makeFlatVector<int64_t>(expectedIds)});
+        AssertQueryBuilder(plan)
+            .maxDrivers(1)
+            .splits(makeCudfHiveConnectorSplits(
+                {mixedPath, allNullPath, nonNullPath}))
+            .assertResults(expected);
+      };
+      check(
+          std::make_unique<common::BigintRange>(-500, -500, nullAllowed), true);
+      // These bounds fit the logical decimal, but no DECIMAL32 value matches.
+      check(
+          std::make_unique<common::BigintRange>(
+              3'000'000'000, 4'000'000'000, nullAllowed),
+          false);
+      check(
+          common::createBigintValues({-500, 3'000'000'000}, nullAllowed), true);
+      check(
+          common::createBigintValues(
+              {3'000'000'000, 3'000'000'002}, nullAllowed),
+          false);
     }
   }
 }

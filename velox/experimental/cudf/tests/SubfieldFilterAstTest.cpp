@@ -27,6 +27,7 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
+#include <cudf/unary.hpp>
 #include <cudf/utilities/error.hpp>
 
 #include <gtest/gtest.h>
@@ -66,7 +67,8 @@ class SubfieldFilterAstTest : public OperatorTestBase {
       const std::string& columnName,
       const common::Filter& filter,
       const RowVectorPtr& vector,
-      const cudf::ast::expression& expr) {
+      const cudf::ast::expression& expr,
+      const SubfieldFilterDecimalTypes* decimalTypes = nullptr) {
     auto stream = cudf::get_default_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
@@ -74,6 +76,19 @@ class SubfieldFilterAstTest : public OperatorTestBase {
       auto cudfTable = cudf_velox::with_arrow::toCudfTable(
           vector, pool_.get(), stream, cudf::get_current_device_resource_ref());
       ASSERT_NE(cudfTable, nullptr);
+
+      if (decimalTypes != nullptr) {
+        auto columns = cudfTable->release();
+        for (const auto& [name, type] : *decimalTypes) {
+          const auto index = rowType->getChildIdx(name);
+          columns[index] = cudf::cast(
+              columns[index]->view(),
+              cudf::data_type{type, columns[index]->type().scale()},
+              stream,
+              mr);
+        }
+        cudfTable = std::make_unique<cudf::table>(std::move(columns));
+      }
 
       auto cudfResult =
           cudf::compute_column(cudfTable->view(), expr, stream, mr);
@@ -106,7 +121,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
 
       for (int i = 0; i < vector->size(); ++i) {
         if (fieldVec->isNullAt(i)) {
-          continue; // skip null comparison
+          EXPECT_EQ(
+              filter.testNull(),
+              !boolVector->isNullAt(i) && boolVector->valueAt(i))
+              << "Null mismatch at row " << i << " for " << columnName;
+          continue;
         }
 
         bool veloxExpected = false;
@@ -159,13 +178,130 @@ class SubfieldFilterAstTest : public OperatorTestBase {
           default:
             veloxExpected = true;
         }
-        bool cudfGot = boolVector->valueAt(i);
+        bool cudfGot = !boolVector->isNullAt(i) && boolVector->valueAt(i);
         EXPECT_EQ(veloxExpected, cudfGot)
             << "Mismatch at row " << i << " for " << columnName;
       }
     }
   }
+
+  void assertFilterMatchesVelox(
+      const RowVectorPtr& vector,
+      const common::Filter& filter,
+      const SubfieldFilterDecimalTypes* decimalTypes = nullptr) {
+    SCOPED_TRACE(filter.toString());
+    const auto& rowType = vector->rowType();
+    const auto& name = rowType->nameOf(0);
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const auto& expr = createAstFromSubfieldFilter(
+        common::Subfield(name), filter, tree, scalars, rowType, decimalTypes);
+    testFilterExecution(rowType, name, filter, vector, expr, decimalTypes);
+  }
 };
+
+TEST_F(SubfieldFilterAstTest, decimal32FiltersPreserveNulls) {
+  auto vector = makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt, -500, 0, 100, 200}, DECIMAL(12, 2))});
+  const SubfieldFilterDecimalTypes decimalTypes{
+      {"c0", cudf::type_id::DECIMAL32}};
+  const int64_t aboveInt32 =
+      static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1;
+  const int64_t belowInt32 =
+      static_cast<int64_t>(std::numeric_limits<int32_t>::min()) - 1;
+
+  for (const bool nullAllowed : {false, true}) {
+    auto check = [&](const common::Filter& filter) {
+      assertFilterMatchesVelox(vector, filter, &decimalTypes);
+    };
+    check(common::BigintRange(-500, -500, nullAllowed));
+    check(common::BigintRange(-500, 100, nullAllowed));
+    check(common::BigintRange(belowInt32, aboveInt32, nullAllowed));
+    check(common::BigintRange(aboveInt32, aboveInt32, nullAllowed));
+    check(common::BigintRange(aboveInt32, aboveInt32 + 2, nullAllowed));
+    check(common::BigintRange(belowInt32 - 2, belowInt32, nullAllowed));
+    check(
+        common::BigintValuesUsingBitmask(
+            aboveInt32,
+            aboveInt32 + 2,
+            {aboveInt32, aboveInt32 + 2},
+            nullAllowed));
+    check(
+        common::BigintValuesUsingHashTable(
+            belowInt32, aboveInt32, {belowInt32, aboveInt32}, nullAllowed));
+    check(
+        common::BigintValuesUsingHashTable(
+            -500, aboveInt32, {-500, aboveInt32}, nullAllowed));
+    check(common::NegatedBigintRange(-500, 100, nullAllowed));
+    check(common::NegatedBigintRange(aboveInt32, aboveInt32 + 2, nullAllowed));
+
+    // The parent, rather than its component ranges, controls null acceptance.
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.push_back(
+        std::make_unique<common::BigintRange>(-500, -100, !nullAllowed));
+    ranges.push_back(
+        std::make_unique<common::BigintRange>(100, 200, !nullAllowed));
+    check(common::BigintMultiRange(std::move(ranges), nullAllowed));
+  }
+}
+
+TEST_F(SubfieldFilterAstTest, longDecimalFiltersPreserveNulls) {
+  auto vector = makeRowVector({makeNullableFlatVector<int128_t>(
+      {std::nullopt, -500, 0, 100, 200}, DECIMAL(20, 0))});
+  const SubfieldFilterDecimalTypes decimalTypes{
+      {"c0", cudf::type_id::DECIMAL64}};
+  const auto aboveInt64 =
+      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1;
+  for (const bool nullAllowed : {false, true}) {
+    auto check = [&](const common::Filter& filter) {
+      assertFilterMatchesVelox(vector, filter, &decimalTypes);
+    };
+    check(common::HugeintRange(-500, 100, nullAllowed));
+    check(common::HugeintRange(aboveInt64, aboveInt64 + 2, nullAllowed));
+    check(
+        common::HugeintValuesUsingHashTable(
+            aboveInt64,
+            aboveInt64 + 2,
+            {aboveInt64, aboveInt64 + 2},
+            nullAllowed));
+    check(
+        common::HugeintValuesUsingHashTable(
+            -500, aboveInt64, {-500, aboveInt64}, nullAllowed));
+  }
+}
+
+TEST_F(SubfieldFilterAstTest, nonDecimalFiltersPreserveNulls) {
+  auto integers = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, -1, 0, 1})});
+  auto booleans = makeRowVector(
+      {makeNullableFlatVector<bool>({std::nullopt, true, false})});
+  auto strings = makeRowVector(
+      {makeNullableFlatVector<std::string>({std::nullopt, "a", "b", "c"})});
+  auto doubles =
+      makeRowVector({makeNullableFlatVector<double>({std::nullopt, -1, 0, 1})});
+  for (const bool nullAllowed : {false, true}) {
+    assertFilterMatchesVelox(integers, common::BigintRange(0, 1, nullAllowed));
+    assertFilterMatchesVelox(booleans, common::BoolValue(true, nullAllowed));
+    assertFilterMatchesVelox(
+        strings, common::BytesValues({"a", "c"}, nullAllowed));
+    assertFilterMatchesVelox(
+        strings, common::NegatedBytesValues({"a", "c"}, nullAllowed));
+    assertFilterMatchesVelox(
+        strings,
+        common::BytesRange("b", false, false, "c", false, false, nullAllowed));
+    std::vector<std::unique_ptr<common::Filter>> ranges;
+    ranges.push_back(
+        std::make_unique<common::DoubleRange>(
+            -1, false, false, -1, false, false, !nullAllowed));
+    ranges.push_back(
+        std::make_unique<common::DoubleRange>(
+            1, false, false, 1, false, false, !nullAllowed));
+    assertFilterMatchesVelox(
+        doubles, common::MultiRange(std::move(ranges), nullAllowed));
+  }
+  assertFilterMatchesVelox(integers, common::IsNull());
+  assertFilterMatchesVelox(integers, common::IsNotNull());
+}
 
 // Basic AST generation tests
 TEST_F(SubfieldFilterAstTest, int32RangeInclusive) {

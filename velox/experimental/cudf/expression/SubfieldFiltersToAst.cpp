@@ -432,10 +432,9 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
-} // namespace
-
-// Convert subfield filters to cudf AST
-cudf::ast::expression const& createAstFromSubfieldFilter(
+// Build the value predicate without applying the filter's null policy. A
+// MultiRange's null policy overrides those of its component filters.
+cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
@@ -608,7 +607,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       std::vector<const cudf::ast::expression*> exprRefs;
       exprRefs.reserve(subFilters.size());
       for (const auto* subFilter : subFilters) {
-        auto const& subExpr = createAstFromSubfieldFilter(
+        auto const& subExpr = createAstFromSubfieldFilterImpl(
             subfield, *subFilter, tree, scalars, inputRowSchema, decimalTypes);
         exprRefs.push_back(&subExpr);
       }
@@ -634,7 +633,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       // Then negate it: NOT(column >= lower AND column <= upper).
       // This expresses "column is outside [lower, upper]".
       common::BigintRange innerRange(
-          rejectedLower, rejectedUpper, !filter.testNull());
+          rejectedLower, rejectedUpper, /*nullAllowed=*/false);
       auto innerResult = VELOX_DYNAMIC_TYPE_DISPATCH(
           buildBigintRangeExpr,
           columnType->kind(),
@@ -652,6 +651,34 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           "Filter type {} not yet supported for subfield filter conversion",
           static_cast<int>(filter.kind()));
   }
+}
+
+} // namespace
+
+cudf::ast::expression const& createAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema,
+    const SubfieldFilterDecimalTypes* decimalTypes) {
+  auto const& expr = createAstFromSubfieldFilterImpl(
+      subfield, filter, tree, scalars, inputRowSchema, decimalTypes);
+  if (!filter.testNull() || filter.kind() == common::FilterKind::kIsNull) {
+    return expr;
+  }
+
+  // Comparisons, including the out-of-range col != col predicate, produce
+  // null for null input. cuDF discards rows with a null filter result, so
+  // explicitly accept them when Velox does. Apply this once per filter.
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+  const auto* field = static_cast<const common::Subfield::NestedField*>(
+      subfield.path()[0].get());
+  auto const& columnRef = tree.push(
+      cudf::ast::column_reference(inputRowSchema->getChildIdx(field->name())));
+  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+  return tree.push(Operation{Op::NULL_LOGICAL_OR, isNull, expr});
 }
 
 // Create a combined AST from a set of subfield filters by chaining them with
