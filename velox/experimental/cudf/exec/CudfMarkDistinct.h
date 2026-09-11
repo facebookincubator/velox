@@ -75,6 +75,10 @@ class CudfMarkDistinct : public CudfOperatorBase {
   /// Column indices in the input schema that form the distinct key.
   std::vector<cudf::size_type> distinctKeyIndices_;
 
+  // Which distinct keys are TIMESTAMP WITH TIME ZONE, in key order. Such a key
+  // must be compared on its instant alone.
+  std::vector<bool> distinctKeyIsTswtz_;
+
   /// Accumulated distinct keys seen across all batches processed so far.
   std::unique_ptr<cudf::table> seenKeys_;
 
