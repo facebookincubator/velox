@@ -401,5 +401,13 @@ TEST_F(MergeAggregateTest, mergeSfmSketch) {
       SfmSketch::deserialize(resultBinary2.data(), &allocator_).cardinality(),
       8);
 }
+
+TEST_F(MergeAggregateTest, unknownType) {
+  auto data = makeRowVector({makeAllNullFlatVector<UnknownValue>(10)});
+
+  auto expected = makeRowVector({makeAllNullFlatVector<UnknownValue>(1)});
+
+  testAggregations({data}, {}, {"merge(c0)"}, {expected});
+}
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -1901,3 +1901,62 @@ TYPED_TEST(SimdComparisonsTest, flat) {
 TYPED_TEST(SimdComparisonsTest, dictionary) {
   this->testDictionary();
 }
+
+TEST_F(ComparisonsTest, unknownType) {
+  auto unknownVector = makeAllNullFlatVector<UnknownValue>(10);
+  auto expected = makeNullConstant(TypeKind::BOOLEAN, 10);
+
+  auto result =
+      evaluate("c0 = c1", makeRowVector({unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("c0 != c1", makeRowVector({unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("c0 < c1", makeRowVector({unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("c0 <= c1", makeRowVector({unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("c0 > c1", makeRowVector({unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate("c0 >= c1", makeRowVector({unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  result = evaluate(
+      "c0 BETWEEN c1 AND c2",
+      makeRowVector({unknownVector, unknownVector, unknownVector}));
+  test::assertEqualVectors(expected, result);
+
+  auto literalResult =
+      evaluate("NULL", makeRowVector({makeFlatVector<int64_t>({1})}));
+  ASSERT_EQ(literalResult->type()->kind(), TypeKind::UNKNOWN);
+  ASSERT_TRUE(literalResult->isNullAt(0));
+
+  auto singleUnknown = makeAllNullFlatVector<UnknownValue>(1);
+  auto castInput = makeRowVector({singleUnknown});
+
+  auto castResult = evaluate("cast(c0 as bigint)", castInput);
+  ASSERT_EQ(castResult->type()->kind(), TypeKind::BIGINT);
+  ASSERT_TRUE(castResult->isNullAt(0));
+
+  castResult = evaluate("cast(c0 as varchar)", castInput);
+  ASSERT_EQ(castResult->type()->kind(), TypeKind::VARCHAR);
+  ASSERT_TRUE(castResult->isNullAt(0));
+
+  castResult = evaluate("cast(c0 as double)", castInput);
+  ASSERT_EQ(castResult->type()->kind(), TypeKind::DOUBLE);
+  ASSERT_TRUE(castResult->isNullAt(0));
+
+  castResult = evaluate("cast(c0 as boolean)", castInput);
+  ASSERT_EQ(castResult->type()->kind(), TypeKind::BOOLEAN);
+  ASSERT_TRUE(castResult->isNullAt(0));
+
+  auto distinctInput = makeRowVector({singleUnknown, singleUnknown});
+  auto distinctResult = evaluate("c0 IS DISTINCT FROM c1", distinctInput);
+  ASSERT_EQ(distinctResult->type()->kind(), TypeKind::BOOLEAN);
+  ASSERT_FALSE(distinctResult->isNullAt(0));
+  ASSERT_FALSE(distinctResult->as<SimpleVector<bool>>()->valueAt(0));
+}

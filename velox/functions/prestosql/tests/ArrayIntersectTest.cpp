@@ -736,3 +736,100 @@ TEST_F(ArrayIntersectTest, nullInDictionary) {
       makeNullableArrayVector<int64_t>({{{1}}, std::nullopt, {{7}}});
   testExpr(expected, "array_intersect(c0)", {arrays});
 }
+
+TEST_F(ArrayIntersectTest, unknownType) {
+  // Empty array intersection - [] ∩ [] → []
+  auto emptyArray1 = makeArrayVector<UnknownValue>({{}});
+  auto emptyArray2 = makeArrayVector<UnknownValue>({{}});
+  auto result = evaluate(
+      "array_intersect(c0, c1)", makeRowVector({emptyArray1, emptyArray2}));
+  auto expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+
+  // NULL element intersection - [NULL] ∩ [NULL] → [NULL]
+  auto nullArray1 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  auto nullArray2 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  result = evaluate(
+      "array_intersect(c0, c1)", makeRowVector({nullArray1, nullArray2}));
+  expected = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  assertEqualVectors(expected, result);
+
+  // Array with multiple NULLs intersected with empty array- [NULL, NULL] ∩ [] →
+  // []
+  auto unknownArray = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {std::nullopt, std::nullopt}});
+  auto emptyArray = makeArrayVector<UnknownValue>({{}});
+  result = evaluate(
+      "array_intersect(c0, c1)", makeRowVector({unknownArray, emptyArray}));
+  expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+
+  // NULL array (the array itself is NULL) - NULL ∩ [NULL] → NULL
+  auto nullArrayVector = makeAllNullArrayVector(1, UNKNOWN());
+  auto arrayWithNull = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  result = evaluate(
+      "array_intersect(c0, c1)",
+      makeRowVector({nullArrayVector, arrayWithNull}));
+  auto expectedNull = makeAllNullArrayVector(1, UNKNOWN());
+  assertEqualVectors(expectedNull, result);
+
+  // [NULL] ∩ [NULL, NULL, NULL] → [NULL]
+  auto array1Null = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  auto array3Nulls = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {std::nullopt, std::nullopt, std::nullopt}});
+  result = evaluate(
+      "array_intersect(c0, c1)", makeRowVector({array1Null, array3Nulls}));
+  expected = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  assertEqualVectors(expected, result);
+
+  //[] ∩ [NULL] → []
+  auto emptyArr = makeArrayVector<UnknownValue>({{}});
+  auto arrWithNull = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  result = evaluate(
+      "array_intersect(c0, c1)", makeRowVector({emptyArr, arrWithNull}));
+  expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+
+  // Test single-parameter variant: array_intersect(ARRAY<ARRAY<UNKNOWN>>)
+  // ARRAY[ARRAY[], ARRAY[]] → []
+  using innerArrayType = std::vector<std::optional<UnknownValue>>;
+  using outerArrayType =
+      std::vector<std::optional<std::vector<std::optional<UnknownValue>>>>;
+
+  innerArrayType inner1{};
+  innerArrayType inner2{};
+  outerArrayType row1{{inner1}, {inner2}};
+  auto nestedArrayVector =
+      makeNullableNestedArrayVector<UnknownValue>({{row1}});
+  result = evaluate("array_intersect(c0)", makeRowVector({nestedArrayVector}));
+  expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+
+  // ARRAY[ARRAY[NULL], ARRAY[NULL]] → [NULL]
+  innerArrayType inner3{std::nullopt};
+  innerArrayType inner4{std::nullopt};
+  outerArrayType row2{{inner3}, {inner4}};
+  nestedArrayVector = makeNullableNestedArrayVector<UnknownValue>({{row2}});
+  result = evaluate("array_intersect(c0)", makeRowVector({nestedArrayVector}));
+  expected = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  assertEqualVectors(expected, result);
+
+  // ARRAY[ARRAY[NULL], ARRAY[]] → []
+  innerArrayType inner5{std::nullopt};
+  innerArrayType inner6{};
+  outerArrayType row3{{inner5}, {inner6}};
+  nestedArrayVector = makeNullableNestedArrayVector<UnknownValue>({{row3}});
+  result = evaluate("array_intersect(c0)", makeRowVector({nestedArrayVector}));
+  expected = makeArrayVector<UnknownValue>({{}});
+  assertEqualVectors(expected, result);
+}
