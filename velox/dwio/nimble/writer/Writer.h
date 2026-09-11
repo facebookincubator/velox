@@ -25,6 +25,7 @@
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
@@ -290,7 +291,8 @@ class Writer : public velox::dwio::common::Writer {
   void updateIoStatistics();
 
   // Writes caller-supplied key/value metadata into the optional metadata
-  // section.
+  // section, merging whatever `options.metadataProvider` returns over
+  // `options.metadata`.
   void writeMetadata();
   // Writes the column statistics section, using the vectorized representation
   // when enabled and the legacy raw-size section otherwise.
@@ -326,6 +328,13 @@ class Writer : public velox::dwio::common::Writer {
   // task because EncodingBufferPool is not thread-safe.
   std::unique_ptr<EncodingBufferPool> makeEncodingBufferPool() const;
   uint32_t encodingConcurrency(uint32_t streamCount) const;
+
+  // Orders stream indices largest-first, so that parallel encode batches group
+  // comparably sized streams together. The streamCount overload orders the
+  // identity range [0, streamCount) without materializing it first.
+  std::vector<uint32_t> encodeOrder(uint32_t streamCount) const;
+  std::vector<uint32_t> encodeOrder(
+      std::span<const uint32_t> streamIndices) const;
   void ensureEncodingScratchBufferPools(uint32_t poolCount);
   void ensureEncodingBufferPools(uint32_t poolCount);
   velox::BufferPool* encodingScratchBufferPool(uint32_t index = 0);
@@ -358,6 +367,8 @@ class Writer : public velox::dwio::common::Writer {
   std::unique_ptr<velox::WriteFile> file_;
   const std::unique_ptr<index::IndexWriter> clusterIndexWriter_;
   const std::vector<DenseIndexWriter> denseIndexWriters_;
+  // Accumulates vectors for all configured similarity-search indexes.
+  const std::unique_ptr<index::VectorIndexWriter> vectorIndexWriter_;
   const std::unique_ptr<TabletWriter> tabletWriter_;
   // Built once at construction from `options.bufferPolicyFactory`; null if
   // the caller didn't set the factory (legacy FlushPolicy path).

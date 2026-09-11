@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/Adaptor.h"
 #include "velox/dwio/common/DecoderUtil.h"
 #include "velox/dwio/common/IntDecoder.h"
@@ -207,9 +206,6 @@ class RleEncoderV1 : public IntEncoder<isSigned> {
   bool repeat_;
   int32_t tailRunLength_;
   bool overflow_;
-
-  VELOX_FRIEND_TEST(RleEncoderV1Test, encodeMinAndMax);
-  VELOX_FRIEND_TEST(RleEncoderV1Test, encodeMinAndMaxint32);
 };
 
 template <bool isSigned>

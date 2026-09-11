@@ -526,10 +526,14 @@ PlanBuilder& PlanBuilder::traceScan(
 
 PlanBuilder& PlanBuilder::exchange(
     const RowTypePtr& outputType,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ = std::make_shared<core::ExchangeNode>(
-      nextPlanNodeId(), outputType, serdeKind);
+      nextPlanNodeId(),
+      outputType,
+      std::move(serdeKind),
+      std::move(transportKind));
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -566,13 +570,19 @@ parseOrderByClauses(
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
     const std::vector<std::string>& keys,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NULL(planNode_, "MergeExchange must be the source node");
   auto [sortingKeys, sortingOrders] =
       parseOrderByClauses(keys, outputType, pool_);
 
   planNode_ = std::make_shared<core::MergeExchangeNode>(
-      nextPlanNodeId(), outputType, sortingKeys, sortingOrders, serdeKind);
+      nextPlanNodeId(),
+      outputType,
+      sortingKeys,
+      sortingOrders,
+      std::move(serdeKind),
+      std::move(transportKind));
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -2264,19 +2274,6 @@ PlanBuilder& PlanBuilder::unnest(
     const std::optional<std::string>& ordinalColumn,
     const std::optional<std::string>& markerName) {
   VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
-      replicateFields;
-  replicateFields.reserve(replicateColumns.size());
-  for (const auto& name : replicateColumns) {
-    replicateFields.emplace_back(field(name));
-  }
-
-  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> unnestFields;
-  unnestFields.reserve(unnestColumns.size());
-  for (const auto& name : unnestColumns) {
-    unnestFields.emplace_back(field(name));
-  }
-
   std::vector<std::optional<std::string>> unnestNames;
   for (const auto& name : unnestColumns) {
     auto input = planNode_->outputType()->findChild(name);
@@ -2290,6 +2287,29 @@ PlanBuilder& PlanBuilder::unnest(
           "Unsupported type of unnest variable. Expected ARRAY or MAP, but got {}.",
           input->toString());
     }
+  }
+  return unnest(
+      replicateColumns, unnestColumns, unnestNames, ordinalColumn, markerName);
+}
+
+PlanBuilder& PlanBuilder::unnest(
+    const std::vector<std::string>& replicateColumns,
+    const std::vector<std::string>& unnestColumns,
+    const std::vector<std::optional<std::string>>& unnestNames,
+    const std::optional<std::string>& ordinalColumn,
+    const std::optional<std::string>& markerName) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Unnest cannot be the source node");
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>
+      replicateFields;
+  replicateFields.reserve(replicateColumns.size());
+  for (const auto& name : replicateColumns) {
+    replicateFields.emplace_back(field(name));
+  }
+
+  std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>> unnestFields;
+  unnestFields.reserve(unnestColumns.size());
+  for (const auto& name : unnestColumns) {
+    unnestFields.emplace_back(field(name));
   }
 
   planNode_ = std::make_shared<core::UnnestNode>(

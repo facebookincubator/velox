@@ -407,7 +407,7 @@ class ColumnWriterTest : public Test {
   std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 
-TEST_F(ColumnWriterTest, LowMemoryModeConfig) {
+TEST_F(ColumnWriterTest, lowMemoryModeConfig) {
   auto dataTypeWithId = TypeWithId::create(std::make_shared<VarcharType>(), 1);
   auto config = std::make_shared<Config>();
   WriterContext context{config, memory::memoryManager()->addRootPool()};
@@ -416,7 +416,7 @@ TEST_F(ColumnWriterTest, LowMemoryModeConfig) {
   EXPECT_TRUE(writer->useDictionaryEncoding());
 }
 
-TEST_F(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig) {
+TEST_F(ColumnWriterTest, integerDictionaryEncodingEnabledConfig) {
   auto dataTypeWithId = TypeWithId::create(INTEGER(), 1);
   auto config = std::make_shared<Config>();
   config->set(Config::INTEGER_DICTIONARY_ENCODING_ENABLED, true);
@@ -431,7 +431,7 @@ TEST_F(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig) {
   EXPECT_FALSE(writer->useDictionaryEncoding());
 }
 
-TEST_F(ColumnWriterTest, StringDictionaryEncodingEnabledConfig) {
+TEST_F(ColumnWriterTest, stringDictionaryEncodingEnabledConfig) {
   auto dataTypeWithId = TypeWithId::create(VARCHAR(), 1);
   auto config = std::make_shared<Config>();
   config->set(Config::STRING_DICTIONARY_ENCODING_ENABLED, true);

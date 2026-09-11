@@ -1260,18 +1260,28 @@ TEST_F(ExecutorTest, catTest) {
 
   // Plan structure. o3 = cat([ms1, ms2, ms3]) joins three operands, which is
   // the allocation group's path: the result is laid out on the host, so every
-  // operand's extent has to be known before the concat sizes anything. A
-  // masked_select settles its extent on device, so it now ends its own kernel
-  // first rather than fusing into the cat -- there is no serial fill to fall
-  // back on that could discover the extent as it goes. The multi-kernel grid
-  // already decomposed it, and its compaction step's extent is read back
-  // before the cat, so that one still fuses.
+  // operand's extent has to be known before the concat sizes anything, and
+  // there is no serial fill to fall back on that could discover an extent as
+  // it goes. A masked_select's extent is out of reach either way -- the cg and
+  // single-pass forms settle it on device, and the decomposed form's compaction
+  // step knows it only through its own reserve -- so in every grid variant the
+  // operand ends its kernel and is materialized before the cat rather than
+  // fusing into it. That read-back is the point: it is what makes the extent an
+  // ordinary frame tensor's by the time the concat lays the result out.
   auto plans = compilePlans("data/cat_test.pt2");
-  EXPECT_FALSE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+  if (WaveConfig::get().singlePass) {
+    // --tw_single_pass replaces both decompositions with one look-back op.
+    EXPECT_FALSE(
+        plans.cg.fuses({"aten.cat.default", "tw.masked_select_1pass"}));
+    EXPECT_FALSE(plans.multiKernel.fuses(
+        {"aten.cat.default", "tw.masked_select_1pass"}));
+  } else {
+    EXPECT_FALSE(plans.cg.fuses({"aten.cat.default", "tw.masked_select_cg"}));
+    EXPECT_FALSE(plans.multiKernel.fuses(
+        {"aten.cat.default", "tw.masked_select_final"}));
+  }
   EXPECT_FALSE(plans.singleBlock.fuses(
       {"aten.cat.default", "aten.masked_select.default"}));
-  EXPECT_TRUE(
-      plans.multiKernel.fuses({"aten.cat.default", "tw.masked_select_final"}));
 }
 
 TEST_F(ExecutorTest, catTest2) {
@@ -1329,6 +1339,77 @@ TEST_F(ExecutorTest, catNdTest) {
   EXPECT_TRUE(plans.multiKernel.fuses({"aten.cat.default", "aten.add.Tensor"}));
 }
 
+// A copy into a pitched band. catNdTest covers the operand an expression
+// computes, which writes through the view the concat hands it; this one covers
+// the operand that is copied. A clone reads its source at the source's layout
+// and writes one element per element, so given a band with the result's row
+// pitch it has to map the write through the destination's strides -- indexing
+// the destination linearly walks out of the band and into the next operand's.
+// Every copy here therefore has a computed operand beside it, so that a linear
+// write shows up as a corrupted neighbour and not only as a short tail.
+//
+// The concat allocation group is what hands a copy its band, and it only does
+// so for a producer declaring ArgumentMeta::mayWriteStrided. So the numbers
+// alone are not the assertion: a copy refused the band still comes out right,
+// __concatCopy just moves it in afterwards. numConcatStridedBand is what
+// separates the two.
+TEST_F(ExecutorTest, catStridedBandTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_strided_band_test.pt2";
+  const std::string results = "data/cat_strided_band_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.isCg = true;
+  runTest(pt2, results, "cg");
+
+  // The arm that actually carves the bands: the group needs the cooperative
+  // grid and the freeing, and the A/B against it switched off is what shows the
+  // values do not depend on the copy being placed there.
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+  config.enableConcatAllocGroup = false;
+  runTest(pt2, results, "cg groups, concat groups off");
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg groups, concat groups on");
+
+  // Ten operands carved over four concats: the copies -- three each in o1, o2
+  // and o4, and o3's middle one.
+  //
+  // The count is what says the copies wrote through the destination's strides,
+  // because seven of the ten bands are pitched; only o4's three are a run. A
+  // copy that cannot write a pitched band is refused it and moved in afterwards
+  // by __concatCopy, which leaves the values right and the count at three.
+  //
+  // Ten and not eleven because concatOperandsInPlace is on: o3's computed
+  // operand used to be carved as an eleventh member, writing through the view
+  // the concat handed it. It is now fused into the concat's own kernel and
+  // writes its band directly, which is a member the group no longer has to
+  // bind.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatMembers, 10);
+  EXPECT_EQ(stats.numConcatGroups, 4);
+  EXPECT_EQ(stats.numConcatTooFew, 0);
+  EXPECT_EQ(stats.numConcatNoMembers, 0);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
+}
+
 // Concats whose operands are produced by kernels of their own -- the shape of
 // the ROO preproc graph's final concat. Each operand would otherwise allocate a
 // buffer that the concat immediately copies into its result; the concat
@@ -1372,20 +1453,40 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups, concat groups on");
 
-  // What the pass made of it. 'wide' places all four of its gathers and 'mixed'
-  // the two around the graph input it cannot place, so six operand allocations
-  // and six concat copies go away, and with the two results eight values stop
-  // being the lifetime grouping's to place.
+  // What the pass made of it. Every cat above the threshold forms a group, and
+  // nothing is left to the offset walk: an operand reaches its region one of
+  // two ways, and the counts below separate them. 'wide' places all four of its
+  // gathers and 'nd' all three -- the cat is a kernel break, so the elementwise
+  // op between each gather and the concat no longer fuses into the concat's
+  // kernel and each operand becomes a launch that writes its region. 'mixed's
+  // 'plain' is the other way: the graph hands it to us, no launch writes it, so
+  // the group cannot carve it and a copy op of its own fills its band instead.
+  // That copy is outside the group, which is why 'mixed' carves 2 of 3.
+  //
+  // 'scaled' is a third way. Under concatOperandsInPlace its operands are not
+  // pushed into launches of their own at all: the concat's own kernel computes
+  // them straight into their bands, so the group binds none of them and the
+  // total is 9.
+  //
+  // The run above is what proves the copy happened. A band nothing writes is
+  // not empty, it is whatever the fresh allocation held, so 'mixed' comes back
+  // wrong from element 127 -- where 'plain's region starts -- if the copy is
+  // dropped or lands in a buffer of its own.
   auto stats = allocGroupStats(pt2);
-  EXPECT_EQ(stats.numConcatGroups, 2);
-  EXPECT_EQ(stats.numConcatMembers, 6);
-  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 2);
-  // 'pair' is below the threshold. 'nd' has every operand computed by the
-  // concat's own kernel behind a reserveShape, so no earlier point knows their
-  // extents and the layout cannot be laid out ahead of them.
+  EXPECT_EQ(stats.numConcatGroups, 4);
+  // 'wide' 4, 'mixed' 2, 'nd' 3, and 'scaled' none -- see below.
+  EXPECT_EQ(stats.numConcatMembers, 4 + 2 + 3 + 0);
+  // Each group also takes its own result out of the lifetime grouping.
+  EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
+  // 'pair' is below the threshold, so it keeps the concat's own fill.
   EXPECT_EQ(stats.numConcatTooFew, 1);
-  EXPECT_EQ(stats.numConcatNoMembers, 0);
-  EXPECT_EQ(stats.numConcatUnplaceableOperand, 1);
+  // 'scaled' carves nothing, and that is the concatOperandsInPlace state: its
+  // operands are sized where the concat's own kernel computes them, so the
+  // group owns the result's buffer and lays the regions out but has no write to
+  // redirect. With the pushdown instead, each of its three became a launch of
+  // its own and a member the group had to bind.
+  EXPECT_EQ(stats.numConcatNoMembers, 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
 
   // Nothing is placed with the mode's concat half switched off, which is what
   // makes the arm above an A/B rather than two runs of the same thing.
@@ -1393,6 +1494,146 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   auto without = allocGroupStats(pt2);
   EXPECT_EQ(without.numConcatGroups, 0);
   EXPECT_EQ(without.numInConcatGroup, 0);
+  config.enableConcatAllocGroup = true;
+
+  // The same mode on the multi-kernel grid. Nothing about a lifetime or a band
+  // needs the cooperative grid -- both grids are settled by compilation -- so
+  // the plan is built against whichever one the config names, and the values
+  // have to come out the same on either.
+  config.isCg = false;
+  runTest(pt2, results, "multi-kernel alloc groups, concat groups on");
+
+  auto mk = allocGroupStats(pt2, /*cg=*/false);
+  // Every concat that grouped under the cooperative grid still groups here: a
+  // group's members are decided by where the operands are written relative to
+  // where the result is laid out, and the multi-kernel grid orders those the
+  // same way.
+  EXPECT_EQ(mk.numConcatGroups, 4);
+  EXPECT_EQ(mk.numConcatMembers, 4 + 2 + 3 + 0);
+  EXPECT_EQ(mk.numInConcatGroup, mk.numConcatMembers + 4);
+  EXPECT_EQ(mk.numConcatTooFew, 1);
+  EXPECT_EQ(mk.numConcatNoMembers, 1);
+  EXPECT_EQ(mk.numConcatUnplaceableOperand, 0);
+}
+
+// The rule the parallel fill exists for: a cat of more than two operands never
+// reaches the serial fill. 'handed' is the case catAllocGroupTest does not
+// have -- six operands the graph hands over, so no launch writes any of them,
+// the allocation group carves none and every band is filled by a copy op of its
+// own. Those copies have to run in the concat's own step, side by side. One
+// after another is the chain the rule forbids, and it is not visible in the
+// values: a serial fill computes the same result, slowly.
+//
+// The other half is the kernel boundary. The bands are written by launches
+// beside the concat rather than inside it, so a reader of the result cannot
+// fuse into the concat's kernel and has to land in a later step.
+TEST_F(ExecutorTest, catParallelFillTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_parallel_fill_test.pt2";
+  const std::string results = "data/cat_parallel_fill_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.isCg = true;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg alloc groups");
+
+  // Both concats are grouped even though 'handed' has nothing to carve: the
+  // group owns the result's storage and lays the bands out, which is what the
+  // copies write through. 'mixed' carves its three gathers and copies 'tail'.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 2);
+  EXPECT_EQ(stats.numConcatMembers, 0 + 3);
+  EXPECT_EQ(stats.numConcatNoMembers, 1);
+  EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+
+  // With isCg forced there is one grid, and it is the cooperative one: the
+  // variant selection builds cgGrid_ only when it is choosing between variants
+  // at run time. So the plan to read is the default one, not 'cg'.
+  const auto& plan = compilePlans(pt2).multiKernel;
+  // Six copies for 'handed' and one for 'tail', each in the step of the concat
+  // whose band it fills.
+  EXPECT_TRUE(
+      plan.sideBySideWith("aten.clone.default", "aten.cat.default", 6 + 1));
+  // Neither reader fuses into a concat's kernel, and both run after the last
+  // of them -- the bands are written beside the concat, so the whole step has
+  // to be over before the result can be read.
+  EXPECT_TRUE(
+      plan.kernelBoundaryBetween("aten.cat.default", "aten.mul.Scalar"));
+  EXPECT_TRUE(plan.runsAfter("aten.mul.Scalar", "aten.cat.default"));
+  EXPECT_TRUE(
+      plan.kernelBoundaryBetween("aten.cat.default", "aten.add.Scalar"));
+  EXPECT_TRUE(plan.runsAfter("aten.add.Scalar", "aten.cat.default"));
+}
+
+// Two wide concats of the same shape over different operands. They deduplicate
+// to one project operation that runs twice, so everything the concat works
+// with is formal and each instance has to be handed its own actual -- including
+// the values the operand copies write, which stand for no node in the graph the
+// caller exported.
+//
+// 'shared' is joined twice by each concat: four regions filled from one buffer,
+// across two instances. Each needs a destination of its own. A destination
+// reused between the two instances is the failure this is for, and it is not
+// visible in the plan -- both instances look right on their own. It shows up
+// only in the values, where one concat's region holds the other's data.
+TEST_F(ExecutorTest, catDedupTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  const auto savedGroup = config.enableAllocGroup;
+  const auto savedConcat = config.enableConcatAllocGroup;
+  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+    config.enableAllocGroup = savedGroup;
+    config.enableConcatAllocGroup = savedConcat;
+  });
+
+  const std::string pt2 = "data/cat_dedup_test.pt2";
+  const std::string results = "data/cat_dedup_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = std::nullopt;
+
+  // The two concats reach the same plan, and the copies that fill their bands
+  // run off one kernel op with per-launch parameters, so a mix-up between the
+  // instances would be a mix-up between two runs of the same code.
+  config.isCg = true;
+  config.freeIntermediates = true;
+  config.enableAllocGroup = true;
+  config.enableConcatAllocGroup = true;
+  runTest(pt2, results, "cg alloc groups");
+
+  // Both concats are grouped, and each carves the one operand written at the
+  // step its result is laid out. The other gather runs a node earlier, so its
+  // buffer already exists when the result is allocated and a copy moves it;
+  // 'shared' twice and the tail are the graph's, which no launch writes at all.
+  //
+  // This counted 2 per concat before the layout point came from placement, but
+  // none of those four was ever carved: the group was created at a step where
+  // its members are not sized, so the collector captured nothing and the run
+  // reported "2 of 2 values were not sized by any launch" for each group. The
+  // count below is the number the run actually carves.
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 2);
+  EXPECT_EQ(stats.numConcatMembers, 1 + 1);
 }
 
 // The same shapes joined along a new dimension instead of an existing one, up
@@ -1862,15 +2103,23 @@ TEST_F(ExecutorTest, indexTensorTest) {
   EXPECT_TRUE(plans.multiKernel.standalone("aten.index.Tensor"));
   EXPECT_TRUE(plans.multiKernel.kernelBoundaryBetween(
       "aten.index.Tensor", "tw.index_select"));
-  EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_head"}));
-  EXPECT_TRUE(plans.multiKernel.inLaterStep(
-      "tw.masked_select_final", "tw.masked_select_head"));
+  if (WaveConfig::get().singlePass) {
+    // --tw_single_pass replaces the head/add_sizes/final decomposition and the
+    // cg variant with one look-back op, so there is nothing to sequence.
+    EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_1pass"}));
+  } else {
+    EXPECT_TRUE(plans.multiKernel.fuses({"tw.masked_select_head"}));
+    EXPECT_TRUE(plans.multiKernel.inLaterStep(
+        "tw.masked_select_final", "tw.masked_select_head"));
+  }
 
   // Single-block: masked_select fuses into one kernel instead of decomposing.
   EXPECT_TRUE(plans.singleBlock.fuses({"aten.masked_select.default"}));
 
-  // Cooperative grid: masked_select uses its dedicated cg variant.
-  EXPECT_TRUE(plans.cg.fuses({"tw.masked_select_cg"}));
+  // Cooperative grid: masked_select uses its dedicated multi-block variant.
+  EXPECT_TRUE(plans.cg.fuses(
+      {WaveConfig::get().singlePass ? "tw.masked_select_1pass"
+                                    : "tw.masked_select_cg"}));
 }
 
 TEST_F(ExecutorTest, dedupTest) {
@@ -1879,6 +2128,192 @@ TEST_F(ExecutorTest, dedupTest) {
 
 TEST_F(ExecutorTest, largeElementTest) {
   runTest("data/large_element_test.pt2", "data/large_element_test_results.pt");
+}
+
+// A step with far more ops than the wave has blocks, whose sizes span three
+// orders of magnitude and are settled on device. One thousand independent
+// repeat_interleave results -- 90% of them a few tens of thousands of elements,
+// a handful in the millions -- each scaled by an elementwise op, plus one
+// barrier op (a cooperative-grid cumsum) to make the step a cg grid.
+//
+// The barrier op is what turns the size spread into the pathology this is
+// about. A cg grid is trimmed back to one wave, and with more ops than the wave
+// has blocks the trim cannot get there: it strips the widest op a block at a
+// time until every op is on one, so the multi-million-element op ends up beside
+// the sixteen-thousand-element ones and the step's makespan becomes its alone.
+// (Without the barrier op the ordinary pro-rata split handles this graph fine
+// -- 1096 blocks over a 432-block wave, skew 1.0.) The size mix comes out of
+// the runtime counts tensor, so none of it is known when the grid is compiled.
+TEST_F(ExecutorTest, launchSkewTest) {
+  constexpr int32_t kNumOps = 1000;
+  // Elements in the tensor every op repeats, so an op's size is kSeedLen times
+  // its count.
+  constexpr int64_t kSeedLen = 32;
+
+  // Millions for a few, hundreds of thousands for a tenth, tens of thousands
+  // for the remaining 90%.
+  auto countFor = [](int32_t index) -> int64_t {
+    if (index < 3) {
+      return 62'500;
+    }
+    return index < 100 ? 1'875 : 500;
+  };
+
+  std::string graphStr = "graph(%seed, %counts):\n";
+  std::string returns;
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["seed"] = makeTensorMeta(c10::ScalarType::Float, 1);
+  meta["counts"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  for (int32_t i = 0; i < kNumOps; ++i) {
+    graphStr += fmt::format(
+        "%c{0} = torch.ops.aten.select.int(self=%counts, dim=0, index={0})\n"
+        "%x{0} = torch.ops.aten.repeat_interleave.self_Tensor(self=%seed, repeats=%c{0})\n"
+        "%o{0} = torch.ops.aten.mul.Scalar(self=%x{0}, other=2.0)\n",
+        i);
+    meta[fmt::format("c{}", i)] = makeTensorMeta(c10::ScalarType::Long, 0);
+    meta[fmt::format("x{}", i)] = makeTensorMeta(c10::ScalarType::Float, 1);
+    meta[fmt::format("o{}", i)] = makeTensorMeta(c10::ScalarType::Float, 1);
+    returns += fmt::format("{}%o{}", i == 0 ? "" : ", ", i);
+  }
+  // One barrier op in the same step as the thousand scales: a cg cumsum over
+  // the smallest of them, so it contributes almost nothing to the step's work
+  // and only its barrier matters.
+  graphStr += fmt::format(
+      "%cs = torch.ops.aten.cumsum.default(self=%x{}, dim=0)\n", kNumOps - 1);
+  meta["cs"] = makeTensorMeta(c10::ScalarType::Float, 1);
+  returns += ", %cs";
+  graphStr += "return(" + returns + ")\n";
+
+  auto seed = at::arange(kSeedLen, at::kFloat);
+  std::vector<int64_t> countValues;
+  countValues.reserve(kNumOps);
+  for (int32_t i = 0; i < kNumOps; ++i) {
+    countValues.push_back(countFor(i));
+  }
+  auto counts = at::tensor(countValues, at::kLong);
+
+  // The op count and the size spread are the point of the test; if the graph
+  // ever stops producing them the assertions below would pass vacuously.
+  ASSERT_EQ(countFor(0) * kSeedLen, 2'000'000);
+  ASSERT_EQ(countFor(999) * kSeedLen, 16'000);
+
+  // launchMeta and the per-block clocks, and with them the grid measurement,
+  // are only collected under kTiming.
+  const int32_t savedTrace = WaveConfig::get().trace;
+  auto resetConfig = folly::makeGuard([savedTrace] {
+    WaveConfig::get().trace = savedTrace;
+    WaveConfig::get().partitionLaunches = false;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+  WaveConfig::get().trace =
+      savedTrace | WaveConfig::kGrid | WaveConfig::kTiming;
+  WaveConfig::get().isCg = true;
+
+  // How evenly a step's blocks actually ran, from their own clocks: the work
+  // done over what the machine could have done in the longest block's time. 1
+  // is every block finishing together.
+  struct StepBalance {
+    LaunchMeta meta;
+    double util{0};
+    int64_t maxClocks{0};
+  };
+
+  // The step of the last run whose grid came out worst balanced, and how its
+  // blocks really ran.
+  auto worstStep = []() -> StepBalance {
+    const auto& info = waveThreadInfo();
+    StepBalance worst;
+    for (size_t i = 0; i < info.launchMeta.size(); ++i) {
+      const auto& step = info.launchMeta[i];
+      if (step.gridStats.numOps <= 1 ||
+          step.gridStats.skew <= worst.meta.gridStats.skew) {
+        continue;
+      }
+      worst = StepBalance{.meta = step};
+      if (i >= info.debugInfo.size() || info.debugInfo[i].empty()) {
+        continue;
+      }
+      int64_t total = 0;
+      for (const auto& block : info.debugInfo[i]) {
+        total += block.clocks;
+        worst.maxClocks = std::max(worst.maxClocks, block.clocks);
+      }
+      if (worst.maxClocks > 0) {
+        worst.util = static_cast<double>(total) /
+            (static_cast<double>(worst.maxClocks) *
+             static_cast<double>(info.debugInfo[i].size()));
+      }
+    }
+    return worst;
+  };
+
+  auto checkOutputs = [&](const std::vector<at::Tensor>& outputs,
+                          const char* label) {
+    ASSERT_EQ(outputs.size(), static_cast<size_t>(kNumOps) + 1) << label;
+    for (int32_t i = 0; i < kNumOps; ++i) {
+      auto reference =
+          at::repeat_interleave(seed, at::scalar_tensor(countFor(i), at::kLong))
+              .mul(2.0);
+      ASSERT_TRUE(tensorsMatch(outputs[i], reference))
+          << label << " output " << i << ": "
+          << firstDifference(outputs[i], reference);
+    }
+    // The barrier op. Its blocks have to stay co-resident in one cooperative
+    // launch however the step is split, and a scan is what notices when they
+    // do not.
+    auto scan = at::cumsum(
+        at::repeat_interleave(
+            seed, at::scalar_tensor(countFor(kNumOps - 1), at::kLong)),
+        0);
+    ASSERT_TRUE(tensorsMatch(outputs[kNumOps], scan))
+        << label << " cumsum: " << firstDifference(outputs[kNumOps], scan);
+  };
+
+  WaveConfig::get().partitionLaunches = false;
+  checkOutputs(
+      runWaveProgrammatic(
+          nativert::stringToGraph(graphStr), meta, {{seed, counts}}),
+      "one launch per step");
+  const auto unsplit = worstStep();
+
+  // The premise: more ops than the wave has blocks, so the cg trim leaves
+  // almost all of them on one block and the step runs many times longer than a
+  // balanced wave of the same work would.
+  EXPECT_GT(unsplit.meta.gridStats.numStarved, 0);
+  EXPECT_GT(unsplit.meta.gridStats.skew, 5.0f);
+  EXPECT_EQ(unsplit.meta.gridStats.numSegments, 1);
+
+  WaveConfig::get().partitionLaunches = true;
+  checkOutputs(
+      runWaveProgrammatic(
+          nativert::stringToGraph(graphStr), meta, {{seed, counts}}),
+      "partitioned");
+  const auto split = worstStep();
+
+  LOG(INFO) << fmt::format(
+      "launchSkew: node {} step {} ops={} target={} skew={:.1f} starved={}; "
+      "one launch: util={:.1f}% maxClk={} -> {} launches: util={:.1f}% maxClk={}",
+      unsplit.meta.sequenceNumber,
+      unsplit.meta.stepIdx,
+      unsplit.meta.gridStats.numOps,
+      unsplit.meta.gridStats.targetBlocks,
+      unsplit.meta.gridStats.skew,
+      unsplit.meta.gridStats.numStarved,
+      100.0 * unsplit.util,
+      unsplit.maxClocks,
+      split.meta.gridStats.numSegments,
+      100.0 * split.util,
+      split.maxClocks);
+
+  // Same step, now spread over several packed waves. An op straddling a launch
+  // boundary still computes its whole slice, which is what the matching outputs
+  // above establish.
+  EXPECT_EQ(split.meta.sequenceNumber, unsplit.meta.sequenceNumber);
+  EXPECT_EQ(split.meta.stepIdx, unsplit.meta.stepIdx);
+  EXPECT_GT(split.meta.gridStats.numSegments, 1);
+  // The point of the split: the longest block, which is the step's makespan,
+  // comes down because the op that owned it is no longer confined to one block.
+  EXPECT_LT(split.maxClocks, unsplit.maxClocks / 2);
 }
 
 TEST_F(ExecutorTest, referenceFrame) {

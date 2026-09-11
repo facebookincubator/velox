@@ -33,6 +33,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleStringDecoderZeroCopySession);
     VELOX_HIVE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
+    VELOX_HIVE_CONFIG_REGISTER(kNimbleIntegerDictionaryAwareFilteringSession);
     VELOX_HIVE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);
     VELOX_HIVE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
     VELOX_HIVE_CONFIG_REGISTER(kIgnoreMissingFilesSession);

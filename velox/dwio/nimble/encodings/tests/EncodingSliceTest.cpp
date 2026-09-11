@@ -32,6 +32,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -48,6 +49,8 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 using namespace facebook;
@@ -282,6 +285,16 @@ class EncodingSliceTest : public ::testing::Test {
         expectedEncodingType = nimble::EncodingType::Slice;
       }
     }
+    if constexpr (std::is_same_v<
+                      EncodingType,
+                      nimble::BlockBitPackingEncoding<T>>) {
+      // A range whose boundary sits inside a block keeps the boundary blocks
+      // whole and comes back wrapped. This test's sources fit in one block, so
+      // any range that isn't the full source is mid-block.
+      if (offset > 0 || offset + length < values.size()) {
+        expectedEncodingType = nimble::EncodingType::Slice;
+      }
+    }
 
     EXPECT_EQ(encoding->encodingType(), expectedEncodingType);
     EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
@@ -361,9 +374,17 @@ TYPED_TEST(EncodingSliceTypedTest, materializesRange) {
   constexpr uint32_t offset{1};
   constexpr uint32_t length{3};
 
+  // BlockBitPacking with default blockSize (1024) fits the 6-value source in
+  // one block, so this mid-block range comes back wrapped in a SliceEncoding.
+  auto expectedType = nimble::test::Encoder<EncodingType>::encodingType();
+  if constexpr (std::is_same_v<
+                    EncodingType,
+                    nimble::BlockBitPackingEncoding<uint32_t>>) {
+    expectedType = nimble::EncodingType::Slice;
+  }
   this->template expectSliceMaterializes<EncodingType>(
       nimble::toString(nimble::test::Encoder<EncodingType>::encodingType()),
-      nimble::test::Encoder<EncodingType>::encodingType(),
+      expectedType,
       values,
       offset,
       length);
@@ -386,6 +407,120 @@ TEST_F(EncodingSliceTest, dictionaryRejectsZeroLengthRange) {
 
   NIMBLE_ASSERT_THROW(
       slice(encoded, /*offset=*/1, /*length=*/0), "Cannot slice zero rows.");
+}
+
+TEST_F(EncodingSliceTest, bitRangeSplitReplaysRanges) {
+  constexpr std::string_view kRangesConfig = "0-15;16-47;48-63";
+  const auto values = makeVector<uint64_t>({
+      0x299aff8ca62b0001,
+      0x299be75117820001,
+      0x0999c1e5b8460001,
+      0x299f100bfa830002,
+  });
+  const nimble::EncodingLayout layout{
+      nimble::EncodingType::BitRangeSplit,
+      nimble::EncodingLayout::Config{{
+          {std::string(
+               nimble::BitRangeSplitEncoding<uint64_t>::kRangesConfigKey),
+           std::string(kRangesConfig)},
+      }},
+      nimble::CompressionType::Uncompressed,
+      std::vector<std::optional<const nimble::EncodingLayout>>(3)};
+  const nimble::EncodingSelectionPolicyCreator policyCreator =
+      [](nimble::DataType dataType)
+      -> std::unique_ptr<nimble::EncodingSelectionPolicyBase> {
+    return nimble::ManualEncodingSelectionPolicyFactory{}.createPolicy(
+        dataType);
+  };
+  const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+      std::make_unique<nimble::ReplayedEncodingSelectionPolicy<uint64_t>>(
+          layout, std::nullopt, policyCreator),
+      values,
+      *buffer_,
+      {});
+
+  const auto sliced = slice(encoded, /*offset=*/1, /*length=*/2);
+  auto encoding = createEncoding(sliced);
+  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::BitRangeSplit);
+  nimble::Vector<uint64_t> output{pool_.get(), 2};
+  encoding->materialize(/*rowCount=*/2, output.data());
+  EXPECT_EQ(
+      std::vector<uint64_t>(output.begin(), output.end()),
+      (std::vector<uint64_t>{values[1], values[2]}));
+
+  const auto captured = nimble::EncodingLayoutCapture::capture(sliced, {});
+  EXPECT_EQ(
+      captured.config().get(
+          std::string(
+              nimble::BitRangeSplitEncoding<uint64_t>::kRangesConfigKey)),
+      kRangesConfig);
+}
+
+TEST_F(
+    EncodingSliceTest,
+    bitRangeSplitSlicesAlignedBlockBitPackingChildrenNatively) {
+  constexpr std::string_view kRangesConfig = "0-15;16-47;48-63";
+  const auto values = makeVector<uint64_t>({
+      0x299aff8ca62b0001,
+      0x199be75117820002,
+      0x0999c1e5b8460003,
+      0x399f100bfa830004,
+      0x499c3851cd460005,
+      0x599d247e14c90006,
+  });
+  const auto blockBitPackingLayout = [] {
+    return nimble::EncodingLayout{
+        nimble::EncodingType::BlockBitPacking,
+        {},
+        nimble::CompressionType::Uncompressed,
+        {std::nullopt, std::nullopt, std::nullopt}};
+  };
+  const nimble::EncodingLayout layout{
+      nimble::EncodingType::BitRangeSplit,
+      nimble::EncodingLayout::Config{{
+          {std::string(
+               nimble::BitRangeSplitEncoding<uint64_t>::kRangesConfigKey),
+           std::string(kRangesConfig)},
+      }},
+      nimble::CompressionType::Uncompressed,
+      {
+          blockBitPackingLayout(),
+          blockBitPackingLayout(),
+          blockBitPackingLayout(),
+      }};
+  const nimble::EncodingSelectionPolicyCreator policyCreator =
+      [](nimble::DataType dataType)
+      -> std::unique_ptr<nimble::EncodingSelectionPolicyBase> {
+    return nimble::ManualEncodingSelectionPolicyFactory{}.createPolicy(
+        dataType);
+  };
+  const nimble::Encoding::Options options{.blockBitPackingBlockSize = 2};
+  const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+      std::make_unique<nimble::ReplayedEncodingSelectionPolicy<uint64_t>>(
+          layout, std::nullopt, policyCreator),
+      values,
+      *buffer_,
+      options);
+
+  const auto sliced = nimble::EncodingFactory::slice(
+      encoded, /*offset=*/2, /*length=*/2, *buffer_, options);
+  const auto captured = nimble::EncodingLayoutCapture::capture(sliced, options);
+  ASSERT_EQ(captured.childrenCount(), 3);
+  for (nimble::NestedEncodingIdentifier sectionIndex{0}; sectionIndex < 3;
+       ++sectionIndex) {
+    SCOPED_TRACE(testing::Message() << "sectionIndex=" << sectionIndex);
+    ASSERT_TRUE(captured.child(sectionIndex).has_value());
+    EXPECT_EQ(
+        captured.child(sectionIndex)->encodingType(),
+        nimble::EncodingType::BlockBitPacking);
+  }
+
+  auto encoding = createEncoding(sliced);
+  nimble::Vector<uint64_t> output{pool_.get(), 2};
+  encoding->materialize(/*rowCount=*/2, output.data());
+  EXPECT_EQ(
+      std::vector<uint64_t>(output.begin(), output.end()),
+      (std::vector<uint64_t>{values[2], values[3]}));
 }
 
 TYPED_TEST(EncodingSliceTypedTest, materializesRandomRanges) {

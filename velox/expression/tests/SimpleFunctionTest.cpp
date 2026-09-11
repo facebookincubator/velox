@@ -359,6 +359,30 @@ TEST_F(SimpleFunctionTest, rowReader) {
   assertEqualVectors(expected, result);
 }
 
+TEST_F(SimpleFunctionTest, namedRow) {
+  registerFunction<
+      RowWriterFunction,
+      Row<Field<"first", int64_t>, Field<"second", double>>,
+      int64_t>({"named_row_writer_func"});
+  registerFunction<
+      RowReaderFunction,
+      int64_t,
+      Row<Field<"first", int64_t>, Field<"second", double>>>(
+      {"named_row_reader_func"});
+
+  const auto input = makeRowVector({makeFlatVector<int64_t>(
+      rowVectorCol1.size(), [](auto row) { return row; })});
+  const auto namedRow = evaluate<RowVector>("named_row_writer_func(c0)", input);
+  EXPECT_EQ(
+      namedRow->type()->asRow().names(),
+      std::vector<std::string>({"first", "second"}));
+
+  assertEqualVectors(
+      vectorMaker_.flatVector(rowVectorCol1),
+      evaluate<FlatVector<int64_t>>(
+          "named_row_reader_func(c0)", makeRowVector({namedRow})));
+}
+
 // Function that takes a tuple of an array and a double.
 template <typename T>
 struct RowArrayReaderFunction {
