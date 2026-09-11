@@ -23,11 +23,13 @@
 #include "velox/connectors/hive/storage_adapters/gcs/GcsWriteFile.h"
 #include "velox/core/QueryConfig.h"
 
+#include <boost/algorithm/string.hpp>
 #include <fmt/format.h>
 #include <glog/logging.h>
 #include <memory>
 #include <stdexcept>
 
+#include <google/cloud/options.h>
 #include <google/cloud/storage/client.h>
 
 namespace facebook::velox {
@@ -137,6 +139,18 @@ class GcsFileSystem::Impl {
       LOG(WARNING)
           << "Config hive.gcs.json-key-file-path is empty or key file path not found";
     }
+
+    std::vector<std::string> userAgentProducts;
+    if (auto userAgent = hiveConfig_->gcsUserAgent();
+        userAgent && !userAgent->empty()) {
+      userAgentProducts.push_back(std::move(*userAgent));
+    }
+
+    if (userAgentProducts.empty() ||
+        !boost::algorithm::icontains(userAgentProducts.back(), "velox")) {
+      userAgentProducts.emplace_back("velox");
+    }
+    options.set<gc::UserAgentProductsOption>(std::move(userAgentProducts));
 
     client_ = std::make_shared<gcs::Client>(options);
   }
