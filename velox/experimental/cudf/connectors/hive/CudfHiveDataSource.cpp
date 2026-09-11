@@ -151,7 +151,7 @@ CudfHiveDataSource::CudfHiveDataSource(
             not connectorQueryCtx_->sessionTimezone().empty()
         ? tz::locateZone(connectorQueryCtx_->sessionTimezone())
         : nullptr;
-    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
+    subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_,
         subfieldTree_,
         subfieldScalars_,
@@ -186,7 +186,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
