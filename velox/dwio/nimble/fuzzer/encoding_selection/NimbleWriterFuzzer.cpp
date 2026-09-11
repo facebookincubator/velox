@@ -78,7 +78,7 @@ using ::facebook::velox::fuzzer::FuzzerGenerator;
 // phase and coverage gate from adding them back. This is not a global
 // unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
+    std::to_array({EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,

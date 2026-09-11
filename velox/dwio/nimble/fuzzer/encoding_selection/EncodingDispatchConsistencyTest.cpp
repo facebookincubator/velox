@@ -316,7 +316,10 @@ TEST_F(
   fuzzer.run();
 
   EXPECT_EQ(fuzzer.numUnfilteredFilesWritten(), kNumUnfilteredRounds);
-  EXPECT_FALSE(fuzzer.coverage().contains(EncodingType::Huffman));
+  // Huffman is a fuzzer candidate now. It reaches the writer only through the
+  // forced rounds, which gate floating-point streams; the unfiltered rounds
+  // still omit it, for the reason in isIntegralOnlyEncoding.
+  EXPECT_TRUE(fuzzer.coverage().contains(EncodingType::Huffman));
   for (const auto encodingType : allCandidateEncodings()) {
     SCOPED_TRACE(toString(encodingType));
     const auto entry = fuzzer.coverage().find(encodingType);

@@ -191,6 +191,55 @@ TEST_F(HuffmanEncodingTest, signedRoundTrip) {
   EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin()));
 }
 
+TEST_F(HuffmanEncodingTest, skewedDistributionLengthLimitedRoundTrip) {
+  // Fibonacci frequencies force a maximally skewed Huffman tree whose deepest
+  // code is ~n-1 bits, far beyond kMaxCodeBits. Encoding must length-limit the
+  // tree instead of throwing, and the code must still round-trip exactly. A
+  // successful decode also proves the stored table log is <= kMaxCodeBits,
+  // since the decoder rejects anything deeper.
+  Vector<int32_t> values{pool_.get()};
+  uint64_t previous = 0;
+  uint64_t current = 1;
+  for (int32_t symbol = 0; symbol < 28; ++symbol) {
+    for (uint64_t i = 0; i < current; ++i) {
+      values.push_back(symbol);
+    }
+    const uint64_t next = previous + current;
+    previous = current;
+    current = next;
+  }
+
+  // encode() throwing NIMBLE_INCOMPATIBLE_ENCODING here fails the test, which
+  // is the regression being guarded.
+  auto encoding = encode(values);
+
+  Vector<int32_t> result{pool_.get(), values.size()};
+  encoding->materialize(static_cast<uint32_t>(values.size()), result.data());
+  EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin()));
+}
+
+TEST_F(HuffmanEncodingTest, nearUniformLargeAlphabetRoundTrip) {
+  // A large near-uniform alphabet exercises the full 16-bit decode table
+  // without triggering length-limiting; codes sit a few bits below the limit.
+  // Rejected outright at the previous 4,096-symbol cap.
+  constexpr int32_t kSymbols = 5000;
+  Vector<int32_t> values{pool_.get()};
+  for (int32_t symbol = 0; symbol < kSymbols; ++symbol) {
+    const int32_t count = 4 + (symbol % 2);
+    for (int32_t i = 0; i < count; ++i) {
+      values.push_back(symbol);
+    }
+  }
+
+  // encode() throwing NIMBLE_INCOMPATIBLE_ENCODING here fails the test, which
+  // is the regression being guarded.
+  auto encoding = encode(values);
+
+  Vector<int32_t> result{pool_.get(), values.size()};
+  encoding->materialize(static_cast<uint32_t>(values.size()), result.data());
+  EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin()));
+}
+
 TEST_F(HuffmanEncodingTest, skipAndPartialReadsCrossCheckpoints) {
   Vector<uint64_t> values{pool_.get()};
   for (uint32_t i = 0; i < 900; ++i) {
@@ -299,7 +348,13 @@ TEST_F(HuffmanEncodingTest, estimateRejectsUnsupportedCardinality) {
       std::nullopt);
 }
 
-TEST_F(HuffmanEncodingTest, estimateRejectsCodeTreePastLimit) {
+// Inverts the former estimateRejectsCodeTreePastLimit, which asserted that
+// encode() throws on a tree deeper than kMaxCodeBits and that estimateSize
+// declines the same input so selection never offers it. encode() now
+// length-limits instead of throwing, so there is nothing left to decline and
+// the depth gate is gone from both sides. Same Fibonacci input, both
+// assertions flipped.
+TEST_F(HuffmanEncodingTest, estimateAcceptsCodeTreePastLimit) {
   constexpr std::array<uint32_t, 14> kFrequencies = {
       1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377};
   Vector<uint32_t> values{pool_.get()};
@@ -310,11 +365,15 @@ TEST_F(HuffmanEncodingTest, estimateRejectsCodeTreePastLimit) {
   }
 
   const std::span<const uint32_t> input{values.data(), values.size()};
-  NIMBLE_ASSERT_THROW(encode(values), "Huffman tree exceeds");
-  EXPECT_EQ(
+  EXPECT_NE(
       HuffmanEncoding<uint32_t>::estimateSize(
           input, Statistics<uint32_t>::create(input)),
       std::nullopt);
+
+  auto encoding = encode(values);
+  Vector<uint32_t> result{pool_.get(), values.size()};
+  encoding->materialize(static_cast<uint32_t>(values.size()), result.data());
+  EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin()));
 }
 
 TEST_F(HuffmanEncodingTest, estimateSizeIncludesCodesAndCheckpoints) {
