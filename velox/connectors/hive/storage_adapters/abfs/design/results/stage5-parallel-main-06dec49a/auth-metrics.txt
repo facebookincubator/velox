@@ -1,0 +1,51 @@
+Stage 5 parallel dynamic-SAS auth metrics
+Date: 2026-07-22
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Single-key single-flight
+- configured_workers=1
+- simultaneous_waiters=64
+- refresh_callbacks=1
+- shared_refreshes=63
+- completed_refreshes=64
+- provider_callback_runs=1
+- all_waiters_received_same_token=true
+
+Distinct-key saturation
+- configured_workers=2
+- configured_queued_distinct_refreshes=2
+- active_refreshes_at_saturation=2
+- queued_refreshes_at_saturation=2
+- in_flight_keys_at_saturation=4
+- waiting_refreshes_at_saturation=4
+- overloaded_refreshes=1
+- sibling_eventbase_request_completed_while_saturated=true
+- final_active_refreshes=0
+- final_queued_refreshes=0
+- final_in_flight_refreshes=0
+- final_waiting_refreshes=0
+
+Cancellation and shutdown
+- one_waiter_cancelled_refreshes=1
+- peer_waiter_delivery_preserved=true
+- all_queued_waiters_cancelled_refreshes=2
+- unstarted_queued_callback_runs=0
+- shutdown_cancelled_refreshes=2
+- shutdown_waited_for_executing_callback=true
+
+Completion race
+- iterations=100
+- terminal_request_results=100
+- final_active_refreshes_each_iteration=0
+- final_queued_refreshes_each_iteration=0
+- final_in_flight_refreshes_each_iteration=0
+- final_waiting_refreshes_each_iteration=0
+
+Dynamic client forced refresh
+- concurrent_reads=64
+- token_provider_calls=2
+- first_call=initial_client_token
+- second_call=shared_forced_refresh
+- transport_requests=65
+- recreated_clients_retained_supplied_transport=true

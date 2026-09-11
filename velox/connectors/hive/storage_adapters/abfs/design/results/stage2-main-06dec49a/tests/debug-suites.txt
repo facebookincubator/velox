@@ -1,0 +1,28 @@
+Stage 2 C2 ordinary Debug validation
+Date: 2026-07-20
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Complete suites
+- velox_abfs_stage2_runtime_test: 12 of 12 tests passed.
+- velox_abfs_stage1_transport_test: 59 of 59 tests passed.
+  This includes 58 transport tests and the Stage 1 C1 concurrency test.
+
+Focused durability
+- Multi-shard active/fiber bound plus overflow rejection: 100 of 100
+  in-process repetitions passed.
+- Runtime-owned endpoint lifetime: 100 of 100 repetitions passed in the
+  preceding Stage 2 increment.
+- Pool idle eviction, waiter timeout boundary, acquisition timeout, and
+  teardown matrix: 100 of 100 repetitions passed in the preceding increment.
+
+Bounds evidence
+- Runtime shards: 3.
+- Peak active requests: 3.
+- Maximum inactive queue: 2.
+- Configured fiber stack: 131072 bytes.
+- Configured peak active stack capacity: 393216 bytes.
+- Measured ordinary Debug stack high watermark: 4944 bytes.
+
+The measured watermark is one focused-run observation, not a production stack
+sizing recommendation. Configured capacity and measured use remain separate.

@@ -55,6 +55,47 @@ defaultProviderRegistry() {
   return kRegistry;
 }
 
+struct SelectedProviderFactory {
+  AzureClientProviderFactory factory;
+  std::string context;
+};
+
+SelectedProviderFactory selectClientFactory(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  const auto& account = abfsPath->accountName();
+  return azureClientFactoryRegistry().withRLock(
+      [&](const auto& factories) -> SelectedProviderFactory {
+        if (auto it = factories.find(account); it != factories.end()) {
+          return {it->second, "registered provider"};
+        }
+        LOG(INFO) << "No AzureClientProviderFactory registered for account '"
+                  << account << "', creating default provider from config.";
+
+        auto authTypeKey = fmt::format(
+            "{}.{}", kAzureAccountAuthType, abfsPath->accountNameWithSuffix());
+        VELOX_USER_CHECK(
+            config.valueExists(authTypeKey),
+            "No AzureClientProviderFactory registered for account '{}' and no "
+            "auth type found in config key '{}'. "
+            "Please either register a factory using `registerAzureClientProvider` "
+            "or `registerAzureClientProviderFactory`, or provide auth type in config.",
+            account,
+            authTypeKey);
+
+        auto authType = config.get<std::string>(authTypeKey).value();
+        auto factory =
+            AzureClientProviderFactories::getDefaultProviderFactory(authType);
+        VELOX_USER_CHECK(
+            factory != nullptr,
+            "Unsupported auth type '{}' for account '{}'. "
+            "Supported auth types are SharedKey, OAuth and SAS.",
+            authType,
+            account);
+        return {std::move(factory), std::move(authType)};
+      });
+}
+
 } // namespace
 
 void AzureClientProviderFactories::registerFactory(
@@ -83,42 +124,7 @@ AzureClientProviderFactories::getDefaultProviderFactory(
 AzureClientProviderFactory AzureClientProviderFactories::getClientFactory(
     const std::shared_ptr<AbfsPath>& abfsPath,
     const config::ConfigBase& config) {
-  const auto& account = abfsPath->accountName();
-  return azureClientFactoryRegistry().withRLock(
-      [&](const auto& factories) -> AzureClientProviderFactory {
-        if (auto it = factories.find(account); it != factories.end()) {
-          return it->second;
-        }
-        LOG(INFO) << "No AzureClientProviderFactory registered for account '"
-                  << account << "', creating default provider from config.";
-
-        // Build the auth-type key using the full account-name-with-suffix so
-        // ABFS URLs targeting non-public clouds or custom endpoints resolve
-        // the same key that the provider implementations already use.
-        auto authTypeKey = fmt::format(
-            "{}.{}", kAzureAccountAuthType, abfsPath->accountNameWithSuffix());
-        VELOX_USER_CHECK(
-            config.valueExists(authTypeKey),
-            "No AzureClientProviderFactory registered for account '{}' and no "
-            "auth type found in config key '{}'. "
-            "Please either register a factory using `registerAzureClientProvider` "
-            "or `registerAzureClientProviderFactory`, or provide auth type in config.",
-            account,
-            authTypeKey);
-
-        auto authType = config.get<std::string>(authTypeKey).value();
-
-        // Return a factory based on the auth type that doesn't depend on config
-        auto factory = getDefaultProviderFactory(authType);
-        VELOX_USER_CHECK(
-            factory != nullptr,
-            "Unsupported auth type '{}' for account '{}'. "
-            "Supported auth types are SharedKey, OAuth and SAS.",
-            authType,
-            account);
-
-        return factory;
-      });
+  return selectClientFactory(abfsPath, config).factory;
 }
 
 std::unique_ptr<AzureBlobClient>
@@ -127,6 +133,28 @@ AzureClientProviderFactories::getReadFileClient(
     const config::ConfigBase& config) {
   auto factory = getClientFactory(abfsPath, config);
   return factory(abfsPath->accountName())->getReadFileClient(abfsPath, config);
+}
+
+AzureReadClients AzureClientProviderFactories::getReadFileClients(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config,
+    const AzureAsyncReadContext* asyncContext) {
+  auto selectedFactory = selectClientFactory(abfsPath, config);
+  auto provider = selectedFactory.factory(abfsPath->accountName());
+
+  AzureReadClients clients;
+  clients.providerContext = std::move(selectedFactory.context);
+  clients.sync = provider->getReadFileClient(abfsPath, config);
+  if (asyncContext != nullptr) {
+    clients.fiber =
+        provider->getReadFileClientForAsync(abfsPath, config, *asyncContext);
+    if (clients.fiber == nullptr) {
+      clients.asyncUnsupportedReason =
+          "Azure client provider does not support read clients with custom "
+          "options.";
+    }
+  }
+  return clients;
 }
 
 std::unique_ptr<AzureDataLakeFileClient>

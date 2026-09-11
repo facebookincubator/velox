@@ -95,4 +95,7 @@ inline std::string throwStorageExceptionWithOperationDetails(
 std::vector<CacheKey> extractCacheKeyFromConfig(
     const config::ConfigBase& config);
 
+std::vector<CacheKey> extractFileSystemCacheKeyFromConfig(
+    const config::ConfigBase& config);
+
 } // namespace facebook::velox::filesystems

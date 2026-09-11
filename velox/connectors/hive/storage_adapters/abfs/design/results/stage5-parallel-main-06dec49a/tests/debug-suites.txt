@@ -1,0 +1,47 @@
+Stage 5 parallel dynamic-SAS ordinary Debug validation
+Date: 2026-07-22
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Complete suites
+- velox_abfs_test: 42 of 42 passed.
+- velox_abfs_registration_test: 25 of 25 passed.
+- velox_abfs_stage1_transport_test: 59 of 59 passed.
+- velox_abfs_stage2_runtime_test: 28 of 28 passed.
+- Total CTest elapsed: 87.04 seconds.
+- Failures: 0.
+
+Focused runtime auth tests
+- AuthRefreshYieldsToSiblingRequest
+- AuthRefreshSharesOneCallbackForSameKey
+- AuthRefreshBoundsDistinctKeys
+- AuthRefreshFansOutCallbackException
+- AuthRefreshCancellationPreservesOtherWaiter
+- AuthRefreshDropsUnstartedCancelledKey
+- AuthRefreshShutdownWaitsForExecutingCallback
+- AuthRefreshRejectsCallsOutsideRequestFiber
+- AuthRefreshCompletionRacesCancellationAndShutdown
+Result: 9 of 9 passed. The final race test performs 100 internal iterations.
+
+Focused provider compatibility
+- readFileClientsWithoutFiberOptions
+- readFileClientsWithFiberOptions
+- legacyProviderDoesNotSupportFiberOptions
+Result: 3 of 3 passed.
+
+Focused dynamic-SAS provider tests
+- asyncClientRefreshesOnFirstOperation
+- asyncClientUsesConfiguredBlobEndpoint
+- asyncClientSharesForcedRefresh
+- asyncClientFansOutProviderFailure
+Result: 4 of 4 passed.
+
+Focused file integration and lifetime
+- nativeAsyncDynamicSasReadFile
+- dynamicSasRefreshDoesNotBlockWarmSiblingRead
+- dynamicSasDestructionDuringRefreshIsSafe
+- dynamicSasCallerCancellationDuringRefresh
+- asyncAuthResourcesAreBounded
+Result: 5 of 5 passed.
+
+The complete suite also passes the unchanged synchronous dynamicSasToken test.

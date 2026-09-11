@@ -1,0 +1,32 @@
+tool=strace 6.8
+result=PASS
+test_result=PASS
+test_elapsed_seconds=9.643
+
+Named runtime thread=abfs-c1-event
+
+EventBase-thread syscall summary:
+connect_count=32
+connect_einprogress=32
+connect_other_result=0
+max_connect_seconds=0.000465
+
+recvfrom_count=15806
+recv_without_MSG_DONTWAIT=0
+max_recv_seconds=0.000545
+
+sendmsg_count=64
+send_without_MSG_DONTWAIT=0
+max_send_seconds=0.000272
+
+epoll_wait_count=2563
+poll_or_ppoll_count=0
+
+Interpretation:
+- Every TCP connect returned EINPROGRESS and completed through EventBase readiness handling.
+- Every socket receive on the runtime thread used MSG_DONTWAIT.
+- Every request send on the runtime thread used MSG_DONTWAIT and MSG_NOSIGNAL.
+- The runtime thread made no blocking poll or ppoll call.
+- Blocking poll appeared only on the separate deterministic server thread.
+
+Raw traces were not persisted because syscall payloads contain deterministic test request bytes. This sanitized count/duration summary is the retained evidence.

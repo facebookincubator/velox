@@ -1,0 +1,25 @@
+Stage 2 C2 source integrity
+Date: 2026-07-20
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+
+SHA-256
+89ae470347a210f6ea5db8014726ddb9665c7ddd38dc5bf0736af1ae1352ed2f  velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.h
+384676bdab56b407161132ab38f8b64f6057ef5f260f1e62e79d184d91837ab1  velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.cpp
+39cdfd1d9b7153026146172cac133be39bad8a7ad1450de5121b94914d143339  velox/connectors/hive/storage_adapters/abfs/FollyHttpTransport.h
+e9267233b7f280752ae45868a733ce80a8d89fc5a23ae42be5cf91afd97a3659  velox/connectors/hive/storage_adapters/abfs/FollyHttpTransport.cpp
+d0219e09daf74131daa4047bd70d97389368039705aa5b2dd622b3650d6fb1a8  velox/connectors/hive/storage_adapters/abfs/HttpConnection.h
+09c67fd56b4eb704632fd080b0e88d6e4c6347dca18d9e9c98a19357c8a74fe6  velox/connectors/hive/storage_adapters/abfs/tests/AbfsAsyncRuntimeTest.cpp
+c4cf6bd3fefeac48ef8c5088d7f7cb36170c7de65954a8c0ed34e83f3a68e633  velox/connectors/hive/storage_adapters/abfs/tests/FollyHttpTransportTest.cpp
+d48e13f092a4c9629403a2d16825aee862c70423b527dd755590de94c6d2d5e6  velox/connectors/hive/storage_adapters/abfs/tests/CMakeLists.txt
+
+Frozen Stage 0 benchmark CMake block, LF-normalized SHA-256
+7b4af22ec2ddc0dcb812dc9d59edceb48262f31b9594a8a4453e1e230ba50e0d
+
+Checks
+- Windows staging and WSL execution copies match byte-for-byte.
+- Repository-pinned clang-format 21.1.2: PASS.
+- Git whitespace checks: PASS.
+- LF line endings and final newlines: PASS.
+- VS Code diagnostics for Stage 2 runtime and transport files: clean.
+- No Stage 0 benchmark source or block changed.
+- No provider, AbfsFileSystem, AbfsReadFile, or preadvAsync wiring was added.

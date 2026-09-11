@@ -28,6 +28,22 @@ using AzureClientProviderFactory =
     std::function<std::unique_ptr<AzureClientProvider>(
         const std::string& account)>;
 
+/// Contains synchronous and optional fiber-aware read clients created by one
+/// provider instance.
+struct AzureReadClients {
+  /// Client using the provider's original transport behavior.
+  std::unique_ptr<AzureBlobClient> sync;
+
+  /// Client using caller-supplied options, when supported and requested.
+  std::unique_ptr<AzureBlobClient> fiber;
+
+  /// Explains why a requested fiber client could not be created.
+  std::string asyncUnsupportedReason;
+
+  /// Identifies the registered provider or configured auth mode selected.
+  std::string providerContext;
+};
+
 /// Handles the registration of Azure client providers and the creation of
 /// AzureBlobClient and AzureDataLakeFileClient instances.
 class AzureClientProviderFactories {
@@ -60,6 +76,13 @@ class AzureClientProviderFactories {
   static std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& abfsPath,
       const config::ConfigBase& config);
+
+  /// Uses one provider instance to create the synchronous read client and,
+  /// when asyncContext is non-null, an optional fiber-aware read client.
+  static AzureReadClients getReadFileClients(
+      const std::shared_ptr<AbfsPath>& abfsPath,
+      const config::ConfigBase& config,
+      const AzureAsyncReadContext* asyncContext);
 
   /// Uses the registered AzureClientProviderFactory to create an
   /// AzureDataLakeFileClient for file write operations. If no factory is
