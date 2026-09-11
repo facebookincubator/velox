@@ -19,6 +19,8 @@
 #include <cmath>
 
 #include <folly/GLog.h>
+#include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Fs.h"
@@ -2193,8 +2195,8 @@ exec::ExprStats adjustStats(const exec::Expr& expr) {
 
 void addStats(
     const exec::Expr& expr,
-    std::unordered_map<std::string, exec::ExprStats>& stats,
-    std::unordered_set<const exec::Expr*>& uniqueExprs,
+    folly::F14FastMap<std::string, exec::ExprStats>& stats,
+    folly::F14FastSet<const exec::Expr*>& uniqueExprs,
     bool excludeSpecialForm) {
   if (!uniqueExprs.insert(&expr).second) {
     // Common sub-expression. Skip to avoid double counting.
@@ -2219,10 +2221,13 @@ std::string makeUuid() {
 }
 } // namespace
 
-std::unordered_map<std::string, exec::ExprStats> ExprSet::stats(
+folly::F14FastMap<std::string, exec::ExprStats> ExprSet::stats(
     bool excludeSpecialForm) const {
-  std::unordered_map<std::string, exec::ExprStats> stats;
-  std::unordered_set<const exec::Expr*> uniqueExprs;
+  folly::F14FastMap<std::string, exec::ExprStats> stats;
+  folly::F14FastSet<const exec::Expr*> uniqueExprs;
+  const auto exprCount = exprs().size();
+  stats.reserve(exprCount);
+  uniqueExprs.reserve(exprCount);
   for (const auto& expr : exprs()) {
     addStats(*expr, stats, uniqueExprs, excludeSpecialForm);
   }
