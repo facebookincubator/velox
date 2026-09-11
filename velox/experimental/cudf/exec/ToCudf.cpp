@@ -170,22 +170,29 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
-      if (keepOperator == 0) {
-        if (planNode && thisOpProps.canRunOnGPU) {
-          auto replacements =
-              adapter->createReplacements(oper, planNode, ctx, id);
-          for (auto& r : replacements) {
-            replaceOp.push_back(std::move(r));
-          }
-          isPureCpuOperator = false;
-        } else {
-          // This is the CPU fallback case.
-          isPureCpuOperator = true;
+      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
+      if (canUseGpuPath) {
+        // canRunOnGPU() controls whether createReplacements() is called;
+        // keepOperator() determines whether returned operators replace or
+        // follow the original.
+        auto replacements =
+            adapter->createReplacements(oper, planNode, ctx, id);
+        // A replacing adapter must produce an operator. Check before appending
+        // an output conversion, which could make the result appear non-empty.
+        VELOX_CHECK(
+            keepOperator != 0 || !replacements.empty(),
+            "Adapter replaced an operator with nothing: {}",
+            adapter->name());
+        for (auto& r : replacements) {
+          replaceOp.push_back(std::move(r));
         }
+      }
+
+      if (keepOperator == 0) {
+        // Only a declined GPU path requires CPU fallback.
+        isPureCpuOperator = !canUseGpuPath;
       } else {
-        // adapter is present and keepOperator is 1, so this is GPU compatible
-        // operator. so this CPU operators is allowed even if fallback is
-        // disabled.
+        // A kept operator is valid with or without appended operators.
         isPureCpuOperator = false;
       }
     } else {
@@ -352,6 +359,8 @@ void registerCudf() {
 void unregisterCudf() {
   output_mr_.reset();
   mr_.reset();
+  // Undo registerCudf()'s operator adapter registration.
+  OperatorAdapterRegistry::getInstance().clear();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
