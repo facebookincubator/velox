@@ -233,4 +233,20 @@ class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
       ExpressionFuzzerState& state) override;
 };
 
+/// Generates arguments for array_least_frequent. The first argument (the
+/// array) uses default field-reference generation; the second argument (the
+/// bigint n) is constrained to a small non-negative literal so that nested
+/// invocations do not produce expressions whose bytecode exceeds the JVM
+/// limits in the Presto reference runner.
+class ArrayLeastFrequentArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~ArrayLeastFrequentArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
 } // namespace facebook::velox::fuzzer
