@@ -597,6 +597,95 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
 // The FixedPointNode constructor and the state declarations validate their
 // inputs up front, so a malformed plan fails at construction rather than at
 // execution.
+// A nested fixed point runs on the peers the enclosing loop was assigned, so
+// the enclosing loop has to know it shuffles: it must report the same width and
+// ask the coordinator for splits, or the nested exchanges wait on peers nobody
+// named.
+TEST_F(PlanNodeTest, fixedPointNestedWorkerPropagation) {
+  auto schema = ROW("x", BIGINT());
+  auto declaration = [&](const std::string& name) {
+    return std::make_shared<VectorStateDeclaration>(
+        name, schema, /*initialPlan=*/nullptr, /*append=*/true);
+  };
+  auto stateSource = [&](const std::string& id, const std::string& entry) {
+    return std::make_shared<StateSourceNode>(id, entry, schema, /*delta=*/true);
+  };
+  auto shuffleOut = [&](const std::string& id,
+                        const PlanNodePtr& source,
+                        int32_t numPartitions) {
+    return std::make_shared<PartitionedOutputNode>(
+        id,
+        PartitionedOutputNode::Kind::kPartitioned,
+        std::vector<TypedExprPtr>{
+            std::make_shared<FieldAccessTypedExpr>(BIGINT(), "x")},
+        numPartitions,
+        /*replicateNullsAndAny=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        schema,
+        "Presto",
+        std::string(TransportKind::kInMemory),
+        source);
+  };
+  // A fixed point whose own body shuffles across 'numPartitions' workers.
+  auto shufflingFixedPoint = [&](const std::string& id, int32_t numPartitions) {
+    return std::make_shared<FixedPointNode>(
+        id,
+        std::vector<StateDeclarationPtr>{declaration("m")},
+        std::vector<PlanNodePtr>{
+            shuffleOut(id + "p", stateSource(id + "s", "m"), numPartitions),
+            std::make_shared<ExchangeNode>(id + "e", schema, "Presto")},
+        ConvergenceConfig{
+            .maxIterations = 5, .errorWhenMaxIterationReached = false},
+        "m");
+  };
+  // Puts 'nested' beside the primary input so the plan still starts with a
+  // StateSourceNode; only the recursive walk finds it.
+  auto beside = [&](const std::string& id,
+                    const PlanNodePtr& primary,
+                    const PlanNodePtr& nested) {
+    return std::make_shared<LocalPartitionNode>(
+        id,
+        LocalPartitionNode::Type::kGather,
+        /*scaleWriter=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        std::vector<PlanNodePtr>{primary, nested});
+  };
+  auto noConvergence = [] {
+    return ConvergenceConfig{
+        .maxIterations = 5, .errorWhenMaxIterationReached = false};
+  };
+
+  // The enclosing loop does not shuffle itself, but adopts the nested width and
+  // the nested split requirement.
+  {
+    auto outer = std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{declaration("n")},
+        std::vector<PlanNodePtr>{
+            beside("g", stateSource("b", "n"), shufflingFixedPoint("in", 2))},
+        noConvergence(),
+        "n");
+    EXPECT_EQ(outer->numWorkers(), 2);
+    EXPECT_TRUE(outer->requiresSplits());
+  }
+
+  // A nested loop wider than the enclosing one is rejected rather than
+  // silently widening it.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{declaration("n")},
+          std::vector<PlanNodePtr>{
+              shuffleOut("p", stateSource("b", "n"), 2),
+              beside(
+                  "g",
+                  std::make_shared<ExchangeNode>("e", schema, "Presto"),
+                  shufflingFixedPoint("in", 3))},
+          noConvergence(),
+          "n"),
+      "must shuffle across the same number of workers");
+}
+
 // A convergence or body chain is one logical plan cut at its shuffle
 // boundaries.  These are the ways a caller can hand over something that is not
 // that, each of which would otherwise wire exchanges to peers that do not

@@ -169,6 +169,43 @@ void FixedPointNode::addDetails(std::stringstream& stream) const {
 
 namespace {
 
+// Whether 'node' contains a nested FixedPointNode that needs
+// coordinator-assigned splits.  Not only a nested shuffle: a nested state
+// declaration reading a TableScan needs splits too, and they reach it the same
+// way.
+bool containsNestedSplitRequirement(const PlanNodePtr& node) {
+  if (node == nullptr) {
+    return false;
+  }
+  if (const auto* fixedPoint =
+          dynamic_cast<const FixedPointNode*>(node.get())) {
+    return fixedPoint->requiresSplits();
+  }
+  for (const auto& source : node->sources()) {
+    if (containsNestedSplitRequirement(source)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The width a nested FixedPointNode shuffles across, or 1 when 'node' nests
+// none.
+int32_t nestedWorkers(const PlanNodePtr& node) {
+  if (node == nullptr) {
+    return 1;
+  }
+  if (const auto* fixedPoint =
+          dynamic_cast<const FixedPointNode*>(node.get())) {
+    return fixedPoint->numWorkers();
+  }
+  int32_t workers{1};
+  for (const auto& source : node->sources()) {
+    workers = std::max(workers, nestedWorkers(source));
+  }
+  return workers;
+}
+
 // Whether a plan chain makes the fixed point need coordinator-assigned peer
 // splits: its first plan shuffles out, or a later plan shuffles in (an
 // Exchange) and so consumes splits.  Without this a shuffling chain would
@@ -182,6 +219,15 @@ bool chainRequiresSplits(const std::vector<PlanNodePtr>& plans) {
   }
   for (size_t i = 1; i < plans.size(); ++i) {
     if (containsSplitSource(plans[i])) {
+      return true;
+    }
+  }
+  // A nested fixed point gets its peers only from the enclosing loop, which
+  // hands down the ones the coordinator assigned it.  So the enclosing loop
+  // needs them too, whatever its own chains do.  Checked on every plan,
+  // including the first: the nested node is wherever the plan puts it.
+  for (const auto& plan : plans) {
+    if (containsNestedSplitRequirement(plan)) {
       return true;
     }
   }
@@ -206,9 +252,17 @@ int32_t chainWorkers(const std::vector<PlanNodePtr>& plans) {
 } // namespace
 
 int32_t FixedPointNode::numWorkers() const {
-  // validateWorkerCounts() rejected a body and convergence chain that disagree,
-  // so at most one of these is greater than one.
-  return std::max(chainWorkers(plans_), chainWorkers(convergenceConfig_.plans));
+  // validateWorkerCounts() rejected any stage that disagrees, so every value
+  // here is either one or the single agreed width.
+  int32_t workers =
+      std::max(chainWorkers(plans_), chainWorkers(convergenceConfig_.plans));
+  for (const auto& plan : plans_) {
+    workers = std::max(workers, nestedWorkers(plan));
+  }
+  for (const auto& plan : convergenceConfig_.plans) {
+    workers = std::max(workers, nestedWorkers(plan));
+  }
+  return workers;
 }
 
 bool FixedPointNode::requiresSplits() const {
@@ -359,18 +413,35 @@ void FixedPointNode::validatePlans() const {
 }
 
 void FixedPointNode::validateWorkerCounts() const {
-  const auto bodyWorkers = chainWorkers(plans_);
-  const auto convergenceWorkers = chainWorkers(convergenceConfig_.plans);
-  // A chain that does not shuffle expresses no opinion.  Two that do must
-  // agree: the body's exchanges are wired for its own peer count, so a wider
-  // convergence chain would wait on peers the coordinator never assigned.
-  VELOX_USER_CHECK(
-      bodyWorkers == 1 || convergenceWorkers == 1 ||
-          bodyWorkers == convergenceWorkers,
-      "FixedPointNode: the body and convergence chains must shuffle across the "
-      "same number of workers. Body: {}, convergence: {}",
-      bodyWorkers,
-      convergenceWorkers);
+  // A stage that does not shuffle reports one and expresses no opinion.  Every
+  // stage that does must name the same width: exchanges are wired for one peer
+  // count, and a nested loop runs on the peers the enclosing one was assigned,
+  // so a wider stage would wait on peers that were never named.
+  int32_t agreed{1};
+  std::string_view agreedBy;
+  auto merge = [&](int32_t workers, std::string_view what) {
+    if (workers == 1) {
+      return;
+    }
+    VELOX_USER_CHECK(
+        agreed == 1 || agreed == workers,
+        "FixedPointNode: every stage must shuffle across the same number of "
+        "workers. The {} stage crosses {}, the {} stage crosses {}",
+        agreedBy,
+        agreed,
+        what,
+        workers);
+    agreed = workers;
+    agreedBy = what;
+  };
+  merge(chainWorkers(plans_), "body");
+  merge(chainWorkers(convergenceConfig_.plans), "convergence");
+  for (const auto& plan : plans_) {
+    merge(nestedWorkers(plan), "nested body");
+  }
+  for (const auto& plan : convergenceConfig_.plans) {
+    merge(nestedWorkers(plan), "nested convergence");
+  }
 }
 
 void FixedPointNode::resolveAndValidateStateReferences() const {
