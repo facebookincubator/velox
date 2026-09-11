@@ -98,7 +98,6 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_SHARED_LIBS ON)
   set(KvikIO_BUILD_NSYS_PLUGIN OFF)
 
-
   FetchContent_Declare(
     rapids-cmake
     URL ${VELOX_rapids_cmake_SOURCE_URL}
