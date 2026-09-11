@@ -47,6 +47,9 @@ struct CudfConfig {
       "cudf.batch_size_min_threshold"};
   static constexpr const char* kCudfBatchSizeMaxThreshold{
       "cudf.batch_size_max_threshold"};
+  /// Hash table occupancy for cudf::hash_join build tables.
+  static constexpr const char* kCudfHashJoinLoadFactor{
+      "cudf.hash_join_load_factor"};
   static constexpr const char* kCudfConcatOptimizationEnabled{
       "cudf.concat_optimization_enabled"};
   static constexpr const char* kCudfStreamingGroupbyEnabled{
@@ -180,6 +183,14 @@ struct CudfConfig {
   /// Maximum rows allowed in a concatenated batch (user configurable).
   /// When not set, cuDF's own `size_type::max()` is used.
   std::optional<int32_t> batchSizeMaxThreshold;
+
+  /// Desired occupancy of the cudf::hash_join hash table in (0, 1]. The table
+  /// stores one 8-byte (hash, row index) slot per capacity entry, so the build
+  /// side of a join with N rows costs N / loadFactor * 8 bytes on top of the
+  /// build table itself. libcudf's default is 0.5 (fastest probes); 0.8 halves
+  /// the table for large builds at a small probe cost, which is what lets a
+  /// 1.5 B-row build fit next to its own data on a 48 GiB GPU.
+  double hashJoinLoadFactor{0.5};
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
 
