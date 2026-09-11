@@ -273,3 +273,6 @@ you can override the `NUM_THREADS` environment variable by doing:
 ```shell
 $ docker-compose run -e NUM_THREADS=<NUM_THREADS_TO_USE> --rm ubuntu-cpp
 ```
+
+<!-- gate e2e test: delete with this PR -->
+<!-- gate e2e test: retrigger e88d6b711 -->
