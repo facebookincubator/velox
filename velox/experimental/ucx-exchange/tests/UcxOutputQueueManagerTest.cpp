@@ -24,11 +24,13 @@
 #include <rmm/device_buffer.hpp>
 #include <memory>
 #include <type_traits>
+#include <optional>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
 using namespace facebook::velox::ucx_exchange;
@@ -639,6 +641,100 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   EXPECT_TRUE(callback0Nullptr);
   EXPECT_TRUE(callback1Fired);
   EXPECT_TRUE(callback1Nullptr);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    intraNodeEligibilityWaitsForPartitionedTaskInitialization) {
+  const std::string taskId = "partitionedEligibility";
+  queueManager_->removeTask(taskId);
+
+  std::optional<bool> eligibility;
+  queueManager_->notifyOnIntraNodeEligibility(
+      taskId, [&](bool value) { eligibility = value; });
+  EXPECT_FALSE(eligibility.has_value());
+
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/2,
+      /*numDrivers=*/1,
+      /*cleanup=*/false,
+      core::PartitionedOutputNode::Kind::kPartitioned);
+
+  ASSERT_TRUE(eligibility.has_value());
+  EXPECT_TRUE(*eligibility);
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    intraNodeEligibilityWaitsForBroadcastTaskInitialization) {
+  const std::string taskId = "broadcastEligibility";
+  queueManager_->removeTask(taskId);
+
+  std::optional<bool> eligibility;
+  queueManager_->notifyOnIntraNodeEligibility(
+      taskId, [&](bool value) { eligibility = value; });
+  EXPECT_FALSE(eligibility.has_value());
+
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/2,
+      /*numDrivers=*/1,
+      /*cleanup=*/false,
+      core::PartitionedOutputNode::Kind::kBroadcast);
+
+  ASSERT_TRUE(eligibility.has_value());
+  EXPECT_FALSE(*eligibility);
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    intraNodeEligibilityResolvesWhenPlaceholderIsRemoved) {
+  const std::string taskId = "removedEligibility";
+  queueManager_->removeTask(taskId);
+
+  std::optional<bool> eligibility;
+  queueManager_->notifyOnIntraNodeEligibility(
+      taskId, [&](bool value) { eligibility = value; });
+  EXPECT_FALSE(eligibility.has_value());
+
+  queueManager_->removeTask(taskId);
+
+  ASSERT_TRUE(eligibility.has_value());
+  EXPECT_FALSE(*eligibility);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    intraNodeEligibilityClearsStaleCancellationBeforeCallback) {
+  const std::string taskId = "reusedEligibility";
+  queueManager_->removeTask(taskId);
+
+  std::optional<bool> eligibility;
+  std::optional<IntraNodeTransferResult> registryPollResult;
+  queueManager_->notifyOnIntraNodeEligibility(
+      taskId,
+      [&](bool value) {
+        eligibility = value;
+        registryPollResult = IntraNodeTransferRegistry::getInstance()->poll(
+            IntraNodeTransferKey{
+                taskId, /*destination=*/0, /*sequenceNumber=*/0});
+      });
+  EXPECT_FALSE(eligibility.has_value());
+
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/false,
+      core::PartitionedOutputNode::Kind::kPartitioned);
+
+  ASSERT_TRUE(eligibility.has_value());
+  EXPECT_TRUE(*eligibility);
+  EXPECT_FALSE(registryPollResult.has_value());
+  queueManager_->removeTask(taskId);
 }
 
 // --- Broadcast tests ---

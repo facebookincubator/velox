@@ -36,15 +36,29 @@
 #include <rmm/mr/cuda_memory_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 
+#include <mutex>
+
 namespace facebook::velox::ucx_exchange {
 
 struct UcxExchangeMetrics {
   UcxExchangeMetrics()
       : numPackedColumns_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
         totalBytes_(RuntimeCounter::Unit::kBytes),
+        intraNodePackedColumns_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
+        intraNodeBytes_(RuntimeCounter::Unit::kBytes),
+        remotePackedColumns_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
+        remoteBytes_(RuntimeCounter::Unit::kBytes),
+        intraNodeSources_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
+        remoteSources_(RuntimeMetric(RuntimeCounter::Unit::kNone)),
         rttPerRequest_(RuntimeMetric(RuntimeCounter::Unit::kNanos)) {}
   RuntimeMetric numPackedColumns_; // total number of packed columns received.
   RuntimeMetric totalBytes_; // total number of bytes received
+  RuntimeMetric intraNodePackedColumns_;
+  RuntimeMetric intraNodeBytes_;
+  RuntimeMetric remotePackedColumns_;
+  RuntimeMetric remoteBytes_;
+  RuntimeMetric intraNodeSources_;
+  RuntimeMetric remoteSources_;
   RuntimeMetric rttPerRequest_;
 };
 
@@ -246,6 +260,10 @@ class UcxExchangeSource
   /// @return Returns true if state was changed, false otherwise.
   bool setStateIf(ReceiverState expected, ReceiverState desired);
 
+  void recordTransportDecisionMetric();
+
+  void recordPayloadMetrics(uint64_t dataBytes);
+
   // The connection parameters
   const std::string host_;
   uint16_t port_;
@@ -289,6 +307,7 @@ class UcxExchangeSource
   std::atomic<bool> backpressureActive_{false};
 
   // Some metrics/counters:
+  mutable std::mutex metricsMutex_;
   UcxExchangeMetrics metrics_;
 
   // The outstanding request - there can only be one outstanding request
