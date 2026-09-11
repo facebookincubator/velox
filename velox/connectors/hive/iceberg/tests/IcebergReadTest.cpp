@@ -494,6 +494,46 @@ TEST_F(IcebergReadTest, readParquetFilterOnlyColumnByFieldId) {
       .assertResults({makeRowVector({makeFlatVector<int64_t>({20})})});
 }
 
+// Regression test for the guard in buildFieldIds(): field-ID column mapping
+// must NOT be activated when all IcebergColumnHandle assignments carry only
+// sentinel (≤ 0) field IDs. Before the fix, a non-empty handleByName was
+// sufficient to activate kParquetFieldId mode regardless of the actual IDs,
+// causing the reader to return wrong results or crash.
+TEST_F(IcebergReadTest, testNoFieldIdMappingWithSentinelHandles) {
+  const auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  // Writing the columns in different order to verify that column
+  // mapping is done by name.
+  const std::vector<RowVectorPtr> data = {makeRowVector(
+      {"c1", "c0"},
+      {makeFlatVector<std::string>({"a", "b", "c"}),
+       makeFlatVector<int64_t>({1, 2, 3})})};
+
+  // Write Parquet via the Iceberg sink (stamps 1-based field IDs on columns).
+  // writeParquetData also sets fileFormat_ = PARQUET so splits are correct.
+  const auto outputDirectory = writeParquetData(data);
+
+  // Build assignments with sentinel field IDs (≤ 0). These must NOT activate
+  // kParquetFieldId mode; the reader must fall back to name-based mapping.
+  ColumnHandleMap assignments;
+  assignments["c0"] = makeIcebergHandle("c0", BIGINT(), /*fieldId=*/-1);
+  assignments["c1"] = makeIcebergHandle("c1", VARCHAR(), /*fieldId=*/-1);
+
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  exec::test::AssertQueryBuilder(plan)
+      .splits(createSplitsForDirectory(outputDirectory->getPath()))
+      .assertResults({makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<std::string>({"a", "b", "c"})})});
+}
+
 TEST_F(IcebergReadTest, readParquetNestedStructByFieldId) {
   const auto addressWriteType = ROW({"city", "zip"}, {VARCHAR(), VARCHAR()});
   const auto profileWriteType =
