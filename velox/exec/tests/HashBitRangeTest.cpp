@@ -15,21 +15,22 @@
  */
 
 #include "velox/exec/HashBitRange.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook;
+#include <gtest/gtest.h>
+
+#include "velox/common/memory/Memory.h"
+
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 
-class HashRangeBitTest : public velox::test::VectorTestBase,
-                         public testing::Test {
+class HashBitRangeTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 
-TEST_F(HashRangeBitTest, hashBitRange) {
+TEST_F(HashBitRangeTest, hashBitRange) {
   HashBitRange bitRange(29, 31);
   ASSERT_EQ(29, bitRange.begin());
   ASSERT_EQ(4, bitRange.numPartitions());
