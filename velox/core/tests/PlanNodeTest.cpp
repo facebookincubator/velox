@@ -597,6 +597,128 @@ TEST_F(PlanNodeTest, aggregationNodeNoGroupsSpanBatches) {
 // The FixedPointNode constructor and the state declarations validate their
 // inputs up front, so a malformed plan fails at construction rather than at
 // execution.
+// A convergence or body chain is one logical plan cut at its shuffle
+// boundaries.  These are the ways a caller can hand over something that is not
+// that, each of which would otherwise wire exchanges to peers that do not
+// match.
+TEST_F(PlanNodeTest, fixedPointChainValidation) {
+  auto schema = ROW("x", BIGINT());
+  auto otherSchema = ROW({"x", "y"}, BIGINT());
+  auto declaration = [&] {
+    return std::make_shared<VectorStateDeclaration>(
+        "n", schema, /*initialPlan=*/nullptr, /*append=*/true);
+  };
+  auto stateSource = [&] {
+    return std::make_shared<StateSourceNode>("b", "n", schema, /*delta=*/true);
+  };
+  auto exchange = [&](const std::string& id, const RowTypePtr& type) {
+    return std::make_shared<ExchangeNode>(id, type, "Presto");
+  };
+  auto shuffleOut = [&](const std::string& id,
+                        const PlanNodePtr& source,
+                        int32_t numPartitions,
+                        const RowTypePtr& type) {
+    return std::make_shared<PartitionedOutputNode>(
+        id,
+        PartitionedOutputNode::Kind::kPartitioned,
+        std::vector<TypedExprPtr>{
+            std::make_shared<FieldAccessTypedExpr>(BIGINT(), "x")},
+        numPartitions,
+        /*replicateNullsAndAny=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        type,
+        "Presto",
+        std::string(TransportKind::kInMemory),
+        source);
+  };
+  auto fixedPoint = [&](std::vector<PlanNodePtr> plans,
+                        ConvergenceConfig convergence) {
+    return std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{declaration()},
+        std::move(plans),
+        std::move(convergence),
+        "n");
+  };
+  auto noConvergence = [] {
+    return ConvergenceConfig{
+        .maxIterations = 5, .errorWhenMaxIterationReached = false};
+  };
+
+  // A two-plan chain shuffling across two workers is the valid baseline each
+  // case below mutates, and it is what numWorkers()/requiresSplits() report.
+  {
+    auto node = fixedPoint(
+        {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+        noConvergence());
+    EXPECT_EQ(node->numWorkers(), 2);
+    EXPECT_TRUE(node->requiresSplits());
+  }
+
+  // A non-shuffling body is one worker and needs no peer splits.
+  {
+    auto node = fixedPoint({stateSource()}, noConvergence());
+    EXPECT_EQ(node->numWorkers(), 1);
+    EXPECT_FALSE(node->requiresSplits());
+  }
+
+  // A fragment reading a second shuffle is a branching topology, not one link
+  // of a linear chain.  primaryLeaf() alone would not see the second branch.
+  {
+    auto branching = std::make_shared<LocalPartitionNode>(
+        "lp",
+        LocalPartitionNode::Type::kGather,
+        /*scaleWriter=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        std::vector<PlanNodePtr>{
+            exchange("e0", schema), exchange("e1", schema)});
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), branching},
+            noConvergence()),
+        "must read exactly one shuffle");
+  }
+
+  // What one fragment shuffles out is what the next reads back, so the schemas
+  // must match.
+  VELOX_ASSERT_USER_THROW(
+      fixedPoint(
+          {shuffleOut("p", stateSource(), 2, schema),
+           exchange("e", otherSchema)},
+          noConvergence()),
+      "must match what the next one reads back");
+
+  // Every shuffling stage of a chain crosses the same number of workers.
+  VELOX_ASSERT_USER_THROW(
+      fixedPoint(
+          {shuffleOut("p0", stateSource(), 2, schema),
+           shuffleOut("p1", exchange("e0", schema), 3, schema),
+           exchange("e1", schema)},
+          noConvergence()),
+      "must partition across the same number of workers");
+
+  // A convergence chain wider than the body would wait on peers the
+  // coordinator never assigned it.
+  {
+    auto convergenceSchema = ROW("c", BOOLEAN());
+    ConvergenceConfig convergence{
+        .plans =
+            {shuffleOut(
+                 "cp",
+                 std::make_shared<StateSourceNode>(
+                     "cs", "n", schema, /*delta=*/false),
+                 3,
+                 schema),
+             exchange("ce", schema)},
+        .maxIterations = 5};
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+            std::move(convergence)),
+        "must shuffle across the same number of workers");
+  }
+}
+
 TEST_F(PlanNodeTest, fixedPointValidation) {
   auto vecSchema = ROW("x", BIGINT());
   auto htSchema = ROW({"k", "v"}, BIGINT());
@@ -682,7 +804,7 @@ TEST_F(PlanNodeTest, fixedPointValidation) {
           ConvergenceConfig{
               .maxIterations = 5, .errorWhenMaxIterationReached = true},
           "n"),
-      "errorWhenMaxIterationReached requires a convergence plan");
+      "errorWhenMaxIterationReached requires a convergence criterion");
 
   // A convergence plan must emit exactly one BOOLEAN column.
   auto nonBoolConvergence =
@@ -692,7 +814,7 @@ TEST_F(PlanNodeTest, fixedPointValidation) {
           "fp",
           std::vector<StateDeclarationPtr>{vectorN()},
           std::vector<PlanNodePtr>{body},
-          ConvergenceConfig{.plan = nonBoolConvergence, .maxIterations = 5},
+          ConvergenceConfig{.plans = {nonBoolConvergence}, .maxIterations = 5},
           "n"),
       "convergence plan output column must be BOOLEAN");
 
@@ -706,7 +828,7 @@ TEST_F(PlanNodeTest, fixedPointValidation) {
               vectorN(),
               std::make_shared<VectorStateDeclaration>("flags", twoColSchema)},
           std::vector<PlanNodePtr>{body},
-          ConvergenceConfig{.plan = twoColConvergence, .maxIterations = 5},
+          ConvergenceConfig{.plans = {twoColConvergence}, .maxIterations = 5},
           "n"),
       "exactly one output column");
 
