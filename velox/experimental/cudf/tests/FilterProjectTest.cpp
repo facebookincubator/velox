@@ -1890,6 +1890,110 @@ TEST_F(CudfFilterProjectTest, stringUpperOperation) {
   testStringUpperOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, strposConstantSubstring) {
+  // Column string, constant substring: found -> 1-based position, absent ->
+  // 0, null string -> null.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"database services",
+           "no match here",
+           "the database",
+           "DATABASE",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, 'database') AS pos_found",
+      "strpos(s, 'zzz') AS pos_absent",
+      "strpos(s, '') AS pos_empty"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposColumnSubstring) {
+  // Both operands are columns; nulls on either side propagate to null.
+  auto data = makeRowVector(
+      {"s", "sub"},
+      {makeNullableFlatVector<std::string>(
+           {"alpha beta gamma",
+            "gamma",
+            "delta",
+            std::nullopt,
+            "epsilon zeta"}),
+       makeNullableFlatVector<std::string>(
+           {"beta", "gamma", "xyz", "delta", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"strpos(s, sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposConstantString) {
+  // Constant string, column substring: exercises the make_column_from_scalar
+  // path that sizes the constant string column to the substring column's
+  // rows.
+  auto data = makeRowVector(
+      {"sub"},
+      {makeNullableFlatVector<std::string>(
+          {"world", "hello", "zzz", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos('hello world', sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposNullConstantSubstring) {
+  // strpos(x, NULL) is NULL for every row (the all-null-target column path).
+  auto data = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"anything", "here", "goes"})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, CAST(NULL AS VARCHAR)) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposMultibyte) {
+  // Positions are character (code-point) based, not byte based, on both the
+  // GPU and CPU paths; multi-byte UTF-8 input must agree.
+  auto data = makeRowVector(
+      {"s"},
+      {makeFlatVector<std::string>(
+          {"caf\xC3\xA9 latte", // "café latte"
+           "na\xC3\xAFve city", // "naïve city"
+           "\xE2\x82\xAC"
+           "100 note"})}); // "€100 note"
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, 'latte') AS pos_latte",
+      "strpos(s, 'city') AS pos_city",
+      "strpos(s, '100') AS pos_100"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposNullConstantString) {
+  // Constant NULL string with a column substring: strpos(NULL, x) is NULL for
+  // every row. The constant string is materialized as an all-null string
+  // column, so this exercises the GPU path distinct from a null substring.
+  auto data = makeRowVector(
+      {"sub"},
+      {makeNullableFlatVector<std::string>(
+          {"world", "hello", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(CAST(NULL AS VARCHAR), sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
