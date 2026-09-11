@@ -23,15 +23,11 @@
 #include "velox/external/date/iso_week.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/lib/TimeUtilsCore.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions {
 
-inline constexpr int64_t kSecondsInMinute = 60;
-inline constexpr int64_t kMinutesInHour = 60;
-inline constexpr int64_t kSecondsInHour = kSecondsInMinute * kMinutesInHour;
-inline constexpr int64_t kSecondsInDay = 86'400;
-inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
 
 FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
@@ -57,47 +53,7 @@ getSeconds(Timestamp timestamp, const tz::TimeZone* timeZone) {
 
 FOLLY_ALWAYS_INLINE
 std::tm getDateTime(Timestamp timestamp, const tz::TimeZone* timeZone) {
-  int64_t seconds = getSeconds(timestamp, timeZone);
-  std::tm dateTime;
-  VELOX_USER_CHECK(
-      Timestamp::epochToCalendarUtc(seconds, dateTime),
-      "Timestamp is too large: {} seconds since epoch",
-      seconds);
-  return dateTime;
-}
-
-// days is the number of days since Epoch.
-FOLLY_ALWAYS_INLINE
-std::tm getDateTime(int32_t days) {
-  int64_t seconds = days * kSecondsInDay;
-  std::tm dateTime;
-  VELOX_USER_CHECK(
-      Timestamp::epochToCalendarUtc(seconds, dateTime),
-      "Date is too large: {} days",
-      days);
-  return dateTime;
-}
-
-FOLLY_ALWAYS_INLINE int getYear(const std::tm& time) {
-  // tm_year: years since 1900.
-  return 1900 + time.tm_year;
-}
-
-FOLLY_ALWAYS_INLINE int getMonth(const std::tm& time) {
-  // tm_mon: months since January – [0, 11].
-  return 1 + time.tm_mon;
-}
-
-FOLLY_ALWAYS_INLINE int getDay(const std::tm& time) {
-  return time.tm_mday;
-}
-
-FOLLY_ALWAYS_INLINE int32_t getQuarter(const std::tm& time) {
-  return time.tm_mon / 3 + 1;
-}
-
-FOLLY_ALWAYS_INLINE int32_t getDayOfYear(const std::tm& time) {
-  return time.tm_yday + 1;
+  return getDateTimeUtc(getSeconds(timestamp, timeZone));
 }
 
 FOLLY_ALWAYS_INLINE uint32_t getWeek(
