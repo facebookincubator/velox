@@ -4,6 +4,10 @@ Function Coverage
 
 Here is a list of all scalar, aggregate, and window functions from Spark, with functions that are available in Velox highlighted.
 
+The :spark:func:`min` and :spark:func:`max` aggregates support ``TIMESTAMP_UTC``
+(Spark's ``TIMESTAMP_NTZ``), preserving the logical type and microsecond
+precision without session time zone adjustments.
+
 .. raw:: html
 
     <style>

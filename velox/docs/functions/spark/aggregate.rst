@@ -144,6 +144,11 @@ General Aggregate Functions
 
     Returns the maximum value of ``x``.
     ``x`` must be an orderable type.
+    Null values are ignored. Returns null if there are no non-null input values.
+
+    Supports ``TIMESTAMP_UTC`` (Spark's ``TIMESTAMP_NTZ``). The result retains
+    this logical type and microsecond precision, without applying session
+    time zone adjustments.
 
 .. spark:function:: max_by(x, y) -> [same as x]
 
@@ -166,6 +171,11 @@ General Aggregate Functions
 
     Returns the minimum value of ``x``.
     ``x`` must be an orderable type.
+    Null values are ignored. Returns null if there are no non-null input values.
+
+    Supports ``TIMESTAMP_UTC`` (Spark's ``TIMESTAMP_NTZ``). The result retains
+    this logical type and microsecond precision, without applying session
+    time zone adjustments.
 
 .. spark:function:: min_by(x, y) -> [same as x]
 
