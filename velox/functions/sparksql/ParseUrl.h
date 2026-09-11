@@ -121,11 +121,11 @@ struct ParseUrlFunction {
     if (part) {
       constPart_ = parsePart(std::string_view(part->data(), part->size()));
     }
-    // A constant key's pattern is only remembered here; the regex itself is
-    // compiled lazily on the first call that extracts a query parameter, so
-    // an invalid key does not fail rows that never use it.
+    // A constant key is only remembered here; its regex is compiled
+    // lazily on the first call that extracts a query parameter, so an
+    // invalid key does not fail rows that never use it.
     if (key) {
-      constQueryPattern_ = buildQueryPattern(key->str());
+      constKey_ = std::string(key->data(), key->size());
     }
   }
 
@@ -144,7 +144,7 @@ struct ParseUrlFunction {
       }
       return nullptr;
     }
-    parsedScratch_ = detail::ParsedUrl{};
+    // parseUrl resets the scratch state itself.
     if (!detail::parseUrl(
             std::string_view(urlStr.data(), urlStr.size()), parsedScratch_)) {
       if (ansiEnabled_) {
@@ -189,29 +189,29 @@ struct ParseUrlFunction {
     if (parsed == nullptr || !parsed->query.has_value()) {
       return false;
     }
-    // A key without regex metacharacters is a plain string; extract it with
-    // a literal scan that does not consume the compiled-regex budget.
+    // A key without regex metacharacters, constant or not, is extracted
+    // with a literal scan that does not consume the compiled-regex budget.
     const std::string_view query(*parsed->query);
-    if (!constQueryPattern_.has_value() &&
-        isPlainKey(std::string_view(key.data(), key.size()))) {
-      return extractPlainKey(
-          output, query, std::string_view(key.data(), key.size()));
+    const std::string_view keyValue = constKey_.has_value()
+        ? std::string_view(*constKey_)
+        : std::string_view(key.data(), key.size());
+    if (isPlainKey(keyValue)) {
+      return extractPlainKey(output, query, keyValue);
     }
     const re2::RE2* pattern = nullptr;
-    if (constQueryPattern_.has_value()) {
+    if (constKey_.has_value()) {
       // A constant key compiles its regex once, on the first call that uses
       // it; an invalid key fails the query here.
       if (constPattern_ == nullptr) {
-        constPattern_ = std::make_unique<re2::RE2>(*constQueryPattern_);
-        VELOX_USER_CHECK(
-            constPattern_->ok(), "invalid key: {}", *constQueryPattern_);
+        constPattern_ = std::make_unique<re2::RE2>(buildQueryPattern(keyValue));
+        VELOX_USER_CHECK(constPattern_->ok(), "invalid key: {}", keyValue);
       }
       pattern = constPattern_.get();
     } else {
       // A non-constant key is looked up in the regex cache so each distinct
       // key compiles at most once instead of once per row. An invalid key or
       // a full cache fails the query, like the regexp functions.
-      const std::string queryPattern = buildQueryPattern(key.str());
+      const std::string queryPattern = buildQueryPattern(keyValue);
       pattern = cache_.findOrCompile(StringView(queryPattern));
     }
     re2::StringPiece value;
@@ -360,7 +360,8 @@ struct ParseUrlFunction {
   std::optional<detail::ParsedUrl> constUrl_;
   bool constUrlInvalid_ = false;
 
-  // Scratch space for parsing a non-constant URL, reused across calls.
+  // Scratch space for parsing a non-constant URL, reused across calls;
+  // parseUrl resets it at entry.
   detail::ParsedUrl parsedScratch_;
 
   // A constant part, keyed once in initialize() instead of per row.
@@ -370,9 +371,9 @@ struct ParseUrlFunction {
   // matching Spark's ANSI mode.
   bool ansiEnabled_ = false;
 
-  // The pattern of a constant query key, remembered in initialize(). The
-  // compiled regex is built lazily on first use in call().
-  std::optional<std::string> constQueryPattern_;
+  // A constant query key, remembered in initialize(). Its compiled regex
+  // is built lazily on first use in call().
+  std::optional<std::string> constKey_;
   std::unique_ptr<re2::RE2> constPattern_;
 
   // Cache of compiled regexes for non-constant query keys, bounded by
