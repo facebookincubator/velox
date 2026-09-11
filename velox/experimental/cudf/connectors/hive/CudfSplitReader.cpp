@@ -299,9 +299,10 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
 }
 
 void CudfSplitReader::startColumnChunkFetch() {
-  // Return if there's no more passes or if the fetch is already started or if
-  // the chunking is already setup
-  if (passState_->currentPass >= passState_->passes.size() or
+  // Return if there's no passes or if the fetch is already started or if
+  // the chunking is already setup.
+  if (passState_ == nullptr or
+      passState_->currentPass >= passState_->passes.size() or
       passState_->fetch.pending.valid() or passState_->isChunkingSetup) {
     return;
   }
