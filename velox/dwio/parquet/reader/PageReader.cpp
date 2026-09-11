@@ -24,6 +24,7 @@
 #include <folly/ScopeGuard.h>
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
@@ -496,6 +497,11 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
 
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
   dictionary_.numValues = *pageHeader.dictionary_page_header()->num_values();
+  VELOX_CHECK_GE(
+      dictionary_.numValues,
+      0,
+      "Negative dictionary value count: {}",
+      dictionary_.numValues);
   dictionaryEncoding_ = *pageHeader.dictionary_page_header()->encoding();
   dictionary_.sorted =
       pageHeader.dictionary_page_header()->is_sorted().value_or(false);
@@ -640,29 +646,52 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
     }
     case thrift::Type::FIXED_LEN_BYTE_ARRAY: {
       auto parquetTypeLength = type_->typeLength_;
-      auto numParquetBytes = dictionary_.numValues * parquetTypeLength;
-      auto veloxTypeLength = type_->type()->cppSizeInBytes();
-      auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+      auto numParquetBytes = checkedMultiply<int32_t>(
+          dictionary_.numValues,
+          parquetTypeLength,
+          "FIXED_LEN_BYTE_ARRAY dictionary byte size");
+      auto readBytes = [&](char* data) {
+        if (pageData_) {
+          memcpy(data, pageData_, numParquetBytes);
+        } else {
+          uint64_t readNs{0};
+          {
+            NanosecondWallTimer timer(&readNs);
+            dwio::common::readBytes(
+                numParquetBytes,
+                inputStream_.get(),
+                data,
+                bufferStart_,
+                bufferEnd_);
+          }
+          stats_.accumulateStat(
+              ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
+        }
+      };
+      if (type_->type()->isVarbinary() || type_->type()->isVarchar()) {
+        dictionary_.values =
+            AlignedBuffer::allocate<StringView>(dictionary_.numValues, &pool_);
+        dictionary_.strings =
+            AlignedBuffer::allocate<char>(numParquetBytes, &pool_);
+        auto values = dictionary_.values->asMutable<StringView>();
+        auto strings = dictionary_.strings->asMutable<char>();
+        readBytes(strings);
+        for (auto i = 0; i < dictionary_.numValues; ++i) {
+          values[i] =
+              StringView(strings + (i * parquetTypeLength), parquetTypeLength);
+        }
+        break;
+      }
+      auto veloxTypeLength =
+          static_cast<int32_t>(type_->type()->cppSizeInBytes());
+      auto numVeloxBytes = checkedMultiply<int32_t>(
+          dictionary_.numValues,
+          veloxTypeLength,
+          "FIXED_LEN_BYTE_ARRAY dictionary Velox byte size");
       VELOX_CHECK_LE(numParquetBytes, numVeloxBytes);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto data = dictionary_.values->asMutable<char>();
-      // Read the data bytes.
-      if (pageData_) {
-        memcpy(data, pageData_, numParquetBytes);
-      } else {
-        uint64_t readNs{0};
-        {
-          NanosecondWallTimer timer(&readNs);
-          dwio::common::readBytes(
-              numParquetBytes,
-              inputStream_.get(),
-              data,
-              bufferStart_,
-              bufferEnd_);
-        }
-        stats_.accumulateStat(
-            ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
-      }
+      readBytes(data);
       if (type_->type()->isShortDecimal()) {
         // Parquet decimal values have a fixed typeLength_ and are in big-endian
         // layout.
