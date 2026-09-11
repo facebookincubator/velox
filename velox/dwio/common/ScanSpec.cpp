@@ -37,7 +37,7 @@ std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
 }
 
 ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
-  std::lock_guard<std::mutex> l(mutex_);
+  std::lock_guard<std::mutex> lock(mutex_);
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
     return it->second;
@@ -141,7 +141,9 @@ void ScanSpec::enableFilterInSubTree(bool value) {
 }
 
 ScanSpec::StableChildren ScanSpec::stableChildren() {
-  std::lock_guard<std::mutex> l(mutex_);
+  std::lock_guard<std::mutex> lock(mutex_);
+  // Every child goes into both vectors. The prefix property depends on it.
+  VELOX_DCHECK_EQ(children_.size(), stableOrder_.size());
   if (stableChildren_ == nullptr) {
     stableChildren_ =
         std::make_shared<const std::vector<std::shared_ptr<ScanSpec>>>(

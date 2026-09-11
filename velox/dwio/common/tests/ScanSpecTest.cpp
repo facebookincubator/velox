@@ -167,8 +167,7 @@ TEST_F(ScanSpecTest, testFilterOnConstant) {
       false);
 }
 
-// A child added after the first reader tree was built appears at the end of
-// stableChildren().
+// A child added after a snapshot was taken appears at the end of the next one.
 TEST_F(ScanSpecTest, stableChildrenAfterAddingChild) {
   ScanSpec scanSpec("<root>");
   scanSpec.addField("c0", 0);

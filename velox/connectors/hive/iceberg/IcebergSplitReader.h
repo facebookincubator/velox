@@ -153,11 +153,8 @@ class IcebergSplitReader : public FileSplitReader {
   // Fails if the reader tree for the current split cannot supply one of
   // 'equalityColumnNames', which would silently match no row to delete.
   // 'configureEqualityDeleteColumns' establishes what is checked, so a failure
-  // is an internal error.
-  //
-  // Reads the subscripts that building the reader tree assigns, so call this
-  // only once 'nextRowNumber()' has forced the first stripe or row group of
-  // the split to load.
+  // is an internal error. Reads subscripts the reader tree assigns, so call it
+  // only once 'nextRowNumber()' has loaded the first stripe or row group.
   void checkEqualityDeleteColumnsAreReadable(
       const std::vector<std::string>& equalityColumnNames) const;
 

@@ -735,14 +735,10 @@ void IcebergSplitReader::checkEqualityDeleteColumnsAreReadable(
         "Iceberg equality delete column is missing from the reader output "
         "type: {}",
         name);
-    // A constant carries its own value and needs no reader. Otherwise a
-    // negative subscript means the selective reader tree has none.
-    //
-    // A positive subscript can be stale rather than current: a struct reader
-    // skips a child that is not read from the file without clearing the
-    // subscript, so a spec shared across splits can still carry the one a
-    // previous split's tree assigned. Such a column passes here while having
-    // no reader in this tree.
+    // A constant carries its own value and needs no reader; otherwise a
+    // negative subscript means the tree has none. Best-effort: a struct reader
+    // skips a child not read from the file without clearing the subscript, so a
+    // stale positive value from an earlier split's tree also passes.
     VELOX_CHECK(
         fieldSpec->isConstant() || fieldSpec->subscript() >= 0,
         "Iceberg equality delete column has no column reader: {}",
