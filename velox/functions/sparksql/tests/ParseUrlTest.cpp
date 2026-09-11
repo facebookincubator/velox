@@ -565,6 +565,49 @@ TEST_F(ParseUrlTest, nonConstantKey) {
       "Max number of regex reached");
 }
 
+// Pins ANSI mode: an invalid URL fails the query when ANSI is enabled and
+// yields null otherwise. Absent parts and unknown parts stay null in both
+// modes; only the URL parse failure is ANSI-sensitive.
+TEST_F(ParseUrlTest, ansiMode) {
+  const auto parseUrl = [&](const std::optional<std::string>& url,
+                            const std::string& part) {
+    return evaluateOnce<std::string>(
+        fmt::format("parse_url(c0, '{}')", part), url);
+  };
+  const auto invalidUrl = std::optional<std::string>("inva lid://x");
+
+  // ANSI off: an invalid URL yields null, as pinned above.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  EXPECT_EQ(std::nullopt, parseUrl(invalidUrl, "HOST"));
+  EXPECT_EQ(
+      std::nullopt,
+      parseUrl(std::optional<std::string>("http://h/p"), "UNKNOWN"));
+  EXPECT_EQ(
+      std::nullopt, parseUrl(std::optional<std::string>("http://h/p"), "REF"));
+
+  // ANSI on: the invalid URL fails the query; absent or unknown parts of a
+  // valid URL still yield null.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  VELOX_ASSERT_THROW(parseUrl(invalidUrl, "HOST"), "The url is invalid");
+  VELOX_ASSERT_THROW(parseUrl(invalidUrl, "PATH"), "The url is invalid");
+  // The three-argument form fails on the same invalid URL.
+  VELOX_ASSERT_THROW(
+      (evaluateOnce<std::string>("parse_url(c0, 'QUERY', 'a')", invalidUrl)),
+      "The url is invalid");
+  EXPECT_EQ(
+      std::nullopt,
+      parseUrl(std::optional<std::string>("http://h/p"), "UNKNOWN"));
+  EXPECT_EQ(
+      std::nullopt, parseUrl(std::optional<std::string>("http://h/p"), "REF"));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a')",
+          std::optional<std::string>("http://h/p")));
+}
+
 // Pins null propagation: any null argument yields a null result, including
 // the key of the three-argument form.
 TEST_F(ParseUrlTest, nullArguments) {
