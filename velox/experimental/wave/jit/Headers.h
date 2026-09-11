@@ -1428,6 +1428,10 @@ const char* velox_experimental_wave_exec_Accumulators_cuh =
     "      }\n"
     "    }\n"
     "  }\n"
+    "  // Consecutive accumulators in the same ungrouped aggregation reuse this\n"
+    "  // scratch area, so no warp may start writing it before the first warp has\n"
+    "  // finished reading it.\n"
+    "  __syncthreads();\n"
     "}\n"
     "\n"
     "} // namespace facebook::velox::wave\n";
