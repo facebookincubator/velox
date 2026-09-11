@@ -95,7 +95,7 @@ The workflow also includes bias fuzzers that focus specifically on newly added o
 
 ### Run Checks (`preliminary_checks.yml`)
 
-Runs early validation on pull requests before the heavier build workflows. Executes `pre-commit run --all-files` to check code formatting (clang-format), linting (yamllint, zizmor), license headers, and other code quality rules. Also validates the PR title against the conventional commits format (`type(scope): description`), which is required for all PRs.
+Runs early validation on pull requests before the heavier build workflows. Executes `pre-commit run --from-ref <base-sha> --to-ref <head-sha>` so checks apply to files changed by the PR, including code formatting (clang-format), linting (yamllint, zizmor), license headers, and other code quality rules. Also validates the PR title against the conventional commits format (`type(scope): description`), which is required for all PRs.
 
 ### Dependency Graph (`dependency-graph.yml`)
 
