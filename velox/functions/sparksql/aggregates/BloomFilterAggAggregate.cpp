@@ -16,7 +16,13 @@
 
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 
+#include <cstring>
+#include <optional>
+
+#include <folly/lang/Bits.h>
+
 #include "velox/common/base/BloomFilter.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -26,40 +32,68 @@ namespace facebook::velox::functions::aggregate::sparksql {
 
 using functions::sparksql::SparkQueryConfig;
 
-namespace {
+BloomFilterAccumulator::BloomFilterAccumulator(HashStringAllocator* allocator)
+    : blocks_{BlockAllocator(allocator)} {}
 
-struct BloomFilterAccumulator {
-  explicit BloomFilterAccumulator(HashStringAllocator* allocator)
-      : bloomFilter{StlAllocator<uint64_t>(allocator)} {}
+int32_t BloomFilterAccumulator::serializedSize() const {
+  return static_cast<int32_t>(blocks_.size() * sizeof(Block));
+}
 
-  int32_t serializedSize() const {
-    return bloomFilter.serializedSize();
+void BloomFilterAccumulator::serialize(char* output) const {
+  std::memcpy(output, blocks_.data(), blocks_.size() * sizeof(Block));
+}
+
+void BloomFilterAccumulator::merge(const StringView& serialized) {
+  VELOX_USER_CHECK_GT(
+      serialized.size(), 0, "Serialized split-block Bloom filter is empty");
+  VELOX_USER_CHECK_EQ(
+      serialized.size() % sizeof(Block),
+      0,
+      "Invalid serialized split-block Bloom filter size: {}",
+      serialized.size());
+  const auto numBlocks =
+      static_cast<int32_t>(serialized.size() / sizeof(Block));
+  if (blocks_.empty()) {
+    init(numBlocks);
+  } else {
+    VELOX_USER_CHECK_EQ(
+        blocks_.size(),
+        numBlocks,
+        "Cannot merge split-block Bloom filters of different sizes");
   }
 
-  void serialize(char* output) const {
-    return bloomFilter.serialize(output);
-  }
-
-  void mergeWith(StringView& serialized) {
-    bloomFilter.merge(serialized.data());
-  }
-
-  bool initialized() const {
-    return bloomFilter.isSet();
-  }
-
-  void init(int32_t capacity) {
-    if (!bloomFilter.isSet()) {
-      bloomFilter.reset(capacity);
+  for (int64_t i = 0; i < numBlocks; ++i) {
+    for (int32_t j = 0; j < xsimd::batch<uint32_t>::size; ++j) {
+      const auto offset = i * sizeof(Block) + j * sizeof(uint32_t);
+      blocks_[i].data[j] |=
+          folly::loadUnaligned<uint32_t>(serialized.data() + offset);
     }
   }
+}
 
-  void insert(int64_t value) {
-    bloomFilter.insert(folly::hasher<int64_t>()(value));
+bool BloomFilterAccumulator::initialized() const {
+  return !blocks_.empty();
+}
+
+void BloomFilterAccumulator::init(int32_t numBlocks) {
+  if (blocks_.empty()) {
+    VELOX_CHECK_GT(numBlocks, 0);
+    blocks_.resize(numBlocks);
+    bloomFilter_.emplace(blocks_);
   }
+}
 
-  BloomFilter<StlAllocator<uint64_t>> bloomFilter;
-};
+void BloomFilterAccumulator::insert(int64_t value) {
+  VELOX_DCHECK(bloomFilter_.has_value());
+  bloomFilter_->insert(folly::hasher<int64_t>()(value));
+}
+
+const SplitBlockBloomFilter* BloomFilterAccumulator::bloomFilter() const {
+  VELOX_CHECK(bloomFilter_.has_value());
+  return &bloomFilter_.value();
+}
+
+namespace {
 
 class BloomFilterAggAggregate : public exec::Aggregate {
  public:
@@ -95,7 +129,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
-    computeCapacity();
+    const auto numBlocks = this->numBlocks();
     auto mayHaveNulls = decodedRaw_.mayHaveNulls();
     rows.applyToSelected([&](vector_size_t row) {
       if (mayHaveNulls) {
@@ -104,7 +138,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       auto group = groups[row];
       auto tracker = trackRowSize(group);
       auto accumulator = value<BloomFilterAccumulator>(group);
-      accumulator->init(capacity_);
+      accumulator->init(numBlocks);
       accumulator->insert(decodedRaw_.valueAt<int64_t>(row));
     });
   }
@@ -124,7 +158,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       auto tracker = trackRowSize(group);
       auto serialized = decodedIntermediate_.valueAt<StringView>(row);
       auto accumulator = value<BloomFilterAccumulator>(group);
-      accumulator->mergeWith(serialized);
+      accumulator->merge(serialized);
     });
   }
 
@@ -134,10 +168,10 @@ class BloomFilterAggAggregate : public exec::Aggregate {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodeArguments(rows, args);
-    computeCapacity();
+    const auto numBlocks = this->numBlocks();
     auto tracker = trackRowSize(group);
     auto accumulator = value<BloomFilterAccumulator>(group);
-    accumulator->init(capacity_);
+    accumulator->init(numBlocks);
     if (decodedRaw_.isConstantMapping()) {
       // All values are same, just do for the first.
       checkBloomFilterNotNull(decodedRaw_, 0);
@@ -167,7 +201,7 @@ class BloomFilterAggAggregate : public exec::Aggregate {
         return;
       }
       auto serialized = decodedIntermediate_.valueAt<StringView>(row);
-      accumulator->mergeWith(serialized);
+      accumulator->merge(serialized);
     });
   }
 
@@ -211,6 +245,14 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     }
   }
 
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto* group : groups) {
+      if (isInitialized(group)) {
+        value<BloomFilterAccumulator>(group)->~BloomFilterAccumulator();
+      }
+    }
+  }
+
  private:
   void decodeArguments(
       const SelectivityVector& rows,
@@ -235,11 +277,10 @@ class BloomFilterAggAggregate : public exec::Aggregate {
     }
   }
 
-  void computeCapacity() {
-    if (capacity_ == kMissingArgument) {
-      int64_t numBits = std::min(numBits_, maxNumBits_);
-      capacity_ = numBits / 16;
-    }
+  int32_t numBlocks() const {
+    const int64_t numBits = std::min(numBits_, maxNumBits_);
+    return static_cast<int32_t>(std::max<int64_t>(
+        1, numBits / (8 * sizeof(SplitBlockBloomFilter::Block))));
   }
 
   int32_t getTotalSize(char** groups, int32_t numGroups) const {
@@ -290,7 +331,6 @@ class BloomFilterAggAggregate : public exec::Aggregate {
   DecodedVector decodedIntermediate_;
   int64_t estimatedNumItems_ = kMissingArgument;
   int64_t numBits_ = kMissingArgument;
-  int32_t capacity_ = kMissingArgument;
 };
 
 } // namespace
