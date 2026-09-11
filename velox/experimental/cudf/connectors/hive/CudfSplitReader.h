@@ -60,7 +60,7 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      cudf::ast::expression const* subfieldFilterExpr);
+      const cudf::ast::expression* subfieldFilterAst);
 
   virtual ~CudfSplitReader();
 
@@ -100,6 +100,9 @@ class CudfSplitReader : public NvtxHelper {
   // Performs split-specific setup after base reader state is reset.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
+  // Returns whether the split is skipped.
+  virtual bool isSplitSkipped() const;
+
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
 
@@ -119,8 +122,8 @@ class CudfSplitReader : public NvtxHelper {
   // Read file metadatas.
   void fileMetaDatas();
 
-  // Return the logical subfield filter used after reading.
-  cudf::ast::expression const* subfieldFilter() const;
+  // Return the logical subfield filter AST used after reading.
+  const cudf::ast::expression* subfieldFilterAst() const;
 
   // Return whether the pushdown filter was built for the current split.
   bool hasSplitSpecificPushdownFilter() const;
@@ -207,7 +210,7 @@ class CudfSplitReader : public NvtxHelper {
   std::size_t passReadLimit_{0};
 
   dwio::common::ReaderOptions baseReaderOpts_;
-  cudf::ast::expression const* subfieldFilterExpr_;
+  const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   PushdownFilterBuilder pushdownFilterBuilder_;
   bool hasSplitSpecificPushdownFilter_{false};

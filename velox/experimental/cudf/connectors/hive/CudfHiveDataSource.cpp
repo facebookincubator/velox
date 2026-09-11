@@ -145,7 +145,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // and doesn't depend on split-specific state.
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
-    subfieldFilterExpr_ = &createAstFromSubfieldFilters(
+    subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
 
@@ -168,7 +168,7 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       cudfHiveConfig_,
       ioStatistics_,
       ioStats_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_);
 }
 
 void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -267,7 +267,7 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   // heap-allocated, so moving the owners does not move the expressions.
   subfieldScalars_ = std::move(preparedSource->subfieldScalars_);
   subfieldTree_ = std::move(preparedSource->subfieldTree_);
-  subfieldFilterExpr_ = preparedSource->subfieldFilterExpr_;
+  subfieldFilterAst_ = preparedSource->subfieldFilterAst_;
 
   cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
   VELOX_CHECK_NOT_NULL(cudfSplitReader_);

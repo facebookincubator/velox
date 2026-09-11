@@ -80,6 +80,11 @@ void OperatorAdapterRegistry::registerAdapter(
   adapters_.push_back(std::move(adapter));
 }
 
+void OperatorAdapterRegistry::registerAdapterFront(
+    std::unique_ptr<OperatorAdapter> adapter) {
+  adapters_.insert(adapters_.begin(), std::move(adapter));
+}
+
 const OperatorAdapter* OperatorAdapterRegistry::findAdapter(
     const exec::Operator* op) const {
   for (const auto& adapter : adapters_) {
