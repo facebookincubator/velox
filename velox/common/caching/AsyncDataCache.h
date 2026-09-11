@@ -841,20 +841,30 @@ class AsyncDataCache : public memory::Cache {
     uint64_t ssdFlushThresholdBytes;
   };
 
+  // NOTE: 'ssdCache' has no default argument. A defaulted
+  // 'std::unique_ptr<SsdCache> = nullptr' parameter would force the compiler to
+  // instantiate the unique_ptr destructor for the incomplete SsdCache type at
+  // this declaration (its destructor is constexpr since C++23), which fails to
+  // compile. The no-SSD case is provided via overloads instead.
   AsyncDataCache(
       const Options& options,
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache);
 
   AsyncDataCache(
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache);
 
   ~AsyncDataCache() override;
 
   static std::shared_ptr<AsyncDataCache> create(
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr,
+      std::unique_ptr<SsdCache> ssdCache,
+      const AsyncDataCache::Options& = {});
+
+  /// Creates an AsyncDataCache without an SSD tier.
+  static std::shared_ptr<AsyncDataCache> create(
+      memory::MemoryAllocator* allocator,
       const AsyncDataCache::Options& = {});
 
   static AsyncDataCache* getInstance();

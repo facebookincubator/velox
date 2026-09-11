@@ -50,7 +50,18 @@ set(gRPC_RE2_PROVIDER "package" CACHE STRING "Provider of re2 library")
 set(gRPC_SSL_PROVIDER "package" CACHE STRING "Provider of ssl library")
 set(gRPC_PROTOBUF_PROVIDER "package" CACHE STRING "Provider of protobuf library")
 set(gRPC_INSTALL ON CACHE BOOL "Generate installation target")
+
+# gRPC 1.48.1 does not compile as C++23: several of its classes hold
+# std::unique_ptr members of forward-declared types (e.g.
+# grpc_server_config_fetcher), and unique_ptr's destructor became constexpr in
+# C++23, which requires the complete type. Build the fetched gRPC sources with
+# C++20 to keep them compiling. This only affects gRPC's own translation units;
+# Velox continues to consume gRPC's public headers at C++23.
+set(_velox_saved_cxx_standard ${CMAKE_CXX_STANDARD})
+set(CMAKE_CXX_STANDARD 20)
 FetchContent_MakeAvailable(gRPC)
+set(CMAKE_CXX_STANDARD ${_velox_saved_cxx_standard})
+unset(_velox_saved_cxx_standard)
 add_library(gRPC::grpc ALIAS grpc)
 add_library(gRPC::grpc++ ALIAS grpc++)
 add_executable(gRPC::grpc_cpp_plugin ALIAS grpc_cpp_plugin)

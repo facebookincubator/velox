@@ -14,6 +14,10 @@
 
 add_executable(velox_duckdb_conversion_test DuckConversionTest.cpp DuckParserTest.cpp)
 
+# These tests use DuckDB directly; the vendored DuckDB headers do not compile as
+# C++23 (constexpr ~unique_ptr over an incomplete duckdb::QueryNode).
+set_target_properties(velox_duckdb_conversion_test PROPERTIES CXX_STANDARD 20)
+
 add_test(velox_duckdb_conversion_test velox_duckdb_conversion_test)
 
 target_link_libraries(

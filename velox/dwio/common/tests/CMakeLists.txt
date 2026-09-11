@@ -108,6 +108,10 @@ if(VELOX_ENABLE_BENCHMARKS)
     add_subdirectory(Lemire)
     add_executable(velox_dwio_common_bitpack_decoder_benchmark BitPackDecoderBenchmark.cpp)
 
+    # Includes <duckdb.hpp>; the vendored DuckDB headers do not compile as C++23
+    # (constexpr ~unique_ptr over an incomplete duckdb::QueryNode).
+    set_target_properties(velox_dwio_common_bitpack_decoder_benchmark PROPERTIES CXX_STANDARD 20)
+
     target_compile_options(
       velox_dwio_common_bitpack_decoder_benchmark
       PRIVATE -Wno-deprecated-declarations
