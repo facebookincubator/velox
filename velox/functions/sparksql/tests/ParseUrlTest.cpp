@@ -701,16 +701,21 @@ TEST_F(ParseUrlTest, ipv6LiteralShapes) {
   EXPECT_EQ("[::]", host("http://[::]/p"));
   EXPECT_EQ("[::ffff:1.2.3.4]", host("http://[::ffff:1.2.3.4]/p"));
   EXPECT_EQ("[1:2:3:4:5:6:7:8]", host("http://[1:2:3:4:5:6:7:8]/p"));
-  // A scope id is alphanumeric only and must be non-empty; '%' is a mask
-  // member in the authority, not an escape.
+  // A scope id holds alphanumerics plus '_' and '.', and must be
+  // non-empty; '%' is a mask member in the authority, not an escape.
   EXPECT_EQ("[fe80::1%eth0]", host("http://[fe80::1%eth0]/p"));
   EXPECT_EQ("[fe80::1%eth0]:80", authority("http://[fe80::1%eth0]:80/p"));
+  EXPECT_EQ("[fe80::1%eth_0]", host("http://[fe80::1%eth_0]/p"));
+  EXPECT_EQ("[fe80::1%eth.0]", host("http://[fe80::1%eth.0]/p"));
+  EXPECT_EQ("[fe80::1%e_t.h0]", host("http://[fe80::1%e_t.h0]/p"));
 
   // Malformed shapes yield a null host. Unlike a non-IPv6 authority, a
   // malformed IPv6 literal fails the whole authority, so AUTHORITY is
   // null too.
   EXPECT_EQ(std::nullopt, host("http://[fe80::1%]/p"));
   EXPECT_EQ(std::nullopt, host("http://[fe80::1%e!h0]/p"));
+  EXPECT_EQ(std::nullopt, host("http://[fe80::1%eth-0]/p"));
+  EXPECT_EQ(std::nullopt, host("http://[fe80::1%eth+0]/p"));
   EXPECT_EQ(std::nullopt, host("http://[1:2:3:4:5:6:7:8:9]/p"));
   EXPECT_EQ(std::nullopt, host("http://[12345::]/p"));
   EXPECT_EQ(std::nullopt, host("http://[1::2::3]/p"));

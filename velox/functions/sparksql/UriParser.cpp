@@ -187,6 +187,12 @@ FOLLY_ALWAYS_INLINE constexpr bool isHexGroupChar(char c) {
   return isHexDigit(c);
 }
 
+// The characters an IPv6 scope id may contain: alphanumerics plus '_'
+// and '.'.
+FOLLY_ALWAYS_INLINE constexpr bool isScopeIdChar(char c) {
+  return isAlnum(c) || c == '_' || c == '.';
+}
+
 // Returns the leading run of characters accepted by Pred, without
 // consuming input. The bounded-loop spelling of find_first_not_of with
 // a literal set, so the accepted set is stated by a predicate's name.
@@ -739,7 +745,7 @@ bool parseIpv6Host(std::string_view& hostAndPort, detail::ParsedUrl& parsed) {
   const auto scopeStart = literal.find('%');
   if (scopeStart != std::string_view::npos) {
     const auto scope = literal.substr(scopeStart + 1);
-    if (scope.empty() || !checkComponent<isAlnum>(scope, false)) {
+    if (scope.empty() || !checkComponent<isScopeIdChar>(scope, false)) {
       return false;
     }
     if (!parseIpv6Reference(literal.substr(0, scopeStart))) {
