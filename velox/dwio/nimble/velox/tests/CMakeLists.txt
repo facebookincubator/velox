@@ -72,6 +72,7 @@ add_executable(
   DecodedVectorManagerTest.cpp
   EncodingLayoutTreeTest.cpp
   LayoutPlannerTest.cpp
+  NimbleWriterOptionsTest.cpp
   OrderedRangesTest.cpp
   RawSizeContextTest.cpp
   RawSizeTest.cpp
