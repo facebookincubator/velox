@@ -40,6 +40,11 @@ template <typename T>
 struct ParseURLFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  // Every part except a FILE that concatenates the path and query is a
+  // direct slice of the URL argument, so the result reuses its string
+  // buffer instead of copying.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
 
@@ -122,13 +127,17 @@ struct ParseURLFunction {
     if (value.data() == nullptr) {
       return false;
     }
-    output = std::string(value.data(), value.size());
+    // The capture is a slice of the query, which is a slice of the URL
+    // argument, so it can be stored without copying.
+    output.setNoCopy(StringView(value.data(), value.size()));
     return true;
   }
 
  private:
+  // Stores a part that is a direct slice of the URL argument without
+  // copying; the result vector reuses the argument's string buffer.
   static void assignOutput(out_type<Varchar>& output, std::string_view value) {
-    output = StringView(value.data(), static_cast<int32_t>(value.size()));
+    output.setNoCopy(StringView(value.data(), value.size()));
   }
 
   // Builds the query-parameter extraction regex for key: the same
@@ -172,6 +181,8 @@ struct ParseURLFunction {
       if (parsed.path.data() == nullptr) {
         return false;
       }
+      // FILE synthesizes a new string that is not a slice of the URL
+      // argument, so it must be copied into the result.
       std::string outputStr(parsed.path);
       if (parsed.query.has_value()) {
         outputStr += '?';
