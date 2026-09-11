@@ -52,6 +52,7 @@ add_library(
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
   views/SparseBoolEncodingView.h
+  views/SubIntSplitEncodingView.h
   views/SimdForBitpackEncodingView.h
   views/RLEEncodingView.h
   views/PFOREncodingView.h
@@ -85,6 +86,7 @@ add_library(
   SubIntSplitSampler.h
   SubIntSplitMetrics.h
   SubIntSplitEncoding.h
+  SubIntSplitAccumulate.h
   SubIntSplitCostModels.h
   SubIntSplitConfig.h
   SparseBoolEncoding.h
