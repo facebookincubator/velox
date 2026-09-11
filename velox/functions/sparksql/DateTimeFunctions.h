@@ -414,7 +414,7 @@ struct FromUtcTimestampFunction {
   const tz::TimeZone* timeZone_{nullptr};
 };
 
-/// Converts date string to Timestmap type.
+/// Converts date string to Timestamp type.
 template <typename T>
 struct GetTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

@@ -114,13 +114,9 @@ TEST_F(RPCNodeTest, rpcNodeCreation) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "response",
-      ROW({"response"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{});
+      ROW({"response"}, {VARCHAR()}));
 
   EXPECT_EQ(rpcNode->id(), "rpc-1");
   EXPECT_EQ(rpcNode->name(), "RPC");
@@ -134,13 +130,9 @@ TEST_F(RPCNodeTest, rpcNodeWithBatchMode) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-2",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "result",
       ROW({"result"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{},
       rpc::RPCStreamingMode::kBatch,
       100);
 
@@ -209,13 +201,9 @@ TEST_F(RPCNodeTest, planNodeToString) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "response",
-      ROW({"response"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{});
+      ROW({"response"}, {VARCHAR()}));
 
   std::string str = rpcNode->toString(/*detailed=*/true);
 
@@ -227,13 +215,9 @@ TEST_F(RPCNodeTest, planNodeSingleSource) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "response",
-      ROW({"response"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{});
+      ROW({"response"}, {VARCHAR()}));
 
   ASSERT_EQ(rpcNode->sources().size(), 1);
   EXPECT_EQ(rpcNode->source().get(), nullptr);

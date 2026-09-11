@@ -23,9 +23,9 @@ namespace facebook::velox::cudf_velox::sparksql {
 /// remaining arguments using the constant non-negative integer seed.
 class HashFunction : public CudfFunction {
  public:
-  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
-  explicit HashFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  HashFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,

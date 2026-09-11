@@ -108,8 +108,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   bool useExperimentalCudfReader_;
 
-  // Cached combined subfield filter expression owned by 'subfieldTree_'.
-  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
+  // Cached combined AST filter expression compiled from 'subfieldFilters_',
+  // owned by 'subfieldTree_'.
+  const cudf::ast::expression* subfieldFilterAst_{nullptr};
 
  private:
   // Construct and cache a RowTypePtr for the table column names and types.
@@ -121,12 +122,18 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   size_t completedRows_{0};
   size_t completedBytes_{0};
 
-  dwio::common::RuntimeStatistics runtimeStats_;
+  dwio::common::RuntimeStats runtimeStats_;
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
-  std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
-  std::shared_ptr<velox::cudf_velox::CudfExpression> cudfExpressionEvaluator_;
+  // Optimized remaining-filter expression, or null when there is no remaining
+  // filter. Gates remaining-filter evaluation in next().
+  core::TypedExprPtr optimizedRemainingFilter_;
+
+  // Compiled cuDF evaluator for the remaining filter, applied post-read in
+  // next(). Null when there is no remaining filter.
+  std::shared_ptr<velox::cudf_velox::CudfExpression>
+      cudfRemainingFilterExpression_;
 
   std::atomic<uint64_t> totalRemainingFilterTime_{0};
 
@@ -138,6 +145,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Expression evaluator for subfield filter.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
+
+  // The table handle's subfield filters, merged with the ones extracted from
+  // its remaining filter.
   common::SubfieldFilters subfieldFilters_;
 };
 

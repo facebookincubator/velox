@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include "velox/expression/Expr.h"
-#include "velox/expression/ExprCompiler.h"
+#include "velox/expression/ExprOptimizer.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -36,14 +35,16 @@ inline core::TypedExprPtr parseAndInferTypedExpr(
   return core::Expressions::inferTypes(untyped, rowType, execCtx->pool());
 }
 
-inline std::shared_ptr<exec::Expr> compileExecExpr(
+inline core::TypedExprPtr optimizeTypedExpr(
     const std::string& sql,
     const RowTypePtr& rowType,
+    core::QueryCtx* queryCtx,
     core::ExecCtx* execCtx,
     const parse::ParseOptions& options = {}) {
-  auto typed = parseAndInferTypedExpr(sql, rowType, execCtx, options);
-  exec::ExprSet exprSet({typed}, execCtx, /*enableConstantFolding*/ false);
-  return exprSet.expr(0);
+  return expression::optimize(
+      parseAndInferTypedExpr(sql, rowType, execCtx, options),
+      queryCtx,
+      execCtx->pool());
 }
 
 } // namespace facebook::velox::cudf_velox::test_utils

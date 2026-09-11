@@ -16,24 +16,24 @@
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/sparksql/DateAddFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/core/Expressions.h"
 
 #include <cudf/binaryop.hpp>
 
 namespace facebook::velox::cudf_velox::sparksql {
 
 DateAddFunction::DateAddFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK_EQ(
       expr->inputs().size(), 2, "date_add function expects exactly 2 inputs");
   VELOX_CHECK(
       expr->inputs()[0]->type()->isDate(),
       "First argument to date_add must be a date");
-  VELOX_CHECK_NULL(
-      std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[0]));
+  VELOX_CHECK(!expr->inputs()[0]->isConstantKind());
   // The date_add second argument could be int8_t, int16_t, int32_t.
   value_ = makeScalarFromConstantExpr(
-      expr->inputs()[1], cudf::type_id::DURATION_DAYS);
+      expr->inputs()[1], pool, cudf::type_id::DURATION_DAYS);
 }
 
 ColumnOrView DateAddFunction::eval(

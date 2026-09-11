@@ -84,6 +84,46 @@ class Pool {
 
 using StreamPool = Pool<facebook::velox::wave::Stream>;
 using EventPool = Pool<facebook::velox::wave::Event>;
+using EventP = std::unique_ptr<facebook::velox::wave::Event>;
+
+/// Returns an alias of 'base' with the given shape, strides and element
+/// offset, built straight from the TensorImpl. This is the primitive
+/// Tensor::narrow / slice / select all bottom out in (aten's
+/// as_strided_tensorimpl); reaching it through them costs two dispatcher
+/// round-trips plus autograd view bookkeeping, which is measurable when a view
+/// is rebuilt per launch. Wave buffers are inference-only, so the skipped view
+/// tracking is unused. The caller owns the argument conditioning and bounds
+/// checks the dispatched ops would have done.
+/// Microseconds this thread has spent inside device allocator calls, monotonic
+/// over the thread's life; read a pair and subtract. The allocation phase of a
+/// step also computes shapes and builds the views over what it allocated, and
+/// those cost differently and are fixed differently -- a bigger arena or a
+/// coarser grouping moves the first, a cheaper view primitive moves the second
+/// -- so the report separates them and this is the part it can measure
+/// directly. Only accumulated under the kTiming trace bit.
+int64_t threadAllocCallUs();
+
+/// Charges the enclosed allocator call to threadAllocCallUs. Wraps only the
+/// call itself, never the surrounding shape arithmetic.
+class ScopedAllocCall {
+ public:
+  ScopedAllocCall();
+  ~ScopedAllocCall();
+
+  ScopedAllocCall(const ScopedAllocCall&) = delete;
+  ScopedAllocCall& operator=(const ScopedAllocCall&) = delete;
+
+ private:
+  const bool timing_;
+  const uint64_t start_;
+};
+
+at::Tensor aliasTensor(
+    const at::Tensor& base,
+    c10::IntArrayRef sizes,
+    c10::IntArrayRef strides,
+    int64_t storageOffset,
+    std::optional<c10::ScalarType> dtype = std::nullopt);
 
 /// Parses a qualified op name (e.g. "torch.ops.aten.add.Tensor") and looks up
 /// its FunctionSchema from the dispatcher. Returns nullptr if not found.
@@ -243,6 +283,49 @@ void forArguments(const Metadata& meta, NodeCP node, Func&& func) {
       func(i, static_cast<ValueCP>(nullptr), attr);
     }
   }
+}
+
+/// Maps a node input position to the position of the matching argument in the
+/// op's function schema, which is what argumentMeta is indexed by. The two
+/// coincide only when every schema argument arrives as an input. An argument
+/// supplied as a constant attribute instead -- tw.scatter's 'dim', declared
+/// second in the schema but carried as an attribute -- shifts every later
+/// input, so indexing argumentMeta by input position reads a neighbouring
+/// argument's flags. Matching by name is what forArguments already does.
+/// Returns 'inputIdx' unchanged when there is nothing to match against.
+inline size_t
+schemaArgIndex(const Metadata& meta, NodeCP node, size_t inputIdx) {
+  const auto& inputs = node->inputs();
+  if (inputIdx >= inputs.size()) {
+    return inputIdx;
+  }
+  const auto& name = inputs[inputIdx].name;
+  if (meta.functionSchema) {
+    const auto& args = meta.functionSchema->arguments();
+    for (size_t i = 0; i < args.size(); ++i) {
+      if (args[i].name() == name) {
+        return i;
+      }
+    }
+  } else {
+    for (size_t i = 0; i < meta.argumentNames.size(); ++i) {
+      if (meta.argumentNames[i] == name) {
+        return i;
+      }
+    }
+  }
+  return inputIdx;
+}
+
+/// The ArgumentMeta for the node input at 'inputIdx', resolved through
+/// schemaArgIndex. Null when the op has no metadata entry for that argument.
+inline const ArgumentMeta*
+argMetaForInput(const Metadata* meta, NodeCP node, size_t inputIdx) {
+  if (meta == nullptr) {
+    return nullptr;
+  }
+  const auto idx = schemaArgIndex(*meta, node, inputIdx);
+  return idx < meta->argumentMeta.size() ? &meta->argumentMeta[idx] : nullptr;
 }
 
 /// Visits sorted attributes of each node reachable from 'node' in dependency

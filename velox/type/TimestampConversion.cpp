@@ -635,7 +635,17 @@ bool tryParseTimestampString(
   }
 
   // Try to parse a time field.
+  const size_t preSeparatorPos = pos;
   parseTimeSeparator(buf, pos, parseMode);
+
+  // In Spark cast mode, once a date-time separator ('T' or ' ') is consumed,
+  // the time component must begin immediately with a digit. This mirrors
+  // Spark's grammar: a separator followed by a timezone, garbage, or end of
+  // input is rejected.
+  if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
+      (pos >= len || !characterIsDigit(buf[pos]))) {
+    return false;
+  }
 
   size_t timePos = 0;
   if (!tryParseTimeString(

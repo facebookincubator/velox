@@ -67,7 +67,11 @@ Window::Window(
   if (windowNode->inputsSorted()) {
     if (supportRowsStreaming()) {
       windowBuild_ = std::make_unique<window::RowsStreamingWindowBuild>(
-          windowNode_, pool(), spillConfig, &nonReclaimableSection_);
+          windowNode_,
+          pool(),
+          spillConfig,
+          &nonReclaimableSection_,
+          driverCtx->queryConfig().preferredOutputBatchBytes());
     } else {
       windowBuild_ = std::make_unique<window::PartitionStreamingWindowBuild>(
           windowNode, pool(), spillConfig, &nonReclaimableSection_);

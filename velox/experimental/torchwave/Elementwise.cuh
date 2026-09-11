@@ -809,69 +809,269 @@ __device__ inline T __index_put_elt_three(
   return T();
 }
 
-// Fused slice_scatter along 'dim' (functional/out-of-place). The elementwise
-// loop iterates every element of the output (which has self's shape), so 'idx'
-// is the row-major offset of one output element and the device function returns
-// that element's value. Positions inside the slice [start, start + len*step)
-// along 'dim' (stride 'step') come from 'src'; all other positions pass through
-// 'self' unchanged. 'len' (the slice length) is taken from src, which is
-// authoritative. Both 'self' and 'src' are read at computed offsets through
-// their own strides, so non-contiguous operands (e.g. a column-slice view) are
-// handled; both are whole tensors and must be materialized before this op (the
-// randomAccess argument flag enforces that, as for the index-gather source).
-// The output is contiguous, so 'idx' decomposes directly into per-dim
-// coordinates via self's dims. A slice that does not fit in 'self' along 'dim'
-// (an out-of-range start/end, possibly injected) is reported like
-// __index_put_elt_*.
+// aten.copy with its result in memory instead of a register. The register form
+// is an expression the consumer inlines, which is wrong when the source aliases
+// the buffer the consumer writes back into: the read of one lane and the write
+// of another then race inside a single loop. Writing 'out' here makes the copy
+// its own expression over its own buffer, so the whole read completes before
+// any consumer runs. The loop is sized by the copy's output, so 'idx' indexes
+// both it and 'out' directly. T is the destination dtype, so this is also where
+// the copy's cast happens.
+template <typename T, typename TValue>
+__device__ inline T __copy_out(uint32_t idx, TValue value, Tensor* out) {
+  T converted = static_cast<T>(value);
+  storage<T>(out)[idx] = converted;
+  return converted;
+}
+
+// Fused in-place slice_scatter along 'dim'. The elementwise loop is sized by
+// 'src' (the values written, passed per element as 'value'), so 'idx' is the
+// row-major offset of one src element and the device function scatters it into
+// 'out' (== self, bound in place) at its strided slice position; it returns
+// nothing (the return meta is not isRegister, so the machinery stores no
+// per-idx result). 'src' has self's shape with 'dim' replaced by the slice
+// length, so 'idx' decomposes over out's dims -- via out's magic dividers for
+// the non-'dim' axes, and by the runtime slice length for 'dim' -- and the
+// destination coordinate along 'dim' is start + sliceCoord*step. Pass-through
+// elements are already correct in 'out' (a clone of self, or self itself when
+// the clone was elided) and are never touched. An out-of-range slice (e.g. an
+// injected bad start) is reported like __index_put_elt_*.
 template <typename T>
 __device__ inline T __slice_scatter(
     uint32_t idx,
-    Tensor* self,
-    Tensor* src,
-    int32_t dim,
-    int32_t start,
-    int32_t /*end*/,
-    int32_t step,
+    Tensor* /*self*/,
+    T value,
+    int64_t dim,
+    int64_t start,
+    int64_t end,
+    int64_t step,
+    Tensor* out,
     BlockInfo& block) {
-  int64_t dimSize = self->dims[dim];
-  int64_t len = src->dims[dim];
-  int64_t st = static_cast<int64_t>(step) > 0 ? static_cast<int64_t>(step) : 1;
-  // The whole slice must fit in 'self' along 'dim'; otherwise report and pass
-  // self through unchanged. An empty slice is a no-op (all positions pass
-  // through).
-  int64_t lastPos = static_cast<int64_t>(start) + (len - 1) * st;
-  if (len >= 1 && (start < 0 || lastPos >= dimSize) && block.debugInfo) {
-    block.debugInfo->line = __LINE__;
-    block.debugInfo->extra[0] = dim;
-    block.debugInfo->extra[1] = start;
-    SET_MSG(block.debugInfo, "Bad idx\0");
-  }
-  // Decompose the contiguous output offset 'idx' into per-dim coordinates using
-  // the output dims (== self dims), innermost dim first.
-  int64_t coord[kMaxDims];
-  int64_t rem = static_cast<int64_t>(idx);
-  for (int d = self->rank - 1; d >= 0; --d) {
-    coord[d] = rem % self->dims[d];
-    rem /= self->dims[d];
-  }
-  int64_t pos = coord[dim];
-  int64_t rel = pos - static_cast<int64_t>(start);
-  bool inSlice = len >= 1 && start >= 0 && lastPos < dimSize && rel >= 0 &&
-      rel < len * st && rel % st == 0;
-  if (inSlice) {
-    int64_t sliceJ = rel / st;
-    int64_t srcOff = 0;
-    for (int d = 0; d < src->rank; ++d) {
-      int64_t c = d == dim ? sliceJ : coord[d];
-      srcOff += c * src->strides[d];
+  // 'start' and 'end' must stay 64-bit: an open-ended slice ([:] or [2:])
+  // carries aten's end sentinel 2**63-1, which reads back as -1 once narrowed
+  // to 32 bits, collapsing the slice length to 0 so every element scatters
+  // onto index 'start' along 'dim'.
+  int32_t d0 = static_cast<int32_t>(dim < 0 ? dim + out->rank : dim);
+  int64_t dimSize = out->dims[d0];
+  int64_t st = step > 0 ? step : 1;
+  int64_t clampedEnd = end < dimSize ? end : dimSize;
+  // Slice length (== src's extent along 'dim'); the loop runs src.numel()
+  // times, so this partitions 'idx' along 'dim' the same way src is laid out.
+  int64_t len = clampedEnd > start ? (clampedEnd - start + st - 1) / st : 0;
+  // Decompose 'idx' (row-major over src's shape) into the destination offset in
+  // 'out': non-'dim' axes use out's magic dividers; the 'dim' axis uses the
+  // runtime slice length and maps slice coord c -> start + c*step.
+  int64_t destOff = 0;
+  uint32_t rem = idx;
+  for (int i = 0; i < out->rank; ++i) {
+    int axis = out->rank - 1 - i;
+    if (axis == d0) {
+      int64_t c =
+          len > 0 ? static_cast<int64_t>(rem % static_cast<uint32_t>(len)) : 0;
+      rem = len > 0 ? rem / static_cast<uint32_t>(len) : rem;
+      int64_t destCoord = start + c * st;
+      if (start < 0 || destCoord >= dimSize) {
+        if (block.debugInfo) {
+          block.debugInfo->line = __LINE__;
+          block.debugInfo->extra[0] = d0;
+          block.debugInfo->extra[1] = start;
+          SET_MSG(block.debugInfo, "Bad idx\0");
+        }
+        return T();
+      }
+      destOff += destCoord * out->strides[d0];
+      continue;
     }
-    return storage<T>(src)[srcOff];
+    unsigned int q, r;
+    out->sizes[i].divmod(rem, q, r);
+    destOff += static_cast<int64_t>(r) * out->strides[axis];
+    rem = q;
   }
-  int64_t selfOff = 0;
-  for (int d = 0; d < self->rank; ++d) {
-    selfOff += coord[d] * self->strides[d];
+  storage<T>(out)[destOff] = value;
+  return T();
+}
+
+// Fused in-place select_scatter along 'dim'. The elementwise loop is sized by
+// 'src' (the values written, passed per element as 'value'), so 'idx' is the
+// row-major offset of one src element; the device function writes it to its
+// destination in 'out' (== self, bound in place) and returns nothing. 'src' has
+// self's shape with 'dim' removed, so 'idx' decomposes over out's dims skipping
+// 'dim' (via out's magic dividers, force-initialized in the block prologue),
+// and the destination inserts 'index' at 'dim'. Pass-through elements are
+// already correct in 'out' (a clone of self, or self itself when the clone was
+// elided) and are never touched. A negative 'index' wraps once; an out-of-range
+// 'index' is reported like __index_select.
+template <typename T>
+__device__ inline T __select_scatter(
+    uint32_t idx,
+    Tensor* /*self*/,
+    T value,
+    int32_t dim,
+    int32_t index,
+    Tensor* out,
+    BlockInfo& block) {
+  int32_t d0 = dim < 0 ? dim + out->rank : dim;
+  int64_t dimSize = out->dims[d0];
+  int64_t sel = index < 0 ? static_cast<int64_t>(index) + dimSize : index;
+  if (sel < 0 || sel >= dimSize) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = d0;
+      block.debugInfo->extra[1] = index;
+      SET_MSG(block.debugInfo, "Bad idx\0");
+    }
+    return T();
   }
-  return storage<T>(self)[selfOff];
+  // Decompose 'idx' (row-major over src's shape == out's shape with 'dim'
+  // removed) into the destination offset in 'out': skip the 'dim' axis (using
+  // out's magic dividers for the rest) and insert 'sel' at 'dim'.
+  int64_t destOff = sel * out->strides[d0];
+  uint32_t rem = idx;
+  for (int i = 0; i < out->rank; ++i) {
+    int axis = out->rank - 1 - i;
+    if (axis == d0) {
+      continue;
+    }
+    unsigned int q, r;
+    out->sizes[i].divmod(rem, q, r);
+    destOff += static_cast<int64_t>(r) * out->strides[axis];
+    rem = q;
+  }
+  storage<T>(out)[destOff] = value;
+  return T();
+}
+
+// atomicAdd dispatch for fused scatter_add. CUDA has no native int64 atomicAdd,
+// so route int64 through unsigned long long (value-preserving for two's
+// complement add). The rewrite only fuses scatter_add for these dtypes.
+__device__ inline void scatterAtomicAdd(int64_t* p, int64_t v) {
+  atomicAdd(
+      reinterpret_cast<unsigned long long*>(p),
+      static_cast<unsigned long long>(v));
+}
+__device__ inline void scatterAtomicAdd(int32_t* p, int32_t v) {
+  atomicAdd(p, v);
+}
+__device__ inline void scatterAtomicAdd(float* p, float v) {
+  atomicAdd(p, v);
+}
+__device__ inline void scatterAtomicAdd(double* p, double v) {
+  atomicAdd(p, v);
+}
+
+// Computes the destination offset in 'out' (== self) for the src element at
+// row-major position 'idx'. 'index' shares src's shape (enforced by the
+// rewrite) so 'idx' decomposes over index's dims; the destination takes the src
+// coordinates with the 'dim' axis replaced by index[idx]. 'index' is read at
+// its own strides (int or long). Returns false and flags "Bad idx" when the
+// scatter coordinate is out of range.
+__device__ inline bool scatterDestOffset(
+    uint32_t idx,
+    int32_t dim,
+    Tensor* index,
+    Tensor* out,
+    BlockInfo& block,
+    int64_t& destOff) {
+  int32_t d0 = dim < 0 ? dim + out->rank : dim;
+  destOff = 0;
+  // 'idx' counts src elements, but the offset below is decomposed against
+  // index's dims. aten only requires index.size(d) <= src.size(d), so a
+  // smaller index lets 'idx' run past its extent: the decomposition then wraps
+  // (silently scattering the wrong value) and, when index is empty, addresses
+  // element 0 of a zero-size buffer, which faults. Neither is recoverable
+  // here, so report instead of reading. Same reporting path as the scatter
+  // coordinate check below and the index_put kernels.
+  if (index->rank > out->rank || idx >= index->numEl) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = idx;
+      block.debugInfo->extra[1] = index->numEl;
+      SET_MSG(block.debugInfo, "Idx too small\0");
+    }
+    return false;
+  }
+  int64_t indexElemOff = 0;
+  int64_t rem = idx;
+  for (int axis = out->rank - 1; axis >= 0; --axis) {
+    int64_t sz = index->dims[axis];
+    int64_t coord = sz > 0 ? rem % sz : 0;
+    rem = sz > 0 ? rem / sz : rem;
+    indexElemOff += coord * index->strides[axis];
+    if (axis != d0) {
+      destOff += coord * out->strides[axis];
+    }
+  }
+  // A non-contiguous or mis-described index can still land the strided offset
+  // outside the buffer even when 'idx' is in range.
+  if (indexElemOff < 0 || indexElemOff >= static_cast<int64_t>(index->numEl)) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = indexElemOff;
+      block.debugInfo->extra[1] = index->numEl;
+      SET_MSG(block.debugInfo, "Bad idx off\0");
+    }
+    return false;
+  }
+  int64_t indexVal = index->elementType == kScalarTypeLong
+      ? storage<int64_t>(index)[indexElemOff]
+      : static_cast<int64_t>(storage<int32_t>(index)[indexElemOff]);
+  int64_t dimSize = out->dims[d0];
+  if (indexVal < 0) {
+    indexVal += dimSize;
+  }
+  if (indexVal < 0 || indexVal >= dimSize) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = d0;
+      block.debugInfo->extra[1] = static_cast<int32_t>(indexVal);
+      SET_MSG(block.debugInfo, "Bad idx\0");
+    }
+    return false;
+  }
+  destOff += indexVal * out->strides[d0];
+  return true;
+}
+
+// Fused in-place scatter along 'dim'. The elementwise loop is sized by 'src'
+// (the values written, passed per element as 'value'), so 'idx' is the
+// row-major offset of one src element; the device function overwrites 'out' (==
+// self, bound in place) at the destination whose 'dim' coordinate is
+// index[idx]. Pass-through elements are already correct in 'out' (a clone of
+// self, or self itself when the clone was elided) and are never touched.
+template <typename T>
+__device__ inline T __scatter(
+    uint32_t idx,
+    Tensor* /*self*/,
+    int32_t dim,
+    Tensor* index,
+    T value,
+    Tensor* out,
+    BlockInfo& block) {
+  int64_t destOff;
+  if (scatterDestOffset(idx, dim, index, out, block, destOff)) {
+    storage<T>(out)[destOff] = value;
+  }
+  return T();
+}
+
+// Fused in-place scatter_add along 'dim'. Like __scatter but accumulates with
+// an atomic add, so duplicate destination coordinates sum (scatter_add
+// semantics). The accumulation base is 'out' (a clone of self, or self in place
+// when the clone was elided).
+template <typename T>
+__device__ inline T __scatter_add(
+    uint32_t idx,
+    Tensor* /*self*/,
+    int32_t dim,
+    Tensor* index,
+    T value,
+    Tensor* out,
+    BlockInfo& block) {
+  int64_t destOff;
+  if (scatterDestOffset(idx, dim, index, out, block, destOff)) {
+    scatterAtomicAdd(&storage<T>(out)[destOff], value);
+  }
+  return T();
 }
 
 // Elementwise index gather variants with scalar indices in registers.
@@ -901,6 +1101,39 @@ __index_elt_one_default(Tensor* source, int32_t idx0, U deflt) {
     return storage<T>(source)[indexOffset(source, idx0)];
   }
   return static_cast<T>(deflt);
+}
+
+// aten.pad in constant mode when the pad list covers only the last dimension.
+// That case is an index-with-default along that dimension: output column 'col'
+// takes self's column 'col - left', and 'deflt' where that falls outside self.
+// The output's last extent is self.size(-1) + left + right, recomputed here
+// rather than read from an output tensor so the op does not depend on being
+// the root of its elementwise subgraph. The leading coordinates are decomposed
+// against self's OWN dims and strides, so a non-contiguous self is read at its
+// real layout.
+template <typename T, typename U>
+__device__ inline T __pad_last_dim(
+    uint32_t idx,
+    Tensor* self,
+    int64_t left,
+    int64_t right,
+    U deflt) {
+  const int32_t rank = self->rank;
+  const int32_t width = self->dims[rank - 1];
+  const int32_t outWidth =
+      width + static_cast<int32_t>(left) + static_cast<int32_t>(right);
+  const int32_t linear = static_cast<int32_t>(idx);
+  const int32_t col = linear % outWidth - static_cast<int32_t>(left);
+  if (col < 0 || col >= width) {
+    return static_cast<T>(deflt);
+  }
+  int32_t row = linear / outWidth;
+  int32_t offset = col * self->strides[rank - 1];
+  for (int32_t d = rank - 2; d >= 0; --d) {
+    offset += (row % self->dims[d]) * self->strides[d];
+    row /= self->dims[d];
+  }
+  return storage<T>(self)[offset];
 }
 
 template <typename T>
@@ -1044,6 +1277,24 @@ __device__ inline T __index_select(
       offset += static_cast<int64_t>(c) * source->strides[d];
     }
   }
+  // 'pos' comes from decomposing the enclosing expression's output index, so a
+  // shape the broadcast right-alignment above does not describe (a reshaping
+  // view between the gather and the expression output, say) puts it past the
+  // end of 'index'. Reading there is an out-of-bounds access whose value then
+  // fails the bounds check below as a bogus 'selected', so check it first.
+  if (pos < 0 || static_cast<uint32_t>(pos) >= index->numEl) {
+    if (block.debugInfo) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = dim;
+      block.debugInfo->extra[1] = -1;
+      block.debugInfo->extra[2] = source->dims[dim];
+      block.debugInfo->extra[3] = pos;
+      block.debugInfo->extra[4] = index->numEl;
+      block.debugInfo->extra[5] = out->numEl;
+      SET_MSG(block.debugInfo, "Bad pos\0");
+    }
+    return T();
+  }
   int64_t selected = index->elementType == kScalarTypeLong
       ? storage<int64_t>(index)[pos * index->strides[0]]
       : static_cast<int64_t>(storage<int32_t>(index)[pos * index->strides[0]]);
@@ -1055,6 +1306,10 @@ __device__ inline T __index_select(
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = dim;
       block.debugInfo->extra[1] = selected;
+      block.debugInfo->extra[2] = source->dims[dim];
+      block.debugInfo->extra[3] = pos;
+      block.debugInfo->extra[4] = index->numEl;
+      block.debugInfo->extra[5] = out->numEl;
       SET_MSG(block.debugInfo, "Bad idx\0");
     }
     return T();

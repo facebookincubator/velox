@@ -109,8 +109,8 @@ enum class ColumnMappingMode {
   /// reordered, deleted, or added back later with the same name but a different
   /// type.
   ///
-  /// The caller must provide ReaderOptions::parquetFieldIds() ordered to match
-  /// ReaderOptions::fileSchema() at every row-typed level. Each ParquetFieldId
+  /// The caller must provide ReaderOptions::fieldIds() ordered to match
+  /// ReaderOptions::fileSchema() at every row-typed level. Each field-id
   /// entry describes the table field ID for the corresponding requested column,
   /// and nested children describe field IDs below structs, arrays, and maps.
   ///
@@ -587,6 +587,14 @@ class RowReaderOptions {
     nimblePreserveDictionaryEncoding_ = value;
   }
 
+  bool nimbleIntegerDictionaryAwareFiltering() const {
+    return nimbleIntegerDictionaryAwareFiltering_;
+  }
+
+  void setNimbleIntegerDictionaryAwareFiltering(bool value) {
+    nimbleIntegerDictionaryAwareFiltering_ = value;
+  }
+
   bool lazyColumnIo() const {
     return lazyColumnIo_;
   }
@@ -685,6 +693,8 @@ class RowReaderOptions {
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
+  // Enables dictionary-aware filtering for Nimble integer columns.
+  bool nimbleIntegerDictionaryAwareFiltering_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
@@ -1046,6 +1056,7 @@ class ReaderOptions : public io::ReaderOptions {
   uint64_t footerSpeculativeIoSize_{kDefaultFooterSpeculativeIoSize};
   uint64_t filePreloadThreshold_{kDefaultFilePreloadThreshold};
   bool fileColumnNamesReadAsLowerCase_{false};
+  // Controls how physical file columns are matched to requested schema columns.
   ColumnMappingMode columnMappingMode_{ColumnMappingMode::kPosition};
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_;

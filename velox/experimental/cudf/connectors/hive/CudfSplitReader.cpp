@@ -171,7 +171,7 @@ CudfSplitReader::CudfSplitReader(
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     bool useExperimentalCudfReader,
-    cudf::ast::expression const* subfieldFilterExpr)
+    const cudf::ast::expression* subfieldFilterAst)
     : NvtxHelper(
           nvtx3::rgb{80, 171, 241},
           std::nullopt,
@@ -189,7 +189,8 @@ CudfSplitReader::CudfSplitReader(
       pool_(connectorQueryCtx->memoryPool()),
       useExperimentalCudfReader_(useExperimentalCudfReader),
       baseReaderOpts_(pool_),
-      subfieldFilterExpr_(subfieldFilterExpr) {
+      subfieldFilterAst_(subfieldFilterAst),
+      pushdownFilterExpr_(subfieldFilterAst) {
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
@@ -203,12 +204,11 @@ void CudfSplitReader::setupReader() {
 }
 
 void CudfSplitReader::prepareSplitInternal(
-    dwio::common::RuntimeStatistics& /*runtimeStats*/) {
+    dwio::common::RuntimeStats& /*runtimeStats*/) {
   setupReader();
 }
 
-void CudfSplitReader::prepareSplit(
-    dwio::common::RuntimeStatistics& runtimeStats) {
+void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   // Reset existing split and split readers, if any
   resetSplit();
 
@@ -218,8 +218,17 @@ void CudfSplitReader::prepareSplit(
   // Perform split-specific setup.
   prepareSplitInternal(runtimeStats);
 
-  // Update runtime stats
-  runtimeStats.processedSplits++;
+  // Update runtime stats.
+  if (isSplitSkipped()) {
+    runtimeStats.skippedSplits++;
+    // An unbounded length means the whole file, whose size the split does not
+    // carry, so it contributes no byte count.
+    if (split_->length != std::numeric_limits<uint64_t>::max()) {
+      runtimeStats.skippedSplitBytes += static_cast<int64_t>(split_->length);
+    }
+  } else {
+    runtimeStats.processedSplits++;
+  }
 }
 
 std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
@@ -312,7 +321,6 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
         readerOptions_,
         stream_,
         output_mr);
-    // TODO: check remainingFilterExprSet_ flag here to choose mr
   });
 
   if (!exptSplitReader_->has_next_table_chunk()) {
@@ -330,14 +338,24 @@ void CudfSplitReader::resetSplit() {
   hybridScanState_.reset();
   dataSource_.reset();
   fileMetaData_.clear();
+  pushdownFilterExpr_ = subfieldFilterAst_;
+  hasSplitSpecificPushdownFilter_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
-  return subfieldFilter();
+  return pushdownFilterExpr_;
 }
 
-cudf::ast::expression const* CudfSplitReader::subfieldFilter() const {
-  return subfieldFilterExpr_;
+const cudf::ast::expression* CudfSplitReader::subfieldFilterAst() const {
+  return subfieldFilterAst_;
+}
+
+bool CudfSplitReader::isSplitSkipped() const {
+  return false;
+}
+
+bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
+  return hasSplitSpecificPushdownFilter_;
 }
 
 void CudfSplitReader::setupCudfDataSource() {
@@ -498,6 +516,18 @@ void CudfSplitReader::fileMetaDatas() {
       fileMetaData_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
+
+  if (pushdownFilterBuilder_) {
+    VELOX_CHECK_EQ(
+        fileMetaData_.size(),
+        1,
+        "Split-specific pushdown filters require exactly one Parquet metadata");
+    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
+    VELOX_CHECK_NOT_NULL(
+        pushdownFilterExpr_,
+        "Split-specific pushdown filter builder must return an expression");
+    hasSplitSpecificPushdownFilter_ = true;
+  }
 }
 
 void CudfSplitReader::createCudfReader() {

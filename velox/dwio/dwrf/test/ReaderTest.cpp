@@ -29,6 +29,7 @@
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
+#include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
@@ -1687,7 +1688,7 @@ TEST_F(TestReader, fileColumnNamesReadAsLowerCaseComplexStruct) {
   EXPECT_EQ(col0_1_1_0_0->childByName("ccint3"), col0_1_1_0_0_0);
 }
 
-TEST_F(TestReader, TestStripeSizeCallback) {
+TEST_F(TestReader, testStripeSizeCallback) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -1717,7 +1718,7 @@ TEST_F(TestReader, TestStripeSizeCallback) {
   EXPECT_EQ(numCalls, 1);
 }
 
-TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
+TEST_F(TestReader, testStripeSizeCallbackLimitsOneStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -1748,7 +1749,7 @@ TEST_F(TestReader, TestStripeSizeCallbackLimitsOneStripe) {
   EXPECT_EQ(numCalls, 1);
 }
 
-TEST_F(TestReader, TestStripeSizeCallbackLimitsTwoStripe) {
+TEST_F(TestReader, testStripeSizeCallbackLimitsTwoStripe) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -2453,6 +2454,46 @@ createWriterReader(
   return std::make_pair(std::move(writer), std::move(reader));
 }
 
+struct FlatMapReaderWithKeyFilter {
+  std::unique_ptr<dwrf::Writer> writer;
+  std::unique_ptr<DwrfReader> reader;
+  std::unique_ptr<dwio::common::RowReader> rowReader;
+  RowTypePtr schema;
+  VectorPtr batch;
+};
+
+FlatMapReaderWithKeyFilter createFlatMapReaderWithKeyFilter(
+    const std::vector<VectorPtr>& inputs,
+    std::shared_ptr<common::Filter> keyFilter,
+    memory::MemoryPool* pool,
+    const std::shared_ptr<io::IoStatistics>& dataIoStats,
+    const std::shared_ptr<io::IoStatistics>& metadataIoStats) {
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+
+  auto [writer, reader] =
+      createWriterReader(inputs, pool, dataIoStats, metadataIoStats, config);
+  auto schema = asRowType(inputs.front()->type());
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addAllChildFields(*schema);
+  scanSpec->childByName("c0")
+      ->childByName(common::ScanSpec::kMapKeysFieldName)
+      ->setFilter(std::move(keyFilter));
+
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(scanSpec);
+  rowReaderOptions.setPreserveFlatMapsInMemory(true);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+  auto batch = BaseVector::create(schema, 0, pool);
+  return {
+      std::move(writer),
+      std::move(reader),
+      std::move(rowReader),
+      std::move(schema),
+      std::move(batch)};
+}
+
 } // namespace
 
 TEST_F(TestReader, setRowNumberColumnInfo) {
@@ -2830,6 +2871,189 @@ TEST_F(TestReader, readFlatMapsAsFlatMaps) {
            {{0, 12}, {1, 13}, {2, 14}, {3, 15}}}));
 }
 
+TEST_F(TestReader, readFlatMapsAsFlatMapsWithKeyFilter) {
+  // Reading a flat map with preserveFlatMapsInMemory=true must honor a
+  // requested-key filter and project only the selected keys into the output
+  // FlatMapVector.
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{0, 0}, {1, 1}, {2, 2}, {3, 3}},
+      {{0, 4}, {1, 5}, {2, 6}, {3, 7}},
+      {{0, 8}, {1, 9}, {2, 10}, {3, 11}},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto result = createFlatMapReaderWithKeyFilter(
+      {input},
+      common::createBigintValues({1, 2}, false),
+      pool(),
+      dataIoStats_,
+      metadataIoStats_);
+
+  ASSERT_EQ(
+      result.rowReader->next(flatMap->size(), result.batch), flatMap->size());
+  auto rowVector = result.batch->as<RowVector>();
+  auto resultFlatMap =
+      rowVector->childAt(0)->loadedVector()->as<FlatMapVector>();
+  ASSERT_TRUE(resultFlatMap);
+
+  // Only the selected keys are projected out.
+  auto distinctKeys =
+      resultFlatMap->distinctKeys()->as<SimpleVector<int64_t>>();
+  std::unordered_set<int64_t> keySet;
+  for (auto i = 0; i < distinctKeys->size(); ++i) {
+    keySet.insert(distinctKeys->valueAt(i));
+  }
+  EXPECT_EQ(keySet, (std::unordered_set<int64_t>{1, 2}));
+
+  auto expected = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 1}, {2, 2}},
+      {{1, 5}, {2, 6}},
+      {{1, 9}, {2, 10}},
+  });
+  assertEqualVectors(expected->toMapVector(), resultFlatMap->toMapVector());
+}
+
+TEST_F(TestReader, readFlatMapsAsFlatMapsWithStringKeyFilter) {
+  // Key pruning in the preserving path must also work for string keys.
+  auto flatMap = makeFlatMapVector<StringView, int64_t>({
+      {{"a", 1}, {"b", 2}, {"c", 3}},
+      {{"a", 4}, {"b", 5}, {"c", 6}},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto result = createFlatMapReaderWithKeyFilter(
+      {input},
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"a", "c"}, false),
+      pool(),
+      dataIoStats_,
+      metadataIoStats_);
+
+  ASSERT_EQ(
+      result.rowReader->next(flatMap->size(), result.batch), flatMap->size());
+  auto resultFlatMap = result.batch->as<RowVector>()
+                           ->childAt(0)
+                           ->loadedVector()
+                           ->as<FlatMapVector>();
+  ASSERT_TRUE(resultFlatMap);
+
+  auto expected = makeFlatMapVector<StringView, int64_t>({
+      {{"a", 1}, {"c", 3}},
+      {{"a", 4}, {"c", 6}},
+  });
+  assertEqualVectors(expected->toMapVector(), resultFlatMap->toMapVector());
+}
+
+TEST_F(TestReader, readFlatMapsAsFlatMapsKeyFilterExcludesAllKeys) {
+  // A key filter that matches no key in the stripe yields N empty maps, not
+  // zero rows.
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{0, 0}, {1, 1}},
+      {{0, 2}, {1, 3}},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto result = createFlatMapReaderWithKeyFilter(
+      {input},
+      common::createBigintValues({99}, false),
+      pool(),
+      dataIoStats_,
+      metadataIoStats_);
+
+  ASSERT_EQ(
+      result.rowReader->next(flatMap->size(), result.batch), flatMap->size());
+  auto resultFlatMap = result.batch->as<RowVector>()
+                           ->childAt(0)
+                           ->loadedVector()
+                           ->as<FlatMapVector>();
+  ASSERT_TRUE(resultFlatMap);
+  EXPECT_EQ(resultFlatMap->distinctKeys()->size(), 0);
+
+  auto resultMaps = resultFlatMap->toMapVector();
+  ASSERT_EQ(resultMaps->size(), 2);
+  for (vector_size_t row = 0; row < resultMaps->size(); ++row) {
+    EXPECT_FALSE(resultMaps->isNullAt(row));
+    EXPECT_EQ(resultMaps->sizeAt(row), 0);
+  }
+}
+
+TEST_F(TestReader, readFlatMapsAsFlatMapsWithKeyFilterAndNullMaps) {
+  // Key pruning must compose with null maps: null rows stay null and non-null
+  // rows are pruned to the requested keys.
+  auto flatMap = makeNullableFlatMapVector<int64_t, int64_t>({
+      {{{0, 0}, {1, 1}, {2, 2}, {3, 3}}},
+      {std::nullopt},
+      {{{0, 4}, {1, 5}, {2, 6}, {3, 7}}},
+      {std::nullopt},
+  });
+  auto input = makeRowVector({flatMap->toMapVector()});
+  auto result = createFlatMapReaderWithKeyFilter(
+      {input},
+      common::createBigintValues({1, 2, 3}, false),
+      pool(),
+      dataIoStats_,
+      metadataIoStats_);
+
+  ASSERT_EQ(
+      result.rowReader->next(flatMap->size(), result.batch), flatMap->size());
+  auto resultFlatMap = result.batch->as<RowVector>()
+                           ->childAt(0)
+                           ->loadedVector()
+                           ->as<FlatMapVector>();
+  ASSERT_TRUE(resultFlatMap);
+
+  auto expected = makeNullableFlatMapVector<int64_t, int64_t>({
+      {{{1, 1}, {2, 2}, {3, 3}}},
+      {std::nullopt},
+      {{{1, 5}, {2, 6}, {3, 7}}},
+      {std::nullopt},
+  });
+  assertEqualVectors(expected->toMapVector(), resultFlatMap->toMapVector());
+}
+
+TEST_F(TestReader, readFlatMapsAsFlatMapsMultiStripeWithKeyFilter) {
+  // The key filter must prune every stripe, not just the first. The ScanSpec
+  // is shared across stripes, so a fix that consumes/clears the filter would
+  // silently stop pruning after stripe 1.
+  auto stripe1 = makeRowVector({makeMapVector<int64_t, int64_t>({
+      {{0, 10}, {1, 11}, {2, 12}, {3, 13}, {4, 14}},
+      {{0, 20}, {1, 21}, {2, 22}, {3, 23}, {4, 24}},
+  })});
+  auto stripe2 = makeRowVector({makeMapVector<int64_t, int64_t>({
+      {{0, 30}, {1, 31}, {2, 32}},
+      {{0, 40}, {1, 41}, {2, 42}},
+      {{0, 50}, {1, 51}, {2, 52}},
+  })});
+
+  // simpleFlushPolicyFactory(true) produces one stripe per batch.
+  auto result = createFlatMapReaderWithKeyFilter(
+      {stripe1, stripe2},
+      common::createBigintValues({1, 2}, false),
+      pool(),
+      dataIoStats_,
+      metadataIoStats_);
+  ASSERT_EQ(result.reader->getNumberOfStripes(), 2);
+
+  uint64_t totalRows = 0;
+  // Read one row at a time to exercise repeated lazy materialization at
+  // non-zero reader offsets as well as the stripe transition.
+  while (result.rowReader->next(1, result.batch) > 0) {
+    auto resultMaps = result.batch->as<RowVector>()
+                          ->childAt(0)
+                          ->loadedVector()
+                          ->as<FlatMapVector>()
+                          ->toMapVector();
+    auto* resultKeys = resultMaps->mapKeys()->as<SimpleVector<int64_t>>();
+    for (vector_size_t row = 0; row < resultMaps->size(); ++row) {
+      std::unordered_set<int64_t> keySet;
+      const auto offset = resultMaps->offsetAt(row);
+      for (vector_size_t i = 0; i < resultMaps->sizeAt(row); ++i) {
+        keySet.insert(resultKeys->valueAt(offset + i));
+      }
+      EXPECT_EQ(keySet, (std::unordered_set<int64_t>{1, 2}));
+    }
+    totalRows += result.batch->size();
+  }
+  EXPECT_EQ(totalRows, 5); // 2 rows from stripe 1 + 3 rows from stripe 2.
+}
+
 // Regression test: reading a multi-stripe flatmap file with
 // preserveFlatMapsInMemory=true used to crash when stripes had different
 // key sets. The ScanSpec accumulated stale children across stripes, causing
@@ -2978,9 +3202,13 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(c0->encoding(), VectorEncoding::Simple::DICTIONARY);
   ASSERT_TRUE(c0->valueVector()->isFlatEncoding());
   ASSERT_EQ(c0->valueVector()->size(), dictionary.size());
-  dwio::common::RuntimeStatistics stats;
+  dwio::common::RuntimeStats stats;
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 0);
+  const auto metricName =
+      std::string(DwrfRuntimeStats::kFlattenStringDictionaryValues);
+  ASSERT_FALSE(stats.columnStats.at(1)
+                   .at(FileFormat::DWRF)
+                   .columnMetrics.contains(metricName));
   spec->childByName("c0")->setFilter(
       std::make_unique<common::BytesValues>(
           std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaa"}, false));
@@ -2989,9 +3217,17 @@ TEST_F(TestReader, readStringDictionaryAsFlat) {
   ASSERT_EQ(rowReader->next(20, actual), 20);
   ASSERT_EQ(actual->size(), 1);
   ASSERT_TRUE(actual->as<RowVector>()->childAt(0)->isFlatEncoding());
-  stats = {};
+  stats = dwio::common::RuntimeStats();
   rowReader->updateRuntimeStats(stats);
-  ASSERT_EQ(stats.columnReaderStats.flattenStringDictionaryValues, 1);
+  ASSERT_TRUE(stats.columnStats.at(1)
+                  .at(FileFormat::DWRF)
+                  .columnMetrics.contains(metricName));
+  ASSERT_EQ(
+      stats.columnStats.at(1)
+          .at(FileFormat::DWRF)
+          .columnMetrics.at(metricName)
+          .sum,
+      1);
 }
 
 // A primitive subfield is missing in file, and result is not reused.

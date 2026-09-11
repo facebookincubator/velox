@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 #include <folly/executors/InlineExecutor.h>
 
@@ -30,8 +31,9 @@ namespace facebook::velox::exec::rpc {
 
 namespace {
 // Safety ceiling for the BATCH latency-gradient window. The gradient backs off
-// as soon as queueing lifts RTT, well before this bound, so it caps
-// pathological growth rather than tuning throughput.
+// whenever queueing lifts RTT above the baseline, but the baseline EMA absorbs
+// sustained elevation and the window then resumes probing upward, so against a
+// backend that never visibly slows down this bound is what stops growth.
 constexpr int64_t kBatchMaxWindow = 256;
 
 // Monotonic now() in nanos for RTT measurement. steady_clock (not wall-clock)
@@ -41,6 +43,15 @@ int64_t steadyNowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+// Wake blocked drivers by fulfilling their promises. Must run with no RPCState
+// lock held: setValue() may synchronously drive an inline continuation that
+// reacquires the driver/operator locks (see RPCState::takeWaitersLocked).
+void fulfillWaiters(std::vector<ContinuePromise>& waiters) {
+  for (auto& promise : waiters) {
+    promise.setValue();
+  }
 }
 } // namespace
 
@@ -113,6 +124,16 @@ std::vector<VectorPtr> RPCState::getInputBatchColumns(
       batchIndex,
       inputBatches_.size());
   return inputBatches_[batchIndex].flatColumns;
+}
+
+void RPCState::releaseAllInputBatches() {
+  std::lock_guard<std::mutex> l(mutex_);
+  for (auto& batch : inputBatches_) {
+    batch.flatColumns.clear();
+    batch.activeRowCount = 0;
+  }
+  RPC_STATE_VLOG(1) << "releaseAllInputBatches: dropped "
+                    << inputBatches_.size() << " input batches";
 }
 
 void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
@@ -191,26 +212,30 @@ void RPCState::completeRow(
     RowLocation location,
     RPCResponse response,
     int64_t rttNs) {
-  std::lock_guard<std::mutex> l(mutex_);
-  readyRows_.push_back(
-      ReadyRow{
-          .rowId = rowId,
-          .location = location,
-          .response = std::move(response),
-          .rttNs = rttNs});
-  inFlight_--;
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    readyRows_.push_back(
+        ReadyRow{
+            .rowId = rowId,
+            .location = location,
+            .response = std::move(response),
+            .rttNs = rttNs});
+    inFlight_--;
 
-  if (rttNs > 0) {
-    rttMinNs_ = std::min(rttMinNs_, rttNs);
-    rttMaxNs_ = std::max(rttMaxNs_, rttNs);
-    ++numRttSamples_;
+    if (rttNs > 0) {
+      rttMinNs_ = std::min(rttMinNs_, rttNs);
+      rttMaxNs_ = std::max(rttMaxNs_, rttNs);
+      ++numRttSamples_;
+    }
+
+    RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
+                      << ", readyRows=" << readyRows_.size()
+                      << ", inFlight=" << inFlight_;
+
+    waiters = takeWaitersLocked();
   }
-
-  RPC_STATE_VLOG(2) << "Row completed: rowId=" << rowId
-                    << ", readyRows=" << readyRows_.size()
-                    << ", inFlight=" << inFlight_;
-
-  notifyWaitersLocked();
+  fulfillWaiters(waiters);
 }
 
 RPCState::ClaimResult RPCState::tryClaimOrWait(
@@ -299,20 +324,24 @@ void RPCState::addPendingBatch(
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_VLOG(1)
                 << "Batch completed with " << responses.size() << " responses";
+            std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
-              state->notifyWaitersLocked();
+              waiters = state->takeWaitersLocked();
             }
+            fulfillWaiters(waiters);
             return responses;
           })
           .thenError([state = selfPtr,
                       completionTimeNs](folly::exception_wrapper ew) {
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             RPC_STATE_LOG(ERROR) << "Batch failed: " << ew.what();
+            std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
-              state->notifyWaitersLocked();
+              waiters = state->takeWaitersLocked();
             }
+            fulfillWaiters(waiters);
             return folly::makeSemiFuture<std::vector<RPCResponse>>(
                 std::move(ew));
           })
@@ -377,26 +406,73 @@ RPCState::ReadyBatch RPCState::extractReadyBatchLocked(
 RPCState::BatchPollResult RPCState::tryPollBatchOrWait(
     ContinueFuture* future,
     std::optional<ReadyBatch>* readyBatch) {
-  std::lock_guard<std::mutex> l(mutex_);
+  // Any self-wake fulfillment (Step 3 below) runs AFTER releasing mutex_:
+  // setValue() may inline-drive a continuation that reacquires the
+  // driver/operator locks, so it must never run under mutex_ -- the lock-order
+  // inversion D113951677 fixed. This mirrors addPendingBatch, which drains
+  // waiters under the lock but fulfills them outside it.
+  std::optional<ContinuePromise> selfWake;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
 
-  // Step 1: Check for a ready batch (out-of-order: first ready wins).
-  for (auto it = pendingBatches_.begin(); it != pendingBatches_.end(); ++it) {
-    if (it->future.isReady()) {
-      *readyBatch = extractReadyBatchLocked(it);
-      return BatchPollResult::kGotBatch;
+    // Step 1: Check for a ready batch (out-of-order: first ready wins).
+    for (auto it = pendingBatches_.begin(); it != pendingBatches_.end(); ++it) {
+      if (it->future.isReady()) {
+        *readyBatch = extractReadyBatchLocked(it);
+        return BatchPollResult::kGotBatch;
+      }
+    }
+
+    // Step 2: Check finish condition.
+    if (noMoreInput_ && pendingBatches_.empty()) {
+      RPC_STATE_VLOG(1) << "tryPollBatchOrWait: finish condition met";
+      return BatchPollResult::kFinished;
+    }
+
+    // Step 3: Must wait. Register a waiter that a batch completion fulfills.
+    //
+    // Guard against the completion-drain race. A batch's completion callback
+    // stamps completionTimeNs before it drains the waiter list under mutex_
+    // (see addPendingBatch), and the batch future only becomes ready after that
+    // callback returns. So there is a window -- waiters drained, callback not
+    // yet returned -- in which Step 1 above sees future.isReady() == false even
+    // though the drain has already passed. A waiter registered in that window
+    // would be orphaned: the completing batch will never fulfill it, and at an
+    // in-flight window of 1 (the last batch) no later completion would either,
+    // parking the single-consumer driver for good.
+    //
+    // completionTimeNs != 0 on any pending batch is the reliable under-lock
+    // signal that a completion is in progress: the callback stamps it before
+    // taking mutex_ to drain, so the mutex we hold synchronizes-with that drain
+    // and an already-drained completion is always visible here. When set,
+    // self-fulfill the waiter (below, outside the lock) so the caller re-polls
+    // and claims the now/soon-ready batch instead of parking off a promise no
+    // completion will wake.
+    bool completionInProgress = false;
+    for (const auto& batch : pendingBatches_) {
+      if (batch.completionTimeNs->load(std::memory_order_acquire) != 0) {
+        completionInProgress = true;
+        break;
+      }
+    }
+    RPC_STATE_VLOG(2) << "tryPollBatchOrWait: must wait"
+                      << (completionInProgress
+                              ? " (self-woken: RPC completion racing)"
+                              : "");
+    promises_.emplace_back("RPCState::tryPollBatchOrWait");
+    *future = promises_.back().getSemiFuture();
+    if (completionInProgress) {
+      // Move the waiter out and drop it from the list so a later
+      // takeWaitersLocked cannot double-fulfill it; it is fulfilled below, once
+      // the lock is released.
+      selfWake = std::move(promises_.back());
+      promises_.pop_back();
     }
   }
 
-  // Step 2: Check finish condition.
-  if (noMoreInput_ && pendingBatches_.empty()) {
-    RPC_STATE_VLOG(1) << "tryPollBatchOrWait: finish condition met";
-    return BatchPollResult::kFinished;
+  if (selfWake.has_value()) {
+    selfWake->setValue();
   }
-
-  // Step 3: Must wait.
-  RPC_STATE_VLOG(2) << "tryPollBatchOrWait: must wait";
-  promises_.emplace_back("RPCState::tryPollBatchOrWait");
-  *future = promises_.back().getSemiFuture();
   return BatchPollResult::kMustWait;
 }
 
@@ -413,12 +489,16 @@ std::optional<RPCState::ReadyBatch> RPCState::tryPollReady() {
 // ===== Common =====
 
 void RPCState::setNoMoreInput() {
-  std::lock_guard<std::mutex> l(mutex_);
-  noMoreInput_ = true;
-  RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
-                    << ", pendingBatches=" << pendingBatches_.size()
-                    << ", readyRows=" << readyRows_.size();
-  notifyWaitersLocked();
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    noMoreInput_ = true;
+    RPC_STATE_VLOG(1) << "setNoMoreInput: inFlight=" << inFlight_
+                      << ", pendingBatches=" << pendingBatches_.size()
+                      << ", readyRows=" << readyRows_.size();
+    waiters = takeWaitersLocked();
+  }
+  fulfillWaiters(waiters);
 }
 
 bool RPCState::isFinished() {
@@ -473,13 +553,10 @@ void RPCState::onUnitSamples(const std::vector<int64_t>& rttNsList) {
   }
 }
 
-void RPCState::notifyWaitersLocked() {
-  // Fulfill all promises to wake up blocked drivers.
-  // Called while mutex_ is held.
-  for (auto& promise : promises_) {
-    promise.setValue();
-  }
-  promises_.clear();
+std::vector<ContinuePromise> RPCState::takeWaitersLocked() {
+  // Hand the waiter promises back to the caller to fulfill after releasing
+  // mutex_. See the header for why setValue() must not run under mutex_.
+  return std::exchange(promises_, {});
 }
 
 RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {

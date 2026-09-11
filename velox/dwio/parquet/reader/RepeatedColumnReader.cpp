@@ -27,85 +27,114 @@ PageReader* readLeafRepDefs(
     dwio::common::SelectiveColumnReader* reader,
     int32_t numTop,
     bool mustRead) {
-  auto children = reader->children();
+  const auto& children = reader->children();
+  const auto kind = reader->fileType().type()->kind();
+  PageReader* pageReader = nullptr;
+  if (kind == TypeKind::ROW) {
+    auto* structReader = static_cast<StructColumnReader*>(reader);
+    // A struct can have no logical children and use a separate physical leaf
+    // solely as its rep/def source.
+    auto* repDefSourceReader = structReader->repDefSourceReader();
+    pageReader = readLeafRepDefs(repDefSourceReader, numTop, true);
+    structReader->setNullsFromRepDefs(*pageReader);
+    for (auto* child : children) {
+      if (child != repDefSourceReader) {
+        readLeafRepDefs(child, numTop, false);
+      }
+    }
+    return pageReader;
+  }
   if (children.empty()) {
     if (!mustRead) {
       return nullptr;
     }
-    auto pageReader = reader->formatData().as<ParquetData>().reader();
-    pageReader->decodeRepDefs(numTop);
-    return pageReader;
+    auto* leafPageReader = reader->formatData().as<ParquetData>().reader();
+    leafPageReader->decodeRepDefs(numTop);
+    return leafPageReader;
   }
-  PageReader* pageReader = nullptr;
-  auto& type = *reinterpret_cast<const ParquetTypeWithId*>(&reader->fileType());
-  if (type.type()->kind() == TypeKind::ARRAY) {
+  if (kind == TypeKind::ARRAY) {
     pageReader = readLeafRepDefs(children[0], numTop, true);
-    auto list = dynamic_cast<ListColumnReader*>(reader);
-    assert(list);
+    auto* list = static_cast<ListColumnReader*>(reader);
     list->setLengthsFromRepDefs(*pageReader);
     return pageReader;
   }
-  if (type.type()->kind() == TypeKind::MAP) {
+  if (kind == TypeKind::MAP) {
     pageReader = readLeafRepDefs(children[0], numTop, true);
     readLeafRepDefs(children[1], numTop, false);
-    auto map = dynamic_cast<MapColumnReader*>(reader);
-    assert(map);
+    auto* map = static_cast<MapColumnReader*>(reader);
     map->setLengthsFromRepDefs(*pageReader);
     return pageReader;
-  }
-  if (auto structReader = dynamic_cast<StructColumnReader*>(reader)) {
-    pageReader = readLeafRepDefs(structReader->childForRepDefs(), numTop, true);
-    assert(pageReader);
-    structReader->setNullsFromRepDefs(*pageReader);
-    for (auto i = 0; i < children.size(); ++i) {
-      auto child = children[i];
-      if (child != structReader->childForRepDefs()) {
-        readLeafRepDefs(child, numTop, false);
-      }
-    }
   }
   return pageReader;
 }
 
 void skipUnreadLengthsAndNulls(dwio::common::SelectiveColumnReader& reader) {
-  auto children = reader.children();
+  // A struct can have no logical children but still hold preset nulls decoded
+  // from its synthetic rep/def source. Advance these nulls before the empty-
+  // children check below.
+  const auto kind = reader.fileType().type()->kind();
+  if (kind == TypeKind::ROW) {
+    static_cast<StructColumnReader*>(&reader)->seekToEndOfPresetNulls();
+    return;
+  }
+  const auto& children = reader.children();
   if (children.empty()) {
     return;
   }
-  if (reader.fileType().type()->kind() == TypeKind::ARRAY) {
-    reinterpret_cast<ListColumnReader*>(&reader)->skipUnreadLengths();
-  } else if (reader.fileType().type()->kind() == TypeKind::ROW) {
-    reinterpret_cast<StructColumnReader*>(&reader)->seekToEndOfPresetNulls();
-  } else if (reader.fileType().type()->kind() == TypeKind::MAP) {
-    reinterpret_cast<MapColumnReader*>(&reader)->skipUnreadLengths();
+  if (kind == TypeKind::ARRAY) {
+    static_cast<ListColumnReader*>(&reader)->skipUnreadLengths();
+  } else if (kind == TypeKind::MAP) {
+    static_cast<MapColumnReader*>(&reader)->skipUnreadLengths();
   } else {
     VELOX_UNREACHABLE();
   }
 }
 
-void enqueueChildren(
-    dwio::common::SelectiveColumnReader* reader,
-    uint32_t index,
-    dwio::common::BufferedInput& input) {
-  auto children = reader->children();
-  if (children.empty()) {
-    return reader->formatData().as<ParquetData>().enqueueRowGroup(index, input);
-  }
-  for (auto* child : children) {
-    enqueueChildren(child, index, input);
-  }
-}
 } // namespace
 
-void ensureRepDefs(
+void enqueueRowGroupRecursive(
     dwio::common::SelectiveColumnReader& reader,
-    int32_t numTop) {
-  auto& fileType =
-      *reinterpret_cast<const ParquetTypeWithId*>(&reader.fileType());
-  // Check that this is a direct child of the root struct.
-  if (fileType.parent() && !fileType.parent()->parent()) {
+    uint32_t index,
+    dwio::common::BufferedInput& input) {
+  const auto& children = reader.children();
+  if (children.empty()) {
+    if (reader.fileType().type()->kind() == TypeKind::ROW) {
+      auto* structReader = static_cast<StructColumnReader*>(&reader);
+      // Only the root struct has no rep/def source.
+      if (auto* repDefSourceReader = structReader->repDefSourceReader()) {
+        enqueueRowGroupRecursive(*repDefSourceReader, index, input);
+      }
+      return;
+    }
+    return reader.formatData().as<ParquetData>().enqueueRowGroup(index, input);
+  }
+  for (auto* child : children) {
+    enqueueRowGroupRecursive(*child, index, input);
+  }
+}
+
+void prepareRepDefsAndOffset(
+    dwio::common::SelectiveColumnReader& reader,
+    int64_t offset,
+    const RowSet& rows) {
+  const auto previousOffset = reader.readOffset();
+  const auto* parent = reader.fileType().parent();
+  // Only a direct child of the root struct owns the repdefs for its subtree.
+  if (parent && !parent->parent()) {
+    const int32_t numTop =
+        static_cast<int32_t>(offset + rows.back() + 1 - previousOffset);
     skipUnreadLengthsAndNulls(reader);
     readLeafRepDefs(&reader, numTop, true);
+
+    if (offset > previousOffset) {
+      // There is no page reader on this level so cannot call skipNullsOnly on
+      // it.
+      reader.skip(offset - previousOffset);
+    }
+  }
+
+  if (offset > previousOffset) {
+    reader.setReadOffset(offset);
   }
 }
 
@@ -143,7 +172,7 @@ MapColumnReader::MapColumnReader(
 void MapColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
-  enqueueChildren(this, index, input);
+  enqueueRowGroupRecursive(*this, index, input);
 }
 
 void MapColumnReader::seekToRowGroup(int64_t index) {
@@ -193,15 +222,7 @@ void MapColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  // The topmost list reader reads the repdefs for the left subtree.
-  ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
-  if (offset > readOffset_) {
-    // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent() && !fileType().parent()->parent()) {
-      skip(offset - readOffset_);
-    }
-    readOffset_ = offset;
-  }
+  prepareRepDefsAndOffset(*this, offset, rows);
   SelectiveMapColumnReader::read(offset, rows, incomingNulls);
 
   // The child should be at the end of the range provided to this
@@ -251,7 +272,7 @@ ListColumnReader::ListColumnReader(
 void ListColumnReader::enqueueRowGroup(
     uint32_t index,
     dwio::common::BufferedInput& input) {
-  enqueueChildren(this, index, input);
+  enqueueRowGroupRecursive(*this, index, input);
 }
 
 void ListColumnReader::seekToRowGroup(int64_t index) {
@@ -301,15 +322,7 @@ void ListColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  // The topmost list reader reads the repdefs for the left subtree.
-  ensureRepDefs(*this, offset + rows.back() + 1 - readOffset_);
-  if (offset > readOffset_) {
-    // There is no page reader on this level so cannot call skipNullsOnly on it.
-    if (fileType().parent() && !fileType().parent()->parent()) {
-      skip(offset - readOffset_);
-    }
-    readOffset_ = offset;
-  }
+  prepareRepDefsAndOffset(*this, offset, rows);
   SelectiveListColumnReader::read(offset, rows, incomingNulls);
 
   // The child should be at the end of the range provided to this

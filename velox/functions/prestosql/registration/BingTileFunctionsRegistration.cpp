@@ -36,7 +36,7 @@ void registerSimpleBingTileFunctions(const std::string& prefix) {
       {prefix + "bing_tile_zoom_level"});
   registerFunction<
       BingTileCoordinatesFunction,
-      Row<int32_t, int32_t>,
+      Row<Field<"x", int32_t>, Field<"y", int32_t>>,
       BingTile>({prefix + "bing_tile_coordinates"});
 
   // Parent/child tiles

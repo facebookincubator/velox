@@ -146,9 +146,8 @@ void SfmSketch::mergeWith(const SfmSketch& other) {
     for (int32_t i = 0; i < numBits; i++) {
       const double bit1 = bits::isBitSet(rawBits_, i) ? 1.0 : 0.0;
       const double bit2 = bits::isBitSet(other.rawBits_, i) ? 1.0 : 0.0;
-      const double x =
-          1 - 2 * p - normalizer * (1 - p1 - bit1) * (1 - p2 - bit2);
-      double probability = p + normalizer * x;
+      double probability =
+          1 - p - normalizer * (1 - p1 - bit1) * (1 - p2 - bit2);
       probability = std::min(1.0, std::max(0.0, probability));
 
       bits::setBit(

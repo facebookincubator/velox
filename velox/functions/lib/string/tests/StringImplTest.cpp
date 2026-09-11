@@ -1253,7 +1253,7 @@ TEST_F(StringImplTest, pad) {
 
 // Make sure that utf8proc_codepoint returns invalid codepoint (-1) for
 // incomplete character of length>1.
-TEST_F(StringImplTest, utf8proc_codepoint) {
+TEST_F(StringImplTest, utf8procCodepoint) {
   int size;
 
   std::string twoBytesChar = "\xdd\x81";
