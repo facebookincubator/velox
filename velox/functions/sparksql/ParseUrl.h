@@ -29,15 +29,15 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// parse_url(url, part) → varchar
-/// parse_url(url, 'QUERY', key) → varchar
+/// parse_url(url, part) -> varchar
+/// parse_url(url, 'QUERY', key) -> varchar
 /// Extracts a part of a URL, reproducing the semantics of Spark's ParseUrl
 /// expression: the URL is parsed with java.net.URI rules (see detail::
 /// parseUrl) and every part is returned in its raw, still percent-encoded
 /// form. The three-argument form extracts a query parameter with the same
 /// (&|^)key=([^&]*) regex Spark compiles.
 template <typename T>
-struct ParseURLFunction {
+struct ParseUrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Every part except a FILE that concatenates the path and query is a
@@ -51,7 +51,7 @@ struct ParseURLFunction {
   static constexpr std::string_view kRegexPrefix = "(&|^)";
   static constexpr std::string_view kRegexSuffix = "=([^&]*)";
 
-  ParseURLFunction() : cache_(0) {}
+  ParseUrlFunction() : cache_(0) {}
 
   // The extractable parts, keyed once per part string instead of compared
   // on every row.
