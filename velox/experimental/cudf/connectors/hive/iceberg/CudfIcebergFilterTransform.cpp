@@ -49,7 +49,7 @@ class InjectedColumnFilterTransformer
       : injectedColumnIndices_(sortedInjectedColumnIndices),
         injectedColumnFolds_(injectedColumnFolds) {
     filter.accept(*this);
-    fold(current_);
+    fold(current_, filter);
   }
 
   // Returns the transformed filter, handing over the nodes created while
@@ -73,9 +73,6 @@ class InjectedColumnFilterTransformer
   //   pushed and deferred   the pushed filter enforces part of it
   //   deferred only         nothing of it can be pushed
   struct Transformed {
-    // The subexpression this result was derived from.
-    const cudf::ast::expression* original{nullptr};
-
     // Result over the columns the parquet reader projects. Null when nothing
     // of the subexpression can be pushed, which relaxes the pushed filter.
     const cudf::ast::expression* pushed{nullptr};
@@ -111,7 +108,7 @@ class InjectedColumnFilterTransformer
   // for example of `"a" <= part AND part <= "z"` rather than of either
   // comparison on its own. It is therefore applied at the highest node that
   // references that column and nothing else.
-  void fold(Transformed& transformed) {
+  void fold(Transformed& transformed, const cudf::ast::expression& expr) {
     if (not transformed.pendingColumn.has_value()) {
       return;
     }
@@ -127,7 +124,7 @@ class InjectedColumnFilterTransformer
       case ConstantFilterFold::kUnknown:
         // The columns it references are not read from the data file, so it can
         // only be applied to the assembled table.
-        transformed.deferred = transformed.original;
+        transformed.deferred = &expr;
         return;
     }
   }
@@ -151,22 +148,19 @@ class InjectedColumnFilterTransformer
     return pendingColumn;
   }
 
-  static Transformed constantResult(
-      const cudf::ast::expression& expr,
-      bool value) {
-    return Transformed{.original = &expr, .constant = value};
+  static Transformed constantResult(bool value) {
+    return Transformed{.constant = value};
   }
 
   // Result for a subexpression that cannot be pushed at all and must be
   // deferred to post-read (assembled) table.
   static Transformed deferredResult(const cudf::ast::expression& expr) {
-    return Transformed{.original = &expr, .deferred = &expr};
+    return Transformed{.deferred = &expr};
   }
 
   std::reference_wrapper<const cudf::ast::expression> visit(
       const cudf::ast::literal& expr) override {
     current_ = Transformed{
-        .original = &expr,
         .pushed = &expr,
         .isLiteral = true,
         .requiresSplitSpecificDecimalTypes =
@@ -185,8 +179,7 @@ class InjectedColumnFilterTransformer
         std::distance(injectedColumnIndices_.begin(), iter));
 
     if (iter != injectedColumnIndices_.end() and *iter == columnIndex) {
-      current_ = Transformed{
-          .original = &expr, .pendingColumn = numPrecedingInjectedColumns};
+      current_ = Transformed{.pendingColumn = numPrecedingInjectedColumns};
       return expr;
     }
 
@@ -197,7 +190,7 @@ class InjectedColumnFilterTransformer
                   columnIndex -
                       static_cast<cudf::size_type>(numPrecedingInjectedColumns),
                   expr.get_table_source()});
-    current_ = Transformed{.original = &expr, .pushed = &rebased};
+    current_ = Transformed{.pushed = &rebased};
     return rebased;
   }
 
@@ -219,12 +212,12 @@ class InjectedColumnFilterTransformer
     // Keep climbing while the subtree stays within a single injected column,
     // so that its fold is applied to the whole predicate at once.
     if (const auto pendingColumn = pendingColumnOf(transformedOperands)) {
-      current_ = Transformed{.original = &expr, .pendingColumn = pendingColumn};
+      current_ = Transformed{.pendingColumn = pendingColumn};
       return expr;
     }
 
-    for (auto& operand : transformedOperands) {
-      fold(operand);
+    for (size_t i = 0; i < transformedOperands.size(); ++i) {
+      fold(transformedOperands[i], operands[i].get());
     }
 
     // Folding uses Kleene operators emitted by `createAstFromSubfieldFilter`.
@@ -240,7 +233,7 @@ class InjectedColumnFilterTransformer
     if (op == cudf::ast::ast_operator::NULL_LOGICAL_AND) {
       VELOX_CHECK_EQ(
           operands.size(), 2, "Expected a binary cuDF AST logical AND");
-      current_ = transformLogicalAnd(expr, op, transformedOperands);
+      current_ = transformLogicalAnd(op, transformedOperands);
     } else if (op == cudf::ast::ast_operator::NULL_LOGICAL_OR) {
       VELOX_CHECK_EQ(
           operands.size(), 2, "Expected a binary cuDF AST logical OR");
@@ -259,24 +252,22 @@ class InjectedColumnFilterTransformer
   // dropped out, or the lone survivor. Returns nothing when two survive, which
   // 'retained' then holds.
   static std::optional<Transformed> applyConstants(
-      const cudf::ast::expression& expr,
       bool shortCircuitValue,
       std::span<const Transformed> operands,
       std::vector<const Transformed*>& retained) {
     for (const auto& operand : operands) {
       if (operand.constant == shortCircuitValue) {
-        return constantResult(expr, shortCircuitValue);
+        return constantResult(shortCircuitValue);
       }
       if (not operand.constant.has_value()) {
         retained.push_back(&operand);
       }
     }
     if (retained.empty()) {
-      return constantResult(expr, not shortCircuitValue);
+      return constantResult(not shortCircuitValue);
     }
     if (retained.size() == 1) {
       auto result = *retained.front();
-      result.original = &expr;
       result.valueInexact = result.valueInexact or shortCircuitValue;
       return result;
     }
@@ -287,18 +278,16 @@ class InjectedColumnFilterTransformer
   // `true` drops out, and the remaining ones can be pushed and deferred
   // independently of each other.
   Transformed transformLogicalAnd(
-      const cudf::ast::expression& expr,
       cudf::ast::ast_operator op,
       std::span<const Transformed> operands) {
     std::vector<const Transformed*> retained;
-    if (auto decided = applyConstants(expr, false, operands, retained)) {
+    if (auto decided = applyConstants(false, operands, retained)) {
       return *decided;
     }
 
     const auto& lhs = *retained[0];
     const auto& rhs = *retained[1];
     return Transformed{
-        .original = &expr,
         .pushed = combine(op, lhs.pushed, rhs.pushed),
         .deferred = combine(op, lhs.deferred, rhs.deferred),
         .requiresSplitSpecificDecimalTypes =
@@ -315,7 +304,7 @@ class InjectedColumnFilterTransformer
       cudf::ast::ast_operator op,
       std::span<const Transformed> operands) {
     std::vector<const Transformed*> retained;
-    if (auto decided = applyConstants(expr, true, operands, retained)) {
+    if (auto decided = applyConstants(true, operands, retained)) {
       return *decided;
     }
 
@@ -326,7 +315,6 @@ class InjectedColumnFilterTransformer
     }
     const auto isExact = lhs.deferred == nullptr and rhs.deferred == nullptr;
     return Transformed{
-        .original = &expr,
         .pushed = combine(op, lhs.pushed, rhs.pushed),
         .deferred = isExact ? nullptr : &expr,
         .requiresSplitSpecificDecimalTypes =
@@ -356,7 +344,6 @@ class InjectedColumnFilterTransformer
               cudf::ast::operation{
                   op, *operands[0].pushed, *operands[1].pushed});
     return Transformed{
-        .original = &expr,
         .pushed = &transformed,
         .requiresSplitSpecificDecimalTypes = std::any_of(
             operands.begin(), operands.end(), [](const auto& operand) {
