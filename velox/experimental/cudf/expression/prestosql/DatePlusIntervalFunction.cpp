@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 
 #include "velox/common/memory/Memory.h"
@@ -43,7 +44,7 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
       expr->inputs()[1]->type()->isIntervalDayTime(),
       "Second argument to plus must be an interval day to second");
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
 
   // If the interval is a constant, extract it at construction time and

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
@@ -361,7 +362,7 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
 
   switch (filter.kind()) {

@@ -17,6 +17,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/type/Timestamp.h"
@@ -96,8 +97,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     T value,
     bool isNull,
     std::optional<cudf::type_id> toType = std::nullopt,
-    cuda::stream_ref stream =
-        cudf::get_default_stream(cudf::allow_default_stream)) {
+    cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   auto mr = get_temp_mr();
 
   // Synchronize before returning as scalar construction can enqueue an
@@ -213,8 +213,7 @@ static std::unique_ptr<cudf::scalar> createCudfScalar(
     const core::ConstantTypedExpr& value,
     memory::MemoryPool* pool,
     std::optional<cudf::type_id> toType = std::nullopt,
-    cuda::stream_ref stream =
-        cudf::get_default_stream(cudf::allow_default_stream)) {
+    cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   using T = typename TypeTraits<Kind>::NativeType;
   const auto valueVector = value.hasValueVector()
       ? value.valueVector()
@@ -228,8 +227,7 @@ inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
     std::optional<cudf::type_id> toType = std::nullopt,
-    cuda::stream_ref stream =
-        cudf::get_default_stream(cudf::allow_default_stream)) {
+    cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   auto constExpr =
       std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr);
   VELOX_CHECK_NOT_NULL(constExpr);

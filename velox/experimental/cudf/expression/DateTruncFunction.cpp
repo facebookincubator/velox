@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
@@ -98,7 +99,7 @@ DateTruncFunction::DateTruncFunction(
         isTimestamp, "date_trunc {} requires timestamp input", *unitString);
   }
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
   oneScalar_ =
       std::make_unique<cudf::numeric_scalar<int32_t>>(1, true, stream, mr);

@@ -309,6 +309,13 @@ void registerCudf() {
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
+  // Record this context's device so worker threads can bind it later (see
+  // ensureCudaContextForThread()).
+  int contextDevice = -1;
+  cudaGetDevice(&contextDevice);
+  VELOX_CHECK_GE(contextDevice, 0, "Failed to get current CUDA device ordinal");
+  setCudfContextDevice(contextDevice);
+
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
   auto mr = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);

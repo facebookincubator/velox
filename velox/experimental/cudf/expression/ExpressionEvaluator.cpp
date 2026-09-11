@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -1509,7 +1510,7 @@ class LikeFunction : public CudfFunction {
           // sequences for every batch, so cache those tiny helper columns once
           // here. Constant patterns are validated on the host and don't need
           // these columns.
-          auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+          auto stream = getDefaultStreamForCurrentThread();
           auto mr = get_temp_mr();
           targetsColumn_ = makeEscapeTargetsColumn(escape_[0], stream, mr);
           replacementsColumn_ = makeEscapeReplacementsColumn(stream, mr);
