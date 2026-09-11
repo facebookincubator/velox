@@ -2,7 +2,7 @@
 Array Functions
 =============================
 
-.. function:: all_match(array(T), function(T, boolean)) → boolean
+.. function:: all_match(array(T), function(T, boolean)) -> boolean
 
     Returns whether all elements of an array match the given predicate.
 
@@ -11,12 +11,21 @@ Array Functions
         Returns NULL if the predicate function returns NULL for one or more elements and true for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns true or NULL for the rest.
 
-.. function:: any_match(array(T), function(T, boolean)) → boolean
+.. function:: any_match(array(T), function(T, boolean)) -> boolean
 
     Returns whether at least one element of an array matches the given predicate.
 
         Returns true if one or more elements match the predicate;
         Returns false if none of the elements matches (a special case is when the array is empty);
+        Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
+        Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
+
+.. function:: none_match(array(T), function(T, boolean)) -> boolean
+
+    Returns whether no elements of an array match the given predicate.
+
+        Returns true if none of the elements matches the predicate (a special case is when the array is empty);
+        Returns false if one or more elements match;
         Returns NULL if the predicate function returns NULL for one or more elements and false for all other elements.
         Throws an exception if the predicate fails for one or more elements and returns false or NULL for the rest.
 
@@ -140,6 +149,17 @@ Array Functions
 .. function:: array_normalize(array(E), E) -> array(E)
 
     Normalizes array ``x`` by dividing each element by the p-norm of the array. It is equivalent to ``TRANSFORM(array, v -> v / REDUCE(array, 0, (a, v) -> a + POW(ABS(v), p), a -> POW(a, 1 / p))``, but the reduce part is only executed once. Returns null if the array is null or there are null array elements. If ``p`` is 0, then the input array is returned. Only REAL and DOUBLE types are supported.
+
+.. function:: arrays_overlap(x, y) -> boolean
+
+    Tests if arrays ``x`` and ``y`` have any non-null elements in common.
+    Returns null if there are no non-null elements in common but either array contains null.
+    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
+
+.. function:: array_union(x, y) -> array
+
+    Returns an array of the elements in the union of x and y, without duplicates.
+    For REAL and DOUBLE, NANs (Not-a-Number) are considered equal.
 
 .. function:: array_position(x, element) -> bigint
 
