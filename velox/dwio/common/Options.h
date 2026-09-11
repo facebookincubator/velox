@@ -212,6 +212,26 @@ class SerDeOptions {
   ~SerDeOptions() = default;
 };
 
+/// Parse options for the JSON reader (JSON Lines, matching Hive 4.0.0
+/// org.apache.hadoop.hive.serde2.JsonSerDe). The reader has no lenient mode —
+/// every parse error throws, and leaf type mismatches coerce silently — so no
+/// toggle is needed there. The temporal format strings below are Joda-style
+/// patterns (see velox/functions/lib/DateTimeFormatter.h); SimpleDateFormat
+/// parity is intentionally out of scope for v1.
+/// The format strings are owned rather than viewed: these options are stored in
+/// ReaderOptions, which outlives the call that sets them, so a caller passing a
+/// pattern computed at runtime (a connector reading it out of table properties,
+/// say) must not have to keep the source string alive until the read.
+struct JsonSerDeOptions {
+  /// Joda-style pattern used to parse DATE columns from JSON string values.
+  std::string dateFormat{"yyyy-MM-dd"};
+
+  /// Joda-style pattern used to parse TIMESTAMP columns from JSON string
+  /// values. A trailing timezone token (e.g. ` ZZ`) is honored when present;
+  /// inputs without one are interpreted as UTC.
+  std::string timestampFormat{"yyyy-MM-dd HH:mm:ss"};
+};
+
 struct TableParameter {
   /// If present in the table parameters, the option is passed to the row reader
   /// to instruct it to skip the number of rows from the current position. Used
@@ -748,6 +768,13 @@ class ReaderOptions : public io::ReaderOptions {
     return *this;
   }
 
+  /// Modifies the JSON serialization-deserialization options (temporal
+  /// format strings). Only consulted by the JSON reader.
+  ReaderOptions& setJsonSerDeOptions(const JsonSerDeOptions& serdeOpts) {
+    jsonSerDeOptions_ = serdeOpts;
+    return *this;
+  }
+
   ReaderOptions& setDecrypterFactory(
       const std::shared_ptr<encryption::DecrypterFactory>& factory) {
     decrypterFactory_ = factory;
@@ -846,6 +873,10 @@ class ReaderOptions : public io::ReaderOptions {
 
   const SerDeOptions& serDeOptions() const {
     return serDeOptions_;
+  }
+
+  const JsonSerDeOptions& jsonSerDeOptions() const {
+    return jsonSerDeOptions_;
   }
 
   const std::shared_ptr<encryption::DecrypterFactory> decrypterFactory() const {
@@ -1050,6 +1081,7 @@ class ReaderOptions : public io::ReaderOptions {
   std::vector<ParquetFieldId> fieldIds_;
   std::string fieldIdAttributeKey_;
   SerDeOptions serDeOptions_;
+  JsonSerDeOptions jsonSerDeOptions_;
   std::unordered_map<std::string, std::string> properties_{};
   std::shared_ptr<FormatSpecificOptions> formatSpecificOptions_;
   std::shared_ptr<encryption::DecrypterFactory> decrypterFactory_;
