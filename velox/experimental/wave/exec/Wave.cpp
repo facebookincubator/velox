@@ -41,6 +41,16 @@ DEFINE_int32(
     2048,
     "Initial buckets in group by hash table (4 slots/bucket)");
 
+DEFINE_bool(
+    wave_check_executables,
+#ifndef NDEBUG
+    true
+#else
+    false
+#endif
+    ,
+    "Validate Wave executables; enabled by default in debug builds");
+
 namespace facebook::velox::wave {
 
 PrintTime::PrintTime(const char* title)
@@ -1116,6 +1126,9 @@ void checkOperand(Operand& op) {
 }
 
 void WaveStream::checkExecutables() const {
+  if (!FLAGS_wave_check_executables) {
+    return;
+  }
   for (auto& pair : operandToExecutable_) {
     bool found = false;
     for (auto& exe : executables_) {
