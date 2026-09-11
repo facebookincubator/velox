@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -1168,6 +1169,94 @@ TEST_F(
           makeFlatVector<std::string>({"1009"}),
           makeNullableFlatVector<std::string>({std::nullopt}),
       });
+  assertEqualResults({expected}, {result});
+}
+
+TEST_F(EqualityDeleteFileReaderTest, nestedPrimitiveColumnDelete) {
+  auto detailsType = ROW({"code", "label"}, {INTEGER(), VARCHAR()});
+  auto rowType = ROW({"id", "details"}, {BIGINT(), detailsType});
+
+  auto baseDetails = makeRowVector(
+      {"code", "label"},
+      {
+          makeNullableFlatVector<int32_t>({10, 20, 10, 40, std::nullopt, 60}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e", "f"}),
+      },
+      [](vector_size_t row) { return row == 5; });
+  auto baseData = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+          baseDetails,
+      });
+  auto dataFile = writeDataFile({baseData});
+
+  auto deleteDetails = makeRowVector(
+      {"code"},
+      {
+          makeNullableFlatVector<int32_t>({10, std::nullopt}),
+      },
+      [](vector_size_t row) { return row == 1; });
+  auto deleteData = makeRowVector(
+      {"details"},
+      {
+          deleteDetails,
+      });
+  auto eqDeleteFile = writeDataFile({deleteData});
+
+  const IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      eqDeleteFile->getPath(),
+      dwio::common::FileFormat::DWRF,
+      2,
+      getFileSize(eqDeleteFile->getPath()),
+      /*equalityFieldIds=*/{17});
+
+  auto splits = makeSplits(
+      dataFile->getPath(),
+      /*partitionKeys=*/{},
+      {dwio::common::FileFormat::DWRF, false},
+      {icebergDeleteFile});
+  // Non-sequential IDs verify that field 17 resolves to details.code through
+  // Iceberg metadata rather than an ordinal.
+  connector::ColumnHandleMap assignments{
+      {"id",
+       std::make_shared<const IcebergColumnHandle>(
+           "id",
+           FileColumnHandle::ColumnType::kRegular,
+           BIGINT(),
+           parquet::ParquetFieldId{101, {}})},
+      {"details",
+       std::make_shared<const IcebergColumnHandle>(
+           "details",
+           FileColumnHandle::ColumnType::kRegular,
+           detailsType,
+           parquet::ParquetFieldId{
+               102,
+               {
+                   parquet::ParquetFieldId{17, {}},
+                   parquet::ParquetFieldId{18, {}},
+               }})}};
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(kIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .dataColumnFieldIds({101, 102})
+                  .assignments(std::move(assignments))
+                  .endTableScan()
+                  .planNode();
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  auto expected = makeRowVector(
+      {"id", "details"},
+      {
+          makeFlatVector<int64_t>({2, 4}),
+          makeRowVector(
+              {"code", "label"},
+              {makeFlatVector<int32_t>({20, 40}),
+               makeFlatVector<std::string>({"b", "d"})}),
+      });
+
   assertEqualResults({expected}, {result});
 }
 
