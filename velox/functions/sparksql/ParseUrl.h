@@ -25,6 +25,7 @@
 
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/UriParser.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -88,6 +89,14 @@ struct ParseUrlFunction {
     return Part::kUnknown;
   }
 
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* urlStr,
+      const arg_type<Varchar>* part) {
+    initialize(inputTypes, config, urlStr, part, nullptr);
+  }
+
   FOLLY_ALWAYS_INLINE
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
@@ -96,6 +105,8 @@ struct ParseUrlFunction {
       const arg_type<Varchar>* part,
       const arg_type<Varchar>* key) {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+
     // A constant URL is parsed once here; the parsed views point into the
     // constant vector's string buffer, which outlives every call.
     if (urlStr) {
@@ -119,17 +130,28 @@ struct ParseUrlFunction {
   }
 
   // Returns the parsed URL, using the cached parse for a constant URL.
-  // Returns nullptr for an invalid URL.
+  // Returns nullptr for an invalid URL; in ANSI mode an invalid URL fails
+  // the query instead, matching Spark's ParseUrl failOnError behavior.
   detail::ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
     if (constUrl_.has_value()) {
       return &*constUrl_;
     }
     if (constUrlInvalid_) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "The url is invalid: {}",
+            std::string_view(urlStr.data(), urlStr.size()));
+      }
       return nullptr;
     }
     parsedScratch_ = detail::ParsedUrl{};
     if (!detail::parseUrl(
             std::string_view(urlStr.data(), urlStr.size()), parsedScratch_)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "The url is invalid: {}",
+            std::string_view(urlStr.data(), urlStr.size()));
+      }
       return nullptr;
     }
     return &parsedScratch_;
@@ -295,6 +317,10 @@ struct ParseUrlFunction {
 
   // A constant part, keyed once in initialize() instead of per row.
   std::optional<Part> constPart_;
+
+  // When true, an invalid URL fails the query instead of yielding null,
+  // matching Spark's ANSI mode.
+  bool ansiEnabled_ = false;
 
   // The pattern of a constant query key, remembered in initialize(). The
   // compiled regex is built lazily on first use in call().
