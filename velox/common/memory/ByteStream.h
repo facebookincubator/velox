@@ -438,6 +438,24 @@ class ByteOutputStream {
     append(folly::Range(&value, 1));
   }
 
+  /// Pre-allocates contiguous space for at least 'bytes' additional bytes so a
+  /// following run of small appends need not extend the stream one range at a
+  /// time. Does not change the append position.
+  void reserve(int64_t bytes) {
+    if (bytes <= 0 || current_ == nullptr) {
+      return;
+    }
+    const int64_t available = current_->size - current_->position;
+    if (available >= bytes) {
+      return;
+    }
+    // ensureSpace() takes an int32_t; cap the request and let the normal
+    // append path grow the stream for any remainder.
+    constexpr int64_t kMaxReserve = (int64_t{1} << 31) - 1;
+    ensureSpace(
+        static_cast<int32_t>(bytes < kMaxReserve ? bytes : kMaxReserve));
+  }
+
   void flush(OutputStream* stream);
 
   /// Returns the next byte that would be written to by a write. This

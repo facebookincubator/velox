@@ -122,20 +122,30 @@ class VectorStream {
       folly::Range<const vector_size_t*> rows,
       int32_t numNonNull,
       LengthFunc lengthFunc) {
-    const auto numRows = rows.size();
+    const auto numRows = static_cast<int32_t>(rows.size());
     if (nulls == nullptr) {
       appendNonNull(numRows);
-      for (auto i = 0; i < numRows; ++i) {
-        appendLength(lengthFunc(rows[i]));
-      }
     } else {
       appendNulls(nulls, 0, numRows, numNonNull);
+    }
+    if (numRows == 0) {
+      return;
+    }
+
+    Scratch scratch;
+    AppendWindow<int32_t> window(lengths_, scratch);
+    auto* output = reinterpret_cast<int32_t*>(window.get(numRows));
+    if (nulls == nullptr) {
+      for (auto i = 0; i < numRows; ++i) {
+        totalLength_ += static_cast<int32_t>(lengthFunc(rows[i]));
+        folly::storeUnaligned<int32_t>(output + i, totalLength_);
+      }
+    } else {
       for (auto i = 0; i < numRows; ++i) {
         if (bits::isBitSet(nulls, i)) {
-          appendLength(lengthFunc(rows[i]));
-        } else {
-          appendLength(0);
+          totalLength_ += static_cast<int32_t>(lengthFunc(rows[i]));
         }
+        folly::storeUnaligned<int32_t>(output + i, totalLength_);
       }
     }
   }

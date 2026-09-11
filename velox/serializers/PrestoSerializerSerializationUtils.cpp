@@ -495,9 +495,13 @@ void appendStrings(
     VectorStream* stream,
     Scratch& scratch) {
   if (nulls == nullptr) {
+    int64_t totalBytes = 0;
     stream->appendLengths(nullptr, rows, rows.size(), [&](auto row) {
-      return views[row].size();
+      const auto size = views[row].size();
+      totalBytes += size;
+      return size;
     });
+    stream->values().reserve(totalBytes);
     for (auto i = 0; i < rows.size(); ++i) {
       const auto& view = views[rows[i]];
       stream->values().appendStringView(
@@ -510,8 +514,13 @@ void appendStrings(
   auto* nonNull = nonNullHolder.get(rows.size());
   const auto numNonNull =
       simd::indicesOfSetBits(nulls, 0, rows.size(), nonNull);
-  stream->appendLengths(
-      nulls, rows, numNonNull, [&](auto row) { return views[row].size(); });
+  int64_t totalBytes = 0;
+  stream->appendLengths(nulls, rows, numNonNull, [&](auto row) {
+    const auto size = views[row].size();
+    totalBytes += size;
+    return size;
+  });
+  stream->values().reserve(totalBytes);
   for (auto i = 0; i < numNonNull; ++i) {
     auto& view = views[rows[nonNull[i]]];
     stream->values().appendStringView(
