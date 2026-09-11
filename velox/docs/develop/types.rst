@@ -287,7 +287,10 @@ It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixe
 GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
 Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
 are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
-`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_. When read from an Iceberg v3 table, where
+geometry is stored as `Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_, the geometry object is
+re-serialized into Velox's internal format. This internal geometry format is based off Esri's shape format and can
+be interpreted by the Presto coordinator.
 
 SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters

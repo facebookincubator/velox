@@ -25,6 +25,7 @@ class StringColumnReader : public dwio::common::SelectiveColumnReader {
  public:
   using ValueType = StringView;
   StringColumnReader(
+      const TypePtr& requestedType,
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
@@ -51,5 +52,4 @@ class StringColumnReader : public dwio::common::SelectiveColumnReader {
 
   void dedictionarize() override;
 };
-
 } // namespace facebook::velox::parquet
