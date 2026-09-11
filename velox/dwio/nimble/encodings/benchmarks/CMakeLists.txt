@@ -171,9 +171,12 @@ if(VELOX_ENABLE_BENCHMARKS)
   target_link_libraries(
     nimble_alp_encoding_benchmark
     nimble_encodings
+    nimble_velox_selective
+    nimble_writer
     nimble_common
     Folly::follybenchmark
     Folly::folly
+    velox_dwio_common
     velox_memory
     fmt::fmt
   )
