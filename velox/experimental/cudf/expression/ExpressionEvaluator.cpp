@@ -1294,6 +1294,34 @@ class GreatestLeastFunction : public CudfFunction {
   std::vector<size_t> order_;
 };
 
+// A switch without an else clause produces its null results from a scalar
+// built by cudf::make_default_constructed_scalar. That factory covers only
+// cuDF's fixed-width, decimal and string types, so these are the kinds
+// veloxToCudfDataType turns into one it can build. Arrays and rows arrive as
+// lists and structs, which the factory rejects outright. Every remaining kind
+// has no cuDF type at all. Both stay on the CPU.
+bool canMakeNullScalar(const TypePtr& type) {
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    // Velox spells DECIMAL128 as HUGEINT. Any other use of the kind has no
+    // cuDF counterpart.
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
+  }
+}
+
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
@@ -2634,21 +2662,34 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("varchar")
            .build()});
 
-  // No prefix because switch and if are special form
+  // No prefix because switch and if are special form. The two arities are
+  // registered separately so that the implicit null else of the two-argument
+  // form can be restricted to the types that can produce one.
+  auto switchFactory = [](const std::string&,
+                          const core::TypedExprPtr& expr,
+                          memory::MemoryPool* pool) {
+    return std::make_shared<SwitchFunction>(expr, pool);
+  };
+
   registerCudfFunctions(
       {"switch", "if"},
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        return std::make_shared<SwitchFunction>(expr, pool);
-      },
+      switchFactory,
       {FunctionSignatureBuilder()
            .typeVariable("T")
            .returnType("T")
            .argumentType("boolean")
            .argumentType("T")
-           .build(),
-       FunctionSignatureBuilder()
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[0]->isConstantKind() &&
+            canMakeNullScalar(expr->type());
+      });
+
+  registerCudfFunctions(
+      {"switch", "if"},
+      switchFactory,
+      {FunctionSignatureBuilder()
            .typeVariable("T")
            .returnType("T")
            .argumentType("boolean")

@@ -572,6 +572,68 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   ASSERT_TRUE(canExprRunOnGpu(folded, queryCtx_.get(), pool_.get()));
 }
 
+TEST_F(
+    CudfExpressionSelectionTest,
+    switchWithoutElseRejectsUnsupportedResultTypes) {
+  auto nestedType = ROW({
+      {"flag", BOOLEAN()},
+      {"total", BIGINT()},
+      {"values", ARRAY(BIGINT())},
+      {"others", ARRAY(BIGINT())},
+      {"pair", ROW({{"x", BIGINT()}, {"y", BIGINT()}})},
+      {"other_pair", ROW({{"x", BIGINT()}, {"y", BIGINT()}})},
+  });
+
+  // A CASE with no ELSE produces its nulls from a scalar that cuDF cannot
+  // default-construct for a list or a struct, so these must stay on the CPU.
+  auto arrayNoElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN values END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_FALSE(canExprRunOnGpu(arrayNoElse, queryCtx_.get(), pool_.get()));
+
+  auto rowNoElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN pair END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_FALSE(canExprRunOnGpu(rowNoElse, queryCtx_.get(), pool_.get()));
+
+  // An explicit ELSE makes both results real columns, which copy_if_else
+  // handles for nested types, so the gate must not reach that form.
+  auto arrayWithElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN values ELSE others END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_TRUE(canExprRunOnGpu(arrayWithElse, queryCtx_.get(), pool_.get()));
+
+  auto rowWithElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN pair ELSE other_pair END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_TRUE(canExprRunOnGpu(rowWithElse, queryCtx_.get(), pool_.get()));
+
+  // A bare NULL leaves the result UNKNOWN, which cuDF has no type for.
+  auto unknownNoElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN NULL END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_EQ(unknownNoElse->type()->kind(), TypeKind::UNKNOWN);
+  ASSERT_FALSE(canExprRunOnGpu(unknownNoElse, queryCtx_.get(), pool_.get()));
+
+  // Flat result types keep the two-argument form on the GPU.
+  auto flatNoElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN total END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_TRUE(canExprRunOnGpu(flatNoElse, queryCtx_.get(), pool_.get()));
+}
+
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
   // TODO (dm): This is required for passing of castAndTryCast test but breaks
   // others. This is because ASTExpr agrees to support bad casts. remove after
