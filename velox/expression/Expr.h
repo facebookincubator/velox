@@ -1018,6 +1018,15 @@ VectorPtr tryEvaluateConstantExpression(
     core::QueryCtx* queryCtx,
     bool suppressEvaluationFailures);
 
+/// Variant of `tryEvaluateConstantExpression` that evaluates through a
+/// `core::ExpressionEvaluator` (e.g. the one a connector exposes for pushed
+/// down filters), for callers that have an evaluator but no QueryCtx. The
+/// evaluator supplies the memory pool.
+VectorPtr tryEvaluateConstantExpression(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool suppressEvaluationFailures = false);
+
 /// Returns a string representation of the expression trees annotated with
 /// runtime statistics. Expected to be called after calling ExprSet::eval one or
 /// more times. If called before ExprSet::eval runtime statistics will be all

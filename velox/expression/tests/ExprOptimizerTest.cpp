@@ -18,6 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -297,6 +298,22 @@ TEST_F(ExprOptimizerTest, queryCtx) {
   testFromUnixtime("hour", "America/Los_Angeles", "7");
   testFromUnixtime("minute", "Pacific/Apia", "4");
   testFromUnixtime("minute", "America/Los_Angeles", "4");
+}
+
+TEST_F(ExprOptimizerTest, expressionEvaluatorOverload) {
+  // optimize can fold through a core::ExpressionEvaluator, for callers (e.g.
+  // connectors) that have an evaluator but no QueryCtx.
+  const auto emptyRow = ROW({});
+  const auto typedExpr = makeTypedExpr("1 + 2 * 3", emptyRow);
+  const auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool());
+
+  const auto optimized = expression::optimize(typedExpr, &evaluator);
+  ASSERT_TRUE(*optimized == *makeTypedExpr("7", emptyRow));
+
+  // Results match the default QueryCtx-based overload.
+  ASSERT_TRUE(
+      *optimized == *expression::optimize(typedExpr, queryCtx.get(), pool()));
 }
 
 /// Test cast optimization that avoids expression evaluation when input to
