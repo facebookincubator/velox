@@ -54,7 +54,8 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
       std::unordered_set<int32_t> failingRowIndices = {},
       bool failWholeBatch = false,
       bool failOnError = false,
-      bool dropOneResponse = false);
+      bool dropOneResponse = false,
+      bool failWholeBatchFatal = false);
 
   void initialize(
       const core::QueryConfig& queryConfig,
@@ -127,6 +128,9 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
   bool failWholeBatch_{false};
   bool failOnError_{false};
   bool dropOneResponse_{false};
+  // Fails the flush with a framework invariant error rather than a backend
+  // one, so the operator must propagate it instead of degrading to NULL rows.
+  bool failWholeBatchFatal_{false};
   int32_t totalAccumulatedCount_{0};
 };
 

@@ -20,6 +20,8 @@
 
 #include "velox/exec/rpc/RpcErrorClassification.h"
 
+#include "velox/common/rpc/RPCTypes.h"
+
 #include <stdexcept>
 
 #include <folly/ExceptionWrapper.h>
@@ -73,6 +75,54 @@ TEST(RpcErrorClassificationTest, follyFutureTimeoutIsTimeout) {
 TEST(RpcErrorClassificationTest, genericErrorIsNotTimeout) {
   auto ew = folly::make_exception_wrapper<std::runtime_error>("generic");
   EXPECT_FALSE(isTimeout(ew));
+}
+
+// A transport that already classified must win: re-deriving from the
+// exception type would turn a rate limit into a plain backend error and cost
+// the congestion policy its immediate backoff.
+TEST(RpcErrorClassificationTest, classifiedErrorKeepsItsKind) {
+  auto ew = folly::make_exception_wrapper<RpcClassifiedError>(
+      velox::rpc::RPCErrorKind::kRateLimited, "429 from backend");
+  EXPECT_EQ(errorKindFor(ew), velox::rpc::RPCErrorKind::kRateLimited);
+}
+
+// Including for a kind no exception type could reveal on its own.
+TEST(RpcErrorClassificationTest, classifiedTimeoutSurvivesAPlainRuntimeError) {
+  auto ew = folly::make_exception_wrapper<RpcClassifiedError>(
+      velox::rpc::RPCErrorKind::kTimeout, "polling timeout after 30 attempts");
+  EXPECT_EQ(errorKindFor(ew), velox::rpc::RPCErrorKind::kTimeout);
+  // The same message as a bare runtime_error is invisible to isTimeout(),
+  // which is exactly why the kind has to be carried.
+  auto bare = folly::make_exception_wrapper<std::runtime_error>(
+      "polling timeout after 30 attempts");
+  EXPECT_EQ(errorKindFor(bare), velox::rpc::RPCErrorKind::kBackendError);
+}
+
+// An unclassified fault of ours still resolves to internal.
+TEST(RpcErrorClassificationTest, unclassifiedInternalStillResolves) {
+  auto ew = folly::make_exception_wrapper<std::bad_alloc>();
+  EXPECT_EQ(errorKindFor(ew), velox::rpc::RPCErrorKind::kInternalError);
+}
+
+// ── The unset response ──────────────────────────────────────────────────────
+
+// A producer that returns without setting an outcome reads as an error, so
+// "neither payload nor error" is not a representable state. It is tagged
+// kUnset rather than kBackendError: the row still degrades to NULL, but the
+// kind is what keeps it countable and out of the congestion window.
+TEST(RpcErrorClassificationTest, unsetResponseReadsAsUnsetError) {
+  velox::rpc::RPCResponse response;
+  response.rowId = 7;
+  EXPECT_TRUE(response.hasError());
+  EXPECT_EQ(response.errorKind(), velox::rpc::RPCErrorKind::kUnset);
+}
+
+// Once filled, the same accessors are ordinary reads.
+TEST(RpcErrorClassificationTest, filledResponseReadsBack) {
+  auto response = velox::rpc::RPCResponse::failed(
+      3, velox::rpc::RPCErrorKind::kTimeout, "deadline");
+  EXPECT_EQ(response.errorKind(), velox::rpc::RPCErrorKind::kTimeout);
+  EXPECT_EQ(response.error().message, "deadline");
 }
 
 } // namespace

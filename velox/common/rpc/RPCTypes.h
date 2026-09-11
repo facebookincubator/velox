@@ -16,31 +16,20 @@
 
 #pragma once
 
-#include <map>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
+#include <folly/Expected.h>
+
+#include "velox/common/base/Exceptions.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::rpc {
-
-/// Well-known option key constants for RPCRequest.options.
-/// Use these instead of raw string literals to prevent typo bugs.
-namespace keys {
-inline constexpr std::string_view kModel = "model";
-inline constexpr std::string_view kTemperature = "temperature";
-inline constexpr std::string_view kMaxTokens = "max_tokens";
-inline constexpr std::string_view kSystemPrompt = "systemPrompt";
-inline constexpr std::string_view kJsonSchema = "json_schema";
-inline constexpr std::string_view kMetagenKey = "metagen_key";
-inline constexpr std::string_view kTierOverride = "tier_override";
-inline constexpr std::string_view kCatToken = "cat_token";
-inline constexpr std::string_view kPollIntervalMs = "poll_interval_ms";
-inline constexpr std::string_view kOwnerUnixname = "owner_unixname";
-inline constexpr std::string_view kIsQuery = "is_query";
-inline constexpr std::string_view kPrefixDim = "prefix_dim";
-} // namespace keys
 
 /// Streaming mode for RPC execution.
 /// Controls how RPC results are emitted to downstream operators.
@@ -62,37 +51,6 @@ inline RPCStreamingMode parseStreamingMode(const std::string& value) {
   }
   return RPCStreamingMode::kPerRow;
 }
-
-/// Generic request structure for RPC calls.
-/// This is a minimal, domain-agnostic structure that works for any backend.
-/// Domain-specific formatting (e.g., LLM prompts, embedding inputs) is handled
-/// by the plan node's buildRequests() method.
-struct RPCRequest {
-  /// Row ID for tracking which row this request belongs to.
-  /// This is a globally unique ID assigned by the operator.
-  int64_t rowId{0};
-
-  /// Original row index in the input batch.
-  /// This is used to slice the correct row from input columns when storing
-  /// passthrough data. Unlike rowId (which is globally unique across batches),
-  /// this is the index within the current input batch and is set by
-  /// prepareRequests() based on the SelectivityVector iteration.
-  /// CRITICAL: When prepareRequests() skips null rows, originalRowIndex
-  /// tracks the actual input position to avoid slicing mismatch.
-  vector_size_t originalRowIndex{0};
-
-  /// Whether this row has a null primary input.
-  /// When true, the transport should short-circuit and return an error
-  /// response so that buildOutput() produces SQL NULL for this row.
-  /// Replaces the former "__null_input" magic string in options.
-  bool isNull{false};
-
-  /// The request payload (opaque to the framework).
-  std::string payload;
-
-  /// Type-safe options for backend-specific parameters.
-  std::map<std::string, std::string> options;
-};
 
 /// Typed cause of an RPC failure, carried alongside the human-readable error
 /// string so consumers can classify failures without parsing message text.
@@ -120,10 +78,44 @@ enum class RPCErrorKind {
   /// Non-retryable: the same request will fail again, so the transport fails
   /// fast rather than spending its retry budget.
   kInvalidRequest,
+  /// A producer returned a response without setting an outcome. Not a backend
+  /// condition: it yields a NULL row like any other failure, but is counted on
+  /// its own and kept out of the congestion window so a producer bug cannot
+  /// throttle a healthy backend.
+  kUnset,
+  /// A framework invariant tripped, or the process ran out of memory, while
+  /// handling this row. The row degrades to NULL like any other failure; the
+  /// kind is what keeps it out of the backend error rate and out of the
+  /// congestion window, since the backend is not the thing that is broken.
+  kInternalError,
 };
 
-/// Generic response structure from RPC calls.
-/// This is a minimal, domain-agnostic structure that works for any backend.
+/// Function-owned payload of a response. The framework moves it from the
+/// transport to the owning function's buildOutput() and never inspects it, so
+/// each function defines its own concrete type and casts back on the way out.
+///
+/// Keeping the payload out of the framework's vocabulary is what lets a
+/// function hand back the representation it already has: an embedding function
+/// carries its vector of floats directly rather than rendering it to text for
+/// a field nothing in the framework reads.
+struct RPCResponsePayload {
+  virtual ~RPCResponsePayload() = default;
+};
+
+/// Why a request failed: the typed cause a congestion policy reads, and the
+/// message a failed row carries when the on-error policy asks for one.
+struct RpcError {
+  RPCErrorKind kind{RPCErrorKind::kNone};
+  std::string message;
+};
+
+/// Framework-visible part of a response: correlation and outcome. Everything a
+/// backend actually returns lives in the function-owned payload.
+///
+/// A response is a payload or an error, never both and never neither. The
+/// outcome is only reachable through setPayload()/setError(), so the state
+/// where a producer set neither cannot be built -- a response that nothing has
+/// filled in yet already reads as an error.
 struct RPCResponse {
   /// Row ID for correlating response with the original request.
   ///
@@ -136,23 +128,64 @@ struct RPCResponse {
   ///     operator for downstream result tracking.
   int64_t rowId{0};
 
-  /// The response result (opaque to the framework).
-  std::string result;
+  static RPCResponse ok(
+      int64_t rowId,
+      std::shared_ptr<const RPCResponsePayload> payload) {
+    RPCResponse response;
+    response.rowId = rowId;
+    response.setPayload(std::move(payload));
+    return response;
+  }
 
-  /// Type-safe metadata from the backend.
-  std::map<std::string, std::string> metadata;
+  static RPCResponse
+  failed(int64_t rowId, RPCErrorKind kind, std::string message) {
+    RPCResponse response;
+    response.rowId = rowId;
+    response.setError(kind, std::move(message));
+    return response;
+  }
 
-  /// Error message if the request failed.
-  std::optional<std::string> error;
+  void setPayload(std::shared_ptr<const RPCResponsePayload> payload) {
+    // A success with no payload is the third state this type exists to rule
+    // out: it reads as succeeded, feeds the congestion signal, and only fails
+    // later when a function tries to read it.
+    VELOX_CHECK_NOT_NULL(payload, "RPC response payload must not be null");
+    result_ = std::move(payload);
+  }
 
-  /// Typed cause of the failure, set by the transport when 'error' is set.
-  /// Defaults to kNone so existing aggregate initializers need not list it.
-  RPCErrorKind errorKind{RPCErrorKind::kNone};
+  void setError(RPCErrorKind kind, std::string message) {
+    result_ = folly::makeUnexpected(RpcError{kind, std::move(message)});
+  }
 
   /// Returns true if this response represents an error.
   bool hasError() const {
-    return error.has_value();
+    return result_.hasError();
   }
+
+  /// The failure. Only valid when hasError().
+  const RpcError& error() const {
+    return result_.error();
+  }
+
+  /// Typed cause, or kNone on a successful response.
+  RPCErrorKind errorKind() const {
+    return result_.hasError() ? result_.error().kind : RPCErrorKind::kNone;
+  }
+
+  /// The function-owned payload. Only valid when !hasError().
+  const std::shared_ptr<const RPCResponsePayload>& payload() const {
+    return result_.value();
+  }
+
+ private:
+  // Unfilled reads as an error so that "neither payload nor error" is not a
+  // representable state, under a kind no backend can produce. It degrades to a
+  // NULL row like any other failure; kUnset is what keeps it countable and out
+  // of the congestion window. The message is kept short enough for the
+  // small-string buffer -- every response is default-constructed before it is
+  // filled, so a longer one would put a heap allocation on the per-row path.
+  folly::Expected<std::shared_ptr<const RPCResponsePayload>, RpcError> result_{
+      folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
 };
 
 } // namespace facebook::velox::rpc

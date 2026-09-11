@@ -23,6 +23,7 @@
 #include <folly/executors/InlineExecutor.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/rpc/RpcErrorClassification.h"
 
 #define RPC_STATE_LOG(severity) LOG(severity) << "[RPC_STATE] "
 #define RPC_STATE_VLOG(level) VLOG(level) << "[RPC_STATE] "
@@ -191,20 +192,34 @@ void RPCState::addPendingRow(
                 const auto rttNs = steadyNowNs() - dispatchTimeNs;
                 state->completeRow(rowId, location, std::move(response), rttNs);
               })
-          .deferError(
-              [state = std::move(stateForError),
-               rowId,
-               location,
-               dispatchTimeNs](const folly::exception_wrapper& ew) mutable {
-                RPC_STATE_LOG(ERROR)
-                    << "RPC failed for rowId=" << rowId << ": " << ew.what();
-                RPCResponse errorResponse;
-                errorResponse.rowId = rowId;
-                errorResponse.error = ew.what().toStdString();
-                const auto rttNs = steadyNowNs() - dispatchTimeNs;
-                state->completeRow(
-                    rowId, location, std::move(errorResponse), rttNs);
-              }));
+          .deferError([state = std::move(stateForError),
+                       rowId,
+                       location,
+                       dispatchTimeNs](
+                          const folly::exception_wrapper& ew) mutable {
+            const auto rttNs = steadyNowNs() - dispatchTimeNs;
+            RPCResponse errorResponse;
+            errorResponse.rowId = rowId;
+            // Building the detailed error allocates -- the message, and the
+            // log line. Under the allocation failure this handler exists to
+            // report, that can throw again, and this continuation is detached:
+            // the throw would reach no query and the row would never complete,
+            // hanging the operator on inFlight_. Fall back to a message short
+            // enough to live in the string's inline buffer, and skip the log.
+            try {
+              RPC_STATE_LOG(ERROR)
+                  << "RPC failed for rowId=" << rowId << ": " << ew.what();
+              // The row degrades whatever the cause; the kind is what keeps a
+              // fault of ours, a deadline and a backend refusal apart in the
+              // counters and the congestion window.
+              errorResponse.setError(errorKindFor(ew), ew.what().toStdString());
+            } catch (...) {
+              errorResponse.setError(
+                  velox::rpc::RPCErrorKind::kInternalError, "oom");
+            }
+            state->completeRow(
+                rowId, location, std::move(errorResponse), rttNs);
+          }));
 }
 
 void RPCState::completeRow(
