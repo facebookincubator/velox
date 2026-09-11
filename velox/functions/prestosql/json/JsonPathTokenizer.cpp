@@ -184,7 +184,7 @@ JsonPathTokenizer::matchQuotedSubscriptKey(char quote) {
     }
     index_++;
   }
-  if (escaped || token.empty() || !match(quote)) {
+  if (escaped || !match(quote)) {
     return std::nullopt;
   }
   return JsonPathTokenizer::Token{token, Selector::KEY};
