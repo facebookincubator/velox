@@ -1295,17 +1295,30 @@ class GreatestLeastFunction : public CudfFunction {
 };
 
 // A switch without an else clause produces its null results from a scalar
-// built by cudf::make_default_constructed_scalar, which has no implementation
-// for nested types. Velox arrays, maps and rows all reach it as one, so only
-// the flat types can take that path.
+// built by cudf::make_default_constructed_scalar. That factory covers only
+// cuDF's fixed-width, decimal and string types, so these are the kinds
+// veloxToCudfDataType turns into one it can build. Arrays and rows arrive as
+// lists and structs, which the factory rejects outright. Every remaining kind
+// has no cuDF type at all. Both stay on the CPU.
 bool canMakeNullScalar(const TypePtr& type) {
   switch (type->kind()) {
-    case TypeKind::ARRAY:
-    case TypeKind::MAP:
-    case TypeKind::ROW:
-      return false;
-    default:
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
       return true;
+    // Velox spells DECIMAL128 as HUGEINT. Any other use of the kind has no
+    // cuDF counterpart.
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
   }
 }
 

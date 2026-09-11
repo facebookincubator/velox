@@ -572,7 +572,9 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   ASSERT_TRUE(canExprRunOnGpu(folded, queryCtx_.get(), pool_.get()));
 }
 
-TEST_F(CudfExpressionSelectionTest, switchWithoutElseRejectsNestedResultTypes) {
+TEST_F(
+    CudfExpressionSelectionTest,
+    switchWithoutElseRejectsUnsupportedResultTypes) {
   auto nestedType = ROW({
       {"flag", BOOLEAN()},
       {"total", BIGINT()},
@@ -613,6 +615,15 @@ TEST_F(CudfExpressionSelectionTest, switchWithoutElseRejectsNestedResultTypes) {
       queryCtx_.get(),
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(rowWithElse, queryCtx_.get(), pool_.get()));
+
+  // A bare NULL leaves the result UNKNOWN, which cuDF has no type for.
+  auto unknownNoElse = optimizeTypedExpr(
+      "CASE WHEN flag THEN NULL END",
+      nestedType,
+      queryCtx_.get(),
+      execCtx_.get());
+  ASSERT_EQ(unknownNoElse->type()->kind(), TypeKind::UNKNOWN);
+  ASSERT_FALSE(canExprRunOnGpu(unknownNoElse, queryCtx_.get(), pool_.get()));
 
   // Flat result types keep the two-argument form on the GPU.
   auto flatNoElse = optimizeTypedExpr(
