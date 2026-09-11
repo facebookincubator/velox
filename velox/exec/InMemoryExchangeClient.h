@@ -69,13 +69,13 @@ class InMemoryExchangeClient
     return pool_;
   }
 
-  void addRemoteTaskId(const std::string& remoteTaskId) override;
+  void addRemoteTaskId(std::string_view remoteTaskId) override;
 
   void noMoreRemoteTasks() override;
 
   void close() override;
 
-  folly::F14FastMap<std::string, RuntimeMetric> stats() override;
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const override;
 
   std::string toString() const override;
 
@@ -144,12 +144,14 @@ class InMemoryExchangeClient
   std::vector<RequestSpec> pickupSingleSourceToRequestLocked();
   void request(std::vector<RequestSpec>&& requestSpecs);
 
-  // Returns true if skip request data size optimization is enabled for single
-  // source exchanges.
+  /// Returns true if skip request data size optimization is enabled for single
+  /// source exchanges.
   bool skipRequestDataSizeWithSingleSource() const {
     return skipRequestDataSizeWithSingleSource_ && queue_->hasNoMoreSources() &&
         sources_.size() == 1;
   }
+
+  void closeImpl();
 
   folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
 
@@ -167,7 +169,7 @@ class InMemoryExchangeClient
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
 
-  folly::F14FastMap<std::string, RuntimeMetric> stats_;
+  mutable folly::F14FastMap<std::string, RuntimeMetric> stats_;
 
   // The minimum byte size the consumer is expected to consume from
   // the exchange queue.
