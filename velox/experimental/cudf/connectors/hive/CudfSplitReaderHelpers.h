@@ -28,7 +28,7 @@
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 #include <rmm/resource_ref.hpp>
 
 #include <vector>
@@ -63,21 +63,21 @@ class BufferedInputDataSource : public cudf::io::datasource {
       size_t offset,
       size_t size,
       uint8_t* dst,
-      rmm::cuda_stream_view stream) override;
+      cuda::stream_ref stream) override;
 
   // Use the enqueue API from dwio::common::BufferedInput.
   // Pass a device buffer to copy to after load.
   void enqueueForDevice(uint64_t offset, uint64_t size, uint8_t* dst);
 
   // loads and copies to device.
-  void load(rmm::cuda_stream_view stream);
+  void load(cuda::stream_ref stream);
 
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
-  std::vector<std::function<void(rmm::cuda_stream_view stream)>>
+  std::vector<std::function<void(cuda::stream_ref stream)>>
       pendingDeviceLoads_;
 };
 
@@ -113,7 +113,7 @@ std::tuple<
 fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox::connector::hive

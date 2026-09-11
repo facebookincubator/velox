@@ -37,7 +37,7 @@ namespace {
 cudf::table_view makePartitionKeys(
     cudf::table_view sortedView,
     const std::vector<cudf::size_type>& partitionKeyIndices,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
     std::unique_ptr<cudf::column>& singlePartitionCol) {
   if (!partitionKeyIndices.empty()) {
@@ -57,7 +57,7 @@ cudf::table_view makePartitionKeys(
 std::unique_ptr<cudf::column> computeRowNumbers(
     cudf::table_view view,
     const std::vector<cudf::size_type>& partitionKeyIndices,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::unique_ptr<cudf::column> singlePartitionCol;
   auto partKeys = makePartitionKeys(
@@ -75,7 +75,7 @@ std::unique_ptr<cudf::column> computeRowNumbers(
 std::unique_ptr<cudf::column> makeLimitMask(
     const cudf::column& rowNums,
     int32_t limit,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto limitScalar = cudf::numeric_scalar<int64_t>(limit, true, stream, mr);
   return cudf::binary_operation(
@@ -153,7 +153,7 @@ CudfTopNRowNumber::CudfTopNRowNumber(
 
 CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
     const CudfVectorPtr& cudfInput,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto inputView = cudfInput->getTableView();
   auto keyTable = inputView.select(allSortKeys_);
@@ -173,7 +173,7 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
   // Filter the sort permutation to the surviving rows before gathering the
   // full payload, so batches with many rows per partition don't pay for
   // materializing rows that will be pruned immediately after.
-  auto filteredIndicesTable = cudf::apply_boolean_mask(
+  auto filteredIndicesTable = cudf::apply_retention_mask(
       cudf::table_view{{indices->view()}}, mask->view(), stream, mr);
   auto filteredIndices = filteredIndicesTable->view().column(0);
 
@@ -196,9 +196,9 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
 CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
     const CudfVectorPtr& previous,
     const CudfVectorPtr& incoming,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  std::vector<rmm::cuda_stream_view> inputStreams{
+  std::vector<cuda::stream_ref> inputStreams{
       previous->stream(), incoming->stream()};
   cudf::detail::join_streams(inputStreams, stream);
 
@@ -214,7 +214,7 @@ CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
       computeRowNumbers(merged->view(), partitionKeyIndices_, stream, mr);
   auto mask = makeLimitMask(*rowNums, limit_, stream, mr);
   auto pruned =
-      cudf::apply_boolean_mask(merged->view(), mask->view(), stream, mr);
+      cudf::apply_retention_mask(merged->view(), mask->view(), stream, mr);
 
   auto const size = pruned->num_rows();
   return std::make_shared<CudfVector>(

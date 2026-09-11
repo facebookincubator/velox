@@ -75,12 +75,12 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
     zeroScalar_ = std::make_unique<cudf::numeric_scalar<int64_t>>(
         int64_t{0}, true, stream, mr);
   }
-  stream.synchronize();
+  stream.sync();
 }
 
 ColumnOrView DatePlusIntervalFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto dateCol = asView(inputColumns[0]);
 

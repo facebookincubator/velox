@@ -181,7 +181,7 @@ std::vector<IndexType> expandRuns(
 // empty deletion mask (no rows deleted yet).
 std::unique_ptr<cudf::column> makeDeletionColumn(
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream, mr);
   return cudf::make_column_from_scalar(falseScalar, numRows, stream, mr);
@@ -192,7 +192,7 @@ void applyDeletes(
     cudf::mutable_column_view const& deleteMask,
     uint64_t startRow,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto rowIndex = cudf::make_numeric_column(
       cudf::data_type{cudf::type_id::UINT64},
@@ -207,7 +207,7 @@ void applyDeletes(
 
 std::unique_ptr<cudf::column> makeRowIndexColumn(
     const std::vector<uint64_t>& rowIndexHost,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto rowIndex = cudf::make_numeric_column(
       cudf::data_type{cudf::type_id::UINT64},
@@ -220,7 +220,7 @@ std::unique_ptr<cudf::column> makeRowIndexColumn(
       rowIndexHost.data(),
       rowIndexHost.size() * sizeof(uint64_t),
       cudaMemcpyDefault,
-      stream.value()));
+      stream.get()));
   return rowIndex;
 }
 
@@ -230,7 +230,7 @@ template <typename IndexType>
 std::vector<IndexType> getSetBits(
     const cudf::column_view& deleteMask,
     std::size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VELOX_CHECK_EQ(deleteMask.size(), static_cast<cudf::size_type>(numRows));
   VELOX_CHECK(deleteMask.type().id() == cudf::type_id::BOOL8);
 
@@ -240,8 +240,8 @@ std::vector<IndexType> getSetBits(
       deleteMask.data<bool>(),
       numRows * sizeof(bool),
       cudaMemcpyDefault,
-      stream.value()));
-  stream.synchronize();
+      stream.get()));
+  stream.sync();
 
   std::vector<IndexType> setBits;
   setBits.reserve(numRows);

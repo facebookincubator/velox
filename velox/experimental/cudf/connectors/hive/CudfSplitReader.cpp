@@ -95,7 +95,7 @@ std::unique_ptr<cudf::column> rebuildWithTransformedChildren(
 std::unique_ptr<cudf::column> castDecimalColumns(
     std::unique_ptr<cudf::column> col,
     const TypePtr& veloxType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Decimal type (base case)
   if (veloxType->isDecimal()) {
@@ -145,7 +145,7 @@ std::unique_ptr<cudf::column> castDecimalColumns(
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
     const RowTypePtr& rowType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto numColumns =
       std::min<size_t>(table->view().num_columns(), rowType->size());
@@ -239,7 +239,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
 
   // Launch host callback to calculate timing when scan completes
   cudaLaunchHostFunc(
-      stream_.value(), &CudfSplitReader::totalScanTimeCalculator, callbackData);
+      stream_.get(), &CudfSplitReader::totalScanTimeCalculator, callbackData);
 
   return std::move(chunkOpt.value());
 }

@@ -62,7 +62,7 @@ class CudfAssignUniqueId : public CudfOperatorBase {
  private:
   std::unique_ptr<cudf::column> generateIdColumn(
       vector_size_t size,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   void requestRowIds();

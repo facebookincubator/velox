@@ -17,12 +17,12 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 9c0829e from 2026-07-23 (release/26.08 branch)
-set(VELOX_rapids_cmake_VERSION 26.08)
-set(VELOX_rapids_cmake_COMMIT 9c0829ec73702b3df8a5c2ec43f6aaabe5f1e5ec)
+# rapids_cmake commit 5df8fd1 from 2026-09-08 (release/26.10 branch)
+set(VELOX_rapids_cmake_VERSION 26.10)
+set(VELOX_rapids_cmake_COMMIT 5df8fd1ea26515b6b50fa94844ef1855e457048c)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  3582f621f3b3d63952aafd716985901a075f2ad85602073973f3619761723962
+  f7cb91451aeae915f066907f9ae4eb555348fb62db1857c205a67691816c78c3
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 1a39f9e from 2026-07-24 (release/26.08 branch)
-set(VELOX_rmm_VERSION 26.08)
-set(VELOX_rmm_COMMIT 1a39f9e81c467b1a9522a4dcec8b5581ae165fef)
+# rmm commit 9a693e0 from 2026-09-10 (release/26.10 branch)
+set(VELOX_rmm_VERSION 26.10)
+set(VELOX_rmm_COMMIT 9a693e042004e1da9d2e2db018ce2c2963437d59)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  d8b82bc491a2c5b093cdfb4e1fb99630ccf16d1cbd69bc74451fbb56efc3e68c
+  98916c2801fd9ad72eba8bb95ac45813ac933a4877d2d43445fa174402949063
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 93606c0 from 2026-07-23 (release/26.08 branch)
-set(VELOX_kvikio_VERSION 26.08)
-set(VELOX_kvikio_COMMIT 93606c074f3d863a7052af25afae569f72cb3304)
+# kvikio commit 3ea0db0 from 2026-09-10 (release/26.10 branch)
+set(VELOX_kvikio_VERSION 26.10)
+set(VELOX_kvikio_COMMIT 3ea0db06a308925097e6fe84628f5888efca13b8)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  882e1b7c8950c0bf3520c3c317b0d85da2c91b66d90f3ff44ae81a60166979f3
+  b2c8418ef8eba3f08c4dcb859b3df44711b5ae5cbbf85fc8c5c09992bfb1f9bc
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 5beaa59 from 2026-07-27 (release/26.08 branch)
-set(VELOX_cudf_VERSION 26.08 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT 5beaa5954688fcb12236ffb434e192ea2c77db30)
+# cudf commit 456580f from 2026-09-11 (release/26.10 branch)
+set(VELOX_cudf_VERSION 26.10 CACHE STRING "cudf version")
+set(VELOX_cudf_COMMIT 456580fcdd726380dcb3de6b9686e7d47d6dd0a2)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  1fc77d1ddf97ede67b783bbabacf69d658254be30b2859299f4255525443b1d3
+  160ff8be040c434c9f51fe3e41f08d26421c41710a8adabe559b1f994ad06959
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -74,12 +74,12 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit b7faed1 from 2026-07-23 (release/0.51 branch)
-  set(VELOX_ucxx_VERSION 0.51)
-  set(VELOX_ucxx_COMMIT b7faed1a2e8038f63676183cdb056c3b69daa15d)
+  # ucxx commit 22d9c90 from 2026-09-09 (release/0.52 branch)
+  set(VELOX_ucxx_VERSION 0.52)
+  set(VELOX_ucxx_COMMIT 22d9c90a40055d439c3ec58f2606f2af620c5d71)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    3eb5ff5459dde31edf344f24f0b3086550be70961038b69229b05973b6f37524
+    cfb042ede89913744033aadacbe6768700a8ee8fe357cb80cbf47f14c9d4df5c
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
@@ -93,7 +93,9 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_TESTS OFF)
   set(CUDF_BUILD_TESTUTIL OFF)
   set(CUDF_BUILD_STREAMS_TEST_UTIL OFF)
+  set(CUDF_BUILD_STATIC_DEPS OFF)
   set(BUILD_SHARED_LIBS ON)
+  set(KvikIO_BUILD_NSYS_PLUGIN OFF)
 
   # TODO(mh,bd): Remove this once we have a permanent solution for the spdlog/fmt
   # incompatibility.
@@ -163,6 +165,19 @@ block(SCOPE_FOR VARIABLES)
     cudf
     PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy -Wno-restrict
   )
+  target_link_libraries(cudf PUBLIC $<BUILD_LOCAL_INTERFACE:nvtx3::nvtx3-cpp>)
+
+  # cuDF orders nvcomp_static after its whole-archived rmm and rapids_logger
+  # dependencies. Apply the same ordering to its whole-archived spdlog target.
+  if(
+    CUDF_nvcomp_TARGET STREQUAL "nvcomp::nvcomp_static"
+    AND TARGET spdlog::spdlog
+  )
+    get_target_property(_spdlog_link spdlog::spdlog NAME)
+    target_link_libraries(
+      ${_spdlog_link} INTERFACE $<BUILD_LOCAL_INTERFACE:nvcomp::nvcomp_static>
+    )
+  endif()
 
   unset(BUILD_SHARED_LIBS)
   unset(BUILD_TESTING CACHE)

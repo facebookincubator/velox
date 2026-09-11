@@ -74,7 +74,7 @@ class CudfGroupId : public CudfOperatorBase {
   cudf::size_type inputSize_{0};
 
   /// Stream associated with the input data.
-  rmm::cuda_stream_view inputStream_;
+  cuda::stream_ref inputStream_;
 
   /// Index of the grouping set to output in the next getOutput call.
   size_t groupingSetIndex_{0};

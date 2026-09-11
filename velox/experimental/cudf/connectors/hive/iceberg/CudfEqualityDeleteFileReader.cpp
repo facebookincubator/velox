@@ -181,13 +181,13 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
   auto stream = cudfGlobalStreamPool().get_stream();
   deleteKeyTable_ =
       cudf::io::read_parquet(options, stream, get_output_mr()).tbl;
-  stream.synchronize();
+  stream.sync();
 
   VELOX_CHECK_NOT_NULL(deleteKeyTable_);
   numDeleteKeys_ = deleteKeyTable_->num_rows();
 }
 
-void CudfEqualityDeleteFileReader::buildHashJoin(rmm::cuda_stream_view stream) {
+void CudfEqualityDeleteFileReader::buildHashJoin(cuda::stream_ref stream) {
   if (deleteHashJoin_) {
     return;
   }
@@ -239,7 +239,7 @@ void CudfEqualityDeleteFileReader::applyDeletes(
     cudf::table_view table,
     const std::vector<std::string>& inputColumnNames,
     cudf::mutable_column_view const& deleteMask,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   const auto numRows = table.num_rows();
   if (empty() or numRows == 0) {
     return;

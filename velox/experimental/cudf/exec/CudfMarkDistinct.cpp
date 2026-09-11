@@ -126,7 +126,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
   } else {
     VELOX_CHECK(seenStateStream_.has_value());
     const auto stateStream = seenStateStream_.value();
-    const std::vector<rmm::cuda_stream_view> stateStreams{stateStream};
+    const std::vector<cuda::stream_ref> stateStreams{stateStream};
     cudf::detail::join_streams(stateStreams, stream);
 
     // Subsequent batch: probe the persistent filter — no hash table rebuild.

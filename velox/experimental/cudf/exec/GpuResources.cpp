@@ -82,7 +82,7 @@ cuda::mr::any_resource<cuda::mr::device_accessible> createMemoryResource(
 }
 
 cudf::detail::cuda_stream_pool& cudfGlobalStreamPool() {
-  return cudf::detail::global_cuda_stream_pool();
+  return cudf::detail::current_cuda_stream_pool();
 };
 
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> mr_;
@@ -99,7 +99,7 @@ rmm::device_async_resource_ref get_output_mr() {
 // __attribute__((error)). The overload below calls the real function.
 namespace cudf {
 
-rmm::cuda_stream_view const get_default_stream(allow_default_stream_t) {
+cuda::stream_ref const get_default_stream(allow_default_stream_t) {
   return cudf::get_default_stream();
 }
 
