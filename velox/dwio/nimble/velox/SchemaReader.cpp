@@ -93,7 +93,9 @@ const ScalarType& Type::asScalar() const {
       isScalar(),
       "Cannot cast to Scalar. Current type is {}.",
       getKindName(kind_));
-  return dynamic_cast<const ScalarType&>(*this);
+  // NIMBLE_CHECK above is unconditional (fires in release too), so the type is
+  // guaranteed to be a ScalarType here and the static_cast is safe.
+  return static_cast<const ScalarType&>(*this);
 }
 
 const TimestampMicroNanoType& Type::asTimestampMicroNano() const {
