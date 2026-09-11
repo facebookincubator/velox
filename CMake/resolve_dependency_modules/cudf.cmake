@@ -167,18 +167,6 @@ block(SCOPE_FOR VARIABLES)
   )
   target_link_libraries(cudf PUBLIC $<BUILD_LOCAL_INTERFACE:nvtx3::nvtx3-cpp>)
 
-  # cuDF orders nvcomp_static after its whole-archived rmm and rapids_logger
-  # dependencies. Apply the same ordering to its whole-archived spdlog target.
-  if(
-    CUDF_nvcomp_TARGET STREQUAL "nvcomp::nvcomp_static"
-    AND TARGET spdlog::spdlog
-  )
-    get_target_property(_spdlog_link spdlog::spdlog NAME)
-    target_link_libraries(
-      ${_spdlog_link} INTERFACE $<BUILD_LOCAL_INTERFACE:nvcomp::nvcomp_static>
-    )
-  endif()
-
   unset(BUILD_SHARED_LIBS)
   unset(BUILD_TESTING CACHE)
 endblock()

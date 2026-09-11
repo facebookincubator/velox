@@ -133,7 +133,7 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
 
-  cuda::stream_ref stream_;
+  cuda::stream_ref stream_{cudaStream_t{nullptr}};
 
   // Parquet metadata(s) for the current split(s).
   std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;

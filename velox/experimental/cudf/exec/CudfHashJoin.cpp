@@ -49,10 +49,10 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 
-#include <cuda/stream>
 #include <rmm/device_uvector.hpp>
 #include <rmm/exec_policy.hpp>
 
+#include <cuda/stream>
 #include <nvtx3/nvtx3.hpp>
 
 #include <algorithm>
@@ -753,9 +753,17 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices);
   auto rightInput = rightTableView.select(outputLayout_.buildColumnIndices);
   auto leftResult = cudf::gather(
-      leftInput, leftIndicesCol, oobPolicy, stream, get_output_mr());
+      leftInput,
+      leftIndicesCol,
+      oobPolicy,
+      stream,
+      cudf::memory_resources{get_output_mr(), get_temp_mr()});
   auto rightResult = cudf::gather(
-      rightInput, rightIndicesCol, oobPolicy, stream, get_output_mr());
+      rightInput,
+      rightIndicesCol,
+      oobPolicy,
+      stream,
+      cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(1) << "Left result number of columns: " << leftResult->num_columns();
@@ -785,9 +793,17 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
         cudf::column_view)> func,
     cuda::stream_ref stream) {
   auto leftResult = cudf::gather(
-      leftTableView, leftIndicesCol, oobPolicy, stream, get_output_mr());
+      leftTableView,
+      leftIndicesCol,
+      oobPolicy,
+      stream,
+      cudf::memory_resources{get_output_mr(), get_temp_mr()});
   auto rightResult = cudf::gather(
-      rightTableView, rightIndicesCol, oobPolicy, stream, get_output_mr());
+      rightTableView,
+      rightIndicesCol,
+      oobPolicy,
+      stream,
+      cudf::memory_resources{get_output_mr(), get_temp_mr()});
   auto leftColsSize = leftResult->num_columns();
   auto rightColsSize = rightResult->num_columns();
 
@@ -1444,7 +1460,8 @@ CudfHashJoinProbe::leftSemiFilterJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          stream);
+          stream,
+          get_temp_mr());
       leftJoinIndices = filter_join.semi_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
     }
@@ -2013,7 +2030,8 @@ CudfHashJoinProbe::rightSemiFilterJoin(
     cudf::filtered_join filter_join(
         leftTableView.select(leftKeyIndices_),
         cudf::null_equality::UNEQUAL,
-        stream);
+        stream,
+        get_temp_mr());
     rightJoinIndices = filter_join.semi_join(
         rightTableView.select(rightKeyIndices_), stream, get_temp_mr());
   }
@@ -2088,7 +2106,8 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::antiJoin(
       cudf::filtered_join filter_join(
           rightTableView.select(rightKeyIndices_),
           cudf::null_equality::UNEQUAL,
-          stream);
+          stream,
+          get_temp_mr());
       leftJoinIndices = filter_join.anti_join(
           leftTableView.select(leftKeyIndices_), stream, get_temp_mr());
     }

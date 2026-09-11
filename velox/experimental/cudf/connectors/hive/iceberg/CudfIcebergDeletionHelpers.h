@@ -21,9 +21,10 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/span.hpp>
 
-#include <cuda/stream>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <cstddef>
 #include <cstdint>

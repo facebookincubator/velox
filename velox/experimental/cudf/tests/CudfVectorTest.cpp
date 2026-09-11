@@ -183,7 +183,7 @@ TEST_F(CudfVectorTest, retainedSizeReportsDeviceStorage) {
   TestCudaStream stream;
   auto table =
       makeTable(stream.view(), cudf::get_current_device_resource_ref());
-  stream.view().synchronize();
+  stream.view().sync();
 
   CudfVector vector(
       pool_.get(),
@@ -204,7 +204,7 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   auto table = makeTable(
       allocationStream.view(),
       rmm::to_device_async_resource_ref_checked(&resource));
-  allocationStream.view().synchronize();
+  allocationStream.view().sync();
 
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
@@ -268,7 +268,7 @@ TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
 
   EXPECT_GT(resource.deallocationCount(), 0);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
-  targetStream.view().synchronize();
+  targetStream.view().sync();
   EXPECT_EQ(materialized->num_columns(), 1);
   EXPECT_EQ(materialized->num_rows(), 4);
 }

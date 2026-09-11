@@ -28,8 +28,9 @@
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
 
-#include <cuda/stream>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <vector>
 
@@ -77,8 +78,7 @@ class BufferedInputDataSource : public cudf::io::datasource {
 
   std::shared_ptr<facebook::velox::dwio::common::BufferedInput> input_;
   const size_t fileSize_;
-  std::vector<std::function<void(cuda::stream_ref stream)>>
-      pendingDeviceLoads_;
+  std::vector<std::function<void(cuda::stream_ref stream)>> pendingDeviceLoads_;
 };
 
 /**

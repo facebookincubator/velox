@@ -69,9 +69,7 @@ void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   }
 }
 
-void finalizeDivideOutputNullCount(
-    cudf::column& out,
-    cuda::stream_ref stream) {
+void finalizeDivideOutputNullCount(cudf::column& out, cuda::stream_ref stream) {
   if (out.size() == 0) {
     return;
   }

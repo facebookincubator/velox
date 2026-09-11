@@ -165,7 +165,7 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::negative_index_policy::NOT_ALLOWED,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
   auto rowNums = computeRowNumbers(
       sortedKeyTable->view(), localPartitionKeyIndices_, stream, mr);
   auto mask = makeLimitMask(*rowNums, limit_, stream, mr);
@@ -183,7 +183,7 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::negative_index_policy::NOT_ALLOWED,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
   auto const size = localCandidatesTable->num_rows();
   return std::make_shared<CudfVector>(
       cudfInput->pool(),

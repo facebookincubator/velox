@@ -18,9 +18,10 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
 
-#include <cuda/stream>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <cstddef>
 #include <cstdint>

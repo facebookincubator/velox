@@ -77,14 +77,12 @@ void CudfDistinct::computePartialDistinctStreaming(CudfVectorPtr tbl) {
     // We need to join the input table stream on the partial output stream to
     // make sure the input table is available when we do the concat.
     cudf::detail::join_streams(
-        std::vector<cuda::stream_ref>{inputTableStream},
-        partialOutputStream);
+        std::vector<cuda::stream_ref>{inputTableStream}, partialOutputStream);
 
     auto concatenatedTable =
         cudf::concatenate(tablesToConcat, partialOutputStream, get_output_mr());
     cudf::detail::join_streams(
-        std::vector<cuda::stream_ref>{partialOutputStream},
-        inputTableStream);
+        std::vector<cuda::stream_ref>{partialOutputStream}, inputTableStream);
 
     // Do a distinct on the concatenated results.
     // Keep concatenatedTable alive while we use its view.

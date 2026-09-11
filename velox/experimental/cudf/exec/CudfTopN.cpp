@@ -122,7 +122,7 @@ std::unique_ptr<cudf::table> CudfTopN::getTopK(
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::negative_index_policy::NOT_ALLOWED,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 // helper to get topk of a table

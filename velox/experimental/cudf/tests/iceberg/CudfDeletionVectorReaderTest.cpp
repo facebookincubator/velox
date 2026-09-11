@@ -638,7 +638,7 @@ TEST_F(CudfDeletionVectorReaderTest, deleteOverflowing64BitRowIndices) {
       initialMask.data(),
       initialMask.size() * sizeof(bool),
       cudaMemcpyDefault,
-      stream().value()));
+      stream().get()));
   reader.applyDeletes(
       deleteMask->mutable_view(), rowIndex->view(), stream(), mr());
 
@@ -689,7 +689,7 @@ TEST_F(CudfDeletionVectorReaderTest, applyBitmapToMaskByRowIndex) {
       &bitmap,
       sizeof(bitmap),
       cudaMemcpyDefault,
-      stream().value()));
+      stream().get()));
 
   std::vector<uint64_t> rowIndexHost = {99, 100, 101, 103, 104};
   auto rowIndex = makeRowIndexColumn(rowIndexHost, stream(), mr());
@@ -700,7 +700,7 @@ TEST_F(CudfDeletionVectorReaderTest, applyBitmapToMaskByRowIndex) {
       &deleted,
       sizeof(deleted),
       cudaMemcpyDefault,
-      stream().value()));
+      stream().get()));
 
   facebook::velox::cudf_velox::connector::hive::iceberg::applyBitmapToMask(
       cudf::device_span<const cudf::bitmask_type>(

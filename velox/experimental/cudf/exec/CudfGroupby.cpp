@@ -1315,8 +1315,8 @@ CudfGroupby::createStreamingGroupby(size_t capacity) {
       keyIndices,
       requests,
       static_cast<cudf::size_type>(capacity),
-      ignoreNullKeys_ ? cudf::null_policy::EXCLUDE
-                      : cudf::null_policy::INCLUDE);
+      ignoreNullKeys_ ? cudf::null_policy::EXCLUDE : cudf::null_policy::INCLUDE,
+      get_temp_mr());
 }
 
 void CudfGroupby::computeFinalGroupbyStreaming(CudfVectorPtr input) {
@@ -1872,7 +1872,7 @@ void CudfGroupby::doClose() {
   if (streamingGroupby_ && streamingGroupbyStream_.has_value()) {
     // Match rebuild and finalization: wait before dropping persistent state
     // that an asynchronous aggregate or merge may still reference.
-    streamingGroupbyStream_->synchronize();
+    streamingGroupbyStream_->sync();
   }
   streamingGroupby_.reset();
   streamingGroupbyEvent_.reset();

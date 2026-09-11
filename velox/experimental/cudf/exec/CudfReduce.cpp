@@ -74,7 +74,7 @@ using facebook::velox::cudf_velox::validateIntermediateColumnType;
         cudf::table_view const& input,                                         \
         TypePtr const& outputType,                                             \
         vector_size_t /* inputRowCount */,                                     \
-        cuda::stream_ref stream,                                          \
+        cuda::stream_ref stream,                                               \
         rmm::device_async_resource_ref mr) override {                          \
       auto const aggRequest =                                                  \
           cudf::make_##name##_aggregation<cudf::reduce_aggregation>();         \
@@ -674,7 +674,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
     auto inputTable = cudf::table_view({input.column(inputIndex)});
 
     cudf::approx_distinct_count sketch{
-        inputTable, precision_, kNullPolicy, kNanPolicy, stream};
+        inputTable, precision_, kNullPolicy, kNanPolicy, stream, mr};
 
     return makeSketchColumn(sketch.sketch(), stream, mr);
   }

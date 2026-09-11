@@ -78,9 +78,7 @@ namespace facebook::velox::cudf_velox {
 // Implementation details in anonymous namespace
 namespace {
 
-bool decimalScalarIsZero(
-    const cudf::scalar& scalar,
-    cuda::stream_ref stream) {
+bool decimalScalarIsZero(const cudf::scalar& scalar, cuda::stream_ref stream) {
   if (!scalar.is_valid(stream)) {
     return false;
   }
@@ -546,17 +544,22 @@ __device__ void velox_round_double(
           cudf::scalar_column_view(decimalsView),
           cudf::scalar_column_view(factorView),
       };
-      return cudf::transform_extended(
-          transformInputs,
-          kUdf,
+      const cudf::transform_output transformOutputs[] = {{
           cudf::data_type{cudf::type_id::FLOAT64},
+          cudf::output_nullability::PRESERVE,
+      }};
+      auto transformed = cudf::transform(
+          kUdf,
           cudf::udf_source_type::CUDA,
-          std::nullopt,
           cudf::null_aware::NO,
           std::nullopt,
-          cudf::output_nullability::PRESERVE,
+          transformInputs,
+          transformOutputs,
+          {},
+          std::nullopt,
           stream,
           mr);
+      return std::move(transformed->release().front());
     }
 
     return cudf::round_decimal(

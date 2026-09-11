@@ -122,14 +122,12 @@ std::shared_ptr<CudaEvent> CudfNestedLoopJoinBridge::getBuildReadyEvent() {
   return buildReadyEvent_;
 }
 
-void CudfNestedLoopJoinBridge::setBuildStream(
-    cuda::stream_ref buildStream) {
+void CudfNestedLoopJoinBridge::setBuildStream(cuda::stream_ref buildStream) {
   std::lock_guard<std::mutex> l(mutex_);
   buildStream_ = buildStream;
 }
 
-std::optional<cuda::stream_ref>
-CudfNestedLoopJoinBridge::getBuildStream() {
+std::optional<cuda::stream_ref> CudfNestedLoopJoinBridge::getBuildStream() {
   std::lock_guard<std::mutex> l(mutex_);
   return buildStream_;
 }
@@ -567,8 +565,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
   return exec::BlockingReason::kNotBlocked;
 }
 
-void CudfNestedLoopJoinProbe::waitForBuildReady(
-    cuda::stream_ref probeStream) {
+void CudfNestedLoopJoinProbe::waitForBuildReady(cuda::stream_ref probeStream) {
   if (buildReadyEvent_ != nullptr) {
     // joinWithBuildBatch() is called once per probe input batch, and each
     // call gets a fresh stream from cudfGlobalStreamPool(). The event was
@@ -649,13 +646,13 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
       probeIndices->view(),
       cudf::out_of_bounds_policy::DONT_CHECK,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
   auto gatheredBuild = cudf::gather(
       buildView,
       buildIndices->view(),
       cudf::out_of_bounds_policy::DONT_CHECK,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
   std::vector<cudf::column_view> combinedViews;
   auto gatheredProbeView = gatheredProbe->view();
@@ -845,14 +842,14 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
         leftIndicesView,
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        get_output_mr());
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
     auto gatheredBuild = cudf::gather(
         buildGatherView,
         rightIndicesView,
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        get_output_mr());
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
     std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
     auto probeCols = gatheredProbe->release();

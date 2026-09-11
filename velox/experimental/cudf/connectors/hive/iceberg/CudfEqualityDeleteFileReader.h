@@ -29,9 +29,10 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
-#include <cuda/stream>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <folly/Executor.h>
 

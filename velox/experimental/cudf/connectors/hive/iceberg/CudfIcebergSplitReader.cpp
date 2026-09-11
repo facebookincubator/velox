@@ -371,7 +371,7 @@ CudfIcebergSplitReader::readNextChunk() {
           deleteMask_->mutable_view().data<bool>(),
           false,
           numRows * sizeof(bool),
-          stream_));
+          stream_.get()));
     }
 
     // Set the current mutable view into the deleteMask_ column.
