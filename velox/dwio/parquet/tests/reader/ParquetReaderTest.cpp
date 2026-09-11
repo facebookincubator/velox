@@ -2436,6 +2436,24 @@ TEST_F(ParquetReaderTest, readTimeMicros) {
       rowType, *readerBundle.rowReader, data, *leafPool_);
 }
 
+TEST_F(ParquetReaderTest, readTimeMicrosTypeMismatch) {
+  const auto data = makeRowVector(
+      {"c1"}, {makeFlatVector<int64_t>({1'001}, TIME_MICRO_UTC())});
+  auto sink = write(data);
+
+  for (const auto& requestedType :
+       std::vector<TypePtr>{TIME(), BIGINT(), VARCHAR()}) {
+    SCOPED_TRACE(requestedType->toString());
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(ROW("c1", requestedType));
+    VELOX_ASSERT_THROW(
+        createReaderInMemory(*sink, readerOptions),
+        fmt::format(
+            "Converted type TIME MICRO UTC is not allowed for requested type {} for file column 'c1'",
+            requestedType->toString()));
+  }
+}
+
 TEST_F(ParquetReaderTest, readTimeWithMultipleColumns) {
   const auto rowType =
       ROW({"id", "time_col", "name"}, {INTEGER(), TIME(), VARCHAR()});
