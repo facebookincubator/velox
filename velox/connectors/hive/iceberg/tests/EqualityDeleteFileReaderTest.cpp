@@ -265,6 +265,83 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityColumnNotInProjection) {
   assertEqualResults({expected}, {result});
 }
 
+// Regression test: a column only a later split needs. The stable child order
+// used to be fixed when the first reader tree was built, so the second
+// split's tree had no reader for 'id' and its delete went unapplied.
+TEST_P(EqualityDeleteFileReaderTestP, equalityColumnAddedBySecondSplit) {
+  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
+  // 'id' is outside the projection, so only the delete file puts it in the
+  // scan spec.
+  auto outputType = ROW({"value"}, {VARCHAR()});
+
+  auto firstData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto firstDataFile = writeDataFileP({firstData}, {1, 2});
+
+  auto secondData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({5, 6, 7, 8, 9}),
+          makeFlatVector<std::string>({"f", "g", "h", "i", "j"}),
+      });
+  auto secondDataFile = writeDataFileP({secondData}, {1, 2});
+
+  auto thirdData = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({10, 11, 12, 13, 14}),
+          makeFlatVector<std::string>({"k", "l", "m", "n", "o"}),
+      });
+  auto thirdDataFile = writeDataFileP({thirdData}, {1, 2});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({6, 8})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
+
+  auto splits = makeSplitsP(firstDataFile->getPath());
+  auto secondSplits =
+      makeSplitsP(secondDataFile->getPath(), {icebergDeleteFile});
+  splits.insert(splits.end(), secondSplits.begin(), secondSplits.end());
+  auto thirdSplits = makeSplitsP(thirdDataFile->getPath());
+  splits.insert(splits.end(), thirdSplits.begin(), thirdSplits.end());
+
+  // One driver and no preloading make the splits share one ScanSpec, which is
+  // what carries the stale order forward.
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan)
+                    .splits(splits)
+                    .maxDrivers(1)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+                    .copyResults(pool());
+
+  // Only the second split loses rows, id=6 and id=8.
+  auto expected = makeRowVector(
+      {"value"},
+      {
+          makeFlatVector<std::string>(
+              {"a",
+               "b",
+               "c",
+               "d",
+               "e",
+               "f",
+               "h",
+               "j",
+               "k",
+               "l",
+               "m",
+               "n",
+               "o"}),
+      });
+
+  assertEqualResults({expected}, {result});
+}
+
 /// Two delete files targeting the same column not in the projection.
 TEST_P(EqualityDeleteFileReaderTestP, multipleDeleteFilesSameMissingColumn) {
   auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});

@@ -37,13 +37,19 @@ std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
 }
 
 ScanSpec* ScanSpec::getOrCreateChild(const std::string& name) {
+  // Serializes concurrent adds. Readers of 'children_' and 'childByFieldName_'
+  // do not take it; see the declaration.
+  std::lock_guard<std::mutex> l(mutex_);
   if (auto it = this->childByFieldName_.find(name);
       it != this->childByFieldName_.end()) {
     return it->second;
   }
-  this->children_.push_back(std::make_unique<ScanSpec>(name));
+  this->children_.push_back(std::make_shared<ScanSpec>(name));
   auto* child = this->children_.back().get();
+  child->parent_ = this;
   this->childByFieldName_[child->fieldName()] = child;
+  stableOrder_.push_back(child);
+  stableChildren_.reset();
   return child;
 }
 
@@ -120,8 +126,6 @@ void ScanSpec::reorder() {
   if (children_.empty()) {
     return;
   }
-  // Make sure 'stableChildren_' is initialized.
-  stableChildren();
   std::sort(
       children_.begin(),
       children_.end(),
@@ -139,13 +143,37 @@ void ScanSpec::enableFilterInSubTree(bool value) {
   }
 }
 
-const std::vector<ScanSpec*>& ScanSpec::stableChildren() {
-  std::lock_guard<std::mutex> l(mutex_);
-  if (stableChildren_.empty()) {
-    stableChildren_.reserve(children_.size());
-    for (auto& child : children_) {
-      stableChildren_.push_back(child.get());
+void ScanSpec::resetHasFilterUpToRoot() {
+  for (auto* spec = this; spec != nullptr; spec = spec->parent_) {
+    spec->hasFilter_.reset();
+  }
+}
+
+void ScanSpec::setFilterEnabled(bool value) {
+  enableFilterInSubTree(value);
+  resetHasFilterUpToRoot();
+}
+
+void ScanSpec::setDeltaUpdate(dwio::common::DeltaColumnUpdater* update) {
+  deltaUpdate_ = update;
+  enableFilterInSubTree(update == nullptr);
+  resetHasFilterUpToRoot();
+}
+
+void ScanSpec::resetDeltaUpdates() {
+  for (auto& child : children_) {
+    // Only top level columns can have delta updates.
+    if (child->deltaUpdate_ != nullptr) {
+      child->setDeltaUpdate(nullptr);
     }
+  }
+}
+
+std::shared_ptr<const std::vector<ScanSpec*>> ScanSpec::stableChildren() {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (stableChildren_ == nullptr) {
+    stableChildren_ =
+        std::make_shared<const std::vector<ScanSpec*>>(stableOrder_);
   }
   return stableChildren_;
 }
@@ -206,12 +234,18 @@ void ScanSpec::moveAdaptationFrom(ScanSpec& other) {
       continue;
     }
     auto* otherChild = it->second;
-    if (!child->isConstant() && !otherChild->isConstant()) {
-      // If other child is constant, a possible filter on a
-      // constant will have been evaluated at split start time. If
-      // 'child' is constant there is no adaptation that can be
-      // received.
-      child->filter_ = std::move(otherChild->filter_);
+    // A filter on a constant is evaluated at split start, so a constant on
+    // either side leaves nothing to receive. Filtering disabled means nothing
+    // evaluated it.
+    if ((!child->isConstant() && !otherChild->isConstant()) ||
+        child->filterDisabled_) {
+      // A null source filter is no adaptation; it would clear 'child's own.
+      if (otherChild->filter_ != nullptr) {
+        child->filter_ = std::move(otherChild->filter_);
+        // The split was prepared before the adaptation arrived, so what
+        // 'child' and its ancestors memoized is stale.
+        child->resetHasFilterUpToRoot();
+      }
       child->selectivity_ = otherChild->selectivity_;
     }
   }

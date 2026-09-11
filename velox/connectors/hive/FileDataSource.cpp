@@ -547,7 +547,26 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   splitReader_->configureReaderOptions(randomSkip_);
   splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
   splitReader_->prepareSplit(metadataFilter_, runtimeStats_);
-  readerOutputType_ = splitReader_->readerOutputType();
+
+  auto splitReaderOutputType = splitReader_->readerOutputType();
+  if (readerProducedType_ != nullptr &&
+      splitReaderOutputType->size() > readerProducedType_->size()) {
+    // The split reader appended columns to the type it was handed, for example
+    // an Iceberg lineage column that is filtered on but not selected. next()
+    // allocates the output from 'readerProducedType_' whenever there is one, so
+    // it has to grow by the same columns; the ones it already covers keep the
+    // extraction output types the constructor put there.
+    auto names = readerProducedType_->names();
+    auto types = readerProducedType_->children();
+    for (auto i = readerProducedType_->size();
+         i < splitReaderOutputType->size();
+         ++i) {
+      names.push_back(splitReaderOutputType->nameOf(i));
+      types.push_back(splitReaderOutputType->childAt(i));
+    }
+    readerProducedType_ = ROW(std::move(names), std::move(types));
+  }
+  readerOutputType_ = std::move(splitReaderOutputType);
 }
 
 std::optional<RowVectorPtr> FileDataSource::next(
