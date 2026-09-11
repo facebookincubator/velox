@@ -23,6 +23,7 @@ add_library(
   CudfEnforceSingleRow.cpp
   CudfFilterProject.cpp
   CudfGroupId.cpp
+  GpuCapabilities.cpp
   CudfGroupby.cpp
   CudfHashJoin.cpp
   CudfJoin.cpp
