@@ -17,17 +17,33 @@
 
 #include "velox/exec/JoinBridge.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/Spiller.h"
 
 namespace facebook::velox::exec {
 
+struct NestedLoopJoinBuildData {
+  static std::shared_ptr<const NestedLoopJoinBuildData> createInMemory(
+      std::vector<RowVectorPtr> vectors);
+
+  static std::shared_ptr<const NestedLoopJoinBuildData> createSpilled(
+      RowTypePtr type,
+      SpillFiles files);
+
+  bool spilled{false};
+  std::vector<RowVectorPtr> vectors;
+  RowTypePtr type;
+  SpillFiles spillFiles;
+};
+
 class NestedLoopJoinBridge : public JoinBridge {
  public:
-  void setData(std::vector<RowVectorPtr> buildVectors);
+  void setData(std::shared_ptr<const NestedLoopJoinBuildData> buildData);
 
-  std::optional<std::vector<RowVectorPtr>> dataOrFuture(ContinueFuture* future);
+  std::shared_ptr<const NestedLoopJoinBuildData> dataOrFuture(
+      ContinueFuture* future);
 
  private:
-  std::optional<std::vector<RowVectorPtr>> buildVectors_;
+  std::shared_ptr<const NestedLoopJoinBuildData> buildData_;
 };
 
 class NestedLoopJoinBuild : public Operator {
@@ -53,15 +69,39 @@ class NestedLoopJoinBuild : public Operator {
 
   bool isFinished() override;
 
+  bool canReclaim() const override {
+    return canSpill() && !dataVectors_.empty();
+  }
+
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
+
   void close() override {
     dataVectors_.clear();
+    spiller_.reset();
     Operator::close();
   }
 
   std::vector<RowVectorPtr> mergeDataVectors() const;
 
  private:
+  void ensureSpiller();
+
+  void spillVector(RowVectorPtr vector);
+
+  void spillBufferedVectors();
+
+  void finishSpill(SpillPartitionSet& spillPartitions);
+
+  RowVectorPtr copyToOperatorPool(const RowVectorPtr& input);
+
+  const RowTypePtr buildType_;
+
   std::vector<RowVectorPtr> dataVectors_;
+
+  std::unique_ptr<NoRowContainerSpiller> spiller_;
+
+  bool spilled_{false};
 
   // Future for synchronizing with other Drivers of the same pipeline. All build
   // Drivers must be completed before making data available for the probe side.
