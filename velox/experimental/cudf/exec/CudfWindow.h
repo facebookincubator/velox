@@ -162,7 +162,7 @@ class CudfWindow : public CudfOperatorBase {
   // Sorted and concatenated input data, prepared in doNoMoreInput().
   std::unique_ptr<cudf::table> sortedData_;
   cudf::size_type logicalRowCount_{0};
-  cuda::stream_ref stream_{cudaStream_t{nullptr}};
+  cuda::stream_ref stream_{cudaStream_t{cudaStreamDefault}};
   bool streamAcquired_{false};
 
   bool finished_ = false;
