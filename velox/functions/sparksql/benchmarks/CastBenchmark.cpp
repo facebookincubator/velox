@@ -45,14 +45,18 @@ core::TypedExprPtr makeCastExpr(
 // expression, e.g. when the input type is TIMESTAMP_UTC.
 void addTypedCastBenchmark(
     const std::string& name,
-    const RowVectorPtr& input,
+    const RowVectorPtr& inputVector,
     core::TypedExprPtr castExpr,
     core::ExecCtx& execCtx,
+    std::vector<std::shared_ptr<exec::ExprSet>>& typedExprSets,
     int32_t iterations) {
-  auto exprSet = std::make_shared<exec::ExprSet>(
-      std::vector<core::TypedExprPtr>{std::move(castExpr)}, &execCtx);
+  typedExprSets.push_back(
+      std::make_shared<exec::ExprSet>(
+          std::vector<core::TypedExprPtr>{std::move(castExpr)}, &execCtx));
+  auto* exprSet = typedExprSets.back().get();
+  auto* input = inputVector.get();
   folly::addBenchmark(__FILE__, name, [input, exprSet, &execCtx, iterations]() {
-    exec::EvalCtx evalCtx(&execCtx, exprSet.get(), input.get());
+    exec::EvalCtx evalCtx(&execCtx, exprSet, input);
     SelectivityVector rows(input->size());
     std::vector<VectorPtr> results(1);
 
@@ -160,17 +164,21 @@ int main(int argc, char** argv) {
 
   auto queryCtx = core::QueryCtx::create();
   core::ExecCtx execCtx(benchmarkBuilder.pool(), queryCtx.get());
+  std::vector<std::shared_ptr<exec::ExprSet>> typedExprSets;
+  typedExprSets.reserve(2);
   addTypedCastBenchmark(
       setName + "##cast_timestamp_as_timestamp_utc",
       timestampInput,
       makeCastExpr(TIMESTAMP(), "timestamp", TIMESTAMP_UTC()),
       execCtx,
+      typedExprSets,
       iterations);
   addTypedCastBenchmark(
       setName + "##cast_timestamp_utc_as_timestamp",
       timestampInput,
       makeCastExpr(TIMESTAMP_UTC(), "timestamp_utc", TIMESTAMP()),
       execCtx,
+      typedExprSets,
       iterations);
 
   benchmarkBuilder.registerBenchmarks();
