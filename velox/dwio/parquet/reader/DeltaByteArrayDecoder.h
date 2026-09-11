@@ -16,13 +16,53 @@
 
 #pragma once
 
+#include <cstring>
 #include <optional>
+#include <string_view>
+#include <type_traits>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 
 namespace facebook::velox::parquet {
+namespace detail {
+
+template <typename T>
+FOLLY_ALWAYS_INLINE T fromBigEndianBytes(std::string_view bytes) {
+  static_assert(
+      std::is_same_v<T, int128_t> || std::is_same_v<T, int64_t> ||
+          std::is_same_v<T, int32_t>,
+      "Only integer types are supported.");
+
+  VELOX_CHECK_LE(
+      bytes.size(),
+      sizeof(T),
+      "Length of byte array passed to fromBigEndianBytes is too large");
+
+  if (bytes.empty()) {
+    return {};
+  }
+
+  const auto* rawBytes = reinterpret_cast<const uint8_t*>(bytes.data());
+  T result = (rawBytes[0] & 0x80) != 0 ? -1 : 0;
+  memcpy(
+      reinterpret_cast<uint8_t*>(&result) + sizeof(T) - bytes.size(),
+      rawBytes,
+      bytes.size());
+
+  if constexpr (std::is_same_v<T, int128_t>) {
+    return bits::builtin_bswap128(result);
+  } else if constexpr (std::is_same_v<T, int64_t>) {
+    return __builtin_bswap64(result);
+  } else if constexpr (std::is_same_v<T, int32_t>) {
+    return __builtin_bswap32(result);
+  } else {
+    VELOX_UNREACHABLE();
+  }
+}
+
+} // namespace detail
 
 // DeltaLengthByteArrayDecoder is adapted from Apache Arrow:
 // https://github.com/apache/arrow/blob/apache-arrow-15.0.0/cpp/src/parquet/encoding.cc#L2758-L2889
@@ -204,7 +244,15 @@ class DeltaByteArrayDecoder {
         }
 
         // We are at a non-null value on a row to visit.
-        toSkip = visitor.process(readString(), atEnd);
+        using T = typename Visitor::DataType;
+        if constexpr (
+            std::is_same_v<T, int128_t> || std::is_same_v<T, int64_t> ||
+            std::is_same_v<T, int32_t>) {
+          toSkip = visitor.process(
+              detail::fromBigEndianBytes<T>(readString()), atEnd);
+        } else {
+          toSkip = visitor.process(readString(), atEnd);
+        }
       }
       ++current;
       if (toSkip) {

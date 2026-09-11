@@ -320,6 +320,17 @@ class PageReader {
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         nullsFromFastPath = false;
         deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
+        if constexpr (
+            std::is_same_v<typename Visitor::DataType, int128_t> ||
+            std::is_same_v<typename Visitor::DataType, int64_t> ||
+            std::is_same_v<typename Visitor::DataType, int32_t>) {
+          nullsFromFastPath = false;
+          deltaByteArrDecoder_->readWithVisitor<true>(nulls, visitor);
+        } else {
+          VELOX_UNSUPPORTED(
+              "DELTA_BYTE_ARRAY decoder for non-string values only supports decimal type.");
+        }
       } else {
         directDecoder_->readWithVisitor<true>(
             nulls, visitor, nullsFromFastPath);
@@ -330,6 +341,16 @@ class PageReader {
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
+      } else if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
+        if constexpr (
+            std::is_same_v<typename Visitor::DataType, int128_t> ||
+            std::is_same_v<typename Visitor::DataType, int64_t> ||
+            std::is_same_v<typename Visitor::DataType, int32_t>) {
+          deltaByteArrDecoder_->readWithVisitor<false>(nulls, visitor);
+        } else {
+          VELOX_UNSUPPORTED(
+              "DELTA_BYTE_ARRAY decoder for non-string values only supports decimal type.");
+        }
       } else {
         directDecoder_->readWithVisitor<false>(
             nulls,
