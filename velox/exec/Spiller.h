@@ -52,6 +52,22 @@ class SpillerBase {
   std::string toString() const;
 
  protected:
+  // Returns true if any join key column of 'row' is null. Only meaningful for
+  // spillers whose containers store join keys as their leading columns.
+  bool rowHasNullKey(const char* row) const;
+
+  // When true, rows with null join keys are assigned rotating spill
+  // partitions instead of hash-based ones. Null keys hash to a constant, so
+  // hash partitioning concentrates every null-key row into one partition
+  // which can never split at deeper spill levels. Null-key rows can never
+  // match the other side, so their partition assignment is semantically free.
+  // Set by HashBuildSpiller for right and full joins -- the only join types
+  // that retain null-key build rows (for miss output).
+  bool scatterNullKeyRows_{false};
+
+  // Rotating sequence for scattering null-key rows.
+  uint64_t nullScatterSeq_{0};
+
   SpillerBase(
       RowContainer* container,
       RowTypePtr rowType,

@@ -500,6 +500,37 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     int numFilledRows = 0;
     do {
       RowVectorPtr batch = makeDataset(rowType_, numRows, customizeData);
+      // The hash-placement checks in these tests predict each row's spill
+      // partition from its key hash. HashBuildSpiller deliberately scatters
+      // null-key rows for right and full joins (they can never match, and
+      // hash placement would concentrate them into one un-splittable
+      // partition), so keep fuzzed keys non-null here; null-key placement is
+      // covered by HashJoinBuildOnly::nullKeyRowsSpillScatter.
+      if (type_ == SpillerType::HASH_BUILD &&
+          (isRightJoin(joinType_) || isFullJoin(joinType_)) &&
+          !customizeData) {
+        for (int32_t k = 0; k < numKeys; ++k) {
+          const auto& keyVector = batch->childAt(k);
+          if (!keyVector->mayHaveNulls()) {
+            continue;
+          }
+          vector_size_t firstNonNull = -1;
+          for (vector_size_t i = 0; i < batch->size(); ++i) {
+            if (!keyVector->isNullAt(i)) {
+              firstNonNull = i;
+              break;
+            }
+          }
+          if (firstNonNull < 0) {
+            continue;
+          }
+          for (vector_size_t i = 0; i < batch->size(); ++i) {
+            if (keyVector->isNullAt(i)) {
+              keyVector->copy(keyVector.get(), i, firstNonNull, 1);
+            }
+          }
+        }
+      }
       if (!numRowsPerPartition.empty()) {
         for (int index = 0; index < numRows; ++index) {
           for (int i = 0; i < keys.size(); ++i) {
@@ -1423,6 +1454,66 @@ TEST_P(HashJoinBuildOnly, spillPartition) {
           spiller_.get(),
           {std::nullopt, std::nullopt, std::nullopt, std::optional(&rowIter)}),
       "");
+}
+
+TEST_P(HashJoinBuildOnly, nullKeyRowsSpillScatter) {
+  // Rows with null join keys hash to a constant, so hash-partitioned spilling
+  // puts every null-key row into ONE partition, and that partition can never
+  // split at deeper spill levels (its rows re-hash identically). Full and
+  // right joins retain null-key build rows for miss output (other join types
+  // drop them before they reach the container), so a null-heavy build side
+  // concentrates into an un-splittable partition and dies once the max spill
+  // level disables re-spilling. Null-key rows can never match any probe row,
+  // so their partition assignment is semantically free: HashBuildSpiller
+  // scatters them round-robin for those join types.
+  const int32_t numRows = 20'000;
+  auto makeNullHeavyData = [&]() {
+    setupSpillData(numKeys_, numRows, 1, [&](RowVectorPtr rows) {
+      for (int32_t k = 0; k < numKeys_; ++k) {
+        auto key = rows->childAt(k);
+        for (vector_size_t i = 0; i < rows->size(); ++i) {
+          if (i % 10 != 0) {
+            key->setNull(i, true);
+          }
+        }
+      }
+    });
+  };
+
+  auto maxPartitionShare = [&](core::JoinType joinType) -> double {
+    makeNullHeavyData();
+    // Initializes spillConfig_ (spill directory callback et al); the fixture
+    // spiller it creates is unused -- the join type under test is set below.
+    setupSpiller(100'000, 0, false);
+    auto spiller = std::make_unique<HashBuildSpiller>(
+        joinType,
+        std::nullopt,
+        rowContainer_.get(),
+        hashJoinTableSpillType(containerType_, joinType),
+        hashBits_,
+        &spillConfig_,
+        &spillStats_);
+    spiller->spill();
+    rowContainer_->clear();
+    SpillPartitionSet spillPartitionSet;
+    spiller->finishSpill(spillPartitionSet);
+    uint64_t total{0};
+    uint64_t maxPartition{0};
+    for (const auto& [id, partition] : spillPartitionSet) {
+      total += partition->size();
+      maxPartition = std::max<uint64_t>(maxPartition, partition->size());
+    }
+    VELOX_CHECK_GT(total, 0);
+    return static_cast<double>(maxPartition) / static_cast<double>(total);
+  };
+
+  // Full join: null-key build rows are retained for miss output and must be
+  // scattered -- no partition may dominate.
+  EXPECT_LE(maxPartitionShare(core::JoinType::kFull), 0.5);
+  // Inner join: null-key rows never reach the spiller in production (they are
+  // dropped before insert); partitioning stays purely hash-based, so a
+  // synthetic null-heavy container concentrates. This pins the fix's scope.
+  EXPECT_GE(maxPartitionShare(core::JoinType::kInner), 0.85);
 }
 
 TEST_P(HashJoinBuildOnly, writeBufferSize) {
