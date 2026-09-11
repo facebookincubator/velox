@@ -155,6 +155,8 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "ssdCacheReadWallNanos",
       "waitForPreloadSplitNanos",
       "parquet.pageLoadTimeNanos",
+      "parquet.processedPages",
+      "parquet.skippedPages",
   };
   if (metricNames.contains(name)) {
     return true;
