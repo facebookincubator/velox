@@ -65,23 +65,25 @@ InMemoryExchangeClient::InMemoryExchangeClient(
       destination, 0, "Exchange client destination must not be negative");
 }
 
-void InMemoryExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
+void InMemoryExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
   std::vector<RequestSpec> requestSpecs;
   std::shared_ptr<ExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
-    bool duplicate = !remoteTaskIds_.insert(remoteTaskId).second;
-    if (duplicate) {
+    auto [remoteTaskIdIt, inserted] =
+        remoteTaskIds_.insert(std::string{remoteTaskId});
+    if (!inserted) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.
       return;
     }
+    const auto& ownedRemoteTaskId = *remoteTaskIdIt;
 
     std::shared_ptr<ExchangeSource> source;
     try {
-      source =
-          ExchangeSource::create(remoteTaskId, destination_, queue_, pool_);
+      source = ExchangeSource::create(
+          ownedRemoteTaskId, destination_, queue_, pool_);
     } catch (const VeloxException&) {
       throw;
     } catch (const std::exception& e) {
@@ -89,7 +91,7 @@ void InMemoryExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
       VELOX_FAIL(
           "Failed to create ExchangeSource: {}. Task ID: {}.",
           e.what(),
-          remoteTaskId.substr(0, 128));
+          ownedRemoteTaskId.substr(0, 128));
     }
 
     if (closed_) {
@@ -124,6 +126,10 @@ void InMemoryExchangeClient::noMoreRemoteTasks() {
 }
 
 void InMemoryExchangeClient::close() {
+  closeImpl();
+}
+
+void InMemoryExchangeClient::closeImpl() {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
   std::queue<ProducingSource> producingSources;
   std::queue<std::shared_ptr<ExchangeSource>> emptySources;
@@ -150,7 +156,8 @@ void InMemoryExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> InMemoryExchangeClient::stats() {
+folly::F14FastMap<std::string, RuntimeMetric> InMemoryExchangeClient::stats()
+    const {
   std::lock_guard<std::mutex> l(queue_->mutex());
   if (stats_.empty()) {
     stats_ = collectStatsLocked();
@@ -394,7 +401,7 @@ InMemoryExchangeClient::pickupSingleSourceToRequestLocked() {
 }
 
 InMemoryExchangeClient::~InMemoryExchangeClient() {
-  close();
+  closeImpl();
 }
 
 std::string InMemoryExchangeClient::toString() const {
