@@ -100,6 +100,14 @@ enum class DecodeStep {
   kUnsupported,
 };
 
+/// Returns the name of 'step' for error messages.
+const char* decodeStepName(DecodeStep step);
+
+/// Throws if the device side decode dispatch has no case for 'step'. Call
+/// before launching a decode: a step with no case leaves the output buffer
+/// undecoded, which the host cannot tell apart from a successful decode.
+void checkDecodeStepSupported(DecodeStep step);
+
 enum class DictMode {
   // Decoded values are returned as is
   kNone,

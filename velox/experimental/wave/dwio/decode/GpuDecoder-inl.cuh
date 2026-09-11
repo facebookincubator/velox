@@ -1318,6 +1318,11 @@ __device__ void decodeSwitch(GpuDecode& op) {
             "ERROR: Unsupported DecodeStep %d\n",
             static_cast<int32_t>(op.step));
       }
+      // checkDecodeStepSupported() rejects these before the launch, so this is
+      // unreachable. Trap rather than return: returning leaves the output
+      // undecoded and the host cannot tell that apart from a decoded result.
+      // 'assert' is not used because it is compiled out in release builds.
+      __trap();
   }
 }
 
@@ -1387,6 +1392,7 @@ template <int kBlockSize>
 void decodeGlobal(GpuDecode* plan, int numBlocks, cudaStream_t stream) {
   int32_t sharedSize = 0;
   for (auto i = 0; i < numBlocks; ++i) {
+    checkDecodeStepSupported(plan[i].step);
     sharedSize = std::max(
         sharedSize,
         detail::sharedMemorySizeForDecode<kBlockSize>(plan[i].step));
