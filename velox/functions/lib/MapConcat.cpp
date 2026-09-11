@@ -16,6 +16,7 @@
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/vector/FlatMapConcat.h"
 #include "velox/vector/MapConcat.h"
 
 namespace facebook::velox::functions {
@@ -88,7 +89,10 @@ class MapConcatFunction : public exec::VectorFunction {
           ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
     }
 
-    auto merged = mapConcat(context.pool(), outputType, inputs, rows, config);
+    const VectorPtr merged = allInputsAreFlatMap(inputs)
+        ? VectorPtr(
+              flatMapConcat(context.pool(), outputType, inputs, rows, config))
+        : mapConcat(context.pool(), outputType, inputs, rows, config);
     context.moveOrCopyResult(merged, rows, result);
   }
 
