@@ -39,11 +39,8 @@ using facebook::velox::exec::Task;
 namespace facebook::velox::ucx_exchange {
 namespace {
 
-// Rows whose partition key is null, plus one arbitrary row, must reach every
-// destination so that an anti-join can tell on every worker whether the build
-// side was empty and whether it held a null key. Without that,
-// cudf::hash_partition puts all null keys in one bucket and the other
-// destinations wrongly report their rows as unmatched.
+// Covers partitioning semantics that cannot be inferred from the packed cuDF
+// payload alone, including null-key replication and column-less row counts.
 class UcxPartitionedOutputTest : public testing::Test {
  protected:
   static constexpr int kNumPartitions = 3;
@@ -234,6 +231,79 @@ class UcxPartitionedOutputTest : public testing::Test {
   std::shared_ptr<UcxOutputQueueManager> queueManager_;
   std::shared_ptr<exec::DriverCtx> driverCtx_;
 };
+
+// A cuDF table with no columns always reports zero rows. The logical row count
+// from CudfVector must therefore be preserved separately, including when
+// multiple inputs are buffered into one output page.
+TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
+  auto stream = rmm::cuda_stream_default;
+  const auto rowType = ROW({}, {});
+  constexpr vector_size_t kFirstBatchRows = 2;
+  constexpr vector_size_t kSecondBatchRows = 5;
+
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      rowType,
+      kNumPartitions,
+      /*partitionKeys=*/{},
+      FOUR_GBYTES);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      kNumPartitions,
+      /*numDrivers=*/1);
+
+  auto partitionedOutput = makePartitionedOutput(task);
+  for (const auto numRows : {kFirstBatchRows, kSecondBatchRows}) {
+    auto input = makeCudfVector(
+        pool_.get(), numRows, rowType, /*tableGenerator=*/nullptr, stream);
+    ASSERT_EQ(input->childrenSize(), 0);
+    ASSERT_EQ(input->size(), numRows);
+    ASSERT_EQ(input->getTableView().num_columns(), 0);
+    ASSERT_EQ(input->getTableView().num_rows(), 0);
+    partitionedOutput->addInput(std::move(input));
+    partitionedOutput->getOutput();
+  }
+  finishPartitionedOutput(partitionedOutput.get());
+
+  vector_size_t totalRows = 0;
+  std::vector<vector_size_t> rowsPerDestination;
+  for (int destination = 0; destination < kNumPartitions; ++destination) {
+    vector_size_t destinationRows = 0;
+    int numPages = 0;
+    while (true) {
+      std::shared_ptr<cudf::packed_columns> payload;
+      vector_size_t payloadRows = 0;
+      queueManager_->getData(
+          taskId_,
+          destination,
+          [&payload, &payloadRows](
+              std::shared_ptr<cudf::packed_columns> data,
+              vector_size_t numRows,
+              std::vector<int64_t> /*remainingBytes*/) {
+            payload = std::move(data);
+            payloadRows = numRows;
+          });
+      if (payload == nullptr) {
+        EXPECT_EQ(payloadRows, 0);
+        break;
+      }
+
+      ++numPages;
+      const auto unpacked = cudf::unpack(*payload);
+      EXPECT_EQ(unpacked.num_columns(), 0);
+      EXPECT_EQ(unpacked.num_rows(), 0);
+      destinationRows += payloadRows;
+    }
+    EXPECT_EQ(numPages, 1);
+    rowsPerDestination.push_back(destinationRows);
+    totalRows += destinationRows;
+  }
+
+  EXPECT_THAT(rowsPerDestination, testing::ElementsAre(2, 2, 3));
+  EXPECT_EQ(totalRows, kFirstBatchRows + kSecondBatchRows);
+}
 
 // The bug: both null-keyed rows land in a single hash bucket, so two of the
 // three destinations receive none of them.
