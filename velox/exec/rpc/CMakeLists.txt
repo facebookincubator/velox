@@ -16,7 +16,13 @@
 
 velox_add_library(velox_rpc_error_classification HEADERS RpcErrorClassification.h)
 
-velox_link_libraries(velox_rpc_error_classification Folly::folly FBThrift::thriftcpp2)
+velox_link_libraries(
+  velox_rpc_error_classification
+  velox_rpc_types
+  velox_common_base
+  Folly::folly
+  FBThrift::thriftcpp2
+)
 
 velox_add_library(
   velox_rpc_state
@@ -29,6 +35,7 @@ velox_add_library(
 
 velox_link_libraries(
   velox_rpc_state
+  velox_rpc_error_classification
   velox_rpc_types
   velox_common_base
   velox_future
@@ -44,6 +51,7 @@ velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(
   velox_rpc_operator
+  velox_rpc_error_classification
   velox_rpc_state
   velox_rpc_rate_limiter
   velox_async_rpc_function
@@ -70,9 +78,9 @@ if(${VELOX_BUILD_TESTING})
 
   velox_link_libraries(
     velox_demo_rpc_function
-    velox_mock_rpc_client
     velox_expression_functions
     velox_async_rpc_function
+    Folly::folly
   )
 
   velox_add_library(
