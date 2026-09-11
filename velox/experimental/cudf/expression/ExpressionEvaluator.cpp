@@ -1263,12 +1263,9 @@ class GreatestLeastFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    // Readers may preserve narrower physical types, e.g. DECIMAL32 for a
-    // logical short decimal, while literals use Velox's DECIMAL64. cuDF
-    // requires both binary_operation operands to share a physical type. The
-    // greatest/least signatures pin every operand and the result to the same
-    // decimal(p,s), so scales already agree and normalizing straight to type_
-    // only widens storage.
+    // Readers may hand us a narrower physical decimal (DECIMAL32) than the
+    // DECIMAL64 literals use, and binary_operation needs one physical type for
+    // both operands. Scales already match, so casting to type_ only widens.
     std::unique_ptr<cudf::scalar> convertedScalar;
     const cudf::scalar* folded = foldedScalar_
         ? scalarWithType(*foldedScalar_, type_, convertedScalar, stream, mr)
@@ -1280,23 +1277,23 @@ class GreatestLeastFunction : public CudfFunction {
     }
 
     // Holds the normalized first column for as long as views of it are read.
-    std::unique_ptr<cudf::column> firstColumn;
-    auto const first =
-        columnWithType(inputColumns[order_[0]], type_, firstColumn, stream, mr);
+    std::unique_ptr<cudf::column> castedFirstColumn;
+    const auto firstColumnView =
+        columnWithType(inputColumns[order_[0]], type_, castedFirstColumn, stream, mr);
 
     // Accumulate across column inputs.
     std::unique_ptr<cudf::column> result;
     for (size_t i = 1; i < order_.size(); ++i) {
-      cudf::column_view lhs = result ? result->view() : first;
-      std::unique_ptr<cudf::column> convertedColumn;
-      auto const rhs = columnWithType(
-          inputColumns[order_[i]], type_, convertedColumn, stream, mr);
+      const auto lhs = result ? result->view() : firstColumnView;
+      std::unique_ptr<cudf::column> castedColumn;
+      const auto rhs = columnWithType(
+          inputColumns[order_[i]], type_, castedColumn, stream, mr);
       result = cudf::binary_operation(lhs, rhs, op_, type_, stream, mr);
     }
 
     // Apply the folded constant as a final (column, scalar) operation.
     if (folded) {
-      cudf::column_view lhs = result ? result->view() : first;
+      const auto lhs = result ? result->view() : firstColumnView;
       result = cudf::binary_operation(lhs, *folded, op_, type_, stream, mr);
     }
     return result;
@@ -1364,9 +1361,7 @@ class SwitchFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       rmm::cuda_stream_view stream,
       rmm::device_async_resource_ref mr) const override {
-    // Readers may preserve narrower physical types, e.g. DECIMAL32 for a
-    // logical short decimal, while literals use Velox's DECIMAL64. cuDF
-    // requires both copy_if_else inputs to have the same physical type.
+    // As with GreatestLeastFunction, ensure decimal type sizes match.
     std::unique_ptr<cudf::column> leftColumn;
     std::unique_ptr<cudf::column> rightColumn;
     std::unique_ptr<cudf::scalar> leftScalar;
