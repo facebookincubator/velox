@@ -30,6 +30,7 @@
 #include "velox/functions/prestosql/aggregates/CountAggregate.h"
 #include "velox/functions/prestosql/aggregates/CountIfAggregate.h"
 #include "velox/functions/prestosql/aggregates/CovarianceAggregates.h"
+#include "velox/functions/prestosql/aggregates/DifferentialEntropyAggregate.h"
 #include "velox/functions/prestosql/aggregates/EntropyAggregates.h"
 #include "velox/functions/prestosql/aggregates/GeometricMeanAggregate.h"
 #include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
@@ -406,6 +407,8 @@ void registerAllAggregateFunctions(
       {prefix + kRegrSyy}, withCompanionFunctions, overwrite);
   registerRegrR2Aggregate(
       {prefix + kRegrR2}, withCompanionFunctions, overwrite);
+  registerDifferentialEntropyAggregate(
+      {prefix + kDifferentialEntropy}, withCompanionFunctions, overwrite);
   registerEntropyAggregate(
       {prefix + kEntropy}, withCompanionFunctions, overwrite);
   registerGeometricMeanAggregate(

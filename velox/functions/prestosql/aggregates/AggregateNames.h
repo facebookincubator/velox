@@ -45,6 +45,7 @@ const char* const kCount = "count";
 const char* const kCountIf = "count_if";
 const char* const kCovarPop = "covar_pop";
 const char* const kCovarSamp = "covar_samp";
+const char* const kDifferentialEntropy = "differential_entropy";
 const char* const kEntropy = "entropy";
 const char* const kEvery = "every";
 const char* const kGeometricMean = "geometric_mean";
