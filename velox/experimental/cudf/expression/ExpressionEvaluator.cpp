@@ -546,17 +546,23 @@ __device__ void velox_round_double(
           cudf::scalar_column_view(decimalsView),
           cudf::scalar_column_view(factorView),
       };
-      return cudf::transform_extended(
-          transformInputs,
-          kUdf,
+      const cudf::transform_output transformOutputs[] = {{
           cudf::data_type{cudf::type_id::FLOAT64},
+          cudf::output_nullability::PRESERVE,
+      }};
+      auto transformed = cudf::transform(
+          kUdf,
           cudf::udf_source_type::CUDA,
-          std::nullopt,
           cudf::null_aware::NO,
           std::nullopt,
-          cudf::output_nullability::PRESERVE,
+          transformInputs,
+          transformOutputs,
+          {},
+          std::nullopt,
           stream,
           mr);
+      auto columns = transformed->release();
+      return std::move(columns.front());
     }
 
     return cudf::round_decimal(

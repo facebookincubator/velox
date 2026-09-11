@@ -674,7 +674,7 @@ struct ApproxDistinctAggregator : ReduceAggregator {
     auto inputTable = cudf::table_view({input.column(inputIndex)});
 
     cudf::approx_distinct_count sketch{
-        inputTable, precision_, kNullPolicy, kNanPolicy, stream};
+        inputTable, precision_, kNullPolicy, kNanPolicy, stream, mr};
 
     return makeSketchColumn(sketch.sketch(), stream, mr);
   }
