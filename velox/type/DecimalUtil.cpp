@@ -156,7 +156,7 @@ struct DecimalComponents {
 std::string_view extractDigits(const char* s, size_t start, size_t size) {
   size_t pos = start;
   for (; pos < size; ++pos) {
-    if (!std::isdigit(s[pos])) {
+    if (!std::isdigit(static_cast<unsigned char>(s[pos]))) {
       break;
     }
   }
@@ -219,7 +219,7 @@ parseDecimalComponents(const char* s, size_t size, DecimalComponents& out) {
     // Make sure all chars after sign are digits, as folly::tryTo allows
     // leading and trailing whitespaces.
     for (auto i = static_cast<size_t>(withSign); i < size - pos; ++i) {
-      if (!std::isdigit(s[pos + i])) {
+      if (!std::isdigit(static_cast<unsigned char>(s[pos + i]))) {
         return Status::UserError(
             "Non-digit character is not allowed in the exponent part.");
       }
