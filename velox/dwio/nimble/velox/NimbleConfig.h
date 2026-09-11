@@ -46,6 +46,14 @@ class Config : public velox::config::ConfigBase {
   static Entry<float> ENCODING_SELECTION_COMPRESSION_ACCEPT_RATIO;
   static Entry<const std::vector<std::pair<EncodingType, float>>>
       COMPRESSION_ACCEPT_RATIO_OVERRIDES;
+
+  /// Compressor the writer applies to encoded streams, by name (see
+  /// toCompressionType): "Uncompressed", "Zstd", "MetaInternal", "Lz4",
+  /// "OpenZL". Empty (default) keeps the built-in default, which is
+  /// MetaInternal internally and Zstd in OSS. Set it to pin a compressor
+  /// explicitly -- "Zstd" is how a table opts out of Zstrong/OpenZL.
+  static Entry<std::string> COMPRESSION_TYPE;
+
   static Entry<uint64_t> ZSTD_COMPRESSION_MIN_SIZE;
   static Entry<uint64_t> ZSTRONG_COMPRESSION_MIN_SIZE;
   static Entry<uint32_t> ZSTRONG_COMPRESSION_LEVEL;
