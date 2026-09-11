@@ -61,7 +61,9 @@ struct CppToType<Array<ELEMENT>> : public TypeTraits<TypeKind::ARRAY> {
 template <typename... T>
 struct CppToType<Row<T...>> : public TypeTraits<TypeKind::ROW> {
   static auto create() {
-    return ROW({CppToType<T>::create()...});
+    return ROW(
+        {std::string(FieldTraits<T>::name)...},
+        {CppToType<FieldType<T>>::create()...});
   }
 };
 
@@ -189,10 +191,11 @@ struct MaterializeType<Map<K, V>> {
 
 template <typename... T>
 struct MaterializeType<Row<T...>> {
-  using nullable_t =
-      std::tuple<std::optional<typename MaterializeType<T>::nullable_t>...>;
+  using nullable_t = std::tuple<
+      std::optional<typename MaterializeType<FieldType<T>>::nullable_t>...>;
 
-  using null_free_t = std::tuple<typename MaterializeType<T>::null_free_t...>;
+  using null_free_t =
+      std::tuple<typename MaterializeType<FieldType<T>>::null_free_t...>;
   static constexpr bool requiresMaterialization = true;
 };
 

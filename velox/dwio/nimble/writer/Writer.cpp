@@ -38,6 +38,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -83,6 +84,9 @@ class WriterContext : public FieldWriterContext {
       : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
         options_{std::move(options)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
+        stripeStatsWriteEnabled_{featureGate()->enabled(
+            FeatureGate::FeatureSet::kStripeStatsWrite,
+            /*defaultValue=*/false)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -96,6 +100,12 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
+  // is enabled. Resolved once at construction so it cannot flip mid-file.
+  bool stripeStatsWriteEnabled() const {
+    return stripeStatsWriteEnabled_;
   }
 
   bool hasStripeDictionaryConfig() const {
@@ -244,6 +254,7 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions options_;
   const bool hasStripeDictionaryConfig_;
+  const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -707,7 +718,9 @@ bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
       scalarKind == ScalarKind::Binary;
 }
 
-bool isSharedDictionaryVeloxType(const velox::Type& type) {
+bool isSharedDictionaryLogicalType(const velox::Type& type) {
+  // Enumerated exhaustively rather than defaulted, so adding a TypeKind is a
+  // compile-time decision about shared-dictionary eligibility.
   switch (type.kind()) {
     case velox::TypeKind::TINYINT:
     case velox::TypeKind::SMALLINT:
@@ -716,9 +729,23 @@ bool isSharedDictionaryVeloxType(const velox::Type& type) {
     case velox::TypeKind::VARCHAR:
     case velox::TypeKind::VARBINARY:
       return true;
-    default:
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
       return false;
   }
+  NIMBLE_UNREACHABLE(
+      fmt::format(
+          "Unknown Velox type kind: {}.", static_cast<int>(type.kind())));
 }
 
 template <typename T>
@@ -1404,7 +1431,7 @@ DictionaryConfigs collectDictionaryConfigs(
         "node {}.",
         valueNodeId);
     NIMBLE_USER_CHECK(
-        isSharedDictionaryVeloxType(*valueType.type()),
+        isSharedDictionaryLogicalType(*valueType.type()),
         "Shared dictionary column '{}' must resolve to an integer or string "
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
@@ -2121,24 +2148,37 @@ velox::VectorPtr Writer::storedDataInput(const velox::VectorPtr& input) const {
 }
 
 void Writer::writeMetadata() {
-  if (context_->options().metadata.empty()) {
+  const auto& optionsMetadata = context_->options().metadata;
+  const auto& metadataProvider = context_->options().metadataProvider;
+  // Called here rather than at open so it observes the finished file.
+  const auto providedMetadata = metadataProvider
+      ? metadataProvider()
+      : std::unordered_map<std::string, std::string>{};
+  if (optionsMetadata.empty() && providedMetadata.empty()) {
     return;
   }
-  auto& metadata = context_->options().metadata;
-  auto it = metadata.cbegin();
-  flatbuffers::FlatBufferBuilder builder(kInitialSchemaSectionSize);
-  auto entries =
-      builder.CreateVector<flatbuffers::Offset<serialization::MetadataEntry>>(
-          metadata.size(), [&builder, &it](size_t /* i */) {
-            auto entry = serialization::CreateMetadataEntry(
-                builder,
-                builder.CreateString(it->first),
-                builder.CreateString(it->second));
-            ++it;
-            return entry;
-          });
 
-  builder.Finish(serialization::CreateMetadata(builder, entries));
+  flatbuffers::FlatBufferBuilder builder(kInitialSchemaSectionSize);
+  std::vector<flatbuffers::Offset<serialization::MetadataEntry>> entries;
+  entries.reserve(optionsMetadata.size() + providedMetadata.size());
+  const auto appendEntry = [&builder, &entries](
+                               const auto& key, const auto& value) {
+    entries.push_back(
+        serialization::CreateMetadataEntry(
+            builder, builder.CreateString(key), builder.CreateString(value)));
+  };
+  for (const auto& [key, value] : optionsMetadata) {
+    // Skip the keys the provider overrode, so each key appears once.
+    if (!providedMetadata.contains(key)) {
+      appendEntry(key, value);
+    }
+  }
+  for (const auto& [key, value] : providedMetadata) {
+    appendEntry(key, value);
+  }
+
+  builder.Finish(
+      serialization::CreateMetadata(builder, builder.CreateVector(entries)));
   tabletWriter_->writeOptionalSection(
       std::string(kMetadataSection),
       {reinterpret_cast<const char*>(builder.GetBufferPointer()),
@@ -2146,6 +2186,7 @@ void Writer::writeMetadata() {
 }
 
 void Writer::writeColumnStats() {
+  context_->finalizeFileStatsFromStripes();
   // When enableStatsConsistencyCheck is true, verify that fileRawSize
   // (accumulated via RawSizeUtils) matches the root column statistics.
   if (context_->options().enableStatsConsistencyCheck) {
@@ -2161,6 +2202,14 @@ void Writer::writeColumnStats() {
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
+    if (context_->stripeStatsWriteEnabled()) {
+      VectorizedStripeStats stripeStats{
+          context_->stripeStats(), encodingMemoryPool_.get()};
+      Buffer stripeStatsBuffer{*encodingMemoryPool_};
+      tabletWriter_->writeOptionalSection(
+          std::string(kStripeStatsSection),
+          stripeStats.serialize(stripeStatsBuffer));
+    }
   } else {
     flatbuffers::FlatBufferBuilder builder;
     builder.Finish(
@@ -2404,9 +2453,6 @@ std::unique_ptr<velox::dwio::common::FileMetadata> Writer::close() {
     }
     writeStripe();
     rootWriter_->close();
-    if (context_->options().enableStatsCollection) {
-      context_->finalizeStatsCollectors();
-    }
 
     writeMetadata();
     if (context_->options().enableStatsCollection) {
@@ -3182,8 +3228,15 @@ bool Writer::writeStripe() {
   } else {
     writeStreams();
   }
-
   writeStripeDictionaryStreams();
+
+  // Must run after writeStripeDictionaryStreams(), which still charges the
+  // stripe's alphabet bytes to the stats collectors: snapshotting first would
+  // shift those bytes into the next stripe and drop them for the last one.
+  if (context_->options().enableStatsCollection &&
+      context_->stripeStatsWriteEnabled()) {
+    context_->finalizeStripeStatsCollectors();
+  }
 
   uint64_t stripeSize{0};
   {

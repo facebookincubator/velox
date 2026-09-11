@@ -2022,6 +2022,63 @@ TEST(SignatureBinderTest, tryResolveReturnTypeWithCoercions) {
   }
 }
 
+// Two DECIMALs of different precision or scale bound to one type variable, as
+// the comparison functions declare (`boolean(T, T)`). The type system
+// reconciles them through LongDecimalType::commonSuperType, so the pair binds
+// and the narrower argument is coerced.
+TEST(SignatureBinderTest, decimalPairOnOneTypeVariable) {
+  auto signature = exec::FunctionSignatureBuilder()
+                       .typeVariable("T")
+                       .returnType("boolean")
+                       .argumentType("T")
+                       .argumentType("T")
+                       .build();
+
+  // Same backing type, different scale.
+  {
+    std::vector<TypePtr> actualTypes{DECIMAL(18, 2), DECIMAL(18, 4)};
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
+    std::vector<Coercion> coercions;
+    ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+    // 16 integral digits and 4 fractional ones hold both.
+    VELOX_ASSERT_EQ_TYPES(coercions[0].type, DECIMAL(20, 4));
+    VELOX_ASSERT_EQ_TYPES(coercions[1].type, DECIMAL(20, 4));
+  }
+
+  // The variadic tail reconciles the same way.
+  {
+    auto variadic = exec::FunctionSignatureBuilder()
+                        .typeVariable("T")
+                        .returnType("boolean")
+                        .argumentType("T")
+                        .variableArity("T")
+                        .build();
+    std::vector<TypePtr> actualTypes{
+        DECIMAL(18, 2), DECIMAL(18, 4), DECIMAL(20, 1)};
+    exec::SignatureBinder binder(
+        *variadic, actualTypes, TypeCoercer::defaults());
+    std::vector<Coercion> coercions;
+    ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+    // 19 integral digits and 4 fractional ones hold all three.
+    VELOX_ASSERT_EQ_TYPES(coercions[0].type, DECIMAL(23, 4));
+    VELOX_ASSERT_EQ_TYPES(coercions[1].type, DECIMAL(23, 4));
+    VELOX_ASSERT_EQ_TYPES(coercions[2].type, DECIMAL(23, 4));
+  }
+
+  // Different backing types: DECIMAL(18, 2) is BIGINT, DECIMAL(38, 2) is
+  // HUGEINT, which is what a join sees as mismatched key kinds.
+  {
+    std::vector<TypePtr> actualTypes{DECIMAL(38, 2), DECIMAL(18, 2)};
+    exec::SignatureBinder binder(
+        *signature, actualTypes, TypeCoercer::defaults());
+    std::vector<Coercion> coercions;
+    ASSERT_TRUE(binder.tryBindWithCoercions(coercions));
+    ASSERT_EQ(coercions[0].type, nullptr);
+    VELOX_ASSERT_EQ_TYPES(coercions[1].type, DECIMAL(38, 2));
+  }
+}
+
 TEST(SignatureBinderTest, aggregateUnknownArgTieStaysAmbiguous) {
   // Aggregate mirror of the scalar cardinality(null) carve-out: aggregate and
   // window signatures don't model null-on-null, so an UNKNOWN argument matching

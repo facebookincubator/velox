@@ -86,7 +86,10 @@ function install_gflags {
   # Remove an older version if present.
   dnf remove -y gflags
   wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
-  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+  # Always Release. A Debug gflags installs as libgflags_debug.so instead of
+  # libgflags.so, so a binary linked against it will not start in an image that
+  # has the Release build. We never need to debug into gflags itself.
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DCMAKE_BUILD_TYPE=Release
   # CentOS 9 does not include ${INSTALL_PREFIX}/lib in the default ldconfig
   # search paths. Register it so that downstream builds (e.g. fbthrift's
   # thrift1 compiler) can find libgflags.so at runtime.

@@ -291,6 +291,69 @@ BENCHMARK(FSST_Encode_String_SortedStructuredTextMixedLengths, iterations) {
   }
 }
 
+void benchmarkEncodeBuffers(
+    uint32_t iterations,
+    uint32_t rowCount,
+    bool useBufferPool,
+    bool fallback) {
+  folly::BenchmarkSuspender suspender;
+  const auto corpus = makeFsstBenchmarkCorpus(rowCount);
+  Buffer buffer{*benchmarkPool()};
+  EncodingBufferPool bufferPool{benchmarkPool().get()};
+  auto options = fsstOptions();
+  if (fallback) {
+    options.fsstCompressionTargetRatio = 0;
+  }
+  const auto encode = [&] {
+    buffer.reset();
+    return EncodingFactory::encode<std::string_view>(
+        fsstPolicy(), corpus.values, buffer, options);
+  };
+  const std::string expected{encode()};
+  if (useBufferPool) {
+    options.encodingBufferPool = &bufferPool;
+  }
+  // Exclude the initial output and scratch allocations from the steady-state
+  // measurement. The baseline uses the same setup without a scratch pool.
+  auto encoded = encode();
+  suspender.dismiss();
+  while (iterations--) {
+    encoded = encode();
+    folly::doNotOptimizeAway(encoded);
+  }
+  suspender.rehire();
+  if (encoded != expected) {
+    throw std::runtime_error{"FSST buffer benchmark timed encode mismatch"};
+  }
+}
+
+BENCHMARK(FSST_Encode_SmallChunk, iterations) {
+  benchmarkEncodeBuffers(iterations, 64, false, false);
+}
+
+BENCHMARK_RELATIVE(FSST_Encode_SmallChunk_Pooled, iterations) {
+  benchmarkEncodeBuffers(iterations, 64, true, false);
+}
+
+BENCHMARK(FSST_Encode_LargeChunk, iterations) {
+  benchmarkEncodeBuffers(
+      iterations, kFsstBenchmarkDefaultRowCount, false, false);
+}
+
+BENCHMARK_RELATIVE(FSST_Encode_LargeChunk_Pooled, iterations) {
+  benchmarkEncodeBuffers(
+      iterations, kFsstBenchmarkDefaultRowCount, true, false);
+}
+
+BENCHMARK(FSST_Encode_TrivialFallback, iterations) {
+  benchmarkEncodeBuffers(
+      iterations, kFsstBenchmarkDefaultRowCount, false, true);
+}
+
+BENCHMARK_RELATIVE(FSST_Encode_TrivialFallback_Pooled, iterations) {
+  benchmarkEncodeBuffers(iterations, kFsstBenchmarkDefaultRowCount, true, true);
+}
+
 BENCHMARK(
     FSST_DecodeDense_String_SortedStructuredTextMixedLengths,
     iterations) {
@@ -325,15 +388,16 @@ BENCHMARK(FSST_SkipSeek_String_SortedStructuredTextMixedLengths, iterations) {
 }
 
 void printArtifactRatio() {
-  const FsstBenchmarkFixture fixture;
+  // Keep shared setup encode-only. Decode benchmarks validate their fixtures.
+  const auto corpus = makeFsstBenchmarkCorpus();
+  const auto encoded = encodeFsstFixture(corpus.values);
   fmt::print(
       "FSST full artifact: raw={} encoded={} encoded_to_raw={:.6f} "
       "raw_to_encoded={:.6f}\n",
-      fixture.corpus().rawBytes,
-      fixture.encoded().size(),
-      static_cast<double>(fixture.encoded().size()) / fixture.corpus().rawBytes,
-      static_cast<double>(fixture.corpus().rawBytes) /
-          fixture.encoded().size());
+      corpus.rawBytes,
+      encoded.size(),
+      static_cast<double>(encoded.size()) / corpus.rawBytes,
+      static_cast<double>(corpus.rawBytes) / encoded.size());
 }
 
 } // namespace
