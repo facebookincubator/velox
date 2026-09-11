@@ -160,6 +160,8 @@ VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
   options.allowSlice = false;
   options.nullRatio = nullRatio;
   options.containerHasNulls = nullRatio > 0;
+  options.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
   return options;
 }
 
@@ -1286,7 +1288,9 @@ std::string TableEvolutionFuzzer::makeNewName() {
 }
 
 TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
-  // All types that can be written to file directly.
+  // All types that can be written to file directly. TIMESTAMP has no widening
+  // target, so evolveType() and liftToType() leave it alone through their
+  // default arms; it is excluded from map keys by hasUnsupportedMapKey().
   static const std::vector<TypePtr> scalarTypes = {
       BOOLEAN(),
       TINYINT(),
@@ -1297,6 +1301,7 @@ TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
       DOUBLE(),
       VARCHAR(),
       VARBINARY(),
+      TIMESTAMP(),
   };
   return vectorFuzzer_.randType(scalarTypes, maxDepth);
 }
