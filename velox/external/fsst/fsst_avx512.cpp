@@ -17,6 +17,8 @@
 // You can contact the authors via the FSST source repository : https://github.com/cwida/fsst
 #include "libfsst.hpp"
 
+namespace nimble_fsst_internal {
+
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 
@@ -138,3 +140,5 @@ size_t fsst_compressAVX512(SymbolTable &symbolTable, u8* codeBase, u8* symbolBas
 #endif
    return processed;
 }
+
+} // namespace nimble_fsst_internal

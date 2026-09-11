@@ -150,6 +150,33 @@ class DecodedVector {
     return hasExtraNulls_;
   }
 
+  /// Returns true if nulls() returns storage owned by this DecodedVector.
+  ///
+  /// Owned storage is overwritten by the next decode() and freed when this
+  /// object is destroyed. When this returns false the pointer outlives this
+  /// DecodedVector, because it belongs to the decoded vector itself, so a
+  /// caller building a longer-lived view over it may borrow it rather than
+  /// copy it.
+  ///
+  /// Materializes the bitmap if that has not happened yet, so the answer never
+  /// depends on call order. That costs nothing a caller does not already owe:
+  /// nulls() caches its result, and the one path that does real work -- the
+  /// gather into top-level row order -- only runs when there are nulls to
+  /// gather, which is when the caller wanted the bitmap anyway.
+  ///
+  /// Pass the same 'rows' as decode(), exactly as for nulls().
+  bool ownsNulls(const SelectivityVector* rows = nullptr);
+
+  /// Returns true if indices() returns storage owned by this DecodedVector,
+  /// with the same lifetime and borrowing rules as ownsNulls().
+  ///
+  /// A single dictionary wrapping is adopted by pointer rather than composed,
+  /// so it reports false and can be borrowed. Composing two or more wrappings
+  /// materializes indices here and reports true. A flat or constant input
+  /// materializes on first access to indices(); this answers for that result
+  /// without forcing it.
+  bool ownsIndices() const;
+
   /// Returns the mapping from top-level rows to rows in the base vector or
   /// data() buffer.
   ///
@@ -446,9 +473,15 @@ class DecodedVector {
   static const std::vector<vector_size_t>& zeroIndices();
 
   bool indicesNotCopied() const {
-    return copiedIndices_.empty() || indices_ < copiedIndices_.data() ||
-        indices_ >= &copiedIndices_.back();
+    return copiedIndices_.empty() || indices_ != copiedIndices_.data();
   }
+
+  // Whether fillInIndices() would materialize into copiedIndices_ rather than
+  // hand back one of the shared static arrays. Only meaningful before
+  // indices() has run. Consulted by ownsIndices(), so a caller can ask whether
+  // it may borrow without paying for the materialization, and by
+  // fillInIndices() itself, so the rule lives in one place.
+  bool wouldCopyIndices() const;
 
   bool nullsNotCopied() const {
     return copiedNulls_.empty() || nulls_ != copiedNulls_.data();

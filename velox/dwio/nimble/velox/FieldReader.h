@@ -60,24 +60,27 @@ struct FieldReaderParams {
   /// Executor for parallel decoding of child fields.
   folly::Executor* decodeExecutor{nullptr};
 
-  /// Maximum number of parallel coroutine tasks scheduled by each field
-  /// reader. Children are grouped into this many batches, each decoded
-  /// sequentially within a single coroutine task. This is a per-reader limit;
-  /// the executor bounds the number of tasks that run concurrently across the
-  /// reader tree. 0 disables parallel decoding.
+  /// Maximum planned decode parallelism across the field reader tree. Nested
+  /// scalar stream counts determine how many child-field tasks to create. 0
+  /// disables parallel decoding.
   uint32_t maxDecodeParallelism{0};
 
-  /// Minimum number of child streams per parallel decode task. Ensures each
-  /// coroutine task has enough work to amortize threading overhead.
+  /// Minimum number of nested scalar streams per planned decode task. Ensures
+  /// each coroutine task has enough work to amortize threading overhead.
   uint32_t minStreamsPerDecodeTask{1};
+
+  /// Optional leaf pools distributed round-robin among independently decoded
+  /// row children and FlatMap-as-struct values. When provided, the pool count
+  /// must match maxDecodeParallelism. The caller must keep the pools alive
+  /// while returned vectors exist.
+  std::vector<velox::memory::MemoryPool*> decodePools;
 };
 
 class FieldReader {
  public:
   struct Options {
     folly::Executor* decodeExecutor{nullptr};
-    uint32_t maxDecodeParallelism{0};
-    uint32_t minStreamsPerDecodeTask{1};
+    uint32_t numDecodeTasks{1};
   };
 
   FieldReader(
@@ -130,16 +133,11 @@ class FieldReader {
       uint32_t count,
       velox::VectorPtr& output) const;
 
-  // Returns the number of decode tasks. A single task keeps decoding on the
-  // current executor; multiple tasks enable parallel child decoding.
-  uint32_t decodeTaskCount(uint32_t numChildren) const;
-
   velox::memory::MemoryPool* const pool_;
   const velox::TypePtr type_;
   Decoder* const decoder_;
   folly::Executor* const decodeExecutor_;
-  const uint32_t maxDecodeParallelism_;
-  const uint32_t minStreamsPerDecodeTask_;
+  const uint32_t numDecodeTasks_;
 };
 
 class FieldReaderFactory {

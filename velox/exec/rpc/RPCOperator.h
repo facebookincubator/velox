@@ -177,30 +177,80 @@ class RPCOperator : public exec::Operator {
   // the whole input against a busy backend.
   bool inputBufferIsFull() const;
 
-  /// Flush accumulated batch rows via function_->flushBatch().
-  /// Called when threshold is reached or at noMoreInput/drain time.
-  /// @param maxRows Maximum rows to flush. 0 means flush all.
   // Returns false when the flush did not happen: nothing accumulated, or the
   // tier had no free slot. Callers loop on this so they stop rather than spin.
   bool flushBatchRequests(int32_t maxRows = 0);
 
-  /// Build output RowVector from a ready batch (BATCH mode).
+  // Builds the output RowVector from a completed batch (BATCH mode).
   RowVectorPtr buildOutputFromReadyBatch(RPCState::ReadyBatch& readyBatch);
 
-  /// Common helper: build output vector from responses + input data lookup.
+  // Builds an output vector from RPC responses paired with the buffered
+  // input rows they came from. Shared by both streaming modes.
   RowVectorPtr buildOutputVector(
       const std::vector<RPCResponse>& responses,
       const std::vector<std::pair<int32_t, vector_size_t>>& locations);
 
-  /// Precompute output column projections from source type to output type.
-  /// Called once in initialize() to avoid repeated string lookups in
-  /// buildOutputVector().
+  // Precomputes output column projections from the source type to the output
+  // type. Called once in initialize() so buildOutputVector() does not repeat
+  // the name lookups per batch.
   void initOutputProjections();
 
   // Increment the per-error-kind counter for a single response.
   void recordErrorKind(velox::rpc::RPCErrorKind kind);
 
-  // The PER_ROW arm of drainPending(): dispatch buffered rows up to the
+  // getOutput() decomposed, mirroring the isBlocked() split below. The two
+  // modes differ in how they claim and shape output, not in how they report
+  // finishing or feed the controllers -- those are shared, so a change to one
+  // mode cannot silently diverge from the other.
+  RowVectorPtr outputPerRow();
+  RowVectorPtr outputBatch();
+
+  // Nothing left to emit: settle the drain if one is in progress. Always
+  // returns nullptr, so callers can `return finishIfDrained();`.
+  RowVectorPtr finishIfDrained();
+
+  // Feeds one drained unit's verdict to both controllers -- the per-driver
+  // window and the backend's shared cap. They must back off together: a
+  // rate-limit storm is low-latency, so the latency gradient alone is blind to
+  // it and only the error verdict makes the window shrink.
+  void recordCongestion(
+      AsyncRPCFunction::CongestionSignal signal,
+      const std::vector<int64_t>& roundTripTimesNs,
+      int64_t successUnits);
+
+  // isBlocked() decomposed. Each returns the reason to hand the driver; the
+  // try* helpers return nullopt when the state reports finished, which the
+  // streaming and finishing paths treat differently.
+  exec::BlockingReason blockedInPerRow(ContinueFuture* future);
+  exec::BlockingReason blockedInBatch(ContinueFuture* future);
+  std::optional<exec::BlockingReason> tryClaimOrParkOnRow(
+      ContinueFuture* future);
+  std::optional<exec::BlockingReason> tryClaimOrParkOnBatch(
+      ContinueFuture* future,
+      bool isBackpressure);
+  // Asks the backend whether it can take work and parks on the answer.
+  // admitOrWait() decides and enrols under one lock, so there is no window in
+  // which the caller is neither admitted nor waiting on anything.
+  exec::BlockingReason parkOnTierCapacity(ContinueFuture* future);
+
+  // Hands 'waitFuture' to the driver and starts a block-wait measurement.
+  exec::BlockingReason
+  park(ContinueFuture* future, ContinueFuture waitFuture, bool isBackpressure);
+
+  // Closes the measurement started by the last park().
+  void endBlockWait();
+
+  // Takes a completed batch as this operator's claimed output, logging first
+  // if it carried an error.
+  void claimBatch(RPCState::ReadyBatch batch);
+
+  // True when this driver holds work that admission will not let it dispatch:
+  // buffered rows in PER_ROW, an unflushable chunk in BATCH. isBlocked() parks
+  // on it and needsInput() refuses more input because of it, so both modes
+  // read the same predicate rather than each spelling out its own.
+  bool hasUndispatchableWork() const;
+
+  // PER_ROW admission control: dispatch buffered rows up to the
   // available headroom = min(per-driver window headroom, this backend's
   // rate-limiter headroom). Called from addInput()/getOutput()/isBlocked() so a
   // whole input vector is dripped at the sustainable rate instead of blasted.
@@ -211,7 +261,7 @@ class RPCOperator : public exec::Operator {
     return pendingCursor_ < pendingNumRows_;
   }
 
-  /// Record runtime stats into operator stats. Called from close().
+  // Records the RPC runtime stats into operator stats. Called from close().
   void recordRuntimeStats();
 
   std::shared_ptr<const core::RPCNode> rpcNode_;

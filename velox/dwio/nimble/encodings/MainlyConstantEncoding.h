@@ -109,21 +109,21 @@ class MainlyConstantEncodingBase
 
     // Find most common item count.
     const auto& uniqueCounts = statistics.uniqueCounts().value();
-    const auto maxUniqueCount = mainlyConstantCommonValue(uniqueCounts);
+    const auto maxUniqueCount = uniqueCounts.mostFrequent().value();
     // Deduce uncommon values count
-    const uint64_t uncommonCount = rowCount - maxUniqueCount->second;
+    const uint64_t uncommonCount = rowCount - maxUniqueCount.second;
     // Uncommon values (sparse bool) bitmap will have index per value,
     // stored bit packed.
     const uint64_t isCommonEncodingSize =
         SparseBoolEncoding::estimateSize(rowCount, uncommonCount, options);
 
     if constexpr (isStringType<physicalType>()) {
-      const uint64_t commonValueSize = maxUniqueCount->first.size();
+      const uint64_t commonValueSize = maxUniqueCount.first.size();
       uint64_t uncommonMinLength = 0;
       uint64_t uncommonMaxLength = 0;
       bool hasUncommonValue{false};
       for (const auto& uniqueCount : uniqueCounts) {
-        if (uniqueCount.first == maxUniqueCount->first) {
+        if (uniqueCount.first == maxUniqueCount.first) {
           continue;
         }
 
@@ -555,21 +555,6 @@ class MainlyConstantEncodingBase
   }
 
  protected:
-  template <typename UniqueCounts>
-  static auto mainlyConstantCommonValue(const UniqueCounts& uniqueCounts) {
-    // Select the highest-frequency value. Break count ties by the smaller value
-    // so absl::flat_hash_map iteration order cannot affect estimates or output.
-    return std::max_element(
-        uniqueCounts.cbegin(),
-        uniqueCounts.cend(),
-        [](const auto& left, const auto& right) {
-          if (left.second != right.second) {
-            return left.second < right.second;
-          }
-          return left.first > right.first;
-        });
-  }
-
   // Encode-time child streams: isCommon spans all input rows, while
   // otherValues contains only rows that differ from the common value.
   struct ChildStreams {
@@ -921,15 +906,14 @@ std::string_view MainlyConstantEncoding<T>::encode(
   }
 
   const auto& uniqueCounts = selection.statistics().uniqueCounts().value();
-  const auto commonElement =
-      MainlyConstantEncodingBase<T>::mainlyConstantCommonValue(uniqueCounts);
+  const auto commonElement = uniqueCounts.mostFrequent().value();
 
   const uint32_t entryCount = values.size();
 
   auto* pool = &buffer.getMemoryPool();
-  physicalType commonValue = commonElement->first;
+  physicalType commonValue = commonElement.first;
   auto childStreams = MainlyConstantEncodingBase<T>::prepareChildStreams(
-      pool, values, commonValue, commonElement->second);
+      pool, values, commonValue, commonElement.second);
 
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   std::string_view serializedIsCommon = selection.template encodeNested<bool>(

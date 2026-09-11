@@ -24,219 +24,67 @@
 using namespace ::testing;
 
 namespace facebook::velox::dwrf {
-TEST(TestEncodingIter, Ctor) {
+TEST(TestEncodingIter, ctor) {
+  auto collectNodes =
+      [](const proto::StripeFooter& footer,
+         const std::vector<proto::StripeEncryptionGroup>& encryptionGroups) {
+        std::vector<uint32_t> nodes;
+        for (auto iter = EncodingIter::begin(footer, encryptionGroups),
+                  end = EncodingIter::end(footer, encryptionGroups);
+             iter != end;
+             ++iter) {
+          nodes.push_back(iter->node());
+        }
+        return nodes;
+      };
+
   proto::StripeFooter footer;
   std::vector<proto::StripeEncryptionGroup> encryptionGroups;
   // footer []
   // encryption groups []
-  {
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cbegin(),
-        footer.encoding().cend()};
-    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
-    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // A valid end iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cend(),
-        footer.encoding().cend()};
-    EXPECT_EQ(footer.encoding().cend(), iter.current_);
-    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
-  }
-  footer.add_encoding();
-  // footer [e]
+  EXPECT_THAT(collectNodes(footer, encryptionGroups), IsEmpty());
+
+  footer.add_encoding()->set_node(1);
+  // footer [e(node=1)]
   // encryption groups []
-  {
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cbegin(),
-        footer.encoding().cend()};
-    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
-    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // A valid end iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cend(),
-        footer.encoding().cend()};
-    EXPECT_EQ(footer.encoding().cend(), iter.current_);
-    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
-  }
-  proto::StripeEncryptionGroup group1;
-  proto::StripeEncryptionGroup group2;
-  encryptionGroups.push_back(group1);
-  encryptionGroups.push_back(group2);
-  // footer [e]
+  EXPECT_THAT(collectNodes(footer, encryptionGroups), ElementsAre(1));
+
+  encryptionGroups.resize(2);
+  // footer [e(node=1)]
   // encryption groups [[], []]
-  {
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cbegin(),
-        footer.encoding().cend()};
-    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
-    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // A valid end iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        1,
-        encryptionGroups.at(1).encoding().cend(),
-        encryptionGroups.at(1).encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // An adjusted end iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cend(),
-        footer.encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  encryptionGroups[1].add_encoding();
-  // footer [e]
-  // encryption groups [[], [e]]
-  {
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cbegin(),
-        footer.encoding().cend()};
-    EXPECT_EQ(footer.encoding().cbegin(), iter.current_);
-    EXPECT_EQ(footer.encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // An adjusted iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cend(),
-        footer.encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // An adjusted iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        0,
-        encryptionGroups.at(0).encoding().cbegin(),
-        encryptionGroups.at(0).encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // A valid end iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        1,
-        encryptionGroups.at(1).encoding().cend(),
-        encryptionGroups.at(1).encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  footer.Clear();
+  EXPECT_THAT(collectNodes(footer, encryptionGroups), ElementsAre(1));
+
+  encryptionGroups[1].add_encoding()->set_node(2);
+  // footer [e(node=1)]
+  // encryption groups [[], [e(node=2)]]
+  EXPECT_THAT(collectNodes(footer, encryptionGroups), ElementsAre(1, 2));
+
+  footer.clear_encoding();
   // footer []
-  // encryption groups [[], [e]]
-  {
-    // An adjusted iterator further back.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cbegin(),
-        footer.encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // An adjusted iterator further back.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cend(),
-        footer.encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cbegin(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  encryptionGroups.at(1).Clear();
+  // encryption groups [[], [e(node=2)]]
+  EXPECT_THAT(collectNodes(footer, encryptionGroups), ElementsAre(2));
+
+  encryptionGroups[1].clear_encoding();
   // footer []
   // encryption groups [[], []]
-  {
-    // An adjusted end iterator.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        0,
-        encryptionGroups.at(0).encoding().cend(),
-        encryptionGroups.at(0).encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
-  {
-    // An adjusted end iterator further back.
-    EncodingIter iter{
-        footer,
-        encryptionGroups,
-        -1,
-        footer.encoding().cend(),
-        footer.encoding().cend()};
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.current_);
-    EXPECT_EQ(encryptionGroups.at(1).encoding().cend(), iter.currentEnd_);
-  }
+  EXPECT_THAT(collectNodes(footer, encryptionGroups), IsEmpty());
 }
 
-// The Ctor test has covered most iterator adjustments. Suffices
-// to then just sanity test pass-in values.
-TEST(TestEncodingIter, EncodingIterBeginAndEnd) {
+TEST(TestEncodingIter, encodingIterBeginAndEnd) {
   proto::StripeFooter footer;
-  footer.add_encoding();
-  std::vector<proto::StripeEncryptionGroup> encryptionGroups;
-  proto::StripeEncryptionGroup group1;
-  group1.add_encoding();
-  proto::StripeEncryptionGroup group2;
-  group2.add_encoding();
-  group2.add_encoding();
-  encryptionGroups.push_back(group1);
-  encryptionGroups.push_back(group2);
-  EncodingIter begin{
-      footer,
-      encryptionGroups,
-      -1,
-      footer.encoding().cbegin(),
-      footer.encoding().cend()};
-  EXPECT_EQ(begin, EncodingIter::begin(footer, encryptionGroups));
-  EncodingIter end{
-      footer,
-      encryptionGroups,
-      1,
-      encryptionGroups.at(1).encoding().cend(),
-      encryptionGroups.at(1).encoding().cend()};
-  EXPECT_EQ(end, EncodingIter::end(footer, encryptionGroups));
+  footer.add_encoding()->set_node(1);
+  std::vector<proto::StripeEncryptionGroup> encryptionGroups(2);
+  encryptionGroups[0].add_encoding()->set_node(2);
+  encryptionGroups[1].add_encoding()->set_node(3);
+
+  auto iter = EncodingIter::begin(footer, encryptionGroups);
+  const auto end = EncodingIter::end(footer, encryptionGroups);
+  std::vector<uint32_t> nodes;
+  for (; iter != end; ++iter) {
+    nodes.push_back(iter->node());
+  }
+  EXPECT_THAT(nodes, ElementsAre(1, 2, 3));
+  EXPECT_EQ(iter, end);
 }
 
 namespace {
