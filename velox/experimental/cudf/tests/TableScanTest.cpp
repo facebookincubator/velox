@@ -567,7 +567,7 @@ TEST_F(TableScanTest, filterPushdown) {
           .endTableScan()
           .planNode(),
       filePaths,
-      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
   auto tableScanStats = getTableScanStats(task);
   // EXPECT_EQ(tableScanStats.rawInputRows, 10'000);
@@ -589,7 +589,7 @@ TEST_F(TableScanTest, filterPushdown) {
           .endTableScan()
           .planNode(),
       filePaths,
-      "SELECT c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
   // TODO: zero column non-empty table is not possible in cudf, need to implement.
   // Do the same for count, no columns projected out.
@@ -604,7 +604,7 @@ TEST_F(TableScanTest, filterPushdown) {
           .singleAggregation({}, {"sum(1)"})
           .planNode(),
       filePaths,
-      "SELECT count(*) FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT count(*) FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
   // Do the same for count, no filter, no projections.
   assignments.clear();
