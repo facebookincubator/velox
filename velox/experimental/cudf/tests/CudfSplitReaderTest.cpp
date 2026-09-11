@@ -46,8 +46,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
   }
 
  protected:
-  void prepareSplitInternal(
-      dwio::common::RuntimeStats& runtimeStats) override {
+  void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override {
     fileMetaDatas();
     // Metadata caching must not rebuild the filter during one preparation.
     fileMetaDatas();
