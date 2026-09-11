@@ -2181,11 +2181,8 @@ Status writeArrowSerialize(
       ctx->getScratchData<ParquetCType>(array.length(), &buffer));
 
   SerializeFunctor<ParquetType, ArrowType> functor;
-  // Backport apache/arrow#48692: all-null arrays may have no values buffer.
-  if (array.null_count() != array.length()) {
-    RETURN_NOT_OK(
-        functor.serialize(checked_cast<const ArrayType&>(array), ctx, buffer));
-  }
+  RETURN_NOT_OK(
+      functor.serialize(checked_cast<const ArrayType&>(array), ctx, buffer));
   bool noNulls =
       writer->descr()->schemaNode()->isRequired() || (array.null_count() == 0);
   if (!maybeParentNulls && noNulls) {

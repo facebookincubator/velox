@@ -895,11 +895,17 @@ void exportValues(
   // that case. Handle this before gathering so a changed selection cannot
   // dereference the missing Velox values buffer.
   if (!vec.values()) {
+    VELOX_CHECK_EQ(
+        out.null_count,
+        out.length,
+        "Missing values buffer is only supported for all-null vectors.");
     auto values = type->isBoolean()
         ? AlignedBuffer::allocate<bool>(out.length, pool)
         : AlignedBuffer::allocate<uint8_t>(
-              out.length * getArrowElementSize(type, options), pool);
-    holder.setBuffer(1, std::move(values));
+              checkedMultiply<size_t>(
+                  out.length, getArrowElementSize(type, options)),
+              pool);
+    holder.setBuffer(1, values);
     return;
   }
 
