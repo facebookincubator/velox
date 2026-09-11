@@ -39,18 +39,16 @@ namespace common {
 /// is passed to SelectiveColumnReaders at construction.  This is
 /// mutable by readers to reflect filter order and other adaptations.
 ///
-/// One scan owns a spec and is the only thread that adds children, reorders
-/// them and sets filters. That thread adds children mid-scan, when a split is
-/// the first to reference a column outside the projection. A preloaded split
-/// builds its own spec on the preloading thread and hands it over whole, so
-/// there is one owner at a time.
+/// Not thread safe. One scan owns a spec and alone adds children, reorders
+/// them and sets filters; a preloaded split builds its own and hands it over
+/// whole. Only 'stableChildren()' is called from another thread, by read-ahead
+/// building the next reader tree, which also writes 'subscript_' on the
+/// children it lists.
 ///
-/// 'stableChildren()' is the one accessor another thread may call, to build the
-/// next reader tree while the owner reads; that tree construction also sets
-/// 'subscript_' on the children the snapshot lists. Only the
-/// add-versus-snapshot pairing is synchronized, by 'mutex_'. 'children()',
-/// 'childByName()' and 'hasFilter()' read 'children_' and 'childByFieldName_'
-/// unlocked, so calling any of them concurrently with an add is a data race.
+/// Adding a child needs exclusive access. 'mutex_' only keeps the snapshot
+/// container consistent: a child is published before its caller configures it,
+/// and 'children()', 'childByName()' and 'hasFilter()' read unlocked. The
+/// mid-scan add runs during split preparation, which never overlaps a snapshot.
 class ScanSpec {
  public:
   enum class ColumnType : int8_t {
@@ -198,12 +196,9 @@ class ScanSpec {
   using StableChildren =
       std::shared_ptr<const std::vector<std::shared_ptr<ScanSpec>>>;
 
-  /// Returns 'children' in a stable order. May be used for parallel
-  /// construction and read-ahead of reader trees while the main user
-  /// of 'this' is running. 'children_' may be reordered while running
-  /// but the tree being constructed must see a single, unchanging
-  /// order. A snapshot never changes; a child added later appears at the end
-  /// of a later one.
+  /// Returns 'children' in an order that never changes, for building a reader
+  /// tree while a running scan reorders 'children_'. A child added later
+  /// appears at the end of a later snapshot.
   StableChildren stableChildren();
 
   /// Returns a read sequence number. This can b used for tagging
@@ -217,12 +212,8 @@ class ScanSpec {
   uint64_t newRead();
 
   /// Returns the ScanSpec corresponding to 'name'. Creates it if needed without
-  /// any intermediate level.
-  ///
-  /// Must be called on the owning thread. Taking 'mutex_' only keeps an add
-  /// from interleaving with 'stableChildren()'; it does not make concurrent
-  /// adds safe, since a caller finishes the child after this returns, as
-  /// 'addField' does when it sets 'projectOut_' and 'channel_'.
+  /// any intermediate level. Requires exclusive access: the child is reachable
+  /// through 'stableChildren()' before the caller configures it.
   ScanSpec* getOrCreateChild(const std::string& name);
 
   /// Returns the ScanSpec corresponding to 'subfield'. Creates it if
@@ -506,9 +497,8 @@ class ScanSpec {
 
   bool disableStatsBasedFilterReorder_{false};
 
-  // Orders an add in 'getOrCreateChild' against the snapshot in
-  // 'stableChildren()', which is the only cross-thread pairing. Guards nothing
-  // else: 'reorder()' sorts 'children_' and the accessors read it unlocked.
+  // Keeps 'stableOrder_' and 'stableChildren_' consistent across an add.
+  // Guards nothing else.
   std::mutex mutex_;
 
   // Number of times read is called on the corresponding reader. This
@@ -554,8 +544,7 @@ class ScanSpec {
   std::vector<std::shared_ptr<ScanSpec>> children_;
 
   // Children in the order they were added, never reordered. Append-only, so an
-  // earlier snapshot is a prefix of a later one. Not handed out;
-  // 'stableChildren_' publishes a copy.
+  // earlier snapshot is a prefix of a later one.
   std::vector<std::shared_ptr<ScanSpec>> stableOrder_;
 
   // Snapshot of 'stableOrder_' handed to reader trees. Never mutated once
