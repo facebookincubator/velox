@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/TokenProvider.h"
 #include "velox/core/QueryCtx.h"
 
 namespace facebook::velox::core::test {
@@ -137,4 +138,55 @@ TEST_F(QueryCtxTest, builderReleaseCallbacks) {
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "builder_test_query_id");
 }
+
+namespace {
+
+/// Minimal TokenProvider stub for testing routing logic.
+class TestTokenProvider : public filesystems::TokenProvider {
+ public:
+  bool equals(const TokenProvider& other) const override {
+    return this == &other;
+  }
+  size_t hash() const override {
+    return reinterpret_cast<size_t>(this);
+  }
+  std::shared_ptr<filesystems::AccessToken> getToken(
+      const filesystems::AccessTokenKey& /*key*/) const override {
+    return nullptr;
+  }
+};
+
+} // namespace
+
+TEST_F(QueryCtxTest, fsTokenProviderRouting) {
+  auto queryLevelProvider = std::make_shared<TestTokenProvider>();
+  auto nodeProvider = std::make_shared<TestTokenProvider>();
+
+  auto queryCtx = QueryCtx::Builder()
+                      .queryId("test_query_id")
+                      .tokenProvider(queryLevelProvider)
+                      .build();
+
+  // No planNodeId (default "") returns the query-level provider.
+  ASSERT_EQ(queryCtx->fsTokenProvider(), queryLevelProvider);
+  ASSERT_EQ(queryCtx->fsTokenProvider(""), queryLevelProvider);
+
+  // Register a per-planNode provider and verify it is returned for that node.
+  queryCtx->setFsTokenProvider("scan-1", nodeProvider);
+  ASSERT_EQ(queryCtx->fsTokenProvider("scan-1"), nodeProvider);
+
+  // Once per-node providers exist, an unregistered planNodeId is a setup error.
+  VELOX_ASSERT_THROW(
+      queryCtx->fsTokenProvider("scan-2"),
+      "No token provider registered for planNodeId: scan-2");
+}
+
+TEST_F(QueryCtxTest, fsTokenProviderNullWhenUnset) {
+  auto queryCtx = QueryCtx::Builder().queryId("test_query_id").build();
+
+  // No provider set — both overloads return nullptr.
+  ASSERT_EQ(queryCtx->fsTokenProvider(), nullptr);
+  ASSERT_EQ(queryCtx->fsTokenProvider("scan-1"), nullptr);
+}
+
 } // namespace facebook::velox::core::test
