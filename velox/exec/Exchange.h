@@ -105,8 +105,8 @@ class Exchange : public SourceOperator {
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
-  /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to ExchangeClient.
+  // True if this operator is responsible for fetching splits from the Task
+  // and passing these to ExchangeClient.
   const bool processSplits_;
 
   const int driverId_;

@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include <folly/container/F14Map.h>
 #include <folly/dynamic.h>
@@ -24,8 +25,9 @@
 
 namespace facebook::velox::exec {
 
-/// Control plane of a task's receive side for one exchange transport. Owns the
-/// set of producers a pipeline reads from and is what Task holds and drives.
+/// Control-plane interface for a task's receive side over one exchange
+/// transport. Implementations own the set of producers a pipeline reads from
+/// and provide the operations by which Task drives them.
 ///
 /// The data plane is deliberately absent: page payloads are transport specific
 /// (in-memory serialized pages, GPU buffers, ...), so there is nothing shared
@@ -43,7 +45,7 @@ class ExchangeClient {
   /// If close() has been called already, notifies the upstream task that its
   /// data is no longer needed. Repeated calls with the same 'remoteTaskId' are
   /// ignored.
-  virtual void addRemoteTaskId(const std::string& remoteTaskId) = 0;
+  virtual void addRemoteTaskId(std::string_view remoteTaskId) = 0;
 
   /// Signals that no more calls to addRemoteTaskId() will follow.
   virtual void noMoreRemoteTasks() = 0;
@@ -54,7 +56,7 @@ class ExchangeClient {
   /// Returns runtime statistics aggregated across all producers.
   /// Implementations are expected to report background CPU time as a metric
   /// named Operator::kBackgroundCpuTimeNanos.
-  virtual folly::F14FastMap<std::string, RuntimeMetric> stats() = 0;
+  virtual folly::F14FastMap<std::string, RuntimeMetric> stats() const = 0;
 
   /// Returns a human-readable description of the producers, for logging.
   virtual std::string toString() const = 0;
