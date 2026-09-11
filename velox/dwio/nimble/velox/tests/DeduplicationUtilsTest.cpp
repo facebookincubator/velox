@@ -47,7 +47,7 @@ class DeduplicationUtilsTests : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_F(DeduplicationUtilsTests, TestOrdered) {
+TEST_F(DeduplicationUtilsTests, testOrdered) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto keys = vectorMaker.flatVector<int32_t>({1, 2, 1, 2});
   auto vals = vectorMaker.flatVector<float>({0.3, 0.4, 0.3, 0.4});
@@ -55,7 +55,7 @@ TEST_F(DeduplicationUtilsTests, TestOrdered) {
   EXPECT_TRUE(nimble::DeduplicationUtils::CompareMapsAtIndex(*map, 0, *map, 1));
 }
 
-TEST_F(DeduplicationUtilsTests, TestDedupUnordered) {
+TEST_F(DeduplicationUtilsTests, testDedupUnordered) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto keys = vectorMaker.flatVector<int32_t>({1, 2, 2, 1});
   auto vals = vectorMaker.flatVector<float>({0.3, 0.4, 0.4, 0.3});
@@ -63,7 +63,7 @@ TEST_F(DeduplicationUtilsTests, TestDedupUnordered) {
   EXPECT_TRUE(nimble::DeduplicationUtils::CompareMapsAtIndex(*map, 0, *map, 1));
 }
 
-TEST_F(DeduplicationUtilsTests, TestUnorderedNotMatched) {
+TEST_F(DeduplicationUtilsTests, testUnorderedNotMatched) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto keys = vectorMaker.flatVector<int32_t>({1, 2, 2, 1});
   auto vals = vectorMaker.flatVector<float>({0.3, 0.4, 0.3, 0.4});
@@ -72,7 +72,7 @@ TEST_F(DeduplicationUtilsTests, TestUnorderedNotMatched) {
       nimble::DeduplicationUtils::CompareMapsAtIndex(*map, 0, *map, 1));
 }
 
-TEST_F(DeduplicationUtilsTests, TestLengthNotMatched) {
+TEST_F(DeduplicationUtilsTests, testLengthNotMatched) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto keys = vectorMaker.flatVector<int32_t>({1, 2, 2});
   auto vals = vectorMaker.flatVector<float>({0.3, 0.4, 0.3});
@@ -81,7 +81,7 @@ TEST_F(DeduplicationUtilsTests, TestLengthNotMatched) {
       nimble::DeduplicationUtils::CompareMapsAtIndex(*map, 0, *map, 1));
 }
 
-TEST_F(DeduplicationUtilsTests, TestNullNotMatched) {
+TEST_F(DeduplicationUtilsTests, testNullNotMatched) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto keys = vectorMaker.flatVector<int32_t>({1, 2});
   auto vals = vectorMaker.flatVector<float>({0.3, 0.4});

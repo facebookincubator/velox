@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <random>
 #include <span>
 #include <vector>
 
@@ -100,7 +102,7 @@ class ColumnStatisticsTests : public ::testing::Test {};
 
 // Base ColumnStatistics Tests
 
-TEST_F(ColumnStatisticsTests, DefaultStatistics) {
+TEST_F(ColumnStatisticsTests, defaultStatistics) {
   // Default constructor.
   {
     ColumnStatistics stat;
@@ -140,7 +142,7 @@ TEST_F(ColumnStatisticsTests, DefaultStatistics) {
   }
 }
 
-TEST_F(ColumnStatisticsTests, IntegralStatistics) {
+TEST_F(ColumnStatisticsTests, integralStatistics) {
   {
     IntegralStatistics stat;
     EXPECT_EQ(stat.getValueCount(), 0);
@@ -182,7 +184,7 @@ TEST_F(ColumnStatisticsTests, IntegralStatistics) {
   }
 }
 
-TEST_F(ColumnStatisticsTests, FloatingPointStatistics) {
+TEST_F(ColumnStatisticsTests, floatingPointStatistics) {
   {
     FloatingPointStatistics stat;
     EXPECT_EQ(stat.getValueCount(), 0);
@@ -226,7 +228,7 @@ TEST_F(ColumnStatisticsTests, FloatingPointStatistics) {
 
 // StringStatistics Tests
 
-TEST_F(ColumnStatisticsTests, StringStatisticsDefaultConstructor) {
+TEST_F(ColumnStatisticsTests, stringStatisticsDefaultConstructor) {
   {
     StringStatistics stat;
     EXPECT_EQ(stat.getValueCount(), 0);
@@ -277,7 +279,35 @@ TEST_F(ColumnStatisticsTests, StringStatisticsDefaultConstructor) {
   }
 }
 
-TEST_F(ColumnStatisticsTests, DeduplicatedColumnStatistics) {
+TEST_F(ColumnStatisticsTests, clonePreservesScalarStatistics) {
+  IntegralStatistics integralStat(100, 10, 1000, 500, -50, 150);
+  auto integralClone = integralStat.clone();
+  auto* clonedIntegralStat = integralClone->as<IntegralStatistics>();
+  ASSERT_NE(clonedIntegralStat, nullptr);
+  EXPECT_EQ(clonedIntegralStat->getValueCount(), 100);
+  EXPECT_EQ(clonedIntegralStat->getNullCount(), 10);
+  EXPECT_EQ(clonedIntegralStat->getLogicalSize(), 1000);
+  EXPECT_EQ(clonedIntegralStat->getPhysicalSize(), 500);
+  EXPECT_EQ(clonedIntegralStat->getMin(), -50);
+  EXPECT_EQ(clonedIntegralStat->getMax(), 150);
+
+  FloatingPointStatistics floatingPointStat(20, 2, 200, 80, -1.5, 9.5);
+  auto floatingPointClone = floatingPointStat.clone();
+  auto* clonedFloatingPointStat =
+      floatingPointClone->as<FloatingPointStatistics>();
+  ASSERT_NE(clonedFloatingPointStat, nullptr);
+  EXPECT_EQ(clonedFloatingPointStat->getMin(), -1.5);
+  EXPECT_EQ(clonedFloatingPointStat->getMax(), 9.5);
+
+  StringStatistics stringStat(3, 0, 12, 8, "apple", "pear");
+  auto stringClone = stringStat.clone();
+  auto* clonedStringStat = stringClone->as<StringStatistics>();
+  ASSERT_NE(clonedStringStat, nullptr);
+  EXPECT_EQ(clonedStringStat->getMin(), "apple");
+  EXPECT_EQ(clonedStringStat->getMax(), "pear");
+}
+
+TEST_F(ColumnStatisticsTests, deduplicatedColumnStatistics) {
   {
     DeduplicatedColumnStatistics stat;
     EXPECT_EQ(stat.getType(), StatType::DEDUPLICATED);
@@ -299,7 +329,7 @@ TEST_F(ColumnStatisticsTests, DeduplicatedColumnStatistics) {
 
 // toCommonStatistics Tests
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsIntegral) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsIntegral) {
   IntegralStatistics stat(100, 10, 1000, 500, -50, 150);
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -323,7 +353,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsIntegral) {
   EXPECT_EQ(intStats->getSum(), std::nullopt);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsIntegralNoMinMax) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsIntegralNoMinMax) {
   IntegralStatistics stat(50, 0, 400, 200, std::nullopt, std::nullopt);
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -338,7 +368,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsIntegralNoMinMax) {
   EXPECT_EQ(intStats->getMaximum(), std::nullopt);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsFloatingPoint) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsFloatingPoint) {
   FloatingPointStatistics stat(200, 5, 2000, 800, -1.5, 99.9);
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -358,7 +388,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsFloatingPoint) {
   EXPECT_EQ(fpStats->getSum(), std::nullopt);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsFloatingPointNoMinMax) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsFloatingPointNoMinMax) {
   FloatingPointStatistics stat(30, 0, 240, 120, std::nullopt, std::nullopt);
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -373,7 +403,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsFloatingPointNoMinMax) {
   EXPECT_EQ(fpStats->getMaximum(), std::nullopt);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsString) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsString) {
   StringStatistics stat(300, 20, 3000, 1500, "apple", "zebra");
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -393,7 +423,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsString) {
   EXPECT_EQ(strStats->getTotalLength(), std::nullopt);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsStringNoMinMax) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsStringNoMinMax) {
   StringStatistics stat(10, 0, 80, 40, std::nullopt, std::nullopt);
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -408,7 +438,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsStringNoMinMax) {
   EXPECT_EQ(strStats->getMaximum(), std::nullopt);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsDefault) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsDefault) {
   ColumnStatistics stat(500, 0, 4000, 2000);
   auto common = stat.toCommonStatistics();
   ASSERT_NE(common, nullptr);
@@ -434,7 +464,7 @@ TEST_F(ColumnStatisticsTests, ToCommonStatisticsDefault) {
       nullptr);
 }
 
-TEST_F(ColumnStatisticsTests, ToCommonStatisticsDeduplicated) {
+TEST_F(ColumnStatisticsTests, toCommonStatisticsDeduplicated) {
   IntegralStatistics baseStat(100, 10, 1000, 500, -50, 150);
   DeduplicatedColumnStatistics stat(&baseStat, 80, 800);
   // DEDUPLICATED falls through to the base ColumnStatistics path.
@@ -456,7 +486,7 @@ class StatisticsCollectorTests : public ::testing::Test {};
 
 // Base StatisticsCollector Tests
 
-TEST_F(StatisticsCollectorTests, Ctor) {
+TEST_F(StatisticsCollectorTests, ctor) {
   StatisticsCollector collector;
   EXPECT_EQ(collector.getValueCount(), 0);
   EXPECT_EQ(collector.getNullCount(), 0);
@@ -465,7 +495,7 @@ TEST_F(StatisticsCollectorTests, Ctor) {
   EXPECT_EQ(collector.getType(), StatType::DEFAULT);
 }
 
-TEST_F(StatisticsCollectorTests, AddCounts) {
+TEST_F(StatisticsCollectorTests, addCounts) {
   StatisticsCollector collector;
   collector.addCounts(100, 10);
   EXPECT_EQ(collector.getValueCount(), 90); // nonNullCount = 100 - 10
@@ -476,7 +506,7 @@ TEST_F(StatisticsCollectorTests, AddCounts) {
   EXPECT_EQ(collector.getNullCount(), 15);
 }
 
-TEST_F(StatisticsCollectorTests, AddLogicalSize) {
+TEST_F(StatisticsCollectorTests, addLogicalSize) {
   StatisticsCollector collector;
   collector.addLogicalSize(1000);
   EXPECT_EQ(collector.getLogicalSize(), 1000);
@@ -485,7 +515,7 @@ TEST_F(StatisticsCollectorTests, AddLogicalSize) {
   EXPECT_EQ(collector.getLogicalSize(), 1500);
 }
 
-TEST_F(StatisticsCollectorTests, AddPhysicalSize) {
+TEST_F(StatisticsCollectorTests, addPhysicalSize) {
   StatisticsCollector collector;
   collector.addPhysicalSize(500);
   EXPECT_EQ(collector.getPhysicalSize(), 500);
@@ -494,7 +524,7 @@ TEST_F(StatisticsCollectorTests, AddPhysicalSize) {
   EXPECT_EQ(collector.getPhysicalSize(), 750);
 }
 
-TEST_F(StatisticsCollectorTests, AddBoolValues) {
+TEST_F(StatisticsCollectorTests, addBoolValues) {
   {
     StatisticsCollector collector;
     bool values[] = {true, true, true, true};
@@ -520,7 +550,7 @@ TEST_F(StatisticsCollectorTests, AddBoolValues) {
   }
 }
 
-TEST_F(StatisticsCollectorTests, MergeDefaultStatisticsCollectors) {
+TEST_F(StatisticsCollectorTests, mergeDefaultStatisticsCollectors) {
   StatisticsCollector collector1;
   collector1.addCounts(100, 10);
   collector1.addLogicalSize(1000);
@@ -539,7 +569,28 @@ TEST_F(StatisticsCollectorTests, MergeDefaultStatisticsCollectors) {
   EXPECT_EQ(collector1.getPhysicalSize(), 1500);
 }
 
-TEST_F(StatisticsCollectorTests, IntegralStatisticsCollectorCtor) {
+TEST_F(StatisticsCollectorTests, resetClearsScalarStatistics) {
+  IntegralStatisticsCollector collector;
+  collector.addCounts(4, 1);
+  std::vector<int64_t> values = {3, 7, -1};
+  collector.addValues(std::span<int64_t>(values));
+  ASSERT_NE(
+      collector.getStatsView()->as<IntegralStatistics>()->getMin(),
+      std::nullopt);
+
+  collector.reset();
+
+  auto* stats = collector.getStatsView()->as<IntegralStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getValueCount(), 0);
+  EXPECT_EQ(stats->getNullCount(), 0);
+  EXPECT_EQ(stats->getLogicalSize(), 0);
+  EXPECT_EQ(stats->getPhysicalSize(), 0);
+  EXPECT_EQ(stats->getMin(), std::nullopt);
+  EXPECT_EQ(stats->getMax(), std::nullopt);
+}
+
+TEST_F(StatisticsCollectorTests, integralStatisticsCollectorCtor) {
   IntegralStatisticsCollector collector;
   auto* stats = collector.getStatsView()->as<IntegralStatistics>();
   ASSERT_NE(stats, nullptr);
@@ -551,7 +602,7 @@ TEST_F(StatisticsCollectorTests, IntegralStatisticsCollectorCtor) {
   EXPECT_EQ(sbPtr->getType(), StatType::INTEGRAL);
 }
 
-TEST_F(StatisticsCollectorTests, IntegralStatisticsCollectorMerge) {
+TEST_F(StatisticsCollectorTests, integralStatisticsCollectorMerge) {
   IntegralStatisticsCollector collector1;
   dynamic_cast<StatisticsCollector&>(collector1).addCounts(100, 10);
   dynamic_cast<StatisticsCollector&>(collector1).addLogicalSize(1000);
@@ -569,7 +620,7 @@ TEST_F(StatisticsCollectorTests, IntegralStatisticsCollectorMerge) {
   EXPECT_EQ(sbPtr->getLogicalSize(), 3000);
 }
 
-TEST_F(StatisticsCollectorTests, IntegralStatisticsCollectorMergeWithDefault) {
+TEST_F(StatisticsCollectorTests, integralStatisticsCollectorMergeWithDefault) {
   IntegralStatisticsCollector collector1;
   dynamic_cast<StatisticsCollector&>(collector1).addCounts(100, 10);
 
@@ -587,7 +638,7 @@ TEST_F(StatisticsCollectorTests, IntegralStatisticsCollectorMergeWithDefault) {
 // Regression test: addCounts() is called before addValues() in
 // FieldWriter::collectStatistics. The min/max initialization guard must not
 // depend on getValueCount() being zero.
-TEST_F(StatisticsCollectorTests, IntegralMinMaxAfterAddCounts) {
+TEST_F(StatisticsCollectorTests, integralMinMaxAfterAddCounts) {
   IntegralStatisticsCollector collector;
   // Simulate FieldWriter calling addCounts before addValues.
   dynamic_cast<StatisticsCollector&>(collector).addCounts(10, 0);
@@ -632,7 +683,7 @@ TEST_F(StatisticsCollectorTests, floatingPointMinMaxAcrossBatches) {
   }
 }
 
-TEST_F(StatisticsCollectorTests, FloatingPointStatisticsCollectorCtor) {
+TEST_F(StatisticsCollectorTests, floatingPointStatisticsCollectorCtor) {
   FloatingPointStatisticsCollector collector;
   auto* stats = collector.getStatsView()->as<FloatingPointStatistics>();
   ASSERT_NE(stats, nullptr);
@@ -644,7 +695,7 @@ TEST_F(StatisticsCollectorTests, FloatingPointStatisticsCollectorCtor) {
   EXPECT_EQ(sbPtr->getType(), StatType::FLOATING_POINT);
 }
 
-TEST_F(StatisticsCollectorTests, FloatingPointStatisticsCollectorMerge) {
+TEST_F(StatisticsCollectorTests, floatingPointStatisticsCollectorMerge) {
   FloatingPointStatisticsCollector collector1;
   dynamic_cast<StatisticsCollector&>(collector1).addCounts(100, 10);
   dynamic_cast<StatisticsCollector&>(collector1).addLogicalSize(1000);
@@ -664,7 +715,7 @@ TEST_F(StatisticsCollectorTests, FloatingPointStatisticsCollectorMerge) {
 
 TEST_F(
     StatisticsCollectorTests,
-    FloatingPointStatisticsCollectorMergeWithDefault) {
+    floatingPointStatisticsCollectorMergeWithDefault) {
   FloatingPointStatisticsCollector collector1;
   dynamic_cast<StatisticsCollector&>(collector1).addCounts(100, 10);
 
@@ -680,7 +731,7 @@ TEST_F(
 }
 
 // Regression test: same as IntegralMinMaxAfterAddCounts but for floating-point.
-TEST_F(StatisticsCollectorTests, FloatingPointMinMaxAfterAddCounts) {
+TEST_F(StatisticsCollectorTests, floatingPointMinMaxAfterAddCounts) {
   FloatingPointStatisticsCollector collector;
   dynamic_cast<StatisticsCollector&>(collector).addCounts(10, 0);
   std::vector<double> values = {1.5, -2.7, 99.9, 0.0};
@@ -694,7 +745,7 @@ TEST_F(StatisticsCollectorTests, FloatingPointMinMaxAfterAddCounts) {
   EXPECT_DOUBLE_EQ(stats->getMax().value(), 99.9);
 }
 
-TEST_F(StatisticsCollectorTests, FloatingPointNanBehavior) {
+TEST_F(StatisticsCollectorTests, floatingPointNanBehavior) {
   const auto nan = std::numeric_limits<double>::quiet_NaN();
   {
     FloatingPointStatisticsCollector collector;
@@ -738,7 +789,7 @@ TEST_F(StatisticsCollectorTests, FloatingPointNanBehavior) {
 
 // StringStatisticsCollector Tests
 
-TEST_F(StatisticsCollectorTests, StringStatisticsCollectorCtor) {
+TEST_F(StatisticsCollectorTests, stringStatisticsCollectorCtor) {
   StringStatisticsCollector collector;
   auto* stats = collector.getStatsView()->as<StringStatistics>();
   ASSERT_NE(stats, nullptr);
@@ -750,7 +801,7 @@ TEST_F(StatisticsCollectorTests, StringStatisticsCollectorCtor) {
   EXPECT_EQ(sbPtr->getType(), StatType::STRING);
 }
 
-TEST_F(StatisticsCollectorTests, AddStringValues) {
+TEST_F(StatisticsCollectorTests, addStringValues) {
   {
     StringStatisticsCollector collector;
     std::vector<std::string_view> values = {"hello", "world", "test"};
@@ -773,7 +824,7 @@ TEST_F(StatisticsCollectorTests, AddStringValues) {
 }
 
 // Regression test: same as IntegralMinMaxAfterAddCounts but for strings.
-TEST_F(StatisticsCollectorTests, StringMinMaxAfterAddCounts) {
+TEST_F(StatisticsCollectorTests, stringMinMaxAfterAddCounts) {
   StringStatisticsCollector collector;
   dynamic_cast<StatisticsCollector&>(collector).addCounts(10, 0);
   std::vector<std::string_view> values = {"banana", "apple", "cherry"};
@@ -787,7 +838,190 @@ TEST_F(StatisticsCollectorTests, StringMinMaxAfterAddCounts) {
   EXPECT_EQ(stats->getMax().value(), "cherry");
 }
 
-TEST_F(StatisticsCollectorTests, StringStatisticsCollectorMerge) {
+// The batch scan tracks bounds as views and materializes at most two strings
+// per call, so a caller's buffer must not be aliased after addValues returns
+// and repeated calls must still accumulate a file-wide min/max. Ascending and
+// descending input are the two orders that previously allocated on every value.
+TEST_F(StatisticsCollectorTests, stringMinMaxAcrossBatchesDoesNotAliasInput) {
+  StringStatisticsCollector collector;
+  {
+    // Ascending, then let the source buffer die before the next batch.
+    std::vector<std::string> owned = {"aaa", "bbb", "ccc", "ddd"};
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    collector.addValues(std::span<std::string_view>(views));
+  }
+  {
+    // Descending, disjoint range below the current min.
+    std::vector<std::string> owned = {"a99", "a55", "a11"};
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    collector.addValues(std::span<std::string_view>(views));
+  }
+  {
+    // Entirely inside the current bounds: neither bound may move.
+    std::vector<std::string> owned = {"bzz", "czz"};
+    std::vector<std::string_view> views(owned.begin(), owned.end());
+    collector.addValues(std::span<std::string_view>(views));
+  }
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  ASSERT_TRUE(stats->getMin().has_value());
+  ASSERT_TRUE(stats->getMax().has_value());
+  EXPECT_EQ(stats->getMin().value(), "a11");
+  EXPECT_EQ(stats->getMax().value(), "ddd");
+  EXPECT_EQ(
+      dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+      12 + 9 + 6);
+}
+
+// The scan seeds both bounds from the first value and skips the maximum check
+// whenever a value advances the minimum. Cover the orders where that shortcut
+// could drop a bound: the extremes trailing the first value, and each extreme
+// arriving in a separate batch.
+TEST_F(StatisticsCollectorTests, stringMinMaxWhenFirstValueIsNeitherBound) {
+  StringStatisticsCollector collector;
+  std::vector<std::string_view> middleFirst = {"mmm", "aaa", "zzz"};
+  collector.addValues(std::span<std::string_view>(middleFirst));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getMin().value(), "aaa");
+  EXPECT_EQ(stats->getMax().value(), "zzz");
+
+  // A single-value batch that widens only the maximum.
+  std::vector<std::string_view> single = {"zzzz"};
+  collector.addValues(std::span<std::string_view>(single));
+  EXPECT_EQ(stats->getMin().value(), "aaa");
+  EXPECT_EQ(stats->getMax().value(), "zzzz");
+
+  // The empty string sorts below every other value.
+  std::vector<std::string_view> withEmpty = {"qqq", ""};
+  collector.addValues(std::span<std::string_view>(withEmpty));
+  EXPECT_EQ(stats->getMin().value(), "");
+  EXPECT_EQ(stats->getMax().value(), "zzzz");
+
+  EXPECT_EQ(
+      dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+      9 + 4 + 3);
+}
+
+// Pins the batched scan against a trivial reference over randomized input:
+// arbitrary bytes, mixed lengths, duplicates, empty strings, and batch
+// boundaries that fall anywhere relative to the extremes. Any divergence in the
+// bound-tracking shortcut shows up here rather than as a wrong file footer.
+TEST_F(
+    StatisticsCollectorTests,
+    stringMinMaxMatchesReferenceOverRandomBatches) {
+  std::mt19937 rng{20260830};
+  std::uniform_int_distribution<size_t> lengthDist{0, 12};
+  std::uniform_int_distribution<int> byteDist{0, 255};
+  std::uniform_int_distribution<size_t> batchDist{1, 40};
+
+  for (int trial = 0; trial < 200; ++trial) {
+    StringStatisticsCollector collector;
+    std::optional<std::string> expectedMin;
+    std::optional<std::string> expectedMax;
+    uint64_t expectedLogicalSize{0};
+
+    const size_t numBatches = batchDist(rng);
+    for (size_t batch = 0; batch < numBatches; ++batch) {
+      std::vector<std::string> owned;
+      const size_t batchSize = batchDist(rng);
+      owned.reserve(batchSize);
+      for (size_t i = 0; i < batchSize; ++i) {
+        std::string value(lengthDist(rng), '\0');
+        for (auto& byte : value) {
+          byte = static_cast<char>(byteDist(rng));
+        }
+        owned.push_back(std::move(value));
+      }
+
+      for (const auto& value : owned) {
+        expectedLogicalSize += value.size();
+        if (!expectedMin.has_value() || value < *expectedMin) {
+          expectedMin = value;
+        }
+        if (!expectedMax.has_value() || value > *expectedMax) {
+          expectedMax = value;
+        }
+      }
+
+      std::vector<std::string_view> views(owned.begin(), owned.end());
+      collector.addValues(std::span<std::string_view>(views));
+    }
+
+    auto* stats = collector.getStatsView()->as<StringStatistics>();
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(stats->getMin(), expectedMin) << "trial " << trial;
+    EXPECT_EQ(stats->getMax(), expectedMax) << "trial " << trial;
+    EXPECT_EQ(
+        dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+        expectedLogicalSize)
+        << "trial " << trial;
+  }
+}
+
+// varchar columns carry arbitrary bytes, so bounds must be ordered and stored
+// by length rather than by NUL termination.
+TEST_F(StatisticsCollectorTests, stringMinMaxHandlesEmbeddedNulBytes) {
+  using namespace std::string_view_literals;
+  StringStatisticsCollector collector;
+
+  // "a\0a" sorts above "a\0" purely on length, and both would collapse to "a"
+  // under NUL-terminated comparison.
+  std::vector<std::string_view> values = {"a\0a"sv, "a\0"sv, "a\0z"sv};
+  collector.addValues(std::span<std::string_view>(values));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getMin().value(), "a\0"sv);
+  EXPECT_EQ(stats->getMax().value(), "a\0z"sv);
+  EXPECT_EQ(stats->getMin().value().size(), 2);
+  EXPECT_EQ(stats->getMax().value().size(), 3);
+  EXPECT_EQ(
+      dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(),
+      3 + 2 + 3);
+}
+
+// An empty batch must leave the accumulator untouched rather than reading
+// values.front().
+TEST_F(StatisticsCollectorTests, stringMinMaxEmptyBatchIsANoOp) {
+  StringStatisticsCollector collector;
+  std::vector<std::string_view> empty;
+  collector.addValues(std::span<std::string_view>(empty));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_FALSE(stats->getMin().has_value());
+  EXPECT_FALSE(stats->getMax().has_value());
+  EXPECT_EQ(dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(), 0);
+
+  std::vector<std::string_view> populated = {"kkk"};
+  collector.addValues(std::span<std::string_view>(populated));
+  collector.addValues(std::span<std::string_view>(empty));
+  EXPECT_EQ(stats->getMin().value(), "kkk");
+  EXPECT_EQ(stats->getMax().value(), "kkk");
+  EXPECT_EQ(dynamic_cast<StatisticsCollector&>(collector).getLogicalSize(), 3);
+}
+
+// A shorter bound assigned over a longer one must not leave the previous
+// contents behind, which is the failure mode of reusing the buffer.
+TEST_F(
+    StatisticsCollectorTests,
+    stringMinMaxShrinkingBoundsDoNotRetainOldBytes) {
+  StringStatisticsCollector collector;
+  std::vector<std::string_view> wide = {"bbbbbbbbbb", "yyyyyyyyyy"};
+  collector.addValues(std::span<std::string_view>(wide));
+
+  std::vector<std::string_view> narrow = {"a", "z"};
+  collector.addValues(std::span<std::string_view>(narrow));
+
+  auto* stats = collector.getStatsView()->as<StringStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_EQ(stats->getMin().value(), "a");
+  EXPECT_EQ(stats->getMax().value(), "z");
+}
+
+TEST_F(StatisticsCollectorTests, stringStatisticsCollectorMerge) {
   StringStatisticsCollector collector1;
   dynamic_cast<StatisticsCollector&>(collector1).addCounts(100, 10);
   dynamic_cast<StatisticsCollector&>(collector1).addLogicalSize(1000);
@@ -805,7 +1039,7 @@ TEST_F(StatisticsCollectorTests, StringStatisticsCollectorMerge) {
   EXPECT_EQ(sbPtr->getLogicalSize(), 3000);
 }
 
-TEST_F(StatisticsCollectorTests, StringStatisticsCollectorMergeWithDefault) {
+TEST_F(StatisticsCollectorTests, stringStatisticsCollectorMergeWithDefault) {
   StringStatisticsCollector collector1;
   dynamic_cast<StatisticsCollector&>(collector1).addCounts(100, 10);
 
@@ -820,7 +1054,7 @@ TEST_F(StatisticsCollectorTests, StringStatisticsCollectorMergeWithDefault) {
   EXPECT_EQ(sbPtr->getNullCount(), 15);
 }
 
-TEST_F(StatisticsCollectorTests, WrapWithDeduplicatedStatisticsCollector) {
+TEST_F(StatisticsCollectorTests, wrapWithDeduplicatedStatisticsCollector) {
   auto baseCollector = std::make_unique<IntegralStatisticsCollector>();
   auto dedupCollector =
       DeduplicatedStatisticsCollector::wrap(std::move(baseCollector));
@@ -829,7 +1063,7 @@ TEST_F(StatisticsCollectorTests, WrapWithDeduplicatedStatisticsCollector) {
   EXPECT_EQ(dedupCollector->getType(), StatType::DEDUPLICATED);
 }
 
-TEST_F(StatisticsCollectorTests, DeduplicatedStatisticsCollectorBaseCollector) {
+TEST_F(StatisticsCollectorTests, deduplicatedStatisticsCollectorBaseCollector) {
   auto baseCollector = std::make_unique<IntegralStatisticsCollector>();
   auto* basePtr = baseCollector.get();
   DeduplicatedStatisticsCollector dedupCollector(std::move(baseCollector));
@@ -847,7 +1081,7 @@ TEST_F(StatisticsCollectorTests, DeduplicatedStatisticsCollectorBaseCollector) {
   EXPECT_EQ(sbPtr->getPhysicalSize(), 500);
 }
 
-TEST_F(StatisticsCollectorTests, RecordDedupedStats) {
+TEST_F(StatisticsCollectorTests, recordDedupedStats) {
   auto baseCollector = std::make_unique<IntegralStatisticsCollector>();
   DeduplicatedStatisticsCollector dedupCollector(std::move(baseCollector));
 
@@ -863,7 +1097,7 @@ TEST_F(StatisticsCollectorTests, RecordDedupedStats) {
   EXPECT_EQ(dedupStats->getDedupedLogicalSize(), 1000);
 }
 
-TEST_F(StatisticsCollectorTests, DeduplicatedStatisticsCollectorMerge) {
+TEST_F(StatisticsCollectorTests, deduplicatedStatisticsCollectorMerge) {
   auto baseCollector1 = std::make_unique<IntegralStatisticsCollector>();
   DeduplicatedStatisticsCollector dedupCollector1(std::move(baseCollector1));
   dedupCollector1.addCounts(100, 10);

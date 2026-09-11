@@ -60,7 +60,6 @@ velox_add_library(
   Crc.h
   Doubles.h
   Fs.h
-  GTestMacros.h
   IOUtils.h
   IndexedPriorityQueue.h
   IoCounter.h

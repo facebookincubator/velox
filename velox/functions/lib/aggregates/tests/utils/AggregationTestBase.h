@@ -287,4 +287,15 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::unordered_map<std::string, std::string>& config);
 };
 
+/// Runs 'name' over a single group of ('values', 'comparisons') in a row laid
+/// out by hand, and returns the variable-length size the aggregate tracked for
+/// that row. Zero means the aggregate never moved the row size counter, which
+/// for an accumulator holding out-of-line bytes is the bug this measures.
+uint32_t aggregateAndReadRowSize(
+    memory::MemoryPool* pool,
+    const std::string& name,
+    const TypePtr& valueType,
+    const VectorPtr& values,
+    const VectorPtr& comparisons);
+
 } // namespace facebook::velox::functions::aggregate::test

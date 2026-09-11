@@ -1086,7 +1086,7 @@ TEST_P(E2EFilterTest, integerRleBiased) {
       biasedEncodingFactors(EncodingType::RLE));
 }
 
-TEST_P(E2EFilterTest, integerRleCustomSeed_4049269257) {
+TEST_P(E2EFilterTest, integerRleCustomSeed4049269257) {
   if (common::testutil::useRandomSeed()) {
     return;
   }
@@ -1108,7 +1108,7 @@ TEST_P(E2EFilterTest, integerRleCustomSeed_4049269257) {
       20);
 }
 
-TEST_P(E2EFilterTest, integerRleCustomSeed_583694982) {
+TEST_P(E2EFilterTest, integerRleCustomSeed583694982) {
   if (common::testutil::useRandomSeed()) {
     return;
   }
@@ -1130,7 +1130,7 @@ TEST_P(E2EFilterTest, integerRleCustomSeed_583694982) {
       20);
 }
 
-TEST_P(E2EFilterTest, integerRleCustomSeed_2518626933) {
+TEST_P(E2EFilterTest, integerRleCustomSeed2518626933) {
   if (common::testutil::useRandomSeed()) {
     return;
   }
@@ -1646,7 +1646,7 @@ TEST_P(E2EFilterTest, deduplicatedArraySmallReads) {
 }
 
 // Small skips that don't reach the next dictionary run.
-TEST_P(E2EFilterTest, deduplicatedArrayCustomSeed_ConnectedSkips) {
+TEST_P(E2EFilterTest, deduplicatedArrayCustomSeedConnectedSkips) {
   if (common::testutil::useRandomSeed()) {
     return;
   }
@@ -1684,7 +1684,7 @@ TEST_P(E2EFilterTest, deduplicatedArrayCustomSeed_ConnectedSkips) {
 
 // Small reads that don't reach the next dictionary run and uses the cached
 // last run only.
-TEST_P(E2EFilterTest, deduplicatedArrayCustomSeed_CachedRunOnly) {
+TEST_P(E2EFilterTest, deduplicatedArrayCustomSeedCachedRunOnly) {
   if (common::testutil::useRandomSeed()) {
     return;
   }
@@ -1909,7 +1909,7 @@ TEST_P(E2EFilterTest, filterStruct) {
 }
 
 // Enable once the writer support struct as flat map.
-TEST_P(E2EFilterTest, DISABLED_FlatMapAsStruct) {
+TEST_P(E2EFilterTest, DISABLED_flatMapAsStruct) {
   constexpr auto kColumns =
       "long_val:bigint,"
       "long_vals:struct<v1:bigint,v2:bigint,v3:bigint>,"

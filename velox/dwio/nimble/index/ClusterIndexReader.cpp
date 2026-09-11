@@ -136,7 +136,8 @@ void ClusterIndexReader::loadChunk() {
         auto& buffer = stringBuffers_.emplace_back(
             velox::AlignedBuffer::allocate<char>(totalLength, pool_));
         return buffer->asMutable<void>();
-      });
+      },
+      Encoding::Options{});
   NIMBLE_CHECK_EQ(
       encoding_->dataType(), DataType::String, "Expected String data type");
   NIMBLE_CHECK(

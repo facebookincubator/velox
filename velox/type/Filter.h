@@ -980,6 +980,8 @@ class HugeintRange final : public Filter {
         nullAllowed_ ? "with nulls" : "no nulls");
   }
 
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
+
   bool testingEquals(const Filter& other) const final;
 
  private:
@@ -1201,6 +1203,8 @@ class HugeintValuesUsingHashTable final : public Filter {
   }
 
   bool testInt128(const int128_t& value) const final;
+
+  std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   bool testingEquals(const Filter& other) const final;
 

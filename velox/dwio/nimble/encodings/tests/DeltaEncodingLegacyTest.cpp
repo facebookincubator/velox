@@ -158,25 +158,25 @@ using IntegerTypes = ::testing::Types<
 NIMBLE_TYPED_TEST_SUITE(DeltaEncodingLegacyTest, IntegerTypes);
 
 // The example from the DeltaEncoding.h header comment.
-TYPED_TEST(DeltaEncodingLegacyTest, HeaderExample) {
+TYPED_TEST(DeltaEncodingLegacyTest, headerExample) {
   auto values = this->toVector({1, 2, 4, 1, 2, 3, 4, 1, 2, 4, 8, 8});
   this->verifyRoundtrip(values);
 }
 
 // Constant sequence (all deltas are 0).
-TYPED_TEST(DeltaEncodingLegacyTest, ConstantValues) {
+TYPED_TEST(DeltaEncodingLegacyTest, constantValues) {
   auto values = this->toVector({5, 5, 5, 5, 5});
   this->verifyRoundtrip(values);
 }
 
 // Single value.
-TYPED_TEST(DeltaEncodingLegacyTest, SingleValue) {
+TYPED_TEST(DeltaEncodingLegacyTest, singleValue) {
   auto values = this->toVector({42});
   this->verifyRoundtrip(values);
 }
 
 // Large deltas within type range.
-TYPED_TEST(DeltaEncodingLegacyTest, LargeDeltas) {
+TYPED_TEST(DeltaEncodingLegacyTest, largeDeltas) {
   using T = TypeParam;
   T maxVal = std::numeric_limits<T>::max();
   T mid = maxVal / 2;
@@ -185,7 +185,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, LargeDeltas) {
 }
 
 // Skip then materialize.
-TYPED_TEST(DeltaEncodingLegacyTest, SkipThenMaterialize) {
+TYPED_TEST(DeltaEncodingLegacyTest, skipThenMaterialize) {
   auto values = this->toVector({1, 2, 4, 1, 2, 3, 4, 1, 2, 4, 8, 8});
   auto encoding = this->encodeAndDecode(values);
 
@@ -200,7 +200,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, SkipThenMaterialize) {
 }
 
 // Materialize in chunks.
-TYPED_TEST(DeltaEncodingLegacyTest, MaterializeInChunks) {
+TYPED_TEST(DeltaEncodingLegacyTest, materializeInChunks) {
   auto values = this->toVector({1, 3, 5, 2, 4, 6, 8, 10, 7, 9});
   auto encoding = this->encodeAndDecode(values);
 
@@ -217,7 +217,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, MaterializeInChunks) {
 }
 
 // Reset and re-materialize.
-TYPED_TEST(DeltaEncodingLegacyTest, ResetAndRematerialize) {
+TYPED_TEST(DeltaEncodingLegacyTest, resetAndRematerialize) {
   auto values = this->toVector({5, 10, 15, 8, 12});
   auto encoding = this->encodeAndDecode(values);
 
@@ -234,7 +234,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, ResetAndRematerialize) {
 }
 
 // Large dataset with monotonic increase.
-TYPED_TEST(DeltaEncodingLegacyTest, LargeMonotonicDataset) {
+TYPED_TEST(DeltaEncodingLegacyTest, largeMonotonicDataset) {
   Vector<TypeParam> values(this->pool_.get());
   for (uint32_t i = 0; i < 1000; ++i) {
     values.push_back(static_cast<TypeParam>(i));
@@ -243,7 +243,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, LargeMonotonicDataset) {
 }
 
 // Skip with restatement as the last value in the skipped range.
-TYPED_TEST(DeltaEncodingLegacyTest, SkipEndingOnRestatement) {
+TYPED_TEST(DeltaEncodingLegacyTest, skipEndingOnRestatement) {
   // Values: 10 20 30 5 15 25
   // isRestatement: T F F T F F
   // Skip 4 values (ends on the restatement at index 3 = value 5).
@@ -258,19 +258,19 @@ TYPED_TEST(DeltaEncodingLegacyTest, SkipEndingOnRestatement) {
 }
 
 // Two values where the second is smaller (immediate restatement).
-TYPED_TEST(DeltaEncodingLegacyTest, TwoValuesDecreasing) {
+TYPED_TEST(DeltaEncodingLegacyTest, twoValuesDecreasing) {
   auto values = this->toVector({10, 5});
   this->verifyRoundtrip(values);
 }
 
 // All values are identical (constant deltas of 0).
-TYPED_TEST(DeltaEncodingLegacyTest, AllIdentical) {
+TYPED_TEST(DeltaEncodingLegacyTest, allIdentical) {
   auto values = this->toVector({7, 7, 7, 7, 7, 7, 7, 7, 7, 7});
   this->verifyRoundtrip(values);
 }
 
 // Alternating high-low pattern: every other value causes a restatement.
-TYPED_TEST(DeltaEncodingLegacyTest, AlternatingHighLow) {
+TYPED_TEST(DeltaEncodingLegacyTest, alternatingHighLow) {
   using T = TypeParam;
   T hi = std::numeric_limits<T>::max() / 2;
   T lo = 1;
@@ -279,7 +279,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, AlternatingHighLow) {
 }
 
 // Skip all rows: skip the entire dataset, then there's nothing to read.
-TYPED_TEST(DeltaEncodingLegacyTest, SkipAll) {
+TYPED_TEST(DeltaEncodingLegacyTest, skipAll) {
   auto values = this->toVector({1, 2, 3, 4, 5});
   auto encoding = this->encodeAndDecode(values);
   encoding->skip(5);
@@ -288,7 +288,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, SkipAll) {
 }
 
 // Materialize one row at a time.
-TYPED_TEST(DeltaEncodingLegacyTest, MaterializeOneByOne) {
+TYPED_TEST(DeltaEncodingLegacyTest, materializeOneByOne) {
   auto values = this->toVector({3, 1, 4, 1, 5, 9, 2, 6});
   auto encoding = this->encodeAndDecode(values);
 
@@ -300,7 +300,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, MaterializeOneByOne) {
 }
 
 // Skip interleaved with materialize in small steps.
-TYPED_TEST(DeltaEncodingLegacyTest, InterleavedSkipMaterialize) {
+TYPED_TEST(DeltaEncodingLegacyTest, interleavedSkipMaterialize) {
   auto values = this->toVector({10, 20, 30, 40, 50, 60, 70, 80, 90, 100});
   auto encoding = this->encodeAndDecode(values);
 
@@ -327,13 +327,13 @@ TYPED_TEST(DeltaEncodingLegacyTest, InterleavedSkipMaterialize) {
 }
 
 // Consecutive restatements: strictly decreasing sequence.
-TYPED_TEST(DeltaEncodingLegacyTest, StrictlyDecreasing) {
+TYPED_TEST(DeltaEncodingLegacyTest, strictlyDecreasing) {
   auto values = this->toVector({50, 40, 30, 20, 10, 5, 3, 1});
   this->verifyRoundtrip(values);
 }
 
 // Mixed: increasing runs followed by drops (sawtooth pattern).
-TYPED_TEST(DeltaEncodingLegacyTest, SawtoothPattern) {
+TYPED_TEST(DeltaEncodingLegacyTest, sawtoothPattern) {
   Vector<TypeParam> values(this->pool_.get());
   for (uint32_t i = 0; i < 100; ++i) {
     values.push_back(static_cast<TypeParam>(i % 10));
@@ -342,7 +342,7 @@ TYPED_TEST(DeltaEncodingLegacyTest, SawtoothPattern) {
 }
 
 // Empty data should throw.
-TYPED_TEST(DeltaEncodingLegacyTest, EmptyDataThrows) {
+TYPED_TEST(DeltaEncodingLegacyTest, emptyDataThrows) {
   using physicalType = typename TypeTraits<TypeParam>::physicalType;
   auto physicalValues = std::span<const physicalType>();
   EncodingSelection<physicalType> selection{

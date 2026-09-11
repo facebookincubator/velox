@@ -123,6 +123,9 @@ void printGraphView(
       WaveConfig::get().elideClones) {
     elideReadOnlyClones(graph, waveGraphHolder->types());
   }
+  if (waveGraphHolder) {
+    commonSubexpressions(graph, waveGraphHolder->types());
+  }
   if (waveGraphHolder && WaveConfig::get().duplicateMetadata) {
     duplicateMetadataOps(graph, waveGraphHolder->types(), *waveGraphHolder);
   }

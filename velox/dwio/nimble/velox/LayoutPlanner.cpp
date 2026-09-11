@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
+#include <algorithm>
 #include <cstdint>
+
+#include "velox/common/Casts.h"
 
 namespace facebook::nimble {
 
@@ -85,20 +88,18 @@ void appendAllNestedStreams(
 } // namespace
 
 DefaultLayoutPlanner::DefaultLayoutPlanner(
-    std::function<std::shared_ptr<const TypeBuilder>()> typeResolver,
+    const SchemaBuilder* schemaBuilder,
     const std::optional<std::vector<std::tuple<size_t, std::vector<int64_t>>>>&
         flatMapFeatureOrder)
-    : typeResolver_{std::move(typeResolver)},
+    : schemaBuilder_{velox::checkedNotNull(schemaBuilder)},
       flatMapFeatureOrder_{
           flatMapFeatureOrder.has_value()
               ? std::move(flatMapFeatureOrder.value())
-              : std::vector<std::tuple<size_t, std::vector<int64_t>>>{}} {
-  NIMBLE_CHECK_NOT_NULL(typeResolver_, "typeResolver is not supplied");
-}
+              : std::vector<std::tuple<size_t, std::vector<int64_t>>>{}} {}
 
 std::vector<Stream> DefaultLayoutPlanner::getLayout(
     std::vector<Stream>&& streams) {
-  auto type = typeResolver_();
+  const auto& type = schemaBuilder_->root();
   NIMBLE_CHECK_EQ(
       type->kind(),
       Kind::Row,
@@ -188,9 +189,21 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
 
   auto tryAppendStream = [&offsetsToStreams, &layout](uint32_t offset) {
     auto it = offsetsToStreams.find(offset);
-    if (it != offsetsToStreams.end()) {
-      layout.emplace_back(std::move(*it->second));
-      offsetsToStreams.erase(it);
+    if (it == offsetsToStreams.end()) {
+      return false;
+    }
+    layout.emplace_back(std::move(*it->second));
+    offsetsToStreams.erase(it);
+    return true;
+  };
+  auto appendStream = [&](uint32_t offset) {
+    if (!tryAppendStream(offset)) {
+      return;
+    }
+    const auto dictionaryStreamOffset =
+        schemaBuilder_->sharedDictionaryStreamOffset(offset);
+    if (dictionaryStreamOffset.has_value()) {
+      tryAppendStream(dictionaryStreamOffset.value());
     }
   };
 
@@ -199,18 +212,18 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
   // final ordered stream list.
 
   // First add the root's null stream
-  tryAppendStream(root.nullsDescriptor().offset());
+  appendStream(root.nullsDescriptor().offset());
 
   // Then, add all ordered flat maps
   for (auto offset : orderedFlatMapOffsets) {
-    tryAppendStream(offset);
+    appendStream(offset);
   }
 
   // Then add all remaining streams in the schema order.
   // 'tryAppendStream' will de-dup streams that were already added in previous
   // steps.
   for (auto offset : orderedAllOffsets) {
-    tryAppendStream(offset);
+    appendStream(offset);
   }
 
   NIMBLE_CHECK_EQ(streams.size(), layout.size(), "Stream count mismatch.");

@@ -64,6 +64,14 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
   )
 
+  add_executable(velox_dwio_parquet_delta_bp_decoder_benchmark DeltaBpDecoderBenchmark.cpp)
+  target_link_libraries(
+    velox_dwio_parquet_delta_bp_decoder_benchmark
+    velox_dwio_native_parquet_reader
+    Folly::folly
+    Folly::follybenchmark
+  )
+
   add_executable(velox_dwio_parquet_metadata_benchmark MetadataBenchmark.cpp)
   target_link_libraries(velox_dwio_parquet_metadata_benchmark velox_dwio_native_parquet_reader)
 endif()
@@ -111,7 +119,12 @@ if(VELOX_ENABLE_BENCHMARKS)
   )
 endif()
 
-add_executable(velox_dwio_parquet_table_scan_test ParquetTableScanTest.cpp)
+add_executable(
+  velox_dwio_parquet_table_scan_test
+  ParquetSchemaEvolutionTest.cpp
+  ParquetTableScanTest.cpp
+)
+velox_add_test_headers(velox_dwio_parquet_table_scan_test ParquetTableScanTestBase.h)
 add_test(
   NAME velox_dwio_parquet_table_scan_test
   COMMAND velox_dwio_parquet_table_scan_test
@@ -126,6 +139,19 @@ target_link_libraries(
   velox_hive_connector
   velox_link_libs
   velox_type_tz
+  ${TEST_LINK_LIBS}
+)
+
+add_executable(velox_dwio_parquet_delta_bp_decoder_test DeltaBpDecoderTest.cpp)
+add_test(
+  NAME velox_dwio_parquet_delta_bp_decoder_test
+  COMMAND velox_dwio_parquet_delta_bp_decoder_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_dwio_parquet_delta_bp_decoder_test
+  velox_dwio_native_parquet_reader
+  velox_link_libs
   ${TEST_LINK_LIBS}
 )
 

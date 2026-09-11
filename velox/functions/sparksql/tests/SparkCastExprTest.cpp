@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <boost/multiprecision/cpp_dec_float.hpp>
 #include <folly/ScopeGuard.h>
 #include <cmath>
 #include "velox/core/Expressions.h"
@@ -574,6 +575,118 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             {Timestamp(0, 0), Timestamp(946'729'316, 0)}, TIMESTAMP_UTC()),
         makeNullableFlatVector<std::string>(
             {"1970-01-01 00:00:00", "2000-01-01 12:21:56"}, VARCHAR()));
+  }
+
+  void testDateToTimestampUtc() {
+    // Day 0 = 1970-01-01.
+    testCast(
+        makeFlatVector<int32_t>({0}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP_UTC()));
+    // Day 18262 = 2020-01-01.
+    testCast(
+        makeFlatVector<int32_t>({18262}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
+
+    // Timezone must not affect the result.
+    SCOPE_EXIT {
+      setTimezone("");
+    };
+    setTimezone("America/Los_Angeles");
+    testCast(
+        makeFlatVector<int32_t>({18262}, DATE()),
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
+  }
+
+  void testTimestampUtcToDate() {
+    // 2020-01-01 → day 18262.
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({18262}, DATE()));
+    // Epoch → 1970-01-01 (day 0).
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({0}, DATE()));
+
+    // Kolkata (UTC+5:30) would shift -19800s to day 0; UTC gives day -1.
+    SCOPE_EXIT {
+      setTimezone("");
+    };
+    setTimezone("Asia/Kolkata");
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(-19800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({-1}, DATE()));
+    testCast(
+        makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({18262}, DATE()));
+  }
+
+  // See CastExpr.cpp's overflow check for the derivation of this bound.
+  static constexpr int64_t kMaxTimestampUtcDays = 106'751'991;
+
+  void testDateToTimestampUtcOverflow() {
+    testCast(
+        makeFlatVector<int32_t>({kMaxTimestampUtcDays}, DATE()),
+        makeFlatVector<Timestamp>(
+            {Timestamp(kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()));
+    testCast(
+        makeFlatVector<int32_t>({-kMaxTimestampUtcDays}, DATE()),
+        makeFlatVector<Timestamp>(
+            {Timestamp(-kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()));
+
+    testThrow<int32_t>(
+        DATE(),
+        TIMESTAMP_UTC(),
+        {kMaxTimestampUtcDays + 1},
+        "is out of range for TIMESTAMP_UTC");
+    testThrow<int32_t>(
+        DATE(),
+        TIMESTAMP_UTC(),
+        {-kMaxTimestampUtcDays - 1},
+        "is out of range for TIMESTAMP_UTC");
+
+    testCast(
+        makeFlatVector<int32_t>({kMaxTimestampUtcDays + 1}, DATE()),
+        makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+        /*isTryCast=*/true);
+    testCast(
+        makeFlatVector<int32_t>({-kMaxTimestampUtcDays - 1}, DATE()),
+        makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+        /*isTryCast=*/true);
+  }
+
+  void testTimestampUtcToDateOverflow() {
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp(kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({kMaxTimestampUtcDays}, DATE()));
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp(-kMaxTimestampUtcDays * 86'400, 0)}, TIMESTAMP_UTC()),
+        makeFlatVector<int32_t>({-kMaxTimestampUtcDays}, DATE()));
+
+    testThrow<Timestamp>(
+        TIMESTAMP_UTC(),
+        DATE(),
+        {Timestamp((kMaxTimestampUtcDays + 1) * 86'400, 0)},
+        "is out of range for TIMESTAMP_UTC");
+    testThrow<Timestamp>(
+        TIMESTAMP_UTC(),
+        DATE(),
+        {Timestamp((-kMaxTimestampUtcDays - 1) * 86'400, 0)},
+        "is out of range for TIMESTAMP_UTC");
+
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp((kMaxTimestampUtcDays + 1) * 86'400, 0)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<int32_t>({std::nullopt}, DATE()),
+        /*isTryCast=*/true);
+    testCast(
+        makeFlatVector<Timestamp>(
+            {Timestamp((-kMaxTimestampUtcDays - 1) * 86'400, 0)},
+            TIMESTAMP_UTC()),
+        makeNullableFlatVector<int32_t>({std::nullopt}, DATE()),
+        /*isTryCast=*/true);
   }
 
   void testInvalidDate() {
@@ -1646,6 +1759,92 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   static std::vector<std::string> invalidStringToRealDoubleInputs() {
     return {"abc", "1.2a", "1.2.3", "xyz123"};
   }
+
+  template <typename T>
+  void testDecimalToFloatCasts() {
+    // short to short, scale up.
+    auto shortFlat = makeNullableFlatVector<int64_t>(
+        {DecimalUtil::kShortDecimalMin,
+         DecimalUtil::kShortDecimalMin,
+         -3,
+         0,
+         55,
+         DecimalUtil::kShortDecimalMax,
+         DecimalUtil::kShortDecimalMax,
+         std::nullopt},
+        DECIMAL(18, 18));
+    testCast(
+        shortFlat,
+        makeNullableFlatVector<T>(
+            {-1,
+             // the same DecimalUtil::kShortDecimalMin conversion, checking
+             // floating point diff works on decimals
+             -0.999999999999999999,
+             -0.000000000000000003,
+             0,
+             0.000000000000000055,
+             // the same DecimalUtil::kShortDecimalMax conversion, checking
+             // floating point diff works on decimals
+             0.999999999999999999,
+             1,
+             std::nullopt}));
+
+    auto longFlat = makeNullableFlatVector<int128_t>(
+        {DecimalUtil::kLongDecimalMin,
+         0,
+         DecimalUtil::kLongDecimalMax,
+         HugeInt::build(0xffff, 0xffffffffffffffff),
+         std::nullopt},
+        DECIMAL(38, 5));
+    testCast(
+        longFlat,
+        makeNullableFlatVector<T>(
+            {-1e33, 0, 1e33, 1.2089258196146293E19, std::nullopt}));
+
+    testCast(
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::build(0, 299250000)}, DECIMAL(20, 4)),
+        makeNullableFlatVector<T>({29925.0}));
+
+    for (int scale = 0; scale <= 18; ++scale) {
+      int64_t unscaledValue = 123456789123456789l;
+      const int precision = 18;
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
+      testCast(
+          makeNullableFlatVector<int64_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+
+    for (int scale = 0; scale <= 38; ++scale) {
+      int128_t unscaledValue =
+          HugeInt::parse("12345678912345678912345678912345678912");
+      const int precision = 38;
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+
+    // Small unscaled values with scales 23-38 exercise the boundary of the
+    // exact fast path: the unscaled value fits in a double, but the scale
+    // exceeds the exactly-representable powers of ten, so the cast must fall
+    // back to the general conversion instead of indexing past the power-of-ten
+    // table.
+    for (int scale = 23; scale <= 38; ++scale) {
+      int128_t unscaledValue = 1;
+      const int precision = 38;
+      auto expect = boost::multiprecision::cpp_dec_float_50(
+          DecimalUtil::toString(unscaledValue, DECIMAL(precision, scale)));
+      testCast(
+          makeNullableFlatVector<int128_t>(
+              {unscaledValue}, DECIMAL(precision, scale)),
+          makeNullableFlatVector<T>({expect.convert_to<T>()}));
+    }
+  }
 };
 
 class SparkCastExprTestAnsiOn : public SparkCastExprTest {
@@ -1721,6 +1920,20 @@ TEST_F(SparkCastExprTestAnsiOn, decimalToString) {
 
 TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
   testDecimalToIntegral();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
 }
 
 TEST_F(SparkCastExprTestAnsiOn, floatToTimestamp) {
@@ -2233,6 +2446,20 @@ TEST_F(SparkCastExprTestAnsiOff, decimalToIntegral) {
   testDecimalToIntegral();
 }
 
+TEST_F(SparkCastExprTestAnsiOff, decimalToFloat) {
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"},
+       {SparkQueryConfig::qualify(
+            SparkQueryConfig::kDecimalToFloatHighPrecisionCastEnabled),
+        "true"}});
+
+  testDecimalToFloatCasts<float>();
+  testDecimalToFloatCasts<double>();
+}
+
 TEST_F(SparkCastExprTestAnsiOff, decimalToString) {
   testDecimalToString();
 }
@@ -2602,6 +2829,38 @@ TEST_F(SparkCastExprTestAnsiOff, overflow) {
 
 TEST_F(SparkCastExprTestAnsiOff, recursiveTryCast) {
   testRecursiveTryCast();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampUtc) {
+  testDateToTimestampUtc();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampUtc) {
+  testDateToTimestampUtc();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToDate) {
+  testTimestampUtcToDate();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToDate) {
+  testTimestampUtcToDate();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, dateToTimestampUtcOverflow) {
+  testDateToTimestampUtcOverflow();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, dateToTimestampUtcOverflow) {
+  testDateToTimestampUtcOverflow();
+}
+
+TEST_F(SparkCastExprTestAnsiOff, timestampUtcToDateOverflow) {
+  testTimestampUtcToDateOverflow();
+}
+
+TEST_F(SparkCastExprTestAnsiOn, timestampUtcToDateOverflow) {
+  testTimestampUtcToDateOverflow();
 }
 
 // Verify that casting DATE to TIMESTAMP in a timezone where midnight falls in

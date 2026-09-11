@@ -119,6 +119,7 @@ class HiveConnectorSerDeTest : public exec::test::HiveConnectorTestBase {
     } else {
       ASSERT_FALSE(clone->properties.has_value());
     }
+    ASSERT_EQ(split.columnMappingMode, clone->columnMappingMode);
   }
 };
 
@@ -304,7 +305,9 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
       cacheable,
       infoColumns,
       properties,
-      rowIdProperties);
+      rowIdProperties,
+      std::nullopt,
+      dwio::common::ColumnMappingMode::kName);
   ASSERT_EQ(split1.cacheable, cacheable);
   testSerde(split1);
 
@@ -332,6 +335,15 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
   split3.bucketConversion = {16, 2, std::move(handles)};
   testSerde(split3);
+
+  auto split4 = HiveConnectorSplit(connectorId, filePath, fileFormat);
+  split4.physicalFilePath = "/testSerde/replica/p";
+  testSerde(split4);
+  const auto clone4 =
+      ISerializable::deserialize<HiveConnectorSplit>(split4.serialize());
+  ASSERT_EQ(clone4->physicalFilePath, split4.physicalFilePath);
+  ASSERT_EQ(clone4->readPath(), split4.physicalFilePath);
+  ASSERT_EQ(clone4->filePath, filePath);
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveConnectorSplitFileProperties) {

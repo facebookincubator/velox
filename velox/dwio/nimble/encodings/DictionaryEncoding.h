@@ -167,7 +167,7 @@ class DictionaryEncoding
  private:
   static std::string_view encodeAlphabet(
       EncodingSelection<physicalType>& selection,
-      const Vector<physicalType>& alphabet,
+      std::span<const physicalType> alphabet,
       Buffer& buffer,
       const Encoding::Options& options);
 
@@ -197,20 +197,20 @@ DictionaryEncoding<T>::DictionaryEncoding(
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
       alphabet_{this->pool_} {
-  const EncodingFactory factory{options};
   const auto* pos = data.data() + this->dataOffset();
   const uint32_t alphabetSize = encoding::readUint32(pos);
-  alphabetEncoding_ =
-      factory.create(*this->pool_, {pos, alphabetSize}, stringBufferFactory);
+  alphabetEncoding_ = EncodingFactory().create(
+      *this->pool_, {pos, alphabetSize}, stringBufferFactory, options);
   const uint32_t alphabetCount = alphabetEncoding_->rowCount();
   alphabet_.resize(alphabetCount);
   alphabetEncoding_->materialize(alphabetCount, alphabet_.data());
 
   pos += alphabetSize;
-  indicesEncoding_ = factory.create(
+  indicesEncoding_ = EncodingFactory().create(
       *this->pool_,
       {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      stringBufferFactory,
+      options);
 }
 
 template <typename T>
@@ -358,12 +358,12 @@ void DictionaryEncoding<T>::readIndicesWithVisitor(
 template <typename T>
 std::string_view DictionaryEncoding<T>::encodeAlphabet(
     EncodingSelection<physicalType>& selection,
-    const Vector<physicalType>& alphabet,
+    std::span<const physicalType> alphabet,
     Buffer& buffer,
     const Encoding::Options& options) {
   if constexpr (isFloatingPointType<T>()) {
-    Vector<T> logicalAlphabet{&buffer.getMemoryPool()};
-    logicalAlphabet.resize(alphabet.size());
+    ScopedVector<T> logicalAlphabet{
+        alphabet.size(), &buffer.getMemoryPool(), options.bufferPool};
     for (uint32_t i = 0; i < alphabet.size(); ++i) {
       logicalAlphabet[i] =
           EncodingPhysicalType<T>::asEncodingLogicalType(alphabet[i]);
@@ -397,13 +397,12 @@ std::string_view DictionaryEncoding<T>::encode(
   const uint32_t valueCount = values.size();
   const uint32_t alphabetCount =
       selection.statistics().uniqueCounts().value().size();
+  auto* pool = &buffer.getMemoryPool();
 
   folly::F14FastMap<physicalType, uint32_t> alphabetMapping;
   alphabetMapping.reserve(alphabetCount);
-  Vector<physicalType> alphabet{&buffer.getMemoryPool()};
-  alphabet.resize(alphabetCount);
-  Vector<uint32_t> indices{&buffer.getMemoryPool()};
-  indices.resize(valueCount);
+  ScopedVector<physicalType> alphabet{alphabetCount, pool, options.bufferPool};
+  ScopedVector<uint32_t> indices{valueCount, pool, options.bufferPool};
 
   uint32_t alphabetIndex{0};
   uint32_t indiciesIndex{0};
@@ -460,8 +459,11 @@ std::string_view DictionaryEncoding<T>::encode(
 
   ScopedEncodingBuffer scopedBuffer{
       &buffer.getMemoryPool(), options.encodingBufferPool};
-  std::string_view serializedAlphabet =
-      encodeAlphabet(selection, alphabet, scopedBuffer.get(), options);
+  std::string_view serializedAlphabet = encodeAlphabet(
+      selection,
+      {alphabet.data(), alphabet.size()},
+      scopedBuffer.get(),
+      options);
   std::string_view serializedIndices =
       selection.template encodeNested<uint32_t>(
           EncodingIdentifiers::Dictionary::Indices,

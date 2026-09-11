@@ -102,13 +102,17 @@ NullableEncoding<T>::NullableEncoding(
   const EncodingFactory factory;
   const char* pos = data.data() + EncodingPrefix::kFixedPrefixSize;
   const uint32_t nonNullsBytes = encoding::readUint32(pos);
-  nonNullValues_ =
-      factory.create(*this->pool_, {pos, nonNullsBytes}, stringBufferFactory);
+  nonNullValues_ = factory.create(
+      *this->pool_,
+      {pos, nonNullsBytes},
+      stringBufferFactory,
+      Encoding::Options{});
   pos += nonNullsBytes;
   nulls_ = factory.create(
       *this->pool_,
       {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      stringBufferFactory,
+      Encoding::Options{});
   NIMBLE_DCHECK_EQ(
       Encoding::rowCount(), nulls_->rowCount(), "Nulls count mismatch.");
 }
@@ -197,6 +201,17 @@ uint32_t NullableEncoding<T>::materializeNullable(
 
   const auto scatterSize =
       scatterOutputBitmap ? scatterOutputBitmap->size() - offset : rowCount;
+
+  // A column that is entirely null over this batch would still walk every
+  // position in the scatter loop below to set nothing. Short-circuit to the
+  // cleared bitmap.
+  if (nonNullCount == 0 && scatterSize != 0) {
+    velox::bits::BitmapBuilder nullBits{getOutputNulls(), offset + scatterSize};
+    nullBits.clear(offset, offset + scatterSize);
+    row_ += rowCount;
+    return 0;
+  }
+
   if (nonNullCount != scatterSize) {
     void* nullBitmap = getOutputNulls();
     velox::bits::BitmapBuilder nullBits{nullBitmap, offset + scatterSize};

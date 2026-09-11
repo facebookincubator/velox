@@ -35,6 +35,8 @@ namespace torch::wave {
 class OpInvocation;
 struct StepVectors;
 struct StepEvents;
+// Defined in AllocGroup.h, which includes this file.
+struct AllocGroupPlan;
 
 /// Represents launch of a single KernelOperation or standalone Node.
 struct Launch {
@@ -57,6 +59,15 @@ struct Launch {
 
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
+
+  /// Earliest step this launch may be placed in, or -1 for no floor. Placement
+  /// otherwise puts a launch one step after the last of its inputs, which is as
+  /// early as its data allows -- right for compute, wrong for a copy that fills
+  /// a band of a concat result. That band exists only once the concat's
+  /// allocation group has been carved, so such a copy has to sit no earlier
+  /// than the step whose head lays the concat out, however early its own source
+  /// happens to be ready.
+  int32_t minLevel{-1};
 
   /// Indices into constants in enclosing OpInvocation.
   std::vector<int32_t> constantIndices;
@@ -212,6 +223,13 @@ class CompositeKernel {
   /// default KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
 
+  /// Blocks of this kernel that stay resident on one SM at 'dynamicSharedBytes'
+  /// of dynamic shared memory, as the driver computes it. 0 when there is no
+  /// compiled kernel to ask. Sizing a cooperative launch by anything else risks
+  /// a grid the driver will refuse, so the launch partitioner reads this rather
+  /// than dividing KernelInfo's zero-shared figure down.
+  int32_t occupancy(int32_t numThreads, int32_t dynamicSharedBytes) const;
+
   std::string toString(Listing mode = kExprs) const;
 
   const std::string& entryPoint() const {
@@ -224,16 +242,33 @@ class CompositeKernel {
 
   void warmup();
 
+  /// Waits for the per-op diagnostic kernels queued under
+  /// WaveConfig::configPerOp and returns each one's entry point and occupancy,
+  /// in the order the ops appear in this kernel. Empty when configPerOp is off
+  /// or no GPU is present.
+  std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
+  perOpKernelInfo();
+
   const std::vector<std::unique_ptr<KernelOperation>>& kernelOps() const {
     return kernelOpStorage_;
   }
 
  private:
+  // One single-op kernel built beside the composite when configPerOp is set.
+  // Diagnostic only: never launched for results, only warmed up so its
+  // occupancy can be read.
+  struct PerOpKernel {
+    int32_t opCode{0};
+    std::string entryPoint;
+    std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
+  };
+
   std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
   std::string entryPoint_;
   std::string text_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
+  std::vector<PerOpKernel> perOpKernels_;
 };
 
 /// Records the grid variant (single-block vs multi-block) chosen for a
@@ -340,6 +375,10 @@ class CompositeInvocation {
       std::vector<std::pair<nativert::ValueId, int32_t>> elidedCloneInputs =
           {});
 
+  /// Out of line because allocGroupPlan_ points to a type this header only
+  /// forward-declares.
+  ~CompositeInvocation();
+
   /// Executes this composite invocation: allocates outputs, builds the grid,
   /// copies params to pinned+device memory, and enqueues the H2D transfer.
   void execute(ExecutionState& state);
@@ -350,8 +389,42 @@ class CompositeInvocation {
     return ops_;
   }
 
+  /// Non-const because describing a launch of an op's grid binds it, which the
+  /// whole-graph allocation-group scan does for every op of every node.
+  std::vector<OpInvocation>& ops() {
+    return ops_;
+  }
+
   CompositeKernel* kernel() const {
     return kernel_.get();
+  }
+
+  int32_t sequenceNumber() const {
+    return sequenceNumber_;
+  }
+
+  const std::vector<nativert::ValueId>& lastUseIds() const {
+    return lastUseIds_;
+  }
+
+  const std::vector<std::vector<int32_t>>& lastUseReaderOps() const {
+    return lastUseReaderOps_;
+  }
+
+  /// True when this invocation releases its last-use values as their readers
+  /// run out of grid steps rather than all at its last step. The
+  /// allocation-group plan has to agree with it: a group's buffer is freed when
+  /// the last of its slots is, so the plan and the release path must place that
+  /// point the same way.
+  bool stepLevelRelease() const;
+
+  /// Installs the groups this invocation allocates, built once for the whole
+  /// graph before its first execution.
+  void setAllocGroupPlan(std::unique_ptr<AllocGroupPlan> plan);
+
+  /// The groups this invocation allocates, or null while none are installed.
+  const AllocGroupPlan* allocGroupPlan() const {
+    return allocGroupPlan_.get();
   }
 
  private:
@@ -467,6 +540,33 @@ class CompositeInvocation {
       int32_t& returnBegin,
       int32_t& returnEnd);
 
+  /// Fills the parameter block of every kernel launch in 'sv' in one sweep,
+  /// accumulating the return-data span the same way the inline fill does.
+  ///
+  /// Only the allocation-group path uses this. The ordinary path fills each
+  /// launch in the pass that sizes it, which it can because that pass also
+  /// allocates the launch's outputs; a grouped launch has no output tensor
+  /// until its whole group has been sized and carved, so its fill has to wait
+  /// for every group of the step.
+  void fillStepParams(
+      ExecutionState& state,
+      StepVectors& sv,
+      uint8_t* pinnedBase,
+      uint8_t* deviceBase,
+      int32_t& returnBegin,
+      int32_t& returnEnd);
+
+  /// The allocation-group execute path, selected by WaveConfig at the top of
+  /// execute(). Defined in AllocGroup.cpp: it is a parallel implementation of
+  /// the step loop, not a variant of it, and keeping it out of this file is
+  /// what stops the two from growing shared branches.
+  ///
+  /// Differs from execute() only in how outputs are allocated. Instead of one
+  /// allocator call per output as each op is sized, the step's outputs that
+  /// share a lifetime are sized first and carved out of one buffer, sync-free
+  /// groups before the host waits on any transfer and the rest after.
+  void executeAllocGroups(ExecutionState& state);
+
   /// Stamps onto step 'stepIdx' every last-use value not yet released whose
   /// reading ops have all run out of grid steps, recording the step in
   /// 'releaseStep' (parallel to lastUseIds_, -1 until released). Called once
@@ -511,6 +611,11 @@ class CompositeInvocation {
   // available for SizeExpr evaluation.
   std::vector<Launch> prePassStandalones_;
 
+  // The allocation grouping for this invocation, built on the first execution
+  // in that mode and reused by every later one. Held by pointer so CompiledOp.h
+  // does not have to see AllocGroup.h, which includes it.
+  std::unique_ptr<AllocGroupPlan> allocGroupPlan_;
+
   // Frame value ids that were the input of a clone the in-place pass elided in
   // this node, paired with the number of clones elided for that value (from
   // ProjectNode::elidedCloneCounts). Used to report the copying saved; read
@@ -530,6 +635,10 @@ class CompiledNode {
   void execute(ExecutionState& state);
 
   const CompositeInvocation* kernels() const {
+    return kernels_.get();
+  }
+
+  CompositeInvocation* kernels() {
     return kernels_.get();
   }
 

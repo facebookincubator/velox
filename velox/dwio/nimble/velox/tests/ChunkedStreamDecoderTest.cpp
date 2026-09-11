@@ -223,10 +223,12 @@ void test(
           *memoryPool, std::move(streamLoader)),
       optimizeStringBufferHandling ? [](velox::memory::MemoryPool& pool,
          std::string_view data, std::function<void*(uint32_t)> stringBufferFactory) -> std::unique_ptr<nimble::Encoding> {
-        return nimble::EncodingFactory().create(pool, data, stringBufferFactory);
+        return nimble::EncodingFactory().create(
+            pool, data, std::move(stringBufferFactory), nimble::Encoding::Options{});
       } : [](velox::memory::MemoryPool& pool,
          std::string_view data, std::function<void*(uint32_t)> stringBufferFactory) -> std::unique_ptr<nimble::Encoding> {
-        return nimble::legacy::EncodingFactory().create(pool, data, stringBufferFactory);
+        return nimble::legacy::EncodingFactory().create(
+            pool, data, std::move(stringBufferFactory), nimble::Encoding::Options{});
       },
       optimizeStringBufferHandling,
       /* metricLogger */ {}};
@@ -375,7 +377,7 @@ class ChunkedStreamDecoderTests
       public ::testing::WithParamInterface<
           std::tuple<bool, bool, bool, bool, bool, bool>> {};
 
-TEST_P(ChunkedStreamDecoderTests, Decode) {
+TEST_P(ChunkedStreamDecoderTests, decode) {
   const auto
       [multipleChunks,
        hasNulls,
@@ -399,7 +401,7 @@ TEST_P(ChunkedStreamDecoderTests, Decode) {
   }
 }
 
-TEST_P(ChunkedStreamDecoderTests, DecodeStrings) {
+TEST_P(ChunkedStreamDecoderTests, decodeStrings) {
   const auto
       [multipleChunks,
        hasNulls,

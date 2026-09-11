@@ -27,7 +27,7 @@ using namespace facebook::velox::dwio::common::encryption::test;
 using namespace facebook::velox::dwrf::encryption;
 using namespace facebook::velox::type::fbhive;
 
-TEST(Encryption, NotEncrypted) {
+TEST(Encryption, notEncrypted) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -36,7 +36,7 @@ TEST(Encryption, NotEncrypted) {
   ASSERT_FALSE(handler->isEncrypted());
 }
 
-TEST(Encryption, RootThenField) {
+TEST(Encryption, rootThenField) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -49,7 +49,7 @@ TEST(Encryption, RootThenField) {
       exception::LoggedException);
 }
 
-TEST(Encryption, FieldThenRoot) {
+TEST(Encryption, fieldThenRoot) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -62,7 +62,7 @@ TEST(Encryption, FieldThenRoot) {
       exception::LoggedException);
 }
 
-TEST(Encryption, Root) {
+TEST(Encryption, root) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int, b:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -77,7 +77,7 @@ TEST(Encryption, Root) {
   }
 }
 
-TEST(Encryption, InvalidField) {
+TEST(Encryption, invalidField) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -90,7 +90,7 @@ TEST(Encryption, InvalidField) {
       exception::LoggedException);
 }
 
-TEST(Encryption, InvalidProperties) {
+TEST(Encryption, invalidProperties) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -101,7 +101,7 @@ TEST(Encryption, InvalidProperties) {
       exception::LoggedException);
 }
 
-TEST(Encryption, DifferentEncrypter) {
+TEST(Encryption, differentEncrypter) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -116,7 +116,7 @@ TEST(Encryption, DifferentEncrypter) {
   ASSERT_EQ(handler->getEncryptionGroupCount(), 2);
 }
 
-TEST(Encryption, SameEncrypter) {
+TEST(Encryption, sameEncrypter) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -132,7 +132,7 @@ TEST(Encryption, SameEncrypter) {
   ASSERT_EQ(handler->getEncryptionGroupCount(), 1);
 }
 
-TEST(Encryption, SameEncrypter2) {
+TEST(Encryption, sameEncrypter2) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -147,7 +147,7 @@ TEST(Encryption, SameEncrypter2) {
   ASSERT_EQ(handler->getEncryptionGroupCount(), 1);
 }
 
-TEST(Encryption, DupeField) {
+TEST(Encryption, dupeField) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:int>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -164,7 +164,7 @@ TEST(Encryption, DupeField) {
       exception::LoggedException);
 }
 
-TEST(Encryption, Basic) {
+TEST(Encryption, basic) {
   HiveTypeParser parser;
   auto type = parser.parse("struct<a:int,b:float,c:string,d:double>");
   EncryptionSpecification spec{EncryptionProvider::Unknown};
@@ -191,7 +191,7 @@ TEST(Encryption, Basic) {
   }
 }
 
-TEST(Encryption, NestedType) {
+TEST(Encryption, nestedType) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<a:int,b:map<float,map<int,double>>,c:struct<a:string,b:int>,d:array<double>>");

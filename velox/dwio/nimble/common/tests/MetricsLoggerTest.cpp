@@ -22,7 +22,7 @@ namespace facebook::nimble::test {
 
 // --- StripeLoadMetrics::serialize ---
 
-TEST(MetricsLoggerTest, StripeLoadMetricsSerialize) {
+TEST(MetricsLoggerTest, stripeLoadMetricsSerialize) {
   StripeLoadMetrics metrics{
       .stripeIndex = 3,
       .rowsInStripe = 1000,
@@ -39,7 +39,7 @@ TEST(MetricsLoggerTest, StripeLoadMetricsSerialize) {
   EXPECT_EQ(obj["totalStreamSize"].asInt(), 4096);
 }
 
-TEST(MetricsLoggerTest, StripeLoadMetricsSerializeDefaults) {
+TEST(MetricsLoggerTest, stripeLoadMetricsSerializeDefaults) {
   StripeLoadMetrics metrics{
       .stripeIndex = 0,
       .rowsInStripe = 0,
@@ -54,7 +54,7 @@ TEST(MetricsLoggerTest, StripeLoadMetricsSerializeDefaults) {
 
 // --- StripeFlushMetrics::serialize ---
 
-TEST(MetricsLoggerTest, StripeFlushMetricsSerialize) {
+TEST(MetricsLoggerTest, stripeFlushMetricsSerialize) {
   StripeFlushMetrics metrics{
       .inputSize = 50000,
       .rowCount = 10000,
@@ -73,7 +73,7 @@ TEST(MetricsLoggerTest, StripeFlushMetricsSerialize) {
 
 // --- FileCloseMetrics::serialize ---
 
-TEST(MetricsLoggerTest, FileCloseMetricsSerialize) {
+TEST(MetricsLoggerTest, fileCloseMetricsSerialize) {
   FileCloseMetrics metrics{
       .rowCount = 100000,
       .inputSize = 500000,
@@ -94,12 +94,12 @@ TEST(MetricsLoggerTest, FileCloseMetricsSerialize) {
 
 // --- LoggingScope ---
 
-TEST(MetricsLoggerTest, LoggingScopeNullInitially) {
+TEST(MetricsLoggerTest, loggingScopeNullInitially) {
   // Without any LoggingScope, getLogger should return nullptr
   EXPECT_EQ(LoggingScope::getLogger(), nullptr);
 }
 
-TEST(MetricsLoggerTest, LoggingScopeSetAndClear) {
+TEST(MetricsLoggerTest, loggingScopeSetAndClear) {
   MetricsLogger logger;
   {
     LoggingScope scope(logger);
@@ -109,7 +109,7 @@ TEST(MetricsLoggerTest, LoggingScopeSetAndClear) {
   EXPECT_EQ(LoggingScope::getLogger(), nullptr);
 }
 
-TEST(MetricsLoggerTest, LoggingScopeNestedScopes) {
+TEST(MetricsLoggerTest, loggingScopeNestedScopes) {
   MetricsLogger logger1;
   MetricsLogger logger2;
   {
@@ -126,7 +126,7 @@ TEST(MetricsLoggerTest, LoggingScopeNestedScopes) {
 
 // --- Default MetricsLogger virtual methods are safe no-ops ---
 
-TEST(MetricsLoggerTest, DefaultMethodsAreNoOps) {
+TEST(MetricsLoggerTest, defaultMethodsAreNoOps) {
   MetricsLogger logger;
   // These should all execute without error
   logger.logException(LogOperation::Write, "test error");

@@ -87,7 +87,7 @@ flatbuffers::DetachedBuffer buildSchemaWithoutAttributes() {
 
 } // namespace
 
-TEST(NimbleSchemaAttributesTest, AttributesAbsentByDefault) {
+TEST(NimbleSchemaAttributesTest, attributesAbsentByDefault) {
   // A SchemaNode built without any attributes (the existing wire format for
   // every NIMBLE file written today) must round-trip and surface as either a
   // nullptr or empty vector through the new flatbuffer schema. This protects
@@ -107,7 +107,7 @@ TEST(NimbleSchemaAttributesTest, AttributesAbsentByDefault) {
   EXPECT_EQ(node->attributes(), nullptr);
 }
 
-TEST(NimbleSchemaAttributesTest, AttributesRoundTripIcebergV3Keys) {
+TEST(NimbleSchemaAttributesTest, attributesRoundTripIcebergV3Keys) {
   // Verify every Iceberg V3 attribute key the spec recognizes survives the
   // flatbuffer round-trip with string values, exactly mirroring the Apache
   // ORC attribute convention.
@@ -140,7 +140,7 @@ TEST(NimbleSchemaAttributesTest, AttributesRoundTripIcebergV3Keys) {
   EXPECT_EQ(roundTripped, kIcebergAttrs);
 }
 
-TEST(NimbleSchemaAttributesTest, LegacyBufferIsForwardCompatible) {
+TEST(NimbleSchemaAttributesTest, legacyBufferIsForwardCompatible) {
   // A buffer produced before this fbs change has no `attributes` vtable slot.
   // The new schema's flatbuffer Verifier must accept that buffer (no
   // required fields broken), and the missing attributes accessor must return
@@ -157,7 +157,7 @@ TEST(NimbleSchemaAttributesTest, LegacyBufferIsForwardCompatible) {
   EXPECT_EQ(schema->nodes()->Get(0)->attributes(), nullptr);
 }
 
-TEST(NimbleSchemaAttributesTest, EmptyAttributeListIsDistinctFromAbsent) {
+TEST(NimbleSchemaAttributesTest, emptyAttributeListIsDistinctFromAbsent) {
   // An attribute list explicitly created but empty surfaces as a non-null
   // vector of size 0. Useful so writers can signal "I emit attributes
   // capability, this node just happens to have none" vs absent. The accessor

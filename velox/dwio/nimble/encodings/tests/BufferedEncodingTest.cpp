@@ -74,7 +74,10 @@ class BufferedEncodingTest : public ::testing::Test {
     auto serialized =
         nimble::DictionaryEncoding<uint32_t>::encode(sel, span, *buffer_);
     return nimble::EncodingFactory().create(
-        *pool_, serialized, [](uint32_t) -> void* { return nullptr; });
+        *pool_,
+        serialized,
+        [](uint32_t) -> void* { return nullptr; },
+        nimble::Encoding::Options{});
   }
 
   std::unique_ptr<nimble::Encoding> createTrivialEncoding(
@@ -87,7 +90,10 @@ class BufferedEncodingTest : public ::testing::Test {
     auto serialized =
         nimble::TrivialEncoding<uint32_t>::encode(sel, span, *buffer_);
     return nimble::EncodingFactory().create(
-        *pool_, serialized, [](uint32_t) -> void* { return nullptr; });
+        *pool_,
+        serialized,
+        [](uint32_t) -> void* { return nullptr; },
+        nimble::Encoding::Options{});
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -198,12 +204,15 @@ TEST_F(BufferedEncodingTest, dictionaryModeStringValues) {
   auto serialized =
       nimble::DictionaryEncoding<std::string_view>::encode(sel, span, encBuf);
   std::vector<velox::BufferPtr> stringBufs;
-  auto encoding =
-      nimble::EncodingFactory().create(*pool_, serialized, [&](uint32_t size) {
+  auto encoding = nimble::EncodingFactory().create(
+      *pool_,
+      serialized,
+      [&](uint32_t size) {
         auto& buf = stringBufs.emplace_back(
             velox::AlignedBuffer::allocate<char>(size, pool_.get()));
         return buf->asMutable<void>();
-      });
+      },
+      nimble::Encoding::Options{});
 
   ASSERT_TRUE(encoding->dictionaryEnabled());
   const auto* entries =

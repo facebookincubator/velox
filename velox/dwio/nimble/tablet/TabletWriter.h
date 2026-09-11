@@ -23,7 +23,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
-#include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
@@ -169,6 +168,11 @@ class TabletWriter {
   // Write metadata entry to file. Uses options_.metadataCompressionThreshold
   // to decide whether to compress.
   CompressionType writeMetadata(std::string_view metadata);
+
+  // Writes raw data segments contiguously and returns their file offset and
+  // total byte length.
+  std::pair<uint64_t, uint32_t> writeSegments(
+      const std::vector<std::string_view>& segments);
 
   // Write stripe group metadata entry and also add that to footer sections if
   // exceeds metadata flush size.

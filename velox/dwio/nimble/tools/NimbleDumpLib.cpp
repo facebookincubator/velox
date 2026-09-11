@@ -36,8 +36,8 @@
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 #include "velox/dwio/nimble/tools/NimbleDumpLib.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/StatsGenerated.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
@@ -75,8 +75,8 @@ uint64_t getRawDataSize(
     return buffer->asMutable<void>();
   };
 
-  auto encoding =
-      EncodingFactory().create(memoryPool, encodingStr, stringBufferFactory);
+  auto encoding = EncodingFactory().create(
+      memoryPool, encodingStr, stringBufferFactory, Encoding::Options{});
   EncodingType encodingType = encoding->encodingType();
   DataType dataType = encoding->dataType();
   uint32_t rowCount = encoding->rowCount();
@@ -105,7 +105,10 @@ uint64_t getRawDataSize(
       pos += kCompressionTypeSize;
       auto lengthsSize = encoding::readUint32(pos);
       auto lengths = EncodingFactory().create(
-          memoryPool, {pos, lengthsSize}, stringBufferFactory);
+          memoryPool,
+          {pos, lengthsSize},
+          stringBufferFactory,
+          Encoding::Options{});
       std::vector<uint32_t> buffer(rowCount);
       lengths->materialize(rowCount, buffer.data());
       result += std::accumulate(buffer.begin(), buffer.end(), 0u);
@@ -136,14 +139,20 @@ uint64_t getRawDataSize(
       auto alphabetSize = encoding::readUint32(pos);
       auto alphabetCount = encoding::peek<uint32_t>(pos + kRowCountOffset);
       auto alphabet = EncodingFactory().create(
-          memoryPool, {pos, alphabetSize}, stringBufferFactory);
+          memoryPool,
+          {pos, alphabetSize},
+          stringBufferFactory,
+          Encoding::Options{});
       std::vector<std::string_view> alphabetBuffer(alphabetCount);
       alphabet->materialize(alphabetCount, alphabetBuffer.data());
 
       pos += alphabetSize;
       auto indicesSize = encodingStr.length() - (pos - encodingStr.data());
       auto indices = EncodingFactory().create(
-          memoryPool, {pos, indicesSize}, stringBufferFactory);
+          memoryPool,
+          {pos, indicesSize},
+          stringBufferFactory,
+          Encoding::Options{});
       std::vector<uint32_t> indicesBuffer(rowCount);
       indices->materialize(rowCount, indicesBuffer.data());
       for (int i = 0; i < rowCount; ++i) {
@@ -156,14 +165,20 @@ uint64_t getRawDataSize(
       auto runLengthsSize = encoding::readUint32(pos);
       auto runLengthsCount = encoding::peek<uint32_t>(pos + kRowCountOffset);
       auto runLengths = EncodingFactory().create(
-          memoryPool, {pos, runLengthsSize}, stringBufferFactory);
+          memoryPool,
+          {pos, runLengthsSize},
+          stringBufferFactory,
+          Encoding::Options{});
       std::vector<uint32_t> runLengthsBuffer(runLengthsCount);
       runLengths->materialize(runLengthsCount, runLengthsBuffer.data());
 
       pos += runLengthsSize;
       auto runValuesSize = encodingStr.length() - (pos - encodingStr.data());
       auto runValues = EncodingFactory().create(
-          memoryPool, {pos, runValuesSize}, stringBufferFactory);
+          memoryPool,
+          {pos, runValuesSize},
+          stringBufferFactory,
+          Encoding::Options{});
       std::vector<std::string_view> runValuesBuffer(runLengthsCount);
       runValues->materialize(runLengthsCount, runValuesBuffer.data());
 
@@ -476,7 +491,7 @@ void NimbleDumpLib::emitInfo() {
   ostream_ << "Row Count: " << commaSeparated(tablet->tabletRowCount())
            << std::endl;
 
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
 
   auto statsSection = tablet->loadOptionalSection(std::string(kStatsSection));
   ostream_ << "Raw Data Size: ";
@@ -507,7 +522,7 @@ void NimbleDumpLib::emitSchema(bool collapseFlatMap) {
   options.ioOptions.emplace(pool_.get())
       .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   auto tablet = TabletReader::create(file_, pool_.get(), options);
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
 
   auto emitOffsets = [](const Type& type) {
     std::string offsets;
@@ -639,13 +654,17 @@ void NimbleDumpLib::emitStripes(bool noHeader) {
   // stripe groups. We must hold on to it across loop iterations in order to
   // maintain the items in the cache.
   std::optional<StripeIdentifier> stripeIdentifier;
-  std::vector<uint32_t> sizesScratch;
+  std::vector<TabletReader::StreamLocation> locationsScratch;
   for (auto i = 0; i < tabletReader->stripeCount(); ++i) {
     stripeIdentifier = tabletReader->stripeIdentifier(i);
-    sizesScratch.resize(tabletReader->streamCount(stripeIdentifier.value()));
-    tabletReader->streamSizes(stripeIdentifier.value(), sizesScratch);
-    auto stripeSize =
-        std::accumulate(sizesScratch.begin(), sizesScratch.end(), 0UL);
+    locationsScratch.resize(
+        tabletReader->streamCount(stripeIdentifier.value()));
+    tabletReader->streamLocations(stripeIdentifier.value(), locationsScratch);
+    auto stripeSize = std::accumulate(
+        locationsScratch.begin(),
+        locationsScratch.end(),
+        0UL,
+        [](auto size, const auto& location) { return size + location.size; });
     formatter.writeRow({
         folly::to<std::string>(i),
         commaSeparated(tabletReader->stripeOffset(i)),
@@ -689,12 +708,12 @@ void NimbleDumpLib::emitStreams(
   std::optional<StreamLabels> labels{};
   std::unordered_set<uint32_t> inMapStreams;
   if (showStreamLabels || showInMapStream) {
-    VeloxReader reader{tabletReader, *pool_};
+    BatchReader reader{tabletReader, *pool_};
     if (showStreamLabels) {
       labels.emplace(reader.schema());
     }
     if (showInMapStream) {
-      VeloxReader inMapReader{tabletReader, *pool_};
+      BatchReader inMapReader{tabletReader, *pool_};
       SchemaReader::traverseSchema(
           inMapReader.schema(),
           [&](auto /*level*/, const Type& type, auto /*info*/) {
@@ -873,7 +892,10 @@ void NimbleDumpLib::emitContent(
       InMemoryChunkedStream chunkedStream{*pool_, std::move(stream)};
       while (chunkedStream.hasNext()) {
         auto encoding = EncodingFactory().create(
-            *pool_, chunkedStream.nextChunk(), stringBufferFactory);
+            *pool_,
+            chunkedStream.nextChunk(),
+            stringBufferFactory,
+            Encoding::Options{});
         uint32_t totalRows = encoding->rowCount();
         while (totalRows > 0) {
           auto currentReadSize = std::min(kBufferSize, totalRows);
@@ -1506,7 +1528,7 @@ void NimbleDumpLib::emitStats(bool noHeader) {
     auto fileStats = VectorizedFileStats::deserialize(
         vectorizedStatsSection->content(), *pool_);
 
-    VeloxReader reader{tabletReader, *pool_};
+    BatchReader reader{tabletReader, *pool_};
     auto columnStats =
         fileStats->toColumnStatistics(reader.type(), reader.schema());
 

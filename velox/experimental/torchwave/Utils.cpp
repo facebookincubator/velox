@@ -44,7 +44,8 @@ at::Tensor aliasTensor(
     const at::Tensor& base,
     c10::IntArrayRef sizes,
     c10::IntArrayRef strides,
-    int64_t storageOffset) {
+    int64_t storageOffset,
+    std::optional<c10::ScalarType> dtype) {
   // Built from the TensorImpl directly rather than through narrow/select: a
   // reservation rebuilds its views on every launch, and two dispatcher
   // round-trips per view dominated that path. at::detail::make_tensor is
@@ -54,7 +55,8 @@ at::Tensor aliasTensor(
       c10::TensorImpl::VIEW,
       c10::Storage(base.storage()),
       base.key_set(),
-      base.dtype());
+      dtype.has_value() ? caffe2::TypeMeta::fromScalarType(*dtype)
+                        : base.dtype());
   impl->set_sizes_and_strides(sizes, strides, storageOffset);
   return at::Tensor(std::move(impl));
 }

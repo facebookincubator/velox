@@ -176,7 +176,7 @@ inline std::string getRequestID(
           error.ShouldRetry()) {                                                                                                \
         errMsg.append(                                                                                                          \
             fmt::format(                                                                                                        \
-                " Request failed after retrying {} times. Try increasing the value of 'hive.s3.max-attempts'.",                 \
+                " Request failed after retrying {} times. Try increasing the value of the S3 'max-attempts' configuration.",    \
                 outcome.GetRetryCount()));                                                                                      \
       }                                                                                                                         \
       if (error.GetResponseCode() == Aws::Http::HttpResponseCode::NOT_FOUND) {                                                  \

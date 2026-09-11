@@ -39,8 +39,8 @@ class RLEEncodingView final : public TypedEncodingView<T> {
     const char* pos = data.data() + this->dataOffset_;
     const auto runLengthsSize = encoding::readUint32(pos);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto runLengths = EncodingFactory(options).create(
-        *this->pool_, {pos, runLengthsSize}, noStringBufferFactory);
+    auto runLengths = EncodingFactory().create(
+        *this->pool_, {pos, runLengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(runLengths);
     runEnds_.resize(runLengths->rowCount());
     runLengths->materialize(runLengths->rowCount(), runEnds_.data());
@@ -108,8 +108,8 @@ class RLEEncodingView<bool> final : public TypedEncodingView<bool> {
     const char* pos = data.data() + this->dataOffset_;
     const auto runLengthsSize = encoding::readUint32(pos);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto runLengths = EncodingFactory(options).create(
-        *this->pool_, {pos, runLengthsSize}, noStringBufferFactory);
+    auto runLengths = EncodingFactory().create(
+        *this->pool_, {pos, runLengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(runLengths);
     runEnds_.resize(runLengths->rowCount());
     runLengths->materialize(runLengths->rowCount(), runEnds_.data());

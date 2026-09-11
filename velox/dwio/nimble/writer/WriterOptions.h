@@ -20,16 +20,24 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/MetricsLogger.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 
+#include <memory>
+#include <optional>
 #include <set>
+#include <unordered_map>
+#include <vector>
 #include "velox/common/base/SpillConfig.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/type/Type.h"
@@ -51,13 +59,28 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .allowNestedAlpSelection = allowNestedAlpSelection,
-        .sharedDictionaryResolver = {},
+        .sharedDictionaryAlphabet = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
 
   /// Property bag for storing user metadata in the file.
   std::unordered_map<std::string, std::string> metadata =
       detail::defaultMetadata();
+
+  /// Supplies user metadata that is only known once every row has been
+  /// written, for callers whose value is not final when the writer opens.
+  /// Invoked once from close(), after the last stripe is written and before
+  /// the metadata section is serialized, so it observes the finished file.
+  /// Entries it returns win over `metadata` on a key collision, including
+  /// over the defaults seeded above. Throwing from it fails close().
+  std::function<std::unordered_map<std::string, std::string>()>
+      metadataProvider{};
+
+  /// Shared dictionary encoding settings.
+  /// EXPERIMENTAL: Shared dictionary encoding is not production-ready. Do not
+  /// enable for production tables without consulting the Nimble team (oncall:
+  /// dwios).
+  SharedDictionaryEncodingConfig experimentalSharedDictionaryEncoding{};
 
   /// Enable column statistics collection. When false, the writer skips
   /// collecting per-column statistics, reducing write CPU cost.
@@ -112,7 +135,7 @@ struct WriterOptions {
   bool experimentalOmitClusterIndexKeyColumnStorage{false};
 
   /// Enables compact varint row-count encoding for encoded data streams. The
-  /// value is persisted in file features so readers can select the matching
+  /// value is persisted in file properties so readers can select the matching
   /// decoding behavior.
   /// EXPERIMENTAL: Compact row-count encoding is not production-ready. Do not
   /// enable for production tables without consulting the Nimble team (oncall:
@@ -124,6 +147,19 @@ struct WriterOptions {
   /// EXPERIMENTAL: Dense indexes are not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   std::vector<std::shared_ptr<const index::IndexConfig>> denseIndexConfigs{};
+
+  /// Vector index configurations. Each entry builds a FAISS similarity index
+  /// over a top-level ARRAY<REAL> column, where each row contains one vector of
+  /// floating-point values. Every array must have exactly the configured
+  /// dimensions; null rows and null elements are rejected.
+  /// EXPERIMENTAL: Vector indexes are not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  std::vector<VectorIndexConfig> vectorIndexConfigs{};
+
+  /// Builds the writer for vectorIndexConfigs. Required when
+  /// vectorIndexConfigs is non-empty. Set it to
+  /// index::VectorIndexWriter::create
+  index::VectorIndexWriterFactory vectorIndexWriterFactory{};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
   /// of predefined key strings. When the set is empty, the column is
@@ -353,11 +389,13 @@ struct WriterOptions {
   /// until all KeepAlive references are destructed.
   folly::Executor::KeepAlive<> encodingExecutor{};
 
-  /// When maxEncodeParallelism > 0 and encodingExecutor is set,
-  /// FieldWriter::write() operations will be parallelized using coroutines
-  /// scheduled on encodingExecutor.
+  /// Caps concurrent stream-encoding tasks. Callers should not set this above
+  /// the executor's available thread count.
   uint32_t maxEncodeParallelism{0};
-  uint32_t minStreamsPerEncodeUnit{1};
+
+  /// Targets at least this many streams per parallel encoding task. Zero is
+  /// treated as one.
+  uint32_t minStreamsPerEncodingTask{1};
 
   bool enableChunking{true};
 

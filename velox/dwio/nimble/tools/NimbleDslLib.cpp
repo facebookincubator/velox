@@ -25,8 +25,8 @@
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 #include "velox/dwio/nimble/tools/NimbleDslLib.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/velox/StreamLabels.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 
@@ -345,7 +345,7 @@ void NimbleDslLib::select(
   auto tablet = TabletReader::create(file_, pool_.get(), tabletOptions);
 
   // First create a reader without projection to get the full schema.
-  VeloxReader schemaReader{tablet, *pool_};
+  BatchReader schemaReader{tablet, *pool_};
   const auto& fullType = schemaReader.type();
 
   // If a stripe is specified, compute the row range.
@@ -386,7 +386,7 @@ void NimbleDslLib::select(
         fullType, columns);
   }
 
-  VeloxReader reader{tablet, *pool_, selector};
+  BatchReader reader{tablet, *pool_, selector};
   const auto& projectedType = reader.type();
 
   if (effectiveOffset > 0) {
@@ -449,7 +449,7 @@ void NimbleDslLib::describe() {
   tabletOptions.ioOptions.emplace(pool_.get())
       .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   auto tablet = TabletReader::create(file_, pool_.get(), tabletOptions);
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
   const auto& veloxType = reader.type();
 
   TableFormatter formatter{
@@ -544,7 +544,7 @@ void NimbleDslLib::showStats() {
   tabletOptions.ioOptions.emplace(pool_.get())
       .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   auto tablet = TabletReader::create(file_, pool_.get(), tabletOptions);
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
 
   auto statsSection =
       tablet->loadOptionalSection(tabletOptions.preloadOptionalSections[0]);
@@ -654,7 +654,7 @@ void NimbleDslLib::showEncoding(std::optional<uint32_t> stripeId) {
   tabletOptions.ioOptions.emplace(pool_.get())
       .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   auto tablet = TabletReader::create(file_, pool_.get(), tabletOptions);
-  VeloxReader reader{tablet, *pool_};
+  BatchReader reader{tablet, *pool_};
   StreamLabels labels{reader.schema()};
 
   TableFormatter formatter{

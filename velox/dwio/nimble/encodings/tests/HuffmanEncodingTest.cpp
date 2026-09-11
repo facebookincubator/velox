@@ -69,8 +69,10 @@ class HuffmanEncodingTest : public ::testing::Test {
     for (const auto useLegacy : {false, true}) {
       SCOPED_TRACE(fmt::format("legacy={}", useLegacy));
       std::unique_ptr<Encoding> encoding = useLegacy
-          ? legacy::EncodingFactory().create(*pool_, encoded, nullptr)
-          : EncodingFactory().create(*pool_, encoded, nullptr);
+          ? legacy::EncodingFactory().create(
+                *pool_, encoded, nullptr, Encoding::Options{})
+          : EncodingFactory().create(
+                *pool_, encoded, nullptr, Encoding::Options{});
       EXPECT_EQ(encoding->encodingType(), EncodingType::Huffman);
       EXPECT_EQ(encoding->dataType(), TypeTraits<T>::dataType);
       EXPECT_EQ(encoding->rowCount(), values.size());
@@ -294,6 +296,24 @@ TEST_F(HuffmanEncodingTest, estimateRejectsUnsupportedCardinality) {
   EXPECT_EQ(
       HuffmanEncoding<uint32_t>::estimateSize(
           tooManySymbols, Statistics<uint32_t>::create(tooManySymbols)),
+      std::nullopt);
+}
+
+TEST_F(HuffmanEncodingTest, estimateRejectsCodeTreePastLimit) {
+  constexpr std::array<uint32_t, 14> kFrequencies = {
+      1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377};
+  Vector<uint32_t> values{pool_.get()};
+  for (uint32_t symbol = 0; symbol < kFrequencies.size(); ++symbol) {
+    for (uint32_t count = 0; count < kFrequencies[symbol]; ++count) {
+      values.push_back(symbol);
+    }
+  }
+
+  const std::span<const uint32_t> input{values.data(), values.size()};
+  NIMBLE_ASSERT_THROW(encode(values), "Huffman tree exceeds");
+  EXPECT_EQ(
+      HuffmanEncoding<uint32_t>::estimateSize(
+          input, Statistics<uint32_t>::create(input)),
       std::nullopt);
 }
 

@@ -182,7 +182,8 @@ std::string PlanNodeStats::toString(
   if (includeInputStats) {
     out << "Input: " << inputRows << " rows (" << succinctBytes(inputBytes)
         << ", " << inputVectors << " batches), ";
-    if ((rawInputRows > 0) && (rawInputRows != inputRows)) {
+    if (rawInputRows > 0 &&
+        (rawInputRows != inputRows || rawInputBytes != inputBytes)) {
       out << "Raw Input: " << rawInputRows << " rows ("
           << succinctBytes(rawInputBytes) << "), ";
     }

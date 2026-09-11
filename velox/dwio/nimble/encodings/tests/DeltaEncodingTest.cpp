@@ -133,7 +133,7 @@ using TestTypes = ::testing::Types<NUM_TYPES>;
 
 TYPED_TEST_CASE(DeltaEncodingTest, TestTypes);
 
-TYPED_TEST(DeltaEncodingTest, SerializeThenDeserialize) {
+TYPED_TEST(DeltaEncodingTest, serializeThenDeserialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -168,7 +168,7 @@ TYPED_TEST(DeltaEncodingTest, SerializeThenDeserialize) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, ResetAndMaterializeInParts) {
+TYPED_TEST(DeltaEncodingTest, resetAndMaterializeInParts) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -219,7 +219,7 @@ TYPED_TEST(DeltaEncodingTest, ResetAndMaterializeInParts) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, SkipThenMaterialize) {
+TYPED_TEST(DeltaEncodingTest, skipThenMaterialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -258,7 +258,7 @@ TYPED_TEST(DeltaEncodingTest, SkipThenMaterialize) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, BoundaryValues) {
+TYPED_TEST(DeltaEncodingTest, boundaryValues) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -296,7 +296,7 @@ TYPED_TEST(DeltaEncodingTest, BoundaryValues) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, AllZeros) {
+TYPED_TEST(DeltaEncodingTest, allZeros) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -327,7 +327,7 @@ TYPED_TEST(DeltaEncodingTest, AllZeros) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, StrictlyDecreasing) {
+TYPED_TEST(DeltaEncodingTest, strictlyDecreasing) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -361,7 +361,7 @@ TYPED_TEST(DeltaEncodingTest, StrictlyDecreasing) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, AlternatingMinMax) {
+TYPED_TEST(DeltaEncodingTest, alternatingMinMax) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -397,7 +397,7 @@ TYPED_TEST(DeltaEncodingTest, AlternatingMinMax) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, SkipZeroRows) {
+TYPED_TEST(DeltaEncodingTest, skipZeroRows) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -430,7 +430,7 @@ TYPED_TEST(DeltaEncodingTest, SkipZeroRows) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, SkipAllThenMaterialize) {
+TYPED_TEST(DeltaEncodingTest, skipAllThenMaterialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -466,7 +466,7 @@ TYPED_TEST(DeltaEncodingTest, SkipAllThenMaterialize) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, MultipleSkipMaterializeCycles) {
+TYPED_TEST(DeltaEncodingTest, multipleSkipMaterializeCycles) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -505,7 +505,7 @@ TYPED_TEST(DeltaEncodingTest, MultipleSkipMaterializeCycles) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, ResetAfterPartialSkipAndMaterialize) {
+TYPED_TEST(DeltaEncodingTest, resetAfterPartialSkipAndMaterialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -547,7 +547,7 @@ TYPED_TEST(DeltaEncodingTest, ResetAfterPartialSkipAndMaterialize) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, EmptyData) {
+TYPED_TEST(DeltaEncodingTest, emptyData) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -564,7 +564,7 @@ TYPED_TEST(DeltaEncodingTest, EmptyData) {
       nimble::NimbleUserError);
 }
 
-TYPED_TEST(DeltaEncodingTest, LargeRowCount) {
+TYPED_TEST(DeltaEncodingTest, largeRowCount) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -605,7 +605,7 @@ TYPED_TEST(DeltaEncodingTest, LargeRowCount) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, CompressionRoundTrip) {
+TYPED_TEST(DeltaEncodingTest, compressionRoundTrip) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -638,7 +638,7 @@ TYPED_TEST(DeltaEncodingTest, CompressionRoundTrip) {
   }
 }
 
-TYPED_TEST(DeltaEncodingTest, SingleRestatementAtEnd) {
+TYPED_TEST(DeltaEncodingTest, singleRestatementAtEnd) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -677,7 +677,7 @@ TYPED_TEST(DeltaEncodingTest, SingleRestatementAtEnd) {
 // Verifies round-trip correctness when values increase from negative to
 // positive. The negative-to-positive transition must be treated as a
 // restatement (not a delta) to avoid signed overflow.
-TYPED_TEST(DeltaEncodingTest, ZeroCrossingNegativeToPositive) {
+TYPED_TEST(DeltaEncodingTest, zeroCrossingNegativeToPositive) {
   using D = typename TypeParam::data_type;
   if constexpr (nimble::isSignedIntegralType<D>()) {
     const nimble::Encoding::Options options{
@@ -714,7 +714,7 @@ TYPED_TEST(DeltaEncodingTest, ZeroCrossingNegativeToPositive) {
 // Verifies round-trip when values cross zero multiple times, mixing
 // increasing crossings (restatement) and decreasing crossings (also
 // restatement due to decrease).
-TYPED_TEST(DeltaEncodingTest, ZeroCrossingMultipleCrossings) {
+TYPED_TEST(DeltaEncodingTest, zeroCrossingMultipleCrossings) {
   using D = typename TypeParam::data_type;
   if constexpr (nimble::isSignedIntegralType<D>()) {
     const nimble::Encoding::Options options{
@@ -754,7 +754,7 @@ TYPED_TEST(DeltaEncodingTest, ZeroCrossingMultipleCrossings) {
 // Values that pass through zero itself ({-2, -1, 0, 1, 2}) should NOT trigger
 // the crossesZero path, because 0 is neither > 0 nor < 0. All transitions
 // are plain deltas.
-TYPED_TEST(DeltaEncodingTest, ZeroCrossingThroughZeroValue) {
+TYPED_TEST(DeltaEncodingTest, zeroCrossingThroughZeroValue) {
   using D = typename TypeParam::data_type;
   if constexpr (nimble::isSignedIntegralType<D>()) {
     const nimble::Encoding::Options options{
@@ -789,7 +789,7 @@ TYPED_TEST(DeltaEncodingTest, ZeroCrossingThroughZeroValue) {
 }
 
 // Verifies that skip correctly handles zero-crossing restatements.
-TYPED_TEST(DeltaEncodingTest, ZeroCrossingWithSkipAndMaterialize) {
+TYPED_TEST(DeltaEncodingTest, zeroCrossingWithSkipAndMaterialize) {
   using D = typename TypeParam::data_type;
   if constexpr (nimble::isSignedIntegralType<D>()) {
     const nimble::Encoding::Options options{
@@ -844,7 +844,7 @@ TYPED_TEST(DeltaEncodingTest, ZeroCrossingWithSkipAndMaterialize) {
 
 // Skip exactly 1 row (the minimum non-zero skip). The first row is always a
 // restatement, so lastRestatement=0, totalRestatements=1, deltasToAccumulate=0.
-TYPED_TEST(DeltaEncodingTest, SkipSingleRow) {
+TYPED_TEST(DeltaEncodingTest, skipSingleRow) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -878,7 +878,7 @@ TYPED_TEST(DeltaEncodingTest, SkipSingleRow) {
 // Skip N-1 rows, then materialize only the last row. Tests that the fused
 // reverse scan correctly accumulates all trailing deltas after the last
 // restatement.
-TYPED_TEST(DeltaEncodingTest, SkipToLastRow) {
+TYPED_TEST(DeltaEncodingTest, skipToLastRow) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -908,7 +908,7 @@ TYPED_TEST(DeltaEncodingTest, SkipToLastRow) {
 // Skip range contains consecutive restatements (3 back-to-back decreasing
 // values). The fused reverse scan must correctly find the LAST restatement
 // and count ALL of them.
-TYPED_TEST(DeltaEncodingTest, SkipConsecutiveRestatements) {
+TYPED_TEST(DeltaEncodingTest, skipConsecutiveRestatements) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -947,7 +947,7 @@ TYPED_TEST(DeltaEncodingTest, SkipConsecutiveRestatements) {
 // Skip range ends exactly on a restatement (the last skipped row is a
 // decrease). deltasToAccumulate should be 0 since there are no trailing
 // deltas after the last restatement in the skip range.
-TYPED_TEST(DeltaEncodingTest, SkipEndingOnRestatement) {
+TYPED_TEST(DeltaEncodingTest, skipEndingOnRestatement) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -986,7 +986,7 @@ TYPED_TEST(DeltaEncodingTest, SkipEndingOnRestatement) {
 
 // Skip range has trailing deltas after the last restatement, exercising
 // the deltasToAccumulate accumulation in the fused scan.
-TYPED_TEST(DeltaEncodingTest, SkipWithTrailingDeltasAfterRestatement) {
+TYPED_TEST(DeltaEncodingTest, skipWithTrailingDeltasAfterRestatement) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1027,7 +1027,7 @@ TYPED_TEST(DeltaEncodingTest, SkipWithTrailingDeltasAfterRestatement) {
 // Skip all-monotonic range (no restatements except the first element).
 // The fused scan finds lastRestatement=0, totalRestatements=1, and must
 // accumulate all N-1 deltas.
-TYPED_TEST(DeltaEncodingTest, SkipAllMonotonicThenMaterialize) {
+TYPED_TEST(DeltaEncodingTest, skipAllMonotonicThenMaterialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1060,7 +1060,7 @@ TYPED_TEST(DeltaEncodingTest, SkipAllMonotonicThenMaterialize) {
 // Skip all-restatement range (strictly decreasing). Every element is a
 // restatement. The fused scan must find lastRestatement = rowCount-1,
 // totalRestatements = rowCount, deltasToSkip = 0, deltasToAccumulate = 0.
-TYPED_TEST(DeltaEncodingTest, SkipAllRestatementsThenMaterialize) {
+TYPED_TEST(DeltaEncodingTest, skipAllRestatementsThenMaterialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1095,7 +1095,7 @@ TYPED_TEST(DeltaEncodingTest, SkipAllRestatementsThenMaterialize) {
 // Multiple restatements at scattered positions in the skip range. The fused
 // reverse scan must count restatements at positions 0, 3, 5 while correctly
 // identifying position 5 as the last.
-TYPED_TEST(DeltaEncodingTest, SkipScatteredRestatements) {
+TYPED_TEST(DeltaEncodingTest, skipScatteredRestatements) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1132,7 +1132,7 @@ TYPED_TEST(DeltaEncodingTest, SkipScatteredRestatements) {
 // Repeated single-row skip + single-row materialize across restatement
 // boundaries. Each skip(1) invokes the fused reverse scan on a 1-element
 // window, testing the minimal case repeatedly.
-TYPED_TEST(DeltaEncodingTest, AlternatingSkip1Materialize1) {
+TYPED_TEST(DeltaEncodingTest, alternatingSkip1Materialize1) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1168,7 +1168,7 @@ TYPED_TEST(DeltaEncodingTest, AlternatingSkip1Materialize1) {
 // Large dataset with periodic restatements: sawtooth of 50 values repeated
 // 20 times (1000 values). Exercises the fused scan with many restatements at
 // regular intervals and a large deltasToAccumulate.
-TYPED_TEST(DeltaEncodingTest, SkipLargeSawtoothThenMaterialize) {
+TYPED_TEST(DeltaEncodingTest, skipLargeSawtoothThenMaterialize) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1215,7 +1215,7 @@ TYPED_TEST(DeltaEncodingTest, SkipLargeSawtoothThenMaterialize) {
 // Two skips of different sizes separated by a materialize. The second skip
 // starts from a non-initial position, testing that the fused scan works
 // correctly when currentValue_ is already set from a prior materialize.
-TYPED_TEST(DeltaEncodingTest, TwoSkipsMaterializeBetween) {
+TYPED_TEST(DeltaEncodingTest, twoSkipsMaterializeBetween) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1256,7 +1256,7 @@ TYPED_TEST(DeltaEncodingTest, TwoSkipsMaterializeBetween) {
 // Restatements at both boundaries of the skip range (first and last
 // positions). Tests that the fused scan correctly handles boundary
 // restatements.
-TYPED_TEST(DeltaEncodingTest, SkipWithRestatementAtBothBoundaries) {
+TYPED_TEST(DeltaEncodingTest, skipWithRestatementAtBothBoundaries) {
   using D = typename TypeParam::data_type;
   const nimble::Encoding::Options options{
       .useVarintRowCount = TypeParam::useVarint};
@@ -1297,7 +1297,7 @@ TYPED_TEST(DeltaEncodingTest, SkipWithRestatementAtBothBoundaries) {
 // Directly tests internal::computeDeltas to verify that zero-crossing
 // transitions produce the correct decomposition into deltas, restatements,
 // and isRestatements vectors.
-TEST(ComputeDeltasTest, ZeroCrossingDecomposition) {
+TEST(ComputeDeltasTest, zeroCrossingDecomposition) {
   auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
 
   // Input: {-3, -1, 2, 5}
@@ -1351,7 +1351,7 @@ TEST(ComputeDeltasTest, ZeroCrossingDecomposition) {
 // trigger zero-crossing restatements. The crossesZero check requires
 // values[i] > 0 && values[i-1] < 0, so transitions involving 0 are plain
 // deltas.
-TEST(ComputeDeltasTest, ThroughZeroNoZeroCrossing) {
+TEST(ComputeDeltasTest, throughZeroNoZeroCrossing) {
   auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
 
   // -1 → 0: isDelta=true, crossesZero=false (0 is not > 0) → delta
@@ -1383,7 +1383,7 @@ TEST(ComputeDeltasTest, ThroughZeroNoZeroCrossing) {
 }
 
 // Verifies that unsigned types never trigger zero-crossing logic.
-TEST(ComputeDeltasTest, UnsignedNoZeroCrossing) {
+TEST(ComputeDeltasTest, unsignedNoZeroCrossing) {
   auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
 
   // All increasing — every transition is a delta for unsigned types.

@@ -34,9 +34,10 @@
 // ingestion.
 namespace facebook::nimble::testing {
 
-/// Randomized encoding selection for fuzz/stress testing. For each stream it
-/// picks uniformly at random among the encodings that are compatible with the
-/// data. Compatibility is defined exactly as encoding-size estimability:
+/// Randomized encoding selection for fuzz/stress testing. For each encoded
+/// chunk it picks uniformly at random among the encodings that are compatible
+/// with the data. Compatibility is defined exactly as encoding-size
+/// estimability:
 /// EncodingSizeEstimation returns nullopt for any encoding that cannot encode
 /// the given physical type or data statistics (e.g. Dictionary/FixedBitWidth/
 /// Varint on bool, Varint on non-integers, Constant on non-constant data), so
@@ -67,6 +68,8 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (values.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
       };
     }
 
@@ -87,23 +90,31 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (compatibleEncodings.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
       };
     }
 
-    // Seed a fresh generator from this policy's derived seed so the single pick
-    // is deterministic and independent of encode thread order.
-    std::mt19937_64 generator{seed_};
+    const auto selectionSeed = folly::hash::hash_combine(
+        seed_, folly::hash::hash_range(values.begin(), values.end()));
+    std::mt19937_64 generator{selectionSeed};
     std::uniform_int_distribution<size_t> distribution(
         0, compatibleEncodings.size() - 1);
     const auto selectedEncoding = compatibleEncodings[distribution(generator)];
 
     if (!compressionOptions_.has_value()) {
-      return {.encodingType = selectedEncoding};
+      return {
+          .encodingType = selectedEncoding,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
+      };
     }
     // Encoding selection optimizes the in-memory layout. Compression is still
     // attempted for leaf data streams to reduce persistent storage size.
     return {
         .encodingType = selectedEncoding,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
         .compressionPolicyFactory = [compressionOptions =
                                          compressionOptions_.value(),
                                      selectedEncoding]() {
@@ -119,6 +130,8 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const Encoding::Options& /* options */) override {
     return {
         .encodingType = EncodingType::Nullable,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
     };
   }
 
@@ -160,13 +173,14 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
 };
 
 /// Produces RandomEncodingSelectionPolicy instances seeded deterministically
-/// from a single base seed, so an entire file's random encoding tree is
-/// reproducible from that seed. Intended for fuzz/stress testing only.
+/// from a single base seed. Each selection additionally derives its seed from
+/// the input values, keeping the result reproducible independently of policy
+/// creation and encode thread order. Intended for fuzz/stress testing only.
 class RandomEncodingSelectionPolicyFactory {
  public:
   /// The candidate encodings the random policy draws from (the production
   /// Learned/Manual default set). EncodingSizeEstimation filters this per
-  /// stream down to the encodings compatible with the actual data.
+  /// selection down to the encodings compatible with the actual data.
   static std::vector<EncodingType> defaultEncodingChoices();
 
   /// Builds a factory from a nimble.encoding_selection_config string of the

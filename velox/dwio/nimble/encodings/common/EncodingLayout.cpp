@@ -20,11 +20,12 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
 namespace facebook::nimble {
 
@@ -188,6 +189,7 @@ EncodingLayout EncodingLayoutCapture::capture(
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
   }
 
+  EncodingLayout::Config encodingConfig;
   std::vector<std::optional<const EncodingLayout>> children;
   switch (encodingType) {
     case EncodingType::FixedBitWidth:
@@ -195,12 +197,31 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Constant:
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
+    case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
     case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::Slice:
+      // The wrapped encoding is carried verbatim rather than as a nested
+      // stream, and the layout tree describes how data is encoded, not how a
+      // slice was deferred. Reported as childless.
+      break;
+    case EncodingType::BitRangeSplit: {
+      using Base = detail::BitRangeSplitEncodingBase;
+      Base::captureLayout(
+          encoding,
+          options,
+          [&](NestedEncodingIdentifier /* sectionIndex */,
+              const Base::Section& section) {
+            const char* position = section.data;
+            captureChild(children, position, section.dataBytes, options);
+          },
+          encodingConfig);
+      break;
+    }
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;
       const auto header = detail::alp::readHeader(pos);
@@ -325,8 +346,6 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::SharedDictionary: {
       children.reserve(1);
       const char* pos = encoding.data() + prefixSize;
-      readSharedDictionaryScope(encoding, pos);
-      readSharedDictionaryId(encoding, pos);
       const auto indicesOffset = static_cast<size_t>(pos - encoding.data());
       NIMBLE_CHECK_LT(
           indicesOffset,
@@ -398,8 +417,7 @@ EncodingLayout EncodingLayoutCapture::capture(
 
   return {
       encodingType,
-      /*encodingConfig=*/
-      {},
+      std::move(encodingConfig),
       compressionType,
       std::move(children)};
 }

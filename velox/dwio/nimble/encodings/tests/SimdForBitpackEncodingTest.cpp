@@ -746,7 +746,10 @@ class SimdForBitpackFuzzerTest : public ::testing::Test {
           buffer);
       std::vector<char> storage(encoded.begin(), encoded.end());
       auto encoding = EncodingFactory().create(
-          *pool_, {storage.data(), storage.size()}, nullptr);
+          *pool_,
+          {storage.data(), storage.size()},
+          nullptr,
+          Encoding::Options{});
 
       ASSERT_EQ(encoding->encodingType(), EncodingType::SimdForBitpack);
       ASSERT_EQ(encoding->rowCount(), values.size());

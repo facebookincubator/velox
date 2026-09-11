@@ -82,7 +82,7 @@ void test(const nimble::EncodingLayoutTree& expected) {
 
 } // namespace
 
-TEST(EncodingLayoutTreeTests, SingleNode) {
+TEST(EncodingLayoutTreeTests, singleNode) {
   nimble::EncodingLayoutTree expected{
       nimble::Kind::Row,
       {{
@@ -104,7 +104,7 @@ TEST(EncodingLayoutTreeTests, SingleNode) {
   test(expected);
 }
 
-TEST(EncodingLayoutTreeTests, SingleNodeMultipleStreams) {
+TEST(EncodingLayoutTreeTests, singleNodeMultipleStreams) {
   nimble::EncodingLayoutTree expected{
       nimble::Kind::Row,
       {
@@ -141,7 +141,7 @@ TEST(EncodingLayoutTreeTests, SingleNodeMultipleStreams) {
   test(expected);
 }
 
-TEST(EncodingLayoutTreeTests, WithChildren) {
+TEST(EncodingLayoutTreeTests, withChildren) {
   nimble::EncodingLayoutTree expected{
       nimble::Kind::Row,
       {
@@ -191,7 +191,7 @@ TEST(EncodingLayoutTreeTests, WithChildren) {
   test(expected);
 }
 
-TEST(EncodingLayoutTreeTests, SingleNodeNoEncoding) {
+TEST(EncodingLayoutTreeTests, singleNodeNoEncoding) {
   nimble::EncodingLayoutTree expected{
       nimble::Kind::Row,
       {},
@@ -201,7 +201,7 @@ TEST(EncodingLayoutTreeTests, SingleNodeNoEncoding) {
   test(expected);
 }
 
-TEST(EncodingLayoutTreeTests, SingleNodeEmptyName) {
+TEST(EncodingLayoutTreeTests, singleNodeEmptyName) {
   nimble::EncodingLayoutTree expected{
       nimble::Kind::Row,
       {

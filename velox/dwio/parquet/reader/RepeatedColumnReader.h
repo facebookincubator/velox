@@ -22,6 +22,13 @@
 
 namespace facebook::velox::parquet {
 
+/// Enqueues row-group streams for a reader's logical descendants. For a struct
+/// without logical children, follows its synthetic rep/def source instead.
+void enqueueRowGroupRecursive(
+    dwio::common::SelectiveColumnReader& reader,
+    uint32_t index,
+    dwio::common::BufferedInput& input);
+
 /// Comtainer for the lengths of a repeated reader where the lengths are
 /// pre-filled from repdefs.
 class RepeatedLengths {
@@ -62,13 +69,6 @@ class MapColumnReader : public dwio::common::SelectiveMapColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       ParquetParams& params,
       common::ScanSpec& scanSpec);
-
-  void prepareRead(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* incomingNulls) {
-    // The prepare is done by the topmost list/map/struct.
-  }
 
   void seekToRowGroup(int64_t index) override;
 
@@ -120,13 +120,6 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
       ParquetParams& params,
       common::ScanSpec& scanSpec);
 
-  void prepareRead(
-      vector_size_t offset,
-      RowSet rows,
-      const uint64_t* incomingNulls) {
-    // The prepare is done by the topmost list/struct.
-  }
-
   void seekToRowGroup(int64_t index) override;
 
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
@@ -166,11 +159,15 @@ class ListColumnReader : public dwio::common::SelectiveListColumnReader {
   LevelInfo levelInfo_;
 };
 
-/// Sets nulls and lengths for 'reader' and its children for the
-/// next 'numTop' top level rows. 'reader' must be a complex type
-/// reader. 'reader' may be inside structs but may not be inside a
-/// repeated reader. The topmost repeated reader ensures repdefs for
-/// all its children.
-void ensureRepDefs(dwio::common::SelectiveColumnReader& reader, int32_t numTop);
+/// Prepares a complex Parquet reader for reading 'rows' at 'offset'. For a
+/// direct child of the root struct, decodes repetition and definition levels
+/// through the last requested row, populates nulls and lengths for its subtree,
+/// and skips rows before 'offset'. Advances the reader's logical read offset to
+/// 'offset' if needed. 'reader' must be a complex type reader. It may be inside
+/// structs but may not be inside a repeated reader.
+void prepareRepDefsAndOffset(
+    dwio::common::SelectiveColumnReader& reader,
+    int64_t offset,
+    const RowSet& rows);
 
 } // namespace facebook::velox::parquet

@@ -53,9 +53,11 @@ target_link_libraries(
   nimble_common
   nimble_common_file_writer
   nimble_encodings
+  nimble_index_test_utils
   nimble_random_encoding_selection_policy
   nimble_tablet_reader
-  nimble_velox_reader
+  nimble_velox_schema_serialization
+  nimble_batch_reader
   nimble_velox_selective
   nimble_writer
   velox_memory

@@ -21,6 +21,7 @@
 #include <deque>
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/LaunchPartition.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/wave/common/Buffer.h"
@@ -87,6 +88,9 @@ struct LaunchMeta {
   int64_t gatherUs{0};
   int64_t gridUs{0};
   int64_t allocUs{0};
+  // The part of allocUs spent inside the allocator itself. allocUs minus this
+  // is shape arithmetic and building the views over what was allocated.
+  int64_t allocCallUs{0};
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
@@ -103,6 +107,11 @@ struct LaunchMeta {
   int64_t refCheckUs{0};
   // Bytes of copying the clone-elision pass saved, charged to this step.
   int64_t elidedCloneBytes{0};
+  // Allocation groups carved at this step, and the outputs they covered. Zero
+  // outside the allocation-group mode, and also for a step of it whose outputs
+  // all escape the invocation.
+  int32_t allocGroups{0};
+  int32_t allocGroupTensors{0};
   // Device-measured spans from this step's events (kTiming only). kernelUs and
   // standaloneUs above are host wall times around issuing the work; these are
   // what the GPU actually spent on it.
@@ -123,6 +132,15 @@ struct LaunchMeta {
   int32_t numFused{0};
   int32_t numStandalone{0};
   int32_t numShortcut{0};
+  // How balanced this step's grid came out, and how many launches it ran as.
+  GridStats gridStats;
+
+  /// The launches the step ran as, each owning a contiguous range of the block
+  /// array the DebugInfo of this step is indexed by. Empty for a step that was
+  /// not split. Kept so the balance report can score each launch on its own:
+  /// they run back to back, so a block in one was never able to run beside a
+  /// block in another.
+  std::vector<LaunchSegment> segments;
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
@@ -271,6 +289,38 @@ struct StepVectors {
   std::vector<BlockInfo> blocks;
   std::vector<int32_t> launchIndices;
 
+  /// The kernel launches 'blocks' is run as, in order. Always at least one
+  /// entry; more only when WaveConfig::partitionLaunches split the step. Each
+  /// launch takes its own slice of 'blocks' and its own dynamic shared memory,
+  /// which is where the occupancy a split buys actually lands.
+  std::vector<LaunchSegment> segments;
+
+  /// How balanced this step's grid came out, from the last makeGrid that ran
+  /// for it. Reported per step under WaveConfig::kGrid and summarized in the
+  /// performance report; also what the partitioning gate reads.
+  GridStats gridStats;
+
+  /// Thread-block clocks this step spent per unit of cost, measured on its
+  /// previous execution. Turns WaveConfig::minBlockUs into the cost units the
+  /// block quantum is expressed in. 0 until the first execution has been
+  /// measured, which falls the quantum back to an even division of the step.
+  double clocksPerCost{0};
+
+  /// How well the blocks of this step's previous execution filled the time its
+  /// slowest one took: mean block clocks over max, the same figure the per-step
+  /// balance line reports. 0 until measured.
+  ///
+  /// This is the only honest signal that a step needs MORE blocks. The
+  /// cost-model skew in gridStats cannot tell -- it is derived from the same
+  /// costs the sizing uses, so a step whose costs are wrong looks balanced to
+  /// it. A step already near 1.0 here has nothing to gain from a wider grid and
+  /// everything to lose, since the extra blocks arrive as serialized launches.
+  double measuredUtil{0};
+
+  /// Blocks the previous execution actually ran, so a step that measured well
+  /// can be held to what already worked.
+  int32_t measuredBlocks{0};
+
   /// Used by makeGrid (internal temporaries).
   std::vector<float> costs;
   std::vector<int32_t> maxBlocks;
@@ -316,6 +366,9 @@ struct StepVectors {
   int64_t gatherUs{0};
   int64_t gridUs{0};
   int64_t allocUs{0};
+  // The part of allocUs spent inside the allocator itself. allocUs minus this
+  // is shape arithmetic and building the views over what was allocated.
+  int64_t allocCallUs{0};
   int64_t fillUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
@@ -337,6 +390,13 @@ struct StepVectors {
   // numel * element size * the number of clones elided for it. Filled only
   // when the kTiming trace bit is on.
   int64_t elidedCloneBytes{0};
+
+  // Allocation groups carved at this step and the number of outputs they
+  // covered, i.e. the allocator calls the grouping replaced with one call each.
+  // Always maintained, not just under kTiming: they are counts already to hand
+  // where the groups are materialized, not a measurement.
+  int32_t allocGroups{0};
+  int32_t allocGroupTensors{0};
 
   // Device-measured spans from this step's events, and the device idle that
   // preceded it (kTiming only). See LaunchMeta for what each one means.
@@ -767,10 +827,20 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
+/// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
+/// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
+/// cooperative grid when an op in the step asks for dynamic shared memory.
+/// 'occupancyFor' answers the same question from the driver at a given dynamic
+/// shared memory, and supersedes the other two when given: a cooperative launch
+/// is packed to exactly that figure, so deriving it any other way risks a grid
+/// the driver refuses. See GridDevice::occupancyFor.
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM = 0);
+    int32_t maxBlocksPerSM = 0,
+    int32_t staticSharedPerBlock = 0,
+    const std::function<int32_t(int32_t dynamicShared)>& occupancyFor =
+        nullptr);
 
 /// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
 at::Tensor paramTensor(
@@ -843,6 +913,12 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   std::vector<c10::IValue> executeWithPrefilledFrame(
       nativert::ExecutionFrame& frame) override;
+
+  /// Runs the graph on positional 'inputs' (in graph user-input order) using a
+  /// pooled device frame and returns the user outputs. Convenience wrapper over
+  /// getFrame()/fillUserInputs()/executeWithPrefilledFrame()/returnFrame() for
+  /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
+  std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
 
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();

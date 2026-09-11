@@ -32,6 +32,7 @@
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -108,21 +109,21 @@ class MainlyConstantEncodingBase
 
     // Find most common item count.
     const auto& uniqueCounts = statistics.uniqueCounts().value();
-    const auto maxUniqueCount = mainlyConstantCommonValue(uniqueCounts);
+    const auto maxUniqueCount = uniqueCounts.mostFrequent().value();
     // Deduce uncommon values count
-    const uint64_t uncommonCount = rowCount - maxUniqueCount->second;
+    const uint64_t uncommonCount = rowCount - maxUniqueCount.second;
     // Uncommon values (sparse bool) bitmap will have index per value,
     // stored bit packed.
     const uint64_t isCommonEncodingSize =
         SparseBoolEncoding::estimateSize(rowCount, uncommonCount, options);
 
     if constexpr (isStringType<physicalType>()) {
-      const uint64_t commonValueSize = maxUniqueCount->first.size();
+      const uint64_t commonValueSize = maxUniqueCount.first.size();
       uint64_t uncommonMinLength = 0;
       uint64_t uncommonMaxLength = 0;
       bool hasUncommonValue{false};
       for (const auto& uniqueCount : uniqueCounts) {
-        if (uniqueCount.first == maxUniqueCount->first) {
+        if (uniqueCount.first == maxUniqueCount.first) {
           continue;
         }
 
@@ -554,21 +555,6 @@ class MainlyConstantEncodingBase
   }
 
  protected:
-  template <typename UniqueCounts>
-  static auto mainlyConstantCommonValue(const UniqueCounts& uniqueCounts) {
-    // Select the highest-frequency value. Break count ties by the smaller value
-    // so absl::flat_hash_map iteration order cannot affect estimates or output.
-    return std::max_element(
-        uniqueCounts.cbegin(),
-        uniqueCounts.cend(),
-        [](const auto& left, const auto& right) {
-          if (left.second != right.second) {
-            return left.second < right.second;
-          }
-          return left.first > right.first;
-        });
-  }
-
   // Encode-time child streams: isCommon spans all input rows, while
   // otherValues contains only rows that differ from the common value.
   struct ChildStreams {
@@ -646,27 +632,74 @@ class MainlyConstantEncodingBase
     }
   }
 
-  static std::pair<uint32_t, uint32_t> countCommonForSlice(
+  // Carries common-value counts and, when available, a sliced isCommon stream.
+  struct SlicedCommonResult {
+    // Number of common-value rows before the requested slice.
+    uint32_t numCommonBeforeSlice{0};
+    // Number of common-value rows inside the requested slice.
+    uint32_t numCommonInSlice{0};
+    // Encoded isCommon slice when producing it was already needed for counting.
+    std::string_view slicedIsCommon;
+  };
+
+  static SlicedCommonResult countCommonForSlice(
       std::string_view encoded,
       uint32_t offset,
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options) {
+    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
     const auto rowEnd = offset + length;
-    if (rowEnd == 0) {
-      return {0, 0};
+
+    const auto encodingType = EncodingPrefix::encodingType(encoded);
+    if (encodingType == EncodingType::Constant) {
+      NIMBLE_CHECK_EQ(
+          EncodingPrefix::dataType(encoded),
+          DataType::Bool,
+          "MainlyConstant isCommon child must be boolean.");
+      const char* pos = encoded.data() +
+          EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+      const bool value = encoding::read<bool>(pos);
+      return {
+          .numCommonBeforeSlice = value ? offset : 0,
+          .numCommonInSlice = value ? length : 0,
+          .slicedIsCommon = {},
+      };
+    }
+    if (encodingType == EncodingType::RLE) {
+      RLEEncoding<bool>::RangeCounts counts;
+      RLEEncoding<bool>::countTrue(
+          encoded, offset, length, buffer, counts, options);
+      return {
+          .numCommonBeforeSlice = counts.numTrueBeforeRange,
+          .numCommonInSlice = counts.numTrueInRange,
+          .slicedIsCommon = {},
+      };
+    }
+    if (encodingType == EncodingType::SparseBool) {
+      const auto sliceResult = SparseBoolEncoding::sliceAndCount(
+          encoded, offset, length, buffer, options);
+      return {
+          .numCommonBeforeSlice = sliceResult.counts.numTrueBeforeRange,
+          .numCommonInSlice = sliceResult.counts.numTrueInRange,
+          .slicedIsCommon = sliceResult.sliced,
+      };
     }
 
     auto* pool = &buffer.getMemoryPool();
     auto encoding = EncodingFactory{options}.create(
         *pool, encoded, [](uint32_t /*size*/) -> void* { return nullptr; });
 
-    Vector<bool> values{pool, rowEnd};
+    ScopedVector<bool> values{rowEnd, pool, options.bufferPool};
     encoding->materialize(rowEnd, values.data());
     const auto sliceBegin = values.begin() + offset;
     return {
-        std::count(values.begin(), sliceBegin, true),
-        std::count(sliceBegin, values.end(), true)};
+        .numCommonBeforeSlice =
+            static_cast<uint32_t>(std::count(values.begin(), sliceBegin, true)),
+        .numCommonInSlice =
+            static_cast<uint32_t>(std::count(sliceBegin, values.end(), true)),
+        .slicedIsCommon = {},
+    };
   }
 
   static std::string_view slice(
@@ -692,10 +725,12 @@ class MainlyConstantEncodingBase
     const std::string_view commonValue{
         pos, static_cast<size_t>(encoded.end() - pos)};
 
-    const auto [commonBefore, commonInSlice] =
-        countCommonForSlice(isCommon, offset, length, buffer, options);
-    const auto otherOffset = offset - commonBefore;
-    const auto otherCount = length - commonInSlice;
+    auto* pool = &buffer.getMemoryPool();
+    ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+    const auto slicedCommonResult = countCommonForSlice(
+        isCommon, offset, length, scopedBuffer.get(), options);
+    const auto otherOffset = offset - slicedCommonResult.numCommonBeforeSlice;
+    const auto otherCount = length - slicedCommonResult.numCommonInSlice;
 
     if (otherCount == 0) {
       const auto prefixSize =
@@ -715,10 +750,11 @@ class MainlyConstantEncodingBase
       return {reserved, encodingSize};
     }
 
-    auto* pool = &buffer.getMemoryPool();
-    ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-    const auto slicedIsCommon = EncodingFactory::slice(
-        isCommon, offset, length, scopedBuffer.get(), options);
+    auto slicedIsCommon = slicedCommonResult.slicedIsCommon;
+    if (slicedIsCommon.empty()) {
+      slicedIsCommon = EncodingFactory::slice(
+          isCommon, offset, length, scopedBuffer.get(), options);
+    }
     const auto slicedOtherValues = EncodingFactory::slice(
         otherValues, otherOffset, otherCount, scopedBuffer.get(), options);
 
@@ -845,15 +881,14 @@ MainlyConstantEncoding<T>::MainlyConstantEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : MainlyConstantEncodingBase<T>(pool, data, options) {
-  const EncodingFactory factory{options};
   const char* pos = data.data() + this->dataOffset();
   const uint32_t isCommonBytes = encoding::readUint32(pos);
-  this->isCommon_ =
-      factory.create(*this->pool_, {pos, isCommonBytes}, stringBufferFactory);
+  this->isCommon_ = EncodingFactory().create(
+      *this->pool_, {pos, isCommonBytes}, stringBufferFactory, options);
   pos += isCommonBytes;
   const uint32_t otherValuesBytes = encoding::readUint32(pos);
-  this->otherValues_ = factory.create(
-      *this->pool_, {pos, otherValuesBytes}, stringBufferFactory);
+  this->otherValues_ = EncodingFactory().create(
+      *this->pool_, {pos, otherValuesBytes}, stringBufferFactory, options);
   pos += otherValuesBytes;
   this->commonValue_ = encoding::read<physicalType>(pos);
   NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
@@ -871,15 +906,14 @@ std::string_view MainlyConstantEncoding<T>::encode(
   }
 
   const auto& uniqueCounts = selection.statistics().uniqueCounts().value();
-  const auto commonElement =
-      MainlyConstantEncodingBase<T>::mainlyConstantCommonValue(uniqueCounts);
+  const auto commonElement = uniqueCounts.mostFrequent().value();
 
   const uint32_t entryCount = values.size();
 
   auto* pool = &buffer.getMemoryPool();
-  physicalType commonValue = commonElement->first;
+  physicalType commonValue = commonElement.first;
   auto childStreams = MainlyConstantEncodingBase<T>::prepareChildStreams(
-      pool, values, commonValue, commonElement->second);
+      pool, values, commonValue, commonElement.second);
 
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   std::string_view serializedIsCommon = selection.template encodeNested<bool>(

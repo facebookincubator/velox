@@ -16,13 +16,16 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -35,6 +38,7 @@
 #include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
 
@@ -109,6 +113,56 @@ float selfCost(NodeCP /*expr*/) {
 struct LevelData {
   NodeSet exprs;
 };
+
+// A metadata getter (sym_size / sym_numel) whose only role is to be a top-level
+// graph output, over an operand something else also reads.
+//
+// Such a getter is in `top`, so makeLevelsInner counts a second reference to
+// its operand's producer, and makeCseBorder turns that into a border: the
+// producer moves to its own earlier layer and every other consumer of it
+// follows a layer later than it needed to. The getter's own work is one scalar
+// field read on the host; the whole cost is the layer split it forces.
+//
+// Users are counted through 'reachable', not through users(): torch.export
+// leaves dead `_operator.ge` / `_operator.le` shape guards behind once the
+// asserts are stripped -- 428 of them on the ROO graph -- and they appear in a
+// value's users() while contributing to no level. Counting them refuses every
+// candidate.
+bool isDeferredSizeOutput(
+    NodeCP node,
+    NodeCP outputNode,
+    const NodeSet& reachable) {
+  const Metadata* meta = Registry::metadata(node->target());
+  if (meta == nullptr || !meta->isMetadataGetter) {
+    return false;
+  }
+  if (node->outputs().size() != 1 || node->outputs()[0] == nullptr) {
+    return false;
+  }
+  // Consumed on the device as well as returned: it has to stay a real op or the
+  // consumer has nothing to read.
+  for (auto* user : node->outputs()[0]->users()) {
+    if (user != outputNode && reachable.count(user) > 0) {
+      return false;
+    }
+  }
+  if (node->inputs().empty() || node->inputs()[0].value == nullptr) {
+    return false;
+  }
+  ValueCP operand = node->inputs()[0].value;
+  if (operand->producer() == nullptr) {
+    return false;
+  }
+  // Sole user: removing the reference merges no layer, so there is nothing to
+  // win and no reason to grow a second mechanism.
+  int32_t others = 0;
+  for (auto* user : operand->users()) {
+    if (user != node && reachable.count(user) > 0) {
+      ++others;
+    }
+  }
+  return others > 0;
+}
 
 size_t levelOf(std::vector<LevelData>& levels, NodeCP expr) {
   for (size_t i = 0; i < levels.size(); ++i) {
@@ -1131,6 +1185,319 @@ int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types) {
 
 namespace {
 
+// Appends 'text' as a length-prefixed token. The punctuation cseKey separates
+// its fields with also occurs inside the fields: constantToString renders a
+// string attribute, a device or a list with commas, brackets and equals signs
+// of its own. Concatenated raw, two different nodes could spell the same key
+// and be merged, which rewires readers to the wrong buffer -- a wrong result
+// rather than a missed optimization. A length prefix removes the ambiguity
+// without having to escape anything.
+void appendToken(std::string& key, std::string_view text) {
+  key += std::to_string(text.size());
+  key += ':';
+  key += text;
+}
+
+// Identity of a node for common-subexpression purposes: op, operands in order,
+// attributes, output arity. Output ids are deliberately absent -- they are what
+// a merge rewrites. Empty for a node that must never be merged: one carrying a
+// subgraph attribute, which has no value rendering to compare.
+std::string cseKey(NodeCP node) {
+  std::string key;
+  appendToken(key, node->target());
+  key += '(';
+  for (const auto& input : node->inputs()) {
+    appendToken(key, input.name);
+    key += '=';
+    // An id is digits only, so it needs no length prefix to stay unambiguous.
+    key += input.value != nullptr ? std::to_string(input.value->id()) : "null";
+    key += ',';
+  }
+  // Attribute order is not part of a node's identity, so compare them sorted.
+  // Sorting the already-tokenized rendering keeps the order canonical; which
+  // total order it is does not matter, only that it is deterministic.
+  std::vector<std::string> attrs;
+  attrs.reserve(node->attributes().size());
+  for (const auto& attr : node->attributes()) {
+    if (std::holds_alternative<std::unique_ptr<nativert::Graph>>(attr.value)) {
+      return {};
+    }
+    std::string rendered;
+    appendToken(rendered, attr.name);
+    rendered += '=';
+    appendToken(rendered, constantToString(attr.value));
+    attrs.push_back(std::move(rendered));
+  }
+  std::sort(attrs.begin(), attrs.end());
+  for (const auto& attr : attrs) {
+    key += attr;
+    key += ',';
+  }
+  key += ')';
+  key += std::to_string(node->outputs().size());
+  return key;
+}
+
+// A node is mergeable with an identical one when it is a pure function of its
+// operands. It must write nothing, and no operand's storage may be written
+// anywhere in the graph: a read is interchangeable with an earlier read only if
+// nothing modified the buffer in between, and this pass compares identity, not
+// position. An output that escapes as a graph output is left alone for the same
+// reason clone elision leaves it alone -- the caller would be handed a buffer
+// that other values also read.
+bool cseEligible(
+    NodeCP node,
+    const ValueTypes& types,
+    const folly::F14FastSet<ValueCP>& mutatedBases,
+    bool cseViews,
+    bool cseCompute) {
+  if (node->outputs().empty() || !dataMutatedInputs(node).empty() ||
+      inPlaceSelf(node) != nullptr) {
+    return false;
+  }
+  for (const auto* out : node->outputs()) {
+    if (out == nullptr || types.graphOutput(out)) {
+      return false;
+    }
+    // An output written in place somewhere later is no more interchangeable
+    // than a mutated operand: the survivor's buffer is not what the duplicate's
+    // readers expect once the write has run. The operand loop below does not
+    // cover it, because the write names the output of this node rather than
+    // anything this node reads.
+    if (mutatedBases.count(viewStorageBase(out)) > 0) {
+      return false;
+    }
+    // A TensorList's elements are the outputs of its sole prim.ListUnpack user,
+    // an invariant getListElements asserts on. Merging two list producers
+    // leaves the survivor's list with two users -- its own unpack and the
+    // dup's, which is dead but still counted -- and the next caller to ask for
+    // its elements throws. Sound merging here needs the dead unpack removed,
+    // which this pass does not do.
+    if (out->type().kind() == nativert::Type::Kind::TensorList) {
+      return false;
+    }
+  }
+  for (const auto& input : node->inputs()) {
+    if (input.value == nullptr ||
+        mutatedBases.count(viewStorageBase(input.value)) > 0) {
+      return false;
+    }
+  }
+  const Metadata* meta = Registry::metadata(node->target());
+  return (meta != nullptr && meta->isView()) ? cseViews : cseCompute;
+}
+
+// Points every reader of 'from' at 'to'.
+//
+// Graph::replaceAllUses walks the user list and TORCH_CHECKs that
+// Graph::replace found something to swap in every entry, which two things
+// break. A node reading the value in two argument positions is listed twice,
+// and replace swaps both occurrences on the first visit, so the second visit
+// finds nothing. And the list holds stale entries: nodes an earlier merge
+// repointed without the entry being dropped. Both are common once views merge,
+// where cat(t, t) and chains of repointed readers are the rule rather than the
+// exception. Normalizing the list to the nodes that really do read the value,
+// once each, is what makes the call safe.
+void replaceReaders(nativert::Graph& graph, ValueCP from, nativert::Value* to) {
+  auto* value = const_cast<nativert::Value*>(from);
+  std::vector<nativert::Node*> readers;
+  readers.reserve(value->users().size());
+  for (auto* user : value->users()) {
+    bool reads = false;
+    for (const auto& input : user->inputs()) {
+      if (input.value == value) {
+        reads = true;
+        break;
+      }
+    }
+    if (!reads) {
+      continue;
+    }
+    if (std::find(readers.begin(), readers.end(), user) == readers.end()) {
+      readers.push_back(user);
+    }
+  }
+  if (readers.size() != value->users().size()) {
+    // eraseUser drops every occurrence of a node, so clearing and re-adding
+    // leaves exactly the real readers, one entry apiece.
+    std::vector<nativert::Node*> current(
+        value->users().begin(), value->users().end());
+    for (auto* user : current) {
+      value->eraseUser(user);
+    }
+    for (auto* user : readers) {
+      value->addUser(user);
+    }
+  }
+  graph.replaceAllUses(value, to);
+}
+
+// Points every reader of 'dup's outputs at the matching output of 'keeper',
+// then offers each survivor to 'push' so consumers that only became congruent
+// through this merge get revisited. Returns false, having changed nothing, when
+// the two disagree on output arity: equal cseKeys make that impossible for
+// nodes of the same op, so it means they were never really congruent.
+bool mergeCseNode(
+    nativert::Graph& graph,
+    NodeCP keeper,
+    NodeCP dup,
+    const std::function<void(ValueCP)>& push) {
+  const auto& from = dup->outputs();
+  const auto& to = keeper->outputs();
+  if (from.size() != to.size()) {
+    return false;
+  }
+  // No TensorList output reaches here: cseEligible rejects any node that has
+  // one, so there are never element ids to remap alongside the list value.
+  for (size_t i = 0; i < from.size(); ++i) {
+    replaceReaders(graph, from[i], const_cast<nativert::Value*>(to[i]));
+    push(to[i]);
+  }
+  return true;
+}
+
+} // namespace
+
+int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types) {
+  const bool cseViews = WaveConfig::get().cseViews;
+  const bool cseCompute = WaveConfig::get().cseCompute;
+  if (!cseViews && !cseCompute) {
+    return 0;
+  }
+
+  folly::F14FastSet<ValueCP> mutatedBases;
+  for (const auto& node : graph.nodes()) {
+    for (auto* mutated : dataMutatedInputs(&node)) {
+      if (mutated != nullptr) {
+        mutatedBases.insert(viewStorageBase(mutated));
+      }
+    }
+  }
+
+  std::deque<ValueCP> work;
+  folly::F14FastSet<ValueCP> queued;
+  auto push = [&](ValueCP value) {
+    if (value != nullptr && queued.insert(value).second) {
+      work.push_back(value);
+    }
+  };
+
+  // Program order of every node. The survivor of a merge has to be the earlier
+  // of the two: keeping the later one would leave the earlier one's consumers
+  // reading a value produced after them, which makeParallelNodes rejects. User
+  // lists are not in program order, so the first candidate a bucket sees is not
+  // necessarily the first in the graph.
+  folly::F14FastMap<NodeCP, size_t> order;
+  {
+    size_t index = 0;
+    for (const auto& node : graph.nodes()) {
+      order.emplace(&node, index++);
+    }
+  }
+
+  int64_t merged = 0;
+  auto mergeBucket = [&](folly::F14FastMap<std::string, NodeCP>& firstOf,
+                         NodeCP node) {
+    auto key = cseKey(node);
+    if (key.empty()) {
+      return;
+    }
+    // A value in this graph can be read by a node in a variant subgraph, which
+    // shows up in users() but is not in this graph's node list. Those are not
+    // ours to merge or to order.
+    if (!order.contains(node)) {
+      return;
+    }
+    auto [it, isNew] = firstOf.emplace(key, node);
+    if (isNew) {
+      return;
+    }
+    NodeCP keeper = it->second;
+    NodeCP dup = node;
+    if (order.at(dup) < order.at(keeper)) {
+      std::swap(keeper, dup);
+    }
+    if (mergeCseNode(graph, keeper, dup, push)) {
+      it->second = keeper;
+      ++merged;
+    }
+  };
+
+  // A node with no operands appears in no user list, so nothing would ever
+  // bring two of them together; bucket those once up front. Factory ops
+  // (aten.zeros and friends) are the case that matters.
+  {
+    folly::F14FastMap<std::string, NodeCP> firstOf;
+    for (const auto& node : graph.nodes()) {
+      if (node.inputs().empty() && !isDeadNode(&node) &&
+          cseEligible(&node, types, mutatedBases, cseViews, cseCompute)) {
+        mergeBucket(firstOf, &node);
+      }
+    }
+  }
+
+  // Congruent nodes have identical operands, so both appear in the user list of
+  // every value they read. Walking user lists is therefore complete for any
+  // node with an operand, and never hashes a node that has no possible partner.
+  for (const auto* value : graph.values()) {
+    if (value != nullptr && !value->users().empty()) {
+      push(value);
+    }
+  }
+
+  while (!work.empty()) {
+    ValueCP value = work.front();
+    work.pop_front();
+    queued.erase(value);
+    // Snapshot: merging rewires the list being walked.
+    std::vector<NodeCP> users(value->users().begin(), value->users().end());
+    folly::F14FastMap<std::string, NodeCP> firstOf;
+    for (NodeCP user : users) {
+      if (!isDeadNode(user) &&
+          cseEligible(user, types, mutatedBases, cseViews, cseCompute)) {
+        mergeBucket(firstOf, user);
+      }
+    }
+  }
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && merged > 0) {
+    LOG(INFO) << "pre-partition CSE: merged " << merged << " node(s)";
+  }
+  return merged;
+}
+
+int64_t decomposeListOps(nativert::Graph& graph, WaveGraph& waveGraph) {
+  // Snapshot: a rule rewrites the node it is given and may add nodes, and a
+  // live walk would visit the replacements.
+  std::vector<NodeCP> nodes;
+  nodes.reserve(graph.nodes().size());
+  for (const auto& node : graph.nodes()) {
+    nodes.push_back(&node);
+  }
+
+  int64_t rewritten = 0;
+  for (NodeCP node : nodes) {
+    if (isDeadNode(node)) {
+      continue;
+    }
+    const Metadata* meta = Registry::metadata(node->target());
+    if (meta == nullptr || !meta->decompose) {
+      continue;
+    }
+    if (meta->decompose(node, waveGraph)) {
+      ++rewritten;
+    }
+  }
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) && rewritten > 0) {
+    LOG(INFO) << "pre-partition decomposition: rewrote " << rewritten
+              << " node(s)";
+  }
+  return rewritten;
+}
+
+namespace {
+
 // The ScalarType newScalarValue needs to reproduce a scalar Value's type kind,
 // or nullopt when the kind is not a scalar. Inverse of the mapping in
 // WaveGraph::newScalarValue.
@@ -1731,6 +2098,36 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
   auto topExprs = args(root);
   NodeSet top(topExprs.begin(), topExprs.end());
 
+  // Returned metadata getters, excluded from the level walk so they stop
+  // creating a CSE border on their operand. Put back before the last layer is
+  // built (below) so they still run and still fill their output slot.
+  //
+  // The reachable set is built here rather than at function scope so a run with
+  // the flag off does not pay for a walk of the whole graph.
+  std::vector<NodeCP> deferredSizes;
+  if (WaveConfig::get().deferSizeOutputs) {
+    NodeSet reachable;
+    std::vector<NodeCP> stack(topExprs.begin(), topExprs.end());
+    while (!stack.empty()) {
+      NodeCP n = stack.back();
+      stack.pop_back();
+      if (!reachable.insert(n).second) {
+        continue;
+      }
+      for (auto* in : args(n)) {
+        stack.push_back(in);
+      }
+    }
+    for (auto* expr : top) {
+      if (isDeferredSizeOutput(expr, root, reachable)) {
+        deferredSizes.push_back(expr);
+      }
+    }
+    for (auto* expr : deferredSizes) {
+      top.erase(expr);
+    }
+  }
+
   std::vector<LevelData> levelData;
   std::unordered_map<NodeCP, int32_t> refCount;
   makeExprLevels(top, levelData, refCount);
@@ -1787,11 +2184,31 @@ ProjectNode* ParallelNodes::makeParallelNodes(const nativert::Graph& graph) {
     current = project;
   }
 
+  // The deferred getters rejoin here: topExprs still lists them, so they are
+  // already in the layer's node set; putting them back in 'top' is what makes
+  // collectReachable pull their operands in as layer inputs.
+  for (auto* expr : deferredSizes) {
+    top.insert(expr);
+  }
+
   auto* project = makeParallelProject(current, top, topExprs);
   if (project == nullptr) {
     TORCH_CHECK(false, "makeParallelProject returned null");
   }
   current = project;
+
+  if ((WaveConfig::get().trace & WaveConfig::kTiming) &&
+      WaveConfig::get().deferSizeOutputs) {
+    int32_t layers = 0;
+    for (auto* p = current; p != nullptr; p = p->input()) {
+      ++layers;
+    }
+    std::cout << fmt::format(
+        "partition: {} layers, last layer has {} exprs, {} size outputs deferred\n",
+        layers,
+        current->nodes().size(),
+        deferredSizes.size());
+  }
 
   // All layers are now built in execution order; annotate each with its
   // last-use / reusable-last-use values.

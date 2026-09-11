@@ -48,7 +48,7 @@ std::string BitmapToString(
   return BitmapToString(bitmap.data(), bitCount);
 }
 
-TEST(TestColumnReader, DefLevelsToBitmap) {
+TEST(TestColumnReader, defLevelsToBitmap) {
   // Bugs in this function were exposed in ARROW-3930
   std::vector<int16_t> defLevels = {3, 3, 3, 2, 3, 3, 3, 3, 3};
 
@@ -78,7 +78,7 @@ TEST(TestColumnReader, DefLevelsToBitmap) {
   ASSERT_EQ(current_byte, validBits[1]);
 }
 
-TEST(TestColumnReader, DefLevelsToBitmapPowerOfTwo) {
+TEST(TestColumnReader, defLevelsToBitmapPowerOfTwo) {
   // PARQUET-1623: Invalid memory access when decoding a valid bits vector that
   // has a length equal to a power of two and also using a non-zero
   // validBitsOffset.  This should not fail when run with ASAN or valgrind.
@@ -101,7 +101,7 @@ TEST(TestColumnReader, DefLevelsToBitmapPowerOfTwo) {
 }
 
 #if defined(ARROW_LITTLE_ENDIAN)
-TEST(GreaterThanBitmap, GeneratesExpectedBitmasks) {
+TEST(GreaterThanBitmap, generatesExpectedBitmasks) {
   std::vector<int16_t> levels = {
       0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5,
       6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3,
@@ -121,7 +121,7 @@ TEST(GreaterThanBitmap, GeneratesExpectedBitmasks) {
 }
 #endif
 
-TEST(DefLevelsToBitmap, WithRepetitionLevelFiltersOutEmptyListValues) {
+TEST(DefLevelsToBitmap, withRepetitionLevelFiltersOutEmptyListValues) {
   std::vector<uint8_t> validity_bitmap(/*count*/ 8, 0);
 
   ValidityBitmapInputOutput io;
@@ -242,7 +242,7 @@ using ConverterTypes = ::testing::Types<
     RepDefLevelConverter</*list_length_type=*/int64_t>>;
 TYPED_TEST_SUITE(NestedListTest, ConverterTypes);
 
-TYPED_TEST(NestedListTest, OuterMostTest) {
+TYPED_TEST(NestedListTest, outerMostTest) {
   // [null, [[1 , null, 3], []], []],
   // [[[]], [[], [1, 2]], null, [[3]]],
   // null,
@@ -264,7 +264,7 @@ TYPED_TEST(NestedListTest, OuterMostTest) {
   EXPECT_EQ(BitmapToString(this->validityIo_.validBits, /*length=*/4), "1101");
 }
 
-TYPED_TEST(NestedListTest, MiddleListTest) {
+TYPED_TEST(NestedListTest, middleListTest) {
   // [null, [[1 , null, 3], []], []],
   // [[[]], [[], [1, 2]], null, [[3]]],
   // null,
@@ -291,7 +291,7 @@ TYPED_TEST(NestedListTest, MiddleListTest) {
       BitmapToString(this->validityIo_.validBits, /*length=*/7), "0111101");
 }
 
-TYPED_TEST(NestedListTest, InnerMostListTest) {
+TYPED_TEST(NestedListTest, innerMostListTest) {
   // [null, [[1, null, 3], []], []],
   // [[[]], [[], [1, 2]], null, [[3]]],
   // null,
@@ -318,7 +318,7 @@ TYPED_TEST(NestedListTest, InnerMostListTest) {
       BitmapToString(this->validityIo_.validBits, /*length=*/6), "111111");
 }
 
-TYPED_TEST(NestedListTest, SimpleLongList) {
+TYPED_TEST(NestedListTest, simpleLongList) {
   LevelInfo levelInfo;
   levelInfo.repLevel = 1;
   levelInfo.defLevel = 2;
@@ -361,7 +361,7 @@ TYPED_TEST(NestedListTest, SimpleLongList) {
       "1");
 }
 
-TYPED_TEST(NestedListTest, TestOverflow) {
+TYPED_TEST(NestedListTest, testOverflow) {
   LevelInfo levelInfo;
   levelInfo.repLevel = 1;
   levelInfo.defLevel = 2;
@@ -393,7 +393,7 @@ TYPED_TEST(NestedListTest, TestOverflow) {
   this->Run(testData, levelInfo);
 }
 
-TEST(TestOnlyExtractBitsSoftware, BasicTest) {
+TEST(TestOnlyExtractBitsSoftware, basicTest) {
   auto check =
       [](uint64_t bitmap, uint64_t selection, uint64_t expected) -> void {
     EXPECT_EQ(TestOnlyExtractBitsSoftware(bitmap, selection), expected);

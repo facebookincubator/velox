@@ -81,8 +81,8 @@ struct ColumnCase {
   // Whether every non-null value is the same. ConstantEncoding refuses
   // anything else, so this is what decides its expected outcome.
   bool isSingleValued{false};
-  // Whether the non-null values never decrease. DeltaBlockEncoding refuses
-  // anything else (NIMBLE_CHECK_GE, "requires non-decreasing values").
+  // Whether the non-null values never decrease. DeltaBlockEncoding and
+  // EliasFanoEncoding refuse anything else.
   bool isNonDecreasing{false};
 };
 
@@ -112,7 +112,9 @@ WriteOutcome expectedOutcome(
   if (encodingType == EncodingType::Constant && !columnCase.isSingleValued) {
     return WriteOutcome::kNotApplied;
   }
-  if (encodingType == EncodingType::DeltaBlock && !columnCase.isNonDecreasing) {
+  if ((encodingType == EncodingType::DeltaBlock ||
+       encodingType == EncodingType::EliasFano) &&
+      !columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
@@ -288,6 +290,7 @@ TEST_F(
   options.seed = 1;
   options.randomizeWriterConfig = false;
   NimbleWriterFuzzer fuzzer(options, *rootPool_);
+
   for (const auto encodingType :
        {EncodingType::DeltaBlock,
         EncodingType::PFOR,
@@ -313,6 +316,7 @@ TEST_F(
   fuzzer.run();
 
   EXPECT_EQ(fuzzer.numUnfilteredFilesWritten(), kNumUnfilteredRounds);
+  EXPECT_FALSE(fuzzer.coverage().contains(EncodingType::Huffman));
   for (const auto encodingType : allCandidateEncodings()) {
     SCOPED_TRACE(toString(encodingType));
     const auto entry = fuzzer.coverage().find(encodingType);

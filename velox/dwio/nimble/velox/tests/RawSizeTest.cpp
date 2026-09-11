@@ -495,7 +495,7 @@ class RawSizeMapTestFixture
  * size is calculated from this random data and is used to assert against the
  * raw size returned by the function under test.
  */
-TEST_F(RawSizeTestFixture, Flat) {
+TEST_F(RawSizeTestFixture, flat) {
   testFlat<bool>(noNulls());
   testFlat<int8_t>(noNulls());
   testFlat<int16_t>(noNulls());
@@ -507,7 +507,7 @@ TEST_F(RawSizeTestFixture, Flat) {
   testFlat<velox::Timestamp>(noNulls());
 }
 
-TEST_F(RawSizeTestFixture, FlatSomeNull) {
+TEST_F(RawSizeTestFixture, flatSomeNull) {
   testFlat<bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testFlat<int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testFlat<int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -519,7 +519,7 @@ TEST_F(RawSizeTestFixture, FlatSomeNull) {
   testFlat<velox::Timestamp>(randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_F(RawSizeTestFixture, Constant) {
+TEST_F(RawSizeTestFixture, constant) {
   testConstant<bool>(noNulls());
   testConstant<int8_t>(noNulls());
   testConstant<int16_t>(noNulls());
@@ -531,7 +531,7 @@ TEST_F(RawSizeTestFixture, Constant) {
   testConstant<velox::Timestamp>(noNulls());
 }
 
-TEST_F(RawSizeTestFixture, ConstantSomeNull) {
+TEST_F(RawSizeTestFixture, constantSomeNull) {
   testConstant<bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testConstant<int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testConstant<int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -544,7 +544,7 @@ TEST_F(RawSizeTestFixture, ConstantSomeNull) {
   testConstant<velox::Timestamp>(randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_F(RawSizeTestFixture, Dictionary) {
+TEST_F(RawSizeTestFixture, dictionary) {
   testDictionary<bool>(noNulls());
   testDictionary<int8_t>(noNulls());
   testDictionary<int16_t>(noNulls());
@@ -556,7 +556,7 @@ TEST_F(RawSizeTestFixture, Dictionary) {
   testDictionary<velox::Timestamp>(noNulls());
 }
 
-TEST_F(RawSizeTestFixture, DictionarySomeNull) {
+TEST_F(RawSizeTestFixture, dictionarySomeNull) {
   testDictionary<bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testDictionary<int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testDictionary<int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -570,7 +570,7 @@ TEST_F(RawSizeTestFixture, DictionarySomeNull) {
       randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_F(RawSizeTestFixture, Array) {
+TEST_F(RawSizeTestFixture, array) {
   testArray<bool>(noNulls());
   testArray<int8_t>(noNulls());
   testArray<int16_t>(noNulls());
@@ -582,7 +582,7 @@ TEST_F(RawSizeTestFixture, Array) {
   testArray<velox::Timestamp>(noNulls());
 }
 
-TEST_F(RawSizeTestFixture, ArraySomNull) {
+TEST_F(RawSizeTestFixture, arraySomNull) {
   testArray<bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testArray<int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testArray<int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -594,7 +594,7 @@ TEST_F(RawSizeTestFixture, ArraySomNull) {
   testArray<velox::Timestamp>(randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_F(RawSizeTestFixture, ConstantArray) {
+TEST_F(RawSizeTestFixture, constantArray) {
   testConstantArray<bool>(noNulls());
   testConstantArray<int8_t>(noNulls());
   testConstantArray<int16_t>(noNulls());
@@ -606,7 +606,7 @@ TEST_F(RawSizeTestFixture, ConstantArray) {
   testConstantArray<velox::Timestamp>(noNulls());
 }
 
-TEST_F(RawSizeTestFixture, ConstantArraySomeNull) {
+TEST_F(RawSizeTestFixture, constantArraySomeNull) {
   testConstantArray<bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testConstantArray<int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testConstantArray<int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -620,7 +620,7 @@ TEST_F(RawSizeTestFixture, ConstantArraySomeNull) {
       randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_F(RawSizeTestFixture, DictionaryArray) {
+TEST_F(RawSizeTestFixture, dictionaryArray) {
   testDictionaryArray<bool>(noNulls());
   testDictionaryArray<int8_t>(noNulls());
   testDictionaryArray<int16_t>(noNulls());
@@ -632,7 +632,7 @@ TEST_F(RawSizeTestFixture, DictionaryArray) {
   testDictionaryArray<velox::Timestamp>(noNulls());
 }
 
-TEST_F(RawSizeTestFixture, DictionaryArraySomeNull) {
+TEST_F(RawSizeTestFixture, dictionaryArraySomeNull) {
   testDictionaryArray<bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testDictionaryArray<int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testDictionaryArray<int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -646,7 +646,7 @@ TEST_F(RawSizeTestFixture, DictionaryArraySomeNull) {
       randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_P(RawSizeMapTestFixture, Map) {
+TEST_P(RawSizeMapTestFixture, map) {
   testMap<bool, bool>(noNulls());
   testMap<bool, int8_t>(noNulls());
   testMap<bool, int16_t>(noNulls());
@@ -738,7 +738,7 @@ TEST_P(RawSizeMapTestFixture, Map) {
   testMap<velox::Timestamp, velox::Timestamp>(noNulls());
 }
 
-TEST_P(RawSizeMapTestFixture, MapSomeNull) {
+TEST_P(RawSizeMapTestFixture, mapSomeNull) {
   testMap<bool, bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testMap<bool, int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testMap<bool, int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -862,7 +862,7 @@ TEST_P(RawSizeMapTestFixture, MapSomeNull) {
       randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_P(RawSizeMapTestFixture, ConstantMap) {
+TEST_P(RawSizeMapTestFixture, constantMap) {
   testConstantMap<bool, bool>(noNulls());
   testConstantMap<bool, int8_t>(noNulls());
   testConstantMap<bool, int16_t>(noNulls());
@@ -954,7 +954,7 @@ TEST_P(RawSizeMapTestFixture, ConstantMap) {
   testConstantMap<velox::Timestamp, velox::Timestamp>(noNulls());
 }
 
-TEST_P(RawSizeMapTestFixture, ConstantMapSomeNull) {
+TEST_P(RawSizeMapTestFixture, constantMapSomeNull) {
   testConstantMap<bool, bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testConstantMap<bool, int8_t>(randomNulls(folly::Random::rand32() % 10 + 1));
   testConstantMap<bool, int16_t>(randomNulls(folly::Random::rand32() % 10 + 1));
@@ -1109,7 +1109,7 @@ TEST_P(RawSizeMapTestFixture, ConstantMapSomeNull) {
       randomNulls(folly::Random::rand32() % 10 + 1));
 }
 
-TEST_P(RawSizeMapTestFixture, DictionaryMap) {
+TEST_P(RawSizeMapTestFixture, dictionaryMap) {
   testDictionaryMap<bool, bool>(noNulls());
   testDictionaryMap<bool, int8_t>(noNulls());
   testDictionaryMap<bool, int16_t>(noNulls());
@@ -1201,7 +1201,7 @@ TEST_P(RawSizeMapTestFixture, DictionaryMap) {
   testDictionaryMap<velox::Timestamp, velox::Timestamp>(noNulls());
 }
 
-TEST_P(RawSizeMapTestFixture, DictionaryMapSomeNull) {
+TEST_P(RawSizeMapTestFixture, dictionaryMapSomeNull) {
   testDictionaryMap<bool, bool>(randomNulls(folly::Random::rand32() % 10 + 1));
   testDictionaryMap<bool, int8_t>(
       randomNulls(folly::Random::rand32() % 10 + 1));
@@ -1380,7 +1380,7 @@ INSTANTIATE_TEST_SUITE_P(
  * The following tests are considered handcrafted tests for different nested
  * vector cases. These tests cases have specified expected sizes.
  */
-TEST_F(RawSizeTestFixture, ArrayNested) {
+TEST_F(RawSizeTestFixture, arrayNested) {
   auto arrayVector =
       vectorMaker_->arrayVector<int64_t>({{0, 1}, {1, 0, 1}, {0}});
   auto arrayVector2 = vectorMaker_->arrayVector<int64_t>({{1}, {1, 0}, {0}});
@@ -1394,7 +1394,7 @@ TEST_F(RawSizeTestFixture, ArrayNested) {
   ASSERT_EQ(expectedRawSize, rawSize);
 }
 
-TEST_F(RawSizeTestFixture, MapNested) {
+TEST_F(RawSizeTestFixture, mapNested) {
   auto mapKeys = vectorMaker_->flatVector<velox::StringView>(
       {"a", "bb", "ccc", "dddd", "eeeee"}); // 15
   auto mapValues = vectorMaker_->flatVector<int64_t>({0, 1, 2, 3, 4}); // 40
@@ -1421,7 +1421,7 @@ TEST_F(RawSizeTestFixture, MapNested) {
   ASSERT_EQ(expectedSize, rawSize);
 }
 
-TEST_F(RawSizeTestFixture, MapArrayNested) {
+TEST_F(RawSizeTestFixture, mapArrayNested) {
   auto mapKeys = vectorMaker_->arrayVector<int64_t>(
       {{0, 1, 0}, {1, 0, 1}, {0, 1}, {0}, {1, 0, 1, 0}});
   auto mapValues = vectorMaker_->flatVector<velox::StringView>(
@@ -1438,7 +1438,7 @@ TEST_F(RawSizeTestFixture, MapArrayNested) {
   ASSERT_EQ(expectedSize, rawSize);
 }
 
-TEST_F(RawSizeTestFixture, ArrayMapNested) {
+TEST_F(RawSizeTestFixture, arrayMapNested) {
   auto mapKeys = vectorMaker_->flatVector<velox::StringView>(
       {"a", "bb", "ccc", "dddd", "eeeee"});
   auto mapValues = vectorMaker_->flatVector<int64_t>({0, 1, 2, 3, 4});
@@ -1453,7 +1453,7 @@ TEST_F(RawSizeTestFixture, ArrayMapNested) {
   ASSERT_EQ(expectedSize, rawSize);
 }
 
-TEST_F(RawSizeTestFixture, RowSameTypes) {
+TEST_F(RawSizeTestFixture, rowSameTypes) {
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<int64_t>({0, 1, 0, 1, 0, 1});
   auto childVector3 = vectorMaker_->flatVector<int64_t>({0, 1, 0, 1, 0, 1});
@@ -1471,7 +1471,7 @@ TEST_F(RawSizeTestFixture, RowSameTypes) {
   }
 }
 
-TEST_F(RawSizeTestFixture, RowDifferentTypes) {
+TEST_F(RawSizeTestFixture, rowDifferentTypes) {
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<bool>({0, 1, 0, 1, 0, 1});
   auto childVector3 = vectorMaker_->flatVector<int16_t>({0, 1, 0, 1, 0, 1});
@@ -1490,7 +1490,7 @@ TEST_F(RawSizeTestFixture, RowDifferentTypes) {
   ASSERT_EQ(sizeof(int16_t) * 6, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, RowDifferentTypes2) {
+TEST_F(RawSizeTestFixture, rowDifferentTypes2) {
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<velox::StringView>(
       {"a", "bb", "ccc", "dddd", "eeeee", "ffffff"});
@@ -1510,7 +1510,7 @@ TEST_F(RawSizeTestFixture, RowDifferentTypes2) {
   ASSERT_EQ(sizeof(int16_t) * 6, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, RowNulls) {
+TEST_F(RawSizeTestFixture, rowNulls) {
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<bool>({0, 1, 0, 1, 0, 1});
   auto childVector3 = vectorMaker_->flatVector<int16_t>({0, 1, 0, 1, 0, 1});
@@ -1539,7 +1539,7 @@ TEST_F(RawSizeTestFixture, RowNulls) {
   ASSERT_EQ(sizeof(int16_t) * 5, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, RowAllNulls) {
+TEST_F(RawSizeTestFixture, rowAllNulls) {
   constexpr velox::vector_size_t VECTOR_TEST_SIZE = 6;
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<bool>({0, 1, 0, 1, 0, 1});
@@ -1566,7 +1566,7 @@ TEST_F(RawSizeTestFixture, RowAllNulls) {
   }
 }
 
-TEST_F(RawSizeTestFixture, RowNestedNull) {
+TEST_F(RawSizeTestFixture, rowNestedNull) {
   auto childVector1 =
       vectorMaker_->flatVectorNullable<int64_t>({0, 0, std::nullopt, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVectorNullable<velox::StringView>(
@@ -1588,7 +1588,7 @@ TEST_F(RawSizeTestFixture, RowNestedNull) {
   ASSERT_EQ(sizeof(int16_t) * 5 + nimble::kNullSize, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, RowDictionaryChildren) {
+TEST_F(RawSizeTestFixture, rowDictionaryChildren) {
   auto arrayVector =
       vectorMaker_->arrayVector<int64_t>({{0, 1, 2}, {3, 4}, {5}});
   std::unordered_map<velox::vector_size_t, uint64_t> indexToSizeArray;
@@ -1647,7 +1647,7 @@ TEST_F(RawSizeTestFixture, RowDictionaryChildren) {
   ASSERT_EQ(expectedMapRawSize, context_.sizeAt(1));
 }
 
-TEST_F(RawSizeTestFixture, ConstRow) {
+TEST_F(RawSizeTestFixture, constRow) {
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<velox::StringView>(
       {"a", "bb", "ccc", "dddd", "eeeee", "ffffff"});
@@ -1670,7 +1670,7 @@ TEST_F(RawSizeTestFixture, ConstRow) {
   ASSERT_EQ(sizeof(int16_t) * CONST_VECTOR_SIZE, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, ConstRowNestedNull) {
+TEST_F(RawSizeTestFixture, constRowNestedNull) {
   auto childVector1 =
       vectorMaker_->flatVectorNullable<int64_t>({0, 0, std::nullopt, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVectorNullable<velox::StringView>(
@@ -1695,7 +1695,7 @@ TEST_F(RawSizeTestFixture, ConstRowNestedNull) {
   ASSERT_EQ(nimble::kNullSize * CONST_VECTOR_SIZE, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, DictRow) {
+TEST_F(RawSizeTestFixture, dictRow) {
   constexpr velox::vector_size_t VECTOR_TEST_SIZE = 5;
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<velox::StringView>(
@@ -1730,7 +1730,7 @@ TEST_F(RawSizeTestFixture, DictRow) {
   ASSERT_EQ(sizeof(int16_t) * VECTOR_TEST_SIZE, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, DictRowNull) {
+TEST_F(RawSizeTestFixture, dictRowNull) {
   constexpr velox::vector_size_t VECTOR_TEST_SIZE = 5;
   auto childVector1 =
       vectorMaker_->flatVectorNullable<int64_t>({std::nullopt, 0, 0, 1, 1, 0});
@@ -1766,7 +1766,7 @@ TEST_F(RawSizeTestFixture, DictRowNull) {
   ASSERT_EQ(sizeof(int16_t) * VECTOR_TEST_SIZE, context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, DictRowNullTopLevel) {
+TEST_F(RawSizeTestFixture, dictRowNullTopLevel) {
   constexpr velox::vector_size_t VECTOR_TEST_SIZE = 5;
   auto childVector1 = vectorMaker_->flatVector<int64_t>({0, 0, 0, 1, 1, 1});
   auto childVector2 = vectorMaker_->flatVector<velox::StringView>(
@@ -1805,7 +1805,7 @@ TEST_F(RawSizeTestFixture, DictRowNullTopLevel) {
   ASSERT_EQ(sizeof(int16_t) * (VECTOR_TEST_SIZE - 1), context_.sizeAt(2));
 }
 
-TEST_F(RawSizeTestFixture, ThrowOnDefaultType) {
+TEST_F(RawSizeTestFixture, throwOnDefaultType) {
   auto unknownVector = facebook::velox::BaseVector::create(
       facebook::velox::UNKNOWN(), 10, pool_.get());
   this->ranges_.add(0, unknownVector->size());
@@ -1815,7 +1815,7 @@ TEST_F(RawSizeTestFixture, ThrowOnDefaultType) {
       velox::VeloxRuntimeError);
 }
 
-TEST_F(RawSizeTestFixture, ThrowOnDefaultEncodingFixedWidth) {
+TEST_F(RawSizeTestFixture, throwOnDefaultEncodingFixedWidth) {
   auto sequenceVector =
       vectorMaker_->sequenceVector<int8_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9});
   this->ranges_.add(0, sequenceVector->size());
@@ -1825,7 +1825,7 @@ TEST_F(RawSizeTestFixture, ThrowOnDefaultEncodingFixedWidth) {
       velox::VeloxRuntimeError);
 }
 
-TEST_F(RawSizeTestFixture, ThrowOnDefaultEncodingVariableWidth) {
+TEST_F(RawSizeTestFixture, throwOnDefaultEncodingVariableWidth) {
   auto sequenceVector = vectorMaker_->sequenceVector<velox::StringView>(
       {"a", "bbbb", "ccccccccc", "dddddddddddddddd"});
   this->ranges_.add(0, sequenceVector->size());
@@ -1836,7 +1836,7 @@ TEST_F(RawSizeTestFixture, ThrowOnDefaultEncodingVariableWidth) {
 }
 
 // Test type compatibility helper functions
-TEST_F(RawSizeTestFixture, TypeSizeFromKind) {
+TEST_F(RawSizeTestFixture, typeSizeFromKind) {
   // Fixed-width types should return their sizes via getTypeSize
   EXPECT_EQ(nimble::getTypeSize(*velox::BOOLEAN()), sizeof(bool));
   EXPECT_EQ(nimble::getTypeSize(*velox::TINYINT()), sizeof(int8_t));
@@ -1870,7 +1870,7 @@ class RawSizeTypeCompatibilityTestFixture : public RawSizeBaseTestFixture {
 };
 
 // Test scalar type mismatch: int32_t vector with BIGINT schema
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarIntegerToBigint) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarIntegerToBigint) {
   constexpr velox::vector_size_t SIZE = 10;
   auto vector =
       vectorMaker_->flatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
@@ -1892,7 +1892,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarIntegerToBigint) {
 }
 
 // Test scalar type mismatch with nulls: int32_t vector with BIGINT schema
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarIntegerToBigintWithNulls) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarIntegerToBigintWithNulls) {
   auto vector = vectorMaker_->flatVectorNullable<int32_t>(
       {1, std::nullopt, 3, 4, std::nullopt, 6, 7, 8, 9, 10});
   auto schemaType = makeTypeWithId(velox::BIGINT());
@@ -1913,7 +1913,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarIntegerToBigintWithNulls) {
 }
 
 // Test REAL to DOUBLE promotion
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarRealToDouble) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarRealToDouble) {
   constexpr velox::vector_size_t SIZE = 5;
   auto vector = vectorMaker_->flatVector<float>({1.0f, 2.0f, 3.0f, 4.0f, 5.0f});
   auto schemaType = makeTypeWithId(velox::DOUBLE());
@@ -1934,7 +1934,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarRealToDouble) {
 }
 
 // Test SMALLINT to INTEGER promotion
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarSmallintToInteger) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarSmallintToInteger) {
   constexpr velox::vector_size_t SIZE = 4;
   auto vector = vectorMaker_->flatVector<int16_t>({1, 2, 3, 4});
   auto schemaType = makeTypeWithId(velox::INTEGER());
@@ -1955,7 +1955,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarSmallintToInteger) {
 }
 
 // Test TINYINT to BIGINT promotion (largest gap)
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarTinyintToBigint) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarTinyintToBigint) {
   constexpr velox::vector_size_t SIZE = 8;
   auto vector = vectorMaker_->flatVector<int8_t>({1, 2, 3, 4, 5, 6, 7, 8});
   auto schemaType = makeTypeWithId(velox::BIGINT());
@@ -1976,7 +1976,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarTinyintToBigint) {
 }
 
 // Test BOOLEAN to INTEGER promotion (boolean is now in integer family)
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarBooleanToInteger) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarBooleanToInteger) {
   constexpr velox::vector_size_t SIZE = 6;
   auto vector =
       vectorMaker_->flatVector<bool>({true, false, true, true, false, true});
@@ -1998,7 +1998,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarBooleanToInteger) {
 }
 
 // Test BOOLEAN to BIGINT promotion
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarBooleanToBigint) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarBooleanToBigint) {
   constexpr velox::vector_size_t SIZE = 4;
   auto vector = vectorMaker_->flatVector<bool>({true, false, true, false});
   auto schemaType = makeTypeWithId(velox::BIGINT());
@@ -2019,7 +2019,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarBooleanToBigint) {
 }
 
 // Test BOOLEAN to INTEGER with nulls
-TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarBooleanToIntegerWithNulls) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, scalarBooleanToIntegerWithNulls) {
   auto vector = vectorMaker_->flatVectorNullable<bool>(
       {true, std::nullopt, false, true, std::nullopt});
   auto schemaType = makeTypeWithId(velox::INTEGER());
@@ -2040,7 +2040,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ScalarBooleanToIntegerWithNulls) {
 }
 
 // Test array with element type mismatch
-TEST_F(RawSizeTypeCompatibilityTestFixture, ArrayWithTypeMismatch) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, arrayWithTypeMismatch) {
   // Create ARRAY<int32_t> vector with 2 rows:
   // Row 0: [1, 2, 3] (3 elements)
   // Row 1: [4, 5] (2 elements)
@@ -2064,7 +2064,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ArrayWithTypeMismatch) {
 }
 
 // Test map with value type mismatch
-TEST_F(RawSizeTypeCompatibilityTestFixture, MapWithValueTypeMismatch) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, mapWithValueTypeMismatch) {
   // Create MAP<VARCHAR, int32_t> vector with 2 entries:
   // Entry 0: {"a" -> 1}
   // Entry 1: {"bb" -> 2}
@@ -2093,7 +2093,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, MapWithValueTypeMismatch) {
 }
 
 // Test map with key type mismatch
-TEST_F(RawSizeTypeCompatibilityTestFixture, MapWithKeyTypeMismatch) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, mapWithKeyTypeMismatch) {
   // Create MAP<int32_t, VARCHAR> vector with 2 entries:
   // Entry 0: {1 -> "a"}
   // Entry 1: {2 -> "bb"}
@@ -2122,7 +2122,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, MapWithKeyTypeMismatch) {
 }
 
 // Test constant vector with type mismatch
-TEST_F(RawSizeTypeCompatibilityTestFixture, ConstantVectorWithTypeMismatch) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, constantVectorWithTypeMismatch) {
   constexpr velox::vector_size_t SIZE = 100;
   std::vector<std::optional<int32_t>> vec(SIZE, 42);
   auto constVector = vectorMaker_->constantVector<int32_t>(vec);
@@ -2144,7 +2144,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, ConstantVectorWithTypeMismatch) {
 }
 
 // Test dictionary vector with type mismatch
-TEST_F(RawSizeTypeCompatibilityTestFixture, DictionaryVectorWithTypeMismatch) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, dictionaryVectorWithTypeMismatch) {
   constexpr velox::vector_size_t SIZE = 10;
   auto flatVector =
       vectorMaker_->flatVector<int32_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
@@ -2170,7 +2170,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, DictionaryVectorWithTypeMismatch) {
 }
 
 // Test row vector with nested type mismatches
-TEST_F(RawSizeTypeCompatibilityTestFixture, RowVectorWithTypeMismatch) {
+TEST_F(RawSizeTypeCompatibilityTestFixture, rowVectorWithTypeMismatch) {
   // Create ROW with:
   // - col0: int32_t values [1, 2]
   // - col1: float values [1.0, 2.0]
@@ -2198,7 +2198,7 @@ TEST_F(RawSizeTypeCompatibilityTestFixture, RowVectorWithTypeMismatch) {
   EXPECT_EQ(rawSizeWithSchema, sizeof(int64_t) * 2 + sizeof(double) * 2);
 }
 
-TEST_F(RawSizeTestFixture, LocalDecodedVectorMoveConstructor) {
+TEST_F(RawSizeTestFixture, localDecodedVectorMoveConstructor) {
   auto localDecodedVector1 =
       facebook::nimble::DecodedVectorManager::LocalDecodedVector(
           context_.getDecodedVectorManager());
@@ -2218,7 +2218,7 @@ TEST_F(RawSizeTestFixture, LocalDecodedVectorMoveConstructor) {
 // as a regular ROW vector instead of crashing in passthrough flatmap path.
 // This happens during flatmap-as-struct rewrite where MAP is converted to ROW
 // in the readSchema.
-TEST_F(RawSizeTestFixture, RowTypeWithIdInFlatMapNodeIdsDoesNotCrash) {
+TEST_F(RawSizeTestFixture, rowTypeWithIdInFlatMapNodeIdsDoesNotCrash) {
   // Create a ROW vector with a single child (simulates a flatmap column
   // with 1 feature read as struct).
   auto child = vectorMaker_->flatVector<int32_t>({1, 2, 3});

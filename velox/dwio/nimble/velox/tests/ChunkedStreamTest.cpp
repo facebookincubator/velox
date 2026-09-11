@@ -84,7 +84,7 @@ createChunkedStream(
 
 } // namespace
 
-TEST(ChunkedStreamTests, SingleChunkNoCompression) {
+TEST(ChunkedStreamTests, singleChunkNoCompression) {
   uint32_t seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng{seed};
@@ -108,7 +108,7 @@ TEST(ChunkedStreamTests, SingleChunkNoCompression) {
   }
 }
 
-TEST(ChunkedStreamTests, MultiChunkNoCompression) {
+TEST(ChunkedStreamTests, multiChunkNoCompression) {
   uint32_t seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng{seed};
@@ -137,7 +137,7 @@ TEST(ChunkedStreamTests, MultiChunkNoCompression) {
   }
 }
 
-TEST(ChunkedStreamTests, SingleChunkWithCompression) {
+TEST(ChunkedStreamTests, singleChunkWithCompression) {
   uint32_t seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng{seed};
@@ -161,7 +161,7 @@ TEST(ChunkedStreamTests, SingleChunkWithCompression) {
   }
 }
 
-TEST(ChunkedStreamTests, MultiChunkWithCompression) {
+TEST(ChunkedStreamTests, multiChunkWithCompression) {
   uint32_t seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng{seed};

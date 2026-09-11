@@ -202,8 +202,7 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMap) {
   auto namedTypes = getNamedTypes(*builder.root());
 
   nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); },
-      {{{1, {3, 42, 9, 2, 21}}, {5, {3, 2, 42, 21}}}}};
+      &builder, {{{1, {3, 42, 9, 2, 21}}, {5, {3, 2, 42, 21}}}}};
 
   std::vector<nimble::Stream> streams;
   streams = planner.getLayout(std::move(streams));
@@ -286,8 +285,7 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMapDynamicFeatures) {
 
   auto namedTypes = getNamedTypes(*builder.root());
 
-  nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); }, {{{1, {3, 42, 9, 2, 21}}}}};
+  nimble::DefaultLayoutPlanner planner{&builder, {{{1, {3, 42, 9, 2, 21}}}}};
 
   std::vector<nimble::Stream> streams;
   streams.reserve(namedTypes.size());
@@ -385,8 +383,7 @@ TEST(DefaultLayoutPlannerTests, noFeatureReordering) {
 
   auto namedTypes = getNamedTypes(*builder.root());
 
-  nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); }, std::nullopt};
+  nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
 
   std::vector<nimble::Stream> streams;
   streams.reserve(namedTypes.size());
@@ -416,6 +413,68 @@ TEST(DefaultLayoutPlannerTests, noFeatureReordering) {
   testStreamLayout(rng, planner, std::move(streams), std::move(expected));
 }
 
+TEST(DefaultLayoutPlannerTests, sharedDictionaryFollowsValueStream) {
+  nimble::SchemaBuilder builder;
+  nimble::test::FlatMapChildAdder flatMapChildAdder;
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({
+          {"c1", NIMBLE_TINYINT()},
+          {"c2", NIMBLE_FLATMAP(Int8, NIMBLE_TINYINT(), flatMapChildAdder)},
+          {"c3", NIMBLE_TINYINT()},
+      }));
+  flatMapChildAdder.addChild("feature");
+
+  const auto scalarValueStreamOffset =
+      builder.root()->asRow().childAt(0).asScalar().scalarDescriptor().offset();
+  const auto flatMapValueStreamOffset = builder.root()
+                                            ->asRow()
+                                            .childAt(1)
+                                            .asFlatMap()
+                                            .childAt(0)
+                                            .asScalar()
+                                            .scalarDescriptor()
+                                            .offset();
+  const auto scalarDictionaryOffset =
+      builder.createSharedDictionaryStream(scalarValueStreamOffset);
+  const auto flatMapDictionaryOffset =
+      builder.createSharedDictionaryStream(flatMapValueStreamOffset);
+  auto namedTypes = getNamedTypes(*builder.root());
+  std::vector<nimble::Stream> streams;
+  streams.reserve(namedTypes.size() + 2);
+  for (const auto& [offset, name] : namedTypes) {
+    streams.push_back(nimble::Stream{offset, {{.content = {name}}}});
+  }
+  streams.push_back(
+      nimble::Stream{
+          scalarDictionaryOffset,
+          {{.content = {"scalar dictionary for c1(0).s"}}}});
+  streams.push_back(
+      nimble::Stream{
+          flatMapDictionaryOffset,
+          {{.content = {"flat map dictionary for c2(1).f.feature(0).s"}}}});
+
+  nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
+  streams = planner.getLayout(std::move(streams));
+
+  std::vector<std::string> streamNames;
+  streamNames.reserve(streams.size());
+  for (const auto& stream : streams) {
+    streamNames.emplace_back(stream.chunks.front().content.front());
+  }
+  EXPECT_EQ(
+      streamNames,
+      (std::vector<std::string>{
+          "r",
+          "r.c1(0).s",
+          "scalar dictionary for c1(0).s",
+          "r.c2(1).f",
+          "r.c2(1).f.feature(0).im",
+          "r.c2(1).f.feature(0).s",
+          "flat map dictionary for c2(1).f.feature(0).s",
+          "r.c3(2).s"}));
+}
+
 TEST(DefaultLayoutPlannerTests, nonFlatMapOrdinalsAreIgnored) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
@@ -443,7 +502,7 @@ TEST(DefaultLayoutPlannerTests, nonFlatMapOrdinalsAreIgnored) {
   fm2.addChild("5");
 
   nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); }, {{{0, {1, 2, 3}}, {1, {42, 5}}}}};
+      &builder, {{{0, {1, 2, 3}}, {1, {42, 5}}}}};
 
   auto namedTypes = getNamedTypes(*builder.root());
   std::vector<nimble::Stream> streams;
@@ -512,8 +571,7 @@ TEST(DefaultLayoutPlannerTests, ordinalOutOfRangeAreIgnored) {
   fm2.addChild("5");
 
   nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); },
-      {{{6, {3, 42, 9, 2, 21}}, {3, {3, 2, 42, 21}}}}};
+      &builder, {{{6, {3, 42, 9, 2, 21}}, {3, {3, 2, 42, 21}}}}};
 
   auto namedTypes = getNamedTypes(*builder.root());
   std::vector<nimble::Stream> streams;
@@ -558,8 +616,7 @@ TEST(DefaultLayoutPlannerTests, incompatibleSchema) {
 
   NIMBLE_SCHEMA(builder, NIMBLE_MAP(NIMBLE_TINYINT(), NIMBLE_STRING()));
 
-  nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); }, {{{3, {3, 2, 42, 21}}}}};
+  nimble::DefaultLayoutPlanner planner{&builder, {{{3, {3, 2, 42, 21}}}}};
   try {
     planner.getLayout({});
     FAIL() << "Factory should have failed.";
@@ -590,8 +647,7 @@ TEST(DefaultLayoutPlannerTests, timestampMicros) {
 
   auto namedTypes = getNamedTypes(*builder.root());
 
-  nimble::DefaultLayoutPlanner planner{
-      [&]() { return builder.root(); }, std::nullopt};
+  nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
 
   std::vector<nimble::Stream> streams;
   streams.reserve(namedTypes.size());

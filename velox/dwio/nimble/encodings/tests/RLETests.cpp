@@ -28,7 +28,7 @@ class RleTests : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
-TEST_F(RleTests, EmptyInput) {
+TEST_F(RleTests, emptyInput) {
   std::vector<int32_t> data;
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());
@@ -39,7 +39,7 @@ TEST_F(RleTests, EmptyInput) {
   EXPECT_TRUE(runValues.empty());
 }
 
-TEST_F(RleTests, SingleElement) {
+TEST_F(RleTests, singleElement) {
   std::vector<int32_t> data{42};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());
@@ -55,7 +55,7 @@ TEST_F(RleTests, SingleElement) {
       std::vector<int32_t>(runValues.begin(), runValues.end()), expectedValues);
 }
 
-TEST_F(RleTests, AllSameValues) {
+TEST_F(RleTests, allSameValues) {
   std::vector<int32_t> data{5, 5, 5, 5, 5};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());
@@ -71,7 +71,7 @@ TEST_F(RleTests, AllSameValues) {
       std::vector<int32_t>(runValues.begin(), runValues.end()), expectedValues);
 }
 
-TEST_F(RleTests, AllDifferentValues) {
+TEST_F(RleTests, allDifferentValues) {
   std::vector<int32_t> data{1, 2, 3, 4, 5};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());
@@ -87,7 +87,7 @@ TEST_F(RleTests, AllDifferentValues) {
       std::vector<int32_t>(runValues.begin(), runValues.end()), expectedValues);
 }
 
-TEST_F(RleTests, MixedRuns) {
+TEST_F(RleTests, mixedRuns) {
   std::vector<int32_t> data{1, 1, 1, 2, 2, 3, 3, 3, 3};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());
@@ -103,7 +103,7 @@ TEST_F(RleTests, MixedRuns) {
       std::vector<int32_t>(runValues.begin(), runValues.end()), expectedValues);
 }
 
-TEST_F(RleTests, NegativeValues) {
+TEST_F(RleTests, negativeValues) {
   std::vector<int32_t> data{-1, -1, 0, 0, 0, 1, 1};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());
@@ -119,7 +119,7 @@ TEST_F(RleTests, NegativeValues) {
       std::vector<int32_t>(runValues.begin(), runValues.end()), expectedValues);
 }
 
-TEST_F(RleTests, Int64Type) {
+TEST_F(RleTests, int64Type) {
   std::vector<int64_t> data{100, 100, 200, 200, 200};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int64_t> runValues(pool_.get());
@@ -135,7 +135,7 @@ TEST_F(RleTests, Int64Type) {
       std::vector<int64_t>(runValues.begin(), runValues.end()), expectedValues);
 }
 
-TEST_F(RleTests, UnsignedType) {
+TEST_F(RleTests, unsignedType) {
   std::vector<uint32_t> data{0, 0, 1, 2, 2, 2};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<uint32_t> runValues(pool_.get());
@@ -152,7 +152,7 @@ TEST_F(RleTests, UnsignedType) {
       expectedValues);
 }
 
-TEST_F(RleTests, AlternatingValues) {
+TEST_F(RleTests, alternatingValues) {
   std::vector<int32_t> data{1, 2, 1, 2, 1, 2};
   nimble::Vector<uint32_t> runLengths(pool_.get());
   nimble::Vector<int32_t> runValues(pool_.get());

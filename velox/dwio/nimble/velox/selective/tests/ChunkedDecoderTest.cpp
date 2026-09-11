@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
+#include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestBase.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
 
@@ -376,6 +377,18 @@ class ChunkedDecoderDataTest : public index::test::ClusterIndexTestBase,
     }
 
     return {streamData, chunkInfos};
+  }
+
+  std::string encodeSharedDictionaryChunkedStream(
+      const std::vector<uint32_t>& indices) {
+    Buffer buffer{*pool_};
+    const auto encodedChunk = test::encodeSharedDictionary(buffer, indices);
+    ChunkedStreamWriter writer{buffer, {.type = CompressionType::Uncompressed}};
+    std::string streamData;
+    for (const auto& segment : writer.encode(encodedChunk)) {
+      streamData += segment;
+    }
+    return streamData;
   }
 
   static void verifyChunkCompressionTypes(
@@ -809,11 +822,58 @@ TEST_P(ChunkedDecoderDataTest, readsCompressedChunks) {
         pool_.get());
 
     std::vector<int32_t> result(chunks[0].size() + chunks[1].size());
-    decoder.nextIndices(result.data(), result.size(), nullptr);
+    decoder.nextIndices(
+        result.data(), static_cast<int64_t>(result.size()), nullptr);
 
     std::vector<int32_t> expected;
     expected.insert(expected.end(), chunks[0].size(), kFirstChunkValue);
     expected.insert(expected.end(), chunks[1].size(), kSecondChunkValue);
+    EXPECT_EQ(result, expected);
+  }
+}
+
+TEST_F(ChunkedDecoderDataTest, sharedDictionaryRequiresNonLegacyDispatch) {
+  const std::vector<int32_t> alphabet{10, 20, 30, 40};
+  const std::vector<uint32_t> indices{2, 0, 3, 1, 2};
+  const std::vector<int32_t> expected{30, 10, 40, 20, 30};
+  const auto streamData = encodeSharedDictionaryChunkedStream(indices);
+  auto makeAlphabetLoader = [&] {
+    auto sharedDictionaryAlphabet =
+        test::createSharedDictionaryAlphabet<int32_t>(
+            alphabet, /*candidateEncodings=*/{}, pool_.get());
+    return [sharedDictionaryAlphabet] { return sharedDictionaryAlphabet; };
+  };
+
+  {
+    ChunkedDecoder decoder(
+        std::make_unique<dwio::common::SeekableArrayInputStream>(
+            streamData.data(), streamData.size()),
+        /*streamIndex=*/nullptr,
+        /*decodeValuesWithNulls=*/false,
+        &encodingFactory(),
+        pool_.get(),
+        /*stringDecoderZeroCopy=*/false,
+        /*decodingStats=*/nullptr,
+        makeAlphabetLoader());
+    NIMBLE_ASSERT_THROW(
+        decoder.ensureLoaded(),
+        "Shared dictionary encoding requires non-legacy encoding dispatch");
+  }
+
+  {
+    ChunkedDecoder decoder(
+        std::make_unique<dwio::common::SeekableArrayInputStream>(
+            streamData.data(), streamData.size()),
+        /*streamIndex=*/nullptr,
+        /*decodeValuesWithNulls=*/false,
+        &encodingFactory(),
+        pool_.get(),
+        /*stringDecoderZeroCopy=*/true,
+        /*decodingStats=*/nullptr,
+        makeAlphabetLoader());
+    std::vector<int32_t> result(indices.size());
+    decoder.nextIndices(
+        result.data(), static_cast<int64_t>(result.size()), nullptr);
     EXPECT_EQ(result, expected);
   }
 }

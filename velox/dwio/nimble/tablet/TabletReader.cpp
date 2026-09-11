@@ -21,10 +21,12 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
+#include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
+#include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
 #include "flatbuffers/flatbuffers.h"
@@ -94,6 +96,14 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.fileHandle = options.fileHandle();
   tabletOptions.cache = options.cache();
   tabletOptions.ioOptions = options;
+  if (const auto& formatOptions = options.formatSpecificOptions()) {
+    if (auto nimbleOptions =
+            std::dynamic_pointer_cast<const NimbleReaderOptions>(
+                formatOptions)) {
+      tabletOptions.externalDictionaryResolver =
+          nimbleOptions->externalDictionaryResolver;
+    }
+  }
 
   // TODO(T272495998): Temporary shim. Remove once HiveDataSource plumbs a
   // real `metadataIoStats` through `ReaderOptions` that the operator /
@@ -176,18 +186,6 @@ MetadataSection toMetadataSection(const T* section) {
                            : std::nullopt};
 }
 
-size_t copyTo(const folly::IOBuf& source, void* target, size_t size) {
-  NIMBLE_DCHECK_LE(
-      source.computeChainDataLength(), size, "Target buffer too small.");
-  size_t offset = 0;
-  for (const auto& chunk : source) {
-    std::copy(chunk.begin(), chunk.end(), static_cast<char*>(target) + offset);
-    offset += chunk.size();
-  }
-
-  return offset;
-}
-
 } // namespace
 
 TabletReader::TabletReader(
@@ -245,6 +243,11 @@ TabletReader::TabletReader(
             return loadStripeGroup(stripeGroupIndex);
           },
           options.pinMetadata},
+      vectorIndexCache_{
+          [this](const std::string& columnName) {
+            return loadVectorIndex(columnName);
+          },
+          /*pinEntries=*/true},
       chunkStatsCache_{
           [this](uint32_t stripeGroupIndex) {
             return loadChunkStatsGroup(stripeGroupIndex);
@@ -255,6 +258,39 @@ TabletReader::TabletReader(
       static_cast<const void*>(pool_),
       "ioOptions pool must match the provided pool");
   init(options);
+}
+
+TabletReader::~TabletReader() = default;
+
+bool TabletReader::hasFileOrExternalDictionaries() const {
+  return sharedDictionaryReaderFactory_ != nullptr &&
+      sharedDictionaryReaderFactory_->hasFileOrExternalDictionaries();
+}
+
+bool TabletReader::hasStripeDictionaries() const {
+  return sharedDictionaryReaderFactory_ != nullptr &&
+      sharedDictionaryReaderFactory_->hasStripeDictionaries();
+}
+
+std::optional<uint32_t> TabletReader::stripeDictionaryStreamId(
+    uint32_t valueStreamId) const {
+  return sharedDictionaryReaderFactory_ == nullptr
+      ? std::nullopt
+      : sharedDictionaryReaderFactory_->dictionaryStreamId(valueStreamId);
+}
+
+folly::F14FastMap<uint32_t, uint32_t> TabletReader::stripeDictionaryStreamIds(
+    std::span<const uint32_t> valueStreamIds) const {
+  return sharedDictionaryReaderFactory_ == nullptr
+      ? folly::F14FastMap<uint32_t, uint32_t>{}
+      : sharedDictionaryReaderFactory_->dictionaryStreamIds(valueStreamIds);
+}
+
+std::shared_ptr<const SharedDictionaryAlphabet>
+TabletReader::resolveDictionaryAlphabet(uint32_t valueStreamId) const {
+  return sharedDictionaryReaderFactory_ == nullptr
+      ? nullptr
+      : sharedDictionaryReaderFactory_->resolveAlphabet(valueStreamId);
 }
 
 void TabletReader::init(const Options& options) {
@@ -293,11 +329,13 @@ void TabletReader::init(const Options& options) {
   loadSections(sections);
 
   initStripes(footerView, footerOffset);
-  initFeatures();
+  initProperties();
+  initSharedDictionaries(options);
   initIndexDescriptors();
   initClusterIndex();
   initChunkStats(footerView, footerOffset);
   initDenseIndexes();
+  initVectorIndexes();
 
   cacheMetadata(footerView, footerOffset);
 }
@@ -419,11 +457,13 @@ bool TabletReader::initFromCache(const Options& options) {
   loadSections(sections);
 
   initStripes();
-  initFeatures();
+  initProperties();
+  initSharedDictionaries(options);
   initIndexDescriptors();
   initClusterIndex();
   initChunkStats();
   initDenseIndexes();
+  initVectorIndexes();
   return true;
 }
 
@@ -476,9 +516,17 @@ void TabletReader::cacheMetadata(
     cacheSection(toMetadataSection(stripeGroups->Get(0)));
   }
 
-  if (auto featuresIt = optionalSections_.find(std::string{kFeaturesSection});
-      featuresIt != optionalSections_.end()) {
-    cacheSection(featuresIt->second);
+  if (auto propertiesIt =
+          optionalSections_.find(std::string{kPropertiesSection});
+      propertiesIt != optionalSections_.end()) {
+    cacheSection(propertiesIt->second);
+  }
+
+  if (sharedDictionaryReaderFactory_ != nullptr) {
+    auto sharedDictionaryIt =
+        optionalSections_.find(std::string{kDictionarySection});
+    NIMBLE_CHECK(sharedDictionaryIt != optionalSections_.end());
+    cacheSection(sharedDictionaryIt->second);
   }
 
   if (clusterIndex_ != nullptr || denseIndexRegistry_ != nullptr) {
@@ -696,20 +744,34 @@ void TabletReader::initOptionalSections() {
   }
 }
 
-void TabletReader::initFeatures() {
+void TabletReader::initProperties() {
   auto section =
-      loadOptionalSection(std::string{kFeaturesSection}, /*keepCache=*/true);
+      loadOptionalSection(std::string{kPropertiesSection}, /*keepCache=*/true);
   if (!section.has_value()) {
     return;
   }
 
-  features_ = FileFeatures::deserialize(section->content());
+  properties_ = FileProperties::deserialize(section->content());
+}
+
+void TabletReader::initSharedDictionaries(const Options& options) {
+  auto section =
+      loadOptionalSection(std::string{kDictionarySection}, /*keepCache=*/false);
+  if (!section.has_value()) {
+    return;
+  }
+
+  sharedDictionaryReaderFactory_ = SharedDictionaryReaderFactory::create(
+      section->content(),
+      options.externalDictionaryResolver,
+      /*tabletReader=*/this,
+      /*pool=*/pool_);
 }
 
 std::vector<std::string> TabletReader::preloadSectionNames(
     const Options& options) const {
   std::vector<std::string> names;
-  names.reserve(options.preloadOptionalSections.size() + 2);
+  names.reserve(options.preloadOptionalSections.size() + 4);
   auto addName = [&names](std::string name) {
     if (std::find(names.begin(), names.end(), name) == names.end()) {
       names.emplace_back(std::move(name));
@@ -721,7 +783,9 @@ std::vector<std::string> TabletReader::preloadSectionNames(
   if (options.loadClusterIndex || options.loadDenseIndexes) {
     addName(std::string{kIndexSection});
   }
-  addName(std::string{kFeaturesSection});
+  addName(std::string{kPropertiesSection});
+  addName(std::string{kDictionarySection});
+  addName(std::string{kVectorIndexSection});
   return names;
 }
 
@@ -783,17 +847,21 @@ struct LoadTask {
   std::vector<StreamTask> streamTasks;
 };
 
-class PreloadedStreamLoader : public StreamLoader {
+class IOBufStreamLoader : public StreamLoader {
  public:
-  explicit PreloadedStreamLoader(Vector<char>&& stream)
-      : stream_{std::move(stream)} {}
+  explicit IOBufStreamLoader(folly::IOBuf&& stream)
+      : stream_{std::move(stream)} {
+    // getStream() returns a single contiguous view (no-op for single-buffer
+    // reads).
+    stream_.coalesce();
+  }
 
   const std::string_view getStream() const override {
-    return {stream_.data(), stream_.size()};
+    return {reinterpret_cast<const char*>(stream_.data()), stream_.length()};
   }
 
  private:
-  const Vector<char> stream_;
+  folly::IOBuf stream_;
 };
 
 struct RegionHash {
@@ -888,18 +956,20 @@ uint32_t TabletReader::streamSize(
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
 
-void TabletReader::streamOffsets(
+void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<uint32_t> out) const {
+    std::span<StreamLocation> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  stripe.stripeGroup()->streamOffsets(stripe.stripeId(), out);
+  stripe.stripeGroup()->streamLocations(stripe.stripeId(), locations);
 }
 
-void TabletReader::streamSizes(
+void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<uint32_t> out) const {
+    std::span<const uint32_t> streamIds,
+    std::span<StreamLocation> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  stripe.stripeGroup()->streamSizes(stripe.stripeId(), out);
+  stripe.stripeGroup()->streamLocations(
+      stripe.stripeId(), streamIds, locations);
 }
 
 uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {
@@ -1004,14 +1074,16 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
         iobufs.size(), uniqueRegions.size(), "Buffer size mismatch.");
     for (uint32_t i = 0; i < uniqueRegions.size(); ++i) {
       // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-      const auto size = iobufs[i].computeChainDataLength();
+      auto& iobuf = iobufs[i];
       const auto& streamIndices = regionToStreamIndices[uniqueRegions[i]];
-      for (uint32_t streamIndex : streamIndices) {
-        Vector<char> vector{pool_, size};
-        copyTo(iobufs[i], vector.data(), vector.size());
-        streams[streamIndex] =
-            std::make_unique<PreloadedStreamLoader>(std::move(vector));
+      // The last stream mapped to a region takes ownership of the IOBuf;
+      // any others share it via a reference-counted clone.
+      for (size_t j = 0; j + 1 < streamIndices.size(); ++j) {
+        streams[streamIndices[j]] =
+            std::make_unique<IOBufStreamLoader>(iobuf.cloneAsValue());
       }
+      streams[streamIndices.back()] =
+          std::make_unique<IOBufStreamLoader>(std::move(iobuf));
     }
   }
 
@@ -1193,6 +1265,39 @@ const index::IndexLookup* TabletReader::denseIndex(
     return nullptr;
   }
   return denseIndexRegistry_->findIndex(name, columns);
+}
+
+void TabletReader::initVectorIndexes() {
+  auto section = loadOptionalSection(std::string{kVectorIndexSection});
+  if (!section.has_value()) {
+    return;
+  }
+  NIMBLE_CHECK_NULL(
+      vectorIndexDirectory_, "Vector indexes already initialized");
+  vectorIndexDirectory_ = std::make_unique<index::VectorIndexDirectory>(
+      index::VectorIndexDirectory::create(
+          std::move(section.value()), indexOptions_));
+}
+
+bool TabletReader::hasVectorIndex(std::string_view columnName) const {
+  return vectorIndexDirectory_ != nullptr &&
+      vectorIndexDirectory_->contains(columnName);
+}
+
+std::shared_ptr<const index::VectorIndex> TabletReader::vectorIndex(
+    std::string_view columnName) const {
+  if (vectorIndexDirectory_ == nullptr ||
+      !vectorIndexDirectory_->contains(columnName)) {
+    return nullptr;
+  }
+
+  return vectorIndexCache_.getOrCreate(std::string{columnName});
+}
+
+std::shared_ptr<const index::VectorIndex> TabletReader::loadVectorIndex(
+    const std::string& columnName) const {
+  NIMBLE_CHECK_NOT_NULL(vectorIndexDirectory_);
+  return vectorIndexDirectory_->load(columnName);
 }
 
 void TabletReader::initDenseIndexes() {

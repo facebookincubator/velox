@@ -24,15 +24,14 @@ MainlyConstantEncoding<std::string_view>::MainlyConstantEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : MainlyConstantEncodingBase<std::string_view>(pool, data, options) {
-  const EncodingFactory factory{options};
   const char* pos = data.data() + this->dataOffset();
   const uint32_t isCommonBytes = encoding::readUint32(pos);
-  isCommon_ =
-      factory.create(*this->pool_, {pos, isCommonBytes}, stringBufferFactory);
+  isCommon_ = EncodingFactory().create(
+      *this->pool_, {pos, isCommonBytes}, stringBufferFactory, options);
   pos += isCommonBytes;
   const uint32_t otherValuesBytes = encoding::readUint32(pos);
-  otherValues_ = factory.create(
-      *this->pool_, {pos, otherValuesBytes}, stringBufferFactory);
+  otherValues_ = EncodingFactory().create(
+      *this->pool_, {pos, otherValuesBytes}, stringBufferFactory, options);
   pos += otherValuesBytes;
   commonValue_ = encoding::read<physicalType>(pos);
   NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
@@ -53,17 +52,15 @@ std::string_view MainlyConstantEncoding<std::string_view>::encode(
   }
 
   const auto& uniqueCounts = selection.statistics().uniqueCounts().value();
-  const auto commonElement =
-      MainlyConstantEncodingBase<std::string_view>::mainlyConstantCommonValue(
-          uniqueCounts);
+  const auto commonElement = uniqueCounts.mostFrequent().value();
 
   const uint32_t entryCount = values.size();
 
   auto* pool = &buffer.getMemoryPool();
-  physicalType commonValue = commonElement->first;
+  physicalType commonValue = commonElement.first;
   auto childStreams =
       MainlyConstantEncodingBase<std::string_view>::prepareChildStreams(
-          pool, values, commonValue, commonElement->second);
+          pool, values, commonValue, commonElement.second);
 
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   std::string_view serializedIsCommon = selection.template encodeNested<bool>(

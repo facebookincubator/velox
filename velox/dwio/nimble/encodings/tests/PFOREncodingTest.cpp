@@ -101,7 +101,10 @@ class PFOREncodingTest : public ::testing::Test {
         buffer);
     encodedStorage_.assign(encoded.begin(), encoded.end());
     return EncodingFactory().create(
-        *pool_, {encodedStorage_.data(), encodedStorage_.size()}, nullptr);
+        *pool_,
+        {encodedStorage_.data(), encodedStorage_.size()},
+        nullptr,
+        Encoding::Options{});
   }
 
   void roundTripAndExpect(const std::vector<T>& values) {
@@ -322,7 +325,7 @@ TEST_P(PforBitWidthStorageTest, storesExpectedBasePayloadWidth) {
           values.size(), GetParam().expectedBaseBitWidth));
 
   auto encoding =
-      EncodingFactory(options).create(*pool, encodedStorage, nullptr);
+      EncodingFactory().create(*pool, encodedStorage, nullptr, options);
   std::vector<uint32_t> decoded(values.size());
   encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
   EXPECT_EQ(decoded, values);
@@ -605,7 +608,10 @@ class PFOREncodingFuzzerTest : public ::testing::Test {
           buffer);
       std::vector<char> storage(encoded.begin(), encoded.end());
       auto encoding = EncodingFactory().create(
-          *pool_, {storage.data(), storage.size()}, nullptr);
+          *pool_,
+          {storage.data(), storage.size()},
+          nullptr,
+          Encoding::Options{});
 
       ASSERT_EQ(encoding->encodingType(), EncodingType::PFOR);
       ASSERT_EQ(encoding->dataType(), TypeTraits<T>::dataType);

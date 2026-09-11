@@ -250,7 +250,7 @@ TEST_F(ForEncodingTest, sliceRejectsInvalidRange) {
       "");
 }
 
-TEST_F(ForEncodingTest, BasicEncodeDecode) {
+TEST_F(ForEncodingTest, basicEncodeDecode) {
   nimble::Vector<int32_t> data(pool_.get());
   data.push_back(100);
   data.push_back(105);
@@ -273,7 +273,7 @@ TEST_F(ForEncodingTest, BasicEncodeDecode) {
   }
 }
 
-TEST_F(ForEncodingTest, AllZeros) {
+TEST_F(ForEncodingTest, allZeros) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 1000; ++i) {
     data.push_back(0);
@@ -291,7 +291,7 @@ TEST_F(ForEncodingTest, AllZeros) {
 }
 
 // Test with constant value (1-bit encoding)
-TEST_F(ForEncodingTest, ConstantValue) {
+TEST_F(ForEncodingTest, constantValue) {
   nimble::Vector<int64_t> data(pool_.get());
   const int64_t constantValue = 42;
   for (int i = 0; i < 500; ++i) {
@@ -311,7 +311,7 @@ TEST_F(ForEncodingTest, ConstantValue) {
 }
 
 // Test with values requiring different bit widths
-TEST_F(ForEncodingTest, MixedBitWidths) {
+TEST_F(ForEncodingTest, mixedBitWidths) {
   nimble::Vector<int32_t> data(pool_.get());
 
   // Frame 1: small range (1-bit)
@@ -341,7 +341,7 @@ TEST_F(ForEncodingTest, MixedBitWidths) {
 }
 
 // Test random access by reading subsets
-TEST_F(ForEncodingTest, RandomAccess) {
+TEST_F(ForEncodingTest, randomAccess) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -364,7 +364,7 @@ TEST_F(ForEncodingTest, RandomAccess) {
 }
 
 // Test partial read with skip
-TEST_F(ForEncodingTest, SelectiveRead) {
+TEST_F(ForEncodingTest, selectiveRead) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 500; ++i) {
     data.push_back(i * 10);
@@ -392,7 +392,7 @@ TEST_F(ForEncodingTest, SelectiveRead) {
 }
 
 // Test with negative numbers
-TEST_F(ForEncodingTest, NegativeNumbers) {
+TEST_F(ForEncodingTest, negativeNumbers) {
   nimble::Vector<int32_t> data(pool_.get());
   data.push_back(-100);
   data.push_back(-50);
@@ -413,7 +413,7 @@ TEST_F(ForEncodingTest, NegativeNumbers) {
 }
 
 // Test with mixed positive and negative numbers
-TEST_F(ForEncodingTest, MixedSignNumbers) {
+TEST_F(ForEncodingTest, mixedSignNumbers) {
   nimble::Vector<int32_t> data(pool_.get());
   data.push_back(-100);
   data.push_back(100);
@@ -434,7 +434,7 @@ TEST_F(ForEncodingTest, MixedSignNumbers) {
 }
 
 // Test unsigned types
-TEST_F(ForEncodingTest, UnsignedTypes) {
+TEST_F(ForEncodingTest, unsignedTypes) {
   nimble::Vector<uint32_t> data(pool_.get());
   for (uint32_t i = 0; i < 256; ++i) {
     data.push_back(1000 + i);
@@ -452,7 +452,7 @@ TEST_F(ForEncodingTest, UnsignedTypes) {
 }
 
 // Test very large values (requiring 64-bit width)
-TEST_F(ForEncodingTest, LargeValues) {
+TEST_F(ForEncodingTest, largeValues) {
   nimble::Vector<int64_t> data(pool_.get());
   data.push_back(0);
   data.push_back(1LL << 30); // ~1 billion
@@ -472,7 +472,7 @@ TEST_F(ForEncodingTest, LargeValues) {
 }
 
 // Test skip functionality
-TEST_F(ForEncodingTest, Skip) {
+TEST_F(ForEncodingTest, skip) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 500; ++i) {
     data.push_back(i);
@@ -494,7 +494,7 @@ TEST_F(ForEncodingTest, Skip) {
 }
 
 // Test reset and re-read
-TEST_F(ForEncodingTest, Reset) {
+TEST_F(ForEncodingTest, reset) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 100; ++i) {
     data.push_back(i);
@@ -520,7 +520,7 @@ TEST_F(ForEncodingTest, Reset) {
 }
 
 // Test with compression
-TEST_F(ForEncodingTest, WithCompression) {
+TEST_F(ForEncodingTest, withCompression) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 1000; ++i) {
     data.push_back(i % 100); // Repeating pattern
@@ -544,7 +544,7 @@ TEST_F(ForEncodingTest, WithCompression) {
 }
 
 // Test small data (less than one frame)
-TEST_F(ForEncodingTest, SmallData) {
+TEST_F(ForEncodingTest, smallData) {
   nimble::Vector<int32_t> data(pool_.get());
   data.push_back(10);
   data.push_back(20);
@@ -562,7 +562,7 @@ TEST_F(ForEncodingTest, SmallData) {
 }
 
 // Test exact frame boundary
-TEST_F(ForEncodingTest, ExactFrameBoundary) {
+TEST_F(ForEncodingTest, exactFrameBoundary) {
   nimble::Vector<int32_t> data(pool_.get());
   // Default frame size is 128
   for (int i = 0; i < 256; ++i) { // Exactly 2 frames
@@ -581,7 +581,7 @@ TEST_F(ForEncodingTest, ExactFrameBoundary) {
 }
 
 // Test with all data types
-TEST_F(ForEncodingTest, Int8Type) {
+TEST_F(ForEncodingTest, int8Type) {
   nimble::Vector<int8_t> data(pool_.get());
   for (int8_t i = -50; i < 50; ++i) {
     data.push_back(i);
@@ -596,7 +596,7 @@ TEST_F(ForEncodingTest, Int8Type) {
   }
 }
 
-TEST_F(ForEncodingTest, Int16Type) {
+TEST_F(ForEncodingTest, int16Type) {
   nimble::Vector<int16_t> data(pool_.get());
   for (int16_t i = 0; i < 500; ++i) {
     data.push_back(i * 10);
@@ -611,7 +611,7 @@ TEST_F(ForEncodingTest, Int16Type) {
   }
 }
 
-TEST_F(ForEncodingTest, Uint64Type) {
+TEST_F(ForEncodingTest, uint64Type) {
   nimble::Vector<uint64_t> data(pool_.get());
   for (uint64_t i = 0; i < 200; ++i) {
     data.push_back(i * 1000000);
@@ -627,7 +627,7 @@ TEST_F(ForEncodingTest, Uint64Type) {
 }
 
 // Test selective reads using skip and materialize patterns
-TEST_F(ForEncodingTest, SelectiveReadsWithPattern) {
+TEST_F(ForEncodingTest, selectiveReadsWithPattern) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 1000; ++i) {
     data.push_back(i * 7); // Some pattern
@@ -662,7 +662,7 @@ TEST_F(ForEncodingTest, SelectiveReadsWithPattern) {
 }
 
 // Test random access pattern with multiple resets
-TEST_F(ForEncodingTest, RandomAccessWithResets) {
+TEST_F(ForEncodingTest, randomAccessWithResets) {
   nimble::Vector<int64_t> data(pool_.get());
   for (int i = 0; i < 500; ++i) {
     data.push_back(static_cast<int64_t>(i) * 100);
@@ -697,7 +697,7 @@ TEST_F(ForEncodingTest, RandomAccessWithResets) {
 }
 
 // Test sparse selective read pattern
-TEST_F(ForEncodingTest, SparseSelectiveReads) {
+TEST_F(ForEncodingTest, sparseSelectiveReads) {
   nimble::Vector<uint32_t> data(pool_.get());
   for (uint32_t i = 0; i < 1000; ++i) {
     data.push_back(i * i); // Quadratic values
@@ -735,7 +735,7 @@ TEST_F(ForEncodingTest, SparseSelectiveReads) {
 }
 
 // Test reading across frame boundaries
-TEST_F(ForEncodingTest, SelectiveAcrossFrameBoundaries) {
+TEST_F(ForEncodingTest, selectiveAcrossFrameBoundaries) {
   nimble::Vector<int32_t> data(pool_.get());
   // Create data with 3 full frames (128 * 3 = 384 values)
   for (int i = 0; i < 384; ++i) {
@@ -786,7 +786,7 @@ TEST_F(ForEncodingTest, SelectiveAcrossFrameBoundaries) {
 }
 
 // Test selective read with varying bit widths across frames
-TEST_F(ForEncodingTest, SelectiveWithVaryingBitWidths) {
+TEST_F(ForEncodingTest, selectiveWithVaryingBitWidths) {
   nimble::Vector<int64_t> data(pool_.get());
 
   // Frame 0: small range (1-bit width)
@@ -826,7 +826,7 @@ TEST_F(ForEncodingTest, SelectiveWithVaryingBitWidths) {
 }
 
 // Test batch selective reads
-TEST_F(ForEncodingTest, BatchSelectiveReads) {
+TEST_F(ForEncodingTest, batchSelectiveReads) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 1000; ++i) {
     data.push_back(i * 3);

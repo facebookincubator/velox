@@ -508,6 +508,30 @@ TEST(SchemaTests, roundTrip) {
   nimble::test::compareSchema(nodes, result);
 }
 
+TEST(SchemaTests, sharedDictionaryStream) {
+  nimble::SchemaBuilder builder;
+  auto scalar = builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
+  const auto valueStreamOffset = scalar->scalarDescriptor().offset();
+
+  EXPECT_FALSE(
+      builder.sharedDictionaryStreamOffset(valueStreamOffset).has_value());
+  const auto dictionaryStreamOffset =
+      builder.createSharedDictionaryStream(valueStreamOffset);
+  EXPECT_EQ(
+      builder.sharedDictionaryStreamOffset(valueStreamOffset),
+      dictionaryStreamOffset);
+
+  NIMBLE_ASSERT_THROW(
+      builder.createSharedDictionaryStream(valueStreamOffset),
+      "already has a shared dictionary stream");
+  NIMBLE_ASSERT_THROW(
+      builder.createSharedDictionaryStream(dictionaryStreamOffset),
+      "already the shared dictionary stream for value stream");
+  NIMBLE_ASSERT_THROW(
+      builder.createSharedDictionaryStream(builder.nodeCount()),
+      "Shared dictionary value stream is not allocated");
+}
+
 // Custom context classes for testing checkedContext
 class TestStreamContext : public nimble::StreamContext {
  public:
@@ -666,6 +690,20 @@ TEST(SchemaTests, typeBuilderSetAttributesOverwrites) {
   scalar->setAttributes(kSecond);
 
   EXPECT_EQ(scalar->attributes(), kSecond);
+}
+
+TEST(SchemaTests, rowTypeBuilderFindChild) {
+  nimble::SchemaBuilder builder;
+  auto row = builder.createRowTypeBuilder(2);
+  auto alpha = builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
+  auto beta = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
+  row->addChild("alpha", alpha);
+  row->addChild("beta", beta);
+
+  EXPECT_EQ(&row->findChild("alpha"), alpha.get());
+  EXPECT_EQ(&row->findChild("beta"), beta.get());
+  NIMBLE_ASSERT_USER_THROW(
+      row->findChild("gamma"), "Row child 'gamma' does not exist.");
 }
 
 TEST(SchemaTests, rowTypeFindChild) {

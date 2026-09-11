@@ -38,7 +38,8 @@ class ArbitraryTest : public AggregationTestBase {
   //   second = (possibly encoded) data fed to Velox.
   // When both are the same vector the caller can return {v, v}.
   void testClusteredInput(
-      std::function<std::pair<RowVectorPtr, RowVectorPtr>(int batchSize, int i)>
+      const std::function<
+          std::pair<RowVectorPtr, RowVectorPtr>(int batchSize, int i)>&
           makeBatch) {
     constexpr int kSize = 1000;
     for (int batchRows : {kSize, 13}) {
@@ -51,16 +52,32 @@ class ArbitraryTest : public AggregationTestBase {
         encodedData.push_back(encoded);
       }
       createDuckDbTable(flatData);
+      // A single batch cannot have a group spanning batches, so the
+      // clustered-input fast path is available and gets covered. With 13-row
+      // batches the 17-row groups straddle batch boundaries, so it must stay
+      // off and the copying fallback is covered instead.
+      const bool noGroupsSpanBatches = batchRows >= kSize;
       for (bool mask : {false, true}) {
         auto builder = PlanBuilder().values(encodedData);
         std::string expected;
         if (mask) {
-          builder.partialStreamingAggregation(
-              {"c0"}, {"arbitrary(c1)"}, {"c2"});
+          builder.streamingAggregation(
+              {"c0"},
+              {"arbitrary(c1)"},
+              {"c2"},
+              core::AggregationNode::Step::kPartial,
+              /*ignoreNullKeys=*/false,
+              noGroupsSpanBatches);
           expected =
               "select c0, first(c1) filter (where c2 and c1 is not null) from tmp group by 1";
         } else {
-          builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"});
+          builder.streamingAggregation(
+              {"c0"},
+              {"arbitrary(c1)"},
+              {},
+              core::AggregationNode::Step::kPartial,
+              /*ignoreNullKeys=*/false,
+              noGroupsSpanBatches);
           expected =
               "select c0, first(c1) filter (where c1 is not null) from tmp group by 1";
         }
@@ -661,9 +678,17 @@ TEST_F(ArbitraryTest, clusteredInputDirectVectorAssign) {
 
   createDuckDbTable(data);
 
+  // Single batch, so no group spans batches and the clustered-input fast path
+  // this test is about stays enabled.
   auto plan = PlanBuilder()
                   .values(data)
-                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
                   .finalAggregation()
                   .planNode();
 
@@ -675,6 +700,67 @@ TEST_F(ArbitraryTest, clusteredInputDirectVectorAssign) {
 
 // Also verify the direct vector assign path with multiple batches where the
 // source vector size may differ from numGroups (exercises the slice fallback).
+// The clustered-input fast path keeps a reference to the whole input vector
+// rather than copying the chosen value out of it. That is only bounded when a
+// group cannot span batches, because the reference is dropped once the group's
+// output is produced. When groups do span batches, every batch that contributed
+// a group stays pinned until extractValues, so peak memory grows with the input
+// instead of with the accumulators.
+//
+// The projection matters: it materializes each batch inside the query's pool,
+// so retained batches show up in peakBytes. Reading straight from values()
+// would allocate them in the test's pool and hide the retention.
+TEST_F(ArbitraryTest, clusteredInputNotRetainedWhenGroupsSpanBatches) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "clusteredInputNotRetainedWhenGroupsSpanBatches",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  // Retaining every batch would keep roughly the whole input resident. A
+  // copying accumulator holds one payload per group, which is far smaller.
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_LT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests input batches are being pinned by the accumulators";
+}
+
 TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
   // Use a larger batch size than the number of groups so that the source
   // vector size exceeds numGroups, exercising the existing slice path.
@@ -689,9 +775,17 @@ TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
 
   createDuckDbTable(data);
 
+  // Single batch, so no group spans batches and the clustered-input slice path
+  // this test is about stays enabled.
   auto plan = PlanBuilder()
                   .values(data)
-                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
                   .finalAggregation()
                   .planNode();
 

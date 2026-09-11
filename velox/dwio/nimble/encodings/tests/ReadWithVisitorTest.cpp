@@ -34,6 +34,7 @@
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -207,34 +208,6 @@ std::unique_ptr<SubIntSplitEncoding<T>> makeSubIntSplitEncoding(
       memPool, encoded, [](uint32_t) { return nullptr; });
 }
 
-class Int32SharedDictionaryResolver final : public SharedDictionaryResolver {
- public:
-  Int32SharedDictionaryResolver(
-      uint32_t dictionaryId,
-      std::span<const int32_t> values,
-      velox::memory::MemoryPool* pool)
-      : dictionaryId_{dictionaryId},
-        alphabet_{test::createSharedDictionaryAlphabet<int32_t>(
-            values,
-            /*candidateEncodings=*/{},
-            pool)} {}
-
-  std::shared_ptr<const SharedDictionaryAlphabet> resolve(
-      SharedDictionaryScope scope,
-      uint32_t dictionaryId,
-      DataType dataType) const final {
-    if (scope != SharedDictionaryScope::Stripe ||
-        dictionaryId != dictionaryId_ || dataType != DataType::Int32) {
-      return nullptr;
-    }
-    return alphabet_;
-  }
-
- private:
-  const uint32_t dictionaryId_;
-  const std::shared_ptr<const SharedDictionaryAlphabet> alphabet_;
-};
-
 EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
   const auto encodedValuesLayout = [&] {
     switch (encodedValuesEncodingType) {
@@ -259,6 +232,21 @@ EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
       {},
       CompressionType::Uncompressed,
       {encodedValuesLayout}};
+}
+
+EncodingLayout makeBitRangeSplitEncodingLayout() {
+  const auto sectionLayout = [] {
+    return EncodingLayout{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+  };
+  return EncodingLayout{
+      EncodingType::BitRangeSplit,
+      EncodingLayout::Config{{
+          {std::string(BitRangeSplitEncoding<int64_t>::kRangesConfigKey),
+           "0-15;16-58;59-63"},
+      }},
+      CompressionType::Uncompressed,
+      {sectionLayout(), sectionLayout(), sectionLayout()}};
 }
 
 WriterOptions makeSingleColumnWriterOptions(
@@ -544,9 +532,11 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       std::string_view encoded,
       velox::memory::MemoryPool& memPool) {
     if (useNonLegacy()) {
-      return EncodingFactory().create(memPool, encoded, nullptr);
+      return EncodingFactory().create(
+          memPool, encoded, nullptr, Encoding::Options{});
     }
-    return legacy::EncodingFactory().create(memPool, encoded, nullptr);
+    return legacy::EncodingFactory().create(
+        memPool, encoded, nullptr, Encoding::Options{});
   }
 
   // Dispatch callReadWithVisitor to the appropriate family.
@@ -660,7 +650,8 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
           mcDictStringBuffers_.push_back(
               velox::AlignedBuffer::allocate<char>(size, pool()));
           return mcDictStringBuffers_.back()->asMutable<void>();
-        });
+        },
+        Encoding::Options{});
   }
 
   // Build root reader, get its first child, call read(), return child.
@@ -1345,6 +1336,57 @@ TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpFloatAndDouble) {
             toString(encodedValuesEncodingType)));
     testColumnReaderAlpFloatingPointRange<float>(encodedValuesEncodingType);
     testColumnReaderAlpFloatingPointRange<double>(encodedValuesEncodingType);
+  }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderBitRangeSplitBigintRangeFilter) {
+  constexpr vector_size_t kRows{512};
+  const auto valueAt = [](vector_size_t row) {
+    return static_cast<int64_t>(
+        (uint64_t{5} << 59) | ((uint64_t{1'760'000'000'000} + row) << 16) |
+        (static_cast<uint64_t>(row) % 4 + 1));
+  };
+  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, valueAt)});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(
+      input, makeSingleColumnWriterOptions(makeBitRangeSplitEncodingLayout()));
+
+  const auto captured = captureFirstColumnEncoding(*ctx);
+  ASSERT_TRUE(captured.has_value());
+  ASSERT_EQ(captured->encodingType(), EncodingType::BitRangeSplit);
+  ASSERT_EQ(captured->childrenCount(), 3);
+  for (NestedEncodingIdentifier sectionIndex{0}; sectionIndex < 3;
+       ++sectionIndex) {
+    SCOPED_TRACE(fmt::format("sectionIndex={}", sectionIndex));
+    ASSERT_TRUE(captured->child(sectionIndex).has_value());
+    EXPECT_EQ(
+        captured->child(sectionIndex)->encodingType(),
+        EncodingType::FixedBitWidth);
+  }
+
+  constexpr vector_size_t kFirstMatch{100};
+  constexpr vector_size_t kLastMatch{200};
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(
+          valueAt(kFirstMatch), valueAt(kLastMatch), false));
+
+  auto root =
+      buildReader(*ctx, rowType, *scanSpec, /*stringDecoderZeroCopy=*/true);
+  auto* child = readColumn(root.get(), kRows);
+  ASSERT_EQ(child->numValues(), kLastMatch - kFirstMatch + 1);
+
+  const auto outputRows = child->outputRows();
+  const auto values = getValues<int64_t>(child);
+  ASSERT_EQ(outputRows.size(), values.size());
+  for (vector_size_t index{0}; index < values.size(); ++index) {
+    SCOPED_TRACE(fmt::format("index={}", index));
+    const auto expectedRow = kFirstMatch + index;
+    EXPECT_EQ(outputRows[index], expectedRow);
+    EXPECT_EQ(values[index], valueAt(expectedRow));
   }
 }
 
@@ -2053,9 +2095,9 @@ TEST_P(ReadWithVisitorTest, encodingLevelSharedDictionaryAlwaysTrueDense) {
   Buffer buffer(*pool());
   const auto encoded = test::encodeSharedDictionary(buffer, indices);
   Encoding::Options options;
-  options.sharedDictionaryResolver =
-      std::make_shared<Int32SharedDictionaryResolver>(
-          /*dictionaryId=*/7, alphabet, pool());
+  options.sharedDictionaryAlphabet =
+      test::createSharedDictionaryAlphabet<int32_t>(
+          alphabet, /*candidateEncodings=*/{}, pool());
   SharedDictionaryEncoding<int32_t> encoding{
       *pool(), encoded, [](uint32_t) { return nullptr; }, options};
 
@@ -3223,7 +3265,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorInteger) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-    encoding->readIndicesWithVisitor(visitor, params);
+    callReadIndicesWithVisitor<T>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), kRows);
     const auto* indices = reader->rawIndices();
@@ -3323,7 +3365,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorInteger) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, this->pool());
 
-    encoding->readIndicesWithVisitor(visitor, params);
+    callReadIndicesWithVisitor<T>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -3420,11 +3462,14 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorNullable) {
 
   std::vector<velox::BufferPtr> stringBuffers;
   auto encoding = nimble::EncodingFactory().create(
-      *pool(), std::string_view(reserved, encodingSize), [&](uint32_t size) {
+      *pool(),
+      std::string_view(reserved, encodingSize),
+      [&](uint32_t size) {
         stringBuffers.push_back(
             velox::AlignedBuffer::allocate<char>(size, pool()));
         return stringBuffers.back()->asMutable<void>();
-      });
+      },
+      nimble::Encoding::Options{});
 
   ASSERT_TRUE(encoding->isNullable());
   ASSERT_TRUE(encoding->dictionaryEnabled());
@@ -3442,7 +3487,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorNullable) {
       visitor(filter, reader, rows, extractValues);
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   ASSERT_EQ(reader->numValues(), kRows);
   const auto* indices = reader->rawIndices();
@@ -3534,11 +3579,14 @@ TEST_P(
 
   std::vector<velox::BufferPtr> stringBuffers;
   auto encoding = nimble::EncodingFactory().create(
-      *pool(), std::string_view(reserved, encodingSize), [&](uint32_t size) {
+      *pool(),
+      std::string_view(reserved, encodingSize),
+      [&](uint32_t size) {
         stringBuffers.push_back(
             velox::AlignedBuffer::allocate<char>(size, pool()));
         return stringBuffers.back()->asMutable<void>();
-      });
+      },
+      nimble::Encoding::Options{});
 
   ASSERT_TRUE(encoding->isNullable());
   ASSERT_TRUE(encoding->dictionaryEnabled());
@@ -3566,7 +3614,7 @@ TEST_P(
       visitor(filter, reader, rows, extractValues);
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   ASSERT_EQ(reader->numValues(), kRows);
   const auto* indices = reader->rawIndices();
@@ -3688,7 +3736,8 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorNullable) {
           stringBuffers.push_back(
               velox::AlignedBuffer::allocate<char>(size, this->pool()));
           return stringBuffers.back()->asMutable<void>();
-        });
+        },
+        nimble::Encoding::Options{});
 
     ASSERT_TRUE(encoding->isNullable());
     ASSERT_TRUE(encoding->dictionaryEnabled());
@@ -3706,7 +3755,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorNullable) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, this->pool());
 
-    callReadIndicesWithVisitor(*encoding, visitor, params);
+    callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -4013,7 +4062,7 @@ TEST_P(
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-    callReadIndicesWithVisitor(*encoding, visitor, params);
+    callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -4083,7 +4132,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, numValuesAfterMainlyConstantReadIndices) {
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
   ASSERT_EQ(reader->numValues(), 0);
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   // numValues must equal kRows (all rows), not just numNonCommon
   // (what the inner Dict encoding's bulkScan wrote via addNumValues).
@@ -4256,9 +4305,16 @@ TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesWithNulls) {
 
   ASSERT_EQ(reader->numValues(), 0);
 
-  // Call the helper with nulls.
+  // Call the helper with nulls. prepareResultNulls must mirror what
+  // ChunkedDecoder wires up in production: the dense index path materializes
+  // nulls into the read-range bitmap only, so it needs an allocated,
+  // output-indexed result-nulls buffer to copy them into whenever
+  // returnReaderNulls_ is false -- as it is here, the scan spec carries a
+  // filter.
   ReadWithVisitorParams params{.numScanned = 0};
-  params.prepareResultNulls = [] {};
+  params.prepareResultNulls = [&] {
+    reader->prepareNulls(rows, /*hasNulls=*/true, /*extraRows=*/8);
+  };
   detail::readDenseMaterializedIndices(
       *encoding,
       visitor,
@@ -4560,7 +4616,7 @@ TEST_P(ReadWithVisitorTest, encodingLevelSimdForBitpackBigintRangeSparse) {
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 3 + 500;
 
@@ -4636,7 +4692,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_Sparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueSparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 3;
 
@@ -4711,7 +4767,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_BigintRange_Dense_Int32_FastPath) {
+    encodingLevelBlockBitPackingBigintRangeDenseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kRows = kChunkSize * 2;
 
@@ -4781,7 +4837,7 @@ TEST_P(
 // ---------------------------------------------------------------------------
 TEST_P(
     ReadWithVisitorTest,
-    encodingLevel_BlockBitPacking_AlwaysTrue_VerySparse_Int32_FastPath) {
+    encodingLevelBlockBitPackingAlwaysTrueVerySparseInt32FastPath) {
   constexpr int kChunkSize = 1024;
   constexpr int kTotalRows = kChunkSize * 4;
 

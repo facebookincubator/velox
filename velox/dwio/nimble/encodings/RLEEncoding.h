@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/BufferedEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -116,12 +117,13 @@ class RLEEncodingBase
       std::function<void*(uint32_t)> stringBufferFactory,
       const Encoding::Options& options = {})
       : TypedEncoding<T, physicalType>(pool, data, options),
-        materializedRunLengths_{EncodingFactory(options).create(
+        materializedRunLengths_{EncodingFactory().create(
             pool,
             {data.data() + this->dataOffset() + 4,
              *reinterpret_cast<const uint32_t*>(
                  data.data() + this->dataOffset())},
-            stringBufferFactory)} {}
+            stringBufferFactory,
+            options)} {}
 
   void reset() override {
     materializedRunLengths_.reset();
@@ -255,8 +257,22 @@ class RLEEncodingBase
         buffer,
         options);
 
+    // sliceRuns() may keep the boundary runs whole to avoid re-encoding the
+    // run-length list, in which case the runs cover more rows than requested
+    // and a SliceEncoding trims the remainder at decode time.
+    const auto encodedRows = slicedRuns.encodedRows;
+    NIMBLE_CHECK_LE(
+        static_cast<uint64_t>(slicedRuns.leadingSkipRows) + length,
+        encodedRows,
+        "RLE run slice does not cover the requested rows.");
+    // The invariant above forces the two deferred-shape signals to move
+    // together: leadingSkipRows>0 implies encodedRows>length, and vice-versa,
+    // so a single comparison decides whether a SliceEncoding wrapper is
+    // needed to trim what the kept-whole boundary runs added.
+    const bool needsSliceWrapper = encodedRows != length;
+
     const auto prefixSize =
-        EncodingPrefix::serializedSize(length, options.useVarintRowCount);
+        EncodingPrefix::serializedSize(encodedRows, options.useVarintRowCount);
     const auto encodingSize = prefixSize + sizeof(uint32_t) +
         slicedRuns.encodedLengths.size() + slicedRunValues.size();
     char* reserved = buffer.reserve(encodingSize);
@@ -264,13 +280,21 @@ class RLEEncodingBase
     EncodingPrefix::serialize(
         EncodingType::RLE,
         TypeTraits<T>::dataType,
-        length,
+        encodedRows,
         options.useVarintRowCount,
         output);
     encoding::writeString(slicedRuns.encodedLengths, output);
     encoding::writeBytes(slicedRunValues, output);
     NIMBLE_CHECK_EQ(output - reserved, encodingSize, "Encoding size mismatch.");
-    return std::string_view{reserved, encodingSize};
+    if (!needsSliceWrapper) {
+      return std::string_view{reserved, encodingSize};
+    }
+    return SliceEncoding<T>::wrap(
+        {reserved, encodingSize},
+        slicedRuns.leadingSkipRows,
+        length,
+        buffer,
+        options);
   }
 
   const char* getValuesStart() const {
@@ -321,8 +345,25 @@ class RLEEncodingBase
     // Run-value child range matching encodedLengths.
     uint32_t runValueOffset{0};
     uint32_t runValueCount{0};
+    // Row count written into the emitted RLE's prefix. Equal to the requested
+    // length when the range is run-aligned; larger when the boundary runs
+    // were kept whole to avoid re-encoding the length list.
+    uint32_t encodedRows{0};
+    // Rows to drop from the front of the emitted RLE to reach the requested
+    // slice start. Non-zero, or encodedRows above the requested length, means
+    // the caller must wrap the result in a SliceEncoding so the consumer
+    // trims what the lengths did not.
+    uint32_t leadingSkipRows{0};
   };
 
+  // Locates the run range that covers `[offset, offset+length)`, keeps the
+  // boundary runs whole, and structurally slices the run-length list.
+  //
+  // Trimming boundary run lengths to match `length` exactly would force the
+  // length list back through `encodeWithCapturedLayout`; the wrapper the
+  // caller adds on any overhang costs a few bytes forever but skips that
+  // pipeline every time. A run-aligned range has zero overhang, so the caller
+  // returns the inner RLE unwrapped.
   static RLESliceRuns sliceRuns(
       std::string_view encodedRunLengths,
       uint32_t offset,
@@ -336,7 +377,6 @@ class RLEEncodingBase
     NIMBLE_CHECK_GT(
         runCount, 0, "Cannot slice a non-empty range from empty RLE runs.");
     auto* pool = &buffer.getMemoryPool();
-    RLESliceRuns result;
 
     EncodingFactory encodingFactory{options};
     auto runLengthsEncoding = encodingFactory.create(
@@ -351,8 +391,7 @@ class RLEEncodingBase
     const auto maxRunLengthChunkSize =
         std::min({runCount, length, kRunLengthChunkSize});
     Vector<uint32_t> runLengths{pool, maxRunLengthChunkSize};
-    Vector<uint32_t> slicedRunLengths{pool};
-    slicedRunLengths.reserve(length);
+    RLESliceRuns result;
     uint32_t row{0};
     for (uint32_t run = 0; run < runCount;) {
       const auto chunkSize =
@@ -374,7 +413,6 @@ class RLEEncodingBase
         }
         lastRunEnd = runEnd;
         ++result.runValueCount;
-        slicedRunLengths.push_back(runLengths[i]);
       }
       if (row >= end) {
         break;
@@ -385,40 +423,16 @@ class RLEEncodingBase
         result.runValueCount,
         0,
         "Could not find RLE runs for a non-empty row range.");
-    NIMBLE_CHECK_EQ(
-        slicedRunLengths.size(),
-        result.runValueCount,
-        "Sliced RLE run length count mismatch.");
 
-    if (firstRunStart < offset || lastRunEnd > end) {
-      slicedRunLengths[0] -= offset - firstRunStart;
-      slicedRunLengths[result.runValueCount - 1] -= lastRunEnd - end;
-      result.encodedLengths = encodeRunLengthsSlice(
-          encodedRunLengths, slicedRunLengths, buffer, options);
-    } else {
-      result.encodedLengths = EncodingFactory::slice(
-          encodedRunLengths,
-          result.runValueOffset,
-          result.runValueCount,
-          buffer,
-          options);
-    }
-    return result;
-  }
-
-  static std::string_view encodeRunLengthsSlice(
-      std::string_view encodedRunLengths,
-      std::span<const uint32_t> runLengths,
-      Buffer& buffer,
-      const Encoding::Options& options) {
-    NIMBLE_CHECK_GT(
-        runLengths.size(), 0, "Cannot encode empty RLE run-length slice.");
-    return EncodingFactory::encodeWithCapturedLayout<uint32_t>(
+    result.encodedRows = lastRunEnd - firstRunStart;
+    result.leadingSkipRows = offset - firstRunStart;
+    result.encodedLengths = EncodingFactory::slice(
         encodedRunLengths,
-        runLengths,
+        result.runValueOffset,
+        result.runValueCount,
         buffer,
-        options,
-        "Captured RLE run-length layout");
+        options);
+    return result;
   }
 };
 
@@ -768,6 +782,33 @@ class RLEEncoding<bool> final
   void materializeBoolsAsBits(uint32_t rowCount, uint64_t* buffer, int begin)
       final;
 
+  /// True counts before and inside a row range.
+  struct RangeCounts {
+    /// Number of true values before the range offset.
+    uint32_t numTrueBeforeRange{0};
+
+    /// Number of true values inside the range.
+    uint32_t numTrueInRange{0};
+  };
+
+  /// Fills true counts before and inside non-empty rows [offset, offset +
+  /// length).
+  static void countTrue(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      RangeCounts& counts,
+      const Encoding::Options& options = {});
+
+  /// Counts true values in non-empty rows [offset, offset + length).
+  static uint32_t countTrue(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
   static uint64_t estimateSize(
       uint64_t /*rowCount*/,
       const Statistics<bool>& statistics,
@@ -829,7 +870,7 @@ RLEEncoding<T>::RLEEncoding(
           data.end() -
           internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart())};
   valuesEncoding_ =
-      EncodingFactory(options).create(pool, valuesView, stringBufferFactory);
+      EncodingFactory().create(pool, valuesView, stringBufferFactory, options);
   if (!isStringType<physicalType>() || !valuesEncoding_->dictionaryEnabled()) {
     ensureValues();
   }

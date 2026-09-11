@@ -111,15 +111,22 @@ DeltaEncoding<T>::DeltaEncoding(
   const uint32_t restatementsOffset = encoding::readUint32(pos);
   const uint32_t isRestatementsOffset = encoding::readUint32(pos);
   deltas_ = factory.create(
-      memoryPool, {pos, restatementsOffset}, stringBufferFactory);
+      memoryPool,
+      {pos, restatementsOffset},
+      stringBufferFactory,
+      Encoding::Options{});
   pos += restatementsOffset;
   restatements_ = factory.create(
-      memoryPool, {pos, isRestatementsOffset}, stringBufferFactory);
+      memoryPool,
+      {pos, isRestatementsOffset},
+      stringBufferFactory,
+      Encoding::Options{});
   pos += isRestatementsOffset;
   isRestatements_ = factory.create(
       memoryPool,
       {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      stringBufferFactory,
+      Encoding::Options{});
 }
 
 template <typename T>

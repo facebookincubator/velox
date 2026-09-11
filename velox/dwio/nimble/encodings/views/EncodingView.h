@@ -15,8 +15,11 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 
 #include "velox/common/memory/Memory.h"
@@ -36,6 +39,10 @@ class EncodingView {
   /// Reads the physical value at the given row index into a typed output
   /// buffer.
   virtual void readAt(uint32_t index, void* output) const = 0;
+
+  /// Reads physical values at the given row indices into a typed output buffer.
+  virtual void readAt(std::span<const uint32_t> indices, void* output)
+      const = 0;
 
   /// Reads physical values in the given row range into a typed output buffer.
   virtual void read(uint32_t offset, uint32_t length, void* output) const = 0;
@@ -63,8 +70,7 @@ class EncodingView {
       : data_{data},
         pool_{pool},
         options_{options},
-        encodingType_{static_cast<EncodingType>(
-            data[EncodingPrefix::kEncodingTypeOffset])},
+        encodingType_{EncodingPrefix::encodingType(data)},
         dataType_{EncodingPrefix::readDataType(data)},
         rowCount_{
             EncodingPrefix::readRowCount(data, options.useVarintRowCount)},
@@ -112,13 +118,20 @@ class TypedEncodingView : public EncodingView {
     return readTypedAt(index);
   }
 
+  void readAt(std::span<const uint32_t> indices, physicalType* output) const {
+    readAt(indices, static_cast<void*>(output));
+  }
+
   void read(uint32_t offset, uint32_t length, physicalType* output) const {
     read(offset, length, static_cast<void*>(output));
   }
 
   void readAt(uint32_t index, void* output) const final {
-    *static_cast<physicalType*>(output) =
-        castToPhysicalType(readTypedAt(index));
+    *static_cast<physicalType*>(output) = readPhysicalAt(index);
+  }
+
+  void readAt(std::span<const uint32_t> indices, void* output) const final {
+    readPhysicalAt(indices, static_cast<physicalType*>(output));
   }
 
   void read(uint32_t offset, uint32_t length, void* output) const final {
@@ -136,6 +149,58 @@ class TypedEncodingView : public EncodingView {
       uint32_t offset,
       uint32_t length,
       physicalType* output) const = 0;
+
+  virtual physicalType readPhysicalAt(uint32_t index) const {
+    return castToPhysicalType(readTypedAt(index));
+  }
+
+  // Reads arbitrary row indices. Repeated and contiguous runs reuse cheaper
+  // scalar-fill and range reads before falling back to per-index reads.
+  virtual void readPhysicalAt(
+      std::span<const uint32_t> indices,
+      physicalType* output) const {
+    size_t outputOffset{0};
+    while (outputOffset < indices.size()) {
+      const auto firstIndex = indices[outputOffset];
+      if (outputOffset + 1 == indices.size()) {
+        output[outputOffset] = readPhysicalAt(firstIndex);
+        return;
+      }
+
+      const auto secondIndex = indices[outputOffset + 1];
+      if (secondIndex == firstIndex) {
+        size_t repeatedLength{2};
+        while (outputOffset + repeatedLength < indices.size() &&
+               indices[outputOffset + repeatedLength] == firstIndex) {
+          ++repeatedLength;
+        }
+        const auto value = readPhysicalAt(firstIndex);
+        std::fill(
+            output + outputOffset,
+            output + outputOffset + repeatedLength,
+            value);
+        outputOffset += repeatedLength;
+        continue;
+      }
+
+      if (secondIndex == static_cast<uint64_t>(firstIndex) + 1) {
+        size_t rangeLength{2};
+        while (outputOffset + rangeLength < indices.size() &&
+               indices[outputOffset + rangeLength] ==
+                   static_cast<uint64_t>(firstIndex) + rangeLength) {
+          ++rangeLength;
+        }
+        readPhysical(
+            firstIndex,
+            static_cast<uint32_t>(rangeLength),
+            output + outputOffset);
+        outputOffset += rangeLength;
+        continue;
+      }
+
+      output[outputOffset++] = readPhysicalAt(firstIndex);
+    }
+  }
 
   virtual T readTypedAt(uint32_t index) const = 0;
 

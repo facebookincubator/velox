@@ -92,6 +92,8 @@ class SparkCastHooks : public exec::CastHooks {
     return true;
   }
 
+  bool decimalToFloatHighPrecisionCastEnabled() const override;
+
   exec::PolicyType getPolicy() const override;
 
   // Spark supports TIMESTAMP_UTC casts.
@@ -102,6 +104,8 @@ class SparkCastHooks : public exec::CastHooks {
   void castDateTimestampToGMT(
       Timestamp& timestamp,
       const tz::TimeZone& timeZone) const override;
+
+  bool isDateOverflowForTimestampUtc(int64_t days) const override;
 
   bool isScientific() const override {
     return true;

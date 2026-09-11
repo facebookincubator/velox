@@ -62,7 +62,7 @@ class FrequencyPartitionEncodingTest : public ::testing::Test {
 };
 
 // Test basic encode/decode with simple data
-TEST_F(FrequencyPartitionEncodingTest, BasicEncodeDecode) {
+TEST_F(FrequencyPartitionEncodingTest, basicEncodeDecode) {
   nimble::Vector<int32_t> data(pool_.get());
   data.push_back(1);
   data.push_back(2);
@@ -94,7 +94,7 @@ TEST_F(FrequencyPartitionEncodingTest, BasicEncodeDecode) {
 }
 
 // Test with Zipfian distribution (skewed frequencies)
-TEST_F(FrequencyPartitionEncodingTest, ZipfianDistribution) {
+TEST_F(FrequencyPartitionEncodingTest, zipfianDistribution) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -144,7 +144,7 @@ TEST_F(FrequencyPartitionEncodingTest, ZipfianDistribution) {
 }
 
 // Test with uniform distribution
-TEST_F(FrequencyPartitionEncodingTest, UniformDistribution) {
+TEST_F(FrequencyPartitionEncodingTest, uniformDistribution) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -177,7 +177,7 @@ TEST_F(FrequencyPartitionEncodingTest, UniformDistribution) {
 }
 
 // Test with all identical values (extreme case)
-TEST_F(FrequencyPartitionEncodingTest, AllIdenticalValues) {
+TEST_F(FrequencyPartitionEncodingTest, allIdenticalValues) {
   const int numValues = 1000;
   nimble::Vector<int32_t> data(pool_.get());
 
@@ -197,7 +197,7 @@ TEST_F(FrequencyPartitionEncodingTest, AllIdenticalValues) {
 }
 
 // Test with single value
-TEST_F(FrequencyPartitionEncodingTest, SingleValue) {
+TEST_F(FrequencyPartitionEncodingTest, singleValue) {
   nimble::Vector<int64_t> data(pool_.get());
   data.push_back(123);
 
@@ -211,7 +211,7 @@ TEST_F(FrequencyPartitionEncodingTest, SingleValue) {
 }
 
 // Test incremental materialization (reset and partial reads)
-TEST_F(FrequencyPartitionEncodingTest, IncrementalMaterialization) {
+TEST_F(FrequencyPartitionEncodingTest, incrementalMaterialization) {
   nimble::Vector<uint64_t> data(pool_.get());
   for (uint64_t i = 0; i < 100; ++i) {
     data.push_back(i % 10); // 10 unique values, repeated
@@ -249,7 +249,7 @@ TEST_F(FrequencyPartitionEncodingTest, IncrementalMaterialization) {
 }
 
 // Test with large values (to test different tier sizes)
-TEST_F(FrequencyPartitionEncodingTest, LargeValues) {
+TEST_F(FrequencyPartitionEncodingTest, largeValues) {
   nimble::Vector<uint64_t> data(pool_.get());
 
   // Add values that require different bit widths
@@ -280,7 +280,7 @@ TEST_F(FrequencyPartitionEncodingTest, LargeValues) {
 }
 
 // Test with floating point values
-TEST_F(FrequencyPartitionEncodingTest, FloatValues) {
+TEST_F(FrequencyPartitionEncodingTest, floatValues) {
   nimble::Vector<float> data(pool_.get());
   data.push_back(1.5f);
   data.push_back(2.7f);
@@ -309,7 +309,7 @@ TEST_F(FrequencyPartitionEncodingTest, FloatValues) {
 }
 
 // Test with double values
-TEST_F(FrequencyPartitionEncodingTest, DoubleValues) {
+TEST_F(FrequencyPartitionEncodingTest, doubleValues) {
   nimble::Vector<double> data(pool_.get());
   data.push_back(1.5);
   data.push_back(2.7);
@@ -337,7 +337,7 @@ TEST_F(FrequencyPartitionEncodingTest, DoubleValues) {
 }
 
 // Test encoding layout capture
-TEST_F(FrequencyPartitionEncodingTest, EncodingLayout) {
+TEST_F(FrequencyPartitionEncodingTest, encodingLayout) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 100; ++i) {
     data.push_back(i % 10);
@@ -356,7 +356,7 @@ TEST_F(FrequencyPartitionEncodingTest, EncodingLayout) {
 }
 
 // Test with edge case: maximum tier count
-TEST_F(FrequencyPartitionEncodingTest, MaximumTiers) {
+TEST_F(FrequencyPartitionEncodingTest, maximumTiers) {
   nimble::Vector<uint8_t> data(pool_.get());
 
   // Create data with many unique values to potentially trigger maximum tiers
@@ -384,7 +384,7 @@ TEST_F(FrequencyPartitionEncodingTest, MaximumTiers) {
 }
 
 // Test with empty-like data (very sparse)
-TEST_F(FrequencyPartitionEncodingTest, SparseData) {
+TEST_F(FrequencyPartitionEncodingTest, sparseData) {
   nimble::Vector<int64_t> data(pool_.get());
 
   // Mostly zeros with occasional other values
@@ -495,25 +495,25 @@ static nimble::Vector<T> makeSkewedData(
   return data;
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedPerTierBitmaps_int32) {
+TEST_F(FrequencyPartitionEncodingTest, indexedPerTierBitmapsInt32) {
   auto data = makeSkewedData<int32_t>(pool_.get(), 500, 4, 20);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::PerTierBitmaps);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedTierTagArray_int32) {
+TEST_F(FrequencyPartitionEncodingTest, indexedTierTagArrayInt32) {
   auto data = makeSkewedData<int32_t>(pool_.get(), 500, 4, 20);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::TierTagArray);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedEliasFano_int32) {
+TEST_F(FrequencyPartitionEncodingTest, indexedEliasFanoInt32) {
   auto data = makeSkewedData<int32_t>(pool_.get(), 500, 4, 20);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::EliasFano);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedNoIndex_preservesTierOrder) {
+TEST_F(FrequencyPartitionEncodingTest, indexedNoIndexPreservesTierOrder) {
   // NoIndex stays backward-compatible (sorted-multiset equality, not exact
   // order).
   nimble::Vector<int32_t> data(pool_.get());
@@ -533,25 +533,25 @@ TEST_F(FrequencyPartitionEncodingTest, IndexedNoIndex_preservesTierOrder) {
   ASSERT_EQ(sortedData, sortedResult);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedPerTierBitmaps_uint8) {
+TEST_F(FrequencyPartitionEncodingTest, indexedPerTierBitmapsUint8) {
   auto data = makeSkewedData<uint8_t>(pool_.get(), 300, 3, 10);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::PerTierBitmaps);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedTierTagArray_uint64) {
+TEST_F(FrequencyPartitionEncodingTest, indexedTierTagArrayUint64) {
   auto data = makeSkewedData<uint64_t>(pool_.get(), 400, 8, 30);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::TierTagArray);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedEliasFano_uint64) {
+TEST_F(FrequencyPartitionEncodingTest, indexedEliasFanoUint64) {
   auto data = makeSkewedData<uint64_t>(pool_.get(), 400, 8, 30);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::EliasFano);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedAllIdentical_PerTierBitmaps) {
+TEST_F(FrequencyPartitionEncodingTest, indexedAllIdenticalPerTierBitmaps) {
   // Edge case: all same value → one tier, no fallback.
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 100; ++i)
@@ -560,7 +560,7 @@ TEST_F(FrequencyPartitionEncodingTest, IndexedAllIdentical_PerTierBitmaps) {
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::PerTierBitmaps);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedAllUnique_EliasFano) {
+TEST_F(FrequencyPartitionEncodingTest, indexedAllUniqueEliasFano) {
   // Edge case: all unique values → no tiers, all fallback.
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 50; ++i)
@@ -569,14 +569,14 @@ TEST_F(FrequencyPartitionEncodingTest, IndexedAllUnique_EliasFano) {
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::EliasFano);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedSingleElement_TierTagArray) {
+TEST_F(FrequencyPartitionEncodingTest, indexedSingleElementTierTagArray) {
   nimble::Vector<int32_t> data(pool_.get());
   data.push_back(42);
   testIndexedRoundTrip(
       pool_.get(), *buffer_, data, nimble::FreqPartIndexType::TierTagArray);
 }
 
-TEST_F(FrequencyPartitionEncodingTest, IndexedLargeSkewed_AllThreeModes) {
+TEST_F(FrequencyPartitionEncodingTest, indexedLargeSkewedAllThreeModes) {
   // Larger dataset; verify all three indexed modes produce the same output.
   const uint32_t N = 2000;
   auto data = makeSkewedData<int32_t>(pool_.get(), N, 6, 100);
@@ -616,7 +616,7 @@ TEST_F(FrequencyPartitionEncodingTest, IndexedLargeSkewed_AllThreeModes) {
 //   Tier 0 (keyBits=1, cap=2): values {1,2} → 12 rows, startRow=0, size=12
 //   Tier 1 (keyBits=2, cap=4): values {3,4} →  3 rows, startRow=12, size=3
 //   Fallback: none; row 15 is past the end → returns tiers_.size() == 2
-TEST_F(FrequencyPartitionEncodingTest, GetTierForRow) {
+TEST_F(FrequencyPartitionEncodingTest, getTierForRow) {
   nimble::Vector<int32_t> data(pool_.get());
   for (int i = 0; i < 8; ++i)
     data.push_back(1);

@@ -25,8 +25,10 @@
 #include "velox/dwio/common/Writer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/velox/FieldWriter.h"
+#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/NimbleFileMetadata.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -89,10 +91,12 @@ class Writer : public velox::dwio::common::Writer {
     static constexpr std::string_view kWriteCpuNanos = "nimble.writeCpuNanos";
     /// Wall clock time spent in tabletWriter write.
     static constexpr std::string_view kWriteWallNanos = "nimble.writeWallNanos";
-    /// CPU time spent ingesting vectors into field writer buffers. Sequential —
-    /// no wall time needed.
+    /// CPU time spent ingesting vectors into field writer buffers.
     static constexpr std::string_view kIngestionCpuNanos =
         "nimble.ingestionCpuNanos";
+    /// Wall clock time spent ingesting vectors into field writer buffers.
+    static constexpr std::string_view kIngestionWallNanos =
+        "nimble.ingestionWallNanos";
     /// CPU time spent on encoding and compression.
     // TODO: Separate encoding and compression costs.
     static constexpr std::string_view kEncodingCpuNanos =
@@ -190,7 +194,7 @@ class Writer : public velox::dwio::common::Writer {
   // Adds index keys to all configured index writers.
   void addIndexKey(const velox::VectorPtr& input);
 
-  void writeFeatures(const WriteOptionalSectionFn& writeMetadataFn);
+  void writeProperties(const WriteOptionalSectionFn& writeMetadataFn);
 
   // Returns the vector written to data streams. When cluster index key column
   // storage is omitted, this is a top-level row projection excluding key
@@ -286,9 +290,24 @@ class Writer : public velox::dwio::common::Writer {
   // them at close still sees consistent deltas.
   void updateIoStatistics();
 
+  // Writes caller-supplied key/value metadata into the optional metadata
+  // section, merging whatever `options.metadataProvider` returns over
+  // `options.metadata`.
   void writeMetadata();
+  // Writes the column statistics section, using the vectorized representation
+  // when enabled and the legacy raw-size section otherwise.
   void writeColumnStats();
+  // Writes the serialized Nimble schema section built from the writer context.
   void writeSchema();
+  // Writes the dictionary catalog and any file-scope alphabet payloads.
+  // File-scope alphabet bytes go through writeDataFn so the catalog can point
+  // at their final file offsets.
+  void writeDictionarySection(
+      const WriteDataFn& writeDataFn,
+      const WriteOptionalSectionFn& writeMetadataFn);
+  // Encodes stripe-scope alphabet chunks into their dedicated dictionary
+  // streams after value streams have chosen shared dictionary encoding.
+  void writeStripeDictionaryStreams();
   // Finalizes and writes all indexes. Called via TabletWriter close callback.
   void writeIndexes(
       const WriteDataFn& writeDataFn,
@@ -308,7 +327,14 @@ class Writer : public velox::dwio::common::Writer {
   // by sequential writes; parallel writes use one pool per concurrent encode
   // task because EncodingBufferPool is not thread-safe.
   std::unique_ptr<EncodingBufferPool> makeEncodingBufferPool() const;
-  uint32_t encodingConcurrency(uint32_t taskCount) const;
+  uint32_t encodingConcurrency(uint32_t streamCount) const;
+
+  // Orders stream indices largest-first, so that parallel encode batches group
+  // comparably sized streams together. The streamCount overload orders the
+  // identity range [0, streamCount) without materializing it first.
+  std::vector<uint32_t> encodeOrder(uint32_t streamCount) const;
+  std::vector<uint32_t> encodeOrder(
+      std::span<const uint32_t> streamIndices) const;
   void ensureEncodingScratchBufferPools(uint32_t poolCount);
   void ensureEncodingBufferPools(uint32_t poolCount);
   velox::BufferPool* encodingScratchBufferPool(uint32_t index = 0);
@@ -341,6 +367,8 @@ class Writer : public velox::dwio::common::Writer {
   std::unique_ptr<velox::WriteFile> file_;
   const std::unique_ptr<index::IndexWriter> clusterIndexWriter_;
   const std::vector<DenseIndexWriter> denseIndexWriters_;
+  // Accumulates vectors for all configured similarity-search indexes.
+  const std::unique_ptr<index::VectorIndexWriter> vectorIndexWriter_;
   const std::unique_ptr<TabletWriter> tabletWriter_;
   // Built once at construction from `options.bufferPolicyFactory`; null if
   // the caller didn't set the factory (legacy FlushPolicy path).

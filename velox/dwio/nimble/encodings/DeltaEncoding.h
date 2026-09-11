@@ -133,20 +133,20 @@ DeltaEncoding<T>::DeltaEncoding(
     : TypedEncoding<T, physicalType>(pool, data, options),
       deltasBuffer_(this->template getVectorBuffer<physicalType>()),
       restatementsBuffer_(this->template getVectorBuffer<physicalType>()) {
-  const EncodingFactory factory{options};
   auto pos = data.data() + this->dataOffset();
   const uint32_t restatementsOffset = encoding::readUint32(pos);
   const uint32_t isRestatementsOffset = encoding::readUint32(pos);
-  deltas_ =
-      factory.create(pool, {pos, restatementsOffset}, stringBufferFactory);
+  deltas_ = EncodingFactory().create(
+      pool, {pos, restatementsOffset}, stringBufferFactory, options);
   pos += restatementsOffset;
-  restatements_ =
-      factory.create(pool, {pos, isRestatementsOffset}, stringBufferFactory);
+  restatements_ = EncodingFactory().create(
+      pool, {pos, isRestatementsOffset}, stringBufferFactory, options);
   pos += isRestatementsOffset;
-  isRestatements_ = factory.create(
+  isRestatements_ = EncodingFactory().create(
       pool,
       {pos, static_cast<size_t>(data.end() - pos)},
-      std::move(stringBufferFactory));
+      std::move(stringBufferFactory),
+      options);
 }
 
 template <typename T>

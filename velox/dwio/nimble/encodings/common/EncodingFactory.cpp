@@ -19,11 +19,13 @@
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/EncodingSliceFactory.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
@@ -36,6 +38,7 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
@@ -56,6 +59,23 @@ std::span<const typename TypeTraits<T>::physicalType> toPhysicalSpan(
       reinterpret_cast<const typename TypeTraits<T>::physicalType*>(
           values.data()),
       values.size());
+}
+
+template <typename T>
+std::unique_ptr<Encoding> createSharedDictionaryEncoding(
+    velox::memory::MemoryPool& pool,
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory,
+    const Encoding::Options& options,
+    DataType dataType) {
+  if constexpr (isSharedDictionaryType<T>()) {
+    return std::make_unique<SharedDictionaryEncoding<T>>(
+        pool, data, std::move(stringBufferFactory), options);
+  }
+  NIMBLE_INCOMPATIBLE_ENCODING(
+      "Trying to deserialize a SharedDictionary stream for an incompatible "
+      "data type {}.",
+      dataType);
 }
 
 } // namespace
@@ -83,7 +103,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_NON_BOOL_TYPE(DictionaryEncoding, dataType);
     }
     case EncodingType::SharedDictionary: {
-      RETURN_ENCODING_BY_INTEGER_TYPE(SharedDictionaryEncoding, dataType);
+      NIMBLE_RETURN_BY_NON_BOOL_DATA_TYPE(
+          dataType,
+          T,
+          createSharedDictionaryEncoding<T>(
+              pool, data, stringBufferFactory, options, dataType));
     }
     case EncodingType::FixedBitWidth: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(FixedBitWidthEncoding, dataType);
@@ -108,6 +132,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::MainlyConstant: {
       RETURN_ENCODING_BY_NON_BOOL_TYPE(MainlyConstantEncoding, dataType);
     }
+    case EncodingType::Slice: {
+      RETURN_ENCODING_BY_DATA_TYPE(SliceEncoding, dataType);
+    }
     case EncodingType::Prefix: {
       NIMBLE_CHECK_EQ(
           dataType,
@@ -129,6 +156,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::DeltaBlock: {
       RETURN_ENCODING_BY_INTEGER_TYPE(DeltaBlockEncoding, dataType);
+    }
+    case EncodingType::EliasFano: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(EliasFanoEncoding, dataType);
     }
     case EncodingType::ALP: {
       switch (dataType) {
@@ -152,6 +182,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::SimdForBitpack: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(SimdForBitpackEncoding, dataType);
+    }
+    case EncodingType::BitRangeSplit: {
+      RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
     }
     case EncodingType::Huffman: {
       RETURN_ENCODING_BY_INTEGER_TYPE(HuffmanEncoding, dataType);
@@ -284,13 +317,36 @@ std::string_view EncodingFactory::encode(
           selection, castedValues, buffer, options);
     }
     case EncodingType::SharedDictionary: {
-      if constexpr (isIntegralType<T>() && !std::is_same_v<T, bool>) {
+      if constexpr (isSharedDictionaryType<T>()) {
+        const auto& sharedDictionaryInput = selection.sharedDictionaryInput();
+        NIMBLE_CHECK(
+            sharedDictionaryInput.has_value(),
+            "SharedDictionary encoding requires writer-provided dictionary "
+            "indices.");
+        NIMBLE_CHECK_EQ(
+            sharedDictionaryInput->indices.size(),
+            castedValues.size(),
+            "SharedDictionary index count differs from value count.");
+        EncodingSelectionPolicyCreator nestedPolicyCreator =
+            [&selection](DataType nestedDataType)
+            -> std::unique_ptr<EncodingSelectionPolicyBase> {
+          NIMBLE_CHECK_EQ(
+              nestedDataType,
+              DataType::Uint32,
+              "SharedDictionary index stream must use Uint32.");
+          return selection.template createNestedPolicy<uint32_t>(
+              EncodingType::SharedDictionary,
+              EncodingIdentifiers::SharedDictionary::Indices);
+        };
         return SharedDictionaryEncoding<T>::encode(
-            selection, castedValues, buffer, options);
+            sharedDictionaryInput->indices,
+            nestedPolicyCreator,
+            buffer,
+            options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
-          "SharedDictionary encoding only supports non-bool integer data types, got {}.",
-          TypeTraits<T>::dataType);
+          "SharedDictionary encoding only supports integer or string data "
+          "types.");
     }
     case EncodingType::FixedBitWidth: {
       if constexpr (isNumericType<physicalType>()) {
@@ -362,6 +418,15 @@ std::string_view EncodingFactory::encode(
           "DeltaBlock encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
+    case EncodingType::EliasFano: {
+      if constexpr (isIntegralType<T>()) {
+        return EliasFanoEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "EliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
     case EncodingType::ALP: {
       if constexpr (isFloatingPointType<T>()) {
         return ALPEncoding<T>::encode(selection, castedValues, buffer, options);
@@ -394,6 +459,16 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::BitRangeSplit: {
+      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return BitRangeSplitEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::Huffman: {
@@ -432,6 +507,15 @@ std::string_view EncodingFactory::encodeNullable(
     case EncodingType::Nullable: {
       return NullableEncoding<T>::encodeNullable(
           selection, physicalValues, nulls, buffer, options);
+    }
+    case EncodingType::SharedDictionary: {
+      if constexpr (isSharedDictionaryType<T>()) {
+        return SharedDictionaryEncoding<T>::encodeNullable(
+            std::move(selection), physicalValues, nulls, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SharedDictionary encoding only supports integer or string data "
+          "types.");
     }
     default: {
       NIMBLE_UNSUPPORTED(

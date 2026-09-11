@@ -26,6 +26,7 @@
 #include <vector>
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/dwio/nimble/common/Constants.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
@@ -125,6 +126,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (values.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
       };
     }
 
@@ -150,6 +153,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (candidateEncodingReadFactors.empty()) {
       return {
           .encodingType = EncodingType::Trivial,
+          .encodingConfig = {},
+          .estimatedSize = std::nullopt,
       };
     }
 
@@ -203,12 +208,14 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     if (!compressionOptions_.has_value()) {
       return {
           .encodingType = selectedEncoding,
+          .encodingConfig = {},
           .estimatedSize = selectedEstimatedSize};
     }
     // Encoding selection optimizes the in-memory layout. Compression is still
     // attempted for leaf data streams to reduce persistent storage size.
     return {
         .encodingType = selectedEncoding,
+        .encodingConfig = {},
         .estimatedSize = selectedEstimatedSize,
         .compressionPolicyFactory = [compressionOptions =
                                          compressionOptions_.value(),
@@ -225,6 +232,8 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       const Encoding::Options& /* options */) override {
     return {
         .encodingType = EncodingType::Nullable,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
     };
   }
 
@@ -255,7 +264,11 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         : candidateEncodingReadFactors_;
     nestedEncodingReadFactors.reserve(sourceEncodingReadFactors.size());
     for (const auto& entry : sourceEncodingReadFactors) {
-      if (entry.first != parentEncodingType) {
+      const bool isCandidate = parentEncodingType == EncodingType::BitRangeSplit
+          ? detail::BitRangeSplitEncodingBase::isValidSectionEncodingCandidate(
+                entry.first)
+          : entry.first != parentEncodingType;
+      if (isCandidate) {
         nestedEncodingReadFactors.emplace_back(entry);
       }
     }
@@ -449,6 +462,8 @@ EncodingSelectionResult LearnedEncodingSelectionPolicy<T>::select(
   if (values.empty()) {
     return {
         .encodingType = EncodingType::Trivial,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
     };
   }
 
@@ -456,6 +471,8 @@ EncodingSelectionResult LearnedEncodingSelectionPolicy<T>::select(
   if (prediction > 0.1) {
     return {
         .encodingType = EncodingType::Trivial,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
     };
   }
   // TODO: Implement a multi-class Encoding model so that we can predict not
@@ -463,6 +480,8 @@ EncodingSelectionResult LearnedEncodingSelectionPolicy<T>::select(
 
   return {
       .encodingType = EncodingType::Trivial,
+      .encodingConfig = {},
+      .estimatedSize = std::nullopt,
   };
 }
 
@@ -488,11 +507,13 @@ class ReplayedEncodingSelectionPolicy
       return {
           .encodingType = encodingLayout_.encodingType(),
           .encodingConfig = encodingLayout_.config(),
+          .estimatedSize = std::nullopt,
       };
     }
     return {
         .encodingType = encodingLayout_.encodingType(),
         .encodingConfig = encodingLayout_.config(),
+        .estimatedSize = std::nullopt,
         .compressionPolicyFactory = [this]() {
           return std::make_unique<ReplayedCompressionPolicy>(
               encodingLayout_.compressionType(), compressionOptions_.value());
@@ -517,6 +538,8 @@ class ReplayedEncodingSelectionPolicy
         }};
     return {
         .encodingType = EncodingType::Nullable,
+        .encodingConfig = {},
+        .estimatedSize = std::nullopt,
     };
   }
 

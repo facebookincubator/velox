@@ -117,12 +117,18 @@ MainlyConstantEncoding<T>::MainlyConstantEncoding(
   const EncodingFactory factory;
   const char* pos = data.data() + EncodingPrefix::kFixedPrefixSize;
   const uint32_t isCommonBytes = encoding::readUint32(pos);
-  isCommon_ =
-      factory.create(*this->pool_, {pos, isCommonBytes}, stringBufferFactory);
+  isCommon_ = factory.create(
+      *this->pool_,
+      {pos, isCommonBytes},
+      stringBufferFactory,
+      Encoding::Options{});
   pos += isCommonBytes;
   const uint32_t otherValuesBytes = encoding::readUint32(pos);
   otherValues_ = factory.create(
-      *this->pool_, {pos, otherValuesBytes}, stringBufferFactory);
+      *this->pool_,
+      {pos, otherValuesBytes},
+      stringBufferFactory,
+      Encoding::Options{});
   pos += otherValuesBytes;
   commonValue_ = encoding::read<physicalType>(pos);
   NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");

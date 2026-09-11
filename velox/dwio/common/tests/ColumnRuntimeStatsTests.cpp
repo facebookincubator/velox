@@ -37,7 +37,7 @@ constexpr std::pair<std::string_view, facebook::velox::RuntimeCounter::Unit>
 constexpr auto kExampleFormat = FileFormat::PARQUET;
 } // namespace
 
-TEST(IoCounterTest, BasicOperations) {
+TEST(IoCounterTest, basicOperations) {
   facebook::velox::io::IoCounter counter;
 
   EXPECT_EQ(counter.sum(), 0);
@@ -52,7 +52,7 @@ TEST(IoCounterTest, BasicOperations) {
   EXPECT_EQ(counter.max(), 5'000);
 }
 
-TEST(IoCounterTest, ConcurrentAccess) {
+TEST(IoCounterTest, concurrentAccess) {
   facebook::velox::io::IoCounter counter;
   constexpr int kNumThreads = 4;
   constexpr int kIterationsPerThread = 1'000;
@@ -74,7 +74,7 @@ TEST(IoCounterTest, ConcurrentAccess) {
   EXPECT_EQ(counter.count(), kNumThreads * kIterationsPerThread);
 }
 
-TEST(DecodingStatsTest, ToRuntimeMetrics) {
+TEST(DecodingStatsTest, toRuntimeMetrics) {
   DecodingStats stats;
   stats.decompressCPUTimeNanos.increment(3'000);
   stats.decompressCPUTimeNanos.increment(5'000);
@@ -100,7 +100,7 @@ TEST(DecodingStatsTest, ToRuntimeMetrics) {
   EXPECT_EQ(decode.unit, facebook::velox::RuntimeCounter::Unit::kNanos);
 }
 
-TEST(SplitStatsTest, ColumnRuntimeStats) {
+TEST(SplitStatsTest, columnRuntimeStats) {
   SplitStats stats{kExampleFormat};
   auto& column1 = stats.getOrCreateColumnStats(1, TypeKind::BIGINT);
   EXPECT_EQ(&stats.getOrCreateColumnStats(1, TypeKind::BIGINT), &column1);
@@ -111,7 +111,7 @@ TEST(SplitStatsTest, ColumnRuntimeStats) {
   EXPECT_EQ(stats.columnStats.at(2).typeKind, TypeKind::VARCHAR);
 }
 
-TEST(RuntimeStatsTest, ExportWithoutColumnCpuMetrics) {
+TEST(RuntimeStatsTest, exportWithoutColumnCpuMetrics) {
   const auto schema = TypeWithId::create(
       facebook::velox::ROW(
           {"bigint", "varchar"},
@@ -131,7 +131,7 @@ TEST(RuntimeStatsTest, ExportWithoutColumnCpuMetrics) {
   EXPECT_TRUE(stats.toRuntimeMetricMap().empty());
 }
 
-TEST(RuntimeStatsTest, ToRuntimeMetricMap) {
+TEST(RuntimeStatsTest, toRuntimeMetricMap) {
   RuntimeStats stats;
   SplitStats splitStats{kExampleFormat};
 
@@ -212,7 +212,7 @@ TEST(RuntimeStatsTest, ToRuntimeMetricMap) {
   EXPECT_EQ(formatMetric.max, 2'000);
 }
 
-TEST(IoCounterTest, MergeStats) {
+TEST(IoCounterTest, mergeStats) {
   facebook::velox::io::IoCounter counter1;
   counter1.increment(5'000);
   counter1.increment(3'000);
@@ -226,7 +226,7 @@ TEST(IoCounterTest, MergeStats) {
   EXPECT_EQ(counter1.count(), 3);
 }
 
-TEST(ColumnRuntimeStatsTest, MergeFromWithDecodingStats) {
+TEST(ColumnRuntimeStatsTest, mergeFromWithDecodingStats) {
   ColumnRuntimeStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
   src.decodingStats.emplace();
@@ -247,7 +247,7 @@ TEST(ColumnRuntimeStatsTest, MergeFromWithDecodingStats) {
   EXPECT_EQ(dst.decodingStats->decompressCPUTimeNanos.sum(), 1'000);
 }
 
-TEST(ColumnRuntimeStatsTest, MergeFromBothWithDecodingStats) {
+TEST(ColumnRuntimeStatsTest, mergeFromBothWithDecodingStats) {
   ColumnRuntimeStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
   src.decodingStats.emplace();
@@ -269,14 +269,14 @@ TEST(ColumnRuntimeStatsTest, MergeFromBothWithDecodingStats) {
   EXPECT_EQ(dst.decodingStats->decompressCPUTimeNanos.sum(), 3'000);
 }
 
-TEST(WithDecompressStatsTest, NonVoidWithCounter) {
+TEST(WithDecompressStatsTest, nonVoidWithCounter) {
   facebook::velox::io::IoCounter counter;
   int result = withDecompressStats(&counter, [] { return 42; });
   EXPECT_EQ(result, 42);
   EXPECT_EQ(counter.count(), 1);
 }
 
-TEST(WithDecompressStatsTest, NullCounter) {
+TEST(WithDecompressStatsTest, nullCounter) {
   int result = withDecompressStats(nullptr, [] { return 7; });
   EXPECT_EQ(result, 7);
 
@@ -285,7 +285,7 @@ TEST(WithDecompressStatsTest, NullCounter) {
   EXPECT_EQ(sideEffect, 3);
 }
 
-TEST(ColumnRuntimeStatsTest, MergeFromWithoutDecodingStats) {
+TEST(ColumnRuntimeStatsTest, mergeFromWithoutDecodingStats) {
   ColumnRuntimeStats src{TypeKind::BIGINT};
   src.accumulateStat(kExampleFormatMetric, 100);
 

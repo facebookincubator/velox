@@ -154,6 +154,31 @@ TEST(EncodingTypeTest, asEncodingPhysicalTypeSpanInt32) {
   }
 }
 
+TEST(EncodingTypeTest, asEncodingPhysicalType) {
+  using PhysicalType = EncodingPhysicalType<float>::type;
+
+  std::vector<float> values = {1.0f, 2.0f, 3.0f};
+  auto physicalSpan = EncodingPhysicalType<float>::asEncodingPhysicalTypeSpan(
+      std::span<float>{values});
+  auto physicalValues = [&] {
+    return std::vector<PhysicalType>{physicalSpan.begin(), physicalSpan.end()};
+  };
+
+  const std::vector<PhysicalType> expectedBefore{
+      EncodingPhysicalType<float>::asEncodingPhysicalType(1.0f),
+      EncodingPhysicalType<float>::asEncodingPhysicalType(2.0f),
+      EncodingPhysicalType<float>::asEncodingPhysicalType(3.0f)};
+  EXPECT_EQ(expectedBefore, physicalValues());
+
+  physicalSpan[1] = EncodingPhysicalType<float>::asEncodingPhysicalType(-3.5f);
+  const std::vector<PhysicalType> expectedAfter{
+      EncodingPhysicalType<float>::asEncodingPhysicalType(1.0f),
+      EncodingPhysicalType<float>::asEncodingPhysicalType(-3.5f),
+      EncodingPhysicalType<float>::asEncodingPhysicalType(3.0f)};
+  EXPECT_EQ(expectedAfter, physicalValues());
+  EXPECT_FLOAT_EQ(values[1], -3.5f);
+}
+
 TEST(EncodingTypeTest, asEncodingPhysicalTypeSpanEmpty) {
   std::vector<float> values;
   auto span = std::span<const float>(values);
