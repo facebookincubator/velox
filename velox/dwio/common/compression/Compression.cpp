@@ -25,6 +25,10 @@
 #include <lz4.h>
 #include <snappy.h>
 #include <zlib.h>
+#include <limits>
+// Expose ZSTD static APIs (e.g. ZSTD_decompressBound) used to size the output
+// buffer when a compressed block decompresses to more than expected.
+#define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #include <zstd_errors.h>
 
@@ -418,6 +422,12 @@ uint64_t ZstdDecompressor::decompress(
     uint64_t srcLength,
     char* dest,
     uint64_t destLength) {
+  // ZSTD_decompressDCtx() forwards to ZSTD_decompressMultiFrame() and therefore
+  // decodes every concatenated frame in 'src'. Its only requirement is that
+  // 'destLength' holds the total decompressed size across all frames; that is
+  // satisfied by getDecompressedLength(), which returns the exact total over
+  // the whole input via ZSTD_findDecompressedSize() (falling back to the
+  // ZSTD_decompressBound() upper bound for streaming frames; see below).
   // Reuse 'ZSTD_DCtx' per-thread to avoid repeated allocations.
   thread_local std::unique_ptr<ZSTD_DCtx, size_t (*)(ZSTD_DCtx*)> ctx{
       ZSTD_createDCtx(), ZSTD_freeDCtx};
@@ -433,19 +443,40 @@ uint64_t ZstdDecompressor::decompress(
 std::pair<int64_t, bool> ZstdDecompressor::getDecompressedLength(
     const char* src,
     uint64_t srcLength) const {
-  auto uncompressedLength = ZSTD_getFrameContentSize(src, srcLength);
-  // in the case when decompression size is not available, return the upper
-  // bound
-  if (uncompressedLength == ZSTD_CONTENTSIZE_UNKNOWN ||
-      uncompressedLength == ZSTD_CONTENTSIZE_ERROR) {
-    return {blockSize_, false};
+  // A decompressor block may hold several concatenated ZSTD frames (e.g. a raw
+  // compressed stream fed whole to the decompressor via useRawDecompression,
+  // as the Text reader does). ZSTD_getFrameContentSize() reports only the
+  // first frame, which under-sizes the destination and makes decompress()
+  // fail with dstSize_tooSmall. Instead prefer the exact total across all
+  // frames via ZSTD_findDecompressedSize(), which also lets the caller skip a
+  // block without decompressing it (the 'exact' flag). For streaming frames
+  // (no content-size header) it returns ZSTD_CONTENTSIZE_UNKNOWN, so fall
+  // back to the upper bound ZSTD_decompressBound(), which never returns
+  // UNKNOWN -- correct, at the cost of that bound ('exact' false, so such a
+  // block cannot be skipped without decoding).
+  uint64_t decompressedLength = ZSTD_findDecompressedSize(src, srcLength);
+  bool isExact = true;
+  if (decompressedLength == ZSTD_CONTENTSIZE_UNKNOWN ||
+      decompressedLength == ZSTD_CONTENTSIZE_ERROR) {
+    // Streaming frames: the exact size is unknowable, fall back to the bound.
+    decompressedLength = ZSTD_decompressBound(src, srcLength);
+    isExact = false;
+    if (decompressedLength == ZSTD_CONTENTSIZE_ERROR) {
+      // Unrecognized or corrupt frame header.
+      return {blockSize_, false};
+    }
   }
+  // The sizes above are read straight out of the frame header and are never
+  // validated against the payload, so a corrupt stream can declare a value
+  // that does not fit the signed return type; guard against that before
+  // narrowing, otherwise static_cast<int64_t> would make it negative.
   DWIO_ENSURE_LE_FMT(
-      uncompressedLength,
-      blockSize_,
-      "Insufficient buffer size. Info: {}",
+      decompressedLength,
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+      "ZSTD decompressed length ({}) out of range for int64_t. Info: {}",
+      decompressedLength,
       streamDebugInfo_);
-  return {uncompressedLength, true};
+  return {static_cast<int64_t>(decompressedLength), isExact};
 }
 
 class SnappyDecompressor : public Decompressor {
