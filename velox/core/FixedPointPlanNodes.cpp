@@ -133,15 +133,31 @@ FixedPointNode::FixedPointNode(
       0,
       "FixedPointNode: maxIterations must be positive");
   validatePlans();
+  validateWorkerCounts();
   resolveAndValidateStateReferences();
   // errorWhenMaxIterationReached fails the loop when maxIterations is reached
-  // without converging; that is only meaningful with a convergence plan (a
-  // null plan never converges, so it would always fail).
+  // without converging; that is only meaningful with a convergence criterion
+  // (with none the loop never converges, so it would always fail).
   VELOX_USER_CHECK(
       !convergenceConfig_.errorWhenMaxIterationReached ||
-          convergenceConfig_.plan != nullptr,
+          !convergenceConfig_.plans.empty() ||
+          convergenceConfig_.stopWhenDeltaEmpty,
       "FixedPointNode: errorWhenMaxIterationReached requires a convergence "
-      "plan; set it false for a fixed-count loop with no convergence plan");
+      "criterion; set it false for a fixed-count loop with no convergence "
+      "plan");
+  VELOX_USER_CHECK(
+      !convergenceConfig_.stopWhenDeltaEmpty ||
+          convergenceConfig_.plans.empty(),
+      "FixedPointNode: stopWhenDeltaEmpty and a convergence sequence are "
+      "mutually exclusive; the delta row count is already the verdict");
+  // The delta is the local shard's row count and the framework performs no
+  // cross-worker reduction, so a peer's frontier may still be non-empty when
+  // this one empties -- stopping then strands the peers reading this worker.
+  VELOX_USER_CHECK(
+      !convergenceConfig_.stopWhenDeltaEmpty || numWorkers() == 1,
+      "FixedPointNode: stopWhenDeltaEmpty requires a non-shuffling fixed "
+      "point, because the delta is local to a worker. Workers: {}",
+      numWorkers());
 }
 
 void FixedPointNode::addDetails(std::stringstream& stream) const {
@@ -151,19 +167,56 @@ void FixedPointNode::addDetails(std::stringstream& stream) const {
          << convergenceConfig_.toString();
 }
 
-bool FixedPointNode::requiresSplits() const {
-  if (!plans_.empty() &&
+namespace {
+
+// Whether a plan chain makes the fixed point need coordinator-assigned peer
+// splits: its first plan shuffles out, or a later plan shuffles in (an
+// Exchange) and so consumes splits.  Without this a shuffling chain would
+// report requiresSplits()==false and deadlock waiting for peers that were never
+// named.
+bool chainRequiresSplits(const std::vector<PlanNodePtr>& plans) {
+  if (!plans.empty() &&
       std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
-          plans_.front()) != nullptr) {
+          plans.front()) != nullptr) {
     return true;
   }
-  // A non-first body plan that shuffles in (an Exchange) consumes splits the
-  // coordinator must assign; without this a multi-plan shuffling fixed point
-  // would report requiresSplits()==false and deadlock waiting for peers.
-  for (size_t i = 1; i < plans_.size(); ++i) {
-    if (containsSplitSource(plans_[i])) {
+  for (size_t i = 1; i < plans.size(); ++i) {
+    if (containsSplitSource(plans[i])) {
       return true;
     }
+  }
+  return false;
+}
+
+// The number of workers a chain shuffles across -- the partition count its
+// first plan's PartitionedOutput writes to -- or 1 when the chain does not
+// shuffle.
+int32_t chainWorkers(const std::vector<PlanNodePtr>& plans) {
+  if (plans.empty()) {
+    return 1;
+  }
+  if (auto partitioned =
+          std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+              plans.front())) {
+    return partitioned->numPartitions();
+  }
+  return 1;
+}
+
+} // namespace
+
+int32_t FixedPointNode::numWorkers() const {
+  // validateWorkerCounts() rejected a body and convergence chain that disagree,
+  // so at most one of these is greater than one.
+  return std::max(chainWorkers(plans_), chainWorkers(convergenceConfig_.plans));
+}
+
+bool FixedPointNode::requiresSplits() const {
+  // Either chain can be the shuffling one -- a convergence sequence that
+  // reduces across workers needs peers just as a shuffling body does.
+  if (chainRequiresSplits(plans_) ||
+      chainRequiresSplits(convergenceConfig_.plans)) {
+    return true;
   }
   for (const auto& declaration : stateDeclarations_) {
     if (containsSplitSource(declaration->initialPlan())) {
@@ -173,53 +226,151 @@ bool FixedPointNode::requiresSplits() const {
   return false;
 }
 
-void FixedPointNode::validatePlans() const {
-  VELOX_USER_CHECK(
-      !plans_.empty(), "FixedPointNode requires at least one plan");
-  const auto numPlans = plans_.size();
+namespace {
+
+// Validates the sub-plan chaining convention, which the body and convergence
+// sequences share: the first plan reads state, every later one receives the
+// previous one's shuffle through an Exchange, and only the last produces rows
+// instead of shuffling through a PartitionedOutput.  'what' names a plan of the
+// sequence and 'lastPlanProduces' what its last plan emits, both for the error
+// messages.
+// Counts the ExchangeNodes anywhere in 'node', not just on its primary input
+// chain.  A fragment reading a second shuffle is a branching topology (a
+// distributed join, say) rather than one link of a linear chain.
+int32_t countExchanges(const PlanNode* node) {
+  if (node == nullptr) {
+    return 0;
+  }
+  int32_t numExchanges =
+      dynamic_cast<const core::ExchangeNode*>(node) != nullptr ? 1 : 0;
+  for (const auto& source : node->sources()) {
+    numExchanges += countExchanges(source.get());
+  }
+  return numExchanges;
+}
+
+void validatePlanChain(
+    const std::vector<PlanNodePtr>& plans,
+    std::string_view what,
+    std::string_view lastPlanProduces) {
+  const auto numPlans = plans.size();
   for (size_t i = 0; i < numPlans; ++i) {
     VELOX_USER_CHECK_NOT_NULL(
-        plans_[i], "FixedPointNode: plan {} must not be null", i);
-    const auto* root = plans_[i].get();
+        plans[i], "FixedPointNode: {} {} must not be null", what, i);
+    const auto* root = plans[i].get();
     const auto* leaf = primaryLeaf(root);
     const std::string leafName =
         leaf != nullptr ? std::string(leaf->name()) : "nothing";
-    // The first plan reads from state; every later plan receives the previous
-    // plan's shuffle through an Exchange.
+    // The chain is one logical plan cut at its shuffle boundaries, so a
+    // fragment reads at most the one shuffle that links it to its predecessor.
+    // Counting every Exchange, not just the one on the primary input chain,
+    // is what rejects a branching fragment.
+    const auto numExchanges = countExchanges(root);
     if (i == 0) {
       VELOX_USER_CHECK(
           dynamic_cast<const StateSourceNode*>(leaf) != nullptr,
-          "FixedPointNode: the first plan must start with a StateSourceNode, "
+          "FixedPointNode: the first {} must start with a StateSourceNode, "
           "but it starts with {}",
+          what,
           leafName);
+      VELOX_USER_CHECK_EQ(
+          numExchanges,
+          0,
+          "FixedPointNode: the first {} must not read a shuffle",
+          what);
     } else {
       VELOX_USER_CHECK(
           dynamic_cast<const core::ExchangeNode*>(leaf) != nullptr,
-          "FixedPointNode: every non-first plan must start with an Exchange, "
-          "but plan {} starts with {}",
+          "FixedPointNode: every non-first {} must start with an Exchange, "
+          "but {} {} starts with {}",
+          what,
+          what,
           i,
           leafName);
+      VELOX_USER_CHECK_EQ(
+          numExchanges,
+          1,
+          "FixedPointNode: every non-first {} must read exactly one shuffle, "
+          "the link to its predecessor; a branching topology such as a "
+          "distributed join is not supported. Plan: {}",
+          what,
+          i);
     }
-    // The last plan produces the rows the framework writes back to the output
-    // state entry, so it must not end with a PartitionedOutput; every earlier
-    // plan shuffles to the next through one.
+    const std::string rootName =
+        root != nullptr ? std::string(root->name()) : "nothing";
     if (i + 1 == numPlans) {
       VELOX_USER_CHECK(
           dynamic_cast<const core::PartitionedOutputNode*>(root) == nullptr,
-          "FixedPointNode: the last plan must produce the rows written back to "
-          "the output state entry, not shuffle through a PartitionedOutput, but "
-          "plan {} ends with {}",
+          "FixedPointNode: the last {} must produce {}, not shuffle through a "
+          "PartitionedOutput, but {} {} ends with {}",
+          what,
+          lastPlanProduces,
+          what,
           i,
-          root != nullptr ? std::string(root->name()) : "nothing");
+          rootName);
     } else {
       VELOX_USER_CHECK(
           dynamic_cast<const core::PartitionedOutputNode*>(root) != nullptr,
-          "FixedPointNode: every non-last plan must end with a "
-          "PartitionedOutput, but plan {} ends with {}",
+          "FixedPointNode: every non-last {} must end with a "
+          "PartitionedOutput, but {} {} ends with {}",
+          what,
+          what,
           i,
-          root != nullptr ? std::string(root->name()) : "nothing");
+          rootName);
     }
   }
+
+  // Adjacent fragments are the two halves of one shuffle: what the
+  // PartitionedOutput writes is what the next Exchange reads, so their schemas
+  // must match, and every stage must shuffle across the same width or the
+  // exchanges are built for peers that were never named.
+  const auto workers = chainWorkers(plans);
+  for (size_t i = 0; i + 1 < numPlans; ++i) {
+    const auto partitioned =
+        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plans[i]);
+    VELOX_USER_CHECK_EQ(
+        partitioned->numPartitions(),
+        workers,
+        "FixedPointNode: every shuffling {} must partition across the same "
+        "number of workers. Plan: {}",
+        what,
+        i);
+    const auto* exchange = dynamic_cast<const core::ExchangeNode*>(
+        primaryLeaf(plans[i + 1].get()));
+    VELOX_USER_CHECK(
+        exchange->outputType()->equivalent(*plans[i]->outputType()),
+        "FixedPointNode: the schema a {} shuffles out must match what the next "
+        "one reads back. Plan {} writes {}, plan {} reads {}",
+        what,
+        i,
+        plans[i]->outputType()->toString(),
+        i + 1,
+        exchange->outputType()->toString());
+  }
+}
+
+} // namespace
+
+void FixedPointNode::validatePlans() const {
+  VELOX_USER_CHECK(
+      !plans_.empty(), "FixedPointNode requires at least one plan");
+  validatePlanChain(
+      plans_, "plan", "the rows written back to the output state entry");
+}
+
+void FixedPointNode::validateWorkerCounts() const {
+  const auto bodyWorkers = chainWorkers(plans_);
+  const auto convergenceWorkers = chainWorkers(convergenceConfig_.plans);
+  // A chain that does not shuffle expresses no opinion.  Two that do must
+  // agree: the body's exchanges are wired for its own peer count, so a wider
+  // convergence chain would wait on peers the coordinator never assigned.
+  VELOX_USER_CHECK(
+      bodyWorkers == 1 || convergenceWorkers == 1 ||
+          bodyWorkers == convergenceWorkers,
+      "FixedPointNode: the body and convergence chains must shuffle across the "
+      "same number of workers. Body: {}, convergence: {}",
+      bodyWorkers,
+      convergenceWorkers);
 }
 
 void FixedPointNode::resolveAndValidateStateReferences() const {
@@ -237,9 +388,10 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
   // Resolve and check every StateSource / StateHashJoin in every body plan and
   // in the convergence plan (which also reads state via a StateSource).
   std::vector<PlanNodePtr> referencingPlans = plans_;
-  if (convergenceConfig_.plan != nullptr) {
-    referencingPlans.push_back(convergenceConfig_.plan);
-  }
+  referencingPlans.insert(
+      referencingPlans.end(),
+      convergenceConfig_.plans.begin(),
+      convergenceConfig_.plans.end());
   for (const auto& plan : referencingPlans) {
     std::vector<const StateSourceNode*> sources;
     collectNodes<StateSourceNode>(plan, sources);
@@ -365,16 +517,15 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
       "schema for entry: {}",
       outputStateEntry_);
 
-  // The convergence plan (when present) starts with a StateSourceNode and emits
-  // exactly one BOOLEAN column.
-  if (convergenceConfig_.plan != nullptr) {
-    const auto* leaf = primaryLeaf(convergenceConfig_.plan.get());
-    VELOX_USER_CHECK(
-        dynamic_cast<const StateSourceNode*>(leaf) != nullptr,
-        "FixedPointNode: the convergence plan must start with a StateSourceNode,"
-        " but it starts with {}",
-        leaf != nullptr ? std::string(leaf->name()) : "nothing");
-    const auto& convergenceType = convergenceConfig_.plan->outputType();
+  // The convergence sequence (when present) chains like the body -- reading
+  // state, shuffling between plans -- and its last plan emits exactly one
+  // BOOLEAN column, the verdict.
+  if (!convergenceConfig_.plans.empty()) {
+    validatePlanChain(
+        convergenceConfig_.plans,
+        "convergence plan",
+        "the BOOLEAN convergence verdict");
+    const auto& convergenceType = convergenceConfig_.plans.back()->outputType();
     VELOX_USER_CHECK_EQ(
         convergenceType->size(),
         1,
@@ -517,38 +668,58 @@ HashTableState& HashTableState::initial(PlanNodePtr initialPlan) {
 // static
 ConvergenceConfig ConvergenceConfig::withMaxIterations(int32_t maxIterations) {
   return ConvergenceConfig{
-      .plan = nullptr,
+      .plans = {},
       .maxIterations = maxIterations,
       .errorWhenMaxIterationReached = false};
+}
+
+// static
+ConvergenceConfig ConvergenceConfig::whenDeltaEmpty(int32_t maxIterations) {
+  return ConvergenceConfig{
+      .plans = {},
+      .maxIterations = maxIterations,
+      .errorWhenMaxIterationReached = true,
+      .stopWhenDeltaEmpty = true};
 }
 
 // static
 ConvergenceConfig ConvergenceConfig::converging(
     PlanNodePtr plan,
     int32_t maxIterations) {
+  return converging(std::vector<PlanNodePtr>{std::move(plan)}, maxIterations);
+}
+
+// static
+ConvergenceConfig ConvergenceConfig::converging(
+    std::vector<PlanNodePtr> plans,
+    int32_t maxIterations) {
   return ConvergenceConfig{
-      .plan = std::move(plan),
+      .plans = std::move(plans),
       .maxIterations = maxIterations,
       .errorWhenMaxIterationReached = true};
 }
 
 folly::dynamic ConvergenceConfig::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
-  if (plan != nullptr) {
-    obj["plan"] = plan->serialize();
+  folly::dynamic serializedPlans = folly::dynamic::array;
+  for (const auto& plan : plans) {
+    serializedPlans.push_back(plan->serialize());
   }
+  obj["plans"] = std::move(serializedPlans);
   obj["maxIterations"] = maxIterations;
   obj["errorWhenMaxIterationReached"] = errorWhenMaxIterationReached;
+  obj["stopWhenDeltaEmpty"] = stopWhenDeltaEmpty;
   return obj;
 }
 
 std::string ConvergenceConfig::toString() const {
   return fmt::format(
       "maxIterations: {}, errorWhenMaxIterationReached: {}, "
-      "convergencePlan: {}",
+      "stopWhenDeltaEmpty: {}, convergencePlans: {}",
       maxIterations,
       errorWhenMaxIterationReached ? "true" : "false",
-      plan != nullptr ? "present" : "none");
+      stopWhenDeltaEmpty ? "true" : "false",
+      plans.size());
 }
 
 // static
@@ -556,12 +727,16 @@ ConvergenceConfig ConvergenceConfig::deserialize(
     const folly::dynamic& obj,
     void* context) {
   ConvergenceConfig config;
-  if (obj.count("plan") != 0u) {
-    config.plan = ISerializable::deserialize<PlanNode>(obj["plan"], context);
+  if (obj.count("plans") != 0u) {
+    for (const auto& plan : obj["plans"]) {
+      config.plans.push_back(
+          ISerializable::deserialize<PlanNode>(plan, context));
+    }
   }
   config.maxIterations = static_cast<int32_t>(obj["maxIterations"].asInt());
   config.errorWhenMaxIterationReached =
       obj["errorWhenMaxIterationReached"].asBool();
+  config.stopWhenDeltaEmpty = obj["stopWhenDeltaEmpty"].asBool();
   return config;
 }
 
