@@ -189,6 +189,14 @@ struct ParseUrlFunction {
     if (parsed == nullptr || !parsed->query.has_value()) {
       return false;
     }
+    // A key without regex metacharacters is a plain string; extract it with
+    // a literal scan that does not consume the compiled-regex budget.
+    const std::string_view query(*parsed->query);
+    if (!constQueryPattern_.has_value() &&
+        isPlainKey(std::string_view(key.data(), key.size()))) {
+      return extractPlainKey(
+          output, query, std::string_view(key.data(), key.size()));
+    }
     const re2::RE2* pattern = nullptr;
     if (constQueryPattern_.has_value()) {
       // A constant key compiles its regex once, on the first call that uses
@@ -226,6 +234,46 @@ struct ParseUrlFunction {
   }
 
  private:
+  // Regex metacharacters; a key containing any of them must go through the
+  // regex path. The same set the regexp functions use for their fast paths.
+  static constexpr std::string_view kReservedChars = ".$|()[{^?*+\\";
+
+  // Returns true when key is a non-empty plain string with no regex
+  // metacharacters.
+  static bool isPlainKey(std::string_view key) {
+    return !key.empty() &&
+        key.find_first_of(kReservedChars) == std::string_view::npos;
+  }
+
+  // Extracts the value of a plain key from the query string by scanning for
+  // 'key=' at the start of the query or right after a '&'; the value runs
+  // to the next '&' or the end of the query. This matches the semantics of
+  // the (&|^)key=([^&]*) pattern compiled for the regex path.
+  static bool extractPlainKey(
+      out_type<Varchar>& output,
+      std::string_view query,
+      std::string_view key) {
+    for (size_t position = 0; position < query.size();) {
+      const auto keyStart = query.find(key, position);
+      if (keyStart == std::string_view::npos) {
+        return false;
+      }
+      const bool atBoundary = keyStart == 0 || query[keyStart - 1] == '&';
+      const size_t afterKey = keyStart + key.size();
+      if (atBoundary && afterKey < query.size() && query[afterKey] == '=') {
+        const size_t valueStart = afterKey + 1;
+        const auto valueEnd = query.find('&', valueStart);
+        const size_t valueSize =
+            (valueEnd == std::string_view::npos ? query.size() : valueEnd) -
+            valueStart;
+        output.setNoCopy(StringView(query.data() + valueStart, valueSize));
+        return true;
+      }
+      position = keyStart + 1;
+    }
+    return false;
+  }
+
   // Stores a part that is a direct slice of the URL argument without
   // copying; the result vector reuses the argument's string buffer.
   static void assignOutput(out_type<Varchar>& output, std::string_view value) {

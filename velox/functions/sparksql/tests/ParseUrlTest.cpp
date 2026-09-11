@@ -548,8 +548,10 @@ TEST_F(ParseUrlTest, nonConstantKey) {
   VELOX_ASSERT_THROW(
       run({"http://h/p?a=1"}, {"a["}), "invalid regular expression:");
 
-  // More than "expression.max_compiled_regexes" distinct keys fails the
-  // query, matching how regexp_replace treats its pattern column.
+  // More than "expression.max_compiled_regexes" distinct keys that need a
+  // compiled regex fails the query, matching how regexp_replace treats its
+  // pattern column. Plain keys never reach the cache (see
+  // plainKeyFastPath), so the keys here carry a regex metacharacter.
   const auto maxCompiledRegexes =
       core::QueryConfig({}).exprMaxCompiledRegexes();
   const auto aboveMaxCompiledRegexes = maxCompiledRegexes + 5;
@@ -557,7 +559,7 @@ TEST_F(ParseUrlTest, nonConstantKey) {
   std::vector<std::string> keyStrings(aboveMaxCompiledRegexes);
   for (auto i = 0; i < aboveMaxCompiledRegexes; ++i) {
     urlStrings[i] = fmt::format("http://h/p?k{}=v{}", i, i);
-    keyStrings[i] = fmt::format("k{}", i);
+    keyStrings[i] = fmt::format("k{}.x", i);
   }
   VELOX_ASSERT_THROW(
       run({urlStrings.begin(), urlStrings.end()},
@@ -716,6 +718,57 @@ TEST_F(ParseUrlTest, questionMarkInFragment) {
       std::nullopt,
       evaluateOnce<std::string>(
           "parse_url(c0, 'QUERY', 'f')", std::optional<std::string>(url)));
+}
+
+// Pins the plain-string fast path: a key with no regex metacharacters
+// extracts exactly like the regex path, and distinct plain keys do not
+// consume the compiled-regex budget.
+TEST_F(ParseUrlTest, plainKeyFastPath) {
+  const auto parseUrlQuery = [&](const std::optional<std::string>& url,
+                                 const std::optional<std::string>& key) {
+    return evaluateOnce<std::string>("parse_url(c0, 'QUERY', c1)", url, key);
+  };
+
+  // The same extraction results as the regex path.
+  EXPECT_EQ("1", parseUrlQuery("http://h/p?a=1&&b=2", "a"));
+  EXPECT_EQ("2", parseUrlQuery("http://h/p?a=1&&b=2", "b"));
+  EXPECT_EQ("", parseUrlQuery("http://h/p?k=", "k"));
+  EXPECT_EQ(std::nullopt, parseUrlQuery("http://h/p?k", "k"));
+  EXPECT_EQ("2", parseUrlQuery("http://h/p?ak=1&k=2", "k"));
+  EXPECT_EQ("1", parseUrlQuery("http://h/p?a=1#f", "a"));
+  EXPECT_EQ(std::nullopt, parseUrlQuery("http://h/p?a=1", "A"));
+  EXPECT_EQ(std::nullopt, parseUrlQuery("http://h/p?ab=1", "a"));
+  EXPECT_EQ(std::nullopt, parseUrlQuery("http://h/p?b=2", "a"));
+
+  // A plain key repeated across rows does not consume the compiled-regex
+  // budget: more distinct plain keys than max_compiled_regexes all
+  // extract without failing the query.
+  const auto maxCompiledRegexes =
+      core::QueryConfig({}).exprMaxCompiledRegexes();
+  const auto aboveMaxCompiledRegexes = maxCompiledRegexes + 5;
+  std::vector<std::string> urlStrings;
+  std::vector<std::string> keyStrings;
+  std::vector<std::string> expectedStrings;
+  for (auto i = 0; i < aboveMaxCompiledRegexes; ++i) {
+    urlStrings.emplace_back(fmt::format("http://h/p?k{}=v{}", i, i));
+    keyStrings.emplace_back(fmt::format("k{}", i));
+    expectedStrings.emplace_back(fmt::format("v{}", i));
+  }
+  std::vector<std::optional<StringView>> urls;
+  std::vector<std::optional<StringView>> keys;
+  std::vector<std::optional<StringView>> expected;
+  for (auto i = 0; i < aboveMaxCompiledRegexes; ++i) {
+    urls.emplace_back(urlStrings[i]);
+    keys.emplace_back(keyStrings[i]);
+    expected.emplace_back(expectedStrings[i]);
+  }
+  assertEqualVectors(
+      makeNullableFlatVector<StringView>(expected),
+      evaluate(
+          "parse_url(c0, 'QUERY', c1)",
+          makeRowVector(
+              {makeNullableFlatVector<StringView>(std::move(urls)),
+               makeNullableFlatVector<StringView>(std::move(keys))})));
 }
 
 // Pins that the key is a regex fragment, not a literal: no escaping.
