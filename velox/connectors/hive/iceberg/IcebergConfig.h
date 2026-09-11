@@ -35,6 +35,12 @@ class IcebergConfig {
   /// connector config override is provided.
   static constexpr const char* kDefaultFunctionPrefix = "$internal$.iceberg.";
 
+  /// Controls the writer mode, whether the fanout mode writer is enabled,
+  /// default value is true, setting to false means clustered mode.
+  /// Currently applies only to the Iceberg writer.
+  static constexpr const char* kFanoutEnabled = "fanout-enabled";
+  static constexpr const char* kFanoutEnabledSession = "fanout_enabled";
+
   explicit IcebergConfig(
       const std::shared_ptr<const config::ConfigBase>& config);
 
@@ -43,6 +49,9 @@ class IcebergConfig {
   }
 
   std::string functionPrefix() const;
+
+  /// Return if fanout writer mode is enabled.
+  bool fanoutEnabled(const config::ConfigBase* session) const;
 
  private:
   const std::shared_ptr<const config::ConfigBase> config_;

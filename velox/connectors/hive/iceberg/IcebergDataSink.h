@@ -209,6 +209,8 @@ class IcebergDataSink : public HiveDataSink {
   /// Presto and Spark Iceberg commit protocol.
   std::vector<std::string> commitMessage() const override;
 
+  void appendData(RowVectorPtr input) override;
+
  private:
   IcebergDataSink(
       RowTypePtr inputType,
@@ -255,6 +257,24 @@ class IcebergDataSink : public HiveDataSink {
   // included in the commit message as "partitionDataJson".
   uint32_t ensureWriter(const WriterId& id) override;
 
+  void clusteredAppendData(RowVectorPtr input);
+
+  // Makes 'id' the active clustered writer, closing and releasing the previous
+  // writer when the partition changes.
+  void ensureClusteredWriter(const WriterId& id);
+
+  // Validates that a newly observed partition has not already been closed.
+  void validateNewClusteredWriter(const WriterId& id) const;
+
+  void closeCurrentClusteredWriter();
+
+  // Retains commit metadata while allowing the active writer pools and I/O
+  // state to be destroyed.
+  void saveCompletedClusteredWriter(
+      const std::shared_ptr<WriterInfo>& writerInfo,
+      std::vector<IcebergDataFileStatisticsPtr> dataFileStats,
+      folly::dynamic partitionValue);
+
   // Creates writer options configured for Iceberg table writes. Extends the
   // base HiveDataSink writer options with Iceberg-specific settings:
   // - Sets timestamp timezone to nullopt (UTC) for Iceberg compliance.
@@ -262,13 +282,16 @@ class IcebergDataSink : public HiveDataSink {
   std::shared_ptr<dwio::common::WriterOptions> createWriterOptions(
       size_t writerIndex) const override;
 
-  // Extracts partition values for a specific writer to be included in the
-  // commit message. Converts the transformed partition values from columnar
-  // storage (partitionIdGenerator_->partitionValues() where each partition
-  // field is a separate column) to row storage (a folly::dynamic array of
-  // values for the given writer index) for JSON serialization.
-  // Returns nullptr for null partition values.
-  folly::dynamic makeCommitPartitionValue(uint32_t writerIndex) const;
+  // Extracts transformed values for 'partitionId' into the row-oriented JSON
+  // representation required by the commit protocol.
+  folly::dynamic makeCommitPartitionValue(uint32_t partitionId) const;
+
+  struct CompletedClusteredWriter {
+    std::string targetDirectory;
+    std::vector<FileInfo> writtenFiles;
+    std::vector<IcebergDataFileStatisticsPtr> dataFileStats;
+    folly::dynamic partitionValue;
+  };
 
   // Closes the active writer at 'index' to flush its file footer, captures
   // the file metadata for Iceberg stats aggregation (via
@@ -366,6 +389,15 @@ class IcebergDataSink : public HiveDataSink {
   // via IcebergStatsCollector::create() and reused across all writers. Null
   // when the format has no Iceberg statistics support compiled in.
   std::shared_ptr<IcebergStatsCollector> statsCollector_;
+
+  const bool clusteredWrite_;
+
+  // The clustered path keeps at most one physical writer alive. Completed
+  // writers retain only the metadata needed for commit messages.
+  std::optional<WriterId> currentClusteredWriterId_;
+  std::optional<uint32_t> currentClusteredWriterIndex_;
+  std::optional<uint32_t> lastClusteredPartitionId_;
+  std::vector<CompletedClusteredWriter> completedClusteredWriters_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
