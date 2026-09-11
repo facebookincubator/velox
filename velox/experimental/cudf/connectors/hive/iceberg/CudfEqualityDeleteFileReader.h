@@ -37,6 +37,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -137,7 +138,8 @@ class CudfEqualityDeleteFileReader {
   // deleteKeyTable_ cudf table.
   void directReadEqualityDeleteFile(
       const velox_iceberg::IcebergDeleteFile& deleteFile,
-      std::shared_ptr<dwio::common::BufferedInput> bufferedInput);
+      std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
+      std::span<const TypePtr> equalityColumnTypes);
 
   // Lazily constructs the equality column indices in the input table
   // on the first call to applyDeletes().

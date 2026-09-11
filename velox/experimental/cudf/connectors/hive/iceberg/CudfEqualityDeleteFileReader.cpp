@@ -110,7 +110,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   // Directly read the Parquet-format equality delete file to the
   // deleteKeyTable_ using cuDF
   if (deleteFile.fileFormat == dwio::common::FileFormat::PARQUET) {
-    directReadEqualityDeleteFile(deleteFile, std::move(deleteFileInput));
+    directReadEqualityDeleteFile(
+        deleteFile, std::move(deleteFileInput), equalityColumnTypes);
     return;
   }
 
@@ -160,7 +161,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
 
 void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
     const velox_iceberg::IcebergDeleteFile& deleteFile,
-    std::shared_ptr<dwio::common::BufferedInput> bufferedInput) {
+    std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
+    std::span<const TypePtr> equalityColumnTypes) {
   using cudf_velox::connector::hive::BufferedInputDataSource;
 
   // Create a cuDF data source
@@ -179,11 +181,19 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo)).build();
   options.set_column_names(equalityColumnNames_);
   auto stream = cudfGlobalStreamPool().get_stream();
-  deleteKeyTable_ =
-      cudf::io::read_parquet(options, stream, get_output_mr()).tbl;
-  stream.synchronize();
-
+  deleteKeyTable_ = cudf::io::read_parquet(options, stream, get_temp_mr()).tbl;
   VELOX_CHECK_NOT_NULL(deleteKeyTable_);
+  VELOX_CHECK_EQ(
+      deleteKeyTable_->num_columns(),
+      equalityColumnTypes.size(),
+      "Equality delete column count does not match its logical schema");
+  deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
+      std::move(deleteKeyTable_),
+      equalityColumnTypes,
+      /*numPrependedColumns=*/0,
+      stream,
+      get_temp_mr());
+  stream.synchronize();
   numDeleteKeys_ = deleteKeyTable_->num_rows();
 }
 

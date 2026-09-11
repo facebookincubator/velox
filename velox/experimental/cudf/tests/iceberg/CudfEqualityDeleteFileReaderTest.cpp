@@ -84,26 +84,26 @@ TEST_P(CudfEqualityDeleteFileReaderTest, basicSingleColumnDelete) {
 
 /// Verifies multi-column equality deletes (both columns must match).
 TEST_P(CudfEqualityDeleteFileReaderTest, multiColumnDelete) {
-  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), VARCHAR(), BIGINT()});
+  auto rowType = ROW({"a", "b", "c"}, {INTEGER(), DECIMAL(7, 3), BIGINT()});
 
   auto baseData = makeRowVector(
       {"a", "b", "c"},
       {
           makeFlatVector<int32_t>({1, 2, 3, 4, 5}),
-          makeFlatVector<std::string>({"x", "y", "z", "x", "y"}),
+          makeFlatVector<int64_t>(
+              {1'000, 2'000, 3'000, 4'000, 5'000}, DECIMAL(7, 3)),
           makeFlatVector<int64_t>({10, 20, 30, 40, 50}),
       });
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), baseData);
 
-  // Delete rows where (a=2, b="y") — matches row index 1.
-  // Also (a=5, b="y") — matches row index 4.
-  // But (a=1, b="y") — no match (a=1 has b="x").
+  // Delete rows where (a=2, b=2.000) and (a=5, b=5.000).
+  // The tuple (a=1, b=2.000) does not match.
   auto deleteData = makeRowVector(
       {"a", "b"},
       {
           makeFlatVector<int32_t>({2, 5, 1}),
-          makeFlatVector<std::string>({"y", "y", "y"}),
+          makeFlatVector<int64_t>({2'000, 5'000, 2'000}, DECIMAL(7, 3)),
       });
   auto eqDeleteFile = TempFilePath::create();
   const auto eqDeleteFileFormat = GetParam();
@@ -126,7 +126,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, multiColumnDelete) {
       {"a", "b", "c"},
       {
           makeFlatVector<int32_t>({1, 3, 4}),
-          makeFlatVector<std::string>({"x", "z", "x"}),
+          makeFlatVector<int64_t>({1'000, 3'000, 4'000}, DECIMAL(7, 3)),
           makeFlatVector<int64_t>({10, 30, 40}),
       });
 

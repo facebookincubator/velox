@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/type/Type.h"
 
 #include <cudf/ast/detail/expression_transformer.hpp>
 #include <cudf/ast/detail/operators.hpp>
@@ -27,13 +28,25 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/io/types.hpp>
+#include <cudf/table/table.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <memory>
+#include <span>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
+
+/// Casts decimal columns, including nested decimals, to their corresponding
+/// Velox logical types. Columns before numPrependedColumns are left unchanged.
+std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
+    std::unique_ptr<cudf::table> table,
+    std::span<const TypePtr> columnTypes,
+    size_t numPrependedColumns,
+    rmm::cuda_stream_view stream,
+    rmm::device_async_resource_ref mr);
 
 // ---------------- Internal helper ----------------
 // A cudf::io::datasource that serves bytes via Velox BufferedInput so that
