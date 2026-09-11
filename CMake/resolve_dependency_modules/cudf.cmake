@@ -93,19 +93,11 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_TESTS OFF)
   set(CUDF_BUILD_TESTUTIL OFF)
   set(CUDF_BUILD_STREAMS_TEST_UTIL OFF)
+  # Keep spdlog/nvcomp shared to avoid multiple copies of spdlog in the final binary.
   set(CUDF_BUILD_STATIC_DEPS OFF)
   set(BUILD_SHARED_LIBS ON)
   set(KvikIO_BUILD_NSYS_PLUGIN OFF)
 
-  # TODO(mh,bd): Remove this once we have a permanent solution for the spdlog/fmt
-  # incompatibility.
-
-  # cuDF (via rapids_logger) pins spdlog 1.14.1, which is incompatible with
-  # the fmt 11.2.0 that Velox builds. Override the rapids-cmake/CPM spdlog
-  # version to 1.15.3, which is fmt 11.2 compatible.
-  # RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE is honored by every rapids_cpm_init,
-  # so the override applies before rapids_logger fetches spdlog.
-  set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json")
 
   FetchContent_Declare(
     rapids-cmake
