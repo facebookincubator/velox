@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::type::fbhive {
 namespace {
@@ -66,6 +67,12 @@ HiveTypeParser::HiveTypeParser() {
   setupMetadata<TokenType::String, TypeKind::VARCHAR>({"string", "varchar"});
   setupMetadata<TokenType::Binary, TypeKind::VARBINARY>(
       {"binary", "varbinary"});
+  // Hive 3's name for the instant type, and the spelling Iceberg's
+  // HiveSchemaUtil emits for a `timestamptz` column. Backed by BIGINT because
+  // Velox represents TIMESTAMP WITH TIME ZONE as a packed (millisUtc << 12 |
+  // zoneKey) integer.
+  setupMetadata<TokenType::TimestampWithTimeZone, TypeKind::BIGINT>(
+      "timestamp with local time zone");
   setupMetadata<TokenType::Timestamp, TypeKind::TIMESTAMP>("timestamp");
   setupMetadata<TokenType::Opaque, TypeKind::OPAQUE>("opaque");
   setupMetadata<TokenType::List, TypeKind::ARRAY>("array");
@@ -134,6 +141,11 @@ Result HiveTypeParser::parseType() {
       return Result{TIME()};
     } else if (nt.metadata->tokenString[0] == "time_micro_utc") {
       return Result{TIME_MICRO_UTC()};
+    } else if (
+        nt.metadata->tokenString[0] == "timestamp with local time zone") {
+      // An instant, not a wall-clock reading: it must not degrade to TIMESTAMP,
+      // which would silently drop the UTC contract.
+      return Result{TIMESTAMP_WITH_TIME_ZONE()};
     }
     auto scalarType = createScalarType(nt.typeKind());
     VELOX_CHECK_NOT_NULL(
