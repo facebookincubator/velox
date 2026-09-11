@@ -194,8 +194,9 @@ class SubfieldFilterAstTest : public OperatorTestBase {
     const auto& name = rowType->nameOf(0);
     cudf::ast::tree tree;
     std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const common::Subfield subfield(name);
     const auto& expr = createAstFromSubfieldFilter(
-        common::Subfield(name), filter, tree, scalars, rowType, decimalTypes);
+        subfield, filter, tree, scalars, rowType, decimalTypes);
     testFilterExecution(rowType, name, filter, vector, expr, decimalTypes);
   }
 };
