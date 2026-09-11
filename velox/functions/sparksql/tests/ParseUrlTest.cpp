@@ -586,6 +586,78 @@ TEST_F(ParseUrlTest, nullArguments) {
           std::optional<std::string>(std::nullopt)));
 }
 
+// Pins the constant-argument fast paths: a constant URL is parsed once and
+// a constant part is keyed once, with the same results as the per-row path.
+// A constant invalid URL stays null for every row. Constant expressions
+// carry a dummy column so the input has a row to evaluate on.
+TEST_F(ParseUrlTest, constantArguments) {
+  // A constant URL against a per-row part column: every part extracts the
+  // same value as the per-row-URL path.
+  const auto constUrlParse = [&](const std::string& part) {
+    return evaluateOnce<std::string>(
+        fmt::format("parse_url('http://u@h:80/p?a=1#f', '{}', c0)", part),
+        std::optional<std::string>("x"));
+  };
+  // The three-argument form only extracts with part 'QUERY'; every other
+  // part returns null regardless of the URL. The dummy key column is 'x',
+  // which matches no parameter, so even QUERY extracts nothing here.
+  EXPECT_EQ(std::nullopt, constUrlParse("PROTOCOL"));
+  EXPECT_EQ(std::nullopt, constUrlParse("HOST"));
+  EXPECT_EQ(std::nullopt, constUrlParse("PATH"));
+  EXPECT_EQ(std::nullopt, constUrlParse("QUERY"));
+  EXPECT_EQ(std::nullopt, constUrlParse("REF"));
+  EXPECT_EQ(std::nullopt, constUrlParse("FILE"));
+  EXPECT_EQ(std::nullopt, constUrlParse("AUTHORITY"));
+  EXPECT_EQ(std::nullopt, constUrlParse("USERINFO"));
+  EXPECT_EQ(std::nullopt, constUrlParse("UNKNOWN"));
+
+  // With the key column holding 'a', the constant URL's query parameter is
+  // extracted through the constant-URL cache.
+  EXPECT_EQ(
+      "1",
+      evaluateOnce<std::string>(
+          "parse_url('http://u@h:80/p?a=1#f', 'QUERY', c0)",
+          std::optional<std::string>("a")));
+
+  // A constant URL with a constant part as a two-argument call: the
+  // dummy key column keeps a row in the input while URL and part stay
+  // constant... the two-argument form takes no key, so use a dummy
+  // per-row part instead: a constant URL with a per-row part column.
+  EXPECT_EQ(
+      "h",
+      evaluateOnce<std::string>(
+          "parse_url('http://h/p?a=1', c0)",
+          std::optional<std::string>("HOST")));
+  EXPECT_EQ(
+      "a=1",
+      evaluateOnce<std::string>(
+          "parse_url('http://h/p?a=1', c0)",
+          std::optional<std::string>("QUERY")));
+  EXPECT_EQ(
+      "u@h:80",
+      evaluateOnce<std::string>(
+          "parse_url('http://u@h:80/p?a=1#f', c0)",
+          std::optional<std::string>("AUTHORITY")));
+
+  // A constant invalid URL yields null without re-parsing per row.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<std::string>(
+          "parse_url('http://', 'QUERY', c0)",
+          std::optional<std::string>("a")));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<std::string>(
+          "parse_url('http://', c0)", std::optional<std::string>("HOST")));
+
+  // A constant URL with a constant key extracts through both caches.
+  EXPECT_EQ(
+      "1",
+      evaluateOnce<std::string>(
+          "parse_url('http://h/p?a=1&b=2', 'QUERY', 'a')",
+          std::optional<std::string>("x")));
+}
+
 // Pins the '#'-before-'?' split: a '?' inside the fragment belongs to the
 // fragment and never introduces a query.
 TEST_F(ParseUrlTest, questionMarkInFragment) {
