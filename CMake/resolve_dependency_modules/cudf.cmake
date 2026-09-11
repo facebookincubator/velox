@@ -165,8 +165,6 @@ block(SCOPE_FOR VARIABLES)
     cudf
     PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy -Wno-restrict
   )
-  target_link_libraries(cudf PUBLIC $<BUILD_LOCAL_INTERFACE:nvtx3::nvtx3-cpp>)
-
   unset(BUILD_SHARED_LIBS)
   unset(BUILD_TESTING CACHE)
 endblock()
