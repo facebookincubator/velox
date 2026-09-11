@@ -880,6 +880,9 @@ bool parseHierarchical(std::string_view& remainder, detail::ParsedUrl& parsed) {
 namespace detail {
 
 bool parseUrl(std::string_view url, ParsedUrl& parsed) {
+  // Reset the output so a reused ParsedUrl never carries stale values from
+  // a previous parse: only fields present in the current URL are written.
+  parsed = ParsedUrl{};
   auto remainder = url;
 
   // The scheme is everything before the first ':' that appears before
