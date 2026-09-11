@@ -1477,7 +1477,7 @@ void SharedArbitrator::freeCapacityLocked(
   if (FOLLY_UNLIKELY(
           freeNonReservedCapacity_ + freeReservedCapacity_ > capacity_)) {
     VELOX_FAIL(
-        "Free capacity {}/{} is larger than the max capacity {}, {}",
+        "Free capacity {}/{} is larger than the max capacity {}",
         succinctBytes(freeNonReservedCapacity_),
         succinctBytes(freeReservedCapacity_),
         succinctBytes(capacity_));
