@@ -327,8 +327,8 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
 // A split whose byte range starts past the last stripe or row group: nothing
 // is read, so no reader tree is built for the delete column.
 TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteSplitCoveringNoRows) {
-  auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
-  auto outputType = ROW({"value"}, {VARCHAR()});
+  auto tableType = ROW({{"id", BIGINT()}, {"value", VARCHAR()}});
+  auto outputType = ROW("value", VARCHAR());
 
   auto data = makeRowVector(
       {"id", "value"},

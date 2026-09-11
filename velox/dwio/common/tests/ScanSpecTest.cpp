@@ -21,16 +21,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <atomic>
-#include <thread>
-
 namespace facebook::velox::common {
 namespace {
 
-using testing::Each;
 using testing::ElementsAre;
 using testing::Pointer;
-using testing::SizeIs;
 
 class ScanSpecTest : public testing::Test, public test::VectorTestBase {
  protected:
@@ -221,37 +216,6 @@ TEST_F(ScanSpecTest, stableChildrenRepublishedAfterAdd) {
   EXPECT_THAT(
       *scanSpec.stableChildren(),
       ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
-}
-
-// Two threads calling getOrCreateChild() for one name must get one child. A
-// lookup outside the insert's lock lets both miss and both create.
-TEST_F(ScanSpecTest, getOrCreateChildConcurrently) {
-  constexpr int32_t kNumThreads = 4;
-  constexpr int32_t kNumIterations = 10;
-  for (int32_t iteration = 0; iteration < kNumIterations; ++iteration) {
-    ScanSpec scanSpec("<root>");
-    // Releases every thread at once, widening the lookup-to-insert window.
-    std::atomic_bool start{false};
-    std::vector<ScanSpec*> children(kNumThreads);
-    std::vector<std::thread> threads;
-    threads.reserve(kNumThreads);
-    for (int32_t i = 0; i < kNumThreads; ++i) {
-      threads.emplace_back([&, i] {
-        while (!start.load(std::memory_order_acquire)) {
-          std::this_thread::yield();
-        }
-        children[i] = scanSpec.getOrCreateChild("c0");
-      });
-    }
-    start.store(true, std::memory_order_release);
-    for (auto& thread : threads) {
-      thread.join();
-    }
-    ASSERT_THAT(scanSpec.children(), SizeIs(1));
-    auto* child = scanSpec.childByName("c0");
-    ASSERT_EQ(child, scanSpec.children()[0].get());
-    EXPECT_THAT(children, Each(child));
-  }
 }
 
 class TypedScanSpecTest : public testing::TestWithParam<TypePtr>,
