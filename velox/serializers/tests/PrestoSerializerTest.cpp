@@ -2132,8 +2132,8 @@ DEBUG_ONLY_TEST_P(PrestoSerializerTest, concurrency) {
   t.join();
 }
 
-class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
-                                              public VectorTestBase {
+class PrestoSerializerEstimateSizeTest : public testing::Test,
+                                         public VectorTestBase {
  protected:
   static void SetUpTestSuite() {
     if (!isRegisteredVectorSerde()) {
@@ -2150,14 +2150,13 @@ class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
 
   void SetUp() override {
     serde_ = std::make_unique<serializer::presto::PrestoVectorSerde>();
-    serializer_ = serde_->createBatchSerializer(pool_.get(), &paramOptions_);
   }
 
   void testEstimateSerializedSize(
       VectorPtr input,
       const std::vector<IndexRange>& ranges,
       const std::vector<vector_size_t>& expectedSizes,
-      bool checkRowOverload = false) {
+      const std::vector<std::vector<vector_size_t>>& expectedRowSizes = {}) {
     ASSERT_EQ(ranges.size(), expectedSizes.size());
 
     // Wrap the input a RowVector to better emulate production.
@@ -2170,7 +2169,8 @@ class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
     }
 
     Scratch scratch;
-    serializer_->estimateSerializedSize(row, ranges, sizesPtrs.data(), scratch);
+    serde_->estimateSerializedSize(
+        row.get(), ranges, sizesPtrs.data(), scratch);
 
     for (int i = 0; i < expectedSizes.size(); i++) {
       // Add 4 bytes for each row in the wrapper. This is needed because we
@@ -2180,85 +2180,84 @@ class PrestoSerializerBatchEstimateSizeTest : public testing::Test,
           << ranges[i].begin << ":" << ranges[i].size;
     }
 
-    if (checkRowOverload) {
-      // Test row overload estimation.
-      for (int i = 0; i < ranges.size(); ++i) {
-        const auto& range = ranges[i];
-        std::vector<vector_size_t> rowSizes(range.size, 0);
-        std::vector<vector_size_t*> rowSizePointers(range.size);
-        std::vector<vector_size_t> rows(range.size);
+    // Test row overload estimation.
+    for (int i = 0; i < ranges.size(); ++i) {
+      const auto& range = ranges[i];
+      std::vector<vector_size_t> rowSizes(range.size, 0);
+      std::vector<vector_size_t*> rowSizePointers(range.size);
+      std::vector<vector_size_t> rows(range.size);
+      for (auto offset = 0; offset < range.size; ++offset) {
+        rows[offset] = range.begin + offset;
+        rowSizePointers[offset] = &rowSizes[offset];
+      }
+
+      Scratch rowScratch;
+      serde_->estimateSerializedSize(
+          row.get(),
+          folly::Range(rows.data(), rows.size()),
+          rowSizePointers.data(),
+          rowScratch);
+
+      vector_size_t totalRowSize = 0;
+      for (const auto rowSize : rowSizes) {
+        totalRowSize += rowSize;
+      }
+      ASSERT_EQ(totalRowSize, expectedSizes[i] + 4 * range.size)
+          << "Mismatched estimated size for row range " << i << " "
+          << range.begin << ":" << range.size;
+      if (!expectedRowSizes.empty()) {
         for (auto offset = 0; offset < range.size; ++offset) {
-          rows[offset] = range.begin + offset;
-          rowSizePointers[offset] = &rowSizes[offset];
+          ASSERT_EQ(rowSizes[offset], expectedRowSizes[i][offset])
+              << "at row " << rows[offset];
         }
-
-        Scratch rowScratch;
-        serde_->estimateSerializedSize(
-            row.get(),
-            folly::Range(rows.data(), rows.size()),
-            rowSizePointers.data(),
-            rowScratch);
-
-        vector_size_t totalRowSize = 0;
-        for (const auto rowSize : rowSizes) {
-          totalRowSize += rowSize;
-        }
-        ASSERT_EQ(totalRowSize, expectedSizes[i] + 4 * range.size)
-            << "Mismatched estimated size for row range " << i << " "
-            << range.begin << ":" << range.size;
       }
     }
   }
 
   void testEstimateSerializedSize(
       const VectorPtr& vector,
-      vector_size_t totalExpectedSize,
-      bool checkRowOverload = false) {
+      vector_size_t totalExpectedSize) {
     // The whole Vector is a single range.
     testEstimateSerializedSize(
-        vector, {{0, vector->size()}}, {totalExpectedSize}, checkRowOverload);
+        vector, {{0, vector->size()}}, {totalExpectedSize});
     // Split the Vector into two equal ranges.
     testEstimateSerializedSize(
         vector,
         {{0, vector->size() / 2}, {vector->size() / 2, vector->size() / 2}},
-        {totalExpectedSize / 2, totalExpectedSize / 2},
-        checkRowOverload);
+        {totalExpectedSize / 2, totalExpectedSize / 2});
     // Split the Vector into three ranges of 1/4, 1/2, 1/4.
     testEstimateSerializedSize(
         vector,
         {{0, vector->size() / 4},
          {vector->size() / 4, vector->size() / 2},
          {vector->size() * 3 / 4, vector->size() / 4}},
-        {totalExpectedSize / 4, totalExpectedSize / 2, totalExpectedSize / 4},
-        checkRowOverload);
+        {totalExpectedSize / 4, totalExpectedSize / 2, totalExpectedSize / 4});
   }
 
   std::unique_ptr<serializer::presto::PrestoVectorSerde> serde_;
-  std::unique_ptr<BatchVectorSerializer> serializer_;
-  serializer::presto::PrestoVectorSerde::PrestoOptions paramOptions_;
 };
 
-TEST_F(PrestoSerializerBatchEstimateSizeTest, flat) {
+TEST_F(PrestoSerializerEstimateSizeTest, flat) {
   auto flatBoolVector =
       makeFlatVector<bool>(32, [](vector_size_t row) { return row % 2 == 0; });
 
   // Bools are 1 byte each.
   // 32 * 1 = 32
-  testEstimateSerializedSize(flatBoolVector, 32, true);
+  testEstimateSerializedSize(flatBoolVector, 32);
 
   auto flatIntVector =
       makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
 
   // Ints are 4 bytes each.
   // 4 * 32 = 128
-  testEstimateSerializedSize(flatIntVector, 128, true);
+  testEstimateSerializedSize(flatIntVector, 128);
 
   auto flatDoubleVector =
       makeFlatVector<double>(32, [](vector_size_t row) { return row; });
 
   // Doubles are 8 bytes each.
   // 8 * 32 = 256
-  testEstimateSerializedSize(flatDoubleVector, 256, true);
+  testEstimateSerializedSize(flatDoubleVector, 256);
 
   auto flatStringVector = makeFlatVector<std::string>(
       32, [](vector_size_t row) { return fmt::format("{}", row); });
@@ -2266,11 +2265,10 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, flat) {
   // Strings are variable length, the first 10 are 1 byte each, the rest are 2
   // bytes.  Plus 4 bytes for the length of each string.
   // 10 * 1 + 22 * 2 + 4 * 32 = 182
-  testEstimateSerializedSize(flatStringVector, {{0, 32}}, {182}, true);
+  testEstimateSerializedSize(flatStringVector, {{0, 32}}, {182});
+  testEstimateSerializedSize(flatStringVector, {{0, 16}, {16, 16}}, {86, 96});
   testEstimateSerializedSize(
-      flatStringVector, {{0, 16}, {16, 16}}, {86, 96}, true);
-  testEstimateSerializedSize(
-      flatStringVector, {{0, 8}, {8, 16}, {24, 8}}, {40, 94, 48}, true);
+      flatStringVector, {{0, 8}, {8, 16}, {24, 8}}, {40, 94, 48});
 
   auto flatVectorWithNulls = makeFlatVector<double>(
       32,
@@ -2280,14 +2278,21 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, flat) {
   // Doubles are 8 bytes each, and only non-null doubles are counted. In
   // addition there's a null bit per row.
   // 8 * 24 + (32 / 8) = 196
-  testEstimateSerializedSize(flatVectorWithNulls, {{0, 32}}, {196}, true);
+  std::vector<vector_size_t> expectedRowSizes(32);
+  for (auto i = 0; i < 32; ++i) {
+    // 4 bytes for the row wrapper, 8 bytes for non-null doubles, and one byte
+    // for every eight nullable values.
+    expectedRowSizes[i] = (i % 4 == 0 ? 4 : 12) + (i % 8 == 0 ? 1 : 0);
+  }
   testEstimateSerializedSize(
-      flatVectorWithNulls, {{0, 16}, {16, 16}}, {98, 98}, true);
+      flatVectorWithNulls, {{0, 32}}, {196}, {expectedRowSizes});
   testEstimateSerializedSize(
-      flatVectorWithNulls, {{0, 8}, {8, 16}, {24, 8}}, {49, 98, 49}, true);
+      flatVectorWithNulls, {{0, 16}, {16, 16}}, {98, 98});
+  testEstimateSerializedSize(
+      flatVectorWithNulls, {{0, 8}, {8, 16}, {24, 8}}, {49, 98, 49});
 }
 
-TEST_F(PrestoSerializerBatchEstimateSizeTest, array) {
+TEST_F(PrestoSerializerEstimateSizeTest, array) {
   std::vector<vector_size_t> offsets{
       0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
   auto elements =
@@ -2297,7 +2302,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, array) {
   // The ints in the array are 4 bytes each, and the array length is another 4
   // bytes per row.
   // 4 * 32 + 4 * 16 = 192
-  testEstimateSerializedSize(arrayVector, 192, true);
+  testEstimateSerializedSize(arrayVector, 192);
 
   std::vector<vector_size_t> offsetsWithEmptyOrNulls{
       0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28, 32};
@@ -2307,7 +2312,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, array) {
   // The ints in the array are 4 bytes each, and the array length is another 4
   // bytes per row.
   // 4 * 32 + 4 * 16 = 192
-  testEstimateSerializedSize(arrayVectorWithEmptyArrays, 192, true);
+  testEstimateSerializedSize(arrayVectorWithEmptyArrays, 192);
 
   std::vector<vector_size_t> nullOffsets{1, 3, 5, 7, 9, 11, 13, 15};
   auto arrayVectorWithNulls =
@@ -2316,14 +2321,13 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, array) {
   // The ints in the array are 4 bytes each, and the array length is another 4
   // bytes per non-null row, and 1 null bit per row.
   // 4 * 32 + 4 * 8 + 16 / 8 = 162
-  testEstimateSerializedSize(arrayVectorWithNulls, {{0, 16}}, {162}, true);
+  testEstimateSerializedSize(arrayVectorWithNulls, {{0, 16}}, {162});
+  testEstimateSerializedSize(arrayVectorWithNulls, {{0, 8}, {8, 8}}, {81, 81});
   testEstimateSerializedSize(
-      arrayVectorWithNulls, {{0, 8}, {8, 8}}, {81, 81}, true);
-  testEstimateSerializedSize(
-      arrayVectorWithNulls, {{0, 4}, {4, 8}, {8, 4}}, {41, 81, 41}, true);
+      arrayVectorWithNulls, {{0, 4}, {4, 8}, {8, 4}}, {41, 81, 41});
 }
 
-TEST_F(PrestoSerializerBatchEstimateSizeTest, map) {
+TEST_F(PrestoSerializerEstimateSizeTest, map) {
   std::vector<vector_size_t> offsets{
       0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
   auto keys =
@@ -2334,7 +2338,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, map) {
 
   // The ints in the map are 4 bytes each, the doubles are 8 bytes, and the
   // map length is another 4 bytes per row. 4 * 32 + 8 * 32 + 4 * 16 = 448
-  testEstimateSerializedSize(mapVector, 448, true);
+  testEstimateSerializedSize(mapVector, 448);
 
   std::vector<vector_size_t> offsetsWithEmptyOrNulls{
       0, 4, 4, 8, 8, 12, 12, 16, 16, 20, 20, 24, 24, 28, 28, 32};
@@ -2343,7 +2347,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, map) {
 
   // The ints in the map are 4 bytes each, the doubles are 8 bytes, and the
   // map length is another 4 bytes per row. 4 * 32 + 8 * 32 + 4 * 16 = 448
-  testEstimateSerializedSize(mapVectorWithEmptyMaps, 448, true);
+  testEstimateSerializedSize(mapVectorWithEmptyMaps, 448);
 
   std::vector<vector_size_t> nullOffsets{1, 3, 5, 7, 9, 11, 13, 15};
   auto mapVectorWithNulls =
@@ -2352,14 +2356,13 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, map) {
   // The ints in the map are 4 bytes each, the doubles are 8 bytes, and the
   // map length is another 4 bytes per non-null row, and 1 null bit per row.
   // 4 * 32 + 8 * 32 + 4 * 8 + 16 / 8 = 216
-  testEstimateSerializedSize(mapVectorWithNulls, {{0, 16}}, {418}, true);
+  testEstimateSerializedSize(mapVectorWithNulls, {{0, 16}}, {418});
+  testEstimateSerializedSize(mapVectorWithNulls, {{0, 8}, {8, 8}}, {209, 209});
   testEstimateSerializedSize(
-      mapVectorWithNulls, {{0, 8}, {8, 8}}, {209, 209}, true);
-  testEstimateSerializedSize(
-      mapVectorWithNulls, {{0, 4}, {4, 8}, {12, 4}}, {105, 209, 105}, true);
+      mapVectorWithNulls, {{0, 4}, {4, 8}, {12, 4}}, {105, 209, 105});
 }
 
-TEST_F(PrestoSerializerBatchEstimateSizeTest, row) {
+TEST_F(PrestoSerializerEstimateSizeTest, row) {
   auto field1 =
       makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
   auto field2 =
@@ -2369,7 +2372,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, row) {
   // The ints in the row are 4 bytes each, the doubles are 8 bytes, and the
   // offsets are 4 bytes per row.
   // 4 * 32 + 8 * 32 + 4 * 32 = 512
-  testEstimateSerializedSize(rowVector, 512, true);
+  testEstimateSerializedSize(rowVector, 512);
 
   auto rowVectorWithNulls =
       makeRowVector({field1, field2}, [](auto row) { return row % 4 == 0; });
@@ -2377,10 +2380,10 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, row) {
   // The ints in the row are 4 bytes each, the doubles are 8 bytes, and the
   // offsets are 4 bytes per row, and 1 null bit per row.
   // 4 * 24 + 8 * 24 + 4 * 32 + 32 / 8 = 420
-  testEstimateSerializedSize(rowVectorWithNulls, 420, true);
+  testEstimateSerializedSize(rowVectorWithNulls, 420);
 }
 
-TEST_F(PrestoSerializerBatchEstimateSizeTest, constant) {
+TEST_F(PrestoSerializerEstimateSizeTest, constant) {
   auto flatVector =
       makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
   auto constantInt = BaseVector::wrapInConstant(32, 0, flatVector);
@@ -2429,7 +2432,7 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, constant) {
       {12, 12, 12});
 }
 
-TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
+TEST_F(PrestoSerializerEstimateSizeTest, dictionary) {
   auto indices = makeIndices(32, [](auto row) { return (row * 2) % 32; });
   auto flatVector =
       makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
@@ -2455,9 +2458,9 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, dictionary) {
   // for once and added to the first range. 4 * 32 + 8 * 8 + 16 / 8 = 194.
   testEstimateSerializedSize(dictionaryNullElements, {{0, 32}}, {194});
   testEstimateSerializedSize(
-      dictionaryNullElements, {{0, 16}, {16, 16}}, {132, 128});
+      dictionaryNullElements, {{0, 16}, {16, 16}}, {130, 130});
   testEstimateSerializedSize(
-      dictionaryNullElements, {{0, 8}, {8, 16}, {24, 8}}, {68, 128, 64});
+      dictionaryNullElements, {{0, 8}, {8, 16}, {24, 8}}, {65, 130, 65});
 
   auto arrayIndices = makeIndices(16, [](auto row) { return (row * 2) % 16; });
   std::vector<vector_size_t> offsets{
