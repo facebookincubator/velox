@@ -15,52 +15,17 @@
  */
 #include "velox/serializers/PrestoSerializerEstimationUtils.h"
 
+#include "velox/serializers/PrestoSerializerSerializationUtils.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::serializer::presto::detail {
 namespace {
-template <TypeKind Kind>
-void estimateFlattenedConstantSerializedSize(
-    const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
-    vector_size_t** sizes,
-    Scratch& scratch) {
-  VELOX_CHECK_EQ(vector->encoding(), VectorEncoding::Simple::CONSTANT);
-  using T = typename KindToFlatVector<Kind>::WrapperType;
-  auto* constantVector = vector->as<ConstantVector<T>>();
-  if (constantVector->valueVector()) {
-    estimateWrapperSerializedSize(ranges, sizes, vector, scratch);
-    return;
-  }
-
-  int32_t elementSize = sizeof(T);
-  if (constantVector->isNullAt(0)) {
-    elementSize = 1;
-  } else if constexpr (std::is_same_v<T, StringView>) {
-    elementSize = constantVector->valueAt(0).size();
-  }
-  for (int32_t i = 0; i < ranges.size(); ++i) {
-    *sizes[i] += elementSize * ranges[i].size;
-  }
-}
-
-void estimateBiasedSerializedSize(
-    const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
-    vector_size_t** sizes) {
-  auto valueSize = vector->type()->cppSizeInBytes();
-  if (vector->mayHaveNulls()) {
-    auto rawNulls = vector->rawNulls();
-    for (int32_t i = 0; i < ranges.size(); ++i) {
-      auto end = ranges[i].begin + ranges[i].size;
-      int32_t numValues = bits::countBits(rawNulls, ranges[i].begin, end);
-      *(sizes[i]) += numValues * valueSize + bits::nbytes(ranges[i].size);
-    }
-  } else {
-    for (int32_t i = 0; i < ranges.size(); ++i) {
-      *(sizes[i]) += ranges[i].size * valueSize;
-    }
+// Attribute each null bitmap byte to the first of its eight rows.
+void addNullBitmapSize(vector_size_t** sizes, int32_t numRows) {
+  constexpr auto kBitsPerByte = 8;
+  for (auto byte = 0; byte < bits::nbytes(numRows); ++byte) {
+    *sizes[byte * kBitsPerByte] += 1;
   }
 }
 
@@ -84,7 +49,7 @@ void estimateFlatSerializedSize(
       *sizes[nonNulls[i]] += valueSize;
     }
     if (numNonNull != numRows) {
-      *sizes[0] += bits::nbytes(numRows);
+      addNullBitmapSize(sizes, numRows);
     }
   } else {
     VELOX_UNREACHABLE("Non null fixed width case handled before this");
@@ -121,7 +86,7 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
       *sizes[nonNulls[i]] += rawValues[rows[nonNulls[i]]].size();
     }
     if (numNonNull != numRows) {
-      *sizes[0] += bits::nbytes(numRows);
+      addNullBitmapSize(sizes, numRows);
     }
   }
 }
@@ -158,12 +123,13 @@ void estimateFlattenedConstantSerializedSize(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch) {
+    Scratch& scratch,
+    bool flatten) {
   VELOX_CHECK_EQ(vector->encoding(), VectorEncoding::Simple::CONSTANT);
 
   using T = typename KindToFlatVector<Kind>::WrapperType;
   auto* constantVector = vector->as<ConstantVector<T>>();
-  int32_t elementSize = sizeof(T);
+  int32_t elementSize = vector->valueVector() ? 0 : sizeof(T);
   if (constantVector->isNullAt(0)) {
     elementSize = 1;
   } else if (vector->valueVector()) {
@@ -174,12 +140,17 @@ void estimateFlattenedConstantSerializedSize(
         values,
         folly::Range<const vector_size_t*>(&singleRow, 1),
         &sizePtr,
-        scratch);
+        scratch,
+        flatten);
   } else if constexpr (std::is_same_v<T, StringView>) {
     elementSize = constantVector->valueAt(0).size();
   }
-  for (int32_t i = 0; i < rows.size(); ++i) {
-    *sizes[i] += elementSize;
+  if (flatten) {
+    for (int32_t i = 0; i < rows.size(); ++i) {
+      *sizes[i] += elementSize;
+    }
+  } else if (!rows.empty()) {
+    *sizes[0] += elementSize;
   }
 }
 
@@ -187,7 +158,8 @@ void estimateWrapperSerializedSize(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     const BaseVector* wrapper,
-    Scratch& scratch) {
+    Scratch& scratch,
+    bool flatten) {
   ScratchPtr<vector_size_t, 1> innerRowsHolder(scratch);
   ScratchPtr<vector_size_t*, 1> innerSizesHolder(scratch);
   const int32_t numRows = rows.size();
@@ -195,9 +167,30 @@ void estimateWrapperSerializedSize(
   auto* innerRows = innerRowsHolder.get(numRows);
   auto* innerSizes = sizes;
   const BaseVector* wrapped;
-  if (wrapper->encoding() == VectorEncoding::Simple::DICTIONARY &&
+  auto hasNulls = false;
+  if (!flatten && wrapper->encoding() == VectorEncoding::Simple::DICTIONARY &&
       !wrapper->rawNulls()) {
-    // Dictionary with no nulls.
+    // A dictionary serializes an index for every row plus each selected
+    // dictionary entry once.
+    auto* indices = wrapper->wrapInfo()->as<vector_size_t>();
+    wrapped = wrapper->valueVector().get();
+    ScratchPtr<uint64_t, 64> usedIndicesHolder(scratch);
+    auto* usedIndices = usedIndicesHolder.get(bits::nwords(wrapped->size()));
+    simd::memset(usedIndices, 0, usedIndicesHolder.size() * sizeof(uint64_t));
+    for (int32_t i = 0; i < numRows; ++i) {
+      *sizes[i] += sizeof(int32_t);
+      bits::setBit(usedIndices, indices[rows[i]]);
+    }
+    numInner =
+        simd::indicesOfSetBits(usedIndices, 0, wrapped->size(), innerRows);
+    innerSizes = innerSizesHolder.get(numInner);
+    for (int32_t i = 0; i < numInner; ++i) {
+      innerSizes[i] = sizes[0];
+    }
+  } else if (
+      wrapper->encoding() == VectorEncoding::Simple::DICTIONARY &&
+      !wrapper->rawNulls()) {
+    // Per-row estimation does not preserve dictionary encoding.
     auto* indices = wrapper->wrapInfo()->as<vector_size_t>();
     wrapped = wrapper->valueVector().get();
     simd::transpose(indices, rows, innerRows);
@@ -210,11 +203,13 @@ void estimateWrapperSerializedSize(
         innerRows[numInner] = wrapper->wrappedIndex(rows[i]);
         innerSizes[numInner] = sizes[i];
         ++numInner;
+      } else {
+        hasNulls = true;
       }
     }
   }
-  if (numInner != numRows) {
-    *sizes[0] += bits::nbytes(numRows);
+  if (hasNulls) {
+    addNullBitmapSize(sizes, numRows);
   }
   if (numInner == 0) {
     return;
@@ -224,214 +219,65 @@ void estimateWrapperSerializedSize(
       wrapped,
       folly::Range<const vector_size_t*>(innerRows, numInner),
       innerSizes,
-      scratch);
+      scratch,
+      flatten);
 }
 
 void estimateBiasedSerializedSize(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
-    vector_size_t** sizes,
-    Scratch& scratch) {
-  VELOX_UNSUPPORTED();
-}
-} // namespace
-
-void estimateFlatSerializedSizeVarcharOrVarbinary(
-    const BaseVector* vector,
-    const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes) {
-  auto strings = static_cast<const FlatVector<StringView>*>(vector);
-  auto rawNulls = strings->rawNulls();
-  auto rawValues = strings->rawValues();
-  for (int32_t i = 0; i < ranges.size(); ++i) {
-    auto end = ranges[i].begin + ranges[i].size;
-    int32_t numNulls = 0;
-    int32_t bytes = 0;
-    for (int32_t offset = ranges[i].begin; offset < end; ++offset) {
-      if (rawNulls && bits::isBitNull(rawNulls, offset)) {
-        ++numNulls;
-      } else {
-        bytes += sizeof(int32_t) + rawValues[offset].size();
-      }
+  const auto valueSize = vector->type()->cppSizeInBytes();
+  if (!vector->mayHaveNulls()) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      *sizes[i] += valueSize;
     }
-    *(sizes[i]) += bytes + 4 * numNulls +
-        (numNulls == 0 ? 0 : bits::nbytes(ranges[i].size));
+    return;
+  }
+
+  auto numNonNull = 0;
+  for (auto i = 0; i < rows.size(); ++i) {
+    if (!vector->isNullAt(rows[i])) {
+      *sizes[i] += valueSize;
+      ++numNonNull;
+    }
+  }
+  if (numNonNull != rows.size()) {
+    addNullBitmapSize(sizes, rows.size());
   }
 }
+} // namespace
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
-    Scratch& scratch) {
-  switch (vector->encoding()) {
-    case VectorEncoding::Simple::FLAT:
-      VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-          estimateFlatSerializedSize,
-          vector->typeKind(),
-          vector,
-          ranges,
-          sizes);
-      break;
-    case VectorEncoding::Simple::CONSTANT:
-      VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-          estimateFlattenedConstantSerializedSize,
-          vector->typeKind(),
-          vector,
-          ranges,
-          sizes,
-          scratch);
-      break;
-    case VectorEncoding::Simple::DICTIONARY:
-    case VectorEncoding::Simple::SEQUENCE:
-      estimateWrapperSerializedSize(ranges, sizes, vector, scratch);
-      break;
-    case VectorEncoding::Simple::BIASED:
-      estimateBiasedSerializedSize(vector, ranges, sizes);
-      break;
-    case VectorEncoding::Simple::ROW: {
-      std::vector<IndexRange> childRanges;
-      std::vector<vector_size_t*> childSizes;
-      for (int32_t i = 0; i < ranges.size(); ++i) {
-        auto begin = ranges[i].begin;
-        auto end = begin + ranges[i].size;
-        for (auto offset = begin; offset < end; ++offset) {
-          *sizes[i] += sizeof(int32_t);
-          if (!vector->isNullAt(offset)) {
-            childRanges.push_back(IndexRange{offset, 1});
-            childSizes.push_back(sizes[i]);
-          }
-        }
-      }
-      auto rowVector = vector->as<RowVector>();
-      auto& children = rowVector->children();
-      for (auto& child : children) {
-        if (child) {
-          estimateSerializedSizeInt(
-              child.get(),
-              folly::Range(childRanges.data(), childRanges.size()),
-              childSizes.data(),
-              scratch);
-        }
-      }
-      break;
+    Scratch& scratch,
+    bool flatten) {
+  const auto totalSize = rangesTotalSize(ranges);
+  std::vector<vector_size_t> rowsStorage(totalSize);
+  std::vector<vector_size_t*> rowSizesStorage(totalSize);
+  auto* allRows = rowsStorage.data();
+  auto* allRowSizes = rowSizesStorage.data();
+  auto offset = 0;
+  for (auto i = 0; i < ranges.size(); ++i) {
+    const auto numRows = ranges[i].size;
+    if (numRows == 0) {
+      continue;
     }
-    case VectorEncoding::Simple::MAP: {
-      auto mapVector = vector->as<MapVector>();
-      std::vector<IndexRange> childRanges;
-      std::vector<vector_size_t*> childSizes;
-      expandRepeatedRanges(
-          mapVector,
-          mapVector->rawOffsets(),
-          mapVector->rawSizes(),
-          ranges,
-          sizes,
-          &childRanges,
-          &childSizes);
-      estimateSerializedSizeInt(
-          mapVector->mapKeys().get(), childRanges, childSizes.data(), scratch);
-      estimateSerializedSizeInt(
-          mapVector->mapValues().get(),
-          childRanges,
-          childSizes.data(),
-          scratch);
-      break;
+    auto* rows = allRows + offset;
+    auto* rowSizes = allRowSizes + offset;
+    for (auto j = 0; j < numRows; ++j) {
+      rows[j] = ranges[i].begin + j;
+      rowSizes[j] = sizes[i];
     }
-    case VectorEncoding::Simple::ARRAY: {
-      auto arrayVector = vector->as<ArrayVector>();
-      std::vector<IndexRange> childRanges;
-      std::vector<vector_size_t*> childSizes;
-      expandRepeatedRanges(
-          arrayVector,
-          arrayVector->rawOffsets(),
-          arrayVector->rawSizes(),
-          ranges,
-          sizes,
-          &childRanges,
-          &childSizes);
-      estimateSerializedSizeInt(
-          arrayVector->elements().get(),
-          childRanges,
-          childSizes.data(),
-          scratch);
-      break;
-    }
-    case VectorEncoding::Simple::LAZY:
-      estimateSerializedSizeInt(vector->loadedVector(), ranges, sizes, scratch);
-      break;
-    default:
-      VELOX_UNSUPPORTED("Unsupported vector encoding {}", vector->encoding());
-  }
-}
-
-void estimateWrapperSerializedSize(
-    const folly::Range<const IndexRange*>& ranges,
-    vector_size_t** sizes,
-    const BaseVector* wrapper,
-    Scratch& scratch) {
-  std::vector<IndexRange> newRanges;
-  std::vector<vector_size_t*> newSizes;
-  const BaseVector* wrapped = wrapper->wrappedVector();
-  if (!wrapper->mayHaveNulls()) {
-    int64_t totalSize = 0;
-    for (int32_t i = 0; i < ranges.size(); ++i) {
-      totalSize += ranges[i].size;
-    }
-    newRanges.reserve(totalSize);
-    newSizes.reserve(totalSize);
-  }
-  for (int32_t i = 0; i < ranges.size(); ++i) {
-    int32_t numNulls = 0;
-    auto end = ranges[i].begin + ranges[i].size;
-    for (int32_t offset = ranges[i].begin; offset < end; ++offset) {
-      if (!wrapper->isNullAt(offset)) {
-        newRanges.push_back(IndexRange{wrapper->wrappedIndex(offset), 1});
-        newSizes.push_back(sizes[i]);
-      } else {
-        ++numNulls;
-      }
-    }
-    *sizes[i] += numNulls == 0 ? 0 : bits::nbytes(ranges[i].size);
-  }
-  estimateSerializedSizeInt(wrapped, newRanges, newSizes.data(), scratch);
-}
-
-void expandRepeatedRanges(
-    const BaseVector* vector,
-    const vector_size_t* rawOffsets,
-    const vector_size_t* rawSizes,
-    const folly::Range<const IndexRange*>& ranges,
-    vector_size_t** sizes,
-    std::vector<IndexRange>* childRanges,
-    std::vector<vector_size_t*>* childSizes) {
-  if (!vector->mayHaveNulls()) {
-    int64_t totalSize = 0;
-    for (int32_t i = 0; i < ranges.size(); ++i) {
-      totalSize += ranges[i].size;
-    }
-    childRanges->reserve(totalSize);
-    childSizes->reserve(totalSize);
-  }
-  for (int32_t i = 0; i < ranges.size(); ++i) {
-    int32_t begin = ranges[i].begin;
-    int32_t end = begin + ranges[i].size;
-    bool hasNull = false;
-    for (int32_t offset = begin; offset < end; ++offset) {
-      if (vector->isNullAt(offset)) {
-        hasNull = true;
-      } else {
-        // Add the size of the length.
-        *sizes[i] += sizeof(int32_t);
-        childRanges->push_back(
-            IndexRange{rawOffsets[offset], rawSizes[offset]});
-        childSizes->push_back(sizes[i]);
-      }
-    }
-
-    if (hasNull) {
-      // Add the size of the null bit mask.
-      *sizes[i] += bits::nbytes(ranges[i].size);
-    }
+    estimateSerializedSizeInt(
+        vector,
+        folly::Range<const vector_size_t*>(rows, numRows),
+        rowSizes,
+        scratch,
+        flatten);
+    offset += numRows;
   }
 }
 
@@ -439,9 +285,11 @@ void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch) {
+    Scratch& scratch,
+    bool flatten) {
   const auto numRows = rows.size();
-  if (vector->type()->isFixedWidth() && !vector->mayHaveNullsRecursive()) {
+  if (vector->encoding() == VectorEncoding::Simple::FLAT &&
+      vector->type()->isFixedWidth() && !vector->mayHaveNullsRecursive()) {
     const auto elementSize = vector->type()->cppSizeInBytes();
     for (auto i = 0; i < numRows; ++i) {
       *sizes[i] += elementSize;
@@ -466,14 +314,15 @@ void estimateSerializedSizeInt(
           vector,
           rows,
           sizes,
-          scratch);
+          scratch,
+          flatten);
       break;
     case VectorEncoding::Simple::DICTIONARY:
     case VectorEncoding::Simple::SEQUENCE:
-      estimateWrapperSerializedSize(rows, sizes, vector, scratch);
+      estimateWrapperSerializedSize(rows, sizes, vector, scratch, flatten);
       break;
     case VectorEncoding::Simple::BIASED:
-      estimateBiasedSerializedSize(vector, rows, sizes, scratch);
+      estimateBiasedSerializedSize(vector, rows, sizes);
       break;
     case VectorEncoding::Simple::ROW: {
       ScratchPtr<vector_size_t, 1> innerRowsHolder(scratch);
@@ -492,7 +341,7 @@ void estimateSerializedSizeInt(
         auto mutableInnerRows = innerRowsHolder.get(numRows);
         numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableInnerRows);
         if (numInner != numRows) {
-          *sizes[0] += bits::nbytes(numRows);
+          addNullBitmapSize(sizes, numRows);
         }
         innerSizes = innerSizesHolder.get(numInner);
         for (auto i = 0; i < numInner; ++i) {
@@ -512,7 +361,8 @@ void estimateSerializedSizeInt(
               child.get(),
               folly::Range(innerRows, numInner),
               innerSizes,
-              scratch);
+              scratch,
+              flatten);
         }
       }
       break;
@@ -538,12 +388,14 @@ void estimateSerializedSizeInt(
           mapVector->mapKeys().get(),
           folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
           sizesHolder.get(),
-          scratch);
+          scratch,
+          true);
       estimateSerializedSizeInt(
           mapVector->mapValues().get(),
           folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
           sizesHolder.get(),
-          scratch);
+          scratch,
+          true);
       break;
     }
     case VectorEncoding::Simple::ARRAY: {
@@ -567,11 +419,13 @@ void estimateSerializedSizeInt(
           arrayVector->elements().get(),
           folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
           sizesHolder.get(),
-          scratch);
+          scratch,
+          true);
       break;
     }
     case VectorEncoding::Simple::LAZY:
-      estimateSerializedSizeInt(vector->loadedVector(), rows, sizes, scratch);
+      estimateSerializedSizeInt(
+          vector->loadedVector(), rows, sizes, scratch, flatten);
       break;
     default:
       VELOX_UNSUPPORTED("Unsupported vector encoding {}", vector->encoding());
