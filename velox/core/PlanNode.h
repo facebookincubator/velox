@@ -3572,6 +3572,11 @@ class HashJoinNode : public AbstractJoinNode {
         !cacheKey_.has_value() || useHashTableCache_,
         "cacheKey can only be set when useHashTableCache is enabled");
     VELOX_USER_CHECK(
+        !useHashTableCache_ ||
+            !(isRightJoin() || isFullJoin() || isRightSemiFilterJoin() ||
+              isRightSemiProjectJoin() || isRightAntiJoin()),
+        "Hash table caching does not support right-side joins");
+    VELOX_USER_CHECK(
         !cacheKey_.has_value() || !cacheKey_->empty(),
         "cacheKey must be non-empty if set");
 
