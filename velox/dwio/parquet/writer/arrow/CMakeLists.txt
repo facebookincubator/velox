@@ -36,6 +36,7 @@ velox_add_library(
   Platform.cpp
   Properties.cpp
   Schema.cpp
+  SizeStatistics.cpp
   Statistics.cpp
   StringTruncation.cpp
   Types.cpp
@@ -59,6 +60,7 @@ velox_add_library(
   Properties.h
   Schema.h
   SchemaInternal.h
+  SizeStatistics.h
   Statistics.h
   StringTruncation.h
   ThriftInternal.h

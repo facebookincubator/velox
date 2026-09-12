@@ -24,6 +24,7 @@
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
+#include "velox/dwio/parquet/writer/arrow/SizeStatistics.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 #include "velox/dwio/parquet/writer/arrow/ThriftInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/OverflowUtilInternal.h"
@@ -178,6 +179,23 @@ class TypedColumnIndexImpl : public TypedColumnIndex<DType> {
     return nonNullPageIndices_;
   }
 
+  bool hasDefinitionLevelHistograms() const override {
+    return columnIndex_.definition_level_histograms().has_value();
+  }
+
+  bool hasRepetitionLevelHistograms() const override {
+    return columnIndex_.repetition_level_histograms().has_value();
+  }
+
+  const std::vector<int64_t>& definitionLevelHistograms() const override {
+    return apache::thrift::can_throw(
+        *columnIndex_.definition_level_histograms());
+  }
+
+  const std::vector<int64_t>& repetitionLevelHistograms() const override {
+    return apache::thrift::can_throw(
+        *columnIndex_.repetition_level_histograms());
+  }
   const std::vector<T>& minValues() const override {
     return minValues_;
   }
@@ -208,14 +226,23 @@ class OffsetIndexImpl : public OffsetIndex {
               *page_location.compressed_page_size(),
               *page_location.first_row_index()});
     }
+    if (offset_index.unencoded_byte_array_data_bytes().has_value()) {
+      unencodedByteArrayDataBytes_ =
+          *offset_index.unencoded_byte_array_data_bytes();
+    }
   }
 
   const std::vector<PageLocation>& pageLocations() const override {
     return pageLocations_;
   }
 
+  const std::vector<int64_t>& unencodedByteArrayDataBytes() const override {
+    return unencodedByteArrayDataBytes_;
+  }
+
  private:
   std::vector<PageLocation> pageLocations_;
+  std::vector<int64_t> unencodedByteArrayDataBytes_;
 };
 
 class RowGroupPageIndexReaderImpl : public RowGroupPageIndexReader {
@@ -513,7 +540,8 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
         facebook::velox::parquet::thrift::BoundaryOrder::UNORDERED;
   }
 
-  void addPage(const EncodedStatistics& stats) override {
+  void addPage(const EncodedStatistics& stats, const SizeStatistics& sizeStats)
+      override {
     if (state_ == BuilderState::kFinished) {
       throw ParquetException("Cannot add page to finished ColumnIndexBuilder.");
     } else if (state_ == BuilderState::kDiscarded) {
@@ -544,6 +572,23 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
       columnIndex_.null_counts()->emplace_back(stats.nullCount);
     } else {
       columnIndex_.null_counts().reset();
+    }
+
+    if (sizeStats.isSet()) {
+      if (!columnIndex_.definition_level_histograms().has_value()) {
+        columnIndex_.definition_level_histograms() = {};
+      }
+      if (!columnIndex_.repetition_level_histograms().has_value()) {
+        columnIndex_.repetition_level_histograms() = {};
+      }
+      columnIndex_.definition_level_histograms()->insert(
+          columnIndex_.definition_level_histograms()->end(),
+          sizeStats.definitionLevelHistogram.begin(),
+          sizeStats.definitionLevelHistogram.end());
+      columnIndex_.repetition_level_histograms()->insert(
+          columnIndex_.repetition_level_histograms()->end(),
+          sizeStats.repetitionLevelHistogram.begin(),
+          sizeStats.repetitionLevelHistogram.end());
     }
   }
 
@@ -587,6 +632,36 @@ class ColumnIndexBuilderImpl final : public ColumnIndexBuilder {
     /// Decide the boundary order from decoded min/max values.
     auto boundaryOrder = determineBoundaryOrder(minValues, maxValues);
     columnIndex_.boundary_order() = toThrift(boundaryOrder);
+
+    // Finalize level histograms.
+    const int64_t numPages = columnIndex_.null_pages()->size();
+    auto definitionHistograms = columnIndex_.definition_level_histograms();
+    if (definitionHistograms.has_value() && !definitionHistograms->empty()) {
+      const int64_t expectedSize =
+          (descr_->maxDefinitionLevel() + 1) * numPages;
+      if (definitionHistograms->size() != expectedSize) {
+        std::stringstream ss;
+        ss << "Invalid definition level histogram size: "
+           << definitionHistograms->size() << ", expected: " << expectedSize;
+        throw ParquetException(ss.str());
+      }
+    } else {
+      definitionHistograms.reset();
+    }
+
+    auto repetitionHistograms = columnIndex_.repetition_level_histograms();
+    if (repetitionHistograms.has_value() && !repetitionHistograms->empty()) {
+      const int64_t expectedSize =
+          (descr_->maxRepetitionLevel() + 1) * numPages;
+      if (repetitionHistograms->size() != expectedSize) {
+        std::stringstream ss;
+        ss << "Invalid repetition level histogram size: "
+           << repetitionHistograms->size() << ", expected: " << expectedSize;
+        throw ParquetException(ss.str());
+      }
+    } else {
+      repetitionHistograms.reset();
+    }
   }
 
   void writeTo(::arrow::io::OutputStream* sink) const override {
@@ -663,7 +738,8 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
   void addPage(
       int64_t offset,
       int32_t compressedPageSize,
-      int64_t firstRowIndex) override {
+      int64_t firstRowIndex,
+      std::optional<int64_t> unencodedByteArrayDataBytes) override {
     if (state_ == BuilderState::kFinished) {
       throw ParquetException("Cannot add page to finished OffsetIndexBuilder.");
     } else if (state_ == BuilderState::kDiscarded) {
@@ -678,6 +754,13 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
     page_location.compressed_page_size() = compressedPageSize;
     page_location.first_row_index() = firstRowIndex;
     offsetIndex_.page_locations()->emplace_back(std::move(page_location));
+    if (unencodedByteArrayDataBytes.has_value()) {
+      if (!offsetIndex_.unencoded_byte_array_data_bytes().has_value()) {
+        offsetIndex_.unencoded_byte_array_data_bytes() = {};
+      }
+      offsetIndex_.unencoded_byte_array_data_bytes()->emplace_back(
+          *unencodedByteArrayDataBytes);
+    }
   }
 
   void finish(int64_t finalPosition) override {
@@ -692,6 +775,25 @@ class OffsetIndexBuilderImpl final : public OffsetIndexBuilder {
         if (finalPosition > 0) {
           for (auto& page_location : *offsetIndex_.page_locations()) {
             page_location.offset() = *page_location.offset() + finalPosition;
+          }
+        }
+
+        // Finalize unencoded_byte_array_data_bytes and make sure page sizes
+        // match.
+        auto unencodedByteArrayDataBytes =
+            offsetIndex_.unencoded_byte_array_data_bytes();
+        if (unencodedByteArrayDataBytes.has_value()) {
+          const auto numPages = offsetIndex_.page_locations()->size();
+          if (unencodedByteArrayDataBytes->size() == numPages) {
+            // The optional field remains set and will be serialized.
+          } else if (!unencodedByteArrayDataBytes->empty()) {
+            std::stringstream ss;
+            ss << "Invalid count of unencoded BYTE_ARRAY data bytes: "
+               << unencodedByteArrayDataBytes->size()
+               << ", expected page count: " << numPages;
+            throw ParquetException(ss.str());
+          } else {
+            unencodedByteArrayDataBytes.reset();
           }
         }
         state_ = BuilderState::kFinished;
@@ -1010,6 +1112,16 @@ std::unique_ptr<ColumnIndexBuilder> ColumnIndexBuilder::make(
 
 std::unique_ptr<OffsetIndexBuilder> OffsetIndexBuilder::make() {
   return std::make_unique<OffsetIndexBuilderImpl>();
+}
+
+void OffsetIndexBuilder::addPage(
+    const PageLocation& pageLocation,
+    const SizeStatistics& sizeStats) {
+  addPage(
+      pageLocation.offset,
+      pageLocation.compressedPageSize,
+      pageLocation.firstRowIndex,
+      sizeStats.isSet() ? sizeStats.unencodedByteArrayDataBytes : std::nullopt);
 }
 
 std::unique_ptr<PageIndexBuilder> PageIndexBuilder::make(

@@ -23,6 +23,7 @@ add_executable(
   PageIndexTest.cpp
   PropertiesTest.cpp
   SchemaTest.cpp
+  SizeStatisticsTest.cpp
   StatisticsTest.cpp
   StringTruncationTest.cpp
   TypesTest.cpp

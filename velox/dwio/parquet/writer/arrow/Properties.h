@@ -100,6 +100,16 @@ struct ParquetVersion {
 /// DataPageV2 at all.
 enum class ParquetDataPageVersion { V1, V2 };
 
+/// Controls the level of size statistics that are written to the file.
+enum class SizeStatisticsLevel : uint8_t {
+  // No size statistics are written.
+  None = 0,
+  // Only column chunk size statistics are written.
+  ColumnChunk,
+  // Both size statistics in the column chunk and page index are written.
+  PageAndColumnChunk
+};
+
 /// Align the default buffer size to a small multiple of a page size.
 constexpr int64_t kDefaultBufferSize = 4096 * 4;
 
@@ -217,7 +227,9 @@ static constexpr Encoding::type DEFAULT_ENCODING = Encoding::kUnknown;
 static const char DEFAULT_CREATED_BY[] = CREATED_BY_VERSION;
 static constexpr Compression::type DEFAULT_COMPRESSION_TYPE =
     Compression::UNCOMPRESSED;
-static constexpr bool DEFAULT_IS_PAGE_INDEX_ENABLED = false;
+static constexpr bool DEFAULT_IS_PAGE_INDEX_ENABLED = true;
+static constexpr SizeStatisticsLevel DEFAULT_SIZE_STATISTICS_LEVEL =
+    SizeStatisticsLevel::PageAndColumnChunk;
 
 class PARQUET_EXPORT ColumnProperties {
  public:
@@ -327,7 +339,8 @@ class PARQUET_EXPORT WriterProperties {
           createdBy_(
               DEFAULT_CREATED_BY + std::string(" version ") + VELOX_VERSION),
           storeDecimalAsInteger_(false),
-          pageChecksumEnabled_(false) {}
+          pageChecksumEnabled_(false),
+          sizeStatisticsLevel_(DEFAULT_SIZE_STATISTICS_LEVEL) {}
     virtual ~Builder() {}
 
     /// Specify the memory pool for the writer. Default default_memory_pool.
@@ -682,7 +695,7 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Enable writing page index in general for all columns. Default disabled.
+    /// Enable writing page index in general for all columns. Default enabled.
     ///
     /// Writing statistics to the page index disables the old method of writing
     /// statistics to each data page header.
@@ -697,38 +710,49 @@ class PARQUET_EXPORT WriterProperties {
       return this;
     }
 
-    /// Disable writing page index in general for all columns. Default disabled.
+    /// Disable writing page index in general for all columns. Default enabled.
     Builder* disableWritePageIndex() {
       defaultColumnProperties_.setPageIndexEnabled(false);
       return this;
     }
 
     /// Enable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* enableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = true;
       return this;
     }
 
     /// Enable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* enableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->enableWritePageIndex(path->toDotString());
     }
 
     /// Disable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* disableWritePageIndex(const std::string& path) {
       pageIndexEnabled_[path] = false;
       return this;
     }
 
     /// Disable writing page index for column specified by `path`.
-    /// Default disabled.
+    /// Default enabled.
     Builder* disableWritePageIndex(
         const std::shared_ptr<schema::ColumnPath>& path) {
       return this->disableWritePageIndex(path->toDotString());
+    }
+
+    /// \brief Set the level to write size statistics for all columns. Default
+    /// is PageAndColumnChunk.
+    ///
+    /// \param level The level to write size statistics. Note that if page index
+    /// is not enabled, page level size statistics will not be written even if
+    /// the level is set to PageAndColumnChunk.
+    Builder* setSizeStatisticsLevel(SizeStatisticsLevel level) {
+      sizeStatisticsLevel_ = level;
+      return this;
     }
 
     /// \brief Build the WriterProperties with the builder parameters.
@@ -765,6 +789,7 @@ class PARQUET_EXPORT WriterProperties {
           version_,
           createdBy_,
           pageChecksumEnabled_,
+          sizeStatisticsLevel_,
           std::move(fileEncryptionProperties_),
           defaultColumnProperties_,
           columnProperties,
@@ -784,6 +809,7 @@ class PARQUET_EXPORT WriterProperties {
     std::string createdBy_;
     bool storeDecimalAsInteger_;
     bool pageChecksumEnabled_;
+    SizeStatisticsLevel sizeStatisticsLevel_;
 
     std::shared_ptr<FileEncryptionProperties> fileEncryptionProperties_;
 
@@ -839,6 +865,10 @@ class PARQUET_EXPORT WriterProperties {
 
   inline bool pageChecksumEnabled() const {
     return pageChecksumEnabled_;
+  }
+
+  inline SizeStatisticsLevel sizeStatisticsLevel() const {
+    return sizeStatisticsLevel_;
   }
 
   inline Encoding::type dictionaryIndexEncoding() const {
@@ -942,6 +972,7 @@ class PARQUET_EXPORT WriterProperties {
       ParquetVersion::type version,
       const std::string& createdBy,
       bool pageWriteChecksumEnabled,
+      SizeStatisticsLevel sizeStatisticsLevel,
       std::shared_ptr<FileEncryptionProperties> fileEncryptionProperties,
       const ColumnProperties& defaultColumnProperties,
       const std::unordered_map<std::string, ColumnProperties>& columnProperties,
@@ -958,6 +989,7 @@ class PARQUET_EXPORT WriterProperties {
         parquetCreatedBy_(createdBy),
         storeDecimalAsInteger_(storeShortDecimalAsInteger),
         pageChecksumEnabled_(pageWriteChecksumEnabled),
+        sizeStatisticsLevel_(sizeStatisticsLevel),
         fileEncryptionProperties_(std::move(fileEncryptionProperties)),
         sortingColumns_(std::move(sortingColumns)),
         defaultColumnProperties_(defaultColumnProperties),
@@ -973,6 +1005,7 @@ class PARQUET_EXPORT WriterProperties {
   std::string parquetCreatedBy_;
   bool storeDecimalAsInteger_;
   bool pageChecksumEnabled_;
+  SizeStatisticsLevel sizeStatisticsLevel_;
 
   std::shared_ptr<FileEncryptionProperties> fileEncryptionProperties_;
 

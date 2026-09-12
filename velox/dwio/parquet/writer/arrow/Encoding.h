@@ -175,6 +175,10 @@ class Encoder {
   virtual Encoding::type encoding() const = 0;
 
   virtual void put(const ::arrow::Array& values) = 0;
+  // Report the number of bytes written to the encoder since the last report.
+  // It only works for BYTE_ARRAY type and throw for other types.
+  // This call is not idempotent since it resets the internal counter.
+  virtual int64_t reportUnencodedDataBytes() = 0;
 
   virtual ::arrow::MemoryPool* memoryPool() const = 0;
 };

@@ -62,6 +62,23 @@ static constexpr uint32_t kFooterSize = 8;
 // For PARQUET-816.
 static constexpr int64_t kMaxDictHeaderSize = 100;
 
+LevelInfo computeLevelInfo(const ColumnDescriptor* descr) {
+  LevelInfo levelInfo;
+  levelInfo.defLevel = descr->maxDefinitionLevel();
+  levelInfo.repLevel = descr->maxRepetitionLevel();
+
+  int16_t minSpacedDefLevel = descr->maxDefinitionLevel();
+  const schema::Node* node = descr->schemaNode().get();
+  while (node != nullptr && !node->isRepeated()) {
+    if (node->isOptional()) {
+      minSpacedDefLevel--;
+    }
+    node = node->parent();
+  }
+  levelInfo.repeatedAncestorDefLevel = minSpacedDefLevel;
+  return levelInfo;
+}
+
 // ----------------------------------------------------------------------.
 // RowGroupReader public API.
 
@@ -83,6 +100,23 @@ std::shared_ptr<ColumnReader> RowGroupReader::column(int i) {
       descr,
       std::move(PageReader),
       const_cast<ReaderProperties*>(contents_->properties())->memoryPool());
+}
+
+std::shared_ptr<internal::RecordReader> RowGroupReader::recordReader(int i) {
+  if (i >= metadata()->numColumns()) {
+    std::stringstream ss;
+    ss << "Trying to read column index " << i
+       << " but row group metadata has only " << metadata()->numColumns()
+       << " columns";
+    throw ParquetException(ss.str());
+  }
+  const ColumnDescriptor* descr = metadata()->schema()->column(i);
+  auto reader = internal::RecordReader::make(
+      descr,
+      computeLevelInfo(descr),
+      const_cast<ReaderProperties*>(contents_->properties())->memoryPool());
+  reader->setPageReader(contents_->getColumnPageReader(i));
+  return reader;
 }
 
 std::shared_ptr<ColumnReader> RowGroupReader::columnWithExposeEncoding(
