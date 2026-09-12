@@ -113,8 +113,8 @@ void StreamData::init(std::string_view data) {
     end_ = nullptr;
     return;
   }
-  pos_ = data.begin();
-  end_ = data.end();
+  pos_ = data.data();
+  end_ = data.data() + data.size();
   if (encodingEnabled_) {
     prepareForDecoding({pos_, end_});
   } else {

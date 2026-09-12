@@ -44,7 +44,7 @@ class FixedBitWidthEncodingView final : public TypedEncodingView<T> {
     baseline_ = encoding::read<physicalType>(pos);
     bitWidth_ = static_cast<uint32_t>(encoding::readChar(pos));
     fixedBitArray_ = FixedBitArray{
-        {pos, static_cast<size_t>(data.end() - pos)},
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
         static_cast<int>(bitWidth_)};
   }
 

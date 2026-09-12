@@ -209,7 +209,7 @@ TrivialEncoding<T>::TrivialEncoding(
   } else {
     NIMBLE_CHECK_EQ(
         reinterpret_cast<const char*>(values_ + this->rowCount()),
-        data.end(),
+        data.data() + data.size(),
         "Unexpected trivial encoding end");
   }
 }

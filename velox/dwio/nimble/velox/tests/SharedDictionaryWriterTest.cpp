@@ -392,9 +392,9 @@ std::vector<uint32_t> sharedDictionaryIndices(
 
   const char* pos =
       encoded.data() + EncodingPrefix::prefixSize(encoded, useVarintRowCount);
-  EXPECT_LE(pos, encoded.end());
+  EXPECT_LE(pos, encoded.data() + encoded.size());
   const std::string_view encodedIndices{
-      pos, static_cast<size_t>(encoded.end() - pos)};
+      pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
   auto indicesEncoding = EncodingFactory{}.create(
       *pool,
@@ -486,11 +486,11 @@ std::vector<uint32_t> nullableSharedDictionaryIndices(
   const char* pos =
       encoded.data() + EncodingPrefix::prefixSize(encoded, useVarintRowCount);
   const auto nonNullValuesBytes = encoding::readUint32(pos);
-  EXPECT_LE(pos + nonNullValuesBytes, encoded.end());
+  EXPECT_LE(pos + nonNullValuesBytes, encoded.data() + encoded.size());
   const std::string_view encodedNonNullValues{pos, nonNullValuesBytes};
   pos += nonNullValuesBytes;
   const std::string_view encodedNonNulls{
-      pos, static_cast<size_t>(encoded.end() - pos)};
+      pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
 
   auto nonNullsEncoding = EncodingFactory{}.create(
       *pool,
