@@ -2155,8 +2155,7 @@ class PrestoSerializerEstimateSizeTest : public testing::Test,
   void testEstimateSerializedSize(
       VectorPtr input,
       const std::vector<IndexRange>& ranges,
-      const std::vector<vector_size_t>& expectedSizes,
-      const std::vector<std::vector<vector_size_t>>& expectedRowSizes = {}) {
+      const std::vector<vector_size_t>& expectedSizes) {
     ASSERT_EQ(ranges.size(), expectedSizes.size());
 
     // Wrap the input a RowVector to better emulate production.
@@ -2179,37 +2178,36 @@ class PrestoSerializerEstimateSizeTest : public testing::Test,
           << "Mismatched estimated size for range" << i << " "
           << ranges[i].begin << ":" << ranges[i].size;
     }
+  }
 
-    // Test row overload estimation.
-    for (int i = 0; i < ranges.size(); ++i) {
-      const auto& range = ranges[i];
-      std::vector<vector_size_t> rowSizes(range.size, 0);
-      std::vector<vector_size_t*> rowSizePointers(range.size);
-      std::vector<vector_size_t> rows(range.size);
-      for (auto offset = 0; offset < range.size; ++offset) {
-        rows[offset] = range.begin + offset;
-        rowSizePointers[offset] = &rowSizes[offset];
-      }
+  void testEstimateSerializedSizeByRows(
+      VectorPtr input,
+      const std::vector<vector_size_t>& rows,
+      vector_size_t expectedSize,
+      const std::vector<vector_size_t>& expectedRowSizes = {}) {
+    auto row = makeRowVector({input});
+    std::vector<vector_size_t> sizes(rows.size(), 0);
+    std::vector<vector_size_t*> sizePointers(rows.size());
+    for (auto i = 0; i < rows.size(); ++i) {
+      sizePointers[i] = &sizes[i];
+    }
 
-      Scratch rowScratch;
-      serde_->estimateSerializedSize(
-          row.get(),
-          folly::Range(rows.data(), rows.size()),
-          rowSizePointers.data(),
-          rowScratch);
+    Scratch scratch;
+    serde_->estimateSerializedSize(
+        row.get(),
+        folly::Range(rows.data(), rows.size()),
+        sizePointers.data(),
+        scratch);
 
-      vector_size_t totalRowSize = 0;
-      for (const auto rowSize : rowSizes) {
-        totalRowSize += rowSize;
-      }
-      ASSERT_EQ(totalRowSize, expectedSizes[i] + 4 * range.size)
-          << "Mismatched estimated size for row range " << i << " "
-          << range.begin << ":" << range.size;
-      if (!expectedRowSizes.empty()) {
-        for (auto offset = 0; offset < range.size; ++offset) {
-          ASSERT_EQ(rowSizes[offset], expectedRowSizes[i][offset])
-              << "at row " << rows[offset];
-        }
+    vector_size_t total = 0;
+    for (const auto size : sizes) {
+      total += size;
+    }
+    EXPECT_EQ(total, expectedSize + sizeof(int32_t) * rows.size());
+    if (!expectedRowSizes.empty()) {
+      ASSERT_EQ(sizes.size(), expectedRowSizes.size());
+      for (auto i = 0; i < sizes.size(); ++i) {
+        EXPECT_EQ(sizes[i], expectedRowSizes[i]) << "at row " << rows[i];
       }
     }
   }
@@ -2278,14 +2276,7 @@ TEST_F(PrestoSerializerEstimateSizeTest, flat) {
   // Doubles are 8 bytes each, and only non-null doubles are counted. In
   // addition there's a null bit per row.
   // 8 * 24 + (32 / 8) = 196
-  std::vector<vector_size_t> expectedRowSizes(32);
-  for (auto i = 0; i < 32; ++i) {
-    // 4 bytes for the row wrapper, 8 bytes for non-null doubles, and one byte
-    // for every eight nullable values.
-    expectedRowSizes[i] = (i % 4 == 0 ? 4 : 12) + (i % 8 == 0 ? 1 : 0);
-  }
-  testEstimateSerializedSize(
-      flatVectorWithNulls, {{0, 32}}, {196}, {expectedRowSizes});
+  testEstimateSerializedSize(flatVectorWithNulls, {{0, 32}}, {196});
   testEstimateSerializedSize(
       flatVectorWithNulls, {{0, 16}, {16, 16}}, {98, 98});
   testEstimateSerializedSize(
@@ -2510,4 +2501,49 @@ TEST_F(PrestoSerializerEstimateSizeTest, dictionary) {
       dictionaryWithNulls, {{0, 16}, {16, 16}}, {34, 34});
   testEstimateSerializedSize(
       dictionaryWithNulls, {{0, 8}, {8, 16}, {24, 8}}, {17, 34, 17});
+}
+
+TEST_F(PrestoSerializerEstimateSizeTest, rows) {
+  auto flatVector =
+      makeFlatVector<int32_t>(32, [](vector_size_t row) { return row; });
+  std::vector<vector_size_t> rows(32);
+  std::iota(rows.begin(), rows.end(), 0);
+
+  auto constant = BaseVector::wrapInConstant(32, 0, flatVector);
+  // The row overload flattens the constant.
+  // 32 * 4 = 128
+  testEstimateSerializedSizeByRows(constant, rows, 128);
+
+  auto indices = makeIndices(32, [](auto row) { return (row * 2) % 32; });
+  auto dictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 32, flatVector);
+  // The row overload flattens the dictionary.
+  // 32 * 4 = 128
+  testEstimateSerializedSizeByRows(dictionary, rows, 128);
+
+  auto nullableValues = makeFlatVector<double>(
+      32,
+      [](vector_size_t row) { return row; },
+      [](auto row) { return row % 4 == 0; });
+  auto nullableDictionary =
+      BaseVector::wrapInDictionary(nullptr, indices, 32, nullableValues);
+  // indices contains each even position twice: reference 0, 2, 4, ..., 30.
+  // Thus, the 8 null positions produce 16 null rows and 16 non-null doubles.
+  // 16 * 8 + 32 / 8 = 132
+  testEstimateSerializedSizeByRows(nullableDictionary, rows, 132);
+
+  auto nullableDoubles = makeFlatVector<double>(
+      32,
+      [](vector_size_t row) { return row; },
+      [](vector_size_t row) { return row % 4 == 0; });
+  std::vector<vector_size_t> expectedRowSizes(32);
+  for (auto i = 0; i < 32; ++i) {
+    // 4 bytes for the row wrapper, 8 bytes for non-null doubles, and one byte
+    // for every eight nullable values.
+    expectedRowSizes[i] = (i % 4 == 0 ? 4 : 12) + (i % 8 == 0 ? 1 : 0);
+  }
+  // 24 non-null doubles and 8 nulls.
+  // 24 * 8 + 32 / 8 = 196
+  testEstimateSerializedSizeByRows(
+      nullableDoubles, rows, 196, expectedRowSizes);
 }
