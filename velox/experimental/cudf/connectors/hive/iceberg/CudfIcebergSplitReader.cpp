@@ -370,10 +370,10 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
       rowIndex.begin<uint64_t>(),
       sizeof(uint64_t),
       cudaMemcpyDefault,
-      stream_.value()));
+      stream_.get()));
 
   if (pushdownFilter() == nullptr) {
-    stream_.synchronize();
+    stream_.sync();
     return {startRow, static_cast<std::size_t>(rowIndex.size())};
   }
 
@@ -383,8 +383,8 @@ std::pair<std::size_t, std::size_t> CudfIcebergSplitReader::rowRange(
       rowIndex.end<uint64_t>() - 1,
       sizeof(uint64_t),
       cudaMemcpyDefault,
-      stream_.value()));
-  stream_.synchronize();
+      stream_.get()));
+  stream_.sync();
 
   VELOX_CHECK_LE(startRow, endRow);
   return {startRow, static_cast<std::size_t>(endRow - startRow + 1)};
@@ -458,7 +458,7 @@ CudfIcebergSplitReader::readNextChunk() {
           deleteMask_->mutable_view().data<bool>(),
           false,
           numRows * sizeof(bool),
-          stream_));
+          stream_.get()));
     }
 
     // Set the current mutable view into the deleteMask_ column.
@@ -529,7 +529,7 @@ CudfIcebergSplitReader::readNextChunk() {
   if (deferred) {
     auto filterMask = cudf::compute_column(
         cudfTable->view(), *deferred, stream_, get_temp_mr());
-    cudfTable = cudf::apply_boolean_mask(
+    cudfTable = cudf::apply_retention_mask(
         cudfTable->view(), filterMask->view(), stream_, get_output_mr());
   }
 
@@ -758,7 +758,7 @@ void CudfIcebergSplitReader::readPositionalDeleteBitmap(
       deleteBitmap_->as<uint8_t>(),
       numBitmaskBytes,
       cudaMemcpyDefault,
-      stream_.value()));
+      stream_.get()));
 }
 
 void CudfIcebergSplitReader::applyPositionalDeletes(

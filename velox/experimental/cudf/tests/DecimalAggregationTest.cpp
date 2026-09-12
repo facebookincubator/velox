@@ -58,7 +58,7 @@ constexpr int kBitsPerWord = 8 * sizeof(cudf::bitmask_type);
 
 std::pair<rmm::device_buffer, cudf::size_type> makeNullMask(
     const std::vector<bool>& valid,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto numBits = static_cast<cudf::size_type>(valid.size());
   if (numBits == 0) {
     return {rmm::device_buffer{}, 0};
@@ -83,9 +83,9 @@ std::pair<rmm::device_buffer, cudf::size_type> makeNullMask(
         host.data(),
         host.size() * sizeof(cudf::bitmask_type),
         cudaMemcpyHostToDevice,
-        stream.value());
+        stream.get());
     VELOX_CHECK_EQ(0, static_cast<int>(status));
-    stream.synchronize();
+    stream.sync();
   }
   return {std::move(mask), nullCount};
 }
@@ -122,7 +122,7 @@ std::unique_ptr<cudf::column> makeFixedWidthColumn(
     cudf::data_type type,
     const std::vector<T>& values,
     const std::vector<bool>* valid,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto col = cudf::make_fixed_width_column(
       type,
       static_cast<cudf::size_type>(values.size()),
@@ -134,9 +134,9 @@ std::unique_ptr<cudf::column> makeFixedWidthColumn(
         values.data(),
         values.size() * sizeof(T),
         cudaMemcpyHostToDevice,
-        stream.value());
+        stream.get());
     VELOX_CHECK_EQ(0, static_cast<int>(status));
-    stream.synchronize();
+    stream.sync();
   }
   if (valid) {
     auto [mask, nullCount] = makeNullMask(*valid, stream);
@@ -150,7 +150,7 @@ std::unique_ptr<cudf::column> makeDecimalColumn(
     const std::vector<T>& values,
     int32_t scale,
     const std::vector<bool>* valid,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   cudf::type_id typeId = std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
                                                     : cudf::type_id::DECIMAL128;
   cudf::data_type type{typeId, -scale};
@@ -160,7 +160,7 @@ std::unique_ptr<cudf::column> makeDecimalColumn(
 std::unique_ptr<cudf::column> makeInt64Column(
     const std::vector<int64_t>& values,
     const std::vector<bool>* valid,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return makeFixedWidthColumn(
       cudf::data_type{cudf::type_id::INT64}, values, valid, stream);
 }
@@ -168,7 +168,7 @@ std::unique_ptr<cudf::column> makeInt64Column(
 template <typename T>
 std::vector<T> copyColumnData(
     const cudf::column_view& view,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   std::vector<T> host(view.size());
   if (view.size() == 0) {
     return host;
@@ -178,15 +178,15 @@ std::vector<T> copyColumnData(
       view.data<T>(),
       view.size() * sizeof(T),
       cudaMemcpyDeviceToHost,
-      stream.value());
+      stream.get());
   VELOX_CHECK_EQ(0, static_cast<int>(status));
-  stream.synchronize();
+  stream.sync();
   return host;
 }
 
 std::vector<cudf::bitmask_type> copyNullMask(
     const cudf::column_view& view,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto numWords = cudf::num_bitmask_words(view.size());
   std::vector<cudf::bitmask_type> host(numWords, 0);
   if (!view.nullable() || numWords == 0) {
@@ -197,9 +197,9 @@ std::vector<cudf::bitmask_type> copyNullMask(
       view.null_mask(),
       host.size() * sizeof(cudf::bitmask_type),
       cudaMemcpyDeviceToHost,
-      stream.value());
+      stream.get());
   VELOX_CHECK_EQ(0, static_cast<int>(status));
-  stream.synchronize();
+  stream.sync();
   return host;
 }
 
@@ -1383,9 +1383,9 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
       offsetsPtr,
       0,
       static_cast<size_t>(numRows + 1) * sizeof(int32_t),
-      stream.value());
+      stream.get());
   VELOX_CHECK_EQ(0, static_cast<int>(status));
-  stream.synchronize();
+  stream.sync();
 
   std::vector<bool> valid(numRows, false);
   auto [nullMask, nullCount] = makeNullMask(valid, stream);
