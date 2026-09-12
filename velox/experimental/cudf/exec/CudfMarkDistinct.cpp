@@ -118,15 +118,15 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         newRowIndicesCol->view(),
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        tempMr);
+        cudf::memory_resources{tempMr, tempMr});
     seenFilter_ = std::make_unique<cudf::filtered_join>(
-        seenKeys_->view(), cudf::null_equality::EQUAL, stream);
+        seenKeys_->view(), cudf::null_equality::EQUAL, stream, tempMr);
     seenStateStream_ = stream;
 
   } else {
     VELOX_CHECK(seenStateStream_.has_value());
     const auto stateStream = seenStateStream_.value();
-    const std::vector<rmm::cuda_stream_view> stateStreams{stateStream};
+    const std::vector<cuda::stream_ref> stateStreams{stateStream};
     cudf::detail::join_streams(stateStreams, stream);
 
     // Subsequent batch: probe the persistent filter — no hash table rebuild.
@@ -137,7 +137,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         batchDistinctIdxCol->view(),
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        tempMr);
+        cudf::memory_resources{tempMr, tempMr});
 
     // Anti-join against the persistent seenFilter_ to find new keys.
     auto newKeyLocalIndices =
@@ -160,7 +160,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
               localCol,
               cudf::out_of_bounds_policy::DONT_CHECK,
               stream,
-              tempMr);
+              cudf::memory_resources{tempMr, tempMr});
 
           // Append only the new unique keys to seenKeys_ and rebuild the
           // filter.
@@ -169,7 +169,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
               localCol,
               cudf::out_of_bounds_policy::DONT_CHECK,
               stream,
-              tempMr);
+              cudf::memory_resources{tempMr, tempMr});
 
           // Append new keys and rebuild the filter. This concatenates all seen
           // keys on every batch that introduces new keys, which is O(D) per
@@ -197,7 +197,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
 
     if (updatedSeenKeys) {
       auto updatedSeenFilter = std::make_unique<cudf::filtered_join>(
-          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream);
+          updatedSeenKeys->view(), cudf::null_equality::EQUAL, stream, tempMr);
       seenFilter_ = std::move(updatedSeenFilter);
       seenKeys_ = std::move(updatedSeenKeys);
       seenStateStream_ = stream;

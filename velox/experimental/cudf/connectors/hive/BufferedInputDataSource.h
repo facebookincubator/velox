@@ -20,7 +20,7 @@
 
 #include <cudf/io/datasource.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <future>
 #include <memory>
@@ -55,7 +55,7 @@ class BufferedInputDataSource : public cudf::io::datasource {
       size_t offset,
       size_t size,
       uint8_t* dst,
-      rmm::cuda_stream_view stream) override;
+      cuda::stream_ref stream) override;
 
  private:
   void readContiguous(size_t offset, size_t size, uint8_t* dst);

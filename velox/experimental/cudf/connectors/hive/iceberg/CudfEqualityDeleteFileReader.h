@@ -30,9 +30,10 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <folly/Executor.h>
 
@@ -116,7 +117,7 @@ class CudfEqualityDeleteFileReader {
       cudf::table_view table,
       const std::vector<std::string>& inputColumnNames,
       cudf::mutable_column_view const& rowMask,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   /// Returns the number of delete key tuples loaded from the file.
   size_t numDeleteKeys() const {
@@ -132,7 +133,7 @@ class CudfEqualityDeleteFileReader {
  private:
   // Lazily builds the distinct_hash_join on the first `applyDeletes` call.
   // Converts `deleteRows_` to a GPU table if needed.
-  void buildHashJoin(rmm::cuda_stream_view stream);
+  void buildHashJoin(cuda::stream_ref stream);
 
   // Eagerly reads the Parquet-format equality delete file into the
   // deleteKeyTable_ cudf table.

@@ -20,9 +20,10 @@
 #include <cudf/io/text/byte_range_info.hpp>
 #include <cudf/utilities/span.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <future>
 #include <memory>
@@ -50,7 +51,7 @@ struct ByteRangeFetch {
 ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 // Reads page-index ranges into host buffers and returns them with their views.

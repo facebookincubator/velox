@@ -61,7 +61,7 @@ fetchPageIndexes(
 ByteRangeFetch fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto [buffers, data, pending] =
       cudf::io::parquet::fetch_byte_ranges_to_device_async(

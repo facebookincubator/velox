@@ -26,7 +26,7 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <cstddef>
 #include <memory>
@@ -79,11 +79,11 @@ struct CudfJoinOutputLayout {
   void fillNullProbeColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream) const;
+      cuda::stream_ref stream) const;
   void fillNullBuildColumns(
       std::vector<std::unique_ptr<cudf::column>>& outCols,
       cudf::size_type numRows,
-      rmm::cuda_stream_view stream) const;
+      cuda::stream_ref stream) const;
 
   /// Read-only access to the probe-side projections, for call sites that
   /// copy from column_views instead of moving gathered columns.

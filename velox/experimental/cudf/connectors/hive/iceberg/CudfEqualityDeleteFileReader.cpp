@@ -181,13 +181,13 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
   auto stream = cudfGlobalStreamPool().get_stream();
   deleteKeyTable_ =
       cudf::io::read_parquet(options, stream, get_output_mr()).tbl;
-  stream.synchronize();
+  stream.sync();
 
   VELOX_CHECK_NOT_NULL(deleteKeyTable_);
   numDeleteKeys_ = deleteKeyTable_->num_rows();
 }
 
-void CudfEqualityDeleteFileReader::buildHashJoin(rmm::cuda_stream_view stream) {
+void CudfEqualityDeleteFileReader::buildHashJoin(cuda::stream_ref stream) {
   if (deleteHashJoin_) {
     return;
   }
@@ -204,7 +204,11 @@ void CudfEqualityDeleteFileReader::buildHashJoin(rmm::cuda_stream_view stream) {
   // null_equality::EQUAL per Iceberg spec (NULL == NULL for equality deletes).
   // distinct_hash_join treats all NaNs as equal by default.
   deleteHashJoin_ = std::make_unique<cudf::distinct_hash_join>(
-      deleteKeyTable_->view(), cudf::null_equality::EQUAL, 0.5, stream);
+      deleteKeyTable_->view(),
+      cudf::null_equality::EQUAL,
+      0.5,
+      stream,
+      get_temp_mr());
 }
 
 void CudfEqualityDeleteFileReader::buildEqualityColumnIndices(
@@ -239,7 +243,7 @@ void CudfEqualityDeleteFileReader::applyDeletes(
     cudf::table_view table,
     const std::vector<std::string>& inputColumnNames,
     cudf::mutable_column_view const& deleteMask,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   const auto numRows = table.num_rows();
   if (empty() or numRows == 0) {
     return;

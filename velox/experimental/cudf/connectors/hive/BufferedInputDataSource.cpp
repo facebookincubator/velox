@@ -102,7 +102,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
     size_t offset,
     size_t size,
     uint8_t* dst,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VELOX_CHECK(input_->executor() != nullptr, "IO executor is not initialized");
   return submitDeviceRead(
       input_->executor(), [this, offset, size, dst, stream]() {
@@ -112,7 +112,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
             hostBuffer->data(),
             hostBuffer->size(),
             cudaMemcpyDefault,
-            stream.value()));
+            stream.get()));
         return hostBuffer->size();
       });
 }
