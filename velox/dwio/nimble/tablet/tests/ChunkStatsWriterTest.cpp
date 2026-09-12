@@ -16,10 +16,12 @@
 
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 
@@ -58,11 +60,28 @@ class ChunkStatsWriterTest : public ::testing::Test {
     };
   }
 
-  static auto writeRootCallback(TestChunkFileIndex& fileIndex) {
-    return [&fileIndex](const std::string& name, std::string_view content) {
-      EXPECT_EQ(name, nimble::kChunkStatsSection);
+  static auto writeRootCallback(
+      TestChunkFileIndex& fileIndex,
+      std::string_view expectedSectionName = nimble::kChunkStatsSection) {
+    return [&fileIndex, expectedSectionName](
+               const std::string& name, std::string_view content) {
+      EXPECT_EQ(name, expectedSectionName);
       fileIndex.rootIndexData = std::string(content);
     };
+  }
+
+  std::vector<uint32_t> decode(
+      const serialization::EncodedStream& encodedStream) {
+    const auto* data = encodedStream.data();
+    NIMBLE_CHECK_NOT_NULL(data);
+    auto encoding = EncodingFactory{}.create(
+        *pool_,
+        std::string_view{
+            reinterpret_cast<const char*>(data->data()), data->size()},
+        nullptr);
+    std::vector<uint32_t> values(encoding->rowCount());
+    encoding->materialize(values.size(), values.data());
+    return values;
   }
 
   // Creates a ChunkStatsGroup reader from a serialized group metadata section.
@@ -80,11 +99,27 @@ class ChunkStatsWriterTest : public ::testing::Test {
         firstStripe, stripeCount, std::move(buffer));
   }
 
+  ChunkStatsWriter& createWriter() {
+    return createWriter(2);
+  }
+
+  ChunkStatsWriter& createWriter(float minAvgChunksPerStream) {
+    return createWriter(ChunkStatsVersion::kV1, minAvgChunksPerStream);
+  }
+
+  ChunkStatsWriter& createWriter(
+      ChunkStatsVersion version,
+      float minAvgChunksPerStream = 2) {
+    writer_ = ChunkStatsWriter::create(version, *pool_, minAvgChunksPerStream);
+    return *writer_;
+  }
+
   std::shared_ptr<velox::memory::MemoryPool> pool_;
+  std::unique_ptr<ChunkStatsWriter> writer_;
 };
 
 TEST_F(ChunkStatsWriterTest, singleStripe) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -166,7 +201,7 @@ TEST_F(ChunkStatsWriterTest, singleStripe) {
 }
 
 TEST_F(ChunkStatsWriterTest, perChunkNullCounts) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -205,7 +240,7 @@ TEST_F(ChunkStatsWriterTest, perChunkNullCounts) {
 }
 
 TEST_F(ChunkStatsWriterTest, multipleStripesInSingleGroup) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -253,8 +288,61 @@ TEST_F(ChunkStatsWriterTest, multipleStripesInSingleGroup) {
   EXPECT_EQ(stream1Stats.chunkOffsets, (std::vector<uint32_t>{0, 0, 18}));
 }
 
+TEST_F(ChunkStatsWriterTest, v2MultipleStreamsAndStripes) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(2);
+  writer.addStream(0, createChunks(buffer, {{10, 4, 1}, {20, 6, 2}}));
+  writer.addStream(1, createChunks(buffer, {{30, 5, 3}}));
+
+  writer.newStripe(2);
+  writer.addStream(0, createChunks(buffer, {{40, 7, 4}}));
+  writer.addStream(
+      1, createChunks(buffer, {{10, 2, 0}, {15, 3, 5}, {15, 4, 1}}));
+
+  writer.writeGroup(2, 2, createMetadataSectionCallback(fileIndex));
+  writer.writeRoot(writeRootCallback(fileIndex, nimble::kChunkStatsV2Section));
+
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+  ASSERT_FALSE(fileIndex.rootIndexData.empty());
+
+  const auto* rootChunkStats = flatbuffers::GetRoot<serialization::ChunkStats>(
+      fileIndex.rootIndexData.data());
+  ASSERT_NE(rootChunkStats, nullptr);
+  ASSERT_NE(rootChunkStats->stripe_indexes(), nullptr);
+  EXPECT_EQ(rootChunkStats->stripe_indexes()->size(), 1);
+
+  const auto* group = flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+      fileIndex.groupMetadataSections.front().data());
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(group->stream_count(), 2);
+  ASSERT_NE(group->stream_chunk_counts(), nullptr);
+  const std::vector<uint32_t> chunkCounts{
+      group->stream_chunk_counts()->begin(),
+      group->stream_chunk_counts()->end()};
+  EXPECT_THAT(chunkCounts, testing::ElementsAre(2, 3, 1, 4));
+
+  ASSERT_NE(group->chunk_rows(), nullptr);
+  ASSERT_NE(group->chunk_offsets(), nullptr);
+  ASSERT_NE(group->chunk_null_counts(), nullptr);
+  ASSERT_EQ(group->chunk_rows()->size(), 1);
+  ASSERT_EQ(group->chunk_offsets()->size(), 1);
+  ASSERT_EQ(group->chunk_null_counts()->size(), 1);
+  EXPECT_THAT(
+      decode(*group->chunk_rows()->Get(0)),
+      testing::ElementsAre(10, 30, 40, 30, 10, 25, 40));
+  EXPECT_THAT(
+      decode(*group->chunk_offsets()->Get(0)),
+      testing::ElementsAre(0, 4, 0, 0, 0, 2, 5));
+  EXPECT_THAT(
+      decode(*group->chunk_null_counts()->Get(0)),
+      testing::ElementsAre(1, 2, 4, 3, 0, 5, 1));
+}
+
 TEST_F(ChunkStatsWriterTest, multipleStripeGroups) {
-  ChunkStatsWriter writer(*pool_, 0);
+  auto& writer = createWriter(0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -327,7 +415,7 @@ TEST_F(ChunkStatsWriterTest, multipleStripeGroups) {
 }
 
 TEST_F(ChunkStatsWriterTest, emptyStream) {
-  ChunkStatsWriter writer(*pool_, 0);
+  auto& writer = createWriter(0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -371,7 +459,7 @@ TEST_F(ChunkStatsWriterTest, emptyStream) {
 }
 
 TEST_F(ChunkStatsWriterTest, emptyFileNoStripeGroups) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   TestChunkFileIndex fileIndex;
 
   // No stripes written — writeGroup() is never called.
@@ -382,7 +470,7 @@ TEST_F(ChunkStatsWriterTest, emptyFileNoStripeGroups) {
 }
 
 TEST_F(ChunkStatsWriterTest, finalization) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -406,7 +494,7 @@ TEST_F(ChunkStatsWriterTest, finalization) {
 }
 
 TEST_F(ChunkStatsWriterTest, addStreamIndexValidation) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   Buffer buffer{*pool_};
 
   // addStream before newStripe should fail.
@@ -418,7 +506,7 @@ TEST_F(ChunkStatsWriterTest, addStreamIndexValidation) {
 }
 
 TEST_F(ChunkStatsWriterTest, multipleStripesInMultipleGroups) {
-  ChunkStatsWriter writer(*pool_);
+  auto& writer = createWriter();
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -540,7 +628,7 @@ TEST_F(ChunkStatsWriterTest, minAvgChunksPerStream) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    ChunkStatsWriter writer(*pool_, testData.threshold);
+    auto& writer = createWriter(testData.threshold);
     Buffer buffer{*pool_};
     TestChunkFileIndex fileIndex;
 
@@ -594,7 +682,7 @@ TEST_F(ChunkStatsWriterTest, minAvgChunksPerStream) {
 }
 
 TEST_F(ChunkStatsWriterTest, uncompressedSizeRoundtrip) {
-  ChunkStatsWriter writer(*pool_, /*minAvgChunksPerStream=*/0);
+  auto& writer = createWriter(/*minAvgChunksPerStream=*/0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -716,7 +804,7 @@ TEST_F(ChunkStatsWriterTest, missingUncompressedSizeBackwardCompat) {
 // Verifies that uncompressed sections get uncompressedSize == size in the
 // FlatBuffer, and the reader correctly recovers it.
 TEST_F(ChunkStatsWriterTest, uncompressedSizeForUncompressedSections) {
-  ChunkStatsWriter writer(*pool_, /*minAvgChunksPerStream=*/0);
+  auto& writer = createWriter(/*minAvgChunksPerStream=*/0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 

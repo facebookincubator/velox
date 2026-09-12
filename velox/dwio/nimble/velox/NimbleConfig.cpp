@@ -270,6 +270,11 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.chunk.index.enabled",
     false);
 
+/// Enable V2 chunk stats using the Nimble-encoded representation.
+/* static */ Config::Entry<bool> Config::ENABLE_CHUNK_STATS(
+    "nimble.chunk.stats.enabled",
+    false);
+
 /// Threshold to trigger chunking to relieve memory pressure.
 /* static */ Config::Entry<uint64_t>
     Config::CHUNKING_WRITER_MEMORY_HIGH_THRESHOLD(
