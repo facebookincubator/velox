@@ -54,6 +54,44 @@ inline NvtxMethodFlag operator&(NvtxMethodFlag a, NvtxMethodFlag b) {
       static_cast<EnumT>(a) & static_cast<EnumT>(b));
 }
 
+/// Per-operator cuDF memory resources that charge device allocations to the
+/// operator's `gpu` custom pool. Both members stay empty for queries that do
+/// not configure such a pool, leaving the process-wide resources in effect.
+class CudfOperatorMemoryResources {
+ public:
+  /// Resolves the resources charging 'gpuPool'. A null 'gpuPool' yields an
+  /// empty instance.
+  static CudfOperatorMemoryResources resolve(
+      exec::DriverCtx* driverCtx,
+      memory::MemoryPool* gpuPool);
+
+  /// Installs the resources for as long as the returned scope lives.
+  [[nodiscard]] ScopedCudfMemoryResources scoped() const {
+    return ScopedCudfMemoryResources{temporaryResource(), outputResource()};
+  }
+
+ private:
+  rmm::device_async_resource_ref temporaryResource() const {
+    if (temp_.has_value()) {
+      return *temp_;
+    }
+    // Deliberately not get_temp_mr(): that resolves to the thread-local
+    // temporary dispatcher, which delegates back here, so installing it as the
+    // scope's resource would nest the dispatcher inside itself.
+    VELOX_CHECK(
+        mr_.has_value(),
+        "cuDF memory resources are not initialized; call registerCudf() first");
+    return rmm::device_async_resource_ref{*mr_};
+  }
+
+  rmm::device_async_resource_ref outputResource() const {
+    return output_.has_value() ? *output_ : get_output_mr();
+  }
+
+  std::optional<rmm::device_async_resource_ref> temp_;
+  std::optional<rmm::device_async_resource_ref> output_;
+};
+
 /// The user defined operator will inherit this operator, the operator accepts
 /// CudfOperator and output CudfVector.
 class CudfOperator : public NvtxHelper {
@@ -70,8 +108,9 @@ class CudfOperator : public NvtxHelper {
 /// All cuDF operators MUST extend this class rather than extending
 /// exec::Operator and NvtxHelper directly. This class implements the template
 /// method pattern:
-/// the public operator interface methods (addInput, getOutput, noMoreInput,
-/// close) are marked final and must NOT be overridden by derived classes.
+/// the public operator interface methods (initialize, isBlocked, addInput,
+/// getOutput, noMoreInput, close) are marked final and must NOT be overridden
+/// by derived classes.
 /// Instead, derived classes should ONLY override the corresponding protected
 /// do* virtual methods:
 ///   - doInitialize() -- performs subclass initialization
@@ -120,7 +159,6 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
           std::nullopt);
 
   void initialize() final {
-    ensureCudaContextForThread();
     auto memoryResources = scopedMemoryResources();
     Operator::initialize();
     doInitialize();
@@ -128,7 +166,6 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
   exec::BlockingReason isBlocked(ContinueFuture* future) final {
-    ensureCudaContextForThread();
     auto memoryResources = scopedMemoryResources();
     auto reason = doIsBlocked(future);
     checkCudaErrorInDebug();
@@ -176,8 +213,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
 
  protected:
   [[nodiscard]] ScopedCudfMemoryResources scopedMemoryResources() const {
-    return ScopedCudfMemoryResources{
-        tempMemoryResource(), outputMemoryResource()};
+    return memoryResources_.scoped();
   }
 
   virtual void doInitialize() {}
@@ -199,21 +235,9 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
   }
 
  private:
-  rmm::device_async_resource_ref tempMemoryResource() const {
-    return tempMemoryResource_.has_value()
-        ? *tempMemoryResource_
-        : rmm::device_async_resource_ref{mr_.value()};
-  }
-
-  rmm::device_async_resource_ref outputMemoryResource() const {
-    return outputMemoryResource_.has_value() ? *outputMemoryResource_
-                                             : get_output_mr();
-  }
-
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
-  std::optional<rmm::device_async_resource_ref> tempMemoryResource_;
-  std::optional<rmm::device_async_resource_ref> outputMemoryResource_;
+  const CudfOperatorMemoryResources memoryResources_;
 };
 
 /// Base class for cuDF source operators (first operator in a Driver pipeline).
@@ -224,6 +248,8 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
 /// close with NVTX profiling and checkCudaErrorInDebug.
 ///
 /// Derived classes override:
+///   - doIsBlocked()   -- reports subclass blocking state; called by
+///   isBlocked()
 ///   - doGetOutput()   -- produces output rows; called by getOutput()
 ///   - doClose()       -- releases resources; called by close()
 ///                        (defaults to SourceOperator::close())
@@ -237,19 +263,18 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
       const std::string& operatorName,
       std::optional<nvtx3::color> color = std::nullopt,
       NvtxMethodFlag nvtxMethods = NvtxMethodFlag::kGetOutput |
-          NvtxMethodFlag::kClose)
-      : SourceOperator(
-            driverCtx,
-            outputType,
-            operatorId,
-            planNodeId,
-            operatorName),
-        NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
-        className_(operatorName),
-        nvtxMethods_(nvtxMethods) {}
+          NvtxMethodFlag::kClose);
+
+  exec::BlockingReason isBlocked(ContinueFuture* future) final {
+    auto memoryResources = scopedMemoryResources();
+    auto reason = doIsBlocked(future);
+    checkCudaErrorInDebug();
+    return reason;
+  }
 
   RowVectorPtr getOutput() final {
     ensureCudaContextForThread();
+    auto memoryResources = scopedMemoryResources();
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
     auto result = doGetOutput();
@@ -261,6 +286,7 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
     // close() may run on a different thread than construction so bind the
     // context here too.
     ensureCudaContextForThread();
+    auto memoryResources = scopedMemoryResources();
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
@@ -268,6 +294,14 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
   }
 
  protected:
+  [[nodiscard]] ScopedCudfMemoryResources scopedMemoryResources() const {
+    return memoryResources_.scoped();
+  }
+
+  virtual exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
   virtual RowVectorPtr doGetOutput() = 0;
 
   virtual void doClose() {
@@ -277,6 +311,7 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
  private:
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
+  const CudfOperatorMemoryResources memoryResources_;
 };
 
 } // namespace facebook::velox::cudf_velox
