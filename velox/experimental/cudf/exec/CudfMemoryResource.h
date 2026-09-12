@@ -22,6 +22,7 @@
 
 #include <cuda/memory_resource>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -86,12 +87,20 @@ class CudfMemoryResourceImpl {
       const CudfMemoryResourceImpl&,
       cuda::mr::device_accessible) noexcept {}
 
+  /// Returns the number of allocations handed out and not yet deallocated.
+  /// Unlike the pool's usedBytes(), this counts zero-byte allocations, which
+  /// are passed through to the upstream resource without being accounted.
+  int64_t liveAllocations() const noexcept {
+    return liveAllocations_.load(std::memory_order_acquire);
+  }
+
  private:
   // Declared first so it is destroyed last. MemoryPool borrows its allocator
   // and arbitrator from this object.
   std::shared_ptr<memory::CustomMemoryResource> resourceOwner_;
   std::shared_ptr<memory::MemoryPool> pool_;
   cuda::mr::any_resource<cuda::mr::device_accessible> upstream_;
+  std::atomic<int64_t> liveAllocations_{0};
 };
 
 } // namespace detail

@@ -126,9 +126,17 @@ class ThreadLocalTemporaryMemoryResourceImpl {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     const auto inserted = allocations_.emplace(pointer, resource).second;
-    VELOX_CHECK(inserted, "Duplicate outstanding cuDF temporary allocation");
+    VELOX_CHECK(
+        inserted,
+        "Duplicate outstanding cuDF temporary allocation: {} bytes at {}",
+        bytes,
+        pointer);
   }
 
+  // A miss here means an allocation was not routed through this dispatcher,
+  // which would make the deallocation charge the wrong pool. There is no
+  // correct resource to fall back to, so as required by the RMM resource
+  // contract this noexcept path terminates rather than guess.
   rmm::device_async_resource_ref resourceForDeallocation(
       void* pointer,
       std::size_t bytes) noexcept {
@@ -139,7 +147,9 @@ class ThreadLocalTemporaryMemoryResourceImpl {
     auto it = allocations_.find(pointer);
     VELOX_CHECK(
         it != allocations_.end(),
-        "Unknown cuDF temporary allocation during deallocation");
+        "Unknown cuDF temporary allocation during deallocation: {} bytes at {}",
+        bytes,
+        pointer);
     auto resource = it->second;
     allocations_.erase(it);
     return resource;

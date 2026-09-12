@@ -49,6 +49,7 @@ CudfMemoryResourceImpl::CudfMemoryResourceImpl(
 void* CudfMemoryResourceImpl::allocate_sync(
     std::size_t bytes,
     std::size_t alignment) {
+  liveAllocations_.fetch_add(1, std::memory_order_release);
   if (bytes == 0) {
     return upstream_.allocate_sync(bytes, alignment);
   }
@@ -58,6 +59,7 @@ void* CudfMemoryResourceImpl::allocate_sync(
     return upstream_.allocate_sync(bytes, alignment);
   } catch (...) {
     pool_->reportExternalFree(bytes);
+    liveAllocations_.fetch_sub(1, std::memory_order_release);
     throw;
   }
 }
@@ -70,12 +72,14 @@ void CudfMemoryResourceImpl::deallocate_sync(
   if (bytes != 0) {
     pool_->reportExternalFree(bytes);
   }
+  liveAllocations_.fetch_sub(1, std::memory_order_release);
 }
 
 void* CudfMemoryResourceImpl::allocate(
     cuda::stream_ref stream,
     std::size_t bytes,
     std::size_t alignment) {
+  liveAllocations_.fetch_add(1, std::memory_order_release);
   if (bytes == 0) {
     return upstream_.allocate(stream, bytes, alignment);
   }
@@ -85,6 +89,7 @@ void* CudfMemoryResourceImpl::allocate(
     return upstream_.allocate(stream, bytes, alignment);
   } catch (...) {
     pool_->reportExternalFree(bytes);
+    liveAllocations_.fetch_sub(1, std::memory_order_release);
     throw;
   }
 }
@@ -101,6 +106,7 @@ void CudfMemoryResourceImpl::deallocate(
     // required by the RMM resource contract, terminates this noexcept path.
     pool_->reportExternalFree(bytes);
   }
+  liveAllocations_.fetch_sub(1, std::memory_order_release);
 }
 
 } // namespace facebook::velox::cudf_velox::detail
@@ -149,6 +155,13 @@ class CudfExchangeMemoryResource {
 
   const std::shared_ptr<memory::MemoryPool>& pool() const {
     return pool_;
+  }
+
+  // True when nothing allocated through this resource is still live. Checks
+  // the allocation count rather than the pool's usedBytes(), which does not
+  // see zero-byte allocations.
+  bool isQuiescent() const {
+    return resource_->liveAllocations() == 0;
   }
 
  private:
@@ -207,8 +220,7 @@ std::unordered_map<
 void pruneInactiveExchangeResourcesLocked() {
   for (auto it = exchangeResources.begin(); it != exchangeResources.end();) {
     const auto& entry = *it->second;
-    if (entry.activeQueries.empty() &&
-        entry.resource->pool()->usedBytes() == 0) {
+    if (entry.activeQueries.empty() && entry.resource->isQuiescent()) {
       it = exchangeResources.erase(it);
     } else {
       ++it;
@@ -226,7 +238,7 @@ void retireExchangeResource(
   }
   it->second->activeQueries.erase(queryCtx);
   if (it->second->activeQueries.empty() &&
-      it->second->resource->pool()->usedBytes() == 0) {
+      it->second->resource->isQuiescent()) {
     exchangeResources.erase(it);
   }
 }

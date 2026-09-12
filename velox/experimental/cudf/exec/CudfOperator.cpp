@@ -59,6 +59,31 @@ std::shared_ptr<CudfMemoryResourceRegistry> cudfMemoryResourceRegistry(
 
 } // namespace
 
+CudfOperatorMemoryResources CudfOperatorMemoryResources::resolve(
+    exec::DriverCtx* driverCtx,
+    memory::MemoryPool* gpuPool) {
+  CudfOperatorMemoryResources memoryResources;
+  if (gpuPool == nullptr) {
+    return memoryResources;
+  }
+
+  auto queryCtx = driverCtx->task->queryCtx();
+  auto resourceOwner = cudfMemoryResourceOwner(*queryCtx);
+  VELOX_CHECK_NOT_NULL(
+      resourceOwner,
+      "No CustomMemoryResource registered for tag: {}",
+      kCudfMemoryResourceTag);
+  VELOX_CHECK(
+      mr_.has_value() && output_mr_.has_value(),
+      "cuDF memory resources must be initialized before creating operators");
+
+  auto resources = cudfMemoryResourceRegistry(*queryCtx)->resourcesFor(
+      *mr_, *output_mr_, gpuPool->shared_from_this(), std::move(resourceOwner));
+  memoryResources.temp_ = resources.temp;
+  memoryResources.output_ = resources.output;
+  return memoryResources;
+}
+
 CudfOperatorBase::CudfOperatorBase(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
@@ -78,26 +103,32 @@ CudfOperatorBase::CudfOperatorBase(
           std::move(spillConfig)),
       NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
       className_(operatorName),
-      nvtxMethods_(nvtxMethods) {
-  auto* gpuPool = customPool(kCudfMemoryResourceTag);
-  if (gpuPool == nullptr) {
-    return;
-  }
+      nvtxMethods_(nvtxMethods),
+      memoryResources_(
+          CudfOperatorMemoryResources::resolve(
+              driverCtx,
+              customPool(kCudfMemoryResourceTag))) {}
 
-  auto queryCtx = driverCtx->task->queryCtx();
-  auto resourceOwner = cudfMemoryResourceOwner(*queryCtx);
-  VELOX_CHECK_NOT_NULL(
-      resourceOwner,
-      "No CustomMemoryResource registered for tag: {}",
-      kCudfMemoryResourceTag);
-  VELOX_CHECK(
-      mr_.has_value() && output_mr_.has_value(),
-      "cuDF memory resources must be initialized before creating operators");
-
-  auto resources = cudfMemoryResourceRegistry(*queryCtx)->resourcesFor(
-      *mr_, *output_mr_, gpuPool->shared_from_this(), std::move(resourceOwner));
-  tempMemoryResource_ = resources.temp;
-  outputMemoryResource_ = resources.output;
-}
+CudfSourceOperatorBase::CudfSourceOperatorBase(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    RowTypePtr outputType,
+    const core::PlanNodeId& planNodeId,
+    const std::string& operatorName,
+    std::optional<nvtx3::color> color,
+    NvtxMethodFlag nvtxMethods)
+    : SourceOperator(
+          driverCtx,
+          std::move(outputType),
+          operatorId,
+          planNodeId,
+          operatorName),
+      NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
+      className_(operatorName),
+      nvtxMethods_(nvtxMethods),
+      memoryResources_(
+          CudfOperatorMemoryResources::resolve(
+              driverCtx,
+              customPool(kCudfMemoryResourceTag))) {}
 
 } // namespace facebook::velox::cudf_velox
