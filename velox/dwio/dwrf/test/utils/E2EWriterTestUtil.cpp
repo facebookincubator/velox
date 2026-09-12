@@ -122,6 +122,7 @@ namespace facebook::velox::dwrf {
   readerOpts.setDataIoStats(dataIoStats);
   readerOpts.setMetadataIoStats(metadataIoStats);
   RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());
