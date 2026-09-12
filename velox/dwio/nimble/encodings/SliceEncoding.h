@@ -51,19 +51,74 @@
 /// established a per-slice baseline (e.g. so a downstream FBW inner can pack in
 /// fewer bits) record the shift here rather than mutating the copied inner
 /// bytes.
+///
+/// Composition: a SliceEncoding may itself be wrapped by another SliceEncoding.
+/// Each layer applies its own delta after its inner materialize() completes,
+/// so deltas accumulate additively across layers.
+///
+/// When the inner encoding structurally supports it, wrap() folds the delta
+/// into the copied inner bytes at write time (baseline rewrite for
+/// FixedBitWidth / PFOR / Constant, per-value shift-during-copy for
+/// uncompressed Trivial, recurse into the values child for Nullable). In that
+/// case the on-wire delta is zero and the decode-time shift loop is skipped.
+/// Otherwise the delta rides on the wire and the reader applies it at
+/// materialize(). Push-down declines fall into three categories:
+///   * No push-down implemented (RLE, Dictionary, Huffman, MainlyConstant,
+///     BlockBitPacking, ...): no baseline field to rewrite.
+///   * SharedDictionary: could carry a shift over its resolved values but
+///     folding into the shared alphabet would mutate state visible to other
+///     consumers, and folding into the indices would resolve to wrong
+///     alphabet entries; the read-time loop shifts values after alphabet
+///     resolution instead.
+///   * Runtime-conditional: compressed Trivial, or Nullable whose values
+///     child cannot itself absorb the shift.
 
 namespace facebook::nimble {
 
-// Data layout is:
-// Standard Encoding prefix (size varies with Options::useVarintRowCount),
-//     whose row count is the SLICE length, not the inner encoding's row count.
-// 4 bytes: row offset into the inner encoding at which the slice begins.
-// 1-10 bytes: zigzag varint value delta added to every materialized value at
-//     decode time. Zero delta occupies 1 byte.
-// remaining bytes: the inner encoding, verbatim.
+// Base class holding SliceEncoding::wrap()'s non-templated push-down helpers.
+// Kept as a non-template base so the bodies compile once (moving them onto
+// SliceEncoding<T> would recompile per T). SliceEncoding<T> inherits so wrap()
+// can call the helpers as inherited protected static methods.
+class SliceEncodingBase {
+ protected:
+  // Runtime probe: returns true iff a subsequent applyValueDeltaPushdown() on
+  // the same (inner, delta) pair would succeed. Walks Nullable chains and
+  // checks Trivial compression state so per-encoding runtime conditions are
+  // honoured. `useVarintRowCount` must match the option under which `inner`
+  // was produced (Nimble uses one consistent value across a whole encoding
+  // tree, so callers forward the outer SliceEncoding wrap options).
+  static bool canApplyValueDeltaPushdown(
+      std::string_view inner,
+      int64_t delta,
+      bool useVarintRowCount);
+
+  // Writes shifted inner bytes into `dest` and returns the number of bytes
+  // written (invariant: equal to `inner.size()`). Caller guarantees the
+  // destination has that much space reserved. Caller MUST have gotten `true`
+  // from canApplyValueDeltaPushdown() first -- hitting an unsupported case
+  // here fires NIMBLE_UNREACHABLE. `useVarintRowCount` has the same meaning
+  // as in canApplyValueDeltaPushdown(). The returned size is used by wrap()
+  // as a drift guard: if a folder ever writes fewer or more bytes than the
+  // source inner, the outer post-write assertion fires instead of silently
+  // corrupting the wire.
+  static size_t applyValueDeltaPushdown(
+      std::string_view inner,
+      int64_t delta,
+      bool useVarintRowCount,
+      char* dest);
+};
+
+/// Data layout is:
+/// Standard Encoding prefix (size varies with Options::useVarintRowCount),
+///     whose row count is the SLICE length, not the inner encoding's row count.
+/// 4 bytes: row offset into the inner encoding at which the slice begins.
+/// 1-10 bytes: zigzag varint value delta added to every materialized value at
+///     decode time. Zero delta occupies 1 byte.
+/// remaining bytes: the inner encoding, verbatim.
 template <typename T>
 class SliceEncoding final
-    : public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
+    : public SliceEncodingBase,
+      public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
  public:
   using cppDataType = T;
   using physicalType = typename TypeTraits<T>::physicalType;
@@ -199,17 +254,27 @@ class SliceEncoding final
   ///
   /// `valueDelta` is added to every materialized value at decode time. It is
   /// only representable for non-bool integer physical types; passing a
-  /// non-zero delta for any other T is rejected at write time, as is passing a
-  /// non-zero delta whose inner encoding is a SharedDictionary (its logical
-  /// values are indirected through an alphabet and cannot be shifted by a
-  /// constant).
+  /// non-zero delta for any other T is rejected at write time. SharedDictionary
+  /// inner is accepted -- push-down cannot fold the delta into the shared
+  /// alphabet or the indices, so the delta rides on the wire and is applied
+  /// to alphabet-resolved values at materialize().
+  ///
+  /// When `valueDelta` is non-zero and the inner encoding structurally
+  /// supports it, the delta is folded into the copied inner bytes at write
+  /// time and the on-wire delta is zero -- the decode-time shift loop then
+  /// skips itself. Otherwise the delta rides on the wire and is applied at
+  /// materialize().
+  ///
+  /// Wrapping a SliceEncoding stream inside another wrap() is supported; the
+  /// outer delta accumulates with the inner delta at read time (each layer
+  /// applies its own delta after its inner materialize()).
   static std::string_view wrap(
       std::string_view encoded,
       uint32_t offset,
       uint32_t length,
       Buffer& buffer,
-      const Encoding::Options& options,
-      int64_t valueDelta = 0) {
+      int64_t valueDelta = 0,
+      const Encoding::Options& options = {}) {
     if constexpr (!kSupportsValueDelta) {
       NIMBLE_CHECK_EQ(
           valueDelta,
@@ -221,12 +286,24 @@ class SliceEncoding final
     // shared alphabet would mutate state visible to other consumers, and
     // folding into the indices would resolve to wrong alphabet entries), so
     // the shift stays on the wire and the read-time materialize loop adds
-    // delta to the values the alphabet resolves. Callers still opt out via
-    // the compile-time `kSupportsValueDelta` guard for physical types that
-    // cannot carry a shift (bool, non-integer).
+    // delta to the values the alphabet resolves. Physical types that cannot
+    // carry a shift (bool, non-integer) are still rejected up-front by the
+    // compile-time `kSupportsValueDelta` check above.
+
+    // Decide whether push-down applies. When it can, the on-wire delta is
+    // zero and the decode-time loop is skipped; when it can't, the delta
+    // rides on the wire and the reader applies it.
+    bool pushdownValueDelta = false;
+    if (valueDelta != 0) {
+      pushdownValueDelta = canApplyValueDeltaPushdown(
+          encoded, valueDelta, options.useVarintRowCount);
+    }
+    const int64_t storedDelta = pushdownValueDelta ? 0 : valueDelta;
+
+    // Compute exact wrapper size and reserve.
     const auto prefixSize =
         EncodingPrefix::serializedSize(length, options.useVarintRowCount);
-    const auto zigzaggedDelta = zigzag::zigzagEncode64(valueDelta);
+    const auto zigzaggedDelta = zigzag::zigzagEncode64(storedDelta);
     const auto deltaSize = varint::varintSize(zigzaggedDelta);
     const auto encodingSize =
         prefixSize + sizeof(uint32_t) + deltaSize + encoded.size();
@@ -240,8 +317,19 @@ class SliceEncoding final
         pos);
     encoding::writeUint32(offset, pos);
     varint::writeVarint(zigzaggedDelta, &pos);
-    std::memcpy(pos, encoded.data(), encoded.size());
-    pos += encoded.size();
+
+    // Write the inner bytes. Push-down folders write directly into the
+    // reserved region -- no scratch buffer allocation. Folders that use a
+    // baseline field (FixedBitWidth, PFOR, Constant) memcpy the source first
+    // then rewrite the baseline in place; Trivial shifts values while copying.
+    // Each folder returns the number of bytes it wrote so the post-write
+    // assertion can catch any drift between the reserved size and what the
+    // folder produced.
+    const size_t bytesWritten = pushdownValueDelta
+        ? applyValueDeltaPushdown(
+              encoded, valueDelta, options.useVarintRowCount, pos)
+        : (std::memcpy(pos, encoded.data(), encoded.size()), encoded.size());
+    pos += bytesWritten;
     NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
     return {reserved, encodingSize};
   }

@@ -38,6 +38,7 @@ add_library(
   SharedDictionaryCatalog.cpp
   SharedDictionaryCatalog.h
   SharedDictionaryEncoding.cpp
+  SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
   common/Encoding.cpp
