@@ -410,8 +410,8 @@ CudfHashJoinProbe::CudfHashJoinProbe(
   }
 
   auto outputType = joinNode_->outputType();
-  for (std::size_t i = 0; i < outputType->size(); ++i) {
-    if (CudfConfig::getInstance().debugEnabled) {
+  if (CudfConfig::getInstance().debugEnabled) {
+    for (std::size_t i = 0; i < outputType->size(); ++i) {
       VLOG(1) << "Output column " << i << ": " << outputType->nameOf(i);
     }
   }
@@ -419,14 +419,16 @@ CudfHashJoinProbe::CudfHashJoinProbe(
       probeType_, buildType_, outputType, joinNode_->joinType());
 
   if (CudfConfig::getInstance().debugEnabled) {
-    for (std::size_t i = 0; i < outputLayout_.probeColumnIndices.size(); i++) {
+    for (std::size_t i = 0; i < outputLayout_.probeColumnIndices().size();
+         i++) {
       VLOG(1) << "Left index to gather " << i << ": "
-              << outputLayout_.probeColumnIndices[i];
+              << outputLayout_.probeColumnIndices()[i];
     }
 
-    for (std::size_t i = 0; i < outputLayout_.buildColumnIndices.size(); i++) {
+    for (std::size_t i = 0; i < outputLayout_.buildColumnIndices().size();
+         i++) {
       VLOG(1) << "Right index to gather " << i << ": "
-              << outputLayout_.buildColumnIndices[i];
+              << outputLayout_.buildColumnIndices()[i];
     }
   }
 }
@@ -679,8 +681,8 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   std::vector<std::unique_ptr<cudf::column>> joinedCols;
   auto const numRows = static_cast<vector_size_t>(
       std::max(leftIndicesCol.size(), rightIndicesCol.size()));
-  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices);
-  auto rightInput = rightTableView.select(outputLayout_.buildColumnIndices);
+  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices());
+  auto rightInput = rightTableView.select(outputLayout_.buildColumnIndices());
   auto leftResult = cudf::gather(
       leftInput, leftIndicesCol, oobPolicy, stream, get_output_mr());
   auto rightResult = cudf::gather(
@@ -694,8 +696,8 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::unfilteredOutput(
   auto leftCols = leftResult->release();
   auto rightCols = rightResult->release();
   joinedCols.resize(outputType_->names().size());
-  outputLayout_.scatterProbeColumns(joinedCols, leftCols);
-  outputLayout_.scatterBuildColumns(joinedCols, rightCols);
+  outputLayout_.scatterGatheredProbeColumns(joinedCols, leftCols);
+  outputLayout_.scatterGatheredBuildColumns(joinedCols, rightCols);
   if (buildStream_.has_value()) {
     // Ensure deallocation of build table happens after probe gathers
     cudaEvent_->recordFrom(stream).waitOn(buildStream_.value());
@@ -749,8 +751,8 @@ CudfHashJoinProbe::JoinOutput CudfHashJoinProbe::filteredOutput(
 
   auto filteredjoinedCols =
       std::vector<std::unique_ptr<cudf::column>>(outputType_->names().size());
-  outputLayout_.scatterProbeColumns(filteredjoinedCols, joinedCols, 0);
-  outputLayout_.scatterBuildColumns(
+  outputLayout_.scatterProbeInputColumns(filteredjoinedCols, joinedCols, 0);
+  outputLayout_.scatterBuildInputColumns(
       filteredjoinedCols, joinedCols, leftColsSize);
   joinedCols = std::move(filteredjoinedCols);
   if (buildStream_.has_value()) {
@@ -1891,7 +1893,7 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   outputCols.resize(outputType_->names().size());
 
   // Copy probe columns
-  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices);
+  auto leftInput = leftTableView.select(outputLayout_.probeColumnIndices());
   const auto& probeProjections = outputLayout_.probeProjections();
   for (size_t i = 0; i < probeProjections.size(); i++) {
     outputCols[probeProjections[i].outputChannel] =
@@ -2081,13 +2083,13 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         // channel indices)
         outputLayout_.fillNullProbeColumns(outCols, m, stream);
         // Right side - gather unmatched build columns if any
-        if (!outputLayout_.buildColumnIndices.empty()) {
+        if (!outputLayout_.buildColumnIndices().empty()) {
           auto rightInput =
-              rightTable->view().select(outputLayout_.buildColumnIndices);
+              rightTable->view().select(outputLayout_.buildColumnIndices());
           auto unmatchedRight = cudf::apply_boolean_mask(
               rightInput, boolMask->view(), stream, get_output_mr());
           auto rightCols = unmatchedRight->release();
-          outputLayout_.scatterBuildColumns(outCols, rightCols);
+          outputLayout_.scatterGatheredBuildColumns(outCols, rightCols);
         }
         toConcat.push_back(std::make_unique<cudf::table>(std::move(outCols)));
       }
