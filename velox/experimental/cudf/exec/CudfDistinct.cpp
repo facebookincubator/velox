@@ -50,9 +50,7 @@ CudfDistinct::CudfDistinct(
       maxPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxPartialAggregationMemoryUsage()) {}
 
-void CudfDistinct::initialize() {
-  Operator::initialize();
-
+void CudfDistinct::doInitialize() {
   inputType_ = aggregationNode_->sources()[0]->outputType();
   setupGroupingKeyChannelProjections(
       *aggregationNode_, groupingKeyInputChannels_, groupingKeyOutputChannels_);

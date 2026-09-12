@@ -48,7 +48,7 @@ class CudfLocalPartition : public CudfOperatorBase {
     return true;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 

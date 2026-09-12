@@ -35,10 +35,6 @@ class CudfTopN : public CudfOperatorBase {
     return !noMoreInput_;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override;
 
  protected:
