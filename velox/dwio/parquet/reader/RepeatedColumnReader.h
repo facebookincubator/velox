@@ -22,6 +22,13 @@
 
 namespace facebook::velox::parquet {
 
+/// Enqueues row-group streams for a reader's logical descendants. For a struct
+/// without logical children, follows its synthetic rep/def source instead.
+void enqueueRowGroupRecursive(
+    dwio::common::SelectiveColumnReader& reader,
+    uint32_t index,
+    dwio::common::BufferedInput& input);
+
 /// Comtainer for the lengths of a repeated reader where the lengths are
 /// pre-filled from repdefs.
 class RepeatedLengths {

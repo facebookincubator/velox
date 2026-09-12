@@ -81,8 +81,8 @@ struct ColumnCase {
   // Whether every non-null value is the same. ConstantEncoding refuses
   // anything else, so this is what decides its expected outcome.
   bool isSingleValued{false};
-  // Whether the non-null values never decrease. DeltaBlockEncoding refuses
-  // anything else (NIMBLE_CHECK_GE, "requires non-decreasing values").
+  // Whether the non-null values never decrease. DeltaBlockEncoding and
+  // EliasFanoEncoding refuse anything else.
   bool isNonDecreasing{false};
 };
 
@@ -112,7 +112,9 @@ WriteOutcome expectedOutcome(
   if (encodingType == EncodingType::Constant && !columnCase.isSingleValued) {
     return WriteOutcome::kNotApplied;
   }
-  if (encodingType == EncodingType::DeltaBlock && !columnCase.isNonDecreasing) {
+  if ((encodingType == EncodingType::DeltaBlock ||
+       encodingType == EncodingType::EliasFano) &&
+      !columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol

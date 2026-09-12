@@ -56,6 +56,17 @@ services:
         image: quay.io/centos/centos:stream9
         VELOX_BUILD_SHARED: "ON"
 
+  # Same image as centos-cpp but with the bundled dependencies built Debug, so
+  # they match a Debug Velox. Used by the fuzzer jobs. See issue #18793.
+  centos-cpp-debug:
+    extends: centos-cpp
+    image: ghcr.io/facebookincubator/velox-dev:centos9-debug
+    build:
+      args:
+        image: quay.io/centos/centos:stream9
+        VELOX_BUILD_SHARED: "ON"
+        DEPS_BUILD_TYPE: Debug
+
   adapters-cpp:
     extends: centos-cpp
     image: ghcr.io/facebookincubator/velox-dev:adapters

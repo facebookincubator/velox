@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
@@ -300,6 +301,12 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     // SubIntSplit integration (re-enabled for
     // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+    case EncodingType::EliasFano: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::EliasFanoEncoding, dataType);
+    }
+    // SubIntSplit integration commented out (disabled):
+    /*
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
     case EncodingType::SubIntSplit: {
       RETURN_ENCODING_BY_VARINT_TYPE(SubIntSplitEncoding, dataType);

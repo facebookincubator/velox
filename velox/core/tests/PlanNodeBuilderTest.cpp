@@ -370,8 +370,10 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
       std::vector<std::string>{"sum(c0)"});
   const auto outputType = TableWriteTraits::outputType(statsSpec);
 
-  const auto insertTableHandle =
-      std::make_shared<InsertTableHandle>("connector_id", nullptr);
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id",
+      nullptr,
+      /*notNullColumns=*/folly::F14FastSet<std::string>{});
 
   const auto verify = [&](const std::shared_ptr<const TableWriteNode>& node) {
     EXPECT_EQ(node->id(), id);
@@ -400,6 +402,24 @@ TEST_F(PlanNodeBuilderTest, tableWriteNode) {
 
   const auto node2 = TableWriteNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, tableWriteNodeNotNullColumnOutsideSchema) {
+  const auto insertTableHandle = std::make_shared<InsertTableHandle>(
+      "connector_id", nullptr, folly::F14FastSet<std::string>{"c1"});
+
+  VELOX_ASSERT_USER_THROW(
+      TableWriteNode::Builder()
+          .id("test_id")
+          .columns(ROW({"c0"}, {INTEGER()}))
+          .columnNames({"c0"})
+          .insertTableHandle(insertTableHandle)
+          .hasPartitioningScheme(false)
+          .outputType(TableWriteTraits::outputType(std::nullopt))
+          .commitStrategy(connector::CommitStrategy::kNoCommit)
+          .source(source_)
+          .build(),
+      "NOT NULL column is not in the table schema: c1");
 }
 
 TEST_F(PlanNodeBuilderTest, tableWriteMergeNode) {
@@ -504,17 +524,33 @@ TEST_F(PlanNodeBuilderTest, exchangeNode) {
     EXPECT_EQ(node->id(), id);
     EXPECT_EQ(node->outputType(), type);
     EXPECT_EQ(node->serdeKind(), serdeKind);
+    EXPECT_EQ(node->transportKind(), std::string{TransportKind::kUcx});
   };
 
   const auto node = ExchangeNode::Builder()
                         .id(id)
                         .outputType(type)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kUcx})
                         .build();
   verify(node);
 
   const auto node2 = ExchangeNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, exchangeNodeTransportKindNotSet) {
+  // The backward-compatible constructor and deserialization both default a
+  // missing transport to in-memory. Builder does not: it requires the
+  // transport explicitly, the same way it requires id, outputType and
+  // serdeKind.
+  VELOX_ASSERT_THROW(
+      ExchangeNode::Builder()
+          .id("exchange_node_id")
+          .outputType(ROW({"c0"}, {BIGINT()}))
+          .serdeKind("Presto")
+          .build(),
+      "ExchangeNode transportKind is not set");
 }
 
 TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
@@ -532,6 +568,7 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
         EXPECT_EQ(node->sortingKeys(), sortingKeys);
         EXPECT_EQ(node->sortingOrders(), sortingOrders);
         EXPECT_EQ(node->serdeKind(), serdeKind);
+        EXPECT_EQ(node->transportKind(), std::string{TransportKind::kUcx});
       };
 
   const auto node = MergeExchangeNode::Builder()
@@ -540,11 +577,24 @@ TEST_F(PlanNodeBuilderTest, mergeExchangeNode) {
                         .sortingKeys(sortingKeys)
                         .sortingOrders(sortingOrders)
                         .serdeKind(serdeKind)
+                        .transportKind(std::string{TransportKind::kUcx})
                         .build();
   verify(node);
 
   const auto node2 = MergeExchangeNode::Builder(*node).build();
   verify(node2);
+}
+
+TEST_F(PlanNodeBuilderTest, mergeExchangeNodeTransportKindNotSet) {
+  VELOX_ASSERT_THROW(
+      MergeExchangeNode::Builder()
+          .id("merge_exchange_node_id")
+          .outputType(ROW({"c0"}, {BIGINT()}))
+          .sortingKeys({std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c1")})
+          .sortingOrders({SortOrder(true, false)})
+          .serdeKind("Presto")
+          .build(),
+      "MergeExchangeNode transportKind is not set");
 }
 
 TEST_F(PlanNodeBuilderTest, localMergeNode) {

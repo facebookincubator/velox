@@ -382,6 +382,8 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   EXPECT_EQ(Timestamp(-1, 9000000), fromUnixtime(-0.991));
   EXPECT_EQ(Timestamp(1, 0), fromUnixtime(1 - 1e-10));
   EXPECT_EQ(Timestamp(4000000000, 0), fromUnixtime(4000000000));
+  EXPECT_EQ(Timestamp::maxMillis(), fromUnixtime(1'789'000'000'000'000'000.0));
+  EXPECT_EQ(Timestamp::minMillis(), fromUnixtime(-1'789'000'000'000'000'000.0));
   EXPECT_EQ(
       Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(3.87111e+37));
   EXPECT_EQ(Timestamp(4000000000, 123000000), fromUnixtime(4000000000.123));
@@ -1130,6 +1132,44 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
   EXPECT_EQ(
       "2024-11-03 01:30:00.000 America/Los_Angeles",
       test("2024-11-03 01:30 America/Los_Angeles", 1 * kMillisInHour));
+}
+
+TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusLargeIntervalDayTime) {
+  // An interval past int32 milliseconds, i.e. over ~24.8 days. Kept separate
+  // from the case above because date_add rejects such a value outright.
+  // c0 is the timestamp, c1 the interval.
+  const std::string ts = "cast(c0 as timestamp with time zone)";
+  const int64_t interval = 180 * kMillisInDay;
+
+  const auto eval = [&](const std::string& operation,
+                        const std::string& timestamp) {
+    return evaluateOnce<std::string>(
+               fmt::format("cast({} as varchar)", operation),
+               {VARCHAR(), INTERVAL_DAY_TIME()},
+               std::optional(timestamp),
+               std::optional(interval))
+        .value();
+  };
+
+  // Addition is commutative, so both operand orders must agree.
+  const auto plus = [&](const std::string& timestamp) {
+    const auto result = eval(fmt::format("plus({}, c1)", ts), timestamp);
+    EXPECT_EQ(result, eval(fmt::format("plus(c1, {})", ts), timestamp));
+    return result;
+  };
+
+  const std::string base = "2024-10-03 01:50 America/Los_Angeles";
+
+  EXPECT_EQ("2025-04-01 01:50:00.000 America/Los_Angeles", plus(base));
+  EXPECT_EQ(
+      "2024-04-06 01:50:00.000 America/Los_Angeles",
+      eval(fmt::format("minus({}, c1)", ts), base));
+
+  // A day-to-second interval is a fixed count of milliseconds, so crossing
+  // into daylight saving moves the wall clock forward an hour.
+  EXPECT_EQ(
+      "2025-05-30 02:50:00.000 America/Los_Angeles",
+      plus("2024-12-01 01:50 America/Los_Angeles"));
 }
 
 TEST_F(DateTimeFunctionsTest, minusTimestamp) {

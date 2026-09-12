@@ -31,6 +31,10 @@
 # sources into the single `velox` target, where those definitions would leak
 # into every other translation unit.
 #
+# The upstream sources also define C++ helpers with external linkage. Those
+# helpers live in the nimble_fsst_internal namespace to avoid colliding with
+# DuckDB's separately vendored copy of FSST in the same process.
+#
 # A plain static library would keep that isolation but leave a gap for installed
 # consumers: CMake does not merge static archives, so libfsst.a would stay
 # outside libvelox.a and go uninstalled, leaving fsst_* undefined downstream. An

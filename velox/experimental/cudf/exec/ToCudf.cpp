@@ -170,22 +170,29 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
-      if (keepOperator == 0) {
-        if (planNode && thisOpProps.canRunOnGPU) {
-          auto replacements =
-              adapter->createReplacements(oper, planNode, ctx, id);
-          for (auto& r : replacements) {
-            replaceOp.push_back(std::move(r));
-          }
-          isPureCpuOperator = false;
-        } else {
-          // This is the CPU fallback case.
-          isPureCpuOperator = true;
+      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
+      if (canUseGpuPath) {
+        // canRunOnGPU() controls whether createReplacements() is called;
+        // keepOperator() determines whether returned operators replace or
+        // follow the original.
+        auto replacements =
+            adapter->createReplacements(oper, planNode, ctx, id);
+        // A replacing adapter must produce an operator. Check before appending
+        // an output conversion, which could make the result appear non-empty.
+        VELOX_CHECK(
+            keepOperator != 0 || !replacements.empty(),
+            "Adapter replaced an operator with nothing: {}",
+            adapter->name());
+        for (auto& r : replacements) {
+          replaceOp.push_back(std::move(r));
         }
+      }
+
+      if (keepOperator == 0) {
+        // Only a declined GPU path requires CPU fallback.
+        isPureCpuOperator = !canUseGpuPath;
       } else {
-        // adapter is present and keepOperator is 1, so this is GPU compatible
-        // operator. so this CPU operators is allowed even if fallback is
-        // disabled.
+        // A kept operator is valid with or without appended operators.
         isPureCpuOperator = false;
       }
     } else {
@@ -309,6 +316,13 @@ void registerCudf() {
   CUDF_FUNC_RANGE();
   cudaFree(nullptr); // Initialize CUDA context at startup
 
+  // Record this context's device so worker threads can bind it later (see
+  // ensureCudaContextForThread()).
+  int contextDevice = -1;
+  cudaGetDevice(&contextDevice);
+  VELOX_CHECK_GE(contextDevice, 0, "Failed to get current CUDA device ordinal");
+  setCudfContextDevice(contextDevice);
+
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
   auto mr = cudf_velox::createMemoryResource(
       mrMode, CudfConfig::getInstance().memoryPercent);
@@ -345,6 +359,8 @@ void registerCudf() {
 void unregisterCudf() {
   output_mr_.reset();
   mr_.reset();
+  // Undo registerCudf()'s operator adapter registration.
+  OperatorAdapterRegistry::getInstance().clear();
   exec::DriverFactory::adapters.erase(
       std::remove_if(
           exec::DriverFactory::adapters.begin(),
@@ -391,6 +407,14 @@ void CudfConfig::initialize(
     concatOptimizationEnabled =
         folly::to<bool>(config[kCudfConcatOptimizationEnabled]);
   }
+  if (config.find(kCudfStreamingGroupbyEnabled) != config.end()) {
+    streamingGroupbyEnabled =
+        folly::to<bool>(config[kCudfStreamingGroupbyEnabled]);
+  }
+  if (config.find(kCudfStreamingGroupbyCapacityMultiplier) != config.end()) {
+    streamingGroupbyCapacityMultiplier =
+        folly::to<double>(config[kCudfStreamingGroupbyCapacityMultiplier]);
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }
@@ -406,6 +430,25 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
+  }
+  if (config.find(kUcxExchange) != config.end()) {
+    exchange = folly::to<bool>(config[kUcxExchange]);
+  }
+  if (config.find(kUcxxErrorHandling) != config.end()) {
+    ucxxErrorHandling = folly::to<bool>(config[kUcxxErrorHandling]);
+  }
+  if (config.find(kUcxIntraNodeExchange) != config.end()) {
+    intraNodeExchange = folly::to<bool>(config[kUcxIntraNodeExchange]);
+  }
+  if (config.find(kUcxxBlockingProgress) != config.end()) {
+    ucxxBlockingProgress = folly::to<bool>(config[kUcxxBlockingProgress]);
+  }
+  if (config.find(kUcxExchangeLogLevel) != config.end()) {
+    exchangeLogLevel = folly::to<int32_t>(config[kUcxExchangeLogLevel]);
+  }
+  if (config.find(kUcxPartitionedOutputBatchRows) != config.end()) {
+    partitionedOutputBatchRows =
+        folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);

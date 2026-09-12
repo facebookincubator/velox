@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
-#include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 
 namespace facebook::nimble {
 

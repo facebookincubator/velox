@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/OutputStream.h"
 #include "velox/dwio/dwrf/common/ByteRLE.h"
 #include "velox/dwio/dwrf/common/Common.h"
@@ -169,6 +168,12 @@ class BaseColumnWriter : public ColumnWriter {
     return type_;
   }
 
+  virtual bool useDictionaryEncoding() const {
+    return (sequence_ == 0 ||
+            !context_.getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING)) &&
+        !context_.isLowMemoryMode();
+  }
+
   static std::unique_ptr<BaseColumnWriter> create(
       WriterContext& context,
       const dwio::common::TypeWithId& type,
@@ -270,12 +275,6 @@ class BaseColumnWriter : public ColumnWriter {
     return context_.indexEnabled();
   }
 
-  virtual bool useDictionaryEncoding() const {
-    return (sequence_ == 0 ||
-            !context_.getConfig(Config::MAP_FLAT_DISABLE_DICT_ENCODING)) &&
-        !context_.isLowMemoryMode();
-  }
-
   WriterContext::LocalDecodedVector decode(
       const VectorPtr& slice,
       const common::Ranges& ranges);
@@ -291,9 +290,6 @@ class BaseColumnWriter : public ColumnWriter {
   // in_map stream
   const std::function<void(IndexBuilder&)> onRecordPosition_;
 
-  VELOX_FRIEND_TEST(ColumnWriterTest, LowMemoryModeConfig);
-  VELOX_FRIEND_TEST(ColumnWriterTest, IntegerDictionaryEncodingEnabledConfig);
-  VELOX_FRIEND_TEST(ColumnWriterTest, StringDictionaryEncodingEnabledConfig);
   friend class ValueStatisticsBuilder;
   friend class ValueWriter;
 };

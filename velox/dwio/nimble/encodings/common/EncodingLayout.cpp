@@ -20,6 +20,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -189,6 +190,7 @@ EncodingLayout EncodingLayoutCapture::capture(
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
   }
 
+  EncodingLayout::Config encodingConfig;
   std::vector<std::optional<const EncodingLayout>> children;
   switch (encodingType) {
     case EncodingType::FixedBitWidth:
@@ -196,6 +198,7 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Constant:
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
+    case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
@@ -255,6 +258,18 @@ EncodingLayout EncodingLayoutCapture::capture(
               detail::subintsplit::makePreserveSplitConfig(boundaryPlans)},
           compressionType,
           std::move(children)};
+    case EncodingType::BitRangeSplit: {
+      using Base = detail::BitRangeSplitEncodingBase;
+      Base::captureLayout(
+          encoding,
+          options,
+          [&](NestedEncodingIdentifier /* sectionIndex */,
+              const Base::Section& section) {
+            const char* position = section.data;
+            captureChild(children, position, section.dataBytes, options);
+          },
+          encodingConfig);
+      break;
     }
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;
@@ -451,8 +466,7 @@ EncodingLayout EncodingLayoutCapture::capture(
 
   return {
       encodingType,
-      /*encodingConfig=*/
-      {},
+      std::move(encodingConfig),
       compressionType,
       std::move(children)};
 }
