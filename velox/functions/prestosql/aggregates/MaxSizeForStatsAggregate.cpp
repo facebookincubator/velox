@@ -38,7 +38,8 @@ class MaxSizeForStatsAggregate
  private:
   std::vector<vector_size_t> elementSizes_;
   std::vector<vector_size_t*> elementSizePtrs_;
-  std::vector<IndexRange> elementIndices_;
+  std::vector<vector_size_t> elementIndices_;
+  Scratch scratch_;
   DecodedVector decoded_;
 
  public:
@@ -160,7 +161,7 @@ class MaxSizeForStatsAggregate
 
     vector_size_t i = 0;
     rows.testSelected([&](auto row) {
-      elementIndices_[i] = IndexRange{row, 1};
+      elementIndices_[i] = row;
       elementSizePtrs_[i] = &elementSizes_[i];
       return ++i < numToProcess;
     });
@@ -168,7 +169,8 @@ class MaxSizeForStatsAggregate
     getVectorSerde()->estimateSerializedSize(
         vector.get(),
         folly::Range(elementIndices_.data(), elementIndices_.size()),
-        elementSizePtrs_.data());
+        elementSizePtrs_.data(),
+        scratch_);
   }
 
   void doUpdateSingleGroup(
