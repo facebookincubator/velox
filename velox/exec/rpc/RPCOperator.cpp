@@ -117,14 +117,14 @@ void RPCOperator::initialize() {
       constantInputs,
       rpcNode_->streamingMode());
 
-  tierKey_ = function_->tierKey();
+  backendKey_ = function_->backendKey();
 
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
 
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
-  limiter_ = &RPCRateLimiterRegistry::global().get(tierKey_);
+  limiter_ = &RPCRateLimiterRegistry::global().get(backendKey_);
   // A backend's configuration is fixed by the first query to reach it and is
   // shared by every query after. The limiter is a controller: its policy has
   // to hold still while it adapts, and the adaptation itself is learned from
@@ -181,7 +181,7 @@ bool RPCOperator::needsInput() const {
   }
 
   // Don't take more input while this driver already holds as much as it
-  // should buffer. This bounds memory; whether the tier can take a flush
+  // should buffer. This bounds memory; whether the backend can take a flush
   // right now is isBlocked()'s question, not this one.
   if (inputBufferIsFull()) {
     return false;
@@ -277,8 +277,8 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
 void RPCOperator::dispatchRowsUnderAdmission() {
   while (hasPendingRows()) {
-    // The per-driver congestion window bounds this driver; the tier's capacity
-    // bounds every driver sharing the backend. Both must have room.
+    // The per-driver congestion window bounds this driver; the backend's
+    // capacity bounds every driver sharing the backend. Both must have room.
     const int64_t windowHeadroom = state_->dispatchHeadroom();
     if (windowHeadroom <= 0) {
       break;
@@ -287,8 +287,8 @@ void RPCOperator::dispatchRowsUnderAdmission() {
         static_cast<int64_t>(pendingNumRows_ - pendingCursor_);
     const int64_t want = std::min(windowHeadroom, remaining);
 
-    // Reserve the tier's slots BEFORE dispatching, one token per row, and send
-    // exactly what was granted. Sizing the chunk against available() and
+    // Reserve the backend's slots BEFORE dispatching, one token per row, and
+    // send exactly what was granted. Sizing the chunk against available() and
     // acquiring after the RPC is out lets N drivers each measure the same free
     // capacity and all dispatch against it, overshooting the cap by roughly
     // the driver count.
@@ -572,7 +572,7 @@ bool RPCOperator::inputBufferIsFull() const {
   if (state_->streamingMode() == RPCStreamingMode::kPerRow) {
     return hasPendingRows();
   }
-  // Depth only. Deliberately not gated on the tier's free capacity, which
+  // Depth only. Deliberately not gated on the backend's free capacity, which
   // churns as tokens release: throttling intake on an instantaneous zero both
   // stalls the pipeline and ignores this driver's own in-flight work that is
   // about to free a slot. dispatchBatchSize_ of 0 means buffer-everything, so
@@ -609,10 +609,10 @@ std::optional<exec::BlockingReason> RPCOperator::drainOrParkOnAdmission(
   }
   if (state_->numInFlight() == 0) {
     // Nothing of ours is in flight, so only another driver's release can help.
-    // parkOnTierCapacity() decides and enrols under one lock, so a slot
+    // parkOnBackendCapacity() decides and enrols under one lock, so a slot
     // freeing here cannot leave us waiting on nothing, and this never falls
     // through to a wait that nothing could fulfil.
-    return parkOnTierCapacity(future);
+    return parkOnBackendCapacity(future);
   }
   // Our own completions will free slots and wake the wait below.
   return std::nullopt;
@@ -629,11 +629,12 @@ void RPCOperator::dispatchBatchUnderAdmission(DispatchScope scope) {
   }
   const auto chunk = dispatchBatchSize_ > 0 ? dispatchBatchSize_ : 0;
   // Both gates, the same pair dispatchRowsUnderAdmission() applies: the
-  // per-driver window, and the tier's shared capacity. Checking only the window
-  // lets a driver whose window is open keep flushing while other drivers have
-  // already exhausted the tier, which is the over-admission this exists to
-  // stop. The tier slot is reserved inside flushBatchRequests(), which returns
-  // false when the backend is full, so this stops instead of overshooting.
+  // per-driver window, and the backend's shared capacity. Checking only the
+  // window lets a driver whose window is open keep flushing while other drivers
+  // have already exhausted the backend, which is the over-admission this exists
+  // to stop. The backend slot is reserved inside flushBatchRequests(), which
+  // returns false when the backend is full, so this stops instead of
+  // overshooting.
   while (function_->pendingBatchSize() >= minRows &&
          !state_->isUnderBackpressure() && flushBatchRequests(chunk)) {
   }
@@ -675,7 +676,7 @@ void RPCOperator::recordCongestion(
 
 RowVectorPtr RPCOperator::outputPerRow() {
   // Drip more buffered rows now that in-flight completions may have freed
-  // window / tier capacity.
+  // window / backend capacity.
   dispatchRowsUnderAdmission();
 
   if (claimedRows_.empty()) {
@@ -797,14 +798,16 @@ bool RPCOperator::hasUndispatchableWork() const {
   if (state_->streamingMode() == RPCStreamingMode::kPerRow) {
     return hasPendingRows();
   }
-  // A chunk is ready to flush and the tier is refusing it. dispatchBatchSize_
-  // of 0 means buffer-everything, so nothing flushes until noMoreInput().
+  // A chunk is ready to flush and the backend is refusing it.
+  // dispatchBatchSize_ of 0 means buffer-everything, so nothing flushes until
+  // noMoreInput().
   return dispatchBatchSize_ > 0 &&
       function_->pendingBatchSize() >= dispatchBatchSize_ &&
       limiter_->available() == 0;
 }
 
-exec::BlockingReason RPCOperator::parkOnTierCapacity(ContinueFuture* future) {
+exec::BlockingReason RPCOperator::parkOnBackendCapacity(
+    ContinueFuture* future) {
   auto admission = limiter_->admitOrWait();
   if (admission.admitted) {
     // Room appeared; come back round and dispatch into it.
@@ -873,19 +876,19 @@ exec::BlockingReason RPCOperator::blockedInPerRow(ContinueFuture* future) {
   }
 
   // Nothing ready. Park on whatever can wake us; with rows buffered and
-  // nothing in flight that is the tier's queue, since the per-state future
+  // nothing in flight that is the backend's queue, since the per-state future
   // would never fire. needsInput() stays false meanwhile, so no new input
   // arrives. Finished is not expected mid-stream, so it falls through.
   if (state_->numInFlight() > 0 || hasUndispatchableWork()) {
     // Prefer this driver's own in-flight work: that completion is guaranteed
-    // to fire AND frees a slot, whereas the tier's queue depends on another
+    // to fire AND frees a slot, whereas the backend's queue depends on another
     // driver releasing. blockedInBatch() applies the same order.
     if (state_->numInFlight() > 0) {
       if (auto reason = tryClaimOrParkOnRow(future)) {
         return reason.value();
       }
     } else {
-      return parkOnTierCapacity(future);
+      return parkOnBackendCapacity(future);
     }
   }
   return exec::BlockingReason::kNotBlocked;
@@ -935,14 +938,14 @@ exec::BlockingReason RPCOperator::blockedInBatch(ContinueFuture* future) {
   // straight back here with nothing to do.
   if (hasUndispatchableWork()) {
     // Same order as blockedInPerRow(): this driver's own in-flight batches
-    // first, the tier's queue only when it has none.
+    // first, the backend's queue only when it has none.
     if (state_->numInFlight() > 0) {
       if (auto reason =
               tryClaimOrParkOnBatch(future, /*isBackpressure=*/true)) {
         return reason.value();
       }
     } else {
-      return parkOnTierCapacity(future);
+      return parkOnBackendCapacity(future);
     }
   }
   return exec::BlockingReason::kNotBlocked;

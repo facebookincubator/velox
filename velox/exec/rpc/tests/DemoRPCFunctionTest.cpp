@@ -147,7 +147,7 @@ TEST_F(DemoRPCFunctionTest, signatures) {
 TEST_F(DemoRPCFunctionTest, metadata) {
   EXPECT_EQ(function_->name(), "demo_rpc");
   EXPECT_EQ(function_->resultType()->kind(), TypeKind::VARCHAR);
-  EXPECT_EQ(function_->tierKey(), "");
+  EXPECT_EQ(function_->backendKey(), "");
 }
 
 } // namespace
