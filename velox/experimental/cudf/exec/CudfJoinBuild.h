@@ -25,7 +25,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Common input accumulation and peer coordination for cuDF join builds.
+/// Accumulates inputs and coordinates peer drivers for cuDF join builds.
 class CudfJoinBuild : public CudfOperatorBase {
  public:
   bool needsInput() const final;
@@ -47,12 +47,17 @@ class CudfJoinBuild : public CudfOperatorBase {
   void doNoMoreInput() final;
   void doClose() final;
 
+  // Records per-input statistics before accumulation; no-op by default.
   virtual void recordInputStats(const CudfVector& input) {}
 
+  // Consumes accumulated inputs and publishes the build result to the bridge.
   virtual void buildAndPublish(std::vector<CudfVectorPtr> inputs) = 0;
 
  private:
+  // Build inputs accumulated by this driver and transferred from peer drivers.
   std::vector<CudfVectorPtr> inputs_;
+
+  // Waits for the last peer driver to finish collecting build inputs.
   ContinueFuture future_{ContinueFuture::makeEmpty()};
 };
 
