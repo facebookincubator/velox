@@ -33,7 +33,8 @@ Variant fromStringImpl(
     std::string_view value,
     const Type& type,
     PartitionValue::TimestampMode timestampMode,
-    PartitionValue::DateMode dateMode) {
+    PartitionValue::DateMode dateMode,
+    const tz::TimeZone* timezone) {
   using NativeType = typename TypeTraits<kind>::NativeType;
 
   if (type.isDate()) {
@@ -63,9 +64,13 @@ Variant fromStringImpl(
         folly::identity,
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
     if constexpr (kind == TypeKind::TIMESTAMP) {
-      if (type.equivalent(*TIMESTAMP()) &&
-          timestampMode == PartitionValue::TimestampMode::kLocalTime) {
-        converted.toGMT(Timestamp::defaultTimezone());
+      // A TIMESTAMP_UTC value is always UTC and is never shifted.
+      if (type.equivalent(*TIMESTAMP())) {
+        if (timezone != nullptr) {
+          converted.toGMT(*timezone);
+        } else if (timestampMode == PartitionValue::TimestampMode::kLocalTime) {
+          converted.toGMT(Timestamp::defaultTimezone());
+        }
       }
     }
     return Variant::create<kind>(converted);
@@ -79,9 +84,16 @@ Variant PartitionValue::fromString(
     std::string_view value,
     const Type& type,
     TimestampMode timestampMode,
-    DateMode dateMode) {
+    DateMode dateMode,
+    const tz::TimeZone* timezone) {
   return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-      fromStringImpl, type.kind(), value, type, timestampMode, dateMode);
+      fromStringImpl,
+      type.kind(),
+      value,
+      type,
+      timestampMode,
+      dateMode,
+      timezone);
 }
 
 } // namespace facebook::velox::connector::hive

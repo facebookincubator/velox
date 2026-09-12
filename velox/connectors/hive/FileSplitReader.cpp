@@ -18,35 +18,14 @@
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
-
-VectorPtr newConstantFromString(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
-  if (!value.has_value()) {
-    return BaseVector::createNullConstant(type, 1, pool);
-  }
-  return BaseVector::createConstant(
-      type,
-      PartitionValue::fromString(
-          value.value(),
-          *type,
-          isLocalTimestamp ? PartitionValue::TimestampMode::kLocalTime
-                           : PartitionValue::TimestampMode::kUtc,
-          isDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
-                           : PartitionValue::DateMode::kIsoString),
-      1,
-      pool);
-}
 
 std::unique_ptr<FileSplitReader> FileSplitReader::create(
     const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
@@ -101,6 +80,12 @@ FileSplitReader::FileSplitReader(
       fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
+      sessionTimezone_(
+          connectorQueryCtx->sessionTimezone().empty()
+              ? nullptr
+              : tz::locateZone(connectorQueryCtx->sessionTimezone())),
+      adjustTimestampToTimezone_(
+          connectorQueryCtx->adjustTimestampToTimezone()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
       fileSplit_(fileSplit),
@@ -423,7 +408,8 @@ void FileSplitReader::setPartitionValue(
       connectorQueryCtx_->memoryPool(),
       fileConfig_->readTimestampPartitionValueAsLocalTime(
           connectorQueryCtx_->sessionProperties()),
-      it->second->isPartitionDateValueDaysSinceEpoch());
+      it->second->isPartitionDateValueDaysSinceEpoch(),
+      adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
   spec->setConstantValue(constant);
 }
 

@@ -21,6 +21,10 @@
 #include "velox/type/Type.h"
 #include "velox/type/Variant.h"
 
+namespace facebook::velox::tz {
+class TimeZone;
+}
+
 namespace facebook::velox::connector::hive {
 
 /// Converts partition key strings to typed values. TIMESTAMP and DATE have
@@ -58,8 +62,13 @@ class PartitionValue {
   /// - DECIMAL: a decimal literal, scaled by the type's scale.
   /// - VARCHAR, VARBINARY: taken verbatim.
   /// - TIMESTAMP: parsed as TimestampParseMode::kPrestoCast, then shifted per
-  ///   'timestampMode'.
+  ///   'timezone' and 'timestampMode'.
   /// - DATE: parsed per 'dateMode'.
+  ///
+  /// 'timezone', when non-null, is the zone a TIMESTAMP value is read in
+  /// before being shifted to UTC. It takes precedence over 'timestampMode',
+  /// which falls back to the process default zone for kLocalTime. Delta Lake
+  /// and Iceberg use it to honor the session timezone.
   ///
   /// Fails for a non-scalar type, and for a value that does not parse as
   /// 'type'.
@@ -67,7 +76,8 @@ class PartitionValue {
       std::string_view value,
       const Type& type,
       TimestampMode timestampMode,
-      DateMode dateMode);
+      DateMode dateMode,
+      const tz::TimeZone* timezone = nullptr);
 };
 
 } // namespace facebook::velox::connector::hive
