@@ -29,13 +29,17 @@
 // trials differ only by an explicit per-trial seed.
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -46,6 +50,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
+#include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
@@ -74,6 +79,25 @@ DEFINE_bool(
     false,
     "Print the SubIntSplit section layout (bit ranges + chosen encoding) "
     "for each pattern instead of running microbenchmarks.");
+DEFINE_string(
+    dump_data_dir,
+    "",
+    "Write each pattern's raw little-endian uint64 values to "
+    "<dir>/<pattern>.u64 and exit. Lets an external compressor run on inputs "
+    "byte-identical to the ones the in-process methods see.");
+DEFINE_int64(
+    dump_count,
+    1'000'000,
+    "Element count per pattern for --dump_data_dir.");
+DEFINE_string(
+    only_pattern,
+    "",
+    "Comma-separated pattern names to restrict --csv to (default: all).");
+DEFINE_bool(
+    ratio_only,
+    false,
+    "Skip encode/decode throughput timing in --csv and report compression "
+    "ratio only. Much faster when the question is purely about size.");
 
 namespace {
 
@@ -265,6 +289,151 @@ Vector<T> genMultiField(uint32_t n, uint64_t seed) {
   return d;
 }
 
+// Sorted runs that restart every `segment` rows, as a column sorted within a
+// row group but not across them. Whole-value delta goes negative at every
+// boundary, which is the failure mode block-wise delta exists to absorb.
+Vector<T> genSegmentedSorted(uint32_t segment, uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  T cur = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    if (i % segment == 0) {
+      cur = rng() & 0xFFFFFFFFULL;
+    }
+    cur += rng() % 64;
+    d[i] = cur;
+  }
+  return d;
+}
+
+// Monotone timestamps with 1% of rows arriving out of order, as an event log
+// that is nearly but not exactly sorted. Delta stays small for 99% of rows and
+// spikes for the rest, which separates plain delta from an outlier-tolerant
+// scheme.
+Vector<T> genMonotoneWithOutliers(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  T now = 1700000000000ULL;
+  for (uint32_t i = 0; i < n; ++i) {
+    now += rng() % 5;
+    d[i] = (rng() % 100 == 0) ? now - (rng() % 100000) : now;
+  }
+  return d;
+}
+
+// Eight independent monotone id streams interleaved round-robin, as ids drawn
+// from sharded generators. Each stream is monotone but the interleaving is
+// not, so whole-value delta sees garbage while the bit structure survives.
+Vector<T> genInterleavedCounters(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  constexpr uint32_t kShards = 8;
+  std::array<T, kShards> counters{};
+  for (uint32_t s = 0; s < kShards; ++s) {
+    counters[s] = 1700000000000ULL + (rng() % 1000000) * 4096;
+  }
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t shard = i % kShards;
+    counters[shard] += 1 + (rng() % 3);
+    d[i] = counters[shard];
+  }
+  return d;
+}
+
+// Millisecond timestamps that are always whole seconds, so the low 10 bits are
+// near-constant. Trailing-zero structure a bit-range split can see directly.
+Vector<T> genGranularTimestamp(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  T now = 1700000000ULL;
+  for (uint32_t i = 0; i < n; ++i) {
+    now += rng() % 3;
+    d[i] = now * 1000ULL;
+  }
+  return d;
+}
+
+// A 64-value cycle repeated for the whole column. Whole-field LZ matches this
+// exactly; a per-value encoding has to rediscover it as low cardinality.
+Vector<T> genRepeatingSequence(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  constexpr uint32_t kCycle = 64;
+  std::array<T, kCycle> cycle{};
+  for (uint32_t c = 0; c < kCycle; ++c) {
+    cycle[c] = rng();
+  }
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  for (uint32_t i = 0; i < n; ++i) {
+    d[i] = cycle[i % kCycle];
+  }
+  return d;
+}
+
+// High-entropy top bits over a structured low counter -- the inverse of
+// BitStruct, where the compressible half is the low end.
+Vector<T> genHashWithCounter(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  T counter = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    counter = (counter + 1) & 0xFFFF;
+    d[i] = ((rng() & 0xFFFFFFFFFFFFULL) << 16) | counter;
+  }
+  return d;
+}
+
+// Increasing 64-byte-aligned offsets: the low 6 bits are always zero, so the
+// value carries 6 bits of pure padding a range-based encoding cannot drop.
+Vector<T> genAlignedOffsets(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  T offset = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    offset += (1 + (rng() % 16)) * 64;
+    d[i] = offset;
+  }
+  return d;
+}
+
+// Strictly decreasing values: monotone, but every delta is negative, which
+// wraps to a huge unsigned value.
+Vector<T> genReverseSorted(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  T cur = T{1} << 40;
+  for (uint32_t i = 0; i < n; ++i) {
+    cur -= rng() % 1024;
+    d[i] = cur;
+  }
+  return d;
+}
+
+// Six independent low-cardinality enum fields packed into one integer, as a
+// feature bitfield. Every field boundary is unaligned.
+Vector<T> genBitFlags(uint32_t n, uint64_t seed) {
+  std::mt19937_64 rng{seed};
+  Vector<T> d{benchmarkPool().get()};
+  d.resize(n);
+  for (uint32_t i = 0; i < n; ++i) {
+    const T a = rng() % 3; // 2 bits
+    const T b = rng() % 5; // 3 bits
+    const T c = rng() % 9; // 4 bits
+    const T e = rng() % 17; // 5 bits
+    const T f = rng() % 33; // 6 bits
+    const T g = rng() % 2; // 1 bit
+    d[i] = a | (b << 2) | (c << 5) | (e << 9) | (f << 14) | (g << 20);
+  }
+  return d;
+}
+
 struct Pattern {
   std::string name;
   std::function<Vector<T>(uint32_t, uint64_t)> gen;
@@ -305,6 +474,23 @@ std::vector<Pattern> patterns() {
        [](uint32_t n, uint64_t s) { return genZipfian(4096, n, s); }},
       {"MultiField",
        [](uint32_t n, uint64_t s) { return genMultiField(n, s); }},
+      {"SegmentedSorted",
+       [](uint32_t n, uint64_t s) { return genSegmentedSorted(10'000, n, s); }},
+      {"MonotoneWithOutliers",
+       [](uint32_t n, uint64_t s) { return genMonotoneWithOutliers(n, s); }},
+      {"InterleavedCounters",
+       [](uint32_t n, uint64_t s) { return genInterleavedCounters(n, s); }},
+      {"GranularTimestamp",
+       [](uint32_t n, uint64_t s) { return genGranularTimestamp(n, s); }},
+      {"RepeatingSequence",
+       [](uint32_t n, uint64_t s) { return genRepeatingSequence(n, s); }},
+      {"HashWithCounter",
+       [](uint32_t n, uint64_t s) { return genHashWithCounter(n, s); }},
+      {"AlignedOffsets",
+       [](uint32_t n, uint64_t s) { return genAlignedOffsets(n, s); }},
+      {"ReverseSorted",
+       [](uint32_t n, uint64_t s) { return genReverseSorted(n, s); }},
+      {"BitFlags", [](uint32_t n, uint64_t s) { return genBitFlags(n, s); }},
   };
 }
 
@@ -337,6 +523,16 @@ class ForcePolicy : public CompressionPolicy {
  private:
   const CompressionType type_;
 };
+
+// Pattern names from --only_pattern, empty when the flag is unset.
+std::set<std::string> selectedPatternNames() {
+  std::set<std::string> names;
+  if (!FLAGS_only_pattern.empty()) {
+    folly::splitTo<std::string>(
+        ',', FLAGS_only_pattern, std::inserter(names, names.end()));
+  }
+  return names;
+}
 
 struct Method {
   std::string name;
@@ -376,7 +572,8 @@ std::vector<std::pair<EncodingType, float>> tunedReadFactors() {
 Encoded encodeSubIntSplitWith(
     const Vector<T>& data,
     std::vector<std::pair<EncodingType, float>> readFactors,
-    CompressionType compressionType) {
+    CompressionType compressionType,
+    bool deltaPreTransform = false) {
   auto& pool = benchmarkPool();
   Buffer buffer{*pool};
   std::span<const uint64_t> values{data.data(), data.size()};
@@ -401,8 +598,10 @@ Encoded encodeSubIntSplitWith(
       std::move(result),
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
-  auto encoded =
-      SubIntSplitEncoding<uint64_t>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  encodeOptions.subIntSplitDeltaPreTransform = deltaPreTransform;
+  auto encoded = SubIntSplitEncoding<uint64_t>::encode(
+      selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
@@ -452,6 +651,16 @@ std::vector<Method> makeMethods() {
        },
        decodeSubIntSplit});
   methods.push_back(
+      {"SubIntSplitDelta",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitWith(
+             d,
+             tunedReadFactors(),
+             CompressionType::Zstd,
+             /*deltaPreTransform=*/true);
+       },
+       decodeSubIntSplit});
+  methods.push_back(
       {"OpenZL",
        [](const Vector<T>& d) {
          return compressWith(CompressionType::OpenZL, d);
@@ -467,6 +676,38 @@ std::vector<Method> makeMethods() {
        [](const std::string& c, uint32_t) {
          decompressWith(CompressionType::Zstd, c);
        }});
+  // Whole-value delta, for contrast with SubIntSplit's within-value split.
+  // OpenZL's numeric building blocks include ZL_NODE_DELTA_INT, and the
+  // patterns SubIntSplit loses on are exactly the monotone ones, where the
+  // redundancy is across rows rather than across bit positions.
+  methods.push_back(
+      {"Delta",
+       [](const Vector<T>& d) {
+         return Encoded{
+             encodeData<DeltaEncoding<T>>(EncodingType::Delta, d), true};
+       },
+       decodeNimble});
+  // Delta output run through the stream compressor, which is how a Nimble
+  // writer actually stores it -- the bare Delta method above is uncompressed
+  // and so is not comparable with SubIntSplitTuned or OpenZL.
+  methods.push_back(
+      {"DeltaZstd",
+       [](const Vector<T>& d) {
+         const std::string encoded =
+             encodeData<DeltaEncoding<T>>(EncodingType::Delta, d);
+         auto& pool = benchmarkPool();
+         ForcePolicy policy{CompressionType::Zstd};
+         auto result = Compression::compress(
+             *pool, encoded, kDataType, kBitWidth, policy);
+         if (result.buffer.has_value() &&
+             result.compressionType != CompressionType::Uncompressed) {
+           return Encoded{
+               std::string{result.buffer->data(), result.buffer->size()},
+               false};
+         }
+         return Encoded{encoded, false};
+       },
+       nullptr});
   methods.push_back(
       {"FixedBitWidth",
        [](const Vector<T>& d) {
@@ -563,12 +804,17 @@ void emitCsv(int trials, int64_t onlySize) {
   const auto pats = patterns();
   const auto methods = makeMethods();
 
+  const std::set<std::string> selectedPatterns = selectedPatternNames();
+
   std::cout << "pattern,size,method,trials,ratio_mean,ratio_stddev,"
                "encode_mb_s_mean,decode_mb_s_mean\n";
   for (const auto& spec : specs) {
     const uint64_t rawBytes = spec.size * sizeof(T);
     for (const auto& pat : pats) {
       if (spec.subset && !inBigSubset(pat.name)) {
+        continue;
+      }
+      if (!selectedPatterns.empty() && !selectedPatterns.contains(pat.name)) {
         continue;
       }
       // Per-method accumulators across trials.
@@ -585,6 +831,9 @@ void emitCsv(int trials, int64_t onlySize) {
           ratios[m].push_back(
               static_cast<double>(rawBytes) /
               static_cast<double>(encoded.bytes.size()));
+          if (FLAGS_ratio_only) {
+            continue;
+          }
           encMbs[m].push_back(timedThroughputMbPerSec(
               [&] { folly::doNotOptimizeAway(method.encode(data)); },
               rawBytes,
@@ -618,17 +867,51 @@ void emitCsv(int trials, int64_t onlySize) {
 // the encoding's own debugString, which recurses into each section).
 void emitLayout() {
   auto& pool = benchmarkPool();
+  // Both compression regimes: a section encoding that only pays off when the
+  // stream compressor is absent is worth knowing about separately, since Zstd
+  // and OpenZL already entropy-code whatever the section encoder emits.
+  const std::vector<std::pair<std::string, CompressionType>> regimes = {
+      {"SubIntSplitUncompressed", CompressionType::Uncompressed},
+      {"SubIntSplitTuned", CompressionType::Zstd},
+  };
+  const std::set<std::string> selected = selectedPatternNames();
   for (const auto& pat : patterns()) {
+    if (!selected.empty() && !selected.contains(pat.name)) {
+      continue;
+    }
     const uint64_t seed = 0x9e3779b97f4a7c15ULL + 1'000'000ULL;
     const Vector<T> data = pat.gen(1'000'000u, seed);
-    const Encoded encoded =
-        encodeSubIntSplitWith(data, tunedReadFactors(), CompressionType::Zstd);
-    const double ratio = static_cast<double>(data.size() * sizeof(T)) /
-        static_cast<double>(encoded.bytes.size());
-    auto enc = EncodingFactory{}.create(*pool, encoded.bytes, nullFactory());
-    std::cout << "===== " << pat.name << " (SubIntSplitTuned ratio " << ratio
-              << ") =====\n"
-              << enc->debugString(0) << "\n";
+    for (const auto& [label, compressionType] : regimes) {
+      const Encoded encoded =
+          encodeSubIntSplitWith(data, tunedReadFactors(), compressionType);
+      const double ratio = static_cast<double>(data.size() * sizeof(T)) /
+          static_cast<double>(encoded.bytes.size());
+      // EncodingFactory has no SubIntSplit dispatch, so going through it here
+      // aborts on "invalid EncodingType:16". Build the encoding directly, the
+      // same way decodeSubIntSplit does.
+      SubIntSplitEncoding<T> enc{*pool, encoded.bytes, nullFactory()};
+      std::cout << "===== " << pat.name << " (" << label << " ratio " << ratio
+                << ") =====\n"
+                << enc.debugString(0) << "\n";
+    }
+  }
+}
+
+// Write every pattern out as a flat little-endian uint64 file, using the same
+// seed emitLayout() uses so an external compressor sees byte-identical input.
+void dumpData(const std::string& directory, uint32_t count) {
+  std::filesystem::create_directories(directory);
+  for (const auto& pat : patterns()) {
+    const uint64_t seed = 0x9e3779b97f4a7c15ULL + 1'000'000ULL;
+    const Vector<T> data = pat.gen(count, seed);
+    const std::string path = directory + "/" + pat.name + ".u64";
+    std::ofstream out{path, std::ios::binary | std::ios::trunc};
+    NIMBLE_CHECK(out.is_open(), fmt::format("Cannot open {}", path));
+    out.write(
+        reinterpret_cast<const char*>(data.data()),
+        static_cast<std::streamsize>(data.size() * sizeof(T)));
+    NIMBLE_CHECK(out.good(), fmt::format("Failed writing {}", path));
+    std::cout << path << " " << data.size() * sizeof(T) << " bytes\n";
   }
 }
 
@@ -687,6 +970,11 @@ void registerBenchmarks() {
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   facebook::velox::memory::MemoryManager::initialize({});
+
+  if (!FLAGS_dump_data_dir.empty()) {
+    dumpData(FLAGS_dump_data_dir, static_cast<uint32_t>(FLAGS_dump_count));
+    return 0;
+  }
 
   if (FLAGS_layout) {
     emitLayout();
