@@ -24,7 +24,8 @@ namespace facebook::velox::core {
 struct ScanBatchEvent {
   virtual ~ScanBatchEvent() = default;
 
-  /// Post-pushdown, pre-remaining-filter row count.
+  /// Rows read from storage, mid-pushdown: after row-group pruning, before
+  /// per-row filter evaluation and the remaining filter.
   uint64_t numRows{0};
   /// Wall time spent producing this batch in microseconds.
   uint64_t wallTimeMicros{0};
