@@ -83,10 +83,12 @@ class CudfHiveConfig {
   static constexpr const char* kUseBufferedInputSession =
       "cudf.hive.use_buffered_input";
 
-  static constexpr const char* kUseExperimentalCudfReader =
-      "cudf.hive.use-experimental-reader";
-  static constexpr const char* kUseExperimentalCudfReaderSession =
-      "cudf.hive.use_experimental_reader";
+  // Whether background split preparation starts reading the first column-chunk
+  // pass. Disable to keep queued preloaded splits metadata-only.
+  static constexpr const char* kPreloadColumnChunks =
+      "cudf.hive.preload-column-chunks";
+  static constexpr const char* kPreloadColumnChunksSession =
+      "cudf.hive.preload_column_chunks";
 
   // Writer config options
 
@@ -155,9 +157,8 @@ class CudfHiveConfig {
   bool useBufferedInput() const;
   bool useBufferedInputSession(const config::ConfigBase* session) const;
 
-  bool useExperimentalCudfReader() const;
-  bool useExperimentalCudfReaderSession(
-      const config::ConfigBase* session) const;
+  bool preloadColumnChunks() const;
+  bool preloadColumnChunksSession(const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 

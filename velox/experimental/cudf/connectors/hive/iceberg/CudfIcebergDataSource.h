@@ -54,6 +54,11 @@ class CudfIcebergDataSource : public ::facebook::velox::cudf_velox::connector::
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig);
 
+  // Override to also adopt the Iceberg split of the background-prepared
+  // source.
+  void setFromDataSource(
+      std::unique_ptr<velox_connector::DataSource> source) override;
+
  protected:
   // Override to create `CudfIcebergSplitReader` instead of
   // `CudfHiveSplitReader`
