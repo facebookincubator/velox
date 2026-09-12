@@ -30,23 +30,33 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-void scatterColumns(
+void scatterGatheredColumns(
     const std::vector<exec::IdentityProjection>& projections,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
-    std::vector<std::unique_ptr<cudf::column>>& cols) {
+    std::vector<std::unique_ptr<cudf::column>>& gatheredCols) {
+  VELOX_CHECK_EQ(gatheredCols.size(), projections.size());
+  for (const auto& projection : projections) {
+    VELOX_CHECK_LT(projection.outputChannel, outCols.size());
+  }
   for (std::size_t i = 0; i < projections.size(); ++i) {
-    outCols[projections[i].outputChannel] = std::move(cols[i]);
+    outCols[projections[i].outputChannel] = std::move(gatheredCols[i]);
   }
 }
 
-void scatterColumns(
+void scatterInputColumns(
     const std::vector<exec::IdentityProjection>& projections,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
-    std::vector<std::unique_ptr<cudf::column>>& cols,
+    std::vector<std::unique_ptr<cudf::column>>& inputCols,
     std::size_t srcOffset) {
-  for (const auto& proj : projections) {
-    outCols[proj.outputChannel] =
-        std::move(cols[srcOffset + proj.inputChannel]);
+  VELOX_CHECK_LE(srcOffset, inputCols.size());
+  for (const auto& projection : projections) {
+    VELOX_CHECK_LT(projection.inputChannel, inputCols.size() - srcOffset);
+    VELOX_CHECK_LT(projection.outputChannel, outCols.size());
+  }
+  for (const auto& projection : projections) {
+    outCols[projection.outputChannel] = std::move(
+        inputCols
+            [srcOffset + static_cast<std::size_t>(projection.inputChannel)]);
   }
 }
 
@@ -106,42 +116,42 @@ CudfJoinOutputLayout::CudfJoinOutputLayout(
     VELOX_FAIL("Join field {} not in probe or build input", outputName);
   }
 
-  probeColumnIndices.reserve(probeProjections_.size());
+  probeColumnIndices_.reserve(probeProjections_.size());
   for (const auto& proj : probeProjections_) {
-    probeColumnIndices.push_back(
+    probeColumnIndices_.push_back(
         static_cast<cudf::size_type>(proj.inputChannel));
   }
-  buildColumnIndices.reserve(buildProjections_.size());
+  buildColumnIndices_.reserve(buildProjections_.size());
   for (const auto& proj : buildProjections_) {
-    buildColumnIndices.push_back(
+    buildColumnIndices_.push_back(
         static_cast<cudf::size_type>(proj.inputChannel));
   }
 }
 
-void CudfJoinOutputLayout::scatterProbeColumns(
+void CudfJoinOutputLayout::scatterGatheredProbeColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
-    std::vector<std::unique_ptr<cudf::column>>& cols) const {
-  scatterColumns(probeProjections_, outCols, cols);
+    std::vector<std::unique_ptr<cudf::column>>& gatheredCols) const {
+  scatterGatheredColumns(probeProjections_, outCols, gatheredCols);
 }
 
-void CudfJoinOutputLayout::scatterBuildColumns(
+void CudfJoinOutputLayout::scatterGatheredBuildColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
-    std::vector<std::unique_ptr<cudf::column>>& cols) const {
-  scatterColumns(buildProjections_, outCols, cols);
+    std::vector<std::unique_ptr<cudf::column>>& gatheredCols) const {
+  scatterGatheredColumns(buildProjections_, outCols, gatheredCols);
 }
 
-void CudfJoinOutputLayout::scatterProbeColumns(
+void CudfJoinOutputLayout::scatterProbeInputColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
-    std::vector<std::unique_ptr<cudf::column>>& cols,
+    std::vector<std::unique_ptr<cudf::column>>& inputCols,
     std::size_t srcOffset) const {
-  scatterColumns(probeProjections_, outCols, cols, srcOffset);
+  scatterInputColumns(probeProjections_, outCols, inputCols, srcOffset);
 }
 
-void CudfJoinOutputLayout::scatterBuildColumns(
+void CudfJoinOutputLayout::scatterBuildInputColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
-    std::vector<std::unique_ptr<cudf::column>>& cols,
+    std::vector<std::unique_ptr<cudf::column>>& inputCols,
     std::size_t srcOffset) const {
-  scatterColumns(buildProjections_, outCols, cols, srcOffset);
+  scatterInputColumns(buildProjections_, outCols, inputCols, srcOffset);
 }
 
 void CudfJoinOutputLayout::fillNullProbeColumns(
