@@ -231,7 +231,6 @@ CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
 void CudfNestedLoopJoinProbe::doInitialize() {
   // Filter construction is deferred from the ctor to avoid memory allocation
   // during driver initialization. Mirrors #17045 for CudfHashJoinProbe.
-
   if (!joinNode_->joinCondition()) {
     return;
   }

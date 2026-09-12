@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/MallocAllocator.h"
@@ -138,7 +139,20 @@ class TestCudfOperator final : public CudfOperatorBase {
   std::optional<OutputAllocation> outputAllocation_;
 };
 
-class CudfOperatorMemoryTrackingTest : public exec::test::OperatorTestBase {};
+class CudfOperatorMemoryTrackingTest : public exec::test::OperatorTestBase {
+ protected:
+  void SetUp() override {
+    OperatorTestBase::SetUp();
+    // The operator lifecycle methods bind the cuDF context to the calling
+    // thread, which requires the registration-time device to be recorded.
+    cudf_velox::registerCudf();
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    OperatorTestBase::TearDown();
+  }
+};
 
 TEST_F(
     CudfOperatorMemoryTrackingTest,
@@ -206,9 +220,13 @@ TEST_F(
 
     outputAllocation = testOperator.releaseOutputAllocation();
     EXPECT_EQ(gpuPool->usedBytes(), outputAllocation->bytes);
+    // Each of initialize, isBlocked, addInput, getOutput, noMoreInput and
+    // close makes one temporary allocation and frees it; getOutput makes one
+    // more that the test holds past close().
+    constexpr int32_t kLifecycleTemporaries = 6;
     const auto stats = gpuPool->stats();
-    EXPECT_EQ(stats.numExternalAllocs, 7);
-    EXPECT_EQ(stats.numExternalFrees, 6);
+    EXPECT_EQ(stats.numExternalAllocs, kLifecycleTemporaries + 1);
+    EXPECT_EQ(stats.numExternalFrees, kLifecycleTemporaries);
   }
 
   outputAllocation->resource.deallocate(

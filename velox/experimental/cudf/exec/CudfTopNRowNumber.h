@@ -46,10 +46,6 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   bool isFinished() override;
 
  protected:
-  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
   void doNoMoreInput() override;
