@@ -28,7 +28,7 @@ namespace facebook::velox::cudf_velox {
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     cudf::column_view nullSourceColumn,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   mergeNullSourceNullsIntoResult(
       result, std::vector<cudf::column_view>{nullSourceColumn}, stream, mr);
@@ -37,7 +37,7 @@ void mergeNullSourceNullsIntoResult(
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     const std::vector<cudf::column_view>& nullSourceColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<cudf::column_view> nullableSourceColumns;
   nullableSourceColumns.reserve(nullSourceColumns.size());

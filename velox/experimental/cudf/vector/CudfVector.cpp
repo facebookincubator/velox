@@ -98,9 +98,9 @@ std::pair<uint64_t, std::unique_ptr<cudf::table>> getTableSize(
 }
 
 void logDefaultStreamIfNeeded(
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     const char* constructorName) {
-  if (stream.value() != rmm::cuda_stream_default.value()) {
+  if (stream.get() != rmm::cuda_stream_default.value()) {
     return;
   }
   LOG(WARNING) << constructorName
@@ -115,7 +115,7 @@ CudfVector::CudfVector(
     TypePtr type,
     vector_size_t size,
     std::unique_ptr<cudf::table>&& table,
-    rmm::cuda_stream_view stream)
+    cuda::stream_ref stream)
     : RowVector(
           pool,
           std::move(type),
@@ -138,7 +138,7 @@ CudfVector::CudfVector(
     TypePtr type,
     vector_size_t size,
     std::unique_ptr<cudf::packed_table>&& packedTable,
-    rmm::cuda_stream_view stream)
+    cuda::stream_ref stream)
     : RowVector(
           pool,
           std::move(type),
@@ -171,20 +171,20 @@ std::unique_ptr<cudf::table> CudfVector::release() {
   auto mr = packedPtr->data.gpu_data->memory_resource();
   packedPtr->data.gpu_data->set_stream(stream_);
   auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
-  stream_.synchronize();
+  stream_.sync();
   // Clear the packed table since we've materialized
   packedPtr.reset();
   return materializedTable;
 }
 
-bool CudfVector::rebindStream(rmm::cuda_stream_view stream) {
+bool CudfVector::rebindStream(cuda::stream_ref stream) {
   if (auto* tablePtr =
           std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
     if (!*tablePtr) {
       return false;
     }
 
-    if (stream_.value() == stream.value()) {
+    if (stream_.get() == stream.get()) {
       return true;
     }
 

@@ -65,7 +65,7 @@ void fillNullColumns(
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   for (const auto& proj : projections) {
     auto cudfDataType =
         veloxToCudfDataType(inputType->childAt(proj.inputChannel));
@@ -157,14 +157,14 @@ void CudfJoinOutputLayout::scatterBuildInputColumns(
 void CudfJoinOutputLayout::fillNullProbeColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) const {
+    cuda::stream_ref stream) const {
   fillNullColumns(probeProjections_, probeType_, outCols, numRows, stream);
 }
 
 void CudfJoinOutputLayout::fillNullBuildColumns(
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) const {
+    cuda::stream_ref stream) const {
   fillNullColumns(buildProjections_, buildType_, outCols, numRows, stream);
 }
 

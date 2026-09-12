@@ -87,7 +87,7 @@ class CudfSplitReader : public NvtxHelper {
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
 
   /// Get the stream.
-  rmm::cuda_stream_view stream() const {
+  cuda::stream_ref stream() const {
     return stream_;
   }
 
@@ -136,7 +136,7 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
 
-  rmm::cuda_stream_view stream_;
+  cuda::stream_ref stream_{cudaStream_t{cudaStreamDefault}};
 
   // Parquet metadata(s) for the current split(s).
   std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;

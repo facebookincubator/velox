@@ -33,7 +33,7 @@
 #include <cudf/join/hash_join.hpp>
 #include <cudf/table/table.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 
@@ -70,9 +70,9 @@ class CudfHashJoinBridge : public exec::JoinBridge {
   std::optional<hash_type> hashOrFuture(ContinueFuture* future);
 
   // Store and retrieve the CUDA stream used for building the hash join.
-  void setBuildStream(rmm::cuda_stream_view buildStream);
+  void setBuildStream(cuda::stream_ref buildStream);
 
-  std::optional<rmm::cuda_stream_view> getBuildStream();
+  std::optional<cuda::stream_ref> getBuildStream();
 
   void setBuildReadyEvent(std::shared_ptr<CudaEvent> buildReadyEvent);
 
@@ -83,7 +83,7 @@ class CudfHashJoinBridge : public exec::JoinBridge {
    * operators */
   std::optional<hash_type> hashObject_;
   /** @brief CUDA stream used by build operator for proper synchronization */
-  std::optional<rmm::cuda_stream_view> buildStream_;
+  std::optional<cuda::stream_ref> buildStream_;
   /** @brief Event recorded after build-side CUDA work is ready for probes */
   std::shared_ptr<CudaEvent> buildReadyEvent_;
 };
@@ -169,7 +169,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  void waitForBuildReady(rmm::cuda_stream_view stream);
+  void waitForBuildReady(cuda::stream_ref stream);
 
   std::shared_ptr<const core::HashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
@@ -222,7 +222,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   bool skipInput_{false};
 
   /** @brief CUDA stream from build operator for synchronization */
-  std::optional<rmm::cuda_stream_view> buildStream_;
+  std::optional<cuda::stream_ref> buildStream_;
   /** @brief Event recorded after build-side CUDA work is ready for probes */
   std::shared_ptr<CudaEvent> buildReadyEvent_;
   /** @brief CUDA event for coordinating stream synchronization */
@@ -251,7 +251,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   /// to skip: the driver loop guarantees all addInput batches are consumed by
   /// getOutput() before noMoreInput() fires, and unset flags remain in their
   /// host-synchronized all-false init state with no pending GPU work.
-  std::optional<rmm::cuda_stream_view> lastProbeStream_;
+  std::optional<cuda::stream_ref> lastProbeStream_;
 
   static constexpr auto oobPolicy = cudf::out_of_bounds_policy::NULLIFY;
 
@@ -268,7 +268,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> innerJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs left join between probe table and all build tables.
    * @param leftTableView Probe-side table view to join
@@ -277,7 +277,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> leftJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs right join between probe table and all build tables.
    * @param leftTableView Probe-side table view to join
@@ -286,7 +286,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> rightJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs full outer join between probe table and all build tables.
    * @param leftTableView Probe-side table view to join
@@ -295,7 +295,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> fullJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs left semi filter join between probe table and all build
    * tables.
@@ -305,7 +305,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> leftSemiFilterJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs left semi project join between probe table and all build
    * tables. Returns all probe rows with a boolean match column indicating
@@ -316,7 +316,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> leftSemiProjectJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs right semi filter join between probe table and all build
    * tables.
@@ -326,7 +326,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> rightSemiFilterJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Performs anti join between probe table and all build tables.
    * @param leftTableView Probe-side table view to join
@@ -335,7 +335,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
    */
   std::vector<JoinOutput> antiJoin(
       cudf::table_view leftTableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Constructs join output table without applying filter conditions.
    * @param leftTableView Input probe table view
@@ -350,7 +350,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       cudf::column_view leftIndicesCol,
       cudf::table_view rightTableView,
       cudf::column_view rightIndicesCol,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
   /**
    * @brief Constructs join output table with filter condition applied.
    * @param leftTableView Input probe table view
@@ -369,7 +369,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       std::function<std::vector<std::unique_ptr<cudf::column>>(
           std::vector<std::unique_ptr<cudf::column>>&&,
           cudf::column_view)> func,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   JoinOutput filteredOutputIndices(
       cudf::table_view leftTableView,
@@ -379,7 +379,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
       cudf::table_view extendedLeftView,
       cudf::table_view extendedRightView,
       cudf::join_kind joinKind,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 };
 
 /**

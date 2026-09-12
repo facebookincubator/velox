@@ -52,7 +52,7 @@ class InteropTest : public ::testing::Test, public VectorTestBase {
     // Convert cudf -> Velox using the existing Arrow path.
     auto result = cudf_velox::with_arrow::toVeloxColumn(
         cudfTable->view(), pool_.get(), input->type(), stream, mr);
-    stream.synchronize();
+    stream.sync();
 
     // Verify.
     test::assertEqualVectors(input, result);
