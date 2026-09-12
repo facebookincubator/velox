@@ -99,6 +99,12 @@ struct WriterOptions {
   // once per-chunk null/min/max stats are fully rolled out.
   bool enableChunkIndex{false};
 
+  /// When true, V2 chunk statistics are built for all streams. Mutually
+  /// exclusive with enableChunkIndex.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  bool enableChunkStats{false};
+
   /// Skip writing chunk stats for a stripe group if the average number
   /// of chunks per stream is below this threshold. 0 disables chunk stats
   /// skipping.

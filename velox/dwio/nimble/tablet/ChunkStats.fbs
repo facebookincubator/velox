@@ -45,10 +45,30 @@ table StripeChunkStats {
   stream_chunk_null_counts:[uint32];
 }
 
-/// Root table for the chunk stats optional section ("columnar.chunk.stats").
-/// Contains per-stripe-group MetadataSection references.
+/// V2 chunk-level position index using Nimble-encoded arrays. Data is laid out
+/// in stream-major order: all chunks for stream 0 across all stripes, then
+/// stream 1, etc. Each encoded-stream vector contains one concatenated array.
+table StripeChunkStatsV2 {
+  /// Total number of streams indexed in this stripe group.
+  stream_count:uint32;
+  /// Per-stream accumulated chunk counts in stream-major order.
+  /// Length = stream_count * the surrounding stripe group's stripe count.
+  /// For stream s and stripe t at index i = s * stripe_count + t:
+  ///   chunk count = stream_chunk_counts[i] - (t > 0 ? stream_chunk_counts[i-1] : 0)
+  stream_chunk_counts:[uint32];
+  /// Nimble-encoded accumulated row counts for all chunks.
+  chunk_rows:[EncodedStream];
+  /// Nimble-encoded byte offsets for all chunks.
+  chunk_offsets:[EncodedStream];
+  /// Nimble-encoded null-value counts for all chunks.
+  chunk_null_counts:[EncodedStream];
+}
+
+/// Root table for the "columnar.chunk.stats" or "columnar.chunk.stats.v2"
+/// optional section. Contains per-stripe-group MetadataSection references.
 table ChunkStats {
-  /// MetadataSection for each stripe group's StripeChunkStats.
+  /// MetadataSection for each stripe group's version-specific chunk stats
+  /// table.
   /// Parallel to Footer.stripe_groups. size==0 means no chunk stats
   /// for that group (e.g., when average chunks per stream is below threshold).
   stripe_indexes:[MetadataSection];
