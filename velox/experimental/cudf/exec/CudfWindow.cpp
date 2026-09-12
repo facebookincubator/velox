@@ -181,7 +181,7 @@ cudf::rank_method toRankMethod(const std::string& name) {
 
 std::unique_ptr<cudf::column> makeConstantOnesColumn(
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
   return cudf::make_column_from_scalar(oneScalar, numRows, stream, mr);
@@ -191,7 +191,7 @@ cudf::column_view makeCountStarInputColumn(
     const cudf::table_view& sortedView,
     cudf::size_type logicalRowCount,
     ColumnOrView& owner,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (sortedView.num_columns() > 0) {
     return sortedView.column(0);
@@ -214,7 +214,7 @@ std::unique_ptr<cudf::column> computeGlobalAggregate(
     bool isCountStar,
     cudf::data_type resultType,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::unique_ptr<cudf::scalar> resultScalar;
   if (baseName == "sum") {
@@ -748,7 +748,7 @@ void CudfWindow::computeRankColumnsBatch(
     const std::vector<std::pair<size_t, std::string>>& pendingRanks,
     cudf::groupby::groupby* rankGrouper,
     std::vector<std::unique_ptr<cudf::column>>& windowResultCols,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   if (pendingRanks.empty()) {
     return;
@@ -838,7 +838,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
     cudf::column_view inputCol,
     const core::WindowNode::Function& func,
     const std::string& baseName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK_LE(
       func.functionCall->inputs().size(),
@@ -889,7 +889,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     const core::WindowNode::Function& func,
     std::unique_ptr<cudf::rolling_aggregation> agg,
     bool isFullPartition,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   // RANGE frames are handled by the batched grouped_range_rolling_window path
   // in doGetOutput (see toBatchRangeWindowTypes). canRunOnGPU only accepts
@@ -924,7 +924,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
     const core::WindowNode::Function& func,
     const std::string& baseName,
     bool isFullPartition,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto nullPolicy = func.ignoreNulls ? cudf::null_policy::EXCLUDE
                                      : cudf::null_policy::INCLUDE;
@@ -948,7 +948,7 @@ std::unique_ptr<cudf::column> CudfWindow::computeAggregateColumn(
     const core::WindowNode::Function& func,
     const std::string& baseName,
     bool isCountStar,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   // The unpartitioned, sort-key-less full-partition case is already
   // dispatched to computeGlobalAggregate() directly from doGetOutput(), so
@@ -1260,7 +1260,7 @@ void CudfWindow::doClose() {
   Operator::close();
   // Release GPU allocations only after pending work on stream_ completes.
   if (streamAcquired_) {
-    stream_.synchronize();
+    stream_.sync();
   }
   inputBatches_.clear();
   sortedData_.reset();
