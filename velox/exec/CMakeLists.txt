@@ -209,6 +209,7 @@ velox_add_library(
   Spill.h
   SpillFile.h
   Spiller.h
+  SkewResilientRadixPartitioner.h
   Split.h
   StreamingAggregation.h
   StreamingEnforceDistinct.h
