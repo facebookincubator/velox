@@ -1600,6 +1600,24 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
 
 void initializeEncodingLayouts(
     const TypeBuilder& typeBuilder,
+    const EncodingLayoutTree& encodingLayoutTree);
+
+void initializeFlatMapFieldEncodingLayout(
+    const TypeBuilder& flatMap,
+    std::string_view fieldKey,
+    const TypeBuilder& fieldType) {
+  const auto* flatMapContext = flatMap.context<FlatmapEncodingLayoutContext>();
+  if (flatMapContext == nullptr) {
+    return;
+  }
+  const auto layout = flatMapContext->keyEncodings.find(fieldKey);
+  if (layout != flatMapContext->keyEncodings.end()) {
+    initializeEncodingLayouts(fieldType, *layout->second);
+  }
+}
+
+void initializeEncodingLayouts(
+    const TypeBuilder& typeBuilder,
     const EncodingLayoutTree& encodingLayoutTree) {
   {
 #define SET_STREAM_CONTEXT(builder, descriptor, identifier)           \
@@ -1618,8 +1636,14 @@ void initializeEncodingLayouts(
           encodingLayoutTree.schemaKind(),
           Kind::FlatMap,
           "Incompatible encoding layout node. Expecting flatmap node.");
-      const auto& mapBuilder = typeBuilder.asFlatMap();
-      SET_STREAM_CONTEXT(mapBuilder, nullsDescriptor, FlatMap::NullsStream);
+      const auto& flatMapBuilder = typeBuilder.asFlatMap();
+      SET_STREAM_CONTEXT(flatMapBuilder, nullsDescriptor, FlatMap::NullsStream);
+      for (size_t index = 0; index < flatMapBuilder.childrenCount(); ++index) {
+        initializeFlatMapFieldEncodingLayout(
+            flatMapBuilder,
+            flatMapBuilder.nameAt(index),
+            flatMapBuilder.childAt(index));
+      }
       return;
     }
 
@@ -1770,16 +1794,13 @@ void configureAddedFlatMapField(
   collectFlatMapValueStreamOffsets(fieldType, valueStreamOffsets);
   inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
 
+  if (context.options().encodingLayoutTree.has_value()) {
+    initializeFlatMapFieldEncodingLayout(flatmap, fieldKey, fieldType);
+  }
+
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
     return;
-  }
-
-  if (context.options().encodingLayoutTree.has_value()) {
-    auto it = flatMapContext->keyEncodings.find(fieldKey);
-    if (it != flatMapContext->keyEncodings.end()) {
-      initializeEncodingLayouts(fieldType, *it->second);
-    }
   }
 
   auto it = flatMapContext->valueDictionaries.find(std::string{fieldKey});
