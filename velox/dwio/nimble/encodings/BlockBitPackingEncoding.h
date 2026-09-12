@@ -1238,7 +1238,12 @@ std::string_view BlockBitPackingEncoding<T>::slice(
     return encodedBlockRange;
   }
   return SliceEncoding<T>::wrap(
-      encodedBlockRange, skipLeadingRows, length, buffer, options);
+      encodedBlockRange,
+      skipLeadingRows,
+      length,
+      buffer,
+      /*valueDelta=*/0,
+      options);
 }
 
 template <typename T>
