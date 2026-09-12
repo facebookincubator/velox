@@ -41,7 +41,12 @@ extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
 extern std::optional<rmm::mr::statistics_resource_adaptor> statsMr_;
 extern std::optional<rmm::mr::statistics_resource_adaptor> outputStatsMr_;
 
-/// Returns the memory resource designated for temporary allocations.
+/// Returns the temporary resource selected for the current cuDF call, falling
+/// back to RMM's current device resource outside an operator call.
+///
+/// Also declared in CudfNoDefaults.h. That header cannot be included here: it
+/// poisons cudf's implicit stream and resource getters, which the translation
+/// units including this header call explicitly.
 rmm::device_async_resource_ref get_temp_mr();
 
 /// Returns the memory resource designated for output vector allocations.
@@ -100,6 +105,10 @@ createMemoryResource(std::string_view mode, int percent);
 
 /// Releases retired UCX exchange resources with no live packed buffers.
 /// Returns true when no active or in-use exchange resources remain.
+///
+/// Defined in CudfMemoryResource.cpp and declared in both headers: callers of
+/// this one cannot include CudfMemoryResource.h, which drags in cudf headers
+/// that redefine the getters CudfNoDefaults.h poisons.
 bool tryResetCudfExchangeMemoryResource();
 
 /// Tears down all process-owned UCX exchange resources. There must be no
