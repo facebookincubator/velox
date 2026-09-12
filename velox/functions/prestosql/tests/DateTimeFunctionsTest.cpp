@@ -382,6 +382,8 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
   EXPECT_EQ(Timestamp(-1, 9000000), fromUnixtime(-0.991));
   EXPECT_EQ(Timestamp(1, 0), fromUnixtime(1 - 1e-10));
   EXPECT_EQ(Timestamp(4000000000, 0), fromUnixtime(4000000000));
+  EXPECT_EQ(Timestamp::maxMillis(), fromUnixtime(1'789'000'000'000'000'000.0));
+  EXPECT_EQ(Timestamp::minMillis(), fromUnixtime(-1'789'000'000'000'000'000.0));
   EXPECT_EQ(
       Timestamp(9'223'372'036'854'775, 807'000'000), fromUnixtime(3.87111e+37));
   EXPECT_EQ(Timestamp(4000000000, 123000000), fromUnixtime(4000000000.123));

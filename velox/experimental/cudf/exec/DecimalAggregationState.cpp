@@ -33,7 +33,7 @@ namespace facebook::velox::cudf_velox {
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VELOX_CHECK(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column (type is {})",
@@ -148,7 +148,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,
@@ -231,7 +231,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       countCol.type().id() == cudf::type_id::INT64,

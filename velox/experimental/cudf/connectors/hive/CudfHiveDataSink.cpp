@@ -160,7 +160,7 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
   auto stream = cudfGlobalStreamPool().get_stream();
   auto cudfInput =
       with_arrow::toCudfTable(input, input->pool(), stream, get_temp_mr());
-  stream.synchronize();
+  stream.sync();
   VELOX_CHECK_NOT_NULL(
       cudfInput, "Failed to convert input RowVectorPtr to cudf::table");
 
@@ -178,7 +178,7 @@ void CudfHiveDataSink::appendData(RowVectorPtr input) {
 std::unique_ptr<cudf::io::chunked_parquet_writer>
 CudfHiveDataSink::createCudfWriter(
     cudf::table_view cudfTable,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Create a table_input_metadata from the input
   auto tableInputMetadata = createCudfTableInputMetadata(cudfTable);
 
