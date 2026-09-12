@@ -34,16 +34,71 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
-using velox::rpc::RPCRequest;
+using velox::rpc::RpcPayload;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
+
+/// Read a response's payload as the concrete type the function produced.
+///
+/// A transport helper shared by several functions writes one payload type for
+/// all of them, so a function does not always read back the type it wrote, and
+/// an unchecked cast would reinterpret one payload's bytes as another's. The
+/// type is therefore checked in every build. There is no "carries neither a
+/// payload nor an error" case to guard: RPCResponse cannot represent one.
+template <typename T>
+const T& responseAs(const RPCResponse& response) {
+  VELOX_CHECK(
+      !response.hasError(),
+      "RPC response carries an error, not a payload: {}",
+      response.error().message);
+  return response.payload().template get<T>();
+}
+
+/// Payload for functions whose backend returns text. Shared by the text
+/// functions via buildTextOutput(); a function with a richer result (an
+/// embedding, a struct) defines its own payload type instead.
+struct TextPayload {
+  std::string text;
+
+  explicit TextPayload(std::string value) : text(std::move(value)) {}
+};
+
+/// Wrap text as a response payload. Returns the payload by value: it is
+/// stored inline in the response, so there is nothing to allocate.
+inline TextPayload makeTextPayload(std::string value) {
+  return TextPayload{std::move(value)};
+}
+
+/// Build a VARCHAR output vector from text payloads: errors become SQL NULL,
+/// successes carry their text through.
+///
+/// This is a helper the text functions call from their own buildOutput(), not
+/// a default they inherit. A function that returns something else gets a
+/// compile error for not implementing buildOutput(), rather than a column of
+/// silent NULLs from a default that could not read its payload.
+inline VectorPtr buildTextOutput(
+    const std::vector<RPCResponse>& responses,
+    memory::MemoryPool* pool) {
+  const auto numRows = static_cast<vector_size_t>(responses.size());
+  auto result =
+      BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    if (responses[i].hasError()) {
+      result->setNull(i, true);
+    } else {
+      result->set(i, StringView(responseAs<TextPayload>(responses[i]).text));
+    }
+  }
+  return result;
+}
 
 /// Base interface for async RPC functions (business logic layer).
 ///
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
-/// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// analogous to VectorFunction in velox/expression/. The framework-visible
+/// response type (RPCResponse) lives in velox/common/rpc/; the concrete
+/// request and response payload types belong to each function.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -157,7 +212,7 @@ class AsyncRPCFunction {
   /// into the correct positions before stamping global row IDs. The
   /// responses may appear in any order in the vector; the operator
   /// reorders them by rowId. Null rows get
-  /// RPCResponse{.error = "null_input"}. This keeps the operator
+  /// a response carrying RPCErrorKind::kNullInput. This keeps the operator
   /// completely agnostic to null handling in batch mode.
   virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
       int32_t /*maxRows*/) {
@@ -177,27 +232,25 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Returns the number of backend admission slots needed to flush 'numRows'.
+  /// The result must be positive and nondecreasing with 'numRows', and one row
+  /// must require exactly one unit. Native and asynchronous batch APIs consume
+  /// one slot per flush. Functions that implement a batch instruction by
+  /// issuing one RPC per row override this to return 'numRows'.
+  virtual int32_t admissionUnitsForBatch(int32_t /*numRows*/) const {
+    return 1;
+  }
+
   // ── Output ────────────────────────────────────────────────────
 
-  /// Build output vector from completed responses.
-  /// Default: VARCHAR FlatVector (errors → SQL NULL, success → string
-  /// value). Override for non-VARCHAR return types (e.g., ARRAY(REAL)
-  /// for embeddings) or custom result processing.
+  /// Build the output vector from completed responses.
+  ///
+  /// Only the function can do this: it is the one that knows what its
+  /// payload contains and how it maps onto resultType(). Functions returning
+  /// text can delegate to buildTextOutput().
   virtual VectorPtr buildOutput(
       const std::vector<RPCResponse>& responses,
-      memory::MemoryPool* pool) const {
-    const auto numRows = static_cast<vector_size_t>(responses.size());
-    auto result =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (responses[i].hasError()) {
-        result->setNull(i, true);
-      } else {
-        result->set(i, StringView(responses[i].result));
-      }
-    }
-    return result;
-  }
+      memory::MemoryPool* pool) const = 0;
 
   // ── Congestion Control ───────────────────────────────────────
 
