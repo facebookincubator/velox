@@ -28,7 +28,7 @@ ConstantEncoding<std::string_view>::ConstantEncoding(
   value_ = encoding::read<physicalType>(pos);
   NIMBLE_CHECK(pos == data.end(), "Unexpected constant encoding end");
   auto stringBuffer = static_cast<char*>(stringBufferFactory(value_.size()));
-  std::memcpy(stringBuffer, value_.begin(), value_.size());
+  std::memcpy(stringBuffer, value_.data(), value_.size());
   value_ = std::string_view{stringBuffer, value_.size()};
 }
 
