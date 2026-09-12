@@ -31,5 +31,5 @@ void estimateSerializedSizeInt(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch,
-    bool flatten = false);
+    bool flatten = true);
 } // namespace facebook::velox::serializer::presto::detail
