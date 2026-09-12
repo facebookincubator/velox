@@ -68,6 +68,11 @@ class SharedDictionaryReaderFactory;
 class SharedDictionaryAlphabet;
 class ExternalDictionaryResolver;
 
+namespace index {
+class VectorIndex;
+class VectorIndexDirectory;
+} // namespace index
+
 /// Nimble-specific reader options carried through Velox common ReaderOptions.
 class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
  public:
@@ -296,6 +301,14 @@ class TabletReader {
   const index::IndexLookup* denseIndex(
       std::string_view name,
       const std::vector<std::string>& columns) const;
+
+  /// Returns whether the file contains a vector index for the column.
+  bool hasVectorIndex(std::string_view columnName) const;
+
+  /// Loads the immutable vector index on first use and reuses it thereafter.
+  /// Returns nullptr if the column has no vector index.
+  std::shared_ptr<const index::VectorIndex> vectorIndex(
+      std::string_view columnName) const;
 
   uint64_t fileSize() const {
     return fileSize_;
@@ -559,6 +572,13 @@ class TabletReader {
 
   void initDenseIndexes();
 
+  // Parses vector index descriptors and configures their index data input.
+  void initVectorIndexes();
+
+  // Loads one vector index for insertion into the metadata cache.
+  std::shared_ptr<const index::VectorIndex> loadVectorIndex(
+      const std::string& columnName) const;
+
   // Loads chunk stats and preloads the first group from footerBuf
   // when available.
   void initChunkStats(
@@ -618,6 +638,12 @@ class TabletReader {
   FileProperties properties_{false, false, {}};
 
   std::unique_ptr<index::DenseIndexRegistry> denseIndexRegistry_;
+
+  // Describes available indexes without materializing their FAISS data.
+  std::unique_ptr<index::VectorIndexDirectory> vectorIndexDirectory_;
+  // Keeps immutable indexes strongly cached for the reader lifetime.
+  mutable MetadataCache<std::string, const index::VectorIndex>
+      vectorIndexCache_;
 
   // Chunk stats root, loaded from the "columnar.chunk.stats" optional section.
   std::unique_ptr<ChunkStats> chunkStats_;

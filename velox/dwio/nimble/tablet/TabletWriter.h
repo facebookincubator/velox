@@ -23,7 +23,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
-#include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"

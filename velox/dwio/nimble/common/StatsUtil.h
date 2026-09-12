@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 
 #include "velox/common/base/SimdUtil.h"
@@ -39,6 +40,10 @@ constexpr bool kIntegralMinMaxType = std::is_integral_v<std::remove_cv_t<T>> &&
 template <typename T>
 constexpr bool kFloatingPointMinMaxType =
     std::is_floating_point_v<std::remove_cv_t<T>>;
+
+template <typename T>
+constexpr bool kStringMinMaxType =
+    std::is_same_v<std::remove_cv_t<T>, std::string_view>;
 
 template <typename T>
 std::enable_if_t<kIntegralMinMaxType<T>, MinMax<std::remove_cv_t<T>>>
@@ -105,6 +110,32 @@ findMinMax(std::span<T> values) {
   }
 
   return MinMax<Value>{
+      .min = minValue,
+      .max = maxValue,
+  };
+}
+
+/// Returns bounds as views into 'values'; copy them before the buffer is
+/// recycled. Branches instead of calling std::min and std::max unconditionally
+/// because string comparison is not free, and a value below the running minimum
+/// cannot also be above the running maximum.
+template <typename T>
+  requires(kStringMinMaxType<T>)
+MinMax<std::remove_cv_t<T>> findMinMax(std::span<T> values) {
+  using Value = std::remove_cv_t<T>;
+
+  Value minValue{values.front()};
+  Value maxValue{values.front()};
+
+  for (const Value value : values) {
+    if (value < minValue) {
+      minValue = value;
+    } else if (value > maxValue) {
+      maxValue = value;
+    }
+  }
+
+  return {
       .min = minValue,
       .max = maxValue,
   };

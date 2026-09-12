@@ -16,6 +16,7 @@
 #include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -38,14 +39,17 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/velox/BatchReader.h"
@@ -1925,6 +1929,85 @@ TEST_P(BatchReaderTest, readComplexData) {
         }
       }
     }
+  }
+}
+
+DEBUG_ONLY_TEST_P(BatchReaderTest, parallelDecode) {
+  velox::common::testutil::TestValue::enable();
+
+  const auto nestedType = velox::ROW({
+      {"integer", velox::BIGINT()},
+      {"floatingPoint", velox::DOUBLE()},
+  });
+  const auto type = velox::ROW({
+      {"left", nestedType},
+      {"right", nestedType},
+  });
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 50, .nullRatio = 0}, leafPool_.get());
+  const auto input = fuzzer.fuzzInputRow(type);
+  const auto file = nimble::test::createNimbleFile(*rootPool_, input);
+  const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+
+  constexpr uint32_t kMaxDecodeParallelism{4};
+  folly::CPUThreadPoolExecutor executor{kMaxDecodeParallelism};
+
+  // Keep the decode pool count aligned with the parallel task budget.
+  std::vector<std::shared_ptr<velox::memory::MemoryPool>> decodePoolOwners;
+  decodePoolOwners.reserve(kMaxDecodeParallelism);
+  nimble::BatchReadParams params;
+  params.decodeExecutor = &executor;
+  params.maxDecodeParallelism = kMaxDecodeParallelism;
+  params.minStreamsPerDecodeTask = 1;
+  for (uint32_t i = 0; i < kMaxDecodeParallelism; ++i) {
+    decodePoolOwners.emplace_back(
+        rootPool_->addLeafChild(fmt::format("parallel_decode_{}", i)));
+    params.decodePools.emplace_back(decodePoolOwners.back().get());
+  }
+
+  velox::VectorPtr result;
+  {
+    std::vector<uint32_t> plannedTaskCounts;
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::DecodePlanBuilder::build",
+        std::function<void(const uint32_t*)>([&](const uint32_t* taskCount) {
+          plannedTaskCounts.emplace_back(*taskCount);
+        }));
+    std::atomic_uint32_t numParallelRowDecodes{0};
+    std::atomic_bool unexpectedTaskCount{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::decodeChildRanges",
+        std::function<void(const uint32_t*)>([&](const uint32_t* taskCount) {
+          if (*taskCount != 2) {
+            unexpectedTaskCount = true;
+          }
+          ++numParallelRowDecodes;
+        }));
+
+    auto reader = createBatchReader(readFile, *leafPool_, nullptr, params);
+    ASSERT_TRUE(reader->next(input->size(), result));
+    EXPECT_FALSE(reader->next(1, result));
+
+    const std::vector<uint32_t> expectedTaskCounts{2, 2, 2};
+    EXPECT_EQ(plannedTaskCounts, expectedTaskCounts);
+    EXPECT_EQ(numParallelRowDecodes, expectedTaskCounts.size());
+    EXPECT_FALSE(unexpectedTaskCount);
+  }
+
+  ASSERT_EQ(result->size(), input->size());
+  for (velox::vector_size_t row = 0; row < result->size(); ++row) {
+    EXPECT_TRUE(input->equalValueAt(result.get(), row, row));
+  }
+  EXPECT_GT(decodePoolOwners[0]->stats().cumulativeBytes, 0);
+  EXPECT_GT(decodePoolOwners[1]->stats().cumulativeBytes, 0);
+
+  auto skipReader = createBatchReader(readFile, *leafPool_, nullptr, params);
+  constexpr uint32_t kNumSkippedRows{17};
+  EXPECT_EQ(skipReader->skipRows(kNumSkippedRows), kNumSkippedRows);
+  ASSERT_TRUE(skipReader->next(input->size(), result));
+  ASSERT_EQ(result->size(), input->size() - kNumSkippedRows);
+  for (velox::vector_size_t row = 0; row < result->size(); ++row) {
+    EXPECT_TRUE(input->equalValueAt(result.get(), row + kNumSkippedRows, row));
   }
 }
 
@@ -4297,11 +4380,15 @@ TEST_P(BatchReaderTest, flatMapSkipAllFalseInMapStream) {
 
   // Read back as struct selecting all keys and verify null pattern.
   {
+    folly::CPUThreadPoolExecutor executor{4};
     velox::InMemoryReadFile readFile(file);
     auto selector = std::make_shared<velox::dwio::common::ColumnSelector>(type);
     nimble::BatchReadParams readParams = createReadParams();
     readParams.readFlatMapFieldAsStruct.insert("flat_map");
     readParams.flatMapFeatureSelector["flat_map"].features = {"1", "2", "3"};
+    readParams.decodeExecutor = &executor;
+    readParams.maxDecodeParallelism = 4;
+    readParams.minStreamsPerDecodeTask = 1;
     nimble::BatchReader reader(
         &readFile, *leafPool_, std::move(selector), readParams);
     velox::VectorPtr output;

@@ -463,11 +463,15 @@ core::PlanNodePtr getTraceNode(
           mergeExchangeNode->outputType(),
           mergeExchangeNode->sortingKeys(),
           mergeExchangeNode->sortingOrders(),
-          mergeExchangeNode->serdeKind());
+          mergeExchangeNode->serdeKind(),
+          mergeExchangeNode->transportKind());
     }
     // Regular ExchangeNode
     return std::make_shared<core::ExchangeNode>(
-        nodeId, exchangeNode->outputType(), exchangeNode->serdeKind());
+        nodeId,
+        exchangeNode->outputType(),
+        exchangeNode->serdeKind(),
+        exchangeNode->transportKind());
   }
 
   for (const auto& factory : traceNodeRegistry()) {

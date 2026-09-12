@@ -208,6 +208,25 @@ void Statistics<T, InputType>::populateMinMax() const {
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populatePhysicalOrderNonDecreasing()
+    const noexcept {
+  physicalOrderNonDecreasing_ = std::is_sorted(data_.begin(), data_.end());
+}
+
+template <typename T, typename InputType>
+void Statistics<T, InputType>::populateSignedOrderNonDecreasing()
+    const noexcept {
+  using UnsignedInputType = std::make_unsigned_t<InputType>;
+  constexpr auto signMask = UnsignedInputType{1}
+      << (std::numeric_limits<UnsignedInputType>::digits - 1);
+  signedOrderNonDecreasing_ = std::is_sorted(
+      data_.begin(), data_.end(), [](const auto lhs, const auto rhs) {
+        return (static_cast<UnsignedInputType>(lhs) ^ signMask) <
+            (static_cast<UnsignedInputType>(rhs) ^ signMask);
+      });
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateUniques() const {
   MapType<T, InputType> uniqueCounts;
   if constexpr (nimble::isBoolType<T>()) {
@@ -240,11 +259,22 @@ void Statistics<T, InputType>::populateUniques() const {
 template <typename T, typename InputType>
 void Statistics<T, InputType>::populateMinMaxBlocks(uint16_t blockSize) const {
   static_assert(std::is_unsigned_v<T>);
-  BlockStatsAccumulator acc(blockSize);
-  for (const auto& v : data_) {
-    acc.add(static_cast<uint64_t>(static_cast<T>(v)));
+  static_assert(std::is_same_v<T, InputType>);
+
+  std::vector<BlockStats> blocks;
+  if (data_.empty()) {
+    minMaxBlocks_ = std::move(blocks);
+    return;
   }
-  minMaxBlocks_ = acc.finish();
+
+  const size_t effectiveBlockSize = blockSize == 0 ? data_.size() : blockSize;
+  blocks.reserve((data_.size() - 1) / effectiveBlockSize + 1);
+  for (size_t offset = 0; offset < data_.size(); offset += effectiveBlockSize) {
+    const auto count = std::min(effectiveBlockSize, data_.size() - offset);
+    const auto minMax = findMinMax(data_.subspan(offset, count));
+    blocks.push_back({count, minMax.min, minMax.max});
+  }
+  minMaxBlocks_ = std::move(blocks);
 }
 
 template <typename T, typename InputType>
@@ -318,6 +348,8 @@ Statistics<T, InputType> Statistics<T, InputType>::create(
     statistics.totalStringsRepeatLength_ = 0;
     statistics.min_ = T();
     statistics.max_ = T();
+    statistics.physicalOrderNonDecreasing_ = true;
+    statistics.signedOrderNonDecreasing_ = true;
 
     statistics.bucketCounts_ = {};
     statistics.uniqueCounts_ = std::make_optional(
@@ -401,6 +433,35 @@ template void Statistics<float>::populateMinMax() const;
 template void Statistics<double>::populateMinMax() const;
 template void Statistics<std::string_view>::populateMinMax() const;
 template void Statistics<std::string_view, std::string>::populateMinMax() const;
+
+// populatePhysicalOrderNonDecreasing works on integral types only.
+template void Statistics<int8_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint8_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<int16_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint16_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<int32_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint32_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<int64_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint64_t>::populatePhysicalOrderNonDecreasing()
+    const noexcept;
+
+// populateSignedOrderNonDecreasing is used when signed logical values are
+// represented by unsigned physical values.
+template void Statistics<uint8_t>::populateSignedOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint16_t>::populateSignedOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint32_t>::populateSignedOrderNonDecreasing()
+    const noexcept;
+template void Statistics<uint64_t>::populateSignedOrderNonDecreasing()
+    const noexcept;
 
 // populateMinMaxBlocks is used through the estimation path where T is always
 // the unsigned physicalType.

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
@@ -40,6 +41,8 @@
 #include "velox/dwio/nimble/index/HashIndexConfig.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/SortedIndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndex.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
@@ -1049,6 +1052,148 @@ TEST_P(TabletTest, hasOptionalSectionEmpty) {
   EXPECT_FALSE(tablet->hasOptionalSection("section1"));
   EXPECT_FALSE(tablet->hasOptionalSection(""));
   EXPECT_FALSE(tablet->hasOptionalSection("any_name"));
+}
+
+TEST_P(TabletTest, vectorIndex) {
+  constexpr velox::vector_size_t kNumVectors{4};
+  constexpr velox::vector_size_t kDimensions{2};
+  constexpr std::array<float, kNumVectors * kDimensions> kValues{
+      0.0,
+      0.0,
+      1.0,
+      1.0,
+      2.0,
+      2.0,
+      3.0,
+      3.0,
+  };
+
+  auto elements =
+      velox::BaseVector::create(velox::REAL(), kValues.size(), pool_.get());
+  auto* flatElements = elements->asFlatVector<float>();
+  for (velox::vector_size_t i = 0; i < kValues.size(); ++i) {
+    flatElements->set(i, kValues[i]);
+  }
+  auto embeddings = std::make_shared<velox::ArrayVector>(
+      pool_.get(),
+      velox::ARRAY(velox::REAL()),
+      nullptr,
+      kNumVectors,
+      velox::allocateOffsets(kNumVectors, pool_.get()),
+      velox::allocateSizes(kNumVectors, pool_.get()),
+      elements);
+  auto* offsets = embeddings->mutableOffsets(kNumVectors)
+                      ->asMutable<velox::vector_size_t>();
+  auto* sizes =
+      embeddings->mutableSizes(kNumVectors)->asMutable<velox::vector_size_t>();
+  for (velox::vector_size_t i = 0; i < kNumVectors; ++i) {
+    offsets[i] = i * kDimensions;
+    sizes[i] = kDimensions;
+  }
+  const auto input = std::make_shared<velox::RowVector>(
+      pool_.get(),
+      velox::ROW({{"embedding", velox::ARRAY(velox::REAL())}}),
+      nullptr,
+      kNumVectors,
+      std::vector<velox::VectorPtr>{std::move(embeddings)});
+
+  for (const bool withVectorIndex : {false, true}) {
+    SCOPED_TRACE(fmt::format("withVectorIndex={}", withVectorIndex));
+    nimble::WriterOptions writerOptions;
+    if (withVectorIndex) {
+      writerOptions.vectorIndexConfigs.push_back(
+          nimble::VectorIndexConfig{
+              .columnName = "embedding",
+              .dimensions = kDimensions,
+              .metric = nimble::VectorDistanceMetric::kL2,
+              .indexType = nimble::VectorIndexType::kIvfFlat,
+              .numPartitions = 1,
+          });
+      writerOptions.vectorIndexWriterFactory =
+          nimble::index::VectorIndexWriter::create;
+    }
+
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        input->type(), std::move(writeFile), *pool_, std::move(writerOptions));
+    writer.write(input);
+    writer.close();
+
+    const auto tablet = createTabletReader(file);
+    EXPECT_EQ(tablet->hasVectorIndex("embedding"), withVectorIndex);
+    const auto indexBytesBeforeLoad = indexIoStats_->rawBytesRead();
+    const auto indexReadsBeforeLoad = indexIoStats_->read().count();
+    uint64_t numCacheEntriesBeforeLoad{0};
+    uint64_t numCacheInsertionsBeforeLoad{0};
+    if (expectHasCache()) {
+      const auto cacheStats = cache_->refreshStats();
+      numCacheEntriesBeforeLoad = cacheStats.numEntries;
+      numCacheInsertionsBeforeLoad = cacheStats.numNew;
+    }
+
+    const auto vectorIndex = tablet->vectorIndex("embedding");
+    if (!withVectorIndex) {
+      EXPECT_EQ(vectorIndex, nullptr);
+      EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesBeforeLoad);
+      EXPECT_EQ(indexIoStats_->read().count(), indexReadsBeforeLoad);
+      continue;
+    }
+
+    ASSERT_NE(vectorIndex, nullptr);
+    EXPECT_GT(indexIoStats_->rawBytesRead(), indexBytesBeforeLoad);
+    EXPECT_GT(indexIoStats_->read().count(), indexReadsBeforeLoad);
+    EXPECT_EQ(vectorIndex->columnName(), "embedding");
+    EXPECT_EQ(vectorIndex->dimensions(), kDimensions);
+    EXPECT_EQ(vectorIndex->numVectors(), kNumVectors);
+    const auto indexBytesAfterLoad = indexIoStats_->rawBytesRead();
+    const auto indexReadsAfterLoad = indexIoStats_->read().count();
+    EXPECT_EQ(tablet->vectorIndex("embedding"), vectorIndex);
+    EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesAfterLoad);
+    EXPECT_EQ(indexIoStats_->read().count(), indexReadsAfterLoad);
+    const auto results = vectorIndex->search({
+        .queryVector = {2.0, 2.0},
+        .numNeighbors = 1,
+        .numProbes = 1,
+    });
+    EXPECT_THAT(
+        results,
+        testing::ElementsAre(
+            testing::Field(
+                &nimble::index::VectorIndex::SearchResult::rowId, 2)));
+    EXPECT_FALSE(tablet->hasVectorIndex("missing"));
+    EXPECT_EQ(tablet->vectorIndex("missing"), nullptr);
+    EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesAfterLoad);
+    EXPECT_EQ(indexIoStats_->read().count(), indexReadsAfterLoad);
+
+    if (expectHasCache()) {
+      const auto coldCacheStats = cache_->refreshStats();
+      EXPECT_GT(coldCacheStats.numEntries, numCacheEntriesBeforeLoad);
+      EXPECT_GT(coldCacheStats.numNew, numCacheInsertionsBeforeLoad);
+
+      dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+      metadataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+      indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
+      readerOptions_.reset();
+
+      const auto warmTablet = createTabletReader(file);
+      const auto warmCacheStatsBeforeLoad = cache_->refreshStats();
+      const auto warmIndexBytesBeforeLoad = indexIoStats_->rawBytesRead();
+      const auto warmIndexReadsBeforeLoad = indexIoStats_->read().count();
+      const auto warmVectorIndex = warmTablet->vectorIndex("embedding");
+
+      ASSERT_NE(warmVectorIndex, nullptr);
+      EXPECT_EQ(warmVectorIndex->numVectors(), kNumVectors);
+      EXPECT_EQ(indexIoStats_->rawBytesRead(), warmIndexBytesBeforeLoad);
+      EXPECT_EQ(indexIoStats_->read().count(), warmIndexReadsBeforeLoad);
+      EXPECT_GT(indexIoStats_->ramHit().count(), 0);
+
+      const auto warmCacheStats = cache_->refreshStats();
+      EXPECT_EQ(warmCacheStats.numEntries, warmCacheStatsBeforeLoad.numEntries);
+      EXPECT_EQ(warmCacheStats.numNew, warmCacheStatsBeforeLoad.numNew);
+      EXPECT_GT(warmCacheStats.numHit, warmCacheStatsBeforeLoad.numHit);
+    }
+  }
 }
 
 TEST_P(TabletTest, optionalSectionsPreload) {

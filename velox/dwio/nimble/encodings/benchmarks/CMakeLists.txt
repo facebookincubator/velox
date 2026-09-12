@@ -165,6 +165,18 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::folly
     velox_memory
   )
+
+  add_executable(nimble_alp_encoding_benchmark ALPEncodingBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alp_encoding_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
+    fmt::fmt
+  )
 endif()
 
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)

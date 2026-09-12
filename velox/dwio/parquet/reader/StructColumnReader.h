@@ -94,6 +94,10 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::ColumnReaderOptions& columnReaderOptions,
       ParquetParams& params);
 
+  void applyMissingFieldPolicy(
+      const dwio::common::ColumnReaderOptions& columnReaderOptions,
+      bool nullStructIfAllFieldsMissing);
+
   dwio::common::SelectiveColumnReader* FOLLY_NONNULL findBestLeaf();
 
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
@@ -110,6 +114,10 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   // The level information for extracting nulls for 'this' from the
   // repdefs in a leaf PageReader.
   LevelInfo levelInfo_;
+
+  // True when all requested fields are missing from this file and the
+  // configured policy requires the struct itself to be null.
+  bool nullStructForMissingFields_{false};
 
   // Owns the synthetic non-projected reader and its ScanSpec.
   std::unique_ptr<SyntheticRepDefSource> syntheticRepDefSource_;

@@ -1082,7 +1082,7 @@ TEST_F(EncodingSizeEstimationTest, blockBitPackingConstantData) {
 
 TEST_F(EncodingSizeEstimationTest, blockBitPackingPartialLastBlock) {
   // 1500 values: 1 full block (1024) + 1 partial block (476).
-  // Verifies BlockStatsAccumulator correctly flushes the remainder.
+  // Verifies block statistics include the trailing partial block.
   std::vector<uint32_t> data;
   data.reserve(1500);
   for (uint32_t i = 0; i < 1500; ++i) {

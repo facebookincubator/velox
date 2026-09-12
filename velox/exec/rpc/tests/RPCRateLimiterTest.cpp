@@ -561,6 +561,28 @@ TEST_F(RPCRateLimiterTest, noBackpressureBelowLimit) {
   EXPECT_EQ(limiterFor(tier).stats().pending, 4);
 }
 
+// A backend that never backed off has no low-water mark, and zero would be
+// indistinguishable from "not recorded". Reporting the ceiling means every
+// reading of the stat is a real capacity.
+TEST_F(RPCRateLimiterTest, lowWaterReportsTheCeilingWhenNeverShrunk) {
+  const std::string tier = "test.tier";
+  setCeiling(tier, 64);
+  setAdaptive(tier, /*enabled=*/true, /*floor=*/2, /*decreaseFactor=*/0.5);
+
+  // Nothing has driven an overload, so capacity has never shrunk.
+  EXPECT_EQ(limiterFor(tier).stats().lowWaterCapacity, 64);
+
+  // Once it does shrink, the actual low-water value is reported instead.
+  limiterFor(tier).onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  const auto shrunk = limiterFor(tier).stats();
+  EXPECT_LT(shrunk.lowWaterCapacity, 64);
+  EXPECT_EQ(shrunk.lowWaterCapacity, shrunk.capacity);
+
+  // Recovering above the low-water mark leaves the mark where it was.
+  limiterFor(tier).onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'024);
+  EXPECT_EQ(limiterFor(tier).stats().lowWaterCapacity, shrunk.lowWaterCapacity);
+}
+
 // Regression test for the defect that motivated one limiter per backend: the
 // previous API configured the adaptive parameters process-globally, so a
 // second backend's configuration silently reconfigured the first backend's

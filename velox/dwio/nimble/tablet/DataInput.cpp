@@ -16,11 +16,15 @@
 #include "velox/dwio/nimble/tablet/DataInput.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <numeric>
 
+#include <folly/executors/QueuedImmediateExecutor.h>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
@@ -40,6 +44,15 @@ velox::ReadFile* checkedFile(velox::ReadFile* file) {
 uint64_t readAlignment(const velox::ReadFile& file) {
   uint64_t alignment{0};
   return file.directIo(/*alignment=*/alignment) ? alignment : 1;
+}
+
+DataInput::Region alignedRegion(DataInput::Region region, uint64_t alignment) {
+  NIMBLE_DCHECK_GT(alignment, 0);
+  NIMBLE_DCHECK(velox::bits::isPowerOfTwo(alignment));
+  const auto alignedOffset = region.offset & ~(alignment - 1);
+  const auto alignedEnd =
+      (region.offset + region.length + alignment - 1) & ~(alignment - 1);
+  return {alignedOffset, alignedEnd - alignedOffset};
 }
 
 } // namespace
@@ -73,6 +86,10 @@ DirectDataInput::DirectDataInput(velox::ReadFile* file, const Options& options)
   NIMBLE_CHECK_NOT_NULL(pool_);
   NIMBLE_CHECK_NOT_NULL(ioStats_);
   NIMBLE_CHECK_GT(alignment_, 0, "alignment must be positive");
+  NIMBLE_CHECK_LE(
+      alignment_,
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
+      "alignment exceeds the memory allocator limit");
   NIMBLE_CHECK(
       velox::bits::isPowerOfTwo(alignment_), "alignment must be a power of 2");
 }
@@ -83,7 +100,7 @@ void DirectDataInput::reserve(uint32_t numRegions) {
   bufferRefs_.reserve(numRegions);
 }
 
-void DirectDataInput::startGroup() {
+void DirectDataInput::startGroup(std::optional<Region> /*groupRegion*/) {
   NIMBLE_CHECK_NE(state_, State::kLoaded);
   NIMBLE_CHECK(
       groupOffsets_.empty() ||
@@ -196,8 +213,14 @@ std::vector<DirectDataInput::IoGroup> DirectDataInput::computeIoGroups(
         const auto groupRegions = std::span<const EnqueuedRegion>(
             &sortedRegions[begin], static_cast<size_t>(end - begin));
         const auto [payloadSize, lastEnd] = computePayloadSize(groupRegions);
-        group.readOffset = alignDown(sortedRegions[begin].region.offset);
-        group.readSize = alignUp(lastEnd) - group.readOffset;
+        const auto readRegion = alignedRegion(
+            Region{
+                sortedRegions[begin].region.offset,
+                lastEnd - sortedRegions[begin].region.offset,
+            },
+            alignment_);
+        group.readOffset = readRegion.offset;
+        group.readSize = readRegion.length;
         group.payloadSize = payloadSize;
         group.regions = groupRegions;
         ioGroups.emplace_back(group);
@@ -352,6 +375,289 @@ void DirectDataInput::clear() {
   state_ = State::kInit;
   regions_.clear();
   groupOffsets_.clear();
+  bufferRefs_.clear();
+}
+
+// --- CachedDataInput ---
+
+CachedDataInput::CachedDataInput(velox::ReadFile* file, const Options& options)
+    : file_{checkedFile(file)},
+      pool_{options.pool},
+      cache_{options.cache},
+      fileId_{options.fileId},
+      ioStats_{options.ioStats},
+      alignment_{readAlignment(*file_)},
+      allocationAlignment_{std::max(
+          alignment_,
+          static_cast<uint64_t>(
+              velox::memory::MemoryAllocator::kMinAlignment))} {
+  NIMBLE_CHECK_NOT_NULL(pool_);
+  NIMBLE_CHECK_NOT_NULL(cache_);
+  NIMBLE_CHECK_NOT_NULL(ioStats_);
+  NIMBLE_CHECK_GT(alignment_, 0, "alignment must be positive");
+  NIMBLE_CHECK_LE(
+      alignment_,
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
+      "alignment exceeds the memory allocator limit");
+  NIMBLE_CHECK(
+      velox::bits::isPowerOfTwo(alignment_), "alignment must be a power of 2");
+}
+
+void CachedDataInput::reserve(uint32_t numRegions) {
+  NIMBLE_CHECK(!loaded_, "Cannot reserve after load");
+  regions_.reserve(numRegions);
+  bufferRefs_.reserve(numRegions);
+}
+
+void CachedDataInput::startGroup(std::optional<Region> groupRegion) {
+  NIMBLE_CHECK(!loaded_, "Cannot start a group after load");
+  NIMBLE_CHECK(
+      groups_.empty() || groups_.back().enqueuedRegionOffset < regions_.size(),
+      "Previous group is empty");
+  NIMBLE_CHECK(groupRegion.has_value(), "Cached group region is required");
+  NIMBLE_CHECK_GT(
+      groupRegion->length, 0, "Cached group length must be positive");
+  NIMBLE_CHECK_LE(
+      groupRegion->length,
+      static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
+      "Cached group exceeds the maximum cache entry size");
+  if (!groups_.empty()) {
+    const auto& previous = groups_.back().groupRegion;
+    NIMBLE_CHECK_GE(
+        groupRegion->offset,
+        previous.offset + previous.length,
+        "Cached groups must be sorted and non-overlapping by file offset");
+  }
+  groups_.push_back(
+      Group{
+          .groupRegion = *groupRegion,
+          .enqueuedRegionOffset = static_cast<uint32_t>(regions_.size()),
+      });
+}
+
+uint32_t CachedDataInput::enqueue(Region region) {
+  NIMBLE_CHECK(!loaded_, "Cannot enqueue after load");
+  NIMBLE_CHECK(!groups_.empty(), "startGroup() must precede enqueue()");
+  NIMBLE_CHECK_GT(region.length, 0, "Read region length must be positive");
+  const auto& groupRegion = groups_.back().groupRegion;
+  NIMBLE_CHECK_GE(
+      region.offset,
+      groupRegion.offset,
+      "Read region begins before its cached group");
+  NIMBLE_CHECK_LE(
+      region.offset + region.length,
+      groupRegion.offset + groupRegion.length,
+      "Read region extends beyond its cached group");
+  const auto index = static_cast<uint32_t>(bufferRefs_.size());
+  bufferRefs_.emplace_back();
+  regions_.push_back(EnqueuedRegion{index, region});
+  return index;
+}
+
+uint64_t CachedDataInput::populateBufferRefs(
+    const Group& group,
+    uint32_t endRegion,
+    const char* buffer) {
+  std::vector<const EnqueuedRegion*> sortedRegions;
+  sortedRegions.reserve(endRegion - group.enqueuedRegionOffset);
+  for (uint32_t i = group.enqueuedRegionOffset; i < endRegion; ++i) {
+    sortedRegions.push_back(&regions_[i]);
+  }
+  std::sort(
+      sortedRegions.begin(),
+      sortedRegions.end(),
+      [](const EnqueuedRegion* lhs, const EnqueuedRegion* rhs) {
+        if (lhs->region.offset != rhs->region.offset) {
+          return lhs->region.offset < rhs->region.offset;
+        }
+        if (lhs->region.length != rhs->region.length) {
+          return lhs->region.length < rhs->region.length;
+        }
+        return lhs->enqueueIndex < rhs->enqueueIndex;
+      });
+
+  uint64_t payloadBytes{0};
+  uint64_t coveredEnd{group.groupRegion.offset};
+  const EnqueuedRegion* canonicalRegion{nullptr};
+  for (const auto* enqueued : sortedRegions) {
+    auto& ref = bufferRefs_[enqueued->enqueueIndex];
+    ref.data = buffer + enqueued->region.offset - group.groupRegion.offset;
+    ref.length = enqueued->region.length;
+    if (canonicalRegion != nullptr &&
+        canonicalRegion->region.offset == enqueued->region.offset &&
+        canonicalRegion->region.length == enqueued->region.length) {
+      ref.canonicalIndex = canonicalRegion->enqueueIndex;
+    } else {
+      canonicalRegion = enqueued;
+      ref.canonicalIndex = enqueued->enqueueIndex;
+    }
+
+    const auto regionEnd = enqueued->region.offset + enqueued->region.length;
+    if (regionEnd > coveredEnd) {
+      payloadBytes += regionEnd - std::max(coveredEnd, enqueued->region.offset);
+      coveredEnd = regionEnd;
+    }
+  }
+  return payloadBytes;
+}
+
+void CachedDataInput::loadCacheMissGroups(
+    std::span<const CacheMissGroup> cacheMissGroups,
+    uint64_t stagingBufferSize,
+    const std::vector<velox::cache::CachePin>& cachePins) {
+  char* stagingBuffer{nullptr};
+  Handle stagingHandle;
+  if (alignment_ > 1) {
+    stagingBuffer = static_cast<char*>(pool_->allocateAligned(
+        static_cast<int64_t>(stagingBufferSize),
+        static_cast<uint32_t>(allocationAlignment_)));
+    stagingHandle = Handle(
+        stagingBuffer,
+        [pool = pool_,
+         stagingBufferSize,
+         allocationAlignment = allocationAlignment_](void* buffer) {
+          pool->freeAligned(
+              buffer,
+              static_cast<int64_t>(stagingBufferSize),
+              static_cast<uint32_t>(allocationAlignment));
+        });
+  }
+
+  std::vector<Region> readRegions;
+  std::vector<folly::Range<char*>> readBuffers;
+  readRegions.reserve(cacheMissGroups.size());
+  readBuffers.reserve(cacheMissGroups.size());
+  uint64_t expectedReadBytes{0};
+  for (const auto& cacheMissGroup : cacheMissGroups) {
+    readRegions.push_back(cacheMissGroup.readRegion);
+    auto* entry = cachePins.at(cacheMissGroup.groupIndex).checkedEntry();
+    auto* destination = alignment_ == 1
+        ? entry->contiguousData()
+        : stagingBuffer + cacheMissGroup.stagingBufferOffset;
+    readBuffers.emplace_back(destination, cacheMissGroup.readRegion.length);
+    expectedReadBytes += cacheMissGroup.readRegion.length;
+  }
+
+  uint64_t storageReadUs{0};
+  uint64_t bytesRead{0};
+  {
+    velox::MicrosecondTimer timer(&storageReadUs);
+    bytesRead = file_->preadv(
+        folly::Range<const Region*>(readRegions.data(), readRegions.size()),
+        folly::Range<const folly::Range<char*>*>(
+            readBuffers.data(), readBuffers.size()));
+  }
+  NIMBLE_CHECK_EQ(bytesRead, expectedReadBytes, "preadv returned a short read");
+  ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
+  ioStats_->storageReadLatencyUs().increment(storageReadUs);
+  ioStats_->incTotalScanTimeNs(static_cast<int64_t>(storageReadUs) * 1'000);
+
+  for (const auto& cacheMissGroup : cacheMissGroups) {
+    auto* entry = cachePins.at(cacheMissGroup.groupIndex).checkedEntry();
+    const auto& group = groups_[cacheMissGroup.groupIndex];
+    if (alignment_ > 1) {
+      std::memcpy(
+          entry->contiguousData(),
+          stagingBuffer + cacheMissGroup.stagingBufferOffset +
+              group.groupRegion.offset - cacheMissGroup.readRegion.offset,
+          group.groupRegion.length);
+    }
+    ioStats_->read().increment(cacheMissGroup.readRegion.length);
+    ioStats_->incRawOverreadBytes(
+        static_cast<int64_t>(
+            cacheMissGroup.readRegion.length - cacheMissGroup.payloadBytes));
+    entry->setExclusiveToShared(/*ssdSavable=*/false);
+  }
+}
+
+DataInput::Handle CachedDataInput::load() {
+  NIMBLE_CHECK(!loaded_, "Data is already loaded");
+  NIMBLE_CHECK(!bufferRefs_.empty(), "No regions enqueued");
+  NIMBLE_CHECK(
+      groups_.back().enqueuedRegionOffset < regions_.size(),
+      "Read group must contain a region");
+  loaded_ = true;
+
+  // Releasing a pin removes an unfinished exclusive cache entry and wakes its
+  // waiters if any subsequent cache-fill work throws.
+  auto cachePins = std::make_shared<std::vector<velox::cache::CachePin>>();
+  cachePins->reserve(groups_.size());
+  std::vector<CacheMissGroup> cacheMissGroups;
+  cacheMissGroups.reserve(groups_.size());
+  uint64_t stagingBufferSize{0};
+  for (size_t groupIndex{0}; groupIndex < groups_.size(); ++groupIndex) {
+    const auto& group = groups_[groupIndex];
+    const auto endRegion = groupIndex + 1 < groups_.size()
+        ? groups_[groupIndex + 1].enqueuedRegionOffset
+        : static_cast<uint32_t>(regions_.size());
+
+    velox::cache::CachePin pin;
+    do {
+      folly::SemiFuture<bool> waitFuture{false};
+      pin = cache_->findOrCreate(
+          velox::cache::RawFileCacheKey{fileId_, group.groupRegion.offset},
+          group.groupRegion.length,
+          /*contiguous=*/true,
+          &waitFuture);
+      if (pin.empty()) {
+        NIMBLE_CHECK(waitFuture.valid(), "Cache wait future is invalid");
+        uint64_t waitUs{0};
+        {
+          velox::MicrosecondTimer timer(&waitUs);
+          std::move(waitFuture)
+              .via(&folly::QueuedImmediateExecutor::instance())
+              .wait();
+        }
+        ioStats_->queryThreadIoLatencyUs().increment(waitUs);
+        ioStats_->cacheWaitLatencyUs().increment(waitUs);
+        // The future only signals that the competing exclusive load finished;
+        // findOrCreate must run again to acquire a shared or exclusive pin.
+      }
+    } while (pin.empty());
+
+    auto* entry = pin.checkedEntry();
+    const bool firstUse = entry->getAndClearFirstUseFlag();
+    const bool loadedFromStorage = entry->isExclusive();
+    if (!loadedFromStorage && !firstUse) {
+      ioStats_->ramHit().increment(group.groupRegion.length);
+    }
+
+    const auto payloadBytes =
+        populateBufferRefs(group, endRegion, entry->contiguousData());
+    NIMBLE_CHECK_LE(payloadBytes, group.groupRegion.length);
+    ioStats_->incRawBytesRead(static_cast<int64_t>(payloadBytes));
+    if (loadedFromStorage) {
+      const auto readRegion = alignedRegion(group.groupRegion, alignment_);
+      cacheMissGroups.push_back(
+          CacheMissGroup{
+              .groupIndex = groupIndex,
+              .readRegion = readRegion,
+              .stagingBufferOffset = stagingBufferSize,
+              .payloadBytes = payloadBytes,
+          });
+      stagingBufferSize += readRegion.length;
+    }
+    cachePins->push_back(std::move(pin));
+  }
+
+  if (!cacheMissGroups.empty()) {
+    loadCacheMissGroups(cacheMissGroups, stagingBufferSize, *cachePins);
+  }
+
+  regions_.clear();
+  return std::static_pointer_cast<void>(cachePins);
+}
+
+const DataInput::BufferRef& CachedDataInput::bufferRef(uint32_t index) const {
+  NIMBLE_CHECK(loaded_, "Data has not been loaded");
+  NIMBLE_CHECK_LT(index, bufferRefs_.size());
+  return bufferRefs_[index];
+}
+
+void CachedDataInput::clear() {
+  loaded_ = false;
+  regions_.clear();
+  groups_.clear();
   bufferRefs_.clear();
 }
 

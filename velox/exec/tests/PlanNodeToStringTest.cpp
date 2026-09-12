@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -731,7 +732,8 @@ TEST_F(PlanNodeToStringTest, exchange) {
 
     ASSERT_EQ("-- Exchange[0]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format("-- Exchange[0][{}] -> a:BIGINT, b:VARCHAR\n", serdeKind),
+        fmt::format(
+            "-- Exchange[0][{} in-memory] -> a:BIGINT, b:VARCHAR\n", serdeKind),
         plan->toString(true, false));
   }
 }
@@ -750,7 +752,7 @@ TEST_F(PlanNodeToStringTest, mergeExchange) {
     ASSERT_EQ("-- MergeExchange[0]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- MergeExchange[0][a ASC NULLS LAST, {}] -> a:BIGINT, b:VARCHAR\n",
+            "-- MergeExchange[0][a ASC NULLS LAST, {} in-memory] -> a:BIGINT, b:VARCHAR\n",
             serdeKind),
         plan->toString(true, false));
   }
@@ -789,6 +791,51 @@ TEST_F(PlanNodeToStringTest, tableScan) {
     ASSERT_EQ(
         "-- TableScan[0][table: hive_table, remaining filter: (not(like(ROW[\"comment\"],%special%request%)))] "
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, tableScanAssignments) {
+  {
+    // A complex column shows the parts the scan asks for; a scalar column
+    // shows nothing.
+    RowTypePtr rowType{ROW({
+        {"m", MAP(VARCHAR(), BIGINT())},
+        {"n", BIGINT()},
+    })};
+
+    connector::ColumnHandleMap assignments;
+    assignments["m"] = test::HiveConnectorTestBase::makeColumnHandle(
+        "m", rowType->childAt(0), {"m[\"k\"]"});
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(1));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table, assignments: [m := HiveColumnHandle "
+        "[name: m, columnType: Regular, dataType: MAP<VARCHAR,BIGINT>, "
+        "requiredSubfields: [ m[\"k\"] ]]]] "
+        "-> m:MAP<VARCHAR,BIGINT>, n:BIGINT\n",
+        plan->toString(true, false));
+  }
+
+  {
+    // A scan of scalars alone adds nothing.
+    RowTypePtr rowType{ROW("n", BIGINT())};
+
+    connector::ColumnHandleMap assignments;
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(0));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table] -> n:BIGINT\n",
         plan->toString(true, false));
   }
 }

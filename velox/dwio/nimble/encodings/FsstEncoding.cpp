@@ -16,6 +16,8 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <numeric>
 
@@ -144,31 +146,118 @@ FsstEncoding::Header FsstEncoding::parseHeader(
       offset, encoding.size(), "FSST header offset exceeds encoding bounds.");
 
   Header header{};
-  header.symbolTableSize = readFsstHeaderVarint(encoding, offset);
+  const auto symbolTableSize = readFsstHeaderVarint(encoding, offset);
   NIMBLE_CHECK_GT(
-      header.symbolTableSize, 0, "FSST symbol table size must be positive.");
+      symbolTableSize, 0, "FSST symbol table size must be positive.");
   NIMBLE_CHECK_LE(
-      header.symbolTableSize,
+      symbolTableSize,
       static_cast<uint32_t>(FSST_MAXHEADER),
       "FSST symbol table size exceeds FSST_MAXHEADER.");
   NIMBLE_CHECK_LE(
-      static_cast<size_t>(header.symbolTableSize),
+      static_cast<size_t>(symbolTableSize),
       encoding.size() - offset,
       "FSST symbol table exceeds encoding bounds.");
-  header.symbolTable = encoding.data() + offset;
-  offset += header.symbolTableSize;
+  header.symbolTable = encoding.substr(offset, symbolTableSize);
+  offset += symbolTableSize;
 
-  header.lengthsSize = readFsstHeaderVarint(encoding, offset);
+  const auto lengthsSize = readFsstHeaderVarint(encoding, offset);
   NIMBLE_CHECK_GT(
-      header.lengthsSize, 0, "FSST lengths encoding size must be positive.");
+      lengthsSize, 0, "FSST lengths encoding size must be positive.");
   NIMBLE_CHECK_LE(
-      static_cast<size_t>(header.lengthsSize),
+      static_cast<size_t>(lengthsSize),
       encoding.size() - offset,
       "FSST lengths encoding exceeds encoding bounds.");
-  header.lengths = encoding.data() + offset;
-  offset += header.lengthsSize;
-  header.blob = encoding.data() + offset;
+  header.lengths = encoding.substr(offset, lengthsSize);
+  offset += lengthsSize;
+  header.blob = encoding.substr(offset);
   return header;
+}
+
+std::string_view FsstEncoding::validateEncodedPrefix(
+    std::string_view encoding,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK_FILE_GE(
+      encoding.size(),
+      EncodingPrefix::kRowCountOffset,
+      "Truncated FSST encoding prefix.");
+  NIMBLE_CHECK_FILE_EQ(
+      EncodingPrefix::encodingType(encoding),
+      EncodingType::Fsst,
+      "Expected FSST encoding.");
+  NIMBLE_CHECK_FILE_EQ(
+      EncodingPrefix::dataType(encoding),
+      DataType::String,
+      "FSST encoding must contain string data.");
+
+  if (options.useVarintRowCount) {
+    size_t offset = EncodingPrefix::kRowCountOffset;
+    readFsstHeaderVarint(encoding, offset);
+  } else {
+    NIMBLE_CHECK_FILE_GE(
+        encoding.size(),
+        EncodingPrefix::kFixedPrefixSize,
+        "Truncated FSST encoding prefix.");
+  }
+  return encoding;
+}
+
+void FsstEncoding::validateSymbolTable(std::string_view symbolTable) {
+  constexpr size_t kSerializedHeaderSize = 17;
+  NIMBLE_CHECK_FILE_GE(
+      symbolTable.size(),
+      kSerializedHeaderSize,
+      "Truncated FSST symbol table.");
+
+  const auto zeroTerminated = static_cast<uint8_t>(symbolTable[8]);
+  NIMBLE_CHECK_FILE_LE(zeroTerminated, 1, "Invalid FSST zero-terminated flag.");
+
+  uint32_t symbolCount{0};
+  uint64_t serializedSize = kSerializedHeaderSize;
+  for (uint32_t symbolLength = 1; symbolLength <= 8; ++symbolLength) {
+    const auto count = static_cast<uint8_t>(symbolTable[9 + symbolLength - 1]);
+    symbolCount += count;
+    serializedSize += static_cast<uint64_t>(count) * symbolLength;
+  }
+
+  NIMBLE_CHECK_FILE_LE(
+      symbolCount, 255, "FSST symbol table contains too many symbols.");
+  if (zeroTerminated != 0) {
+    const auto oneByteSymbolCount = static_cast<uint8_t>(symbolTable[9]);
+    NIMBLE_CHECK_FILE_GT(
+        oneByteSymbolCount,
+        0,
+        "FSST zero-terminated table has no terminator symbol.");
+    --serializedSize;
+  }
+  NIMBLE_CHECK_FILE_EQ(
+      serializedSize,
+      symbolTable.size(),
+      "FSST symbol table histogram does not match its serialized size.");
+}
+
+size_t FsstEncoding::validateCompressedLengths(
+    std::span<const uint32_t> lengths,
+    std::string_view blob,
+    size_t blobOffset) {
+  NIMBLE_CHECK_FILE_LE(
+      blobOffset, blob.size(), "FSST blob position exceeds its bounds.");
+
+  size_t compressedBytes{0};
+  for (const auto compressedLength : lengths) {
+    const auto currentOffset = blobOffset + compressedBytes;
+    NIMBLE_CHECK_FILE_LE(
+        static_cast<size_t>(compressedLength),
+        blob.size() - currentOffset,
+        "FSST compressed length exceeds the remaining blob.");
+    if (compressedLength > 0) {
+      NIMBLE_CHECK_FILE_NE(
+          static_cast<uint8_t>(blob[currentOffset + compressedLength - 1]),
+          FSST_ESC,
+          "FSST compressed string ends with an incomplete escape code.");
+    }
+    compressedBytes += compressedLength;
+  }
+  return compressedBytes;
 }
 
 FsstEncoding::CompressedValues FsstEncoding::compressValues(
@@ -277,46 +366,48 @@ FsstEncoding::FsstEncoding(
     std::string_view data,
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
-    : TypedEncoding<std::string_view, std::string_view>{pool, data, options},
+    : TypedEncoding<
+          std::string_view,
+          std::
+              string_view>{pool, validateEncodedPrefix(data, options), options},
       stringBufferFactory_{std::move(stringBufferFactory)},
       lengthBuffer_{&pool},
       decompressBuffer_{&pool} {
   const auto header = parseHeader(data, this->dataOffset());
+  validateSymbolTable(header.symbolTable);
   const auto bytesConsumed = nimble_fsst_import(
       &decoder_,
       const_cast<unsigned char*>(
-          reinterpret_cast<const unsigned char*>(header.symbolTable)));
+          reinterpret_cast<const unsigned char*>(header.symbolTable.data())));
   NIMBLE_CHECK_EQ(
-      static_cast<uint32_t>(bytesConsumed),
-      header.symbolTableSize,
+      static_cast<size_t>(bytesConsumed),
+      header.symbolTable.size(),
       "FSST symbol table import size mismatch.");
 
   lengths_ = EncodingFactory().create(
-      pool,
-      {header.lengths, header.lengthsSize},
-      stringBufferFactory_,
-      options);
+      pool, header.lengths, stringBufferFactory_, options);
+  NIMBLE_CHECK_FILE_EQ(
+      lengths_->dataType(),
+      DataType::Uint32,
+      "FSST lengths encoding must contain Uint32 values.");
+  NIMBLE_CHECK_FILE(
+      !lengths_->isNullable(), "FSST lengths encoding must not be nullable.");
+  NIMBLE_CHECK_FILE_EQ(
+      lengths_->rowCount(),
+      this->rowCount(),
+      "FSST lengths row count does not match the parent encoding.");
   blob_ = header.blob;
-  pos_ = blob_;
+  validateLengthsAndBlob();
 }
 
 std::string_view FsstEncoding::lengthsEncoding(
     std::string_view encoding,
     const Encoding::Options& options) {
-  NIMBLE_CHECK_GE(
-      encoding.size(),
-      EncodingPrefix::kRowCountOffset,
-      "FSST encoding too small.");
-  NIMBLE_CHECK_EQ(
-      static_cast<EncodingType>(encoding[EncodingPrefix::kEncodingTypeOffset]),
-      EncodingType::Fsst,
-      "Expected FSST encoding.");
-
+  validateEncodedPrefix(encoding, options);
   const auto prefixSize =
       EncodingPrefix::prefixSize(encoding, options.useVarintRowCount);
-  NIMBLE_CHECK_GE(encoding.size(), prefixSize, "FSST encoding too small.");
   const auto header = parseHeader(encoding, prefixSize);
-  return {header.lengths, header.lengthsSize};
+  return header.lengths;
 }
 
 void FsstEncoding::captureNestedEncoding(
@@ -331,7 +422,7 @@ void FsstEncoding::captureNestedEncoding(
 
 void FsstEncoding::reset() {
   row_ = 0;
-  pos_ = blob_;
+  blobOffset_ = 0;
   lengths_->reset();
   pageUsedBytes_ = 0;
   currentPageIndex_ = 0;
@@ -344,42 +435,94 @@ void FsstEncoding::reset() {
   }
 }
 
+void FsstEncoding::validateLengthsAndBlob() {
+  constexpr uint32_t kValidationBatchSize = 1024;
+  size_t validatedBlobBytes{0};
+  uint32_t validatedRows{0};
+  while (validatedRows < this->rowCount()) {
+    const auto batchSize =
+        std::min(kValidationBatchSize, this->rowCount() - validatedRows);
+    lengthBuffer_.resize(batchSize);
+    lengths_->materialize(batchSize, lengthBuffer_.data());
+    validatedBlobBytes += validateCompressedLengths(
+        {lengthBuffer_.data(), lengthBuffer_.size()},
+        blob_,
+        validatedBlobBytes);
+    validatedRows += batchSize;
+  }
+  NIMBLE_CHECK_FILE_EQ(
+      validatedBlobBytes,
+      blob_.size(),
+      "FSST compressed lengths do not match the blob size.");
+  lengths_->reset();
+  lengthBuffer_.resize(0);
+}
+
+void FsstEncoding::checkReadRange(uint32_t rowCount, const char* operation)
+    const {
+  NIMBLE_CHECK_LE(row_, this->rowCount(), "Invalid FSST encoding position.");
+  NIMBLE_CHECK(rowCount <= this->rowCount() - row_, operation);
+}
+
+void FsstEncoding::checkFinalBlobPosition() const {
+  if (row_ == this->rowCount()) {
+    NIMBLE_CHECK_FILE_EQ(
+        blobOffset_,
+        blob_.size(),
+        "FSST compressed lengths do not match the blob size.");
+  }
+}
+
 void FsstEncoding::skip(uint32_t rowCount) {
+  checkReadRange(rowCount, "Skipping past end of FSST encoding.");
   lengthBuffer_.resize(rowCount);
   lengths_->materialize(rowCount, lengthBuffer_.data());
+  const auto compressedBytes = validateCompressedLengths(
+      {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
   row_ += rowCount;
-  pos_ +=
-      std::accumulate(lengthBuffer_.begin(), lengthBuffer_.end(), uint64_t{0});
+  blobOffset_ += compressedBytes;
+  checkFinalBlobPosition();
 }
 
 void FsstEncoding::materialize(uint32_t rowCount, void* buffer) {
+  checkReadRange(rowCount, "Reading past end of FSST encoding.");
   lengthBuffer_.resize(rowCount);
   lengths_->materialize(rowCount, lengthBuffer_.data());
+  validateCompressedLengths(
+      {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
 
   auto* output = static_cast<std::string_view*>(buffer);
   for (uint32_t i = 0; i < rowCount; ++i) {
     const auto compressedLen = lengthBuffer_[i];
-    output[i] = decompressToStringBuffer(pos_, compressedLen);
-    pos_ += compressedLen;
+    output[i] =
+        decompressToStringBuffer(blob_.substr(blobOffset_, compressedLen));
+    blobOffset_ += compressedLen;
   }
   row_ += rowCount;
+  checkFinalBlobPosition();
 }
 
 std::string_view FsstEncoding::decompressToStringBuffer(
-    const char* compressedData,
-    uint32_t compressedLength) {
-  if (compressedLength == 0) {
+    std::string_view compressed) {
+  if (compressed.empty()) {
     return {};
   }
 
-  const size_t maxDecompressedSize =
-      static_cast<size_t>(compressedLength) * kMaxSymbolLength;
+  NIMBLE_CHECK_FILE_NE(
+      static_cast<uint8_t>(compressed.back()),
+      FSST_ESC,
+      "FSST compressed string ends with an incomplete escape code.");
+  NIMBLE_CHECK_FILE_LE(
+      compressed.size(),
+      std::numeric_limits<uint32_t>::max() / kMaxSymbolLength,
+      "FSST decompressed string exceeds the supported size.");
+  const size_t maxDecompressedSize = compressed.size() * kMaxSymbolLength;
   decompressBuffer_.resize(maxDecompressedSize);
 
   const auto decompressedSize = nimble_fsst_decompress(
       &decoder_,
-      compressedLength,
-      reinterpret_cast<const unsigned char*>(compressedData),
+      compressed.size(),
+      reinterpret_cast<const unsigned char*>(compressed.data()),
       maxDecompressedSize,
       reinterpret_cast<unsigned char*>(decompressBuffer_.data()));
 
@@ -387,6 +530,10 @@ std::string_view FsstEncoding::decompressToStringBuffer(
       decompressedSize,
       0,
       "FSST decompression failed for non-empty compressed string.");
+  NIMBLE_CHECK_FILE_LE(
+      decompressedSize,
+      maxDecompressedSize,
+      "FSST decompressed string exceeds its output buffer.");
 
   ensurePage(decompressedSize);
 
@@ -489,6 +636,7 @@ std::string_view FsstEncoding::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
+  validateEncodedPrefix(encoded, options);
   const auto sourceRowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
   NIMBLE_CHECK_LE(offset, sourceRowCount);
@@ -497,38 +645,71 @@ std::string_view FsstEncoding::slice(
 
   const auto header = parseHeader(
       encoded, EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
-  const std::string_view lengths{
-      header.lengths, static_cast<size_t>(header.lengthsSize)};
+  validateSymbolTable(header.symbolTable);
 
   const auto rowEnd = offset + length;
   Vector<uint32_t> materializedLengths{&buffer.getMemoryPool(), rowEnd};
-  EncodingFactory{}
-      .create(
-          buffer.getMemoryPool(),
-          lengths,
-          [](uint32_t /*totalLength*/) -> void* { return nullptr; },
-          options)
-      ->materialize(rowEnd, materializedLengths.data());
+  auto lengthsEncoding = EncodingFactory{}.create(
+      buffer.getMemoryPool(),
+      header.lengths,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options);
+  NIMBLE_CHECK_FILE_EQ(
+      lengthsEncoding->dataType(),
+      DataType::Uint32,
+      "FSST lengths encoding must contain Uint32 values.");
+  NIMBLE_CHECK_FILE(
+      !lengthsEncoding->isNullable(),
+      "FSST lengths encoding must not be nullable.");
+  NIMBLE_CHECK_FILE_EQ(
+      lengthsEncoding->rowCount(),
+      sourceRowCount,
+      "FSST lengths row count does not match the parent encoding.");
+  lengthsEncoding->materialize(rowEnd, materializedLengths.data());
 
   const auto blobOffset = std::accumulate(
       materializedLengths.begin(),
       materializedLengths.begin() + offset,
-      uint32_t{0});
+      size_t{0});
   const auto blobBytes = std::accumulate(
       materializedLengths.begin() + offset,
       materializedLengths.end(),
-      uint32_t{0});
+      size_t{0});
+  validateCompressedLengths(
+      {materializedLengths.data(), materializedLengths.size()}, header.blob, 0);
+  if (rowEnd == sourceRowCount) {
+    NIMBLE_CHECK_FILE_EQ(
+        blobOffset + blobBytes,
+        header.blob.size(),
+        "FSST compressed lengths do not match the blob size.");
+  }
 
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   const auto slicedLengths = EncodingFactory::slice(
-      lengths, offset, length, scopedBuffer.get(), options);
+      header.lengths, offset, length, scopedBuffer.get(), options);
 
-  const uint32_t encodingSize =
+  NIMBLE_CHECK_FILE_LE(
+      slicedLengths.size(),
+      std::numeric_limits<uint32_t>::max(),
+      "Sliced FSST lengths encoding exceeds the supported size.");
+  const uint64_t fixedEncodingSize =
       EncodingPrefix::serializedSize(length, options.useVarintRowCount) +
-      varint::varintSize(header.symbolTableSize) + header.symbolTableSize +
-      varint::varintSize(slicedLengths.size()) + slicedLengths.size() +
-      blobBytes;
+      varint::varintSize(header.symbolTable.size()) +
+      header.symbolTable.size() + varint::varintSize(slicedLengths.size()) +
+      slicedLengths.size();
+  constexpr auto kMaxEncodingSize =
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
+  NIMBLE_CHECK_FILE_LE(
+      fixedEncodingSize,
+      kMaxEncodingSize,
+      "Sliced FSST encoding exceeds the supported size.");
+  NIMBLE_CHECK_FILE_LE(
+      blobBytes,
+      kMaxEncodingSize - fixedEncodingSize,
+      "Sliced FSST encoding exceeds the supported size.");
+  const auto encodingSize =
+      static_cast<uint32_t>(fixedEncodingSize + blobBytes);
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
   EncodingPrefix::serialize(
@@ -537,11 +718,13 @@ std::string_view FsstEncoding::slice(
       length,
       options.useVarintRowCount,
       pos);
-  encoding::writeVarintString(
-      {header.symbolTable, static_cast<size_t>(header.symbolTableSize)}, pos);
+  encoding::writeVarintString(header.symbolTable, pos);
   encoding::writeVarintString(slicedLengths, pos);
-  encoding::writeBytes({header.blob + blobOffset, blobBytes}, pos);
-  NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
+  encoding::writeBytes(header.blob.substr(blobOffset, blobBytes), pos);
+  NIMBLE_CHECK_EQ(
+      static_cast<uint64_t>(pos - reserved),
+      encodingSize,
+      "Encoding size mismatch.");
   return {reserved, encodingSize};
 }
 

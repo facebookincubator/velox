@@ -128,9 +128,7 @@ statistics.minMaxBlocks()
 
 ← scans data\_ once
 
-// BlockStatsAccumulator: for each value,
-
-// track min/max, flush every 1024 rows
+// Find the exact min/max independently for each 1024-row block.
 
 // → vector < {count, min, max} >
 

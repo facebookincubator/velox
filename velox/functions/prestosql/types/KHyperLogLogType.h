@@ -59,6 +59,10 @@ inline bool isKHyperLogLogType(const TypePtr& type) {
   return KHyperLogLogType::get() == type;
 }
 
+inline bool isKHyperLogLogType(const Type& type) {
+  return KHyperLogLogType::get().get() == &type;
+}
+
 inline std::shared_ptr<const KHyperLogLogType> KHYPERLOGLOG() {
   return KHyperLogLogType::get();
 }

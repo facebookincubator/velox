@@ -99,7 +99,8 @@ class CompileTest : public ::testing::Test {
   // compiles it into a WaveGraph (host-side compile only, no GPU).
   std::unique_ptr<WaveGraph> compileGraphString(
       const std::string& graphStr,
-      const std::unordered_map<std::string, torch::_export::TensorMeta>& meta) {
+      const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
+      std::shared_ptr<WaveConfig> configOverride = nullptr) {
     auto graph = nativert::stringToGraph(graphStr);
     graph->setTensorValuesMeta(meta);
     setGraphDevice(graph.get(), /*isCuda=*/true);
@@ -107,6 +108,7 @@ class CompileTest : public ::testing::Test {
     auto modelContext = std::make_unique<ModelContext>();
     modelContext->graph = std::move(graph);
     modelContext->weights = std::move(weights);
+    modelContext->configOverride = std::move(configOverride);
     modelContexts_.push_back(std::move(modelContext));
     return std::make_unique<WaveGraph>(modelContexts_.back().get());
   }
@@ -259,8 +261,9 @@ TEST(WaveConfigTest, toStringReportsOnlyNonDefaults) {
 
   config.enableReuse = true;
   config.trace = WaveConfig::kTiming;
-  config.freeIntermediates = true;
-  EXPECT_EQ(config.toString(), "trace=16, freeIntermediates=true");
+  // freeIntermediates defaults to true, so turning it off is what shows up.
+  config.freeIntermediates = false;
+  EXPECT_EQ(config.toString(), "trace=16, freeIntermediates=false");
 }
 
 TEST_F(CompileTest, maskedSelectTest) {
@@ -504,6 +507,126 @@ return(%r)
 
   auto waveGraph = compileGraphString(graphStr, meta);
   EXPECT_NE(waveGraph, nullptr);
+}
+
+// The allocation-group plan is settled while the graph compiles, not on its
+// first execution. Every decision the plan carries is expressed as a (node,
+// step) pair of the compiled grids, and the concat carve pass has to read those
+// decisions back while it generates the concat's kernel -- which happens during
+// compilation. A plan built on first execution is settled after the source it
+// is supposed to inform has already been frozen.
+TEST_F(CompileTest, allocGroupPlanIsBuiltWhileCompiling) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"c", f()},
+      {"x", f()},
+      {"y", f()},
+      {"z", f()},
+      {"o", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c):
+%x = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%y = torch.ops.aten.mul.Tensor(self=%b, other=%c)
+%z = torch.ops.aten.sub.Tensor(self=%a, other=%c)
+%list[] = prim.ListPack(l0=%x, l1=%y, l2=%z)
+%o = torch.ops.aten.cat.default(tensors=%list, dim=0)
+return(%o)
+)";
+
+  // The three flags allocGroupEnabled() reads. Without all of them the mode is
+  // off and there is no plan to build at any point.
+  auto config = std::make_shared<WaveConfig>();
+  config->enableAllocGroup = true;
+  config->isCg = true;
+  config->freeIntermediates = true;
+
+  auto waveGraph = compileGraphString(graphStr, meta, std::move(config));
+  ASSERT_NE(waveGraph, nullptr);
+
+  int32_t planned = 0;
+  for (const auto& node : waveGraph->nodes()) {
+    const auto* invocation = node->kernels();
+    if (invocation == nullptr) {
+      continue;
+    }
+    EXPECT_NE(invocation->allocGroupPlan(), nullptr);
+    ++planned;
+  }
+  EXPECT_GT(planned, 0);
+}
+
+// Where a value is written and where its dimensions become readable are two
+// different points, and the concat carve pass turns on the difference: the step
+// at which a cat can be laid out is the latest realization among its operands,
+// while an operand can only write its own band if it is written at that same
+// step. A standalone sizes its own output, so nothing measures it until the
+// step has run; an ordinary kernel output is sized by host code that runs
+// before the step, so it is measured at the step that writes it.
+TEST_F(CompileTest, standaloneOutputIsMeasuredOneStepLate) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()}, {"b", f()}, {"c", f()}, {"s", f()}, {"e", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c):
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%e = torch.ops.aten.mul.Tensor(self=%s, other=%c)
+return(%e)
+)";
+
+  // Re-registered as a schema-less standalone so the graph has one of each
+  // kind. add.Tensor is otherwise an ordinary fused elementwise op.
+  auto addMeta = Registry::unregister("torch.ops.aten.add.Tensor");
+  MetadataBuilder("torch.ops.aten.add.Tensor", MetadataBuilder::NoSchema{})
+      .isStandalone()
+      .argumentMeta({{.isRegister = false}, {.isRegister = false}})
+      .returnMeta({{.isRegister = false}})
+      .outputConstraints(
+          [](NodeCP, const ValueTypes&) -> std::vector<ValueConstraint> {
+            return {{.rank = 1, .contiguity = Contiguity::kContiguous}};
+          })
+      .registerOp();
+  auto restore = folly::makeGuard([&] {
+    Registry::unregister("torch.ops.aten.add.Tensor");
+    Registry::restoreRegistry("torch.ops.aten.add.Tensor", std::move(addMeta));
+  });
+
+  // The points are only recorded when a single grid is fixed, which is the
+  // only case where a step index names one launch.
+  auto config = std::make_shared<WaveConfig>();
+  config->isCg = true;
+
+  auto waveGraph = compileGraphString(graphStr, meta, std::move(config));
+  ASSERT_NE(waveGraph, nullptr);
+
+  auto idOf = [&](std::string_view name) -> nativert::ValueId {
+    for (const auto& [id, value] : waveGraph->idToValue()) {
+      if (value->name() == name) {
+        return id;
+      }
+    }
+    return -1;
+  };
+  const auto standaloneId = idOf("s");
+  const auto fusedId = idOf("e");
+  ASSERT_GE(standaloneId, 0);
+  ASSERT_GE(fusedId, 0);
+
+  const auto* standaloneWritten = waveGraph->writtenAt(standaloneId);
+  const auto* standaloneRealized = waveGraph->realizedAt(standaloneId);
+  ASSERT_NE(standaloneWritten, nullptr);
+  ASSERT_NE(standaloneRealized, nullptr);
+  EXPECT_EQ(standaloneRealized->node, standaloneWritten->node);
+  EXPECT_EQ(standaloneRealized->step, standaloneWritten->step + 1);
+
+  const auto* fusedWritten = waveGraph->writtenAt(fusedId);
+  const auto* fusedRealized = waveGraph->realizedAt(fusedId);
+  ASSERT_NE(fusedWritten, nullptr);
+  ASSERT_NE(fusedRealized, nullptr);
+  EXPECT_EQ(*fusedRealized, *fusedWritten);
+
+  // The consumer reads the standalone, so it cannot run before the standalone's
+  // dims exist. This is the ordering the cat's layout point is derived from.
+  EXPECT_FALSE(*fusedWritten < *standaloneRealized);
 }
 
 // A linear chain of in-place index_puts on a new_ones tensor
@@ -1004,6 +1127,50 @@ return(%r)
   EXPECT_GT(countSteps(*standaloneGraph), fusedSteps)
       << standalonePlan.describe();
 }
+
+// An operand that is a transposed view of a value the same kernel just wrote
+// is read, at index i, as an element some other block produced. Only a
+// grid-wide barrier orders that; the __syncthreads() between two fused
+// expressions covers one block. The operand is marked isRegister like every
+// elementwise argument, which is why the barrier test cannot go by that flag.
+TEST_F(CompileTest, barrierBeforeATransposedLeafOfThisKernel) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()}, {"b", f()}, {"c", f()}, {"s", f()}, {"ts", f()}, {"r", f()}};
+  const char* graphStr = R"(graph(%a, %b, %c):
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%ts = torch.ops.aten.transpose.int(self=%s, dim0=0, dim1=1)
+%r = torch.ops.aten.mul.Tensor(self=%ts, other=%c)
+return(%r)
+)";
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(waveGraph, nullptr);
+  auto plan = CompiledPlan::from(*waveGraph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(plan.fuses({"aten.add.Tensor", "aten.mul.Tensor"}))
+      << plan.describe();
+  EXPECT_TRUE(plan.barrierBetween("aten.mul.Tensor", "aten.add.Tensor"))
+      << plan.describe();
+
+  // Contrast: consumed straight through, the intermediate stays in a register
+  // and there is nothing to order. Without this the test would still pass if
+  // every fused elementwise pair started carrying a barrier.
+  std::unordered_map<std::string, torch::_export::TensorMeta> directMeta = {
+      {"a", f()}, {"b", f()}, {"c", f()}, {"s", f()}, {"r", f()}};
+  const char* directStr = R"(graph(%a, %b, %c):
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%r = torch.ops.aten.mul.Tensor(self=%s, other=%c)
+return(%r)
+)";
+
+  auto directGraph = compileGraphString(directStr, directMeta);
+  ASSERT_NE(directGraph, nullptr);
+  auto directPlan =
+      CompiledPlan::from(*directGraph, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_FALSE(directPlan.barrierBetween("aten.mul.Tensor", "aten.add.Tensor"))
+      << directPlan.describe();
+}
+
 // True when the node producing %<name> reads the same value twice, i.e. its
 // two operands were merged. Asking the consumer rather than counting nodes is
 // what keeps the answer independent of whether the merged-away node is later

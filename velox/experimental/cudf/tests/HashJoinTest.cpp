@@ -156,6 +156,29 @@ TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
+  // The LIKE value comes from the probe side and the pattern comes from the
+  // build side, so this cross-side, non-AST-supported filter should exercise
+  // the same filteredOutput() fallback as the CASE expression test above,
+  // rather than crashing when the AST tree builder tries to precompute a
+  // single-sided "like" instruction for an expression that spans both sides.
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3}),
+       makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_k", "u_pattern"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe, build, core::JoinType::kInner, "t_val LIKE u_pattern");
+
+  // Matches: (k=2,t_val=banana) x (u_k=2,pattern=ban%) -> true.
+  auto expected = makeRowVector({makeFlatVector<int64_t>({1})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
   auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
   auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
