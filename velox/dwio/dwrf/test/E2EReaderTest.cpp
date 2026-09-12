@@ -239,7 +239,8 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
         ASSERT_TRUE(resultTypeRow.childAt(col)->isRow());
         ASSERT_EQ(batchRow->childAt(col)->typeKind(), TypeKind::ROW);
         auto& resultTypeChild = resultTypeRow.childAt(col)->as<TypeKind::ROW>();
-        auto* batchRowChild = batchRow->childAt(col)->as<RowVector>();
+        auto* batchRowChild =
+            batchRow->childAt(col)->loadedVector()->as<RowVector>();
         ASSERT_EQ(resultTypeChild.size(), batchRowChild->children().size());
         for (column_index_t feature = 0; feature < resultTypeChild.size();
              ++feature) {
