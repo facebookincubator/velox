@@ -577,11 +577,8 @@ void CudfSplitReader::createCudfReader() {
   passReadLimit_ = cudfHiveConfig_->maxPassReadLimitSession(sessionProperties);
 
   // Create a hybrid scan reader over all sources of the split
-  splitReader_ =
-      std::make_unique<CudfParquetReader>(fileMetaData_, readerOptions_);
-
-  // Metadata ingested
-  fileMetaData_.clear();
+  splitReader_ = std::make_unique<CudfParquetReader>(
+      std::move(fileMetaData_), readerOptions_);
 
   setupPageIndexes();
 
