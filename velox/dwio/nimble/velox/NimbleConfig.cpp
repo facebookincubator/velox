@@ -314,6 +314,14 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
         "nimble.chunking.writer.wide.schema.max.chunk.size",
         kChunkingWriterWideSchemaMaxChunkSize);
 
+/* static */ Config::Entry<const std::vector<std::string>> Config::FSST_COLUMNS(
+    "nimble.fsst.columns",
+    {},
+    [](const std::vector<std::string>& val) { return folly::join(",", val); },
+    [](const std::string& /* key */, const std::string& val) {
+      return parseVector<std::string>(val);
+    });
+
 /* static */ Config::Entry<std::string> Config::FLUSH_POLICY_CONFIG(
     "nimble.flush_policy_config",
     "");

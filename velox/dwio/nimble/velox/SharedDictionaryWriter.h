@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryBuilder.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
@@ -75,6 +76,13 @@ class SharedDictionaryWriter {
     /// alphabets.
     EncodingSelectionPolicyCreator encodingSelectionPolicyCreator;
 
+    /// Optional value layout to replay when a shared dictionary is not
+    /// selected. This does not participate in the Dictionary-vs-non-Dictionary
+    /// decision; it only controls the resulting non-dictionary encoding.
+    /// Encoding-specific fallback remains the replayed encoding's
+    /// responsibility; targeted FSST falls back internally to Trivial.
+    std::shared_ptr<const EncodingLayout> nonSharedEncodingOverride;
+
     Encoding::Options encodingOptions;
 
     /// Resolves external logical alphabets keyed by dictionary id and data
@@ -96,6 +104,14 @@ class SharedDictionaryWriter {
 
   /// Returns the alphabet bytes when the selected scope stores one.
   virtual std::optional<Chunk> encodeAlphabet(Buffer& buffer) = 0;
+
+  /// Finalizes a stripe-scoped dictionary for stripeIndex. Unlike
+  /// encodeAlphabet(), this also advances cached writers whose value stream was
+  /// absent from the stripe (for example, an all-null scalar or an absent
+  /// FlatMap key).
+  virtual std::optional<Chunk> encodeStripeAlphabet(
+      Buffer& buffer,
+      size_t stripeIndex) = 0;
 
   /// Returns the dictionary id within scope().
   virtual uint32_t dictionaryId() const = 0;
@@ -234,6 +250,16 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
     return Chunk{.rowCount = rowCount, .content = {encoded}};
   }
 
+  std::optional<Chunk> encodeStripeAlphabet(Buffer& buffer, size_t stripeIndex)
+      final {
+    NIMBLE_CHECK_EQ(
+        options_.scope,
+        SharedDictionaryScope::Stripe,
+        "Only stripe-scoped dictionaries can encode a stripe alphabet.");
+    advanceToStripe(stripeIndex);
+    return encodeAlphabet(buffer);
+  }
+
  private:
   using physicalType = typename TypeTraits<T>::physicalType;
   using BuilderMapping = typename SharedDictionaryBuilder<T>::Mapping;
@@ -280,7 +306,12 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         const Encoding::Options& options,
         std::optional<std::span<const bool>> notNulls) {
       if (notNulls.has_value() && values.empty()) {
-        return selectNonSharedEncoding(values, statistics, options, notNulls);
+        return selectNonSharedEncoding(
+            values,
+            statistics,
+            options,
+            notNulls,
+            /*useOverride=*/true);
       }
 
       const std::span<const T> logicalValues{
@@ -292,18 +323,33 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
       }
       if (writer_->useDictionary_.has_value()) {
         if (!writer_->useDictionary_.value()) {
-          return selectNonSharedEncoding(values, statistics, options, notNulls);
+          return selectNonSharedEncoding(
+              values,
+              statistics,
+              options,
+              notNulls,
+              /*useOverride=*/true);
         }
         return selectDictionary(logicalValues);
       }
 
       // Decide against the regular value encoding, not the nullable wrapper.
-      const auto nonSharedSelection =
-          selectNonSharedEncoding(values, statistics, options);
+      const auto nonSharedSelection = selectNonSharedEncoding(
+          values,
+          statistics,
+          options,
+          std::nullopt,
+          /*useOverride=*/false);
       if (nonSharedSelection.encodingType != EncodingType::Dictionary) {
         writer_->abandonStripeDictionary();
-        if (notNulls.has_value()) {
-          return selectNonSharedEncoding(values, statistics, options, notNulls);
+        if (writer_->options_.nonSharedEncodingOverride != nullptr ||
+            notNulls.has_value()) {
+          return selectNonSharedEncoding(
+              values,
+              statistics,
+              options,
+              notNulls,
+              /*useOverride=*/true);
         }
         return nonSharedSelection;
       }
@@ -314,14 +360,28 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         std::span<const physicalType> values,
         const Statistics<physicalType>& statistics,
         const Encoding::Options& options,
-        std::optional<std::span<const bool>> notNulls = std::nullopt) {
-      auto policy =
-          writer_->createNonSharedEncodingPolicy(TypeTraits<T>::dataType);
-      nonSharedEncodingPolicy_ =
-          std::unique_ptr<::facebook::nimble::EncodingSelectionPolicy<T>>(
-              static_cast<::facebook::nimble::EncodingSelectionPolicy<T>*>(
-                  policy.release()));
-      writer_->validateNonSharedValuePolicy(*nonSharedEncodingPolicy_);
+        std::optional<std::span<const bool>> notNulls,
+        bool useOverride) {
+      if (useOverride &&
+          writer_->options_.nonSharedEncodingOverride != nullptr) {
+        NIMBLE_CHECK_NE(
+            writer_->options_.nonSharedEncodingOverride->encodingType(),
+            EncodingType::SharedDictionary,
+            "Non-shared encoding override must not select SharedDictionary.");
+        nonSharedEncodingPolicy_ =
+            std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+                *writer_->options_.nonSharedEncodingOverride,
+                std::nullopt,
+                writer_->options_.encodingSelectionPolicyCreator);
+      } else {
+        auto policy =
+            writer_->createNonSharedEncodingPolicy(TypeTraits<T>::dataType);
+        nonSharedEncodingPolicy_ =
+            std::unique_ptr<::facebook::nimble::EncodingSelectionPolicy<T>>(
+                static_cast<::facebook::nimble::EncodingSelectionPolicy<T>*>(
+                    policy.release()));
+        writer_->validateNonSharedValuePolicy(*nonSharedEncodingPolicy_);
+      }
       auto selection = notNulls.has_value()
           ? nonSharedEncodingPolicy_->selectNullable(
                 values, *notNulls, statistics, options)
@@ -400,9 +460,20 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
   // Updates the active stripe and creates the builder when this chunk can use
   // one. Non-shared and alphabet-emitted stripes intentionally keep no builder.
   void ensureBuilder(size_t stripeIndex) {
+    if (!advanceToStripe(stripeIndex)) {
+      return;
+    }
+    if (builder_ == nullptr) {
+      builder_ = createBuilder();
+    }
+  }
+
+  // Advances per-stripe state without creating a dictionary builder. This is
+  // also used when finalizing a stripe that had no encoded value chunks.
+  bool advanceToStripe(size_t stripeIndex) {
     checkValuesNotFinalized(stripeIndex);
     if (stripeIndex_ == stripeIndex) {
-      return;
+      return false;
     }
 
     if (options_.scope == SharedDictionaryScope::Stripe ||
@@ -444,12 +515,7 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         *stripeIndex_,
         stripeIndex);
     stripeIndex_ = stripeIndex;
-
-    if (builder_ != nullptr) {
-      NIMBLE_CHECK_NE(options_.scope, SharedDictionaryScope::Stripe);
-      return;
-    }
-    builder_ = createBuilder();
+    return true;
   }
 
   // Once an owned alphabet is emitted, more values would produce streams that
