@@ -226,7 +226,9 @@ negiative.</p>
 <dd><p>Returns the UNIX timestamp <code class="docutils literal notranslate"><span class="pre">unixtime</span></code> as a timestamp.  If the
 <a class="reference internal" href="../../configs.html"><span class="doc">adjust_timestamp_to_session_timezone</span></a> property is set
 to true, then the timestamp is adjusted to the time zone specified in
-<a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>.</p>
+<a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>. Values above or below the range
+representable by a timestamp are clamped to the maximum or minimum
+timestamp, respectively.</p>
 </dd></dl>
 
 <dl class="py function">
