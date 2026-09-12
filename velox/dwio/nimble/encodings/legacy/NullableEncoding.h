@@ -110,7 +110,7 @@ NullableEncoding<T>::NullableEncoding(
   pos += nonNullsBytes;
   nulls_ = factory.create(
       *this->pool_,
-      {pos, static_cast<size_t>(data.end() - pos)},
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
       stringBufferFactory,
       Encoding::Options{});
   NIMBLE_DCHECK_EQ(

@@ -144,7 +144,7 @@ DeltaEncoding<T>::DeltaEncoding(
   pos += isRestatementsOffset;
   isRestatements_ = EncodingFactory().create(
       pool,
-      {pos, static_cast<size_t>(data.end() - pos)},
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
       std::move(stringBufferFactory),
       options);
 }

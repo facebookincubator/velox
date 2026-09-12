@@ -303,11 +303,12 @@ PFOREncoding<T>::PFOREncoding(
       const size_t bitpackedSize =
           FixedBitArray::bufferSize(this->rowCount_, baseBitWidth_);
       NIMBLE_CHECK_GE(
-          static_cast<size_t>(data.end() - pos),
+          static_cast<size_t>(data.data() + data.size() - pos),
           bitpackedSize,
           "Pfor bitpacked region underruns wire data.");
       fixedBitArray_ = FixedBitArray{
-          {pos, static_cast<size_t>(data.end() - pos)}, baseBitWidth_};
+          {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+          baseBitWidth_};
     }
   }
   reset();
@@ -627,7 +628,7 @@ std::string_view PFOREncoding<T>::slice(
   const std::string_view exceptionValues{readPos, exceptionValuesSize};
   readPos += exceptionValuesSize;
   const std::string_view packedData{
-      readPos, static_cast<size_t>(encoded.end() - readPos)};
+      readPos, static_cast<size_t>(encoded.data() + encoded.size() - readPos)};
 
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   const auto exceptionSlice = sliceExceptions(

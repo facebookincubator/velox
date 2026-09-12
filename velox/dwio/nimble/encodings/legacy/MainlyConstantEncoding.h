@@ -131,7 +131,9 @@ MainlyConstantEncoding<T>::MainlyConstantEncoding(
       Encoding::Options{});
   pos += otherValuesBytes;
   commonValue_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(),
+      "Unexpected mainly constant encoding end");
 }
 
 template <typename T>

@@ -101,7 +101,7 @@ class FOREncodingView final : public TypedEncodingView<T> {
     const auto packedDataSize = varint::readVarint32(&pos);
     packedData_ = pos;
     pos += packedDataSize;
-    NIMBLE_CHECK_EQ(pos, data.end(), "Unexpected FOR view end.");
+    NIMBLE_CHECK_EQ(pos, data.data() + data.size(), "Unexpected FOR view end.");
   }
 
   ~FOREncodingView() override {
