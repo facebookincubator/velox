@@ -91,9 +91,10 @@ class RPCState {
   struct PendingBatch {
     int64_t batchId;
     folly::SemiFuture<std::vector<RPCResponse>> future;
+    int64_t admissionUnits{1};
     /// Row locations for mapping responses back to input batch positions.
-    /// Stored at batch level instead of per-row in a map, since callBatch()
-    /// returns responses in the same order as requests.
+    /// Stored at batch level instead of per-row in a map. RPCOperator scatters
+    /// flushBatch() responses into request order before adding the batch.
     std::vector<RowLocation> rowLocations;
     /// Monotonic dispatch time (nanos, steady_clock).
     int64_t dispatchTimeNs{0};
@@ -110,6 +111,7 @@ class RPCState {
     int64_t batchId{0};
     std::vector<RPCResponse> responses;
     std::optional<std::string> error;
+    int64_t admissionUnits{1};
     /// Row locations carried from PendingBatch for response-to-input mapping.
     std::vector<RowLocation> rowLocations;
     /// Round-trip latency (nanos) from dispatch to completion, used as the
@@ -257,14 +259,17 @@ class RPCState {
   /// mutex_ internally.
   ///
   /// @param selfPtr Shared pointer to this RPCState (prevent destruction).
-  /// @param future The SemiFuture from client->callBatch().
+  /// @param future The normalized SemiFuture produced from
+  ///        AsyncRPCFunction::flushBatch().
   /// @param rowLocations Locations mapping each request to its input batch
   ///        position. Stored on the PendingBatch and carried through to
   ///        ReadyBatch, eliminating per-row rowLocations_ map overhead.
+  /// @param admissionUnits Backend concurrency slots reserved for this batch.
   void addPendingBatch(
       std::shared_ptr<RPCState> selfPtr,
       folly::SemiFuture<std::vector<RPCResponse>> future,
-      std::vector<RowLocation> rowLocations);
+      std::vector<RowLocation> rowLocations,
+      int64_t admissionUnits);
 
   /// Atomically try to poll a ready batch, check finish, or wait. Thread-safe.
   /// Called from the driver thread in isBlocked().
@@ -286,6 +291,21 @@ class RPCState {
   // ===== Common =====
 
   /// Signal that no more rows will be dispatched. Thread-safe.
+  /// Fails if any completed row could not be queued. Every terminal path --
+  /// the claim loop and the drain's finish check -- asks this, because a short
+  /// result that reports success is indistinguishable downstream from a
+  /// correct one. Called on the driver thread, where throwing is a query
+  /// error rather than a lost exception.
+  void checkNoDroppedRowsLocked() const;
+
+  /// Simulates a completed row that could not be queued, which is otherwise
+  /// only reachable under a real allocation failure. Used to prove the finish
+  /// path fails rather than returning a short result.
+  void testingDropCompletedRow() {
+    std::lock_guard<std::mutex> l(mutex_);
+    ++droppedRows_;
+  }
+
   void setNoMoreInput();
 
   /// Returns true when all work is complete. Thread-safe.
@@ -370,6 +390,12 @@ class RPCState {
   // so exactly one dispatch path feeds this counter. Backpressure compares it
   // against window_.limit().
   int64_t inFlight_{0};
+
+  // Rows that completed but could not be queued, because queueing them threw
+  // under memory pressure. Checked at the finish condition: a short result
+  // that reports success is worse than a failed query, since nothing
+  // downstream can tell the difference.
+  int64_t droppedRows_{0};
 
   // High-water mark of inFlight_ across the lifetime of this RPCState.
   int64_t peakInFlight_{0};

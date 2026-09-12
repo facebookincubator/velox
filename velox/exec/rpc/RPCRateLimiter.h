@@ -30,7 +30,7 @@
 
 namespace facebook::velox::exec::rpc {
 
-/// Admission control for one unit of provisioned capacity: a backend tier
+/// Admission control for one unit of provisioned capacity: a backend
 /// plus the credential used to reach it. Everything sharing that pair --
 /// every driver, every query, both streaming modes -- draws on one quota,
 /// because that is what the remote service actually provisions.
@@ -141,7 +141,7 @@ class RPCRateLimiter {
     RPCRateLimiter* owner_{nullptr};
   };
 
-  explicit RPCRateLimiter(std::string tierKey);
+  explicit RPCRateLimiter(std::string backendKey);
 
   /// Applies tuning. Last writer wins, matching the two independent writers
   /// that configure a backend today: the function's SQL option first, then the
@@ -278,7 +278,7 @@ class RPCRateLimiter {
   // Identifies the backend this limiter admits for. Composed by the transport
   // from whatever distinguishes one deployment from another, so two
   // deployments never share a limiter.
-  const std::string tierKey_;
+  const std::string backendKey_;
 
   // Guards config_, capacity_, lowWater_ and waiters_. pending_ and
   // peakPending_ are atomic so the hot increment path stays lock-free, but
@@ -333,7 +333,7 @@ class RPCRateLimiterRegistry {
   /// Returns the backend's admission control, creating it on first sight. The
   /// reference stays valid for the process lifetime: values are held by
   /// unique_ptr, so later insertions move only the map nodes.
-  RPCRateLimiter& get(const std::string& tierKey);
+  RPCRateLimiter& get(const std::string& backendKey);
 
   /// Resets every backend in place and restores process-global defaults.
   /// Resets rather than drops: a Token releases through a back-pointer to its

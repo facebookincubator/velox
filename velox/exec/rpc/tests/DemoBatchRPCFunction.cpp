@@ -29,12 +29,14 @@ DemoBatchRPCFunction::DemoBatchRPCFunction(
     std::unordered_set<int32_t> failingRowIndices,
     bool failWholeBatch,
     bool failOnError,
-    bool dropOneResponse)
+    bool dropOneResponse,
+    bool failWholeBatchFatal)
     : responseOrder_(order),
       failingRowIndices_(std::move(failingRowIndices)),
       failWholeBatch_(failWholeBatch),
       failOnError_(failOnError),
-      dropOneResponse_(dropOneResponse) {}
+      dropOneResponse_(dropOneResponse),
+      failWholeBatchFatal_(failWholeBatchFatal) {}
 
 VectorPtr DemoBatchRPCFunction::buildOutput(
     const std::vector<RPCResponse>& responses,
@@ -46,13 +48,18 @@ VectorPtr DemoBatchRPCFunction::buildOutput(
       }
     }
   }
-  return AsyncRPCFunction::buildOutput(responses, pool);
+  return buildTextOutput(responses, pool);
 }
 
 void DemoBatchRPCFunction::initialize(
     const core::QueryConfig& /*queryConfig*/,
     const std::vector<TypePtr>& /*inputTypes*/,
-    const std::vector<VectorPtr>& /*constantInputs*/) {}
+    const std::vector<VectorPtr>& /*constantInputs*/,
+    RPCStreamingMode instruction) {
+  dispatchPath_ = instruction == RPCStreamingMode::kBatch
+      ? RpcDispatchPath::kNativeBatch
+      : RpcDispatchPath::kPerRow;
+}
 
 std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
 DemoBatchRPCFunction::dispatchPerRow(
@@ -109,6 +116,21 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
         std::runtime_error("simulated batch timeout"));
   }
 
+  // A framework invariant failing, not the backend refusing. Degrading this to
+  // per-row errors would turn a programming fault into a column of NULLs.
+  if (failWholeBatchFatal_) {
+    return folly::makeSemiFuture<std::vector<RPCResponse>>(
+        folly::make_exception_wrapper<VeloxRuntimeError>(
+            __FILE__,
+            __LINE__,
+            __FUNCTION__,
+            "",
+            "simulated invariant failure",
+            error_source::kErrorSourceRuntime,
+            error_code::kInvalidState,
+            /*isRetriable=*/false));
+  }
+
   std::vector<RPCResponse> responses;
   responses.reserve(toFlush.size());
 
@@ -123,11 +145,13 @@ folly::SemiFuture<std::vector<RPCResponse>> DemoBatchRPCFunction::flushBatch(
     response.rowId = i;
 
     if (toFlush[i].isNull) {
-      response.error = "null_input";
+      response.setError(velox::rpc::RPCErrorKind::kNullInput, "null_input");
     } else if (failingRowIndices_.count(startOffset + i)) {
-      response.error = "simulated_failure";
+      response.setError(
+          velox::rpc::RPCErrorKind::kBackendError, "simulated_failure");
     } else {
-      response.result = "Batch response for: " + toFlush[i].prompt;
+      response.setPayload(
+          makeTextPayload("Batch response for: " + toFlush[i].prompt));
     }
     responses.push_back(std::move(response));
   }
