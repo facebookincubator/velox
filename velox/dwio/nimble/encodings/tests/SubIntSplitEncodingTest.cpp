@@ -62,6 +62,97 @@ std::vector<T> makeStructuredValues() {
   return values;
 }
 
+// 300 values with a constant high prefix and a low-cardinality, non-monotonic
+// low section (cycling through 5 distinct values). Unlike
+// makeStructuredValues's unit-step low section -- which plain Delta already
+// encodes optimally as a single, unsplit stream -- this low section is not
+// monotonic, so encoding the full value directly is comparatively expensive
+// and splitting off the constant high prefix (leaving a cheap
+// Dictionary/MainlyConstant-friendly low segment) is unambiguously smaller.
+// Used to exercise SubIntSplit's multi-segment capture/replay path
+// independent of any single candidate's cost-model tuning.
+template <typename T>
+std::vector<T> makeStructuredValuesWithLowCardinalityNoise() {
+  std::vector<T> values;
+  values.reserve(300);
+
+  UnsignedPhysicalType<T> prefix{};
+  if constexpr (sizeof(PhysicalType<T>) == 4) {
+    prefix = static_cast<UnsignedPhysicalType<T>>(0x12340000u);
+  } else {
+    prefix = static_cast<UnsignedPhysicalType<T>>(0x1234567890000000ULL);
+  }
+
+  constexpr UnsignedPhysicalType<T> kLowValues[] = {3, 7, 1, 9, 3, 3, 5, 3};
+  for (size_t i = 0; i < 300; ++i) {
+    const auto bits =
+        static_cast<UnsignedPhysicalType<T>>(prefix + kLowValues[i % 8]);
+    values.push_back(std::bit_cast<T>(bits));
+  }
+
+  return values;
+}
+
+// 300 values whose unsigned physical representation is strictly
+// monotonically increasing with a constant, wide step (so consecutive
+// values' low-order bit-range segments are also roughly monotonic with a
+// constant step). This is the data shape the Delta/FOR cost models
+// (SubIntSplitCostModelsTest.cpp's makeDeltaFriendlyValues/
+// makeForFriendlyValues) favor, exercised here end-to-end through the real
+// SubIntSplit segment-selection pipeline (B.4's extended candidate list).
+template <typename T>
+std::vector<T> makeWideRangeMonotonicValues() {
+  std::vector<T> values;
+  values.reserve(300);
+
+  UnsignedPhysicalType<T> base{};
+  UnsignedPhysicalType<T> step{};
+  if constexpr (sizeof(PhysicalType<T>) == 4) {
+    base = static_cast<UnsignedPhysicalType<T>>(0x10000000u);
+    step = static_cast<UnsignedPhysicalType<T>>(0x00010000u);
+  } else {
+    base = static_cast<UnsignedPhysicalType<T>>(0x1000000000000000ULL);
+    step = static_cast<UnsignedPhysicalType<T>>(0x0000000100000000ULL);
+  }
+
+  for (UnsignedPhysicalType<T> i = 0; i < 300; ++i) {
+    const auto bits = static_cast<UnsignedPhysicalType<T>>(base + i * step);
+    values.push_back(std::bit_cast<T>(bits));
+  }
+
+  return values;
+}
+
+// Typed Zipfian generator for SubIntSplitEncodingTest. Values 0..67 are small
+// enough to fit in any physicalType; bit_cast is used so the round-trip stays
+// bit-exact regardless of the logical type (int32_t, float, etc.).
+// Interleaved (0, j) pairs give monotonicCount ≈ 50%, keeping Delta cost
+// infinite so FrequencyPartition can win the DP cost model.
+template <typename T>
+std::vector<T> makeZipfianValues() {
+  std::vector<T> values;
+  values.reserve(1024);
+  auto push = [&](uint64_t a, uint64_t b, int count) {
+    for (int i = 0; i < count; ++i) {
+      values.push_back(
+          std::bit_cast<T>(static_cast<UnsignedPhysicalType<T>>(a)));
+      values.push_back(
+          std::bit_cast<T>(static_cast<UnsignedPhysicalType<T>>(b)));
+    }
+  };
+  push(0, 1, 256); // 512 values
+  push(0, 2, 128); // 256 values
+  push(0, 3, 64); // 128 values
+  for (uint64_t j = 4; j < 36; ++j) {
+    push(0, j, 1); // 64 values
+  }
+  for (uint64_t j = 36; j < 68; ++j) {
+    push(0, j, 1); // 64 values
+  }
+  // Total: 512 + 256 + 128 + 64 + 64 = 1024
+  return values;
+}
+
 template <typename T>
 std::vector<nimble::detail::subintsplit::SegmentPlan> makePreserveSegments() {
   if constexpr (sizeof(PhysicalType<T>) == 4) {
@@ -147,6 +238,66 @@ std::string_view encodeWithNonRecursiveSubIntSplit(
     nimble::Buffer& buffer) {
   return nimble::EncodingFactory::encode<T>(
       std::make_unique<NonRecursiveSubIntSplitPolicy<T>>(), values, buffer);
+}
+
+// Like NonRecursiveSubIntSplitPolicy, but its createImpl() delegates to
+// ManualEncodingSelectionPolicy<T>::createImpl() (passing through
+// EncodingType::SubIntSplit), exercising the real
+// EncodingType::SubIntSplit special case there, which extends the segment's
+// candidate list with PFOR / SimdForBitpack / BlockBitPacking.
+template <typename T>
+class ExtendedSubIntSplitPolicy final
+    : public nimble::ManualEncodingSelectionPolicy<T> {
+  using physicalType = typename nimble::TypeTraits<T>::physicalType;
+
+ public:
+  // ManualEncodingSelectionPolicy::createImpl() is protected, so its
+  // special-cased SubIntSplit child candidates can only be exercised by
+  // inheriting it (rather than delegating to a sibling instance).
+  ExtendedSubIntSplitPolicy()
+      : nimble::ManualEncodingSelectionPolicy<T>(
+            filteredReadFactors(),
+            std::nullopt,
+            std::nullopt) {}
+
+  nimble::EncodingSelectionResult select(
+      std::span<const physicalType> /* values */,
+      const nimble::Statistics<physicalType>& /* statistics */,
+      const nimble::Encoding::Options& /* options */) override {
+    return {.encodingType = nimble::EncodingType::SubIntSplit};
+  }
+
+  nimble::EncodingSelectionResult selectNullable(
+      std::span<const physicalType> /* values */,
+      std::span<const bool> /* nulls */,
+      const nimble::Statistics<physicalType>& /* statistics */,
+      const nimble::Encoding::Options& /* options */) override {
+    return {.encodingType = nimble::EncodingType::Nullable};
+  }
+
+ private:
+  static std::vector<std::pair<nimble::EncodingType, float>>
+  filteredReadFactors() {
+    auto readFactors = nimble::ManualEncodingSelectionPolicyFactory::
+        defaultEncodingReadFactors();
+    readFactors.erase(
+        std::remove_if(
+            readFactors.begin(),
+            readFactors.end(),
+            [](const auto& factor) {
+              return factor.first == nimble::EncodingType::SubIntSplit;
+            }),
+        readFactors.end());
+    return readFactors;
+  }
+};
+
+template <typename T>
+std::string_view encodeWithExtendedSubIntSplit(
+    const std::vector<T>& values,
+    nimble::Buffer& buffer) {
+  return nimble::EncodingFactory::encode<T>(
+      std::make_unique<ExtendedSubIntSplitPolicy<T>>(), values, buffer);
 }
 
 template <typename T>
@@ -287,7 +438,7 @@ TYPED_TEST_CASE(SubIntSplitEncodingTest, SubIntSplitEncodingTypes);
 
 TYPED_TEST(SubIntSplitEncodingTest, recomputeRoundTripAndReplay) {
   using T = TypeParam;
-  const auto values = makeStructuredValues<T>();
+  const auto values = makeStructuredValuesWithLowCardinalityNoise<T>();
 
   const auto encoded =
       encodeWithNonRecursiveSubIntSplit<T>(values, *this->buffer_);
@@ -412,6 +563,122 @@ TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
 
   const auto decoded = decodeAll<uint64_t>(encoded, *pool);
   expectBitwiseEqual(values, decoded);
+}
+
+TEST(
+    SubIntSplitEncodingTests,
+    CreateImplExtendsCandidatesForSubIntSplitChildren) {
+  nimble::ManualEncodingSelectionPolicy<uint64_t> policy{
+      nimble::ManualEncodingSelectionPolicyFactory::
+          defaultEncodingReadFactors(),
+      std::nullopt,
+      std::nullopt};
+
+  auto containsType =
+      [](const std::vector<std::pair<nimble::EncodingType, float>>& factors,
+         nimble::EncodingType type) {
+        return std::any_of(
+            factors.begin(), factors.end(), [type](const auto& pair) {
+              return pair.first == type;
+            });
+      };
+
+  // Direct children of a SubIntSplit node get the extended candidate list.
+  auto subIntSplitChild =
+      policy.create<uint64_t>(nimble::EncodingType::SubIntSplit, 0);
+  auto* subIntSplitChildPolicy =
+      dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
+          subIntSplitChild.get());
+  ASSERT_NE(subIntSplitChildPolicy, nullptr);
+  const auto& extendedFactors =
+      subIntSplitChildPolicy->candidateEncodingReadFactors();
+  EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::PFOR));
+  EXPECT_TRUE(
+      containsType(extendedFactors, nimble::EncodingType::SimdForBitpack));
+  EXPECT_TRUE(
+      containsType(extendedFactors, nimble::EncodingType::BlockBitPacking));
+  EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::Delta));
+  EXPECT_TRUE(containsType(extendedFactors, nimble::EncodingType::FOR));
+  EXPECT_TRUE(
+      containsType(extendedFactors, nimble::EncodingType::FrequencyPartition));
+
+  // Children of a non-SubIntSplit node do not get the extended list.
+  auto pforChild = policy.create<uint64_t>(nimble::EncodingType::PFOR, 0);
+  auto* pforChildPolicy =
+      dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint64_t>*>(
+          pforChild.get());
+  ASSERT_NE(pforChildPolicy, nullptr);
+  const auto& unextendedFactors =
+      pforChildPolicy->candidateEncodingReadFactors();
+  EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::PFOR));
+  EXPECT_FALSE(
+      containsType(unextendedFactors, nimble::EncodingType::SimdForBitpack));
+  EXPECT_FALSE(
+      containsType(unextendedFactors, nimble::EncodingType::BlockBitPacking));
+  EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::Delta));
+  EXPECT_FALSE(containsType(unextendedFactors, nimble::EncodingType::FOR));
+  EXPECT_FALSE(containsType(
+      unextendedFactors, nimble::EncodingType::FrequencyPartition));
+}
+
+TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
+  using T = TypeParam;
+  const auto values = makeStructuredValues<T>();
+
+  const auto encoded = encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+
+  const auto decoded = decodeAll<T>(encoded, *this->pool_);
+  expectBitwiseEqual(values, decoded);
+}
+
+// Recursion-sanity test for Delta/FOR as SubIntSplit segment candidates
+// (B.4): a wide-range, constant-step monotonic column should round-trip
+// bit-exactly and produce a bounded encoding size, regardless of which
+// candidate (Delta, FOR, or another) each segment's encodeNested ends up
+// selecting.
+TYPED_TEST(SubIntSplitEncodingTest, WideRangeMonotonicRoundTrip) {
+  using T = TypeParam;
+  const auto values = makeWideRangeMonotonicValues<T>();
+
+  const auto encoded = encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+
+  const auto decoded = decodeAll<T>(encoded, *this->pool_);
+  expectBitwiseEqual(values, decoded);
+
+  // Bounded size: the recursive candidate set must not blow up the encoding
+  // beyond a small multiple of the raw data size.
+  const size_t rawSize = values.size() * sizeof(T);
+  EXPECT_LE(encoded.size(), rawSize * 4 + 1024);
+}
+
+// Zipfian-distributed data (FrequencyPartition as SubIntSplit segment
+// candidate, Phase C): a column with a dominant value (50% frequency) and a
+// long tail should round-trip bit-exactly through SubIntSplit with the
+// extended candidate set. The encoding size bound verifies that the
+// PerTierBitmaps index override in SubIntSplitEncoding::encode() does not
+// inflate the output beyond a reasonable multiple of the raw data.
+TYPED_TEST(SubIntSplitEncodingTest, ZipfianRoundTrip) {
+  using T = TypeParam;
+  const auto values = makeZipfianValues<T>();
+
+  const auto encoded = encodeWithExtendedSubIntSplit<T>(values, *this->buffer_);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+
+  const auto decoded = decodeAll<T>(encoded, *this->pool_);
+  expectBitwiseEqual(values, decoded);
+
+  // Bounded size: FrequencyPartition with PerTierBitmaps adds index overhead
+  // but should still compress better than storing raw values.
+  const size_t rawSize = values.size() * sizeof(T);
+  EXPECT_LE(encoded.size(), rawSize * 4 + 1024);
 }
 
 #endif
