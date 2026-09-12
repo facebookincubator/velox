@@ -621,6 +621,16 @@ class RowContainer {
            reinterpret_cast<uintptr_t>(range.data()));
       auto row = iter->rowOffset;
       while (row + rowSize <= limit) {
+#if defined(__x86_64__)
+        // Increase memory run-ahead in this batched producer-consumer scan by
+        // prefetching 2 KiB ahead. Use integer arithmetic to avoid
+        // out-of-bounds pointer arithmetic when the prefetch target lies past
+        // the current range; the prefetch itself is non-faulting for an invalid
+        // target on x86.
+        __builtin_prefetch(
+            reinterpret_cast<const char*>(
+                reinterpret_cast<uintptr_t>(data) + row + 2'048));
+#endif
         rows[count++] = data + row +
             (iter->normalizedKeysLeft > 0 ? originalNormalizedKeySize_ : 0);
         VELOX_DCHECK_EQ(
