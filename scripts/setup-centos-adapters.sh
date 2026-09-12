@@ -142,8 +142,11 @@ function install_adapters_deps_from_dnf {
 
 function install_s3 {
   install_aws_deps
-  local MINIO_OS="linux"
-  install_minio ${MINIO_OS}
+  # TODO: minio install disabled; dl.min.io removed archived binaries
+  # (410 Gone) with no mirror yet. S3 tests using MinioServer will fail
+  # until this is restored.
+  # local MINIO_OS="linux"
+  # install_minio ${MINIO_OS}
 }
 
 function install_adapters {
