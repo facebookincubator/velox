@@ -48,6 +48,18 @@ DEFINE_uint32(
     5000,
     "Maximum rows per EncodingView fuzzer iteration");
 DEFINE_uint32(view_fuzzer_seed, 42, "EncodingView fuzzer seed (0 = random)");
+DEFINE_uint32(
+    view_fuzzer_duration_sec,
+    0,
+    "Wall-clock budget for the whole binary, across every typed test. Zero "
+    "means the iteration counts are the only bound. Prefer setting this in "
+    "automation: an iteration count cannot self-limit, so overshoot shows up "
+    "as the job being killed rather than a short run.");
+
+static ::testing::Environment* const kViewFuzzerBudget =
+    ::testing::AddGlobalTestEnvironment(
+        new facebook::nimble::test::FuzzerBudgetEnvironment(
+            [] { return FLAGS_view_fuzzer_duration_sec; }));
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -178,9 +190,14 @@ void runEncodingViewFuzzer(
             << " encoding: " << toString(Encoder<EncodingClass>::encodingType())
             << " dtype: " << toString(TypeTraits<T>::dataType)
             << " iterations: " << iterations << " maxRows: " << maxRows;
+  FuzzerSeedReporter::setCurrentSeed(seed);
   std::mt19937 rng(seed);
 
   for (uint32_t iter = 0; iter < iterations; ++iter) {
+    if (FuzzerBudget::expired()) {
+      break;
+    }
+    FuzzerBudget::recordIteration();
     const auto rowCount = 1 + folly::Random::rand32(rng) % maxRows;
     auto datasets =
         makeDatasets<EncodingClass>(*pool, rng, rowCount, dataBuffer.get());
