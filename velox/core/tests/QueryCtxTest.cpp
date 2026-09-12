@@ -15,6 +15,9 @@
  */
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <thread>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -82,6 +85,39 @@ TEST_F(QueryCtxTest, releaseCallbacks) {
   // After QueryCtx destruction, all callbacks should have been invoked.
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "test_query_id");
+}
+
+TEST_F(QueryCtxTest, concurrentReleaseCallbackRegistration) {
+  constexpr int32_t kNumThreads = 8;
+  constexpr int32_t kCallbacksPerThread = 500;
+  std::atomic<int32_t> callbackCount{0};
+
+  {
+    auto queryCtx = QueryCtx::create(
+        nullptr,
+        QueryConfig{{}},
+        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+        nullptr,
+        nullptr,
+        nullptr,
+        "test_query_id");
+
+    // Tasks of one query register release callbacks from their own threads.
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int32_t i = 0; i < kNumThreads; ++i) {
+      threads.emplace_back([&]() {
+        for (int32_t j = 0; j < kCallbacksPerThread; ++j) {
+          queryCtx->addReleaseCallback([&callbackCount]() { ++callbackCount; });
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
+    }
+  }
+
+  ASSERT_EQ(callbackCount, kNumThreads * kCallbacksPerThread);
 }
 
 TEST_F(QueryCtxTest, releaseCallbackException) {
