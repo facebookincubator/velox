@@ -117,11 +117,6 @@ std::unordered_set<uint32_t> makeCompatibilityMap() {
   return compat;
 }
 
-bool isCompatible(TypeKind from, TypeKind to) {
-  static auto compat = makeCompatibilityMap();
-  return from == to || compat.find(getKey(from, to)) != compat.end();
-}
-
 template <typename T, typename FKind, typename FShouldRead>
 void checkTypeCompatibility(
     const Type& from,
@@ -189,6 +184,11 @@ void checkTypeCompatibility(
         return selector.shouldReadNode(node.id());
       },
       exceptionMessageCreator);
+}
+
+bool isCompatible(TypeKind from, TypeKind to) {
+  static auto compat = makeCompatibilityMap();
+  return from == to || compat.find(getKey(from, to)) != compat.end();
 }
 
 } // namespace facebook::velox::dwio::common::typeutils

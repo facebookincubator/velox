@@ -519,8 +519,8 @@ class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
     return parallelDecoding_;
   }
 
-  template <typename From, typename To>
-  void runTest(uint64_t size) {
+  template <typename From, typename To, typename AssertEqual>
+  void runTest(uint64_t size, const AssertEqual& assertEqual) {
     auto fileType = ROW({"c0"}, {CppToType<From>::create()});
     auto requestedType = ROW({"c0"}, {CppToType<To>::create()});
 
@@ -553,9 +553,16 @@ class SchemaMismatchTest : public TestWithParam<SchemaMismatchTestParam>,
       auto isNull = asIsField->isNullAt(i);
       EXPECT_EQ(isNull, mismatchField->isNullAt(i));
       if (!isNull) {
-        EXPECT_EQ(asIsField->valueAt(i), mismatchField->valueAt(i));
+        assertEqual(asIsField->valueAt(i), mismatchField->valueAt(i));
       }
     }
+  }
+
+  template <typename From, typename To>
+  void runTest(uint64_t size) {
+    runTest<From, To>(size, [](const auto& expected, const auto& actual) {
+      EXPECT_EQ(expected, actual);
+    });
   }
 
   // columnReader_ and selectiveColumnReader_ are mismatch ColumnReaders
@@ -5076,6 +5083,11 @@ TEST_P(SchemaMismatchTest, testBoolean) {
   runTest<bool, int16_t>(size);
   runTest<bool, int32_t>(size);
   runTest<bool, int64_t>(size);
+  if (useSelectiveReader()) {
+    runTest<bool, StringView>(size, [](bool expected, StringView actual) {
+      EXPECT_EQ(expected ? "true" : "false", actual.str());
+    });
+  }
 }
 
 TEST_P(SchemaMismatchTest, testByte) {
@@ -5250,6 +5262,67 @@ TEST_P(SchemaMismatchTest, testFloat) {
           });
 
   runTest<float, double>(size);
+}
+
+TEST_P(SchemaMismatchTest, testIntegerToVarchar) {
+  // set format
+  streams_.setFormat(DwrfFormat::kOrc);
+  // set getEncoding
+  proto::orc::ColumnEncoding directEncoding;
+  directEncoding.set_kind(proto::orc::ColumnEncoding_Kind_DIRECT);
+  EXPECT_CALL(streams_, getEncodingOrcProxy(_))
+      .WillRepeatedly(Return(&directEncoding));
+
+  // set getStream
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(_, proto::orc::Stream_Kind_PRESENT, false))
+      .WillRepeatedly(Return(nullptr));
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(_, proto::orc::Stream_Kind_ROW_INDEX, false))
+      .WillRepeatedly(Return(nullptr));
+
+  if (!useSelectiveReader()) {
+    const auto fileType = ROW({"c0"}, {BIGINT()});
+    const auto requestedType = ROW({"c0"}, {VARCHAR()});
+    VELOX_ASSERT_THROW(
+        buildReader(requestedType, fileType),
+        "Schema mismatch, From Kind: BIGINT, To Kind: VARCHAR");
+    return;
+  }
+
+  const std::vector<int64_t> values = {
+      std::numeric_limits<int64_t>::min(),
+      -1,
+      0,
+      1,
+      std::numeric_limits<int64_t>::max()};
+  std::array<char, 128> data;
+  data[0] = static_cast<char>(-values.size());
+  const auto encodedSize = writeVsLongs(data.data() + 1, values) + 1;
+  EXPECT_CALL(
+      streams_, getStreamOrcProxy(1, proto::orc::Stream_Kind_DATA, true))
+      .WillRepeatedly(Invoke([&](auto, auto, auto) {
+        return new SeekableArrayInputStream(data.data(), encodedSize);
+      }));
+
+  runTest<int64_t, StringView>(
+      values.size(), [](int64_t expected, StringView actual) {
+        EXPECT_EQ(std::to_string(expected), actual.str());
+      });
+
+  // Filter on integer to varchar schema evolution is not supported.
+  auto scanSpec = std::make_unique<common::ScanSpec>("root");
+  scanSpec->getOrCreateChild(common::Subfield("c0"))
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>{"1"}, false));
+  const auto fileType = ROW({"c0"}, {BIGINT()});
+  const auto requestedType = ROW({"c0"}, {VARCHAR()});
+  buildReader(requestedType, fileType, {}, scanSpec.get());
+  VectorPtr batch = newBatch(requestedType);
+  VELOX_ASSERT_THROW(
+      selectiveColumnReader_->next(values.size(), batch, nullptr),
+      "testInt64() is not supported");
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
