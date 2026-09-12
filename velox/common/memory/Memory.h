@@ -312,7 +312,7 @@ class MemoryManager {
 
  private:
   std::shared_ptr<MemoryPoolImpl> createRootPool(
-      std::string poolName,
+      const std::string& poolName,
       std::unique_ptr<MemoryReclaimer>& reclaimer,
       MemoryPool::Options& options);
 
