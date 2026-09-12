@@ -250,12 +250,19 @@ size_t FsstEncoding::validateCompressedLengths(
         static_cast<size_t>(compressedLength),
         blob.size() - currentOffset,
         "FSST compressed length exceeds the remaining blob.");
-    if (compressedLength > 0) {
-      NIMBLE_CHECK_FILE_NE(
-          static_cast<uint8_t>(blob[currentOffset + compressedLength - 1]),
-          FSST_ESC,
-          "FSST compressed string ends with an incomplete escape code.");
+    // Row ranges are disjoint, so even all-escape input makes these trailing
+    // scans linear in the number of compressed bytes covered by lengths.
+    size_t trailingEscapes{0};
+    for (auto position = currentOffset + compressedLength;
+         position > currentOffset &&
+         static_cast<uint8_t>(blob[position - 1]) == FSST_ESC;
+         --position) {
+      ++trailingEscapes;
     }
+    NIMBLE_CHECK_FILE_EQ(
+        trailingEscapes % 2,
+        0,
+        "FSST compressed string ends with an incomplete escape code.");
     compressedBytes += compressedLength;
   }
   return compressedBytes;
@@ -387,6 +394,8 @@ FsstEncoding::FsstEncoding(
 
   lengths_ = EncodingFactory().create(
       pool, header.lengths, stringBufferFactory_, options);
+  NIMBLE_CHECK_NOT_NULL(
+      lengths_, "FSST lengths encoding factory returned null.");
   NIMBLE_CHECK_FILE_EQ(
       lengths_->dataType(),
       DataType::Uint32,
@@ -398,7 +407,6 @@ FsstEncoding::FsstEncoding(
       this->rowCount(),
       "FSST lengths row count does not match the parent encoding.");
   blob_ = header.blob;
-  validateLengthsAndBlob();
 }
 
 std::string_view FsstEncoding::lengthsEncoding(
@@ -436,29 +444,6 @@ void FsstEncoding::reset() {
   }
 }
 
-void FsstEncoding::validateLengthsAndBlob() {
-  constexpr uint32_t kValidationBatchSize = 1024;
-  size_t validatedBlobBytes{0};
-  uint32_t validatedRows{0};
-  while (validatedRows < this->rowCount()) {
-    const auto batchSize =
-        std::min(kValidationBatchSize, this->rowCount() - validatedRows);
-    lengthBuffer_.resize(batchSize);
-    lengths_->materialize(batchSize, lengthBuffer_.data());
-    validatedBlobBytes += validateCompressedLengths(
-        {lengthBuffer_.data(), lengthBuffer_.size()},
-        blob_,
-        validatedBlobBytes);
-    validatedRows += batchSize;
-  }
-  NIMBLE_CHECK_FILE_EQ(
-      validatedBlobBytes,
-      blob_.size(),
-      "FSST compressed lengths do not match the blob size.");
-  lengths_->reset();
-  lengthBuffer_.resize(0);
-}
-
 void FsstEncoding::checkReadRange(uint32_t rowCount, const char* operation)
     const {
   NIMBLE_CHECK_LE(row_, this->rowCount(), "Invalid FSST encoding position.");
@@ -487,6 +472,10 @@ void FsstEncoding::skip(uint32_t rowCount) {
 
 void FsstEncoding::materialize(uint32_t rowCount, void* buffer) {
   checkReadRange(rowCount, "Reading past end of FSST encoding.");
+  if (rowCount > 0) {
+    NIMBLE_CHECK_NOT_NULL(
+        buffer, "FSST materialization buffer must not be null.");
+  }
   lengthBuffer_.resize(rowCount);
   lengths_->materialize(rowCount, lengthBuffer_.data());
   validateCompressedLengths(
@@ -509,69 +498,112 @@ std::string_view FsstEncoding::decompressToStringBuffer(
     return {};
   }
 
-  NIMBLE_CHECK_FILE_NE(
-      static_cast<uint8_t>(compressed.back()),
-      FSST_ESC,
-      "FSST compressed string ends with an incomplete escape code.");
+  // Bound the conservative expansion calculation and the uint32-sized page
+  // allocation requested by ensurePage().
   NIMBLE_CHECK_FILE_LE(
       compressed.size(),
       std::numeric_limits<uint32_t>::max() / kMaxSymbolLength,
-      "FSST decompressed string exceeds the supported size.");
+      "FSST compressed string exceeds the supported size.");
   const size_t maxDecompressedSize = compressed.size() * kMaxSymbolLength;
-  decompressBuffer_.resize(maxDecompressedSize);
+  // FSST replaces output[size - 1] with a terminator when a zero-terminated
+  // symbol table exactly fills the declared output size. Giving it one extra
+  // byte preserves that final payload byte while retaining the conservative
+  // maximum-expansion bound below.
+  const size_t requiredDecompressionCapacity = maxDecompressedSize + 1;
+  // Both callers below provide requiredDecompressionCapacity writable bytes.
+  const auto decompress = [&](unsigned char* output) {
+    const auto decompressedSize = nimble_fsst_decompress(
+        &decoder_,
+        compressed.size(),
+        reinterpret_cast<const unsigned char*>(compressed.data()),
+        requiredDecompressionCapacity,
+        output);
+    NIMBLE_CHECK_GT(
+        decompressedSize,
+        0,
+        "FSST decompression failed for non-empty compressed string.");
+    NIMBLE_CHECK_FILE_LE(
+        decompressedSize,
+        maxDecompressedSize,
+        "FSST decompressed string exceeds the maximum expansion bound.");
+    return decompressedSize;
+  };
 
-  const auto decompressedSize = nimble_fsst_decompress(
-      &decoder_,
-      compressed.size(),
-      reinterpret_cast<const unsigned char*>(compressed.data()),
-      maxDecompressedSize,
-      reinterpret_cast<unsigned char*>(decompressBuffer_.data()));
+  // Seed a normal page so the first small value can decode directly. Keep
+  // large values on the scratch path to avoid allocating the conservative
+  // maximum expansion when the actual decoded value may be much smaller.
+  if (currentPage_ == nullptr &&
+      requiredDecompressionCapacity <= kStringPageSize) {
+    ensurePage(requiredDecompressionCapacity);
+  }
+  if (const auto output = availablePageRange(requiredDecompressionCapacity)) {
+    auto* const outputData = output->data();
+    const auto decompressedSize =
+        decompress(reinterpret_cast<unsigned char*>(outputData));
+    pageUsedBytes_ += decompressedSize;
+    return {outputData, decompressedSize};
+  }
 
-  NIMBLE_CHECK_GT(
-      decompressedSize,
-      0,
-      "FSST decompression failed for non-empty compressed string.");
-  NIMBLE_CHECK_FILE_LE(
-      decompressedSize,
-      maxDecompressedSize,
-      "FSST decompressed string exceeds its output buffer.");
-
-  ensurePage(decompressedSize);
-
-  std::memcpy(
-      currentPage_ + pageUsedBytes_,
-      decompressBuffer_.data(),
-      decompressedSize);
-  std::string_view result(currentPage_ + pageUsedBytes_, decompressedSize);
+  // FSST does not reliably report the required size after decoding into an
+  // undersized buffer, so use the conservative capacity for the scratch path.
+  // Decoding first also preserves a partially filled page when the actual
+  // output fits its tail, rather than abandoning it based on the loose bound.
+  decompressBuffer_.resize(requiredDecompressionCapacity);
+  const auto decompressedSize =
+      decompress(reinterpret_cast<unsigned char*>(decompressBuffer_.data()));
+  auto* const outputData = ensurePage(decompressedSize);
+  std::memcpy(outputData, decompressBuffer_.data(), decompressedSize);
   pageUsedBytes_ += decompressedSize;
-  return result;
+  return {outputData, decompressedSize};
 }
 
-void FsstEncoding::ensurePage(size_t requiredBytes) {
-  if (pageCapacityBytes_ - pageUsedBytes_ >= requiredBytes) {
-    return;
+std::optional<std::span<char>> FsstEncoding::availablePageRange(
+    size_t requiredBytes) const {
+  NIMBLE_CHECK_LE(
+      pageUsedBytes_, pageCapacityBytes_, "Invalid FSST string page position.");
+  if (currentPage_ == nullptr ||
+      requiredBytes > pageCapacityBytes_ - pageUsedBytes_) {
+    return std::nullopt;
+  }
+  return std::span<char>{currentPage_ + pageUsedBytes_, requiredBytes};
+}
+
+char* FsstEncoding::ensurePage(size_t requiredBytes) {
+  if (const auto output = availablePageRange(requiredBytes)) {
+    return output->data();
   }
   const auto pageSize = std::max(kStringPageSize, requiredBytes);
   const size_t nextPageIndex =
       currentPage_ == nullptr ? 0 : currentPageIndex_ + 1;
-  if (nextPageIndex < stringPages_.size() &&
-      stringPages_[nextPageIndex].capacity >= pageSize) {
-    currentPage_ = stringPages_[nextPageIndex].data;
-    pageCapacityBytes_ = stringPages_[nextPageIndex].capacity;
-  } else {
-    StringPageSlot page{
-        .data = static_cast<char*>(stringBufferFactory_(pageSize)),
-        .capacity = pageSize};
-    if (nextPageIndex < stringPages_.size()) {
-      stringPages_[nextPageIndex] = page;
-    } else {
-      stringPages_.push_back(page);
+  if (nextPageIndex < stringPages_.size()) {
+    const auto& page = stringPages_[nextPageIndex];
+    if (page.capacity >= pageSize) {
+      currentPage_ = page.data;
+      pageCapacityBytes_ = page.capacity;
+      currentPageIndex_ = nextPageIndex;
+      pageUsedBytes_ = 0;
+      return currentPage_;
     }
-    currentPage_ = page.data;
-    pageCapacityBytes_ = page.capacity;
   }
+
+  NIMBLE_CHECK_FILE_LE(
+      pageSize,
+      std::numeric_limits<uint32_t>::max(),
+      "FSST string page exceeds the supported size.");
+  auto* nextPage =
+      static_cast<char*>(stringBufferFactory_(static_cast<uint32_t>(pageSize)));
+  NIMBLE_CHECK_NOT_NULL(nextPage, "FSST string buffer factory returned null.");
+  StringPageSlot page{.data = nextPage, .capacity = pageSize};
+  if (nextPageIndex < stringPages_.size()) {
+    stringPages_[nextPageIndex] = page;
+  } else {
+    stringPages_.push_back(page);
+  }
+  currentPage_ = nextPage;
+  pageCapacityBytes_ = pageSize;
   currentPageIndex_ = nextPageIndex;
   pageUsedBytes_ = 0;
+  return currentPage_;
 }
 
 std::string_view FsstEncoding::encode(
@@ -656,6 +688,8 @@ std::string_view FsstEncoding::slice(
       header.lengths,
       [](uint32_t /*totalLength*/) -> void* { return nullptr; },
       options);
+  NIMBLE_CHECK_NOT_NULL(
+      lengthsEncoding, "FSST lengths encoding factory returned null.");
   NIMBLE_CHECK_FILE_EQ(
       lengthsEncoding->dataType(),
       DataType::Uint32,
@@ -713,6 +747,7 @@ std::string_view FsstEncoding::slice(
   const auto encodingSize =
       static_cast<uint32_t>(fixedEncodingSize + blobBytes);
   char* reserved = buffer.reserve(encodingSize);
+  NIMBLE_CHECK_NOT_NULL(reserved, "FSST encoding buffer allocation failed.");
   char* pos = reserved;
   EncodingPrefix::serialize(
       EncodingType::Fsst,

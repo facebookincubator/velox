@@ -355,6 +355,25 @@ BENCHMARK_RELATIVE(FSST_Encode_TrivialFallback_Pooled, iterations) {
 }
 
 BENCHMARK(
+    FSST_CreateDestroy_String_SortedStructuredTextMixedLengths,
+    iterations) {
+  std::optional<FsstBenchmarkFixture> fixture;
+  std::optional<StringPageArena> stringPages;
+  BENCHMARK_SUSPEND {
+    fixture.emplace();
+    stringPages.emplace();
+  }
+  // Time the complete decoder lifecycle. Pausing and resuming the benchmark
+  // around every destruction would distort this sub-microsecond operation.
+  while (iterations--) {
+    auto decoder = createFsstDecoder(fixture->encoded(), *stringPages);
+    folly::doNotOptimizeAway(decoder.get());
+  }
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(
     FSST_DecodeDense_String_SortedStructuredTextMixedLengths,
     iterations) {
   std::unique_ptr<FsstBenchmarkFixture> fixture;
