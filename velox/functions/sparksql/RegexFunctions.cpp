@@ -16,6 +16,7 @@
 #include <folly/container/F14Map.h>
 #include <limits>
 #include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/lib/java_regex/JavaRegexTranslator.h"
 #include "velox/functions/lib/string/StringImpl.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -29,6 +30,15 @@ void ensureRegexIsConstant(
   if (!patternVector || !patternVector->isConstantEncoding()) {
     VELOX_USER_FAIL("{} requires a constant pattern.", functionName);
   }
+}
+
+// Adapts the Velox StringView call sites to the Java->RE2 translator, which is
+// deliberately Velox-agnostic (plain std::string) so it can be reused by other
+// front-ends. Supersedes the previous named-group-only preparation: the
+// translator performs the named-group rewrite plus the Java/RE2 syntax
+// normalization and ICU-free Unicode property expansion.
+std::string prepareRegexPatternForRe2(const StringView& pattern) {
+  return translateJavaRegexToRe2(pattern.getString());
 }
 
 // REGEXP_REPLACE(string, pattern, overwrite) → string
@@ -66,7 +76,7 @@ struct RegexpReplaceFunction {
       const arg_type<Varchar>* replacement,
       const arg_type<int32_t>* /*position*/) {
     if (pattern) {
-      const auto processedPattern = prepareRegexpReplacePattern(*pattern);
+      const auto processedPattern = prepareRegexPatternForRe2(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
       VELOX_USER_CHECK(
           re_->ok(),
@@ -177,8 +187,9 @@ struct RegexpReplaceFunction {
     if (re_.has_value()) {
       return re_.value();
     }
-    auto processedPattern = prepareRegexpReplacePattern(pattern);
-    return *cache_.findOrCompile(StringView(processedPattern));
+    // Cache on the raw pattern and translate only on a miss: this path runs
+    // per row when the pattern is not constant.
+    return *cache_.findOrCompile(pattern, prepareRegexPatternForRe2);
   }
 
   // Used when pattern is constant.
@@ -238,7 +249,7 @@ struct RegexpInstrFunction {
       const arg_type<Varchar>* /*stringInput*/,
       const arg_type<Varchar>* pattern) {
     if (pattern) {
-      const auto processedPattern = prepareRegexpReplacePattern(*pattern);
+      const auto processedPattern = prepareRegexPatternForRe2(*pattern);
       re_.emplace(processedPattern, RE2::Quiet);
       VELOX_USER_CHECK(
           re_->ok(),
@@ -278,13 +289,13 @@ struct RegexpInstrFunction {
 
  private:
   const RE2& getOrCompileRegex(const arg_type<Varchar>& pattern) {
-    processedPatternBuf_ = prepareRegexpReplacePattern(pattern);
-    return *cache_.findOrCompile(StringView(processedPatternBuf_));
+    // Cache on the raw pattern and translate only on a miss: this path runs
+    // per row when the pattern is not constant.
+    return *cache_.findOrCompile(pattern, prepareRegexPatternForRe2);
   }
 
   std::optional<RE2> re_;
   detail::ReCache cache_{0};
-  std::string processedPatternBuf_;
 };
 
 void registerRegexpInstr(const std::string& prefix) {
