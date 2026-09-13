@@ -49,7 +49,6 @@ bool canAggregationBeEvaluatedByCudf(
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"

@@ -86,7 +86,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_aggregation_selection_test
   SOURCES Main.cpp AggregationSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(
@@ -139,11 +139,22 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
+set(CUDF_EXPRESSION_SELECTION_TEST_LIBS ${CUDF_TEST_DEFAULT_LIBS})
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  list(APPEND CUDF_EXPRESSION_SELECTION_TEST_LIBS velox_functions_spark)
+endif()
+
 velox_add_cudf_test(
   NAME velox_cudf_expression_selection_test
   SOURCES Main.cpp ExpressionEvaluatorSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+  LIBS ${CUDF_EXPRESSION_SELECTION_TEST_LIBS}
 )
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  target_compile_definitions(
+    velox_cudf_expression_selection_test
+    PRIVATE VELOX_ENABLE_SPARK_FUNCTIONS
+  )
+endif()
 
 velox_add_cudf_test(
   NAME velox_cudf_filter_project_test

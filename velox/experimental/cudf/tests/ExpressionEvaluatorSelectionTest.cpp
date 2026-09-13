@@ -20,7 +20,9 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
+#endif
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -28,13 +30,16 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
 #include "velox/functions/sparksql/registration/Register.h"
+#endif
 #include "velox/type/Type.h"
 
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 #include <string>
+#include <vector>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
@@ -46,7 +51,9 @@ class CudfExpressionSelectionTest : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
     facebook::velox::functions::sparksql::registerFunctions();
+#endif
     facebook::velox::functions::prestosql::registerAllScalarFunctions();
   }
 
@@ -56,7 +63,9 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoFunctions("");
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
     cudf_velox::registerSparkFunctions("");
+#endif
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
@@ -230,6 +239,7 @@ TEST_F(
   ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
 }
 
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
 // Disabled because this test segfaults in CI while building the typed
 // not use cudf code.
 TEST_F(CudfExpressionSelectionTest, DISABLED_functionTopLevelWithNestedAst) {
@@ -243,6 +253,7 @@ TEST_F(CudfExpressionSelectionTest, DISABLED_functionTopLevelWithNestedAst) {
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
+#endif
 
 // Disabled because this test segfaults in CI while building the typed
 // not use cudf code.
@@ -344,6 +355,7 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnPatternLike) {
   ASSERT_FALSE(canExprRunOnGpu(badColumnEscape, queryCtx_.get(), pool_.get()));
 }
 
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
 TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
   // OK: pattern is a constant
   auto ok = optimizeTypedExpr(
@@ -413,6 +425,7 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
       "endswith(name, name)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(okColumn, queryCtx_.get(), pool_.get()));
 }
+#endif
 
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   // The default parser keeps integer literals as BIGINT, which exercises the
@@ -429,6 +442,7 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
       "substr(name, 1, 5)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(ok3, queryCtx_.get(), pool_.get()));
 
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
   // OK: Spark substring registers integer positions and lengths.
   parse::ParseOptions sparkLiteralOptions;
   sparkLiteralOptions.parseIntegerAsBigint = false;
@@ -452,8 +466,9 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
       "substring(name, c, c)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(
       canExprRunOnGpu(okStartAndLengthColumns, queryCtx_.get(), pool_.get()));
+#endif
 
-  // Bad: Spark substr accepts integer positions, not bigint positions.
+  // Bad: column positions are unsupported for BIGINT.
   auto badBigintStart = optimizeTypedExpr(
       "substr(name, a)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_FALSE(canExprRunOnGpu(badBigintStart, queryCtx_.get(), pool_.get()));
@@ -466,23 +481,25 @@ TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
       {"idx_integer", INTEGER()},
   });
 
-  for (const auto& functionName : {"element_at", "subscript", "get"}) {
+  std::vector<std::string> functionNames{"element_at", "subscript"};
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
+  functionNames.push_back("get");
+#endif
+
+  for (const auto& functionName : functionNames) {
     SCOPED_TRACE(functionName);
 
     auto bigintExpr = parseAndInferTypedExpr(
-        std::string(functionName) + "(arr, idx_bigint)",
-        arrayRowType,
-        execCtx_.get());
+        functionName + "(arr, idx_bigint)", arrayRowType, execCtx_.get());
     ASSERT_TRUE(canExprRunOnGpu(bigintExpr, queryCtx_.get(), pool_.get()));
 
     auto integerExpr = parseAndInferTypedExpr(
-        std::string(functionName) + "(arr, idx_integer)",
-        arrayRowType,
-        execCtx_.get());
+        functionName + "(arr, idx_integer)", arrayRowType, execCtx_.get());
     ASSERT_TRUE(canExprRunOnGpu(integerExpr, queryCtx_.get(), pool_.get()));
   }
 }
 
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
 TEST_F(CudfExpressionSelectionTest, signatureSparkGetSmallIntegralIndices) {
   auto arrayRowType = ROW({
       {"arr", ARRAY(INTEGER())},
@@ -498,6 +515,7 @@ TEST_F(CudfExpressionSelectionTest, signatureSparkGetSmallIntegralIndices) {
       "get(arr, idx_smallint)", arrayRowType, execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(smallintExpr, queryCtx_.get(), pool_.get()));
 }
+#endif
 
 TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
   // OK: numeric args are castable to double
@@ -506,6 +524,7 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
   ASSERT_TRUE(canExprRunOnGpu(ok, queryCtx_.get(), pool_.get()));
 }
 
+#ifdef VELOX_ENABLE_SPARK_FUNCTIONS
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
 
@@ -547,6 +566,7 @@ TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
     SUCCEED();
   }
 }
+#endif
 
 TEST_F(CudfExpressionSelectionTest, signatureTypeVariableCoalesce) {
   // OK: same type BIGINT
