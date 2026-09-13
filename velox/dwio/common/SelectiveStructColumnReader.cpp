@@ -594,13 +594,12 @@ std::unique_ptr<velox::dwio::common::ColumnLoader>
 SelectiveStructColumnReaderBase::makeColumnLoader(vector_size_t index) {
   // Check if the child at this index has a transform with kNone extraction.
   // If so, return a TransformColumnLoader to apply the transform lazily.
-  for (const auto& childSpec : scanSpec_->children()) {
-    if (childSpec->subscript() == index && childSpec->hasTransform() &&
-        childSpec->extractionType() ==
-            velox::common::ScanSpec::ExtractionType::kNone) {
-      return std::make_unique<velox::dwio::common::TransformColumnLoader>(
-          this, children_[index], numReads_, childSpec->transform());
-    }
+  const auto* childSpec = children_[index]->scanSpec();
+  if (childSpec->hasTransform() &&
+      childSpec->extractionType() ==
+          velox::common::ScanSpec::ExtractionType::kNone) {
+    return std::make_unique<velox::dwio::common::TransformColumnLoader>(
+        this, children_[index], numReads_, childSpec->transform());
   }
   return std::make_unique<velox::dwio::common::ColumnLoader>(
       this, children_[index], numReads_);
