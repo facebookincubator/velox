@@ -22,6 +22,7 @@ velox_add_library(
   CentralMomentsAggregate.cpp
   CollectListAggregate.cpp
   CollectSetAggregate.cpp
+  CountMinSketchAggregate.cpp
   CovarianceAggregate.cpp
   FirstLastAggregate.cpp
   MinMaxAggregate.cpp
