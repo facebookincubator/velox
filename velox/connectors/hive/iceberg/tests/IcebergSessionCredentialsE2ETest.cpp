@@ -23,7 +23,6 @@
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
@@ -203,11 +202,7 @@ TEST_F(IcebergSessionCredentialsE2ETest, forwardsSessionCredentialToReadPath) {
   const auto splits =
       makeIcebergSplits(RecordingFileSystem::scheme() + dataFile->getPath());
 
-  const auto plan = exec::test::PlanBuilder()
-                        .startTableScan(test::kIcebergConnectorId)
-                        .outputType(rowType)
-                        .endTableScan()
-                        .planNode();
+  const auto plan = makeIcebergTableScanPlan(rowType);
 
   exec::test::AssertQueryBuilder(plan)
       .connectorSessionProperties(
@@ -232,11 +227,7 @@ TEST_F(IcebergSessionCredentialsE2ETest, noSessionCredentialForwardsNothing) {
   const auto splits =
       makeIcebergSplits(RecordingFileSystem::scheme() + dataFile->getPath());
 
-  const auto plan = exec::test::PlanBuilder()
-                        .startTableScan(test::kIcebergConnectorId)
-                        .outputType(rowType)
-                        .endTableScan()
-                        .planNode();
+  const auto plan = makeIcebergTableScanPlan(rowType);
 
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 

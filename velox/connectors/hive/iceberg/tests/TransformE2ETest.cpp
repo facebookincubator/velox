@@ -24,7 +24,6 @@
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/iceberg/Murmur3Hash32.h"
 
 using namespace facebook::velox::common::testutil;
@@ -208,11 +207,7 @@ class TransformE2ETest : public test::IcebergTestBase {
       int32_t expectedRowCount) {
     auto splits = createSplitsForDirectory(outputPath);
 
-    const auto plan = PlanBuilder()
-                          .startTableScan(test::kIcebergConnectorId)
-                          .outputType(rowType)
-                          .endTableScan()
-                          .planNode();
+    const auto plan = makeIcebergTableScanPlan(rowType);
 
     const auto actualRowCount =
         AssertQueryBuilder(plan).splits(splits).countResults();
@@ -226,25 +221,22 @@ class TransformE2ETest : public test::IcebergTestBase {
       const std::string& partitionPath,
       const std::string& partitionFilter,
       const int32_t expectedRowCount) {
-    auto scanPlan = PlanBuilder()
-                        .startTableScan(test::kIcebergConnectorId)
-                        .outputType(rowType)
-                        .endTableScan()
-                        .planNode();
-
     const auto actualRowCount =
-        AssertQueryBuilder(scanPlan)
+        AssertQueryBuilder(makeIcebergTableScanPlan(rowType))
             .splits(createSplitsForDirectory(partitionPath))
             .countResults();
 
     ASSERT_EQ(actualRowCount, expectedRowCount);
 
-    const auto filterPlan = PlanBuilder()
-                                .startTableScan(test::kIcebergConnectorId)
-                                .outputType(rowType)
-                                .endTableScan()
-                                .filter(partitionFilter)
-                                .planNode();
+    const auto filterPlan = makeIcebergTableScanPlan(
+        rowType,
+        /*dataColumns=*/nullptr,
+        /*subfieldFilters=*/{},
+        /*remainingFilter=*/"",
+        /*assignments=*/{},
+        /*filterColumnHandles=*/{},
+        /*dataColumnFieldIds=*/{},
+        /*postScanFilter=*/partitionFilter);
     const auto filteredRowCount =
         AssertQueryBuilder(filterPlan)
             .splits(createSplitsForDirectory(partitionPath))
@@ -425,11 +417,7 @@ TEST_F(TransformE2ETest, bucket) {
   int32_t totalRows = 0;
   for (const auto& dir : partitionDirs) {
     auto splits = createSplitsForDirectory(dir);
-    auto countPlan = PlanBuilder()
-                         .startTableScan(test::kIcebergConnectorId)
-                         .outputType(rowType)
-                         .endTableScan()
-                         .planNode();
+    auto countPlan = makeIcebergTableScanPlan(rowType);
     auto partitionRowCount =
         AssertQueryBuilder(countPlan).splits(splits).countResults();
 
@@ -446,12 +434,7 @@ TEST_F(TransformE2ETest, bucket) {
     const auto [k, v] = parsePartitionDirName(name);
     const int32_t expectedBucket = std::stoi(v);
 
-    auto dataPlan = PlanBuilder()
-                        .startTableScan(test::kIcebergConnectorId)
-                        .outputType(rowType)
-                        .endTableScan()
-                        .project({"c_varchar"})
-                        .planNode();
+    auto dataPlan = makeIcebergTableScanPlan(rowType);
     const auto& dataResult = AssertQueryBuilder(dataPlan)
                                  .splits(createSplitsForDirectory(dir))
                                  .copyResults(opPool_.get());
@@ -525,22 +508,21 @@ TEST_F(TransformE2ETest, year) {
       const auto name = dirName(dir);
       if (name == expectedDirName) {
         foundPartition = true;
-        auto datePlan = PlanBuilder()
-                            .startTableScan(test::kIcebergConnectorId)
-                            .outputType(rowType)
-                            .endTableScan()
-                            .filter(yearFilter(year))
-                            .planNode();
+        auto datePlan = makeIcebergTableScanPlan(
+            rowType,
+            /*dataColumns=*/nullptr,
+            /*subfieldFilters=*/{},
+            /*remainingFilter=*/"",
+            /*assignments=*/{},
+            /*filterColumnHandles=*/{},
+            /*dataColumnFieldIds=*/{},
+            /*postScanFilter=*/yearFilter(year));
 
         auto partitionRowCount = AssertQueryBuilder(datePlan)
                                      .splits(createSplitsForDirectory(dir))
                                      .countResults();
 
-        auto countPlan = PlanBuilder()
-                             .startTableScan(test::kIcebergConnectorId)
-                             .outputType(rowType)
-                             .endTableScan()
-                             .planNode();
+        auto countPlan = makeIcebergTableScanPlan(rowType);
         auto totalPartitionCount = AssertQueryBuilder(countPlan)
                                        .splits(createSplitsForDirectory(dir))
                                        .countResults();
@@ -692,11 +674,7 @@ TEST_F(TransformE2ETest, multipleTransformsOnSameColumn) {
 
         // Verify the partition has data.
         auto splits = createSplitsForDirectory(thirdDir);
-        auto countPlan = PlanBuilder()
-                             .startTableScan(test::kIcebergConnectorId)
-                             .outputType(rowType)
-                             .endTableScan()
-                             .planNode();
+        auto countPlan = makeIcebergTableScanPlan(rowType);
         auto rowCount =
             AssertQueryBuilder(countPlan).splits(splits).countResults();
         ASSERT_GT(rowCount, 0)
@@ -754,29 +732,31 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
     }
   }
 
+  // addColumnHandles() assigns 1-based field IDs: c_date → 1, c_value → 2.
+  // Use matching field IDs here so buildFieldIds() maps the Parquet columns
+  // correctly when field-ID mode is activated.
   ColumnHandleMap assignments{
       {"c_date",
        std::make_shared<IcebergColumnHandle>(
            "c_date",
            FileColumnHandle::ColumnType::kPartitionKey,
            DATE(),
-           parquet::ParquetFieldId{0, {}},
+           parquet::ParquetFieldId{1, {}},
            std::vector<common::Subfield>{})},
       {"c_value",
        std::make_shared<IcebergColumnHandle>(
            "c_value",
            FileColumnHandle::ColumnType::kRegular,
            INTEGER(),
-           parquet::ParquetFieldId{1, {}})},
+           parquet::ParquetFieldId{2, {}})},
   };
 
-  auto filterPlan = PlanBuilder()
-                        .startTableScan(test::kIcebergConnectorId)
-                        .outputType(rowType)
-                        .assignments(assignments)
-                        .remainingFilter("c_date = DATE '2025-02-28'")
-                        .endTableScan()
-                        .planNode();
+  auto filterPlan = makeIcebergTableScanPlan(
+      /*outputType=*/rowType,
+      /*dataColumns=*/nullptr,
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/"c_date = DATE '2025-02-28'",
+      /*assignments=*/assignments);
 
   const auto filteredRowCount =
       AssertQueryBuilder(filterPlan).splits(splits).countResults();

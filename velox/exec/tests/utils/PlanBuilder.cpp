@@ -336,12 +336,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
     if (!hasAssignments) {
       assignments_.insert(
-          {name,
-           std::make_shared<HiveColumnHandle>(
-               hiveColumnName,
-               FileColumnHandle::ColumnType::kRegular,
-               type,
-               type)});
+          {name, buildDefaultColumnHandle(hiveColumnName, type, i)});
     }
   }
 
@@ -352,7 +347,13 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
     for (auto& handle : filterColumnHandles_) {
       if (!parseType->containsChild(handle->name())) {
         names.push_back(handle->name());
-        types.push_back(handle->hiveType());
+        auto* hiveHandle =
+            dynamic_cast<const hive::HiveColumnHandle*>(handle.get());
+        VELOX_CHECK_NOT_NULL(
+            hiveHandle,
+            "filterColumnHandles entry '{}' is not a HiveColumnHandle",
+            handle->name());
+        types.push_back(hiveHandle->hiveType());
       }
     }
     parseType = ROW(std::move(names), std::move(types));
@@ -383,18 +384,8 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        std::move(subfieldFiltersMap_),
-        remainingFilterExpr,
-        dataColumns_,
-        indexColumns_,
-        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        filterColumnHandles_,
-        sampleRate_,
-        /*dbName=*/"",
-        dataColumnFieldIds_);
+    tableHandle_ = buildConnectorTableHandle(
+        std::move(subfieldFiltersMap_), remainingFilterExpr);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -405,6 +396,43 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         std::make_shared<core::FilterNode>(filterId, filterNodeExpr, result);
   }
   return result;
+}
+
+connector::ColumnHandlePtr
+PlanBuilder::TableScanBuilder::buildDefaultColumnHandle(
+    const std::string& name,
+    const TypePtr& type,
+    uint32_t /*outputIndex*/) {
+  return std::make_shared<HiveColumnHandle>(
+      name, FileColumnHandle::ColumnType::kRegular, type, type);
+}
+
+connector::ConnectorTableHandlePtr
+PlanBuilder::TableScanBuilder::buildConnectorTableHandle(
+    common::SubfieldFilters subfieldFilters,
+    const core::TypedExprPtr& remainingFilter) {
+  std::vector<hive::HiveColumnHandlePtr> hiveHandles;
+  hiveHandles.reserve(filterColumnHandles_.size());
+  for (const auto& h : filterColumnHandles_) {
+    auto hiveH = std::dynamic_pointer_cast<const hive::HiveColumnHandle>(h);
+    VELOX_CHECK_NOT_NULL(
+        hiveH,
+        "filterColumnHandles entry '{}' is not a HiveColumnHandle",
+        h->name());
+    hiveHandles.push_back(std::move(hiveH));
+  }
+  return std::make_shared<HiveTableHandle>(
+      connectorId_,
+      tableName_,
+      std::move(subfieldFilters),
+      remainingFilter,
+      dataColumns_,
+      indexColumns_,
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      std::move(hiveHandles),
+      sampleRate_,
+      /*dbName=*/"",
+      dataColumnFieldIds_);
 }
 
 core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
