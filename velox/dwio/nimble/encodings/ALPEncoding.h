@@ -210,10 +210,13 @@ class ALPEncoding final
             typename DecoderVisitor::Extract,
             velox::dwio::common::ExtractToReader>) {
       constexpr vector_size_t kMinBulkRows = 128;
+      // Use a conservative cutoff based on the number of rows left to read.
+      // This is a trade-off that avoids bulk setup costs for short reads but
+      // may give up potential speedups on some smaller batches.
       if (visitor.numRows() - visitor.rowIndex() >= kMinBulkRows) {
         const auto* nulls = visitor.reader().rawNullsInReadRange();
         if (velox::dwio::common::useFastPath(visitor, nulls)) {
-          readWithVisitorBulk(visitor, params, nulls);
+          detail::readWithVisitorFast(*this, visitor, params, nulls);
           return;
         }
       }
@@ -1005,14 +1008,6 @@ class ALPEncoding final
       }
     }
     return {bestExponent, bestFactor};
-  }
-
-  template <typename Visitor>
-  FOLLY_NOINLINE void readWithVisitorBulk(
-      Visitor& visitor,
-      ReadWithVisitorParams& params,
-      const uint64_t* nulls) {
-    detail::readWithVisitorFast(*this, visitor, params, nulls);
   }
 
   // Converts a floating-point value to the integer stored by ALP.
