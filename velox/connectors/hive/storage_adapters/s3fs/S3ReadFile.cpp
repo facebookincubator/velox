@@ -123,7 +123,7 @@ class S3ReadFile ::Impl {
     BufferPtr pooled;
     std::unique_ptr<char[]> owned;
     if (context.pool != nullptr) {
-      pooled = AlignedBuffer::allocate<char>(length, context.pool);
+      pooled = AlignedBuffer::allocateExact<char>(length, context.pool);
       staging = pooled->asMutable<char>();
     } else {
       owned.reset(new char[length]);
