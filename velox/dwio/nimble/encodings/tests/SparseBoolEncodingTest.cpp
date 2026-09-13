@@ -22,7 +22,12 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 #include <algorithm>
@@ -823,4 +828,245 @@ TYPED_TEST(SparseBoolEncodingTest, skipAllThenMaterializeRemaining) {
   encoding->materialize(2, result.data());
   EXPECT_EQ(result[0], values[8]);
   EXPECT_EQ(result[1], values[9]);
+}
+
+// --- Slice end-to-end coverage across position child shapes ---------------
+//
+// The slice path always emits a SliceEncoding wrapper around the sliced
+// position sub-stream. Its inner is a fresh re-emit of the retained
+// positions through the source's captured encoding layout -- Trivial in,
+// Trivial out; Varint in, Varint out; and so on. When the captured layout
+// supports SliceEncoding push-down (Trivial, FixedBitWidth, ...), the
+// -offset shift is folded into the inner bytes at write time and the
+// on-wire delta is zero. Otherwise the delta rides on the SliceEncoding
+// wire and the read-time shift loop applies it.
+
+// Peels the SliceEncoding wrapper the slice path always emits and returns
+// its inner encoding type plus the on-wire value delta.
+struct SliceInnerInfo {
+  nimble::EncodingType outerType;
+  nimble::EncodingType innerType;
+  int64_t valueDelta;
+};
+
+static SliceInnerInfo sparseBoolPositionSliceInfo(
+    std::string_view encoded,
+    const nimble::Encoding::Options& options,
+    velox::memory::MemoryPool& pool) {
+  const auto payload = encoded.substr(
+      nimble::EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
+  const auto positionEnc = payload.substr(sizeof(uint8_t));
+  const auto outerType = nimble::EncodingPrefix::encodingType(positionEnc);
+  if (outerType != nimble::EncodingType::Slice) {
+    return {.outerType = outerType, .innerType = outerType, .valueDelta = 0};
+  }
+  // Constructing a SliceEncoding<uint32_t> parses the wire layout through the
+  // same code path production readers use; the accessors expose the parsed
+  // fields directly.
+  nimble::SliceEncoding<uint32_t> slice{pool, positionEnc, nullptr, options};
+  return {
+      .outerType = outerType,
+      .innerType = nimble::EncodingPrefix::encodingType(slice.innerEncoding()),
+      .valueDelta = slice.valueDelta(),
+  };
+}
+
+TYPED_TEST(SparseBoolEncodingTest, sliceWithTrivialPositionsFallback) {
+  // Default nested selection makes the sparse positions Trivial. The slice
+  // path re-emits the retained positions through the source's captured
+  // layout, which produces another Trivial<uint32>, and lets SliceEncoding's
+  // Trivial push-down fold the -offset shift into the byte copy -- delta on
+  // the wire is zero.
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  auto values = this->toVector(
+      {false, false, true, false, true, false, true, true, false, false});
+  const auto encoded =
+      nimble::test::Encoder<nimble::SparseBoolEncoding>::encode(
+          *this->buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options);
+
+  nimble::Buffer sliceBuffer{*this->pool_};
+  const auto sliced = nimble::SparseBoolEncoding::slice(
+      encoded, /*offset=*/2, /*length=*/6, sliceBuffer, options);
+  const auto info = sparseBoolPositionSliceInfo(sliced, options, *this->pool_);
+  EXPECT_EQ(info.outerType, nimble::EncodingType::Slice);
+  EXPECT_EQ(info.innerType, nimble::EncodingType::Trivial);
+  EXPECT_EQ(info.valueDelta, 0);
+  nimble::SparseBoolEncoding encoding{
+      *this->pool_,
+      sliced,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options};
+  ASSERT_EQ(encoding.rowCount(), 6);
+  nimble::Vector<bool> result(this->pool_.get(), 6);
+  encoding.materialize(6, result.data());
+  for (uint32_t i = 0; i < 6; ++i) {
+    EXPECT_EQ(result[i], values[2 + i]) << "row " << i;
+  }
+}
+
+TYPED_TEST(SparseBoolEncodingTest, sliceWithVarintPositionsFallback) {
+  // Force the sparse-positions child to Varint, which has no EncodingView and
+  // no SliceEncoding push-down folder. The slice path falls into
+  // detail::findSortedPositionSlots' materialize + binary-search branch and
+  // re-emits the retained range through the source's captured layout --
+  // another Varint<uint32>. SliceEncoding::wrap cannot fold the shift into a
+  // Varint inner, so the -offset delta rides on the wire and the read-time
+  // shift loop applies it.
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  auto values = this->toVector(
+      {false, false, true, false, true, false, true, true, false, false});
+
+  // Replay a SparseBool layout whose sole child (Indices) is Varint. The
+  // ReplayedEncodingSelectionPolicy routes the nested encoding through the
+  // child's layout instead of the default read-factor selector.
+  nimble::ManualEncodingSelectionPolicyFactory manualFactory;
+  nimble::EncodingSelectionPolicyCreator creator =
+      [&manualFactory](nimble::DataType dataType) {
+        return manualFactory.createPolicy(dataType);
+      };
+  nimble::EncodingLayout varintLayout{
+      nimble::EncodingType::Varint, {}, nimble::CompressionType::Uncompressed};
+  nimble::EncodingLayout layout{
+      nimble::EncodingType::SparseBool,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {varintLayout}};
+  auto policy = std::make_unique<nimble::ReplayedEncodingSelectionPolicy<bool>>(
+      std::move(layout), nimble::CompressionOptions{}, creator);
+
+  const auto encoded = nimble::EncodingFactory::encode<bool>(
+      std::move(policy),
+      std::span<const bool>{values.data(), values.size()},
+      *this->buffer_,
+      options);
+
+  // Verify the source really has a Varint positions child so the fallback
+  // branch is exercised.
+  const auto sourcePayload = encoded.substr(
+      nimble::EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
+  const auto sourcePositionEnc = sourcePayload.substr(sizeof(uint8_t));
+  ASSERT_EQ(
+      nimble::EncodingPrefix::encodingType(sourcePositionEnc),
+      nimble::EncodingType::Varint);
+
+  constexpr uint32_t kOffset = 2;
+  constexpr uint32_t kLength = 6;
+  nimble::Buffer sliceBuffer{*this->pool_};
+  const auto sliced = nimble::SparseBoolEncoding::slice(
+      encoded, kOffset, kLength, sliceBuffer, options);
+  const auto info = sparseBoolPositionSliceInfo(sliced, options, *this->pool_);
+  EXPECT_EQ(info.outerType, nimble::EncodingType::Slice);
+  // Captured layout preserves the source's Varint shape.
+  EXPECT_EQ(info.innerType, nimble::EncodingType::Varint);
+  // Varint has no push-down folder, so the -offset shift lands on the wire.
+  EXPECT_EQ(info.valueDelta, -static_cast<int64_t>(kOffset));
+  nimble::SparseBoolEncoding encoding{
+      *this->pool_,
+      sliced,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options};
+  ASSERT_EQ(encoding.rowCount(), kLength);
+  nimble::Vector<bool> result(this->pool_.get(), kLength);
+  encoding.materialize(kLength, result.data());
+  for (uint32_t i = 0; i < kLength; ++i) {
+    EXPECT_EQ(result[i], values[kOffset + i]) << "row " << i;
+  }
+}
+
+TYPED_TEST(SparseBoolEncodingTest, sliceRoundTripAtBoundaries) {
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  auto values = this->toVector(
+      {false, false, true, false, true, false, false, true, false, true});
+  const auto encoded =
+      nimble::test::Encoder<nimble::SparseBoolEncoding>::encode(
+          *this->buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+
+  struct Range {
+    const char* name;
+    uint32_t offset;
+    uint32_t length;
+  };
+  for (const auto range :
+       {Range{"singleRowAtStart", 0, 1},
+        Range{"fullRange", 0, 10},
+        Range{"singleRowAtEnd", 9, 1},
+        Range{"singleRowInside", 4, 1}}) {
+    SCOPED_TRACE(range.name);
+    nimble::Buffer sliceBuffer{*this->pool_};
+    const auto sliced = nimble::SparseBoolEncoding::slice(
+        encoded, range.offset, range.length, sliceBuffer, options);
+    nimble::SparseBoolEncoding encoding{
+        *this->pool_,
+        sliced,
+        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+        options};
+    ASSERT_EQ(encoding.rowCount(), range.length);
+    nimble::Vector<bool> result(this->pool_.get(), range.length);
+    encoding.materialize(range.length, result.data());
+    for (uint32_t i = 0; i < range.length; ++i) {
+      EXPECT_EQ(result[i], values[range.offset + i]) << "row " << i;
+    }
+  }
+}
+
+TYPED_TEST(SparseBoolEncodingTest, mainlyConstantSliceUsesIsCommonSparseBool) {
+  // MainlyConstantEncodingBase::slice reaches SparseBoolEncoding::sliceAndCount
+  // for every projected MainlyConstant stream whose isCommon child is
+  // SparseBool. This is the hot path the fast-slice work was designed for.
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+
+  // Build a MainlyConstant stream: 4096 rows with the common value 42
+  // interleaved with rare non-common values every 47 rows.
+  nimble::Vector<int32_t> values{this->pool_.get()};
+  for (uint32_t row = 0; row < 4096; ++row) {
+    values.push_back(row % 47 == 0 ? static_cast<int32_t>(1000 + row) : 42);
+  }
+  const auto encoded =
+      nimble::test::Encoder<nimble::MainlyConstantEncoding<int32_t>>::encode(
+          *this->buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+
+  struct Range {
+    uint32_t offset;
+    uint32_t length;
+  };
+  for (const auto range :
+       {Range{/*offset=*/0, /*length=*/1},
+        Range{/*offset=*/0, /*length=*/4096},
+        Range{/*offset=*/46, /*length=*/3},
+        Range{/*offset=*/47, /*length=*/1},
+        Range{/*offset=*/94, /*length=*/100},
+        Range{/*offset=*/1000, /*length=*/1000},
+        Range{/*offset=*/4095, /*length=*/1}}) {
+    SCOPED_TRACE(
+        testing::Message() << "offset=" << range.offset
+                           << ", length=" << range.length);
+    nimble::Buffer sliceBuffer{*this->pool_};
+    const auto sliced = nimble::MainlyConstantEncoding<int32_t>::slice(
+        encoded, range.offset, range.length, sliceBuffer, options);
+    auto encoding = nimble::EncodingFactory{options}.create(
+        *this->pool_, sliced, [](uint32_t /*size*/) -> void* {
+          return nullptr;
+        });
+    ASSERT_EQ(encoding->rowCount(), range.length);
+    nimble::Vector<int32_t> result(this->pool_.get(), range.length);
+    encoding->materialize(range.length, result.data());
+    for (uint32_t i = 0; i < range.length; ++i) {
+      EXPECT_EQ(result[i], values[range.offset + i]) << "row " << i;
+    }
+  }
 }

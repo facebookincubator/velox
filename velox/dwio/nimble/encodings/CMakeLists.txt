@@ -44,6 +44,7 @@ add_library(
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
+  common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
@@ -73,6 +74,7 @@ add_library(
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
   common/EncodingUtils.h
+  common/SortedPositionSlots.h
   common/EncodingType.h
   common/EncodingPrimitives.h
   common/EncodingPrefix.h
