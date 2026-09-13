@@ -356,6 +356,7 @@ TEST_F(FsstEncodingTest, roundTripStrings) {
   std::string longString2(10'000, 'b');
 
   std::vector<TestCase> testCases{
+      {"empty input", {}, EncodingType::Trivial},
       {"basic strings", {"hello", "world", "hello world", "foo", "bar", "baz"}},
       {"all empty strings", {"", "", "", ""}, EncodingType::Trivial},
       {"mixed empty and non-empty", {"", "abc", "", "def", ""}},

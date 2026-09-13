@@ -22,6 +22,7 @@
 #include <numeric>
 
 #include "folly/ScopeGuard.h"
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
@@ -578,6 +579,10 @@ std::string_view FsstEncoding::encode(
     std::span<const physicalType> values,
     Buffer& buffer,
     const Encoding::Options& options) {
+  if (values.empty()) {
+    return encodeTrivialFallback(selection, values, buffer, options);
+  }
+
   {
     auto compressedValues = compressValues(values, &buffer.getMemoryPool());
 
@@ -592,7 +597,7 @@ std::string_view FsstEncoding::encode(
 
     const bool useVarint = options.useVarintRowCount;
     const auto valueCount = static_cast<uint32_t>(values.size());
-    const uint32_t encodingSize =
+    const size_t encodingSize =
         Encoding::serializePrefixSize(valueCount, useVarint) +
         varint::varintSize(compressedValues.symbolTableSize) +
         compressedValues.symbolTableSize +
@@ -603,7 +608,7 @@ std::string_view FsstEncoding::encode(
             compressedValues.totalInputSize,
             encodingSize,
             options.fsstCompressionTargetRatio)) {
-      char* reserved = buffer.reserve(encodingSize);
+      char* reserved = velox::checkedNotNull(buffer.reserve(encodingSize));
       char* pos = reserved;
       Encoding::serializePrefix(
           EncodingType::Fsst, DataType::String, valueCount, useVarint, pos);

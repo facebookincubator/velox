@@ -231,14 +231,30 @@ struct WriterOptions {
   /// encodings, based on history data.
   std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
+  /// Velox subfield paths whose VARCHAR value streams prefer FSST. Paths are
+  /// resolved once against the writer's input schema during construction;
+  /// nested ROW fields use '.', while ARRAY elements and MAP values use '[*]'.
+  /// A chunk that misses FSST's compression target safely falls back to
+  /// Trivial. If a writer-owned shared dictionary targets the same stream, its
+  /// stored VARCHAR alphabet prefers FSST with the same Trivial fallback;
+  /// resolver-owned alphabets are rejected because this writer cannot
+  /// re-encode them. The selected scalar stream's complete chunk uses
+  /// chunkCompression (Uncompressed or Zstd), including its nested null bitmap
+  /// when the scalar is nullable. Separately stored auxiliary streams and all
+  /// streams for other nodes retain normal encoding selection and receive no
+  /// outer chunk compression.
+  /// Field names containing Velox subfield separators such as '.' are not
+  /// addressable as literal names through this interface.
+  std::vector<std::string> fsstEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 
-  /// Per-chunk compression of encoded data streams (layered on top of
-  /// compressionOptions).
-  /// EXPERIMENTAL / benchmark-only; only Uncompressed, Zstd and Lz4 are
-  /// supported.
-  /// NOTE: !!! Do NOT enable in production !!!
+  /// Per-chunk compression of encoded data streams, layered on top of
+  /// compressionOptions. When fsstEncodingSubfields is non-empty this applies
+  /// only to the selected scalar value streams. Global chunk compression (when
+  /// fsstEncodingSubfields is empty) remains experimental and must not be
+  /// enabled in production.
   CompressionParams chunkCompression{.type = CompressionType::Uncompressed};
 
   /// Block size for BlockBitPacking encoding.

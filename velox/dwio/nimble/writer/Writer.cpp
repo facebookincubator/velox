@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -28,6 +29,7 @@
 #include <vector>
 
 #include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
@@ -76,13 +78,33 @@ namespace facebook::nimble {
 
 using velox::dwio::common::TypeWithId;
 
+namespace {
+
+using FsstEncodingNodeIds = folly::F14FastSet<uint32_t>;
+
+// Keeps caller-facing subfield strings out of the hot writer path. Construction
+// resolves them once to ids in the schema actually stored in the file.
+struct PreparedWriterOptions {
+  WriterOptions options;
+  FsstEncodingNodeIds fsstEncodingNodeIds;
+};
+
+} // namespace
+
 namespace detail {
 
 class WriterContext : public FieldWriterContext {
  public:
-  WriterContext(velox::memory::MemoryPool& memoryPool, WriterOptions options)
-      : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
-        options_{std::move(options)},
+  WriterContext(
+      velox::memory::MemoryPool& memoryPool,
+      PreparedWriterOptions preparedOptions)
+      : FieldWriterContext{
+            memoryPool,
+            preparedOptions.options.reclaimerFactory(),
+            preparedOptions.options.vectorDecoderVisitor},
+        options_{std::move(preparedOptions.options)},
+        fsstEncodingNodeIds_{
+            std::move(preparedOptions.fsstEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         stripeStatsWriteEnabled_{featureGate()->enabled(
             FeatureGate::FeatureSet::kStripeStatsWrite,
@@ -100,6 +122,10 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  const FsstEncodingNodeIds& fsstEncodingNodeIds() const {
+    return fsstEncodingNodeIds_;
   }
 
   // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
@@ -253,6 +279,7 @@ class WriterContext : public FieldWriterContext {
   }
 
   const WriterOptions options_;
+  const FsstEncodingNodeIds fsstEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
   const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
@@ -277,6 +304,83 @@ namespace {
 
 using SchemaAttributeValues = std::vector<std::pair<std::string, std::string>>;
 using SchemaAttributes = folly::F14FastMap<uint32_t, SchemaAttributeValues>;
+
+// Parses a Velox subfield path used by targeted FSST configuration.
+velox::common::Subfield parseFsstSubfield(std::string_view fieldPath) {
+  NIMBLE_USER_CHECK(
+      !fieldPath.empty(), "FSST subfield path must not be empty.");
+  try {
+    return velox::common::Subfield{std::string{fieldPath}};
+  } catch (const velox::VeloxException& error) {
+    NIMBLE_USER_FAIL(
+        "Invalid FSST subfield path '{}': {}", fieldPath, error.message());
+  }
+}
+
+// Resolves a configured Velox subfield against the authoritative writer input
+// schema. [*] selects an ARRAY element or MAP value; MAP keys are intentionally
+// not part of the SerDe surface.
+const TypeWithId& resolveFsstSubfield(
+    const TypeWithId& root,
+    std::string_view fieldPath) {
+  const auto subfield = parseFsstSubfield(fieldPath);
+  std::reference_wrapper<const TypeWithId> current{root};
+  for (const auto& pathElementPtr : subfield.path()) {
+    const auto* pathElement = velox::checkedNotNull(pathElementPtr.get());
+    const auto& currentNode = current.get();
+    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
+      if (currentNode.type()->kind() == velox::TypeKind::ARRAY) {
+        const auto* child = velox::checkedNotNull(currentNode.childAt(0).get());
+        current = std::cref(*child);
+        continue;
+      }
+      if (currentNode.type()->kind() == velox::TypeKind::MAP) {
+        const auto* child = velox::checkedNotNull(currentNode.childAt(1).get());
+        current = std::cref(*child);
+        continue;
+      }
+      NIMBLE_USER_FAIL(
+          "FSST subfield '{}' cannot apply [*] to {}.",
+          fieldPath,
+          currentNode.type()->toString());
+    }
+
+    NIMBLE_USER_CHECK(
+        pathElement->is(velox::common::SubfieldKind::kNestedField),
+        "FSST subfield '{}' only supports nested ROW fields and [*] ARRAY/MAP values.",
+        fieldPath);
+    const auto& fieldName =
+        static_cast<const velox::common::Subfield::NestedField&>(*pathElement)
+            .name();
+    NIMBLE_USER_CHECK_EQ(
+        currentNode.type()->kind(),
+        velox::TypeKind::ROW,
+        "FSST subfield '{}' cannot select field '{}' from {}.",
+        fieldPath,
+        fieldName,
+        currentNode.type()->toString());
+    const auto& rowType = currentNode.type()->as<velox::TypeKind::ROW>();
+    NIMBLE_USER_CHECK(
+        rowType.containsChild(fieldName),
+        "FSST subfield '{}' does not exist in writer schema.",
+        fieldPath);
+    const auto* child =
+        velox::checkedNotNull(currentNode.childByName(fieldName).get());
+    current = std::cref(*child);
+  }
+
+  const auto& resolved = current.get();
+  NIMBLE_USER_CHECK(
+      resolved.type()->isVarchar(),
+      "FSST subfield '{}' must resolve to VARCHAR, got {}.",
+      fieldPath,
+      resolved.type()->toString());
+  return resolved;
+}
+
+bool containsNodeId(const TypeWithId& subtree, uint32_t nodeId) {
+  return nodeId >= subtree.id() && nodeId <= subtree.maxId();
+}
 
 std::string_view asView(const flatbuffers::FlatBufferBuilder& builder) {
   return {
@@ -337,11 +441,14 @@ std::vector<velox::column_index_t> storedInputColumnIndices(
 velox::RowTypePtr storedDataType(
     const velox::TypePtr& type,
     const WriterOptions& options) {
+  NIMBLE_USER_CHECK_NOT_NULL(type, "Writer type must not be null.");
+  const auto rowType = velox::asRowType(type);
+  NIMBLE_USER_CHECK_NOT_NULL(
+      rowType, "Writer type must be ROW, got {}.", type->toString());
   if (!omitClusterIndexKeyColumnStorage(options)) {
-    return velox::asRowType(type);
+    return velox::RowTypePtr{rowType};
   }
 
-  const auto rowType = velox::asRowType(type);
   const auto indices = storedInputColumnIndices(type, options);
   std::vector<std::string> names;
   std::vector<velox::TypePtr> types;
@@ -354,29 +461,56 @@ velox::RowTypePtr storedDataType(
   return velox::ROW(std::move(names), std::move(types));
 }
 
-void mapSchemaAttributeNode(
+template <typename Visitor>
+void forEachMappedSchemaNode(
     const velox::dwio::common::TypeWithId& inputNode,
     const velox::dwio::common::TypeWithId& storedNode,
-    const SchemaAttributes& inputAttributes,
-    SchemaAttributes& remappedAttributes) {
-  // schemaAttributes is sparse; nodes without caller-provided attributes are
-  // intentionally skipped.
-  auto it = inputAttributes.find(inputNode.id());
-  if (it != inputAttributes.end()) {
-    remappedAttributes[storedNode.id()] = it->second;
-  }
+    const Visitor& visitor) {
+  visitor(inputNode, storedNode);
 
   NIMBLE_CHECK_EQ(
       inputNode.size(),
       storedNode.size(),
       "Stored schema subtree must match input schema subtree");
   for (auto i = 0; i < inputNode.size(); ++i) {
-    mapSchemaAttributeNode(
-        *inputNode.childAt(i),
-        *storedNode.childAt(i),
-        inputAttributes,
-        remappedAttributes);
+    const auto* inputChild = velox::checkedNotNull(inputNode.childAt(i).get());
+    const auto* storedChild =
+        velox::checkedNotNull(storedNode.childAt(i).get());
+    forEachMappedSchemaNode(*inputChild, *storedChild, visitor);
   }
+}
+
+FsstEncodingNodeIds remapFsstEncodingNodeIds(
+    const velox::TypePtr& inputType,
+    const velox::TypePtr& storedType,
+    const std::vector<velox::column_index_t>& storedInputColumnIndices,
+    const FsstEncodingNodeIds& inputNodeIds) {
+  const auto input = TypeWithId::create(inputType);
+  const auto stored = TypeWithId::create(storedType);
+  const auto* inputSchema = velox::checkedNotNull(input.get());
+  const auto* storedSchema = velox::checkedNotNull(stored.get());
+  FsstEncodingNodeIds storedNodeIds;
+  storedNodeIds.reserve(inputNodeIds.size());
+  for (auto storedIndex = 0; storedIndex < storedInputColumnIndices.size();
+       ++storedIndex) {
+    const auto* inputChild = velox::checkedNotNull(
+        inputSchema->childAt(storedInputColumnIndices[storedIndex]).get());
+    const auto* storedChild =
+        velox::checkedNotNull(storedSchema->childAt(storedIndex).get());
+    forEachMappedSchemaNode(
+        *inputChild,
+        *storedChild,
+        [&](const TypeWithId& inputNode, const TypeWithId& storedNode) {
+          if (inputNodeIds.find(inputNode.id()) != inputNodeIds.end()) {
+            storedNodeIds.insert(storedNode.id());
+          }
+        });
+  }
+  NIMBLE_CHECK_EQ(
+      storedNodeIds.size(),
+      inputNodeIds.size(),
+      "FSST stored-schema node remapping lost a validated target.");
+  return storedNodeIds;
 }
 
 SchemaAttributes remapSchemaAttributes(
@@ -386,19 +520,31 @@ SchemaAttributes remapSchemaAttributes(
     const SchemaAttributes& inputAttributes) {
   const auto input = velox::dwio::common::TypeWithId::create(inputType);
   const auto stored = velox::dwio::common::TypeWithId::create(storedType);
+  const auto* inputSchema = velox::checkedNotNull(input.get());
+  const auto* storedSchema = velox::checkedNotNull(stored.get());
   SchemaAttributes remappedAttributes;
 
-  auto rootAttributes = inputAttributes.find(input->id());
+  auto rootAttributes = inputAttributes.find(inputSchema->id());
   if (rootAttributes != inputAttributes.end()) {
-    remappedAttributes[stored->id()] = rootAttributes->second;
+    remappedAttributes[storedSchema->id()] = rootAttributes->second;
   }
   for (auto storedIndex = 0; storedIndex < storedInputColumnIndices.size();
        ++storedIndex) {
-    mapSchemaAttributeNode(
-        *input->childAt(storedInputColumnIndices[storedIndex]),
-        *stored->childAt(storedIndex),
-        inputAttributes,
-        remappedAttributes);
+    const auto* inputChild = velox::checkedNotNull(
+        inputSchema->childAt(storedInputColumnIndices[storedIndex]).get());
+    const auto* storedChild =
+        velox::checkedNotNull(storedSchema->childAt(storedIndex).get());
+    forEachMappedSchemaNode(
+        *inputChild,
+        *storedChild,
+        [&](const TypeWithId& inputNode, const TypeWithId& storedNode) {
+          // schemaAttributes is sparse; nodes without caller-provided
+          // attributes are intentionally skipped.
+          auto it = inputAttributes.find(inputNode.id());
+          if (it != inputAttributes.end()) {
+            remappedAttributes[storedNode.id()] = it->second;
+          }
+        });
   }
   return remappedAttributes;
 }
@@ -453,7 +599,7 @@ void validateEncodingLayoutTree(const EncodingLayoutTree& tree) {
   }
 }
 
-WriterOptions storedWriterOptions(
+PreparedWriterOptions prepareStoredWriterOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
@@ -461,8 +607,54 @@ WriterOptions storedWriterOptions(
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
+
+  FsstEncodingNodeIds fsstEncodingNodeIds;
+  if (!options.fsstEncodingSubfields.empty()) {
+    NIMBLE_USER_CHECK(
+        options.chunkCompression.type == CompressionType::Uncompressed ||
+            options.chunkCompression.type == CompressionType::Zstd,
+        "Targeted FSST chunk compression only supports Uncompressed (disabled) or Zstd, but got {}.",
+        options.chunkCompression.type);
+
+    const auto inputSchemaOwner = TypeWithId::create(inputType);
+    const auto* inputSchema = velox::checkedNotNull(inputSchemaOwner.get());
+    std::vector<std::pair<std::string, uint32_t>> resolvedSubfields;
+    resolvedSubfields.reserve(options.fsstEncodingSubfields.size());
+    fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
+    for (const auto& fieldPath : options.fsstEncodingSubfields) {
+      const auto nodeId = resolveFsstSubfield(*inputSchema, fieldPath).id();
+      const auto inserted = fsstEncodingNodeIds.insert(nodeId).second;
+      NIMBLE_USER_CHECK(
+          inserted,
+          "FSST subfield '{}' resolves to duplicate schema node {}.",
+          fieldPath,
+          nodeId);
+      resolvedSubfields.emplace_back(fieldPath, nodeId);
+    }
+    // From this point on, the remapped node-id set is the source of truth.
+    // Drop the caller-facing paths so downstream code cannot accidentally
+    // resolve them again against the stored (possibly key-omitted) schema.
+    options.fsstEncodingSubfields.clear();
+
+    if (omitClusterIndexKeyColumnStorage(options)) {
+      const auto& indexOptions = clusterIndexConfig(options);
+      for (const auto& keyColumn : indexOptions.columns) {
+        const auto keyNode = inputSchema->childByName(keyColumn);
+        for (const auto& [fieldPath, nodeId] : resolvedSubfields) {
+          NIMBLE_USER_CHECK(
+              !containsNodeId(*keyNode, nodeId),
+              "FSST subfield '{}' cannot be omitted from storage as part of cluster index key '{}'.",
+              fieldPath,
+              keyColumn);
+        }
+      }
+      fsstEncodingNodeIds = remapFsstEncodingNodeIds(
+          inputType, storedType, storedInputColumnIndices, fsstEncodingNodeIds);
+    }
+  }
+
   if (!omitClusterIndexKeyColumnStorage(options)) {
-    return options;
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   if (!options.schemaAttributes.empty()) {
@@ -484,7 +676,7 @@ WriterOptions storedWriterOptions(
 
   const bool hasFeatureReordering = options.featureReordering.has_value();
   if (!hasFeatureReordering) {
-    return options;
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   // Field writers and the layout planner are built from storedDataType().
@@ -511,7 +703,7 @@ WriterOptions storedWriterOptions(
   }
   options.featureReordering = std::move(remapped);
 
-  return options;
+  return {std::move(options), std::move(fsstEncodingNodeIds)};
 }
 
 void writeIndexSection(
@@ -629,6 +821,23 @@ class WriterStreamContext : public StreamContext {
     encoding_.emplace(std::move(value));
   }
 
+  void setEncodingOverride(EncodingLayout value) {
+    setEncoding(std::move(value));
+    hasEncodingOverride_ = true;
+  }
+
+  bool hasEncodingOverride() const {
+    return hasEncodingOverride_;
+  }
+
+  bool useChunkCompression() const {
+    return useChunkCompression_;
+  }
+
+  void setUseChunkCompression() {
+    useChunkCompression_ = true;
+  }
+
   // Stores the shared dictionary configuration selected for this value stream.
   void setSharedDictionaryConfig(const SharedDictionaryConfig& config) {
     sharedDictionaryConfig_ = config;
@@ -654,6 +863,12 @@ class WriterStreamContext : public StreamContext {
  private:
   bool isNullStream_{false};
   bool isInMapStream_{false};
+  // Prevents a caller-provided or cached layout from replacing an explicit
+  // per-stream encoding override such as targeted FSST.
+  bool hasEncodingOverride_{false};
+  // Applies outer chunk compression only to streams selected by a targeted
+  // encoding preset; other streams keep their normal compression behavior.
+  bool useChunkCompression_{false};
   // Value stream descriptor offsets for this in-map stream's flat-map field.
   // Empty for non in-map streams and flat-map values with no reader-visible
   // value stream.
@@ -753,9 +968,7 @@ template <typename T>
 TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
     const StreamData& streamData,
     detail::WriterContext& context,
-    Buffer& buffer,
-    velox::BufferPool* encodingScratchBufferPool,
-    EncodingBufferPool* encodingBufferPool) {
+    Buffer& buffer) {
   auto* streamContext = streamData.descriptor().context<WriterStreamContext>();
   if (streamContext == nullptr) {
     return nullptr;
@@ -778,8 +991,10 @@ TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
     return nullptr;
   }
   const auto& writerOptions = context.options();
-  auto encodingOptions = makeEncodingOptions(
-      writerOptions, encodingScratchBufferPool, encodingBufferPool);
+  // The dictionary writer outlives the encode task that creates it. Keep only
+  // durable format options here; task-local scratch pools may be destroyed by
+  // memory arbitration before a later stripe alphabet is encoded.
+  auto encodingOptions = writerOptions.buildEncodingOptions();
   SharedDictionaryWriter::Options dictionaryOptions{
       .scope = config->scope,
       .dictionaryId = config->dictionaryId,
@@ -787,6 +1002,9 @@ TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
       .alphabetEncodings = config->alphabetEncodings,
       .encodingSelectionPolicyCreator =
           writerOptions.encodingSelectionPolicyCreator,
+      .nonSharedEncodingOverride = streamContext->hasEncodingOverride()
+          ? std::make_shared<const EncodingLayout>(*streamContext->encoding())
+          : nullptr,
       .encodingOptions = std::move(encodingOptions),
       .resolver =
           writerOptions.experimentalSharedDictionaryEncoding.externalResolver,
@@ -804,8 +1022,6 @@ std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
     std::optional<EncodingLayout> encodingLayout,
     detail::WriterContext& context,
     Buffer& buffer,
-    velox::BufferPool* encodingScratchBufferPool,
-    EncodingBufferPool* encodingBufferPool,
     const StreamData& streamData) {
   if (hasDictionaryConfig(streamData)) {
     NIMBLE_USER_CHECK(
@@ -814,12 +1030,8 @@ std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
         "got {}.",
         TypeTraits<T>::dataType);
     if constexpr (isSharedDictionaryType<T>()) {
-      auto* dictionaryWriter = sharedDictionaryWriter<T>(
-          streamData,
-          context,
-          buffer,
-          encodingScratchBufferPool,
-          encodingBufferPool);
+      auto* dictionaryWriter =
+          sharedDictionaryWriter<T>(streamData, context, buffer);
       NIMBLE_CHECK_NOT_NULL(dictionaryWriter);
       return dictionaryWriter->createEncodingPolicy(context.getStripeIndex());
     } else {
@@ -1070,8 +1282,6 @@ std::string_view encode(
       std::move(encodingLayout),
       context,
       buffer,
-      encodingScratchBufferPool,
-      encodingBufferPool,
       streamData);
 
   auto encodingOptions = makeEncodingOptions(
@@ -1398,12 +1608,77 @@ struct DictionaryConfigs {
       flatMaps;
 };
 
+// Carries caller-facing identifiers for shared-dictionary diagnostics.
+struct DictionaryAlphabetTarget {
+  // Names the configured regular or flat-map input field.
+  std::string_view fieldPath;
+
+  // Identifies the flat-map key; remains empty for a regular target.
+  std::optional<int64_t> flatMapKey;
+
+  // Selects a path below a keyed value; empty selects the value itself.
+  std::string_view valueSubfield;
+};
+
+// Describes a dictionary target without reconstructing a Velox subfield path.
+std::string describeDictionaryAlphabetTarget(
+    const DictionaryAlphabetTarget& target) {
+  if (!target.flatMapKey.has_value()) {
+    return fmt::format("configured path '{}'", target.fieldPath);
+  }
+  if (target.valueSubfield.empty()) {
+    return fmt::format(
+        "flat-map column '{}', key {}, value",
+        target.fieldPath,
+        target.flatMapKey.value());
+  }
+  return fmt::format(
+      "flat-map column '{}', key {}, value subfield '{}'",
+      target.fieldPath,
+      target.flatMapKey.value(),
+      target.valueSubfield);
+}
+
+// When targeted FSST and a writer-owned shared dictionary select the same
+// VARCHAR value stream, keep SharedDictionary as the value encoding and make
+// its stored alphabet prefer FSST with FSST's Trivial fallback. Resolver-owned
+// alphabets are already encoded outside this writer and cannot honor it.
+SharedDictionaryConfig applyTargetedFsstToDictionaryAlphabet(
+    SharedDictionaryConfig config,
+    const TypeWithId& dictionaryValueType,
+    const FsstEncodingNodeIds& fsstEncodingNodeIds,
+    const DictionaryAlphabetTarget& target) {
+  if (fsstEncodingNodeIds.find(dictionaryValueType.id()) ==
+      fsstEncodingNodeIds.end()) {
+    return config;
+  }
+
+  if (config.scope == SharedDictionaryScope::External ||
+      config.useExternalAlphabet) {
+    NIMBLE_USER_FAIL(
+        "Targeted FSST cannot re-encode the resolver-owned shared dictionary "
+        "alphabet. Target: {}.",
+        describeDictionaryAlphabetTarget(target));
+  }
+  NIMBLE_USER_CHECK(
+      config.alphabetEncodings.empty() ||
+          (config.alphabetEncodings.size() == 1 &&
+           config.alphabetEncodings.front() == EncodingType::Fsst),
+      "Targeted FSST cannot override explicit shared dictionary "
+      "alphabetEncodings for {}. Leave alphabetEncodings empty or set it "
+      "to exactly [Fsst].",
+      describeDictionaryAlphabetTarget(target));
+  config.alphabetEncodings = {EncodingType::Fsst};
+  return config;
+}
+
 // Resolves shared dictionary configs to writer schema targets. Flat-map value
 // stream assignment is deferred until each configured key is materialized.
 DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
   DictionaryConfigs configs;
+  const auto& fsstEncodingNodeIds = context.fsstEncodingNodeIds();
   const auto& dictionaryEncodingConfig =
       context.options().experimentalSharedDictionaryEncoding;
   if (dictionaryEncodingConfig.empty()) {
@@ -1436,10 +1711,15 @@ DictionaryConfigs collectDictionaryConfigs(
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
-    maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
+    auto dictionary = applyTargetedFsstToDictionaryAlphabet(
+        columnDictionary.dictionary,
+        valueType,
+        fsstEncodingNodeIds,
+        DictionaryAlphabetTarget{.fieldPath = columnDictionary.fieldPath});
+    maybeAddFileDictionaryId(dictionary, fileDictionaryIds);
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     const auto inserted =
-        configs.columns.emplace(nodeId, columnDictionary.dictionary).second;
+        configs.columns.emplace(nodeId, std::move(dictionary)).second;
     NIMBLE_USER_CHECK(
         inserted,
         "Duplicate shared dictionary column configuration for schema node {}.",
@@ -1469,12 +1749,36 @@ DictionaryConfigs collectDictionaryConfigs(
 
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     auto& flatMapKeys = configs.flatMaps[nodeId];
+    const auto& mapValueType = *fieldType.childAt(1);
+    const bool fsstTargetsMapValue = std::any_of(
+        fsstEncodingNodeIds.begin(),
+        fsstEncodingNodeIds.end(),
+        [&](const auto fsstNodeId) {
+          return containsNodeId(mapValueType, fsstNodeId);
+        });
     for (const auto& flatMapKey : flatMap.keys) {
-      const auto& config = flatMapKey.dictionary;
-      maybeAddFileDictionaryId(config, fileDictionaryIds);
+      auto dictionary = flatMapKey.dictionary;
+      if (fsstTargetsMapValue) {
+        const auto& configuredType = flatMapKey.valueSubfield.empty()
+            ? mapValueType
+            : resolveFieldPath(mapValueType, flatMapKey.valueSubfield);
+        const auto& dictionaryValueType =
+            resolveDictionaryValueType(configuredType, flatMap.fieldPath);
+        dictionary = applyTargetedFsstToDictionaryAlphabet(
+            std::move(dictionary),
+            dictionaryValueType,
+            fsstEncodingNodeIds,
+            DictionaryAlphabetTarget{
+                .fieldPath = flatMap.fieldPath,
+                .flatMapKey = flatMapKey.key,
+                .valueSubfield = flatMapKey.valueSubfield,
+            });
+      }
+      maybeAddFileDictionaryId(dictionary, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
-              .valueSubfield = flatMapKey.valueSubfield, .dictionary = config});
+              .valueSubfield = flatMapKey.valueSubfield,
+              .dictionary = std::move(dictionary)});
     }
   }
   return configs;
@@ -1595,6 +1899,21 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
             nodeId,
             _dictionaryConfigs,
             _flatMapKeyEncodingLayouts);
+        if (context.fsstEncodingNodeIds().find(nodeId) !=
+            context.fsstEncodingNodeIds().end()) {
+          auto& writerStreamContext =
+              streamContext(type.asScalar().scalarDescriptor());
+          // Keep encoding-layer compression disabled. encodeChunk() applies
+          // outer compression after either FSST or its Trivial fallback.
+          writerStreamContext.setEncodingOverride(
+              EncodingLayout{
+                  EncodingType::Fsst,
+                  {},
+                  CompressionType::Uncompressed,
+                  {std::nullopt},
+              });
+          writerStreamContext.setUseChunkCompression();
+        }
       });
 }
 
@@ -1602,10 +1921,13 @@ void initializeEncodingLayouts(
     const TypeBuilder& typeBuilder,
     const EncodingLayoutTree& encodingLayoutTree) {
   {
-#define SET_STREAM_CONTEXT(builder, descriptor, identifier)           \
-  if (auto* encodingLayout = encodingLayoutTree.encodingLayout(       \
-          EncodingLayoutTree::StreamIdentifiers::identifier)) {       \
-    streamContext(builder.descriptor()).setEncoding(*encodingLayout); \
+#define SET_STREAM_CONTEXT(builder, descriptor, identifier)          \
+  if (auto* encodingLayout = encodingLayoutTree.encodingLayout(      \
+          EncodingLayoutTree::StreamIdentifiers::identifier)) {      \
+    auto& writerStreamContext = streamContext(builder.descriptor()); \
+    if (!writerStreamContext.hasEncodingOverride()) {                \
+      writerStreamContext.setEncoding(*encodingLayout);              \
+    }                                                                \
   }
 
     if (typeBuilder.kind() == Kind::FlatMap) {
@@ -1926,7 +2248,7 @@ Writer::Writer(
           })},
       context_{std::make_unique<detail::WriterContext>(
           *pool_,
-          storedWriterOptions(
+          prepareStoredWriterOptions(
               type,
               storedDataType_,
               storedInputColumnIndices_,
@@ -2245,7 +2567,11 @@ void Writer::writeStripeDictionaryStreams() {
     if (writer->scope() != SharedDictionaryScope::Stripe) {
       continue;
     }
-    auto alphabetChunk = writer->encodeAlphabet(*encodingBuffer_);
+    // Memory arbitration can clear the persistent encoding buffer after the
+    // value chunks are encoded but before the stripe alphabet is finalized.
+    ensureEncodingBuffer();
+    auto alphabetChunk = writer->encodeStripeAlphabet(
+        *encodingBuffer_, context_->getStripeIndex());
     if (!alphabetChunk.has_value()) {
       continue;
     }
@@ -2293,6 +2619,9 @@ void Writer::writeDictionarySection(
       continue;
     }
     if (writer->scope() == SharedDictionaryScope::File) {
+      // Memory arbitration can clear the persistent encoding buffer after the
+      // final data stripe and before TabletWriter invokes this close callback.
+      ensureEncodingBuffer();
       auto alphabet = writer->encodeAlphabet(*encodingBuffer_);
       NIMBLE_CHECK(
           alphabet.has_value(),
@@ -3042,27 +3371,61 @@ uint32_t Writer::encodeChunk(
     Chunk& chunk,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool) {
-  std::string_view encoded = encodeStreamData(
-      *context_,
-      *encodingBuffer_,
-      encodingScratchBufferPool,
-      encodingBufferPool,
-      chunkView);
-  NIMBLE_DCHECK(!encoded.empty());
-  if (encoded.empty()) {
-    return 0;
+  auto chunkCompression = context_->options().chunkCompression;
+  bool useTargetedChunkCompression = false;
+  if (!context_->fsstEncodingNodeIds().empty()) {
+    const auto* streamContext =
+        chunkView.descriptor().context<WriterStreamContext>();
+    useTargetedChunkCompression =
+        streamContext != nullptr && streamContext->useChunkCompression();
+    if (!useTargetedChunkCompression) {
+      chunkCompression.type = CompressionType::Uncompressed;
+    }
   }
-  uint32_t chunkBytes{0};
-  chunk.rowCount = chunkView.rowCount();
-  // Per-chunk null count, precomputed by the chunker.
-  chunk.nullCount = static_cast<uint32_t>(chunkView.numNulls());
-  ChunkedStreamWriter chunkWriter{
-      *encodingBuffer_, context_->options().chunkCompression};
-  for (auto& buffer : chunkWriter.encode(encoded)) {
-    chunkBytes += buffer.size();
-    chunk.content.push_back(std::move(buffer));
+
+  const auto encodeIntoChunk = [&](Buffer& streamEncodingBuffer,
+                                   bool copyInputBackedPayload) {
+    const std::string_view encoded = encodeStreamData(
+        *context_,
+        streamEncodingBuffer,
+        encodingScratchBufferPool,
+        encodingBufferPool,
+        chunkView);
+    NIMBLE_DCHECK(!encoded.empty());
+    if (encoded.empty()) {
+      return uint32_t{0};
+    }
+
+    uint32_t chunkBytes{0};
+    chunk.rowCount = chunkView.rowCount();
+    // Per-chunk null count, precomputed by the chunker.
+    chunk.nullCount = static_cast<uint32_t>(chunkView.numNulls());
+    ChunkedStreamWriter chunkWriter{*encodingBuffer_, chunkCompression};
+    for (auto buffer : chunkWriter.encode(encoded)) {
+      // ChunkedStreamWriter returns its input view when compression is disabled
+      // or rejected. A staged encoding must be copied before its scoped buffer
+      // is released; accepted compressed payloads already live in
+      // encodingBuffer_.
+      if (copyInputBackedPayload && buffer.data() == encoded.data()) {
+        buffer = encodingBuffer_->writeString(buffer);
+      }
+      chunkBytes += buffer.size();
+      chunk.content.push_back(buffer);
+    }
+    return chunkBytes;
+  };
+
+  // Outer compression only needs the final chunk bytes. Keep the complete
+  // targeted encoding task-local so accepted Zstd does not leave its inner
+  // bytes accumulated in the persistent output arena.
+  if (useTargetedChunkCompression &&
+      chunkCompression.type != CompressionType::Uncompressed) {
+    ScopedEncodingBuffer scopedBuffer{
+        &encodingBuffer_->getMemoryPool(), encodingBufferPool};
+    return encodeIntoChunk(
+        scopedBuffer.get(), /* copyInputBackedPayload */ true);
   }
-  return chunkBytes;
+  return encodeIntoChunk(*encodingBuffer_, /* copyInputBackedPayload */ false);
 }
 
 bool Writer::writeChunks(
