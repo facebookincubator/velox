@@ -24,6 +24,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <vector>
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -202,6 +203,24 @@ class ALPEncoding final
 
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params) {
+    if constexpr (
+        DecoderVisitor::dense && DecoderVisitor::kHasBulkPath &&
+        std::is_same_v<typename DecoderVisitor::DataType, cppDataType> &&
+        std::is_same_v<
+            typename DecoderVisitor::Extract,
+            velox::dwio::common::ExtractToReader>) {
+      constexpr vector_size_t kMinBulkRows = 128;
+      // Use a conservative cutoff based on the number of rows left to read.
+      // This is a trade-off that avoids bulk setup costs for short reads but
+      // may give up potential speedups on some smaller batches.
+      if (visitor.numRows() - visitor.rowIndex() >= kMinBulkRows) {
+        const auto* nulls = visitor.reader().rawNullsInReadRange();
+        if (velox::dwio::common::useFastPath(visitor, nulls)) {
+          detail::readWithVisitorFast(*this, visitor, params, nulls);
+          return;
+        }
+      }
+    }
     auto skipFn = [&](auto toSkip) { pos_ += toSkip; };
     auto decodeFn = [&] {
       physicalType value = detail::alp::toPhysical<cppDataType>(decodeValue(
@@ -213,6 +232,63 @@ class ALPEncoding final
       return value;
     };
     detail::readWithVisitorSlow(visitor, params, skipFn, decodeFn);
+  }
+
+  template <bool kScatter, typename Visitor>
+  void bulkScan(
+      Visitor& visitor,
+      vector_size_t currentRow,
+      const vector_size_t* selectedRows,
+      vector_size_t numSelected,
+      const vector_size_t* scatterRows) {
+    static_assert(Visitor::dense);
+    static_assert(std::is_same_v<typename Visitor::DataType, cppDataType>);
+    if (numSelected == 0) {
+      return;
+    }
+    const auto numRows = visitor.numRows() - visitor.rowIndex();
+    auto* values = detail::mutableValues<cppDataType>(visitor, numRows);
+    auto* physicalValues = reinterpret_cast<physicalType*>(values);
+    const auto sourceStart =
+        pos_ + static_cast<uint32_t>(selectedRows[0] - currentRow);
+    const auto* encodedValues = encodedBuffer_.data() + sourceStart;
+    const auto exponent = exponent_;
+    const auto factor = factor_;
+    for (vector_size_t row = 0; row < numSelected; ++row) {
+      physicalValues[row] = detail::alp::toPhysical<cppDataType>(decodeValue(
+          velox::ZigZag::decode(encodedValues[row]), exponent, factor));
+    }
+    patchExceptions(sourceStart, numSelected, physicalValues);
+
+    if constexpr (!Visitor::kHasHook) {
+      values = reinterpret_cast<cppDataType*>(visitor.reader().rawValues());
+    }
+    auto numValues = visitor.reader().numValues();
+    int32_t* filterHits = nullptr;
+    if constexpr (Visitor::kHasFilter) {
+      filterHits = visitor.outputRows(numSelected) - numValues;
+    }
+    velox::dwio::common::processFixedWidthRun<
+        cppDataType,
+        Visitor::kFilterOnly,
+        kScatter,
+        Visitor::dense>(
+        velox::RowSet(selectedRows, numSelected),
+        0,
+        numSelected,
+        scatterRows,
+        values,
+        filterHits,
+        numValues,
+        visitor.filter(),
+        visitor.hook());
+    pos_ += selectedRows[numSelected - 1] - currentRow + 1;
+    if constexpr (!Visitor::kHasHook) {
+      visitor.addNumValues(
+          Visitor::kHasFilter ? numValues - visitor.reader().numValues()
+                              : numRows);
+    }
+    visitor.setRowIndex(visitor.numRows());
   }
 
   std::string debugString(int offset) const final {
