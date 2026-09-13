@@ -30,6 +30,7 @@
 #include "velox/type/DecimalUtil.h"
 
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
@@ -1279,6 +1280,39 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
   EXPECT_EQ(outCount[0], 1);
   EXPECT_EQ(outSum[2], static_cast<__int128_t>(300));
   EXPECT_EQ(outCount[2], 2);
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateSlice) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  // Slice [1, 4) so the deserializer must apply a non-zero parent offset to
+  // both the strings offsets child and the parent validity mask.
+  std::vector<int64_t> sums = {10, 20, 0, 40, 50};
+  std::vector<int64_t> counts = {1, 2, 0, 4, 5};
+  std::vector<bool> sumValid = {true, true, false, true, true};
+  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countCol = makeInt64Column(counts, nullptr, stream);
+  auto stateCol =
+      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+
+  auto slices = cudf::slice(stateCol->view(), {1, 4});
+  ASSERT_EQ(slices.size(), 1);
+  ASSERT_EQ(slices.front().offset(), 1);
+
+  auto result = deserializeDecimalSumState(slices.front(), 2, stream);
+  auto outSum = copyColumnData<__int128_t>(result.sum->view(), stream);
+  auto outCount = copyColumnData<int64_t>(result.count->view(), stream);
+  auto outMask = copyNullMask(result.sum->view(), stream);
+
+  ASSERT_EQ(outSum.size(), 3);
+  EXPECT_TRUE(isValidAt(outMask, 0));
+  EXPECT_FALSE(isValidAt(outMask, 1));
+  EXPECT_TRUE(isValidAt(outMask, 2));
+  EXPECT_EQ(outSum[0], static_cast<__int128_t>(20));
+  EXPECT_EQ(outCount[0], 2);
+  EXPECT_EQ(outSum[2], static_cast<__int128_t>(40));
+  EXPECT_EQ(outCount[2], 4);
 }
 
 // Trailing null: the offset for the last row equals chars_size, so the kernel
