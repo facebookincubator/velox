@@ -14,13 +14,16 @@
  * limitations under the License.
  */
 #include "velox/functions/prestosql/aggregates/MergeAggregate.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
+#include "velox/expression/SignatureBinder.h"
 #include "velox/functions/prestosql/aggregates/HyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MergeKHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MergeQDigestAggregate.h"
 #include "velox/functions/prestosql/aggregates/MergeTDigestAggregate.h"
 #include "velox/functions/prestosql/aggregates/SfmSketchAggregate.h"
 #include "velox/functions/prestosql/types/HyperLogLogRegistration.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
 #include "velox/functions/prestosql/types/KHyperLogLogRegistration.h"
 #include "velox/functions/prestosql/types/KHyperLogLogType.h"
 #include "velox/functions/prestosql/types/QDigestRegistration.h"
@@ -37,7 +40,8 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
     const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite,
-    double defaultError) {
+    double defaultError,
+    const std::vector<MergeSketchType>& additionalSketchTypes) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures;
   auto inputTypes = std::vector<std::string>{
       "hyperloglog",
@@ -47,7 +51,7 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
       "qdigest(bigint)",
       "qdigest(real)",
       "qdigest(double)"};
-  signatures.reserve(inputTypes.size());
+  signatures.reserve(inputTypes.size() + additionalSketchTypes.size());
   for (const auto& inputType : inputTypes) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
@@ -56,17 +60,73 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
             .argumentType(inputType)
             .build());
   }
+  // Built-in sketch types an injected type must not collide with.
+  const std::vector<TypePtr> builtinTypes = {
+      HYPERLOGLOG(),
+      KHYPERLOGLOG(),
+      SFMSKETCH(),
+      TDIGEST(DOUBLE()),
+      QDIGEST(BIGINT()),
+      QDIGEST(REAL()),
+      QDIGEST(DOUBLE()),
+  };
+  std::vector<TypePtr> seenSketchTypes;
+  seenSketchTypes.reserve(additionalSketchTypes.size());
+  for (const auto& sketch : additionalSketchTypes) {
+    VELOX_CHECK_NOT_NULL(sketch.signature);
+    VELOX_CHECK_NOT_NULL(sketch.type);
+    VELOX_CHECK(sketch.factory);
+    VELOX_CHECK(
+        !sketch.signature->argumentTypes().empty(),
+        "merge() sketch signature must have at least one argument type: {}",
+        sketch.type->toString());
+    // Signature's argument type must resolve to 'type', matched at dispatch.
+    const auto argType = exec::SignatureBinder::tryResolveType(
+        sketch.signature->argumentTypes()[0], {}, {});
+    VELOX_CHECK(
+        argType != nullptr && *argType == *sketch.type,
+        "merge() sketch signature argument type must match its type: {}",
+        sketch.type->toString());
+    // Signature's return type must resolve to 'type', matched at dispatch.
+    const auto returnType = exec::SignatureBinder::tryResolveType(
+        sketch.signature->returnType(), {}, {});
+    VELOX_CHECK(
+        returnType != nullptr && *returnType == *sketch.type,
+        "merge() sketch signature return type must match its type: {}",
+        sketch.type->toString());
+    // An extension type must not shadow a built-in dispatched below it.
+    for (const auto& builtinType : builtinTypes) {
+      VELOX_CHECK(
+          *sketch.type != *builtinType,
+          "merge() sketch type collides with a built-in sketch type: {}",
+          sketch.type->toString());
+    }
+    // Injected extension types must be unique among themselves.
+    for (const auto& seenType : seenSketchTypes) {
+      VELOX_CHECK(
+          *sketch.type != *seenType,
+          "merge() sketch type is registered more than once: {}",
+          sketch.type->toString());
+    }
+    seenSketchTypes.push_back(sketch.type);
+    signatures.push_back(sketch.signature);
+  }
   bool hllAsRawInput = true;
   bool hllAsFinalResult = true;
   return exec::registerAggregateFunction(
       names,
       signatures,
-      [hllAsFinalResult, hllAsRawInput, defaultError](
+      [hllAsFinalResult, hllAsRawInput, defaultError, additionalSketchTypes](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& /*config*/)
           -> std::unique_ptr<exec::Aggregate> {
+        for (const auto& sketch : additionalSketchTypes) {
+          if (*argTypes[0] == *sketch.type) {
+            return sketch.factory(resultType);
+          }
+        }
         if (*argTypes[0] == *TDIGEST(DOUBLE())) {
           return createMergeTDigestAggregate(resultType);
         }
@@ -112,7 +172,8 @@ std::vector<exec::AggregateRegistrationResult> registerMerge(
 void registerMergeAggregate(
     const std::vector<std::string>& names,
     bool /* withCompanionFunctions */,
-    bool overwrite) {
+    bool overwrite,
+    const std::vector<MergeSketchType>& additionalSketchTypes) {
   registerSfmSketchType();
   registerHyperLogLogType();
   registerKHyperLogLogType();
@@ -121,7 +182,11 @@ void registerMergeAggregate(
   // merge is companion function for approx_distinct. Don't register companion
   // functions for it.
   registerMerge(
-      names, false, overwrite, common::hll::kDefaultApproxSetStandardError);
+      names,
+      false,
+      overwrite,
+      common::hll::kDefaultApproxSetStandardError,
+      additionalSketchTypes);
 }
 
 } // namespace facebook::velox::aggregate::prestosql

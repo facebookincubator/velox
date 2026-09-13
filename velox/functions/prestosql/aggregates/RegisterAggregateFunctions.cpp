@@ -33,7 +33,6 @@
 #include "velox/functions/prestosql/aggregates/EntropyAggregates.h"
 #include "velox/functions/prestosql/aggregates/GeometricMeanAggregate.h"
 #include "velox/functions/prestosql/aggregates/HistogramAggregate.h"
-#include "velox/functions/prestosql/aggregates/KHyperLogLogAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapAggAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionAggregate.h"
 #include "velox/functions/prestosql/aggregates/MapUnionSumAggregate.h"
@@ -432,7 +431,8 @@ void registerAllAggregateFunctions(
       {prefix + kMultiMapAgg}, withCompanionFunctions, overwrite);
   registerSumDataSizeForStatsAggregate(
       {prefix + kSumDataSizeForStats}, withCompanionFunctions, overwrite);
-  registerMergeAggregate({prefix + kMerge}, withCompanionFunctions, overwrite);
+  registerMergeAggregate(
+      {prefix + kMerge}, withCompanionFunctions, overwrite, {});
   registerMinAggregate({prefix + kMin}, withCompanionFunctions, overwrite);
   registerMaxAggregate({prefix + kMax}, withCompanionFunctions, overwrite);
   registerMaxByAggregates({prefix + kMaxBy}, withCompanionFunctions, overwrite);
