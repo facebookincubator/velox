@@ -104,10 +104,24 @@ target_link_libraries(
 
 add_test(NAME velox_rpc_error_classification_test COMMAND velox_rpc_error_classification_test)
 
+add_executable(velox_backend_error_summary_test BackendErrorSummaryTest.cpp)
+
+target_link_libraries(
+  velox_backend_error_summary_test
+  velox_backend_error_summary
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+)
+
+add_test(NAME velox_backend_error_summary_test COMMAND velox_backend_error_summary_test)
+
 add_executable(velox_rpc_operator_test RPCOperatorTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_operator_test
+  velox_backend_error_summary
   velox_demo_batch_rpc_function
   velox_demo_rpc_function
   velox_rpc_plan_node_translator

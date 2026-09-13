@@ -20,12 +20,20 @@
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/rpc/BackendErrorSummary.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 
 #define RPC_OP_LOG(severity) LOG(severity) << "[RPC_OP] "
 #define RPC_OP_VLOG(level) VLOG(level) << "[RPC_OP] "
 
 namespace facebook::velox::exec::rpc {
+
+namespace {
+
+// Identifies the operator-level batch fan-out as the source of a row's error.
+constexpr std::string_view kBatchErrorPrefix = "[RPC_BATCH] batch error: ";
+
+} // namespace
 
 RPCOperator::RPCOperator(
     int32_t operatorId,
@@ -358,14 +366,16 @@ std::vector<RPCResponse> degradeBatchFailureToRowErrors(
   // since evaluateCongestion reads a batch failure as overload.
   RPC_OP_LOG(ERROR) << "RPC batch failed, " << rowIds.size()
                     << " rows will carry a per-row error: " << error.what();
-  std::vector<RPCResponse> errored(rowIds.size());
-  for (size_t i = 0; i < rowIds.size(); ++i) {
+  // Summarize once here rather than copying a server-side stack trace into
+  // every row: the backend text is the same for all of them, and at batch
+  // sizes in the thousands the duplication dominates the output. The
+  // untruncated text stays in the log line above.
+  auto errored = makeBatchErrorResponses(
+      rowIds.size(), kBatchErrorPrefix, error.what().toStdString());
+  for (size_t i = 0; i < errored.size(); ++i) {
     // Batch-position rowId, so the scatter stamps global ids the same way it
     // does on the success path.
     errored[i].rowId = static_cast<int64_t>(i);
-    errored[i].error =
-        std::string("[RPC_BATCH] batch error: ") + error.what().toStdString();
-    errored[i].errorKind = velox::rpc::RPCErrorKind::kBackendError;
   }
   return errored;
 }

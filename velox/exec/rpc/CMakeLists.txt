@@ -18,6 +18,10 @@ velox_add_library(velox_rpc_error_classification HEADERS RpcErrorClassification.
 
 velox_link_libraries(velox_rpc_error_classification Folly::folly FBThrift::thriftcpp2)
 
+velox_add_library(velox_backend_error_summary BackendErrorSummary.cpp HEADERS BackendErrorSummary.h)
+
+velox_link_libraries(velox_backend_error_summary velox_rpc_types velox_common_base)
+
 velox_add_library(
   velox_rpc_state
   CongestionController.cpp
@@ -44,6 +48,7 @@ velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(
   velox_rpc_operator
+  velox_backend_error_summary
   velox_rpc_state
   velox_rpc_rate_limiter
   velox_async_rpc_function
