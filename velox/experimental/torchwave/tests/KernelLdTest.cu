@@ -113,7 +113,12 @@ class KernelLdTest : public ::testing::Test {
     CUcontext ctx;
     cuCtxGetCurrent(&ctx);
     if (!ctx) {
-      if (cuCtxCreate(&ctx, 0, device) != CUDA_SUCCESS) {
+#if CUDA_VERSION >= 13000
+      auto createResult = cuCtxCreate(&ctx, nullptr, 0, device);
+#else
+      auto createResult = cuCtxCreate(&ctx, 0, device);
+#endif
+      if (createResult != CUDA_SUCCESS) {
         GTEST_SKIP() << "Failed to create CUDA context";
       }
     }
