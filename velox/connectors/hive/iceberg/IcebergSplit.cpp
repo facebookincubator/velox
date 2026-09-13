@@ -37,7 +37,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     int64_t dataSequenceNumber,
     const std::unordered_map<int32_t, std::optional<std::string>>&
         identityPartitionKeys,
-    std::optional<dwio::common::ColumnMappingMode> columnMappingMode)
+    std::optional<dwio::common::ColumnMappingMode> columnMappingMode,
+    std::shared_ptr<ChangelogSplitInfo> changelogInfo)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -57,7 +58,8 @@ HiveIcebergSplit::HiveIcebergSplit(
           std::nullopt,
           columnMappingMode),
       dataSequenceNumber(dataSequenceNumber),
-      identityPartitionKeys(identityPartitionKeys) {
+      identityPartitionKeys(identityPartitionKeys),
+      changelogSplitInfo(std::move(changelogInfo)) {
   // TODO: Deserialize _extraFileInfo to get deleteFiles;
 }
 
@@ -80,7 +82,8 @@ HiveIcebergSplit::HiveIcebergSplit(
     int64_t dataSequenceNumber,
     const std::unordered_map<int32_t, std::optional<std::string>>&
         identityPartitionKeys,
-    std::optional<dwio::common::ColumnMappingMode> columnMappingMode)
+    std::optional<dwio::common::ColumnMappingMode> columnMappingMode,
+    std::shared_ptr<ChangelogSplitInfo> changelogInfo)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -101,7 +104,8 @@ HiveIcebergSplit::HiveIcebergSplit(
           columnMappingMode),
       deleteFiles(std::move(deletes)),
       dataSequenceNumber(dataSequenceNumber),
-      identityPartitionKeys(identityPartitionKeys) {}
+      identityPartitionKeys(identityPartitionKeys),
+      changelogSplitInfo(std::move(changelogInfo)) {}
 
 std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
   auto split = std::make_shared<HiveIcebergSplit>(
@@ -120,7 +124,8 @@ std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
       std::nullopt,
       dataSequenceNumber_,
       identityPartitionKeys_,
-      columnMappingMode_);
+      columnMappingMode_,
+      changelogSplitInfo_);
   split->physicalFilePath = physicalFilePath_;
   return split;
 }
