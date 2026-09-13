@@ -48,6 +48,24 @@ bool isSupportedType(const TypePtr& type) {
   return true;
 }
 
+// Appends 'sourceSql' as the operand of a FROM clause. A Values or TableScan
+// source renders as a table name, which DuckDB rejects in parentheses; every
+// other source renders as a SELECT statement, which DuckDB rejects without
+// them.
+void appendFromOperand(
+    std::stringstream& sql,
+    const core::PlanNodePtr& source,
+    std::string_view sourceSql) {
+  const bool rendersAsTableName =
+      std::dynamic_pointer_cast<const core::ValuesNode>(source) != nullptr ||
+      std::dynamic_pointer_cast<const core::TableScanNode>(source) != nullptr;
+  if (rendersAsTableName) {
+    sql << sourceSql;
+  } else {
+    sql << "(" << sourceSql << ")";
+  }
+}
+
 } // namespace
 
 void DuckQueryRunnerToSqlPlanNodeVisitor::visit(
@@ -112,7 +130,8 @@ void DuckQueryRunnerToSqlPlanNodeVisitor::visit(
     visitorContext.sql = std::nullopt;
     return;
   }
-  sql << " FROM " << *source;
+  sql << " FROM ";
+  appendFromOperand(sql, node.sources()[0], *source);
 
   if (!groupingKeys.empty()) {
     sql << " GROUP BY " << folly::join(", ", groupingKeys);
@@ -188,16 +207,7 @@ void DuckQueryRunnerToSqlPlanNodeVisitor::visit(
   }
 
   sql << " FROM ";
-
-  // DuckDB doesn't support wrapping table names in parentheses.
-  if (std::dynamic_pointer_cast<const core::ValuesNode>(node.sources()[0]) ==
-          nullptr &&
-      std::dynamic_pointer_cast<const core::TableScanNode>(node.sources()[0]) ==
-          nullptr) {
-    sql << "(" << sourceSql.value() << ")";
-  } else {
-    sql << sourceSql.value();
-  }
+  appendFromOperand(sql, node.sources()[0], sourceSql.value());
 
   visitorContext.sql = sql.str();
 }
@@ -239,7 +249,8 @@ void DuckQueryRunnerToSqlPlanNodeVisitor::visit(
     visitorContext.sql = std::nullopt;
     return;
   }
-  sql << ") as row_number FROM " << *source;
+  sql << ") as row_number FROM ";
+  appendFromOperand(sql, node.sources()[0], *source);
 
   visitorContext.sql = sql.str();
 }
@@ -311,7 +322,9 @@ void DuckQueryRunnerToSqlPlanNodeVisitor::visit(
     visitorContext.sql = std::nullopt;
     return;
   }
-  sql << ") as " << rowNumberColumnName << " FROM " << *source << ") ";
+  sql << ") as " << rowNumberColumnName << " FROM ";
+  appendFromOperand(sql, node.sources()[0], *source);
+  sql << ") ";
   sql << " where " << rowNumberColumnName << " <= " << node.limit();
 
   visitorContext.sql = sql.str();
@@ -386,7 +399,8 @@ void DuckQueryRunnerToSqlPlanNodeVisitor::visit(
     visitorContext.sql = std::nullopt;
     return;
   }
-  sql << ") FROM " << *source;
+  sql << ") FROM ";
+  appendFromOperand(sql, node.sources()[0], *source);
 
   visitorContext.sql = sql.str();
 }
