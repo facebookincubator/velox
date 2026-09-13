@@ -152,6 +152,7 @@ set(
   FilterProjectTest.cpp
   AsyncConnectorTest.cpp
   VectorWindowPartitionTest.cpp
+  FileExchangeTest.cpp
 )
 
 set(
