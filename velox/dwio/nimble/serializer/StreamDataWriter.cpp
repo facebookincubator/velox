@@ -135,7 +135,7 @@ size_t estimateSectionSize(EncodingType encodingType, size_t count) {
 uint32_t getStringsTotalSize(std::string_view input) {
   const auto strData = reinterpret_cast<const std::string_view*>(input.data());
   const auto strDataEnd =
-      reinterpret_cast<const std::string_view*>(input.end());
+      reinterpret_cast<const std::string_view*>(input.data() + input.size());
   uint32_t size = 0;
   for (auto sv = strData; sv < strDataEnd; ++sv) {
     size += sizeof(uint32_t);
@@ -147,7 +147,7 @@ uint32_t getStringsTotalSize(std::string_view input) {
 void encodeStrings(std::string_view input, uint32_t size, char* output) {
   const auto strData = reinterpret_cast<const std::string_view*>(input.data());
   const auto strDataEnd =
-      reinterpret_cast<const std::string_view*>(input.end());
+      reinterpret_cast<const std::string_view*>(input.data() + input.size());
   encoding::writeUint32(size, output);
   for (auto sv = strData; sv < strDataEnd; ++sv) {
     encoding::writeString(*sv, output);
@@ -185,7 +185,7 @@ encode(const SerializerOptions& options, std::string_view input, char* output) {
     auto* compPos = output + sizeof(uint32_t);
     encoding::writeChar(
         static_cast<int8_t>(CompressionType::Uncompressed), compPos);
-    std::copy(input.data(), input.end(), compPos);
+    std::copy(input.data(), input.data() + input.size(), compPos);
   }
   encoding::writeUint32(size + 1, output);
   return size + sizeof(uint32_t) + 1;

@@ -163,14 +163,14 @@ FixedBitWidthEncoding<T>::FixedBitWidthEncoding(
         pool,
         compressionType,
         DataType::Undefined,
-        {pos, static_cast<size_t>(data.end() - pos)},
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
         options.decompressCounter(),
         options.bufferPool);
     fixedBitArray_ = FixedBitArray{
         {uncompressedData_->as<char>(), uncompressedData_->size()}, bitWidth_};
   } else {
-    fixedBitArray_ =
-        FixedBitArray{{pos, static_cast<size_t>(data.end() - pos)}, bitWidth_};
+    fixedBitArray_ = FixedBitArray{
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)}, bitWidth_};
   }
 }
 
@@ -434,7 +434,8 @@ std::string_view FixedBitWidthEncoding<T>::slice(
 
   velox::BufferPtr uncompressed;
   std::string_view packedData{
-      sourcePos, static_cast<size_t>(encoded.end() - sourcePos)};
+      sourcePos,
+      static_cast<size_t>(encoded.data() + encoded.size() - sourcePos)};
   if (sourceCompressionType != CompressionType::Uncompressed) {
     uncompressed = Compression::uncompress(
         buffer.getMemoryPool(),
