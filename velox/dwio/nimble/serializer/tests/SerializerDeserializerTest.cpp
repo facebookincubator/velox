@@ -51,6 +51,38 @@ using namespace facebook;
 using namespace facebook::nimble;
 using facebook::nimble::test::makeTestTabletOptions;
 
+namespace {
+
+velox::RowTypePtr convertToVeloxTypeWithFlatMapAsStruct(const RowType& type) {
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> children;
+  names.reserve(type.childrenCount());
+  children.reserve(type.childrenCount());
+  for (size_t column = 0; column < type.childrenCount(); ++column) {
+    names.push_back(type.nameAt(column));
+    const auto& child = *type.childAt(column);
+    if (!child.isFlatMap()) {
+      children.push_back(convertToVeloxType(child));
+      continue;
+    }
+
+    const auto& flatMap = child.asFlatMap();
+    std::vector<std::string> fieldNames;
+    std::vector<velox::TypePtr> fieldTypes;
+    fieldNames.reserve(flatMap.childrenCount());
+    fieldTypes.reserve(flatMap.childrenCount());
+    for (size_t field = 0; field < flatMap.childrenCount(); ++field) {
+      fieldNames.push_back(flatMap.nameAt(field));
+      fieldTypes.push_back(convertToVeloxType(*flatMap.childAt(field)));
+    }
+    children.push_back(
+        velox::ROW(std::move(fieldNames), std::move(fieldTypes)));
+  }
+  return velox::ROW(std::move(names), std::move(children));
+}
+
+} // namespace
+
 // Test parameters for parameterized tests.
 // For kSerialization mode, we test both with and without compression to
 // exercise the compressionOptions path in ReplayedEncodingSelectionPolicy.
@@ -153,39 +185,6 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
     return expected->equalValueAt(actual.get(), index, index);
   }
 
-  /// Builds a Velox RowType from a nimble schema, converting FlatMap columns to
-  /// ROW types so the deserializer reads them as structs.
-  static velox::RowTypePtr buildOutputTypeForFlatMapAsStruct(
-      const Type& schema) {
-    const auto& root = schema.asRow();
-    std::vector<std::string> names;
-    std::vector<velox::TypePtr> types;
-    names.reserve(root.childrenCount());
-    types.reserve(root.childrenCount());
-    for (size_t i = 0; i < root.childrenCount(); ++i) {
-      names.push_back(root.nameAt(i));
-      const auto* child = root.childAt(i).get();
-      if (child->isFlatMap()) {
-        const auto& flatMap = child->asFlatMap();
-        std::vector<std::string> fieldNames;
-        std::vector<velox::TypePtr> fieldTypes;
-        fieldNames.reserve(flatMap.childrenCount());
-        fieldTypes.reserve(flatMap.childrenCount());
-        for (size_t j = 0; j < flatMap.childrenCount(); ++j) {
-          fieldNames.push_back(flatMap.nameAt(j));
-          fieldTypes.push_back(convertToVeloxType(*flatMap.childAt(j)));
-        }
-        types.push_back(
-            std::make_shared<const velox::RowType>(
-                std::move(fieldNames), std::move(fieldTypes)));
-      } else {
-        types.push_back(convertToVeloxType(*child));
-      }
-    }
-    return std::make_shared<const velox::RowType>(
-        std::move(names), std::move(types));
-  }
-
   /// Verifies that flatmap data serialized as map can be correctly deserialized
   /// as struct (ROW). For each flatmap column, the struct fields should match
   /// the corresponding map key values. Rows where a key is absent should have
@@ -196,7 +195,7 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
       const std::vector<velox::VectorPtr>& inputs) {
     auto schema =
         SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
-    auto outputType = buildOutputTypeForFlatMapAsStruct(*schema);
+    auto outputType = convertToVeloxTypeWithFlatMapAsStruct(schema->asRow());
 
     auto opts = deserializerOptions();
     opts.outputType = outputType;
@@ -6588,8 +6587,9 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeFlatMapAsStruct) {
   auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
 
-  // Build struct output type from flatmap keys.
-  auto outputType = buildOutputTypeForFlatMapAsStruct(*schema);
+  // Preserve each encoded FlatMap key as a nullable field to exercise the
+  // struct reader independently from normal map materialization.
+  auto outputType = convertToVeloxTypeWithFlatMapAsStruct(schema->asRow());
 
   struct ParallelDecodeParam {
     uint32_t maxDecodeParallelism;
@@ -6790,7 +6790,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeSkippedFewKeys) {
 
   auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
-  auto outputType = buildOutputTypeForFlatMapAsStruct(*schema);
+  auto outputType = convertToVeloxTypeWithFlatMapAsStruct(schema->asRow());
 
   folly::CPUThreadPoolExecutor executor(4);
 
@@ -7010,7 +7010,7 @@ DEBUG_ONLY_TEST_P(SerializationTest, parallelDecodeDisabledFlatMap) {
 
   auto schema =
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
-  auto outputType = buildOutputTypeForFlatMapAsStruct(*schema);
+  auto outputType = convertToVeloxTypeWithFlatMapAsStruct(schema->asRow());
 
   struct TestParam {
     std::string label;
