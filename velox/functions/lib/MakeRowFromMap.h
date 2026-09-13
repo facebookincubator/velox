@@ -19,6 +19,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions {
@@ -139,11 +140,12 @@ class MakeRowFromMap {
   using KeyType = typename TypeTraits<KeyKind>::NativeType;
 
  public:
-  MakeRowFromMap(const MakeRowFromMapOptions& options)
+  explicit MakeRowFromMap(const MakeRowFromMapOptions& options)
       : replaceNulls_(options.replaceNulls),
         allowTopLevelNulls_(options.allowTopLevelNulls),
         throwOnDuplicateKeys_(options.throwOnDuplicateKeys),
         outputFieldNames_(options.outputFieldNames),
+        keysToProject_(options.keysToProject),
         inputKeyType_(options.keysToProject->type()) {
     VELOX_USER_CHECK_NOT_NULL(options.keysToProject);
     VELOX_USER_CHECK_GT(
@@ -187,7 +189,7 @@ class MakeRowFromMap {
   void createKeyToFieldIndexMap(const VectorPtr& keysToProject) {
     keyToIndex_.reserve(keysToProject->size());
     auto keysToProjectVec = keysToProject->template as<SimpleVector<KeyType>>();
-    for (size_t i = 0; i < keysToProjectVec->size(); ++i) {
+    for (vector_size_t i = 0; i < keysToProjectVec->size(); ++i) {
       VELOX_USER_CHECK(
           !keysToProjectVec->isNullAt(i),
           "Keys to project cannot contain null");
@@ -204,6 +206,10 @@ class MakeRowFromMap {
       exec::EvalCtx* evalCtx) {
     exec::LocalDecodedVector decodedMap(evalCtx);
     decodedMap.get()->decode(vector, rows);
+    if (auto flatMap = decodedMap->base()->as<FlatMapVector>()) {
+      return flatMapToRowVector(*flatMap, *decodedMap, rows, evalCtx);
+    }
+
     auto mapBase = decodedMap->base()->asUnchecked<MapVector>();
     exec::LocalDecodedVector decodedKeys(evalCtx);
     decodedKeys.get()->decode(*mapBase->mapKeys());
@@ -297,6 +303,80 @@ class MakeRowFromMap {
         std::move(children));
   }
 
+  // Projects only requested key streams without materializing the FlatMap.
+  VectorPtr flatMapToRowVector(
+      const FlatMapVector& flatMap,
+      const DecodedVector& decodedMap,
+      const SelectivityVector& rows,
+      exec::EvalCtx* evalCtx) const {
+    const auto& valueType = flatMap.valueType();
+    const auto outputSize = rows.end();
+    auto vectorPool = evalCtx ? evalCtx->vectorPool() : nullptr;
+    std::vector<VectorPtr> children;
+    children.reserve(keysToProject_->size());
+    for (vector_size_t i = 0; i < keysToProject_->size(); ++i) {
+      if (replaceNulls_) {
+        children.push_back(
+            MakeRowFromMapDefaults::createFlat(
+                valueType, outputSize, *flatMap.pool(), vectorPool));
+      } else {
+        children.push_back(
+            vectorPool
+                ? vectorPool->get(valueType, outputSize)
+                : BaseVector::create(valueType, outputSize, flatMap.pool()));
+        bits::fillBits(
+            children.back()->mutableRawNulls(), 0, outputSize, bits::kNull);
+      }
+    }
+
+    auto outputNulls =
+        (!replaceNulls_ && allowTopLevelNulls_ && decodedMap.mayHaveNulls())
+        ? allocateNulls(outputSize, flatMap.pool(), bits::kNotNull)
+        : nullptr;
+    if (outputNulls) {
+      auto* rawNulls = outputNulls->asMutable<uint64_t>();
+      rows.applyToSelected([&](vector_size_t row) {
+        if (decodedMap.isNullAt(row)) {
+          bits::setNull(rawNulls, row, true);
+        }
+      });
+    }
+
+    for (vector_size_t field = 0; field < keysToProject_->size(); ++field) {
+      const auto channel = flatMap.getKeyChannel(keysToProject_, field);
+      if (!channel.has_value()) {
+        continue;
+      }
+      const auto& mapValues = flatMap.mapValuesAt(*channel);
+      if (!mapValues) {
+        continue;
+      }
+      exec::LocalDecodedVector decodedValues(evalCtx);
+      decodedValues.get()->decode(*mapValues);
+
+      std::vector<BaseVector::CopyRange> copyRanges;
+      copyRanges.reserve(rows.countSelected());
+      rows.applyToSelected([&](vector_size_t row) {
+        if (decodedMap.isNullAt(row)) {
+          return;
+        }
+        const auto sourceIndex = decodedMap.index(row);
+        if (flatMap.isInMap(*channel, sourceIndex) &&
+            !decodedValues->isNullAt(sourceIndex)) {
+          copyRanges.push_back({decodedValues->index(sourceIndex), row, 1});
+        }
+      });
+      children[field]->copyRanges(decodedValues->base(), copyRanges);
+    }
+
+    return std::make_shared<RowVector>(
+        flatMap.pool(),
+        ROW(outputFieldNames_, valueType),
+        std::move(outputNulls),
+        outputSize,
+        std::move(children));
+  }
+
   void ensureValidFieldNames(const std::vector<std::string>& fieldNames) {
     std::unordered_set<std::string> fieldNamesSet;
     for (const auto& fieldName : fieldNames) {
@@ -311,6 +391,7 @@ class MakeRowFromMap {
   const bool allowTopLevelNulls_{false};
   const bool throwOnDuplicateKeys_{true};
   const std::vector<std::string> outputFieldNames_;
+  const VectorPtr keysToProject_;
   const TypePtr inputKeyType_;
   folly::F14FastMap<KeyType, size_t> keyToIndex_;
 };
