@@ -16,6 +16,7 @@ add_executable(
   velox_presto_types_fuzzer_utils_test
   TimestampWithTimeZoneInputGeneratorTest.cpp
   TimeWithTimezoneInputGeneratorTest.cpp
+  DigestInputGeneratorTest.cpp
   HyperLogLogInputGeneratorTest.cpp
   KHyperLogLogInputGeneratorTest.cpp
   P4HyperLogLogInputGeneratorTest.cpp
@@ -29,8 +30,11 @@ target_link_libraries(
   velox_presto_types_fuzzer_utils
   velox_functions_test_lib
   velox_presto_types
+  velox_quantile_digest
+  velox_tdigest
   velox_type
   velox_type_tz
+  velox_vector_fuzzer
   GTest::gtest
   GTest::gtest_main
 )
