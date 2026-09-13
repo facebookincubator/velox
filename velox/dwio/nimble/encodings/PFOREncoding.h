@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstring>
 #include <span>
+#include <utility>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -27,10 +28,12 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 
@@ -193,7 +196,6 @@ class PFOREncoding final
       uint32_t numExceptions,
       uint32_t offset,
       uint32_t length,
-      velox::memory::MemoryPool* pool,
       Buffer& scratchBuffer,
       const Encoding::Options& options);
 
@@ -543,51 +545,57 @@ typename PFOREncoding<T>::ExceptionSlice PFOREncoding<T>::sliceExceptions(
     uint32_t numExceptions,
     uint32_t offset,
     uint32_t length,
-    velox::memory::MemoryPool* pool,
     Buffer& scratchBuffer,
     const Encoding::Options& options) {
   if (numExceptions == 0) {
     return {};
   }
 
-  NIMBLE_CHECK_NOT_NULL(pool);
-  ScopedVector<uint32_t> positions{numExceptions, pool, options.bufferPool};
-  auto positionsEncoding =
-      EncodingFactory(options).create(*pool, exceptionPositions, nullptr);
-  positionsEncoding->materialize(numExceptions, positions.data());
+  auto& pool = scratchBuffer.getMemoryPool();
+  const auto rangeEnd = offset + length;
+  const int64_t valueDelta = -static_cast<int64_t>(offset);
 
-  const auto sliceBegin =
-      std::lower_bound(positions.begin(), positions.end(), offset);
-  const auto sliceEnd =
-      std::lower_bound(sliceBegin, positions.end(), offset + length);
-  const auto exceptionOffset =
-      static_cast<uint32_t>(sliceBegin - positions.begin());
-  const auto slicedExceptionCount =
-      static_cast<uint32_t>(sliceEnd - sliceBegin);
+  // Locate exception-position bounds covering rows [offset, offset + length)
+  // through the shared detail::findSortedPositionSlots helper. Slice the
+  // retained range positionally through EncodingFactory::slice and hand the
+  // result to SliceEncoding::wrap. When the sliced inner encoding supports
+  // push-down (FixedBitWidth / PFOR / Constant / Nullable / Trivial), the
+  // wrapper folds |valueDelta| into the inner bytes at write time and the
+  // on-wire delta is zero. Otherwise the delta rides on the wire and the
+  // reader applies it.
+  const auto [slotStart, slotEnd] = detail::findSortedPositionSlots(
+      exceptionPositions, numExceptions, offset, rangeEnd, pool, options);
+  const uint32_t exceptionOffset = slotStart;
+  const uint32_t slicedExceptionCount = slotEnd - slotStart;
   if (slicedExceptionCount == 0) {
     return {};
   }
-
-  ScopedVector<uint32_t> rebasedPositions{
-      slicedExceptionCount, pool, options.bufferPool};
-  for (uint32_t i = 0; i < slicedExceptionCount; ++i) {
-    rebasedPositions[i] = sliceBegin[i] - offset;
-  }
+  const auto slicedInnerPositions = EncodingFactory::slice(
+      exceptionPositions,
+      exceptionOffset,
+      slicedExceptionCount,
+      scratchBuffer,
+      options);
+  const auto slicedPositions = SliceEncoding<uint32_t>::wrap(
+      slicedInnerPositions,
+      /*offset=*/0,
+      /*length=*/slicedExceptionCount,
+      scratchBuffer,
+      valueDelta,
+      options);
 
   return {
-      .positions = EncodingFactory::encodeWithCapturedLayout<uint32_t>(
-          exceptionPositions,
-          {rebasedPositions.data(), rebasedPositions.size()},
-          scratchBuffer,
-          options,
-          "Captured PFOR exception positions layout"),
+      .positions = slicedPositions,
+      // Exception values are addressed by exception slot, not by row, so they
+      // slice positionally on the same bounds.
       .values = EncodingFactory::slice(
           exceptionValues,
           exceptionOffset,
           slicedExceptionCount,
           scratchBuffer,
           options),
-      .count = slicedExceptionCount};
+      .count = slicedExceptionCount,
+  };
 }
 
 template <typename T>
@@ -636,7 +644,6 @@ std::string_view PFOREncoding<T>::slice(
       numExceptions,
       offset,
       length,
-      pool,
       scopedBuffer.get(),
       options);
 

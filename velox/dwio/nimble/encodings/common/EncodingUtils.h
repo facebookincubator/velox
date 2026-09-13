@@ -39,6 +39,7 @@
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
 
 namespace facebook::nimble {
 
