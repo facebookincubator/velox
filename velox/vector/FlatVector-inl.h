@@ -90,7 +90,25 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       AlignedBuffer::allocate<uint64_t>(BaseVector::length_, BaseVector::pool_);
   auto hashData = hashBuffer->asMutable<uint64_t>();
 
+#ifdef _MSC_VER
+  // MSVC instantiates this method for every T (e.g. via the serializer), even
+  // for complex/opaque element types where folly::hasher is undefined and the
+  // method is never actually called. Guard those to keep the body well-formed;
+  // GCC instantiates lazily and only ever sees the scalar specializations.
+  // folly::hasher<int128_t>/<Timestamp> are provided by Velox, so the scalar
+  // path hashes identically to SimpleVector::hashValueAt.
+  const auto hasher = [](T value) -> uint64_t {
+    if constexpr (
+        std::is_arithmetic_v<T> || std::is_same_v<T, StringView> ||
+        std::is_same_v<T, Timestamp> || std::is_same_v<T, int128_t>) {
+      return folly::hasher<T>()(value);
+    } else {
+      return 0;
+    }
+  };
+#else
   folly::hasher<T> hasher;
+#endif
   if (!BaseVector::rawNulls_) {
     VELOX_DCHECK_NOT_NULL(rawValues_);
     for (len_type i = 0; i < BaseVector::length_; ++i) {
@@ -116,7 +134,8 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       std::nullopt /*distinctValueCount*/,
       0 /*nullCount*/,
       false /*sorted*/,
-      sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /*representedBytes*/);
 }
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER

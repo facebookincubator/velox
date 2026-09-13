@@ -24,5 +24,5 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   glog::glog
-  dl
+  ${CMAKE_DL_LIBS}
 )
