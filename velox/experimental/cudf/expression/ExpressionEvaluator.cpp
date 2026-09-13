@@ -1465,6 +1465,77 @@ class UpperFunction : public CudfFunction {
   }
 };
 
+// replace(target_str, search_str[, replacement_str]): replaces every
+// occurrence of search_str in target_str with replacement_str. With only
+// search_str it removes search_str (i.e. an empty replacement). Backed by
+// cudf::strings::replace with a maxrepl of -1 so all occurrences are replaced.
+// Only a constant, non-empty search_str and constant replacement_str are
+// allowed.
+class ReplaceFunction : public CudfFunction {
+ public:
+  ReplaceFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
+    VELOX_CHECK(
+        expr->inputs().size() == 2 || expr->inputs().size() == 3,
+        "replace expects 2 or 3 inputs");
+
+    // Search is a constant per the registered signatures; read it once here.
+    auto searchValue = toConstantVector(expr->inputs()[1], pool);
+    searchIsNull_ = searchValue->isNullAt(0);
+    if (!searchIsNull_) {
+      search_ = searchValue->toString(0);
+    }
+
+    // The 3-argument form carries a constant replacement; the 2-argument form
+    // removes the search, which is an empty, non-null replacement.
+    if (expr->inputs().size() == 3) {
+      auto replacementValue = toConstantVector(expr->inputs()[2], pool);
+      replacementIsNull_ = replacementValue->isNullAt(0);
+      if (!replacementIsNull_) {
+        replacement_ = replacementValue->toString(0);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK(
+        !inputColumns.empty(),
+        "replace requires at least one non-literal input column");
+    // inputColumns holds only non-literal children, so the string column is the
+    // first (and only) entry and determines the output row count.
+    auto inputCol = asView(inputColumns[0]);
+
+    // replace(x, NULL, y) and replace(x, s, NULL) are NULL for every row.
+    // Match Velox null propagation by producing an all-null varchar column.
+    if (searchIsNull_ || replacementIsNull_) {
+      cudf::string_scalar nullString("", false, stream, mr);
+      return cudf::make_column_from_scalar(
+          nullString, inputCol.size(), stream, mr);
+    }
+
+    const cudf::strings_column_view stringsView(inputCol);
+    cudf::string_scalar searchScalar(search_, true, stream, mr);
+    cudf::string_scalar replacementScalar(replacement_, true, stream, mr);
+    // maxrepl == -1 replaces all occurrences. Nulls in the input column
+    // propagate to a null result.
+    return cudf::strings::replace(
+        stringsView, searchScalar, replacementScalar, -1, stream, mr);
+  }
+
+ private:
+  // Constant search value, valid only when searchIsNull_ is false.
+  std::string search_;
+  // Constant replacement value; empty for the 2-argument form, valid only when
+  // replacementIsNull_ is false.
+  std::string replacement_;
+  // Set when the constant search argument is null.
+  bool searchIsNull_{false};
+  // Set when the constant replacement argument is null.
+  bool replacementIsNull_{false};
+};
+
 class LikeFunction : public CudfFunction {
  public:
   LikeFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
@@ -2411,6 +2482,34 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("varchar")
            .argumentType("varchar")
            .build()});
+
+  registerCudfFunction(
+      prefix + "replace",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ReplaceFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("varchar")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .build()},
+      /*overwrite=*/true,
+      /*canEvaluate=*/
+      [](const core::TypedExprPtr& expr) {
+        // Decline an empty constant search_str: the expected semantics insert
+        // the replacement_str around every character, i.e. replace('abc', '',
+        // 'X') → 'XaXbXcX', which cudf::strings::replace does not implement.
+        auto search = constantVarcharValue(expr->inputs()[1]);
+        return !(search.has_value() && search->empty());
+      });
 
   registerCudfFunction(
       prefix + "like",

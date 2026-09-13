@@ -1890,6 +1890,92 @@ TEST_F(CudfFilterProjectTest, stringUpperOperation) {
   testStringUpperOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
+  // Column string with constant search and replacement, including the
+  // replace(s, '-', '') shape: matches present, absent, repeated, and a null
+  // string row.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"2021-01-31",
+           "no dashes here",
+           "a-b-c-d",
+           "-leading-and-trailing-",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, '-', '') AS removed",
+      "replace(s, '-', '/') AS slashed",
+      "replace(s, 'zzz', 'x') AS absent"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
+  // The 2-argument form removes every occurrence of the search.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"a-b-c", "abc", "---", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"replace(s, '-') AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
+  // A null constant search or replacement yields an all-null result.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, CAST(NULL AS VARCHAR), 'x') AS null_search",
+      "replace(s, '-', CAST(NULL AS VARCHAR)) AS null_replacement"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
+  // Multi-byte (UTF-8) search and replacement, including a replacement that
+  // changes the byte length and a null string row.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"café-au-lait",
+           "a€b€c",
+           "naïve",
+           "no multibyte here",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, 'é', 'e') AS deaccent",
+      "replace(s, '€', 'EUR') AS money",
+      "replace(s, 'ï', 'i') AS naive"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceReplacementContainsSearch) {
+  // The replacement contains the search: a single left-to-right pass must not
+  // re-scan the inserted text.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"aaa", "banana", "a", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, 'a', 'aa') AS doubled",
+      "replace(s, 'ana', 'anana') AS grow"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
