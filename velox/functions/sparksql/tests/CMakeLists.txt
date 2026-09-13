@@ -45,6 +45,7 @@ add_executable(
   FactorialTest.cpp
   FilterTest.cpp
   FormatNumberTest.cpp
+  FromCsvTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
   GetArrayStructFieldsTest.cpp
