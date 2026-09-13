@@ -479,12 +479,26 @@ std::vector<subintsplit::SectionPlan> SubIntSplitEncoding<T>::planSections(
     return std::move(parsed.value());
   }
 
+  auto samplerConfig = subintsplit::defaultSamplerConfig();
+  if (options.subIntSplitPlannerMaxSamples > 0) {
+    samplerConfig.maxSamples = options.subIntSplitPlannerMaxSamples;
+  }
   std::vector<uint64_t> samples;
-  subintsplit::sampleIntoU64<physicalType>(values, samples);
+  subintsplit::sampleIntoU64<physicalType>(values, samples, samplerConfig);
 
   auto selectorConfig = subintsplit::defaultSelectorConfig();
   selectorConfig.decodeCostBitsPerValue =
       options.subIntSplitDecodeCostBitsPerValue;
+  if (options.subIntSplitBoundaryPruneThreshold >= 0.0) {
+    selectorConfig.boundaryPruneThreshold =
+        options.subIntSplitBoundaryPruneThreshold;
+  }
+  selectorConfig.maxCandidateBoundaries =
+      options.subIntSplitMaxCandidateBoundaries;
+  selectorConfig.maxSectionWidth =
+      static_cast<int>(options.subIntSplitMaxSectionWidth);
+  selectorConfig.frequencyMetricsMaxWidth =
+      static_cast<int>(options.subIntSplitFrequencyMetricsMaxWidth);
   return subintsplit::selectSplits(
              samples, kBits, values.size(), selectorConfig)
       .sections;
