@@ -36,7 +36,11 @@ General Aggregate Functions
     per-bucket bitmaps from bit positions, ``bitmap_or_agg`` merges those bitmaps
     during the final count-distinct rollup. Null inputs are ignored. Returns an
     all-zeros 4096-byte bitmap for empty or all-null input (this is a non-nullable
-    aggregate). Input bitmaps must be exactly 4096 bytes.
+    aggregate). Input bitmaps may be any length: matching Spark's
+    ``BitmapExpressionUtils.bitmapMerge``, only the first ``min(input, 4096)``
+    bytes of each input are merged into the 4096-byte accumulator, so inputs
+    shorter than 4096 bytes contribute only their bytes and any bytes beyond
+    4096 are ignored. The output is always 4096 bytes.
 
 .. spark:function:: bloom_filter_agg(hash, estimatedNumItems, numBits) -> varbinary
 
