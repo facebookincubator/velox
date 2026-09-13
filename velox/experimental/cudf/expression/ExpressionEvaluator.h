@@ -198,11 +198,11 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// expression (constant folding and rewrites) with `pool` so the check sees the
 /// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
 /// folds to a plain decimal constant that the structural check accepts, rather
-/// than a live decimal-target cast that it would reject. Then applies the
-/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
-/// structural support check on the optimized expression. When
-/// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
+/// than a live decimal-target cast that it would reject. Then applies
+/// query-context-dependent fallbacks for timezone-sensitive date_trunc and
+/// Spark date_format expressions, followed by a structural support check on the
+/// optimized expression. When `queryCtx` or `pool` is null, skips optimization
+/// and checks `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
 ///             typically the operator's own pool.
 bool canExprRunOnGpu(

@@ -232,6 +232,50 @@ TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
   EXPECT_EQ(parseTs("1969-01-01 00:00:00"), dateTrunc("year", preEpochTs));
 }
 
+TEST_F(CudfFilterProjectTest, dateFormat) {
+  auto timestamps = makeNullableFlatVector<Timestamp>(
+      {Timestamp(1'710'460'800, 0), // Represents 2024-03-15 00:00:00 UTC.
+       Timestamp(0, 0), // Represents 1970-01-01 00:00:00 UTC.
+       Timestamp(951'831'930, 0), // Represents 2000-02-29 13:45:30 UTC.
+       Timestamp(1'641'081'599, 0), // Represents 2022-01-01 23:59:59 UTC.
+       Timestamp(1'718'409'600, 0), // Represents 2024-06-15 00:00:00 UTC.
+       std::nullopt},
+      TIMESTAMP());
+  auto data = makeRowVector({timestamps});
+
+  for (const auto& expression : {
+           "date_format(c0, 'yyyyMMdd')",
+           "date_format(c0, 'yyyy-MM-dd')",
+           "date_format(c0, 'yyyy-MM-dd HH:mm:ss')",
+           "date_format(c0, 'HH:mm:ss')",
+           "date_format(c0, 'yy')",
+           "date_format(c0, 'yyyy''Q''MM')",
+           "date_format(c0, 'yyyy''o''''clock''')",
+           "date_format(c0, 'yyyy''%''MM')",
+           "date_format(c0, 'yyyy''''MM')",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, data, data->rowType());
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateFormatQuery2Pattern) {
+  auto dates = makeNullableFlatVector<int32_t>(
+      {DATE()->toDays("2024-03-15"),
+       DATE()->toDays("1970-01-01"),
+       DATE()->toDays("2027-10-18"),
+       std::nullopt},
+      DATE());
+  auto data = makeRowVector({dates});
+
+  assertExpressionMatchesCpu(
+      "if(equalto(date_format(cast(c0 as timestamp), 'yyyyMMdd'), "
+      "'19700101'), '00000000', "
+      "date_format(cast(c0 as timestamp), 'yyyyMMdd'))",
+      data,
+      data->rowType());
+}
+
 TEST_F(CudfFilterProjectTest, substringConstantStartAndLength) {
   auto input = makeNullableFlatVector<std::string>(
       {"abcdef", "spark", "", "über", std::nullopt});
