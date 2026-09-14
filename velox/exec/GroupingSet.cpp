@@ -1270,38 +1270,38 @@ bool GroupingSet::mergeNextWithAggregates(
   VELOX_CHECK(!isDistinct());
   VELOX_CHECK_NOT_NULL(merge_);
 
-  // Whether mergeState_ contains the keys of the current group.
-  bool hasMergeState{false};
+  // True if 'merge_' indicates that the next key is the same as the current
+  // one.
+  bool nextKeyIsEqual{false};
   for (;;) {
-    auto* stream = merge_->next();
-    if (stream == nullptr) {
+    const auto next = merge_->nextWithEquals();
+    if (next.first == nullptr) {
       extractSpillResult(result);
       if (result->size() > 0) {
         return true;
       }
+      VELOX_CHECK(!nextKeyIsEqual);
       if (!prepareNextSpillPartitionOutput()) {
         VELOX_CHECK_NULL(merge_);
         return false;
       }
       VELOX_CHECK_NOT_NULL(merge_);
-      hasMergeState = false;
       continue;
     }
-    if (!hasMergeState || !hasSameKey(*stream, mergeState_)) {
-      // A new key marks the end of the previous group. Do not consume this
-      // row if the completed output batch has reached its limit.
-      if (hasMergeState &&
-          ((mergeRows_->numRows() >= maxOutputRows) ||
-           (mergeRowBytes() >= maxOutputBytes))) {
-        extractSpillResult(result);
-        return true;
-      }
+    if (!nextKeyIsEqual) {
       mergeState_ = mergeRows_->newRow();
-      initializeRow(*stream, mergeState_);
-      hasMergeState = true;
+      initializeRow(*next.first, mergeState_);
     }
-    updateRow(*stream, mergeState_);
-    stream->pop();
+    updateRow(*next.first, mergeState_);
+    nextKeyIsEqual = next.second;
+    next.first->pop();
+
+    if (!nextKeyIsEqual &&
+        ((mergeRows_->numRows() >= maxOutputRows) ||
+         (mergeRowBytes() >= maxOutputBytes))) {
+      extractSpillResult(result);
+      return true;
+    }
   }
   VELOX_UNREACHABLE();
 }
@@ -1479,19 +1479,6 @@ void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
     sortedAggregations_->initializeNewGroups(
         &row, folly::Range<const vector_size_t*>(&zero, 1));
   }
-}
-
-bool GroupingSet::hasSameKey(SpillMergeStream& stream, const char* row) const {
-  for (auto i = 0; i < keyChannels_.size(); ++i) {
-    if (mergeRows_->compare(
-            row,
-            mergeRows_->columnAt(i),
-            stream.decoded(i),
-            stream.currentIndex()) != 0) {
-      return false;
-    }
-  }
-  return true;
 }
 
 void GroupingSet::extractSpillResult(const RowVectorPtr& result) {

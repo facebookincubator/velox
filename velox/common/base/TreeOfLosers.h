@@ -52,6 +52,13 @@ class MergeStream {
   virtual int32_t compare(const MergeStream& /*other*/) const {
     VELOX_UNSUPPORTED();
   }
+
+  /// Returns true if the element after the current one in this stream compares
+  /// equal to the current element. The default is appropriate for streams
+  /// whose elements are unique.
+  virtual bool nextEquals() {
+    return false;
+  }
 };
 
 /// Implements a tree of losers algorithm for merging ordered streams. The
@@ -124,19 +131,18 @@ class TreeOfLosers {
   }
 
   /// Returns the stream with the lowest first element and a flag that is true
-  /// if there is another equal value to come from some other stream. The
-  /// streams should have ordered unique values when using this function. This
-  /// is useful for merging aggregate states that are unique by their key in
-  /// each stream.  The caller is expected to pop off the first element of the
-  /// stream before calling this again. Returns {nullptr, false} when all
-  /// streams are at end.
+  /// if there is another equal value to come, either from another stream or
+  /// from the same stream. This is useful for merging aggregate states by key.
+  /// The caller is expected to pop off the first element of the stream before
+  /// calling this again. Returns {nullptr, false} when all streams are at end.
   std::pair<Stream*, bool> nextWithEquals() {
     IndexAndFlag result;
     if (UNLIKELY(lastIndex_ == kEmpty)) {
       // Only one stream. We handle this off the common path.
       if (values_.empty()) {
-        return streams_[0]->hasData() ? std::make_pair(streams_[0].get(), false)
-                                      : std::make_pair(nullptr, false);
+        return streams_[0]->hasData()
+            ? std::make_pair(streams_[0].get(), streams_[0]->nextEquals())
+            : std::make_pair(nullptr, false);
       }
       result = firstWithEquals(0);
     } else {
@@ -148,7 +154,9 @@ class TreeOfLosers {
 
     return lastIndex_ == kEmpty
         ? std::make_pair(nullptr, false)
-        : std::make_pair(streams_[lastIndex_].get(), result.second);
+        : std::make_pair(
+              streams_[lastIndex_].get(),
+              result.second || streams_[lastIndex_]->nextEquals());
   }
 
  private:

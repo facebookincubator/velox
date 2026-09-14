@@ -5378,7 +5378,7 @@ TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
       .config(QueryConfig::kSpillEnabled, true)
       .config(QueryConfig::kAggregationSpillEnabled, true)
       // Force a batch boundary at the transition from key 99 to key 100.
-      .config(QueryConfig::kPreferredOutputBatchRows, "100")
+      .config(QueryConfig::kMaxOutputBatchRows, "100")
       .config(QueryConfig::kSpillNumPartitionBits, "0")
       .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
       .maxDrivers(1)
