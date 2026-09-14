@@ -179,26 +179,26 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
   while (start < tables.size()) {
     size_t end = start;
     size_t runningRows = 0;
+    std::vector<cudf::table_view> tableViews;
+    tableViews.reserve(tables.size() - start);
     while (end < tables.size()) {
       VELOX_CHECK_NOT_NULL(tables[end]);
-      auto const numRows =
-          static_cast<size_t>(tables[end]->getTableView().num_rows());
+      auto const tableView = tables[end]->getTableView();
+      auto const numRows = static_cast<size_t>(tableView.num_rows());
       if (runningRows > 0 && runningRows + numRows > maxRows) {
         break;
       }
       runningRows += numRows;
+      tableViews.push_back(tableView);
       ++end;
     }
 
     std::vector<CudfVectorPtr> batch;
-    std::vector<cudf::table_view> tableViews;
     std::vector<rmm::cuda_stream_view> inputStreams;
     batch.reserve(end - start);
-    tableViews.reserve(end - start);
     inputStreams.reserve(end - start);
     for (size_t i = start; i < end; ++i) {
       batch.push_back(std::move(tables[i]));
-      tableViews.push_back(batch.back()->getTableView());
       inputStreams.push_back(batch.back()->stream());
     }
 
@@ -212,7 +212,10 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     orderCudfVectorDeallocationsAfterStream(batch, inputStreams, stream);
     batch.clear();
 
-    auto retainedInputBatches = tables.size() - end;
+    size_t retainedInputBatches =
+        std::count_if(tables.begin(), tables.end(), [](const auto& table) {
+          return table != nullptr;
+        });
     common::testutil::TestValue::adjust(
         "facebook::velox::cudf_velox::getConcatenatedTableBatched::retainedInputBatchesAfterBatchRelease",
         &retainedInputBatches);

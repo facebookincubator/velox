@@ -361,9 +361,12 @@ DEBUG_ONLY_TEST_F(HashJoinTest, transferBuildInputOwnershipFromSourceDrivers) {
 
 DEBUG_ONLY_TEST_F(HashJoinTest, releasesBatchedBuildInputsIncrementally) {
   auto& cudfConfig = cudf_velox::CudfConfig::getInstance();
+  auto savedMin = cudfConfig.batchSizeMinThreshold;
   auto savedMax = cudfConfig.batchSizeMaxThreshold;
+  cudfConfig.batchSizeMinThreshold = 10;
   cudfConfig.batchSizeMaxThreshold = 10;
   SCOPE_EXIT {
+    cudfConfig.batchSizeMinThreshold = savedMin;
     cudfConfig.batchSizeMaxThreshold = savedMax;
   };
 
@@ -384,6 +387,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, releasesBatchedBuildInputsIncrementally) {
       .buildVectors(10, 3)
       .referenceQuery(
           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t_k0 = u_k0")
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "10")
       .run();
 
   EXPECT_EQ(retainedInputBatches, std::vector<size_t>({2, 1, 0}));
