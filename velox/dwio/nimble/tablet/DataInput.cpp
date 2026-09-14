@@ -313,18 +313,25 @@ DataInput::Handle DirectDataInput::load() {
         ? groupOffsets_[i + 1]
         : static_cast<uint32_t>(regions_.size());
     NIMBLE_CHECK_LT(start, end, "Read group must contain a region");
-    std::sort(
-        regions_.begin() + start,
-        regions_.begin() + end,
-        [](const EnqueuedRegion& a, const EnqueuedRegion& b) {
-          if (a.region.offset != b.region.offset) {
-            return a.region.offset < b.region.offset;
-          }
-          // Tiebreak equal extents by enqueue index so the first member of each
-          // duplicate run is its stored copy (smallest enqueue index = earliest
-          // processed by the consumer).
-          return a.enqueueIndex < b.enqueueIndex;
-        });
+    // Enqueue order is stream-index order and streams are serialised in the
+    // stripe's file layout in stream-index order too, so this range is
+    // already sorted by (offset, enqueueIndex) in the common case. Guard the
+    // sort with std::is_sorted so we pay one linear pass on the sorted path
+    // instead of full introsort work.
+    const auto beginIt = regions_.begin() + start;
+    const auto endIt = regions_.begin() + end;
+    const auto cmp = [](const EnqueuedRegion& a, const EnqueuedRegion& b) {
+      if (a.region.offset != b.region.offset) {
+        return a.region.offset < b.region.offset;
+      }
+      // Tiebreak equal extents by enqueue index so the first member of each
+      // duplicate run is its stored copy (smallest enqueue index = earliest
+      // processed by the consumer).
+      return a.enqueueIndex < b.enqueueIndex;
+    };
+    if (!std::is_sorted(beginIt, endIt, cmp)) {
+      std::sort(beginIt, endIt, cmp);
+    }
 
     if (i > 0) {
       NIMBLE_CHECK_GE(
