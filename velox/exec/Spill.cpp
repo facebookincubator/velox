@@ -101,16 +101,39 @@ void SpillMergeStream::pop() {
 int32_t SpillMergeStream::compare(const MergeStream& other) const {
   VELOX_CHECK(!closed_);
   const auto& otherStream = static_cast<const SpillMergeStream&>(other);
-  const auto& children = rowVector_->children();
-  const auto& otherChildren = otherStream.current().children();
+  return compareRows(
+      *rowVector_, index_, otherStream.current(), otherStream.index_);
+}
+
+bool SpillMergeStream::nextEquals() {
+  VELOX_CHECK(!closed_);
+  if (index_ + 1 < size_) {
+    return compareRows(*rowVector_, index_, *rowVector_, index_ + 1) == 0;
+  }
+  return loadNextBatch() &&
+      compareRows(*rowVector_, index_, *nextRowVector_, 0) == 0;
+}
+
+bool SpillMergeStream::loadNextBatch() {
+  if (nextRowVector_ != nullptr) {
+    return true;
+  }
+  return nextBatch(nextRowVector_);
+}
+
+int32_t SpillMergeStream::compareRows(
+    const RowVector& left,
+    vector_size_t leftIndex,
+    const RowVector& right,
+    vector_size_t rightIndex) const {
+  const auto& children = left.children();
+  const auto& otherChildren = right.children();
   for (const auto& [key, compareFlags] : sortingKeys()) {
-    const auto result = children[key]
-                            ->compare(
-                                otherChildren[key].get(),
-                                index_,
-                                otherStream.index_,
-                                compareFlags)
-                            .value();
+    const auto result =
+        children[key]
+            ->compare(
+                otherChildren[key].get(), leftIndex, rightIndex, compareFlags)
+            .value();
     if (result != 0) {
       return result;
     }
@@ -122,6 +145,7 @@ void SpillMergeStream::close() {
   VELOX_CHECK(!closed_);
   closed_ = true;
   rowVector_.reset();
+  nextRowVector_.reset();
   decoded_.clear();
   rows_.resize(0);
   index_ = 0;
@@ -609,15 +633,9 @@ uint32_t FileSpillMergeStream::id() const {
   return spillFile_->id();
 }
 
-void FileSpillMergeStream::nextBatch() {
+bool FileSpillMergeStream::nextBatch(RowVectorPtr& rowVector) {
   VELOX_CHECK(!closed_);
-  index_ = 0;
-  if (!spillFile_->nextBatch(rowVector_)) {
-    size_ = 0;
-    close();
-    return;
-  }
-  size_ = rowVector_->size();
+  return spillFile_->nextBatch(rowVector);
 }
 
 void FileSpillMergeStream::close() {
@@ -631,7 +649,7 @@ std::unique_ptr<SpillMergeStream> ConcatFilesSpillMergeStream::create(
     std::vector<std::unique_ptr<SpillReadFile>> spillFiles) {
   auto spillStream = std::unique_ptr<ConcatFilesSpillMergeStream>(
       new ConcatFilesSpillMergeStream(id, std::move(spillFiles)));
-  spillStream->nextBatch();
+  spillStream->setNextBatch();
   return spillStream;
 }
 
@@ -639,20 +657,17 @@ uint32_t ConcatFilesSpillMergeStream::id() const {
   return id_;
 }
 
-void ConcatFilesSpillMergeStream::nextBatch() {
+bool ConcatFilesSpillMergeStream::nextBatch(RowVectorPtr& rowVector) {
   VELOX_CHECK(!closed_);
-  index_ = 0;
   for (; fileIndex_ < spillFiles_.size(); ++fileIndex_) {
     VELOX_CHECK_NOT_NULL(spillFiles_[fileIndex_]);
-    if (spillFiles_[fileIndex_]->nextBatch(rowVector_)) {
-      VELOX_CHECK_NOT_NULL(rowVector_);
-      size_ = rowVector_->size();
-      return;
+    if (spillFiles_[fileIndex_]->nextBatch(rowVector)) {
+      VELOX_CHECK_NOT_NULL(rowVector);
+      return true;
     }
     spillFiles_[fileIndex_].reset();
   }
-  size_ = 0;
-  close();
+  return false;
 }
 
 void ConcatFilesSpillMergeStream::close() {
