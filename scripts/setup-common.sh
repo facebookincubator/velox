@@ -360,7 +360,7 @@ function install_minio {
   local MINIO_OS=${1:-darwin}
   local MINIO_ARCH
 
-  if [[ $MACHINE == aarch64 ]]; then
+  if [[ $MACHINE == aarch64 || $MACHINE == arm64 ]]; then
     MINIO_ARCH="arm64"
   elif [[ $MACHINE == x86_64 ]]; then
     MINIO_ARCH="amd64"
@@ -368,7 +368,7 @@ function install_minio {
     echo "Unsupported Minio platform"
   fi
 
-  wget "${WGET_OPTS[@]}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
+  wget "${WGET_OPTS[@]}" https://github.com/minio/minio/releases/download/RELEASE."${MINIO_VERSION}"/minio."${MINIO_OS}"-"${MINIO_ARCH}".RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
   chmod +x ./"${MINIO_BINARY_NAME}"
   mkdir -p "$INSTALL_PREFIX"/bin/
   ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
