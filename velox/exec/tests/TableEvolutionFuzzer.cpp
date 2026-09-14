@@ -1285,8 +1285,10 @@ std::string TableEvolutionFuzzer::makeNewName() {
   return fmt::format("name_{}", ++sequenceNumber_);
 }
 
-TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
-  // All types that can be written to file directly.
+TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth, bool allowTimestamp) {
+  // All types that can be written to file directly. TIMESTAMP has no widening
+  // target, so evolveType() and liftToType() leave it alone through their
+  // default arms; it is excluded from map keys by hasUnsupportedMapKey().
   static const std::vector<TypePtr> scalarTypes = {
       BOOLEAN(),
       TINYINT(),
@@ -1297,18 +1299,44 @@ TypePtr TableEvolutionFuzzer::makeNewType(int maxDepth) {
       DOUBLE(),
       VARCHAR(),
       VARBINARY(),
+      TIMESTAMP(),
   };
-  return vectorFuzzer_.randType(scalarTypes, maxDepth);
+  // Same set without TIMESTAMP, for bucket columns. Bucketing a timestamp
+  // breaks the bucket-conversion invariant asserted in
+  // HiveSplitReader::bucketConversionRows(): a row read from the file for
+  // bucket B must hash to a partition congruent to B modulo the original
+  // bucket count. Whatever the writer hashed a timestamp to does not agree
+  // with what HivePartitionFunction computes at read time, so those rows land
+  // in the wrong bucket. Excluded at every nesting depth, not just the top
+  // level, because a bucket column may be a row/array/map.
+  static const std::vector<TypePtr> nonTimestampScalarTypes = {
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      VARBINARY(),
+  };
+  return vectorFuzzer_.randType(
+      allowTimestamp ? scalarTypes : nonTimestampScalarTypes, maxDepth);
 }
 
 RowTypePtr TableEvolutionFuzzer::makeInitialSchema(
+    const std::vector<column_index_t>& bucketColumnIndices,
     const std::vector<std::string>& additionalColumnNames,
     const std::vector<TypePtr>& additionalColumnTypes) {
+  const folly::F14FastSet<column_index_t> bucketColumns(
+      bucketColumnIndices.begin(), bucketColumnIndices.end());
   std::vector<std::string> names(config_.columnCount);
   std::vector<TypePtr> types(config_.columnCount);
   for (int i = 0; i < config_.columnCount; ++i) {
     names[i] = makeNewName();
-    types[i] = makeNewType(3);
+    // Bucket columns are never evolved (evolveRowType skips them), so keeping
+    // TIMESTAMP out here is enough to keep it out of bucketing entirely.
+    types[i] = makeNewType(3, /*allowTimestamp=*/bucketColumns.count(i) == 0);
   }
 
   // Add additional columns from generateRemainingFilters
@@ -1407,8 +1435,8 @@ std::vector<TableEvolutionFuzzer::Setup> TableEvolutionFuzzer::makeSetups(
   std::vector<Setup> setups(config_.evolutionCount);
   for (int i = 0; i < config_.evolutionCount; ++i) {
     if (i == 0) {
-      setups[i].schema =
-          makeInitialSchema(additionalColumnNames, additionalColumnTypes);
+      setups[i].schema = makeInitialSchema(
+          bucketColumnIndices, additionalColumnNames, additionalColumnTypes);
     } else {
       setups[i].schema = evolveRowType(
           *setups[i - 1].schema, bucketColumnIndices, columnNameMapping);

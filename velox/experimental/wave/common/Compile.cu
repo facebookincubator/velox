@@ -93,6 +93,11 @@ class CompiledModuleImpl : public CompiledModule {
 
   KernelInfo info(int32_t kernelIdx) override;
 
+  int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) override;
+
  private:
   // Opts the kernel in to more than the default 48KB of dynamic shared memory.
   // A launch asking for more than that fails without this.
@@ -597,6 +602,22 @@ KernelInfo CompiledModuleImpl::info(int32_t kernelIdx) {
   info.maxOccupancy32 = max;
   info.compileMs = compileMs_;
   return info;
+}
+
+int32_t CompiledModuleImpl::occupancy(
+    int32_t kernelIdx,
+    int32_t numThreads,
+    int32_t dynamicSharedBytes) {
+  // A launch asking for more than the default 48KB needs the opt-in before the
+  // driver will report an occupancy for it, and reports 0 otherwise.
+  allowLargeDynamicShared(kernelIdx, dynamicSharedBytes);
+  int32_t blocks = 0;
+  const auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks, kernels_[kernelIdx], numThreads, dynamicSharedBytes);
+  if (result != CUDA_SUCCESS) {
+    return 0;
+  }
+  return blocks;
 }
 
 } // namespace facebook::velox::wave

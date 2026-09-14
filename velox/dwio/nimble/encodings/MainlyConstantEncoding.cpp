@@ -52,17 +52,15 @@ std::string_view MainlyConstantEncoding<std::string_view>::encode(
   }
 
   const auto& uniqueCounts = selection.statistics().uniqueCounts().value();
-  const auto commonElement =
-      MainlyConstantEncodingBase<std::string_view>::mainlyConstantCommonValue(
-          uniqueCounts);
+  const auto commonElement = uniqueCounts.mostFrequent().value();
 
   const uint32_t entryCount = values.size();
 
   auto* pool = &buffer.getMemoryPool();
-  physicalType commonValue = commonElement->first;
+  physicalType commonValue = commonElement.first;
   auto childStreams =
       MainlyConstantEncodingBase<std::string_view>::prepareChildStreams(
-          pool, values, commonValue, commonElement->second);
+          pool, values, commonValue, commonElement.second);
 
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   std::string_view serializedIsCommon = selection.template encodeNested<bool>(

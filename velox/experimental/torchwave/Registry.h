@@ -131,6 +131,14 @@ struct ArgumentMeta {
   /// size to allocate based on inputs and execution state.
   OutputReserveFunc reserveShape{nullptr};
 
+  /// Ordinal of the input whose shape 'reserveShape' returns, or -1 when the
+  /// shape is the reserve's own business. An elementwise or *_like output has
+  /// the extent of an operand, so anything that only needs to know WHEN the
+  /// shape becomes computable -- rather than what it is -- can look at that
+  /// input instead of treating the reserve as opaque. Concat layout is the
+  /// caller: one operand it cannot place early refuses the whole concat.
+  int32_t shapeFromInput{-1};
+
   /// True if actual size is determined on device, e.g. stream compaction.
   bool shapeSetOnDevice{false};
 

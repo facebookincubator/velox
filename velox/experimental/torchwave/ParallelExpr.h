@@ -33,6 +33,8 @@ namespace torch::wave {
 /// before partitioning: ParallelNodes::rewriteInPlace walks one ProjectNode
 /// layer at a time and cannot see a source whose clones land in different
 /// layers. Returns the number elided.
+/// Drops clones nobody writes, whose source is never mutated and which do not
+/// escape as graph outputs, then merges the identical ones that remain.
 int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 
 /// Merges nodes that compute the same value from the same operands, to a

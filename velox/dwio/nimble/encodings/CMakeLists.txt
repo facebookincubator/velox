@@ -38,15 +38,18 @@ add_library(
   SharedDictionaryCatalog.cpp
   SharedDictionaryCatalog.h
   SharedDictionaryEncoding.cpp
+  SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
+  common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
   views/DeltaBlockEncodingView.h
+  views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
@@ -62,6 +65,7 @@ add_library(
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
   views/BlockBitPackingEncodingView.h
+  views/BitRangeSplitEncodingView.h
   views/ALPEncodingView.h
   selection/Statistics.h
   selection/NestedAlpSizeEstimation.h
@@ -70,6 +74,7 @@ add_library(
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
   common/EncodingUtils.h
+  common/SortedPositionSlots.h
   common/EncodingType.h
   common/EncodingPrimitives.h
   common/EncodingPrefix.h
@@ -101,11 +106,13 @@ add_library(
   ForEncoding.h
   FixedBitWidthEncoding.h
   EncodingSliceFactory.h
+  EliasFanoEncoding.h
   DictionaryEncoding.h
   DeltaEncoding.h
   DeltaBlockEncoding.h
   ConstantEncoding.h
   BlockBitPackingEncoding.h
+  BitRangeSplitEncoding.h
   ALPEncoding.h
 )
 

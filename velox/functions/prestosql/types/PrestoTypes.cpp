@@ -17,10 +17,16 @@
 #include "velox/functions/prestosql/types/PrestoTypes.h"
 
 #include <fmt/format.h>
+#include <folly/String.h>
 #include <velox/common/base/Exceptions.h>
 #include <iomanip>
+
 #include <sstream>
 #include "velox/functions/prestosql/types/BigintEnumType.h"
+#include "velox/functions/prestosql/types/HyperLogLogType.h"
+#include "velox/functions/prestosql/types/KHyperLogLogType.h"
+#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
+#include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/VarcharEnumType.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -59,6 +65,102 @@ bool needsQuoting(const std::string& name) {
 }
 
 } // namespace
+
+std::string PrestoTypes::displayName(const Type& type) {
+  if (type.isDecimal()) {
+    const auto [precision, scale] = getDecimalPrecisionScale(type);
+    return fmt::format("decimal({},{})", precision, scale);
+  }
+
+  if (isPlainArray(type)) {
+    return fmt::format("array({})", displayName(*type.childAt(0)));
+  }
+
+  if (isPlainMap(type)) {
+    return fmt::format(
+        "map({}, {})",
+        displayName(*type.childAt(0)),
+        displayName(*type.childAt(1)));
+  }
+
+  if (isPlainRow(type)) {
+    const auto& rowType = type.asRow();
+    std::stringstream out;
+    out << "row(";
+    for (auto i = 0; i < rowType.size(); ++i) {
+      if (i > 0) {
+        out << ", ";
+      }
+      // Every field name a row has is quoted, whether or not it needs it.
+      if (!rowType.nameOf(i).empty()) {
+        out << '"' << rowType.nameOf(i) << "\" ";
+      }
+      out << displayName(*rowType.childAt(i));
+    }
+    out << ")";
+    return out.str();
+  }
+
+  if (isBigintEnumType(type)) {
+    return static_cast<const BigintEnumType&>(type).enumName();
+  }
+  if (isVarcharEnumType(type)) {
+    return static_cast<const VarcharEnumType&>(type).enumName();
+  }
+
+  // Types Presto spells in mixed case.
+  if (isHyperLogLogType(type)) {
+    return "HyperLogLog";
+  }
+  if (isP4HyperLogLogType(type)) {
+    return "P4HyperLogLog";
+  }
+  if (isKHyperLogLogType(type)) {
+    return "KHyperLogLog";
+  }
+  if (isSetDigestType(type)) {
+    return "SetDigest";
+  }
+
+  if (type.kind() == TypeKind::OPAQUE || type.kind() == TypeKind::FUNCTION ||
+      type.kind() == TypeKind::INVALID) {
+    VELOX_UNSUPPORTED("Unsupported type: {}", type.toString());
+  }
+
+  // A parameterized type appends its parameters, e.g. 'tdigest(double)'; the
+  // rest name themselves. A custom type, e.g. IPPREFIX, lands here rather than
+  // in the complex cases above, which admit only the plain types.
+  const auto& parameters = type.parameters();
+  std::string name{type.name()};
+  folly::toLowerAscii(name);
+  if (parameters.empty()) {
+    return name;
+  }
+
+  std::stringstream out;
+  out << name << "(";
+  for (auto i = 0; i < parameters.size(); ++i) {
+    if (i > 0) {
+      out << ",";
+    }
+    switch (parameters[i].kind) {
+      case TypeParameterKind::kType:
+        out << displayName(*parameters[i].type);
+        break;
+      case TypeParameterKind::kLongLiteral:
+        out << parameters[i].longLiteral.value();
+        break;
+      // An enum's parameters name its values; the enum itself is spelled by
+      // name above.
+      case TypeParameterKind::kLongEnumLiteral:
+      case TypeParameterKind::kVarcharEnumLiteral:
+        VELOX_UNSUPPORTED(
+            "Type parameter has no Presto name: {}", type.toString());
+    }
+  }
+  out << ")";
+  return out.str();
+}
 
 std::string PrestoTypes::toSql(const TypePtr& type) {
   if (isPlainArray(*type)) {

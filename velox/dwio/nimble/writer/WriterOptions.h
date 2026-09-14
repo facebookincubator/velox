@@ -23,6 +23,8 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexConfig.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
@@ -64,6 +66,15 @@ struct WriterOptions {
   /// Property bag for storing user metadata in the file.
   std::unordered_map<std::string, std::string> metadata =
       detail::defaultMetadata();
+
+  /// Supplies user metadata that is only known once every row has been
+  /// written, for callers whose value is not final when the writer opens.
+  /// Invoked once from close(), after the last stripe is written and before
+  /// the metadata section is serialized, so it observes the finished file.
+  /// Entries it returns win over `metadata` on a key collision, including
+  /// over the defaults seeded above. Throwing from it fails close().
+  std::function<std::unordered_map<std::string, std::string>()>
+      metadataProvider{};
 
   /// Shared dictionary encoding settings.
   /// EXPERIMENTAL: Shared dictionary encoding is not production-ready. Do not
@@ -136,6 +147,19 @@ struct WriterOptions {
   /// EXPERIMENTAL: Dense indexes are not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   std::vector<std::shared_ptr<const index::IndexConfig>> denseIndexConfigs{};
+
+  /// Vector index configurations. Each entry builds a FAISS similarity index
+  /// over a top-level ARRAY<REAL> column, where each row contains one vector of
+  /// floating-point values. Every array must have exactly the configured
+  /// dimensions; null rows and null elements are rejected.
+  /// EXPERIMENTAL: Vector indexes are not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  std::vector<VectorIndexConfig> vectorIndexConfigs{};
+
+  /// Builds the writer for vectorIndexConfigs. Required when
+  /// vectorIndexConfigs is non-empty. Set it to
+  /// index::VectorIndexWriter::create
+  index::VectorIndexWriterFactory vectorIndexWriterFactory{};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
   /// of predefined key strings. When the set is empty, the column is

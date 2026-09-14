@@ -109,6 +109,9 @@ EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator(
   return
       [valueEncodingReadFactors = std::move(valueEncodingReadFactors)](
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        // TODO: Only Int32, Uint32 and String are given tailored read
+        // factors; the remaining fixed-width types fall through to the shared
+        // default. Extend the pool so they are exercised distinctly too.
         EncodingReadFactors encodingReadFactors;
         switch (dataType) {
           case DataType::Int32:

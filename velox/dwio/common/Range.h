@@ -17,7 +17,6 @@
 #pragma once
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/GTestMacros.h"
 
 namespace facebook::velox::common {
 
@@ -115,9 +114,6 @@ class Ranges {
  private:
   std::vector<std::tuple<size_t, size_t>> ranges_;
   size_t size_{0};
-
-  VELOX_FRIEND_TEST(RangeTests, Add);
-  VELOX_FRIEND_TEST(RangeTests, Filter);
 };
 
 } // namespace facebook::velox::common

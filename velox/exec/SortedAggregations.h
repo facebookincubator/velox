@@ -69,7 +69,12 @@ class SortedAggregations {
       char** groups,
       folly::Range<const vector_size_t*> indices);
 
-  void addInput(char** groups, const RowVectorPtr& input);
+  /// 'rows' identifies the input rows to add. 'groups' has an entry only for
+  /// these rows; entries for other rows are not initialized.
+  void addInput(
+      char** groups,
+      const RowVectorPtr& input,
+      const SelectivityVector& rows);
 
   void addSingleGroupInput(char* group, const RowVectorPtr& input);
 

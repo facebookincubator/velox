@@ -171,6 +171,9 @@ void IcebergSplitReader::configureBaseReaderOptions() {
       baseReaderOpts_.setColumnMappingMode(
           dwio::common::ColumnMappingMode::kParquetFieldId);
       baseReaderOpts_.setFieldIds(std::move(fieldIds));
+    } else {
+      baseReaderOpts_.setColumnMappingMode(
+          dwio::common::ColumnMappingMode::kName);
     }
     return;
   }
@@ -181,6 +184,8 @@ void IcebergSplitReader::configureBaseReaderOptions() {
   }
   auto fieldIds = buildFieldIds();
   if (fieldIds.empty()) {
+    baseReaderOpts_.setColumnMappingMode(
+        dwio::common::ColumnMappingMode::kName);
     return;
   }
   baseReaderOpts_.setColumnMappingMode(
@@ -205,8 +210,19 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
   // data-column name so we can align to dataColumns() order.
   const auto handleByName =
       buildIcebergHandleByName(columnHandles_.get(), tableHandle_.get());
-  if (handleByName.empty() &&
-      (dataColumnFieldIds == nullptr || dataColumnFieldIds->empty())) {
+
+  // Field-ID column mapping is only meaningful when the table handle carries
+  // explicit Iceberg field IDs, OR when the caller supplied explicit
+  // IcebergColumnHandle assignments with real (positive) field IDs.
+  // Without either, the file was written with positional/name mapping, so
+  // activating kParquetFieldId mode would produce wrong results (e.g. crash
+  // on nested structs with no embedded field IDs).
+  const bool hasExplicitHandleFieldIds =
+      std::any_of(handleByName.begin(), handleByName.end(), [](const auto& kv) {
+        return kv.second->field().fieldId > 0;
+      });
+  if ((dataColumnFieldIds == nullptr || dataColumnFieldIds->empty()) &&
+      !hasExplicitHandleFieldIds) {
     return fieldIds;
   }
 

@@ -338,6 +338,17 @@ struct CompiledModule {
 
   /// Returns resource utilization for 'kernelIdx'th entry point.
   virtual KernelInfo info(int32_t kernelIdx) = 0;
+
+  /// Blocks of 'kernelIdx' that stay resident on one SM at 'numThreads' threads
+  /// and 'dynamicSharedBytes' of dynamic shared memory, as the driver computes
+  /// it. KernelInfo samples the same thing at two fixed points; a caller sizing
+  /// a cooperative launch needs it at the shared memory that launch will
+  /// actually ask for, since the driver refuses a cooperative grid that cannot
+  /// be co-resident.
+  virtual int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) = 0;
 };
 
 using KernelGenFunc = std::function<KernelSpec()>;
@@ -381,6 +392,12 @@ class CompiledKernel {
       void** args) = 0;
 
   virtual KernelInfo info(int32_t kernelIdx) = 0;
+
+  /// See CompiledModule::occupancy.
+  virtual int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) = 0;
 };
 
 KernelInfo getRegisteredKernelInfo(const char* name);

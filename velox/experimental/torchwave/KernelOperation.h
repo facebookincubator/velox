@@ -289,6 +289,16 @@ class KernelOperation {
     return outputDescs_;
   }
 
+  /// Marks every output as reserved by somebody else, so nothing allocates
+  /// over the buffer already in the frame. Used for the ops that fill a wide
+  /// concat's bands: the band is the concat allocation group's, materialized
+  /// before the copy runs.
+  void delegateOutputs() {
+    for (auto& desc : outputDescs_) {
+      desc.delegated = true;
+    }
+  }
+
   /// Returns the set of values backed by memory. Includes all inputs and
   /// outputs whose OutputDesc is not shapeOnly.
   std::unordered_set<ValueCP> memOutputs() const {

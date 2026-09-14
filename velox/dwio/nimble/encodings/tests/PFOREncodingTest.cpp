@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -251,9 +252,28 @@ TEST(PFOREncodingBufferPoolTest, sliceReturnsScratchBufferToPool) {
                     : static_cast<Value>(50 + (i % 64)));
   }
 
-  Vector<Value> values{pool.get()};
-  values.insert(values.end(), input.data(), input.data() + input.size());
-  const auto encoded = Encoder<EncodingType>::encode(encodeBuffer, values);
+  // Force the exception-positions child to Varint so both
+  // findSortedPositionSlots' materialize-and-search branch and
+  // EncodingFactory::slice's sliceByMaterializing branch acquire scratch
+  // ScopedVectors from |bufferPool|. Trivial / FixedBitWidth positions are
+  // sliced through zero-copy header rewrites that never touch the pool.
+  ManualEncodingSelectionPolicyFactory manualFactory;
+  EncodingSelectionPolicyCreator creator = [&manualFactory](DataType dataType) {
+    return manualFactory.createPolicy(dataType);
+  };
+  EncodingLayout varintLayout{
+      nimble::EncodingType::Varint, {}, CompressionType::Uncompressed};
+  EncodingLayout layout{
+      nimble::EncodingType::PFOR,
+      {},
+      CompressionType::Uncompressed,
+      {varintLayout, std::nullopt}};
+  auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<Value>>(
+      std::move(layout), CompressionOptions{}, creator);
+  const auto encoded = EncodingFactory::encode<Value>(
+      std::move(policy),
+      std::span<const Value>{input.data(), input.size()},
+      encodeBuffer);
   const std::string encodedStorage{encoded};
 
   velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
@@ -710,6 +730,246 @@ TEST_F(PFOREncodingFuzzerTest, encodeRejectsEmpty) {
           std::span<const uint32_t>{empty.data(), empty.size()},
           buffer),
       "Pfor encoding cannot be used with 0 rows.");
+}
+
+// --- Slice end-to-end coverage for exception-position edge cases ----------
+
+TYPED_TEST(PFOREncodingTest, sliceWithZeroSourceExceptions) {
+  // A source with numExceptions == 0 has no exception-positions sub-stream at
+  // all. Slicing a non-empty range must still round-trip -- the slice path
+  // needs to skip the positions-stream logic entirely.
+  using T = TypeParam;
+  if constexpr (sizeof(T) < 4) {
+    return;
+  } else {
+    Vector<T> valuesVec{this->pool_.get()};
+    for (uint32_t i = 0; i < 256; ++i) {
+      valuesVec.push_back(T{static_cast<uint32_t>(i)});
+    }
+    Buffer buffer{*this->pool_};
+    const auto encoded = Encoder<PFOREncoding<T>>::encode(
+        buffer,
+        valuesVec,
+        CompressionType::Uncompressed,
+        /*options=*/{},
+        /*realNestedSelection=*/true);
+
+    Buffer sliceBuffer{*this->pool_};
+    const auto sliced = PFOREncoding<T>::slice(
+        encoded, /*offset=*/10, /*length=*/100, sliceBuffer, {});
+    PFOREncoding<T> encoding{*this->pool_, sliced, nullptr, {}};
+    EXPECT_EQ(encoding.rowCount(), 100);
+
+    std::vector<T> output(100);
+    encoding.materialize(100, output.data());
+    for (uint32_t i = 0; i < 100; ++i) {
+      EXPECT_EQ(output[i], valuesVec[10 + i]) << "row " << i;
+    }
+  }
+}
+
+TYPED_TEST(PFOREncodingTest, sliceEmptyExceptionRange) {
+  // A slice that covers no exception rows falls out early: no positions stream
+  // is emitted, and the sliced Pfor decodes to the base residuals only.
+  using T = TypeParam;
+  if constexpr (sizeof(T) < 4) {
+    return;
+  } else {
+    Vector<T> valuesVec{this->pool_.get()};
+    for (uint32_t i = 0; i < 256; ++i) {
+      // Only one exception, at row 0. Slicing rows [1, 1 + 100) skips it.
+      valuesVec.push_back(i == 0 ? T{999'999} : T{static_cast<uint32_t>(i)});
+    }
+    Buffer buffer{*this->pool_};
+    const auto encoded = Encoder<PFOREncoding<T>>::encode(
+        buffer,
+        valuesVec,
+        CompressionType::Uncompressed,
+        /*options=*/{},
+        /*realNestedSelection=*/true);
+
+    Buffer sliceBuffer{*this->pool_};
+    const auto sliced = PFOREncoding<T>::slice(
+        encoded, /*offset=*/1, /*length=*/100, sliceBuffer, {});
+    PFOREncoding<T> encoding{*this->pool_, sliced, nullptr, {}};
+    EXPECT_EQ(encoding.rowCount(), 100);
+
+    std::vector<T> output(100);
+    encoding.materialize(100, output.data());
+    for (uint32_t i = 0; i < 100; ++i) {
+      EXPECT_EQ(output[i], valuesVec[1 + i]) << "row " << i;
+    }
+  }
+}
+
+// Extracts the exception-positions sub-stream bytes from a PFOR<T> encoding.
+// Assumes the standard wire layout (see PFOREncoding class docstring): a
+// standard encoding prefix, sizeof(T) baseline bytes, a 1-byte baseBitWidth,
+// a numExceptions varint, then a varint-length-prefixed positions sub-stream.
+template <typename T>
+static std::string_view pforExceptionPositionsBytes(
+    std::string_view encoded,
+    bool useVarintRowCount) {
+  const auto prefixSize =
+      EncodingPrefix::prefixSize(encoded, useVarintRowCount);
+  const char* pos = encoded.data() + prefixSize;
+  pos += sizeof(T);
+  encoding::readChar(pos);
+  varint::readVarint32(&pos);
+  const auto positionsSize = varint::readVarint32(&pos);
+  return {pos, positionsSize};
+}
+
+// Peels the SliceEncoding wrapper the slice path always emits around the
+// exception-positions sub-stream and returns its inner encoding type plus
+// the on-wire value delta.
+struct PforExceptionPositionsSliceInfo {
+  EncodingType outerType;
+  EncodingType innerType;
+  int64_t valueDelta;
+};
+
+template <typename T>
+static PforExceptionPositionsSliceInfo pforExceptionPositionsSliceInfo(
+    std::string_view encoded,
+    const Encoding::Options& options,
+    velox::memory::MemoryPool& pool) {
+  const auto positionsBytes =
+      pforExceptionPositionsBytes<T>(encoded, options.useVarintRowCount);
+  const auto outerType = EncodingPrefix::encodingType(positionsBytes);
+  if (outerType != EncodingType::Slice) {
+    return {.outerType = outerType, .innerType = outerType, .valueDelta = 0};
+  }
+  SliceEncoding<uint32_t> slice{pool, positionsBytes, nullptr, options};
+  return {
+      .outerType = outerType,
+      .innerType = EncodingPrefix::encodingType(slice.innerEncoding()),
+      .valueDelta = slice.valueDelta(),
+  };
+}
+
+TYPED_TEST(PFOREncodingTest, sliceWithTrivialExceptionPositionsFallback) {
+  // Default nested selection makes the exception-positions child Trivial.
+  // The slice path re-emits the retained range through the source's captured
+  // layout, which produces another Trivial<uint32>, and lets SliceEncoding's
+  // Trivial push-down fold the -offset shift into the byte copy -- delta on
+  // the wire is zero.
+  using T = TypeParam;
+  if constexpr (sizeof(T) < 4) {
+    return;
+  } else {
+    Vector<T> valuesVec{this->pool_.get()};
+    for (uint32_t i = 0; i < 300; ++i) {
+      valuesVec.push_back(
+          i % 10 == 7 ? T{100'000 + i}
+                      : T{static_cast<uint32_t>(50 + (i % 64))});
+    }
+    Buffer buffer{*this->pool_};
+    const auto encoded = Encoder<PFOREncoding<T>>::encode(
+        buffer,
+        valuesVec,
+        CompressionType::Uncompressed,
+        /*options=*/{},
+        /*realNestedSelection=*/false);
+
+    // Confirm the source really has a Trivial exception-positions child so
+    // the Trivial fallback branch is exercised.
+    const auto sourcePositionsBytes =
+        pforExceptionPositionsBytes<T>(encoded, /*useVarintRowCount=*/false);
+    ASSERT_EQ(
+        EncodingPrefix::encodingType(sourcePositionsBytes),
+        EncodingType::Trivial);
+
+    Buffer sliceBuffer{*this->pool_};
+    const auto sliced = PFOREncoding<T>::slice(
+        encoded, /*offset=*/50, /*length=*/128, sliceBuffer, {});
+    const auto info = pforExceptionPositionsSliceInfo<T>(
+        sliced, /*options=*/{}, *this->pool_);
+    EXPECT_EQ(info.outerType, EncodingType::Slice);
+    EXPECT_EQ(info.innerType, EncodingType::Trivial);
+    EXPECT_EQ(info.valueDelta, 0);
+
+    PFOREncoding<T> encoding{*this->pool_, sliced, nullptr, {}};
+    ASSERT_EQ(encoding.rowCount(), 128);
+    std::vector<T> output(128);
+    encoding.materialize(128, output.data());
+    for (uint32_t i = 0; i < 128; ++i) {
+      EXPECT_EQ(output[i], valuesVec[50 + i]) << "row " << i;
+    }
+  }
+}
+
+TYPED_TEST(PFOREncodingTest, sliceWithVarintExceptionPositionsFallback) {
+  // Force the exception-positions child to Varint, which has no
+  // SliceEncoding push-down folder. The slice path re-emits the retained
+  // range through the source's captured layout -- another Varint<uint32> --
+  // and hands it to SliceEncoding::wrap. Wrap cannot fold the shift into a
+  // Varint inner, so the -offset delta rides on the wire and the read-time
+  // shift loop applies it.
+  using T = TypeParam;
+  if constexpr (sizeof(T) < 4) {
+    return;
+  } else {
+    Vector<T> valuesVec{this->pool_.get()};
+    for (uint32_t i = 0; i < 300; ++i) {
+      valuesVec.push_back(
+          i % 10 == 7 ? T{100'000 + i}
+                      : T{static_cast<uint32_t>(50 + (i % 64))});
+    }
+
+    // Replay a PFOR layout whose exception-positions child is Varint. The
+    // ReplayedEncodingSelectionPolicy routes the nested encoding through the
+    // child's layout instead of the default read-factor selector.
+    EncodingLayout varintLayout{
+        EncodingType::Varint, {}, CompressionType::Uncompressed};
+    EncodingLayout layout{
+        EncodingType::PFOR,
+        {},
+        CompressionType::Uncompressed,
+        {varintLayout, std::nullopt}};
+    ManualEncodingSelectionPolicyFactory manualFactory;
+    EncodingSelectionPolicyCreator creator =
+        [&manualFactory](DataType dataType) {
+          return manualFactory.createPolicy(dataType);
+        };
+    auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+        std::move(layout), CompressionOptions{}, creator);
+
+    Buffer buffer{*this->pool_};
+    const auto encoded = EncodingFactory::encode<T>(
+        std::move(policy),
+        std::span<const T>{valuesVec.data(), valuesVec.size()},
+        buffer);
+
+    // Confirm the source really has a Varint exception-positions child so
+    // the Varint fallback branch is exercised.
+    const auto sourcePositionsBytes =
+        pforExceptionPositionsBytes<T>(encoded, /*useVarintRowCount=*/false);
+    ASSERT_EQ(
+        EncodingPrefix::encodingType(sourcePositionsBytes),
+        EncodingType::Varint);
+
+    constexpr uint32_t kOffset = 50;
+    constexpr uint32_t kLength = 128;
+    Buffer sliceBuffer{*this->pool_};
+    const auto sliced =
+        PFOREncoding<T>::slice(encoded, kOffset, kLength, sliceBuffer, {});
+    const auto info = pforExceptionPositionsSliceInfo<T>(
+        sliced, /*options=*/{}, *this->pool_);
+    EXPECT_EQ(info.outerType, EncodingType::Slice);
+    // Captured layout preserves the source's Varint shape.
+    EXPECT_EQ(info.innerType, EncodingType::Varint);
+    // Varint has no push-down folder, so the -offset shift lands on the wire.
+    EXPECT_EQ(info.valueDelta, -static_cast<int64_t>(kOffset));
+
+    PFOREncoding<T> encoding{*this->pool_, sliced, nullptr, {}};
+    ASSERT_EQ(encoding.rowCount(), kLength);
+    std::vector<T> output(kLength);
+    encoding.materialize(kLength, output.data());
+    for (uint32_t i = 0; i < kLength; ++i) {
+      EXPECT_EQ(output[i], valuesVec[kOffset + i]) << "row " << i;
+    }
+  }
 }
 
 } // namespace facebook::nimble::test

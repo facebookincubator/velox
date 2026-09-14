@@ -3690,6 +3690,110 @@ TEST_F(TestReader, extractionTransformMapKeys) {
   ASSERT_EQ(resultArray->sizeAt(1), 2);
 }
 
+TEST_F(TestReader, extractionTransformAfterScanSpecReorder) {
+  constexpr vector_size_t kNumRows = 12;
+  auto maps = makeMapVector<int64_t, int64_t>(
+      kNumRows,
+      [](auto row) { return row % 3; },
+      [](auto index) { return index; },
+      [](auto index) { return index * 10; },
+      [](auto row) { return row % 5 == 0; });
+  auto data = makeRowVector(
+      {"constant", "maps", "plain", "id"},
+      {makeFlatVector<int64_t>(kNumRows, folly::identity),
+       maps,
+       makeFlatVector<int64_t>(kNumRows, [](auto row) { return 100 + row; }),
+       makeFlatVector<int64_t>(kNumRows, folly::identity)});
+  auto [writer, reader] =
+      createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
+
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*data->type());
+  spec->childByName("constant")
+      ->setConstantValue(BaseVector::createNullConstant(BIGINT(), 1, pool()));
+  spec->childByName("id")->setFilter(
+      std::make_unique<common::BigintRange>(1, 10, false));
+
+  using connector::hive::applyExtractionChain;
+  using connector::hive::ExtractionPathElement;
+  using connector::hive::ExtractionPathElementPtr;
+  using connector::hive::ExtractionStep;
+  const std::vector<ExtractionPathElementPtr> keysChain = {
+      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+  const std::vector<ExtractionPathElementPtr> sizeChain = {
+      ExtractionPathElement::simple(ExtractionStep::kSize)};
+  const auto outputType = ROW({"keys", "size"}, {ARRAY(BIGINT()), BIGINT()});
+  auto* mapsSpec = spec->childByName("maps");
+  int transformCalls = 0;
+  mapsSpec->setTransform(
+      [&](const VectorPtr& input, memory::MemoryPool* memoryPool) -> VectorPtr {
+        ++transformCalls;
+        return std::make_shared<RowVector>(
+            memoryPool,
+            outputType,
+            nullptr,
+            input->size(),
+            std::vector<VectorPtr>{
+                applyExtractionChain(input, keysChain, memoryPool),
+                applyExtractionChain(input, sizeChain, memoryPool)});
+      },
+      outputType);
+
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(options);
+  auto result = BaseVector::create(data->type(), 0, pool());
+  DecodedVector expectedKeys(*maps->mapKeys());
+  int batches = 0;
+  int totalRows = 0;
+  while (rowReader->next(3, result)) {
+    auto* row = result->as<RowVector>();
+    // Constants have no reader, and filtering reorders the ScanSpecs. Neither
+    // output channels nor ScanSpec positions are reader indices.
+    ASSERT_NE(mapsSpec->subscript(), mapsSpec->channel());
+    ASSERT_NE(spec->children().at(mapsSpec->subscript()).get(), mapsSpec);
+    auto& mapResult = row->childAt(1);
+    ASSERT_TRUE(mapResult->isLazy());
+    ASSERT_TRUE(mapResult->type()->equivalent(*outputType));
+    ASSERT_FALSE(mapResult->as<LazyVector>()->supportsHook());
+    ASSERT_EQ(transformCalls, batches);
+    auto* extracted = mapResult->loadedVector()->as<RowVector>();
+    ASSERT_NE(extracted, nullptr);
+    auto* keys = extracted->childAt(0)->as<ArrayVector>();
+    ASSERT_NE(keys, nullptr);
+    DecodedVector sizes(*extracted->childAt(1));
+    DecodedVector actualKeys(*keys->elements());
+    DecodedVector ids(*row->childAt(3));
+    ASSERT_TRUE(row->childAt(2)->isLazy());
+    ASSERT_TRUE(row->childAt(2)->as<LazyVector>()->supportsHook());
+    DecodedVector plain(*row->childAt(2));
+    for (vector_size_t i = 0; i < row->size(); ++i) {
+      const auto sourceRow = ids.valueAt<int64_t>(i);
+      EXPECT_TRUE(row->childAt(0)->isNullAt(i));
+      EXPECT_EQ(plain.valueAt<int64_t>(i), 100 + sourceRow);
+      EXPECT_EQ(keys->isNullAt(i), maps->isNullAt(sourceRow));
+      EXPECT_EQ(sizes.isNullAt(i), maps->isNullAt(sourceRow));
+      if (maps->isNullAt(sourceRow)) {
+        continue;
+      }
+      EXPECT_EQ(sizes.valueAt<int64_t>(i), maps->sizeAt(sourceRow));
+      ASSERT_EQ(keys->sizeAt(i), maps->sizeAt(sourceRow));
+      for (vector_size_t j = 0; j < keys->sizeAt(i); ++j) {
+        EXPECT_EQ(
+            actualKeys.valueAt<int64_t>(keys->offsetAt(i) + j),
+            expectedKeys.valueAt<int64_t>(maps->offsetAt(sourceRow) + j));
+      }
+    }
+    totalRows += row->size();
+    ++batches;
+    EXPECT_EQ(transformCalls, batches);
+    mapResult->loadedVector();
+    EXPECT_EQ(transformCalls, batches);
+  }
+  EXPECT_EQ(totalRows, 10);
+  EXPECT_EQ(batches, 4);
+}
+
 TEST_F(TestReader, extractionTransformSize) {
   // Write a MAP(VARCHAR, BIGINT) column, read with a Size extraction.
   auto keys = makeFlatVector<StringView>({"a", "b", "c"});

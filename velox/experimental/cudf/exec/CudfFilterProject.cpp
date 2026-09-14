@@ -258,7 +258,7 @@ RowVectorPtr CudfFilterProject::doGetOutput() {
 
 void CudfFilterProject::filter(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Evaluate the Filter
   std::vector<cudf::column_view> inputViews;
   inputViews.reserve(inputTableColumns.size());
@@ -287,7 +287,7 @@ void CudfFilterProject::filter(
   if (shouldApplyFilter) {
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
-    auto filteredTable = cudf::apply_boolean_mask(
+    auto filteredTable = cudf::apply_retention_mask(
         *filterTable, filterColumnView, stream, get_output_mr());
     inputTableColumns = filteredTable->release();
   }
@@ -295,7 +295,7 @@ void CudfFilterProject::filter(
 
 std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   std::vector<cudf::column_view> inputViews;
   inputViews.reserve(inputTableColumns.size());
   for (auto& col : inputTableColumns) {
