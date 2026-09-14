@@ -243,9 +243,7 @@ class ALPEncoding final
       const vector_size_t* scatterRows) {
     static_assert(Visitor::dense);
     static_assert(std::is_same_v<typename Visitor::DataType, cppDataType>);
-    if (numSelected == 0) {
-      return;
-    }
+    NIMBLE_CHECK_GT(numSelected, 0);
     const auto numRows = visitor.numRows() - visitor.rowIndex();
     auto* values = detail::mutableValues<cppDataType>(visitor, numRows);
     auto* physicalValues = reinterpret_cast<physicalType*>(values);
@@ -260,6 +258,11 @@ class ALPEncoding final
     }
     patchExceptions(sourceStart, numSelected, physicalValues);
 
+    // For non-hook visitors, mutableValues() returns rawValues() + numValues.
+    // processFixedWidthRun() applies numValues as its offset, so rebase to the
+    // beginning of the output buffer to avoid applying the offset twice. Hook
+    // visitors must retain the scratch-buffer pointer returned by
+    // mutableValues().
     if constexpr (!Visitor::kHasHook) {
       values = reinterpret_cast<cppDataType*>(visitor.reader().rawValues());
     }
@@ -284,6 +287,9 @@ class ALPEncoding final
         visitor.hook());
     pos_ += selectedRows[numSelected - 1] - currentRow + 1;
     if constexpr (!Visitor::kHasHook) {
+      // processFixedWidthRun updates the local output count. Commit only rows
+      // that passed the filter; without a filter, all requested rows contribute
+      // output.
       visitor.addNumValues(
           Visitor::kHasFilter ? numValues - visitor.reader().numValues()
                               : numRows);
