@@ -422,6 +422,8 @@ class HashProbe : public Operator {
 
   const RowTypePtr probeType_;
 
+  const bool mixedGroupedModeHashJoinSpillEnabled_;
+
   // Flag to indicate whether this hash probe operator can output build-side
   // rows in parallel with the peer operators for the current hash table.
   // Outputting build-side rows in parallel is currently not allowed in either

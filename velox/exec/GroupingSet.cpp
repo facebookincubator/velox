@@ -70,7 +70,6 @@ GroupingSet::GroupingSet(
       globalGroupingSets_(globalGroupingSets),
       nonReclaimableSection_(nonReclaimableSection),
       spillConfig_(spillConfig),
-      queryConfig_(queryConfig),
       pool_(pool),
       spillStats_(spillStats),
       groupingKeyOutputProjections_(std::move(groupingKeyOutputProjections)),
@@ -225,7 +224,7 @@ void GroupingSet::addInput(const RowVectorPtr& input, bool mayPushdown) {
   addInputForActiveRows(input, mayPushdown);
 }
 
-void GroupingSet::noMoreInput() {
+void GroupingSet::noMoreInput(uint64_t preferredOutputBatchBytes) {
   drainedNewGroups_ = {};
   noMoreInput_ = true;
 
@@ -241,7 +240,7 @@ void GroupingSet::noMoreInput() {
     spill();
   }
 
-  ensureOutputFits();
+  ensureOutputFits(preferredOutputBatchBytes);
 }
 
 bool GroupingSet::hasSpilled() const {
@@ -1082,7 +1081,7 @@ void GroupingSet::ensureInputFits(const RowVectorPtr& input) {
                << succinctBytes(pool_->root()->reservedBytes());
 }
 
-void GroupingSet::ensureOutputFits() {
+void GroupingSet::ensureOutputFits(uint64_t preferredOutputBatchBytes) {
   // If spilling has already been triggered on this operator, then we don't need
   // to reserve memory for the output as we can't reclaim much memory from this
   // operator itself. The output processing can reclaim memory from the other
@@ -1099,8 +1098,7 @@ void GroupingSet::ensureOutputFits() {
     return;
   }
 
-  const uint64_t outputBufferSizeToReserve =
-      queryConfig_->preferredOutputBatchBytes() * 1.2;
+  const uint64_t outputBufferSizeToReserve = preferredOutputBatchBytes * 1.2;
   {
     memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_->maybeReserve(outputBufferSizeToReserve)) {

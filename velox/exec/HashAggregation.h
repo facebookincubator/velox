@@ -118,6 +118,8 @@ class HashAggregation : public Operator {
 
   void updateEstimatedOutputRowSize();
 
+  vector_size_t outputBatchRowsForEstimate() const;
+
   // Returns whether this driver should emit the default global grouping set
   // rows.
   bool shouldEmitDefaultGlobalGroupingSetRows();
@@ -144,6 +146,9 @@ class HashAggregation : public Operator {
   // yields one grand-total row over all input.
   const bool hasGlobalGroupingSets_;
   const bool memoryCompactionEnabled_;
+  const uint64_t preferredOutputBatchBytes_;
+  const vector_size_t preferredOutputBatchRows_;
+  const vector_size_t maxOutputBatchRows_;
   const int64_t maxExtendedPartialAggregationMemoryUsage_;
   // Minimum number of rows to see before deciding to give up on partial
   // aggregation.

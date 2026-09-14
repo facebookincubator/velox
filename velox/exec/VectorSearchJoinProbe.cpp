@@ -37,6 +37,9 @@ VectorSearchJoinProbe::VectorSearchJoinProbe(
       isLeftJoin_{joinNode->joinType() == core::JoinType::kLeft},
       metric_{joinNode->metric()},
       k_{joinNode->k()},
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
+      maxOutputBatchRows_{driverCtx->queryConfig().maxOutputBatchRows()},
       results_{memory::StlAllocator<Result>(*pool())} {
   const auto& probeType = joinNode->sources()[0]->outputType();
   const auto& buildType = joinNode->sources()[1]->outputType();
@@ -100,7 +103,8 @@ void VectorSearchJoinProbe::addInput(RowVectorPtr input) {
     bits::fillBits(rawHasResults, 0, numRows, false);
   }
   nextLeftJoinRow_ = 0;
-  maxOutputRows_ = outputBatchRows(estimateOutputRowSize());
+  maxOutputRows_ = outputBatchRows(
+      estimateOutputRowSize(), preferredOutputBatchBytes_, maxOutputBatchRows_);
 
   prepareSearches();
 

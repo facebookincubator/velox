@@ -69,7 +69,8 @@ class GroupingSet {
 
   void addInput(const RowVectorPtr& input, bool mayPushdown);
 
-  void noMoreInput();
+  /// The preferred output batch size is used for spillable output reservation.
+  void noMoreInput(uint64_t preferredOutputBatchBytes);
 
   /// Typically, the output is not available until all input has been added.
   /// However, in case when input is clustered on some of the grouping keys, the
@@ -261,7 +262,7 @@ class GroupingSet {
 
   // Reserves memory for output processing. If reservation cannot be increased,
   // spills enough to make output fit.
-  void ensureOutputFits();
+  void ensureOutputFits(uint64_t preferredOutputBatchBytes);
 
   // Copies the grouping keys and aggregates for 'groups' into 'result' If
   // partial output, extracts the intermediate type for aggregates, final result
@@ -363,7 +364,6 @@ class GroupingSet {
   tsan_atomic<bool>* const nonReclaimableSection_;
 
   const common::SpillConfig* const spillConfig_;
-  const core::QueryConfig* const queryConfig_;
   memory::MemoryPool* const pool_;
   exec::SpillStats* const spillStats_;
 

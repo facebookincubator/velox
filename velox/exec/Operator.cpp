@@ -375,10 +375,21 @@ vector_size_t Operator::outputBatchRows(
     return queryConfig.maxOutputBatchRows();
   }
 
-  const uint64_t batchSize =
-      queryConfig.preferredOutputBatchBytes() / averageRowSize.value();
-  if (batchSize > queryConfig.maxOutputBatchRows()) {
-    return queryConfig.maxOutputBatchRows();
+  const auto batchBytes = queryConfig.preferredOutputBatchBytes();
+  return outputBatchRows(
+      *averageRowSize, batchBytes, queryConfig.maxOutputBatchRows());
+}
+
+vector_size_t Operator::outputBatchRows(
+    uint64_t averageRowSize,
+    uint64_t preferredOutputBatchBytes,
+    vector_size_t maxOutputBatchRows) {
+  if (averageRowSize == 0) {
+    return maxOutputBatchRows;
+  }
+  const uint64_t batchSize = preferredOutputBatchBytes / averageRowSize;
+  if (batchSize > maxOutputBatchRows) {
+    return maxOutputBatchRows;
   }
   return std::max<vector_size_t>(batchSize, 1);
 }

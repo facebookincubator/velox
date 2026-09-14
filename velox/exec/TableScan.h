@@ -145,6 +145,7 @@ class TableScan : public SourceOperator {
   DriverCtx* const driverCtx_;
   const int32_t maxSplitPreloadPerDriver_{0};
   const vector_size_t maxReadBatchSize_;
+  const uint64_t preferredOutputBatchBytes_;
   memory::MemoryPool* const connectorPool_;
   const std::shared_ptr<connector::Connector> connector_;
   // Exits getOutput() method after this many milliseconds. Zero means 'no

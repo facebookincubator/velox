@@ -55,6 +55,12 @@ HashAggregation::HashAggregation(
       hasGlobalGroupingSets_(!aggregationNode->globalGroupingSets().empty()),
       memoryCompactionEnabled_(
           driverCtx->queryConfig().aggregationMemoryCompactionReclaimEnabled()),
+      preferredOutputBatchBytes_(
+          driverCtx->queryConfig().preferredOutputBatchBytes()),
+      preferredOutputBatchRows_(
+          isGlobal_ ? 0 : driverCtx->queryConfig().preferredOutputBatchRows()),
+      maxOutputBatchRows_(
+          isGlobal_ ? 0 : driverCtx->queryConfig().maxOutputBatchRows()),
       maxExtendedPartialAggregationMemoryUsage_(
           driverCtx->queryConfig().maxExtendedPartialAggregationMemoryUsage()),
       abandonPartialAggregationMinRows_(
@@ -404,17 +410,12 @@ RowVectorPtr HashAggregation::getOutput() {
     return distinctOutput;
   }
 
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
-  const auto maxOutputRows =
-      isGlobal_ ? 1 : outputBatchRows(estimatedOutputRowSize_);
+  const auto maxOutputRows = isGlobal_ ? 1 : outputBatchRowsForEstimate();
   // Reuse output vectors if possible.
   prepareOutput(maxOutputRows);
 
   const bool hasData = groupingSet_->getOutput(
-      maxOutputRows,
-      queryConfig.preferredOutputBatchBytes(),
-      resultIterator_,
-      output_);
+      maxOutputRows, preferredOutputBatchBytes_, resultIterator_, output_);
   if (!hasData) {
     resultIterator_.reset();
     resetPartialOutputIfNeed();
@@ -480,12 +481,11 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
     return nullptr;
   }
 
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
-  const auto maxOutputRows = outputBatchRows(estimatedOutputRowSize_);
+  const auto maxOutputRows = outputBatchRowsForEstimate();
   prepareOutput(maxOutputRows);
   if (!groupingSet_->getOutput(
           maxOutputRows,
-          queryConfig.preferredOutputBatchBytes(),
+          preferredOutputBatchBytes_,
           resultIterator_,
           output_)) {
     finished_ = true;
@@ -592,7 +592,7 @@ void HashAggregation::combineGlobalPartialAggregation() {
 
 void HashAggregation::noMoreInput() {
   updateEstimatedOutputRowSize();
-  groupingSet_->noMoreInput();
+  groupingSet_->noMoreInput(preferredOutputBatchBytes_);
   Operator::noMoreInput();
 
   if (hasGlobalGroupingSets_) {
@@ -703,6 +703,16 @@ void HashAggregation::close() {
   Operator::close();
 
   output_ = nullptr;
+}
+
+vector_size_t HashAggregation::outputBatchRowsForEstimate() const {
+  if (!estimatedOutputRowSize_.has_value()) {
+    return preferredOutputBatchRows_;
+  }
+  return outputBatchRows(
+      *estimatedOutputRowSize_,
+      preferredOutputBatchBytes_,
+      maxOutputBatchRows_);
 }
 
 void HashAggregation::updateEstimatedOutputRowSize() {

@@ -667,12 +667,18 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Returns the number of rows for the output batch. This uses averageRowSize
   /// to calculate how many rows fit in preferredOutputBatchBytes. It caps the
-  /// number of rows at 10K and returns at least one row. The averageRowSize
+  /// number of rows at maxOutputBatchRows. The averageRowSize
   /// must not be negative. If the averageRowSize is 0 which is not advised,
   /// returns maxOutputBatchRows. If the averageRowSize is not given, returns
   /// preferredOutputBatchRows.
   vector_size_t outputBatchRows(
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
+
+  /// Computes the batch size for a known row size using stored limits.
+  static vector_size_t outputBatchRows(
+      uint64_t averageRowSize,
+      uint64_t preferredOutputBatchBytes,
+      vector_size_t maxOutputBatchRows);
 
   /// Load 'vector' if lazy. Potential large memory usage site that might
   /// trigger arbitration. Hence this call is made reclaimable. This is often
