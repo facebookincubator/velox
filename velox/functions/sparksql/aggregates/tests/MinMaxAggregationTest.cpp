@@ -45,37 +45,6 @@ class MinMaxAggregationTest
     registerAggregateFunctions("spark_");
   }
 
-  // Check logical types and values across aggregation stages and time zones.
-  void testTimestampUtcAggregations(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const RowVectorPtr& expected) {
-    for (const auto* timeZone :
-         {"UTC", "America/Los_Angeles", "Asia/Kolkata"}) {
-      SCOPED_TRACE(timeZone);
-      testAggregations(
-          [&](auto& builder) { builder.values(data); },
-          groupingKeys,
-          aggregates,
-          {},
-          [&](auto& builder) {
-            std::shared_ptr<exec::Task> task;
-            auto actual = builder.copyResults(pool(), task);
-            // Compare logical types explicitly, since TIMESTAMP_UTC and
-            // TIMESTAMP both use TypeKind::TIMESTAMP.
-            EXPECT_TRUE(expected->type()->equivalent(*actual->type()))
-                << actual->type()->toString();
-            assertEqualResults({expected}, {actual});
-            return task;
-          },
-          {
-              {core::QueryConfig::kSessionTimezone, timeZone},
-              {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
-          });
-    }
-  }
-
   std::vector<RowVectorPtr> fuzzData(const RowTypePtr& rowType) {
     VectorFuzzer::Options options;
     options.vectorSize = 1'000;
@@ -231,157 +200,175 @@ TEST_F(MinMaxAggregationTest, timestampUtc) {
   const auto afterEpoch = Timestamp::fromMicros(1);
   const Timestamp earlier{1'704'067'200, 123'456'000};
   const Timestamp later{1'704'067'200, 123'457'000};
+  const auto earliest =
+      Timestamp::fromMicros(std::numeric_limits<int64_t>::min());
+  const auto latest =
+      Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
   const std::vector<std::string> aggregates{min("c1"), max("c1")};
 
-  {
-    SCOPED_TRACE("Mixed values and all-null groups");
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2}),
-        makeNullableFlatVector<Timestamp>(
-            {
-                later,
-                earlier,
-                std::nullopt,
-                beforeEpoch,
-                afterEpoch,
-                std::nullopt,
-                std::nullopt,
-            },
-            TIMESTAMP_UTC()),
-        makeFlatVector<bool>({false, true, true, false, true, true, false}),
-    });
-    auto expected = makeRowVector({
-        makeFlatVector<Timestamp>({beforeEpoch}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({later}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data, data}, {}, aggregates, expected);
+  std::vector<RowVectorPtr> inputs;
+  RowVectorPtr expected;
+  const auto makeSource = [&](auto& builder) { builder.values(inputs); };
+  const auto assertResults = [&](auto& builder) {
+    std::shared_ptr<exec::Task> task;
+    auto actual = builder.copyResults(pool(), task);
+    // Compare logical types explicitly, since value comparisons only
+    // check the shared TypeKind::TIMESTAMP.
+    EXPECT_TRUE(expected->type()->equivalent(*actual->type()))
+        << actual->type()->toString();
+    assertEqualResults({expected}, {actual});
+    return task;
+  };
 
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1, 2}),
-        makeNullableFlatVector<Timestamp>(
-            {earlier, beforeEpoch, std::nullopt}, TIMESTAMP_UTC()),
-        makeNullableFlatVector<Timestamp>(
-            {later, afterEpoch, std::nullopt}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data, data}, {"c0"}, aggregates, expected);
-
-    const std::vector<std::string> maskedAggregates{
-        min("c1") + " FILTER (WHERE c2)",
-        max("c1") + " FILTER (WHERE c2)",
+  for (const auto* timeZone : {"UTC", "America/Los_Angeles", "Asia/Kolkata"}) {
+    SCOPED_TRACE(timeZone);
+    const std::unordered_map<std::string, std::string> config{
+        {core::QueryConfig::kSessionTimezone, timeZone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     };
-    expected = makeRowVector({
-        makeFlatVector<Timestamp>({afterEpoch}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data, data}, {}, maskedAggregates, expected);
 
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1, 2}),
-        makeNullableFlatVector<Timestamp>(
-            {earlier, afterEpoch, std::nullopt}, TIMESTAMP_UTC()),
-        makeNullableFlatVector<Timestamp>(
-            {earlier, afterEpoch, std::nullopt}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations(
-        {data, data}, {"c0"}, maskedAggregates, expected);
-  }
+    {
+      SCOPED_TRACE("Microseconds, range boundaries, and all-null groups");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 3, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {
+                  later,
+                  earlier,
+                  std::nullopt,
+                  beforeEpoch,
+                  afterEpoch,
+                  std::nullopt,
+                  std::nullopt,
+                  earliest,
+                  latest,
+              },
+              TIMESTAMP_UTC()),
+          makeFlatVector<bool>(
+              {false, true, true, false, true, true, false, false, false}),
+      });
+      inputs = {data, data};
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({earliest}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({latest}, TIMESTAMP_UTC()),
+      });
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
 
-  {
-    SCOPED_TRACE("All-null and empty input");
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>({0, 0, 1}),
-        makeNullableFlatVector<Timestamp>(
-            {std::nullopt, std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
-    });
-    auto expected = makeRowVector({
-        makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
-        makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {}, aggregates, expected);
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, beforeEpoch, std::nullopt, earliest}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {later, afterEpoch, std::nullopt, latest}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
 
-    auto emptyInput = makeRowVector(asRowType(data->type()), 0);
-    testTimestampUtcAggregations({emptyInput}, {}, aggregates, expected);
+      const std::vector<std::string> maskedAggregates{
+          min("c1") + " FILTER (WHERE c2)",
+          max("c1") + " FILTER (WHERE c2)",
+      };
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({afterEpoch}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {}, maskedAggregates, {}, assertResults, config);
 
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1}),
-        makeNullableFlatVector<Timestamp>(
-            {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
-        makeNullableFlatVector<Timestamp>(
-            {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {"c0"}, aggregates, expected);
-    testTimestampUtcAggregations(
-        {emptyInput},
-        {"c0"},
-        aggregates,
-        makeRowVector(asRowType(expected->type()), 0));
-  }
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, afterEpoch, std::nullopt, std::nullopt},
+              TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, afterEpoch, std::nullopt, std::nullopt},
+              TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, maskedAggregates, {}, assertResults, config);
+    }
 
-  {
-    SCOPED_TRACE("Constant encoding");
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>({0, 0, 1, 1}),
-        makeConstant<Timestamp>(earlier, 4, TIMESTAMP_UTC()),
-    });
-    auto expected = makeRowVector({
-        makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {}, aggregates, expected);
+    {
+      SCOPED_TRACE("All-null and empty input");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 1}),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+      });
+      inputs = {data};
+      expected = makeRowVector({
+          makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+      });
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
 
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1}),
-        makeFlatVector<Timestamp>({earlier, earlier}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({earlier, earlier}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {"c0"}, aggregates, expected);
-  }
+      auto emptyInput = makeRowVector(asRowType(data->type()), 0);
+      inputs = {emptyInput};
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
 
-  {
-    SCOPED_TRACE("Dictionary encoding");
-    auto timestamps = makeNullableFlatVector<Timestamp>(
-        {beforeEpoch, earlier, later, std::nullopt}, TIMESTAMP_UTC());
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>({0, 0, 0, 0, 1, 1, 1, 1}),
-        wrapInDictionary(makeIndices({3, 0, 2, 1, 2, 3, 1, 1}), 8, timestamps),
-    });
-    auto expected = makeRowVector({
-        makeFlatVector<Timestamp>({beforeEpoch}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({later}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {}, aggregates, expected);
+      inputs = {data};
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1}),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
 
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1}),
-        makeFlatVector<Timestamp>({beforeEpoch, earlier}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({later, later}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {"c0"}, aggregates, expected);
-  }
+      inputs = {emptyInput};
+      expected = makeRowVector(asRowType(expected->type()), 0);
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
+    }
 
-  {
-    SCOPED_TRACE("Microsecond range boundaries");
-    const auto earliest =
-        Timestamp::fromMicros(std::numeric_limits<int64_t>::min());
-    const auto latest =
-        Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>({0, 0, 1, 1}),
-        makeFlatVector<Timestamp>(
-            {earliest, beforeEpoch, earlier, latest}, TIMESTAMP_UTC()),
-    });
-    auto expected = makeRowVector({
-        makeFlatVector<Timestamp>({earliest}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({latest}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {}, aggregates, expected);
+    {
+      SCOPED_TRACE("Constant encoding");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 1, 1}),
+          makeConstant<Timestamp>(earlier, 4, TIMESTAMP_UTC()),
+      });
+      inputs = {data};
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
+      });
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
 
-    expected = makeRowVector({
-        makeFlatVector<int64_t>({0, 1}),
-        makeFlatVector<Timestamp>({earliest, earlier}, TIMESTAMP_UTC()),
-        makeFlatVector<Timestamp>({beforeEpoch, latest}, TIMESTAMP_UTC()),
-    });
-    testTimestampUtcAggregations({data}, {"c0"}, aggregates, expected);
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1}),
+          makeFlatVector<Timestamp>({earlier, earlier}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({earlier, earlier}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
+    }
+
+    {
+      SCOPED_TRACE("Dictionary encoding");
+      auto timestamps = makeNullableFlatVector<Timestamp>(
+          {beforeEpoch, earlier, later, std::nullopt}, TIMESTAMP_UTC());
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 0, 0, 1, 1, 1, 1}),
+          wrapInDictionary(
+              makeIndices({3, 0, 2, 1, 2, 3, 1, 1}), 8, timestamps),
+      });
+      inputs = {data};
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({beforeEpoch}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({later}, TIMESTAMP_UTC()),
+      });
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
+
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1}),
+          makeFlatVector<Timestamp>({beforeEpoch, earlier}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({later, later}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
+    }
   }
 }
 
