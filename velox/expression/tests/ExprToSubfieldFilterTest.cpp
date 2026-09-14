@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -317,6 +319,27 @@ TEST_F(ExprToSubfieldFilterTest, isNull) {
   validateSubfield(subfield, {"a"});
 
   VELOX_ASSERT_FILTER(isNull(), filter);
+}
+
+// A filter on a TIMESTAMP WITH TIME ZONE column has bounds in the packed
+// millis-plus-zone-key domain, which is neither order- nor equality-isomorphic
+// to the instant domain. Pushing that filter to the reader would silently drop
+// rows, so the leaf-call parser must leave it on the FilterNode.
+TEST_F(ExprToSubfieldFilterTest, timestampWithTimeZoneIsNotPushedDown) {
+  registerTimestampWithTimeZoneType();
+
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(
+      TIMESTAMP_WITH_TIME_ZONE(), "a");
+  auto constant = std::make_shared<core::ConstantTypedExpr>(
+      TIMESTAMP_WITH_TIME_ZONE(), Variant(int64_t{0}));
+
+  for (const char* op : {"eq", "neq", "lt", "lte", "gt", "gte"}) {
+    SCOPED_TRACE(op);
+    auto call = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(), op, field, constant);
+    auto [subfield, filter] = leafCallToSubfieldFilter(call);
+    ASSERT_FALSE(filter);
+  }
 }
 
 TEST_F(ExprToSubfieldFilterTest, like) {
