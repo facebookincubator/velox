@@ -30,6 +30,8 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -2408,6 +2410,104 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
       .config(core::QueryConfig::kMaxOutputBatchRows, "64")
       .splits(splits)
       .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
+}
+
+// End-to-end evidence that pushing a value filter onto a TIMESTAMP WITH TIME
+// ZONE scan column is unsound. The filter is built from the type's BIGINT kind
+// but the file column reports a TIMESTAMP file type, so FileSplitReader's
+// stats-based pruning routes to testTimestampFilter, which calls
+// BigintRange::testTimestampRange -- unimplemented. This test bypasses the
+// PrestoExprToSubfieldFilterParser block by wiring the SubfieldFilters map by
+// hand, so it always exercises the reader's rejection regardless of how the
+// filter arrives at the ScanSpec.
+TEST_F(ParquetTableScanTest, timestampWithTimeZonePushedFilterHitsStatsError) {
+  registerTimestampWithTimeZoneType();
+
+  auto data = makeRowVector(
+      {"ts_tz"},
+      {makeFlatVector<Timestamp>(
+          {Timestamp(1'000'000, 0), Timestamp(2'000'000, 0)})});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  // The writer derives TIMESTAMP's isAdjustedToUTC flag from whether a zone is
+  // set here. A UTC-normalized column is what the reader requires when
+  // projecting as TIMESTAMP WITH TIME ZONE.
+  writerOptions.parquetWriteTimestampTimeZone = "UTC";
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {data}, writerOptions);
+
+  const auto rowType = ROW({"ts_tz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  auto filters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "ts_tz",
+              std::make_unique<common::BigintRange>(0, 100, /*nullAllowed=*/false))
+          .build();
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType)
+                  .subfieldFiltersMap(filters)
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .split(makeSplit(file->getPath()))
+          .copyResults(pool_.get()),
+      "testTimestampRange() is not supported");
+}
+
+// End-to-end that a filter on a TIMESTAMP WITH TIME ZONE column, evaluated on
+// the FilterNode (i.e. not pushed down as a SubfieldFilter), returns the right
+// rows. Presto's ExprToSubfieldFilter parser leaves TSTZ filters on the
+// FilterNode; this test verifies the FilterNode path works end-to-end using
+// the type's custom comparison to match on the packed value.
+TEST_F(ParquetTableScanTest, timestampWithTimeZonePostScanFilterReturnsRows) {
+  registerTimestampWithTimeZoneType();
+
+  const std::vector<Timestamp> timestamps = {
+      Timestamp(1'000'000, 0),
+      Timestamp(2'000'000, 0),
+      Timestamp(3'000'000, 0),
+  };
+  auto data =
+      makeRowVector({"ts_tz"}, {makeFlatVector<Timestamp>(timestamps)});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  writerOptions.parquetWriteTimestampTimeZone = "UTC";
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {data}, writerOptions);
+
+  const auto rowType = ROW({"ts_tz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  const auto utcKey = tz::getTimeZoneID("UTC");
+  const int64_t target = pack(timestamps[1].toMillis(), utcKey);
+
+  auto scan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+
+  // Hand-build the filter expression rather than parsing SQL: DuckDB's parser
+  // has no notion of TIMESTAMP WITH TIME ZONE.
+  auto filterExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      "eq",
+      std::make_shared<core::FieldAccessTypedExpr>(
+          TIMESTAMP_WITH_TIME_ZONE(), "ts_tz"),
+      std::make_shared<core::ConstantTypedExpr>(
+          TIMESTAMP_WITH_TIME_ZONE(), Variant(target)));
+  auto plan = std::make_shared<core::FilterNode>(
+      "post-scan-filter", filterExpr, scan);
+
+  auto expected = makeRowVector(
+      {"ts_tz"},
+      {makeFlatVector<int64_t>({target}, TIMESTAMP_WITH_TIME_ZONE())});
+
+  AssertQueryBuilder(plan)
+      .split(makeSplit(file->getPath()))
+      .assertResults(expected);
 }
 
 int main(int argc, char** argv) {
