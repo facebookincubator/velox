@@ -256,41 +256,51 @@ struct IPPrefixCollapseFunction {
     }
   }
 
-  FOLLY_ALWAYS_INLINE static int64_t bitLength(int128_t num) {
+  // An IP address is an unsigned 128 bit value carried in an int128_t, so the
+  // helpers below take uint128_t. Half the IPv6 address space is negative in
+  // the signed interpretation, which makes signed arithmetic on addresses
+  // overflow at ordinary inputs: 8000::/1 holds more addresses than INT128_MAX
+  // can count, and the address after 7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+  // is not representable.
+
+  // Returns the number of bits needed to represent 'num', i.e. floor(log2(num))
+  // + 1 for num > 0.
+  FOLLY_ALWAYS_INLINE static int64_t bitLength(uint128_t num) {
     // Handle the case when the number is zero
     if (num == 0) {
       return 0;
     }
 
-    // Work with the absolute value of the number
-    uint128_t abs_num =
-        (num < 0) ? static_cast<uint128_t>(-num) : static_cast<uint128_t>(num);
-
-    // Find the position of the highest bit using logarithm (base 2)
-    return static_cast<int64_t>(std::log2(abs_num)) + 1;
+    // Find the position of the highest set bit. Counting leading zeros keeps
+    // this exact for the full 128 bit range, which a double cannot hold.
+    const auto high = static_cast<uint64_t>(num >> 64);
+    if (high != 0) {
+      return 128 - __builtin_clzll(high);
+    }
+    return 64 - __builtin_clzll(static_cast<uint64_t>(num));
   }
 
-  FOLLY_ALWAYS_INLINE static int64_t getLowestSetBit(int128_t x) {
+  FOLLY_ALWAYS_INLINE static int64_t getLowestSetBit(uint128_t x) {
     if (x == 0) {
       return -1; // No set bits
     }
 
     // Check the lower 64 bits
-    static constexpr uint64_t mask = 0xFFFFFFFFFFFFFFFF;
-    if (x & mask) {
-      return __builtin_ctzll(x & mask);
+    const auto low = static_cast<uint64_t>(x);
+    if (low != 0) {
+      return __builtin_ctzll(low);
     }
 
     // Check the upper 64 bits
-    return __builtin_ctzll(x >> 64) + 64;
+    return __builtin_ctzll(static_cast<uint64_t>(x >> 64)) + 64;
   }
 
   FOLLY_ALWAYS_INLINE static int64_t findRangeBits(
-      int128_t firstIpAddress,
-      int128_t lastIpAddress) {
-    // The number of IP addresses in the range
-    constexpr int128_t kOne = 1;
-    const int128_t ipCount = lastIpAddress - firstIpAddress + kOne;
+      uint128_t firstIpAddress,
+      uint128_t lastIpAddress) {
+    // The number of IP addresses in the range. This is 2^128 when the range
+    // covers the whole address space, which wraps to zero.
+    const uint128_t ipCount = lastIpAddress - firstIpAddress + 1;
 
     // We have two possibilities for determining the right prefix boundary
 
@@ -307,24 +317,26 @@ struct IPPrefixCollapseFunction {
     //     isn't exactly a power of 2, we find the highest power of 2 that the
     //     doesn't overrun the ipCount.
 
-    // If ipCount's bitLength is greater than the number of IP addresses (i.e.,
-    // not a power of 2), then use 1 bit less.
-    const int64_t ipCountBitLength = bitLength(ipCount);
-
-    const int128_t numIpAddress = static_cast<int128_t>(1) << ipCountBitLength;
+    // bitLength(n) is floor(log2(n)) + 1 for every n > 0, so 2^bitLength(n)
+    // always overruns n and the largest power of 2 that fits is one bit
+    // shorter. A zero ipCount means the range is the whole address space.
     const int64_t ipRangeMaxBits =
-        numIpAddress > ipCount ? ipCountBitLength - 1 : ipCountBitLength;
+        ipCount == 0 ? ipaddress::kIPV6Bits : bitLength(ipCount) - 1;
     return std::min(firstAddressMaxBits, ipRangeMaxBits);
   }
 
   FOLLY_ALWAYS_INLINE static std::vector<std::tuple<int128_t, int8_t>>
   generateMinIpPrefixes(
-      int128_t firstIpAddress,
-      int128_t lastIpAddress,
+      int128_t firstIpAddressSigned,
+      int128_t lastIpAddressSigned,
       uint32_t ipVersionMaxBits) {
     std::vector<std::tuple<int128_t, int8_t>> ipPrefixSlices;
-    // i.e., while firstIpAddress <= lastIpAddress
-    while (IPADDRESS()->compare(firstIpAddress, lastIpAddress) <= 0) {
+    // IPADDRESS()->compare orders addresses by their big-endian bytes, so
+    // comparing the unsigned representation directly is the same ordering.
+    uint128_t firstIpAddress = static_cast<uint128_t>(firstIpAddressSigned);
+    const uint128_t lastIpAddress = static_cast<uint128_t>(lastIpAddressSigned);
+
+    while (firstIpAddress <= lastIpAddress) {
       // find the number of bits for the next prefix in the range
       const auto rangeBits = findRangeBits(firstIpAddress, lastIpAddress);
 
@@ -334,14 +346,23 @@ struct IPPrefixCollapseFunction {
           prefixLength >= 0 && prefixLength <= ipVersionMaxBits,
           fmt::format(
               "Received invalid ipprefix:{} prefix length: {}",
-              firstIpAddress,
+              static_cast<int128_t>(firstIpAddress),
               prefixLength));
 
-      ipPrefixSlices.emplace_back(firstIpAddress, prefixLength);
+      ipPrefixSlices.emplace_back(
+          static_cast<int128_t>(firstIpAddress), prefixLength);
 
-      int128_t ipCount = static_cast<int128_t>(1)
-          << static_cast<int128_t>(ipVersionMaxBits - prefixLength);
-      firstIpAddress += ipCount;
+      // The prefix just written ends the range once it covers everything from
+      // firstIpAddress onward. Stopping here rather than advancing keeps the
+      // loop from forming an address past the end of the address space, which
+      // a range ending at ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff would need.
+      // The short circuit also keeps the shift below its 128 bit width.
+      if (rangeBits >= ipVersionMaxBits ||
+          (static_cast<uint128_t>(1) << rangeBits) >
+              lastIpAddress - firstIpAddress) {
+        break;
+      }
+      firstIpAddress += static_cast<uint128_t>(1) << rangeBits;
     }
     return ipPrefixSlices;
   }
@@ -398,9 +419,11 @@ struct IPPrefixCollapseFunction {
       if (IPADDRESS()->compare(lastIpAddress, nextFirstIpAddress) < 0) {
         // If they are not contiguous (case 4), finalize the range.
         // Otherwise, extend the current range (case 3).
-        if (IPADDRESS()->compare(
-                lastIpAddress + static_cast<int128_t>(1), nextFirstIpAddress) !=
-            0) {
+        // The successor of 7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff overflows
+        // a signed int128_t, so step on the unsigned representation.
+        const int128_t addressAfterLast =
+            static_cast<int128_t>(static_cast<uint128_t>(lastIpAddress) + 1);
+        if (IPADDRESS()->compare(addressAfterLast, nextFirstIpAddress) != 0) {
           mergedRanges.emplace_back(firstIpAddress, lastIpAddress);
           firstIpAddress = nextFirstIpAddress;
         }

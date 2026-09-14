@@ -551,6 +551,74 @@ TEST_F(IPAddressFunctionsTest, ipPrefixCollapseTest) {
         IPPREFIX());
     ::facebook::velox::test::assertEqualVectors(ret, expected);
   }
+
+  // Test the upper half of the IPv6 address space, whose addresses are negative
+  // when the underlying int128_t is read as a signed value.
+  {
+    std::vector<std::vector<std::optional<std::tuple<int128_t, int8_t>>>> data =
+        {{makeIPPrefixFunc("8000::/1")}};
+    auto ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    auto expected = vectorMaker_.arrayOfRowVector(data, IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+
+    data = {{makeIPPrefixFunc("c000::/2")}};
+    ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    expected = vectorMaker_.arrayOfRowVector(data, IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+
+    // A range that ends at the last address of the space has no next address.
+    data = {{makeIPPrefixFunc("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128")}};
+    ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    expected = vectorMaker_.arrayOfRowVector(data, IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+
+    data = {{makeIPPrefixFunc("ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffc/126")}};
+    ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    expected = vectorMaker_.arrayOfRowVector(data, IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+
+    // Merging on either side of the boundary between the signed halves.
+    data = {
+        {makeIPPrefixFunc("7fff:ffff:ffff:ffff:ffff:ffff:ffff:fffe/128"),
+         makeIPPrefixFunc("7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128")}};
+    ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    expected = vectorMaker_.arrayOfRowVector(
+        std::vector<std::vector<std::optional<std::tuple<int128_t, int8_t>>>>{
+            {makeIPPrefixFunc("7fff:ffff:ffff:ffff:ffff:ffff:ffff:fffe/127")}},
+        IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+
+    data = {{makeIPPrefixFunc("8000::/128"), makeIPPrefixFunc("8000::1/128")}};
+    ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    expected = vectorMaker_.arrayOfRowVector(
+        std::vector<std::vector<std::optional<std::tuple<int128_t, int8_t>>>>{
+            {makeIPPrefixFunc("8000::/127")}},
+        IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+
+    // Contiguous across the boundary: the two ranges merge into one, and no
+    // single prefix covers it, so both addresses are written back out.
+    data = {
+        {makeIPPrefixFunc("7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128"),
+         makeIPPrefixFunc("8000::/128")}};
+    ret = evaluate(
+        "ip_prefix_collapse(c0)",
+        makeRowVector({vectorMaker_.arrayOfRowVector(data, IPPREFIX())}));
+    expected = vectorMaker_.arrayOfRowVector(data, IPPREFIX());
+    ::facebook::velox::test::assertEqualVectors(ret, expected);
+  }
 }
 
 TEST_F(IPAddressFunctionsTest, ipPrefixSubnetsTest) {
