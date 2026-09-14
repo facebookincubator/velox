@@ -86,7 +86,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   void resetSplit() override;
 
  private:
-
   // Selects applicable positional delete, equality delete, and deletion vector
   // files that apply to the split without opening any files.
   void classifyDeleteFiles();
