@@ -374,6 +374,114 @@ TEST_F(FsstEncodingTest, roundTripStrings) {
   }
 }
 
+TEST_F(FsstEncodingTest, trailingEscapeRuns) {
+  Buffer buffer{*pool_};
+  const auto sections = splitFsst(encodeFsst({"seed"}, buffer));
+  for (const bool withPrefix : {false, true}) {
+    SCOPED_TRACE(withPrefix);
+    for (uint32_t escapeRunLength = 0; escapeRunLength <= 8;
+         ++escapeRunLength) {
+      SCOPED_TRACE(escapeRunLength);
+      // Force escaped literals independently of the trained symbol table.
+      // Without a prefix, also exercise a run reaching the start of the string.
+      std::string blob;
+      std::string expected;
+      if (withPrefix) {
+        blob = {static_cast<char>(FSST_ESC), 'x'};
+        expected = "x";
+      }
+      blob.append(escapeRunLength, static_cast<char>(FSST_ESC));
+      const std::vector<uint32_t> lengths{static_cast<uint32_t>(blob.size())};
+      const auto encoded = rebuildFsst(
+          sections,
+          sections.symbolTable,
+          encodeTrivialChild<uint32_t>(lengths),
+          blob);
+      if (escapeRunLength % 2 != 0) {
+        expectMalformedEncoding(
+            encoded,
+            "FSST compressed string ends with an incomplete escape code.");
+        Buffer slicedBuffer{*pool_};
+        NIMBLE_ASSERT_THROW(
+            FsstEncoding::slice(encoded, 0, 1, slicedBuffer),
+            "FSST compressed string ends with an incomplete escape code.");
+        continue;
+      }
+
+      expected.append(escapeRunLength / 2, static_cast<char>(FSST_ESC));
+      auto decoder = EncodingFactory().create(
+          *pool_, encoded, createStringBufferFactory());
+      std::string_view output;
+      decoder->materialize(1, &output);
+      EXPECT_EQ(output, expected);
+      decoder->reset();
+      decoder->skip(1);
+      decoder->reset();
+      decoder->materialize(1, &output);
+      EXPECT_EQ(output, expected);
+
+      Buffer slicedBuffer{*pool_};
+      const auto sliced = FsstEncoding::slice(encoded, 0, 1, slicedBuffer);
+      auto slicedDecoder =
+          EncodingFactory().create(*pool_, sliced, createStringBufferFactory());
+      slicedDecoder->materialize(1, &output);
+      EXPECT_EQ(output, expected);
+    }
+  }
+}
+
+TEST_F(FsstEncodingTest, escapeFramingRespectsRowBoundaries) {
+  Buffer buffer{*pool_};
+  const auto sections = splitFsst(encodeFsst({"seed", "seed", "seed"}, buffer));
+  // Two strings of escaped 0xff bytes followed by one escaped NUL. The first
+  // two rows form one continuous run but must be validated independently.
+  std::string blob(6, static_cast<char>(FSST_ESC));
+  blob.append({static_cast<char>(FSST_ESC), '\0'});
+  const auto rebuildWithLengths = [&](const std::vector<uint32_t>& lengths) {
+    return rebuildFsst(
+        sections,
+        sections.symbolTable,
+        encodeTrivialChild<uint32_t>(lengths),
+        blob);
+  };
+  const auto encoded = rebuildWithLengths({2, 4, 2});
+  const std::vector<std::string_view> expected{
+      std::string_view("\xff", 1),
+      std::string_view("\xff\xff", 2),
+      std::string_view("\0", 1)};
+  auto decoder =
+      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  std::vector<std::string_view> output(expected.size());
+  decoder->materialize(output.size(), output.data());
+  EXPECT_EQ(output, expected);
+  decoder->reset();
+  decoder->skip(1);
+  decoder->materialize(1, output.data());
+  EXPECT_EQ(output.front(), expected[1]);
+
+  Buffer slicedBuffer{*pool_};
+  const auto sliced = FsstEncoding::slice(encoded, 1, 2, slicedBuffer);
+  auto slicedDecoder =
+      EncodingFactory().create(*pool_, sliced, createStringBufferFactory());
+  output.resize(2);
+  slicedDecoder->materialize(output.size(), output.data());
+  EXPECT_EQ(output, (std::vector<std::string_view>{expected[1], expected[2]}));
+
+  for (const auto& lengths :
+       {std::vector<uint32_t>{1, 5, 2}, std::vector<uint32_t>{3, 3, 2}}) {
+    // The total blob still has valid framing. A row's trailing ESC must not
+    // borrow the first byte of the next row as its literal.
+    const auto malformed = rebuildWithLengths(lengths);
+    expectMalformedEncoding(
+        malformed,
+        "FSST compressed string ends with an incomplete escape code.");
+    Buffer slicedBuffer{*pool_};
+    NIMBLE_ASSERT_THROW(
+        FsstEncoding::slice(malformed, 0, 2, slicedBuffer),
+        "FSST compressed string ends with an incomplete escape code.");
+  }
+}
+
 TEST_F(FsstEncodingTest, slice) {
   const std::vector<std::string> storage{
       "common/prefix/value/0000",

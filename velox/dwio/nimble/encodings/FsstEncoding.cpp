@@ -113,6 +113,19 @@ size_t sumLengths(std::span<const size_t> lengths) {
   return std::accumulate(lengths.begin(), lengths.end(), size_t{0});
 }
 
+void validateEscapeFraming(std::string_view compressed) {
+  // A trailing ESC can be a literal 0xff escaped by the preceding ESC.
+  // Only an odd-length trailing run leaves an escape without its literal.
+  auto end = compressed.size();
+  while (end > 0 && static_cast<uint8_t>(compressed[end - 1]) == FSST_ESC) {
+    --end;
+  }
+  NIMBLE_CHECK_FILE_EQ(
+      (compressed.size() - end) % 2,
+      0,
+      "FSST compressed string ends with an incomplete escape code.");
+}
+
 uint32_t readFsstHeaderVarint(std::string_view encoding, size_t& offset) {
   uint32_t value{0};
   for (uint32_t byteIndex = 0; byteIndex < 5; ++byteIndex) {
@@ -249,12 +262,7 @@ size_t FsstEncoding::validateCompressedLengths(
         static_cast<size_t>(compressedLength),
         blob.size() - currentOffset,
         "FSST compressed length exceeds the remaining blob.");
-    if (compressedLength > 0) {
-      NIMBLE_CHECK_FILE_NE(
-          static_cast<uint8_t>(blob[currentOffset + compressedLength - 1]),
-          FSST_ESC,
-          "FSST compressed string ends with an incomplete escape code.");
-    }
+    validateEscapeFraming(blob.substr(currentOffset, compressedLength));
     compressedBytes += compressedLength;
   }
   return compressedBytes;
@@ -508,10 +516,7 @@ std::string_view FsstEncoding::decompressToStringBuffer(
     return {};
   }
 
-  NIMBLE_CHECK_FILE_NE(
-      static_cast<uint8_t>(compressed.back()),
-      FSST_ESC,
-      "FSST compressed string ends with an incomplete escape code.");
+  validateEscapeFraming(compressed);
   NIMBLE_CHECK_FILE_LE(
       compressed.size(),
       std::numeric_limits<uint32_t>::max() / kMaxSymbolLength,
