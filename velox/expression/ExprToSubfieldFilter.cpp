@@ -19,6 +19,7 @@
 #include <span>
 
 #include "velox/expression/Expr.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 using namespace facebook::velox;
 
@@ -1197,6 +1198,16 @@ PrestoExprToSubfieldFilterParser::leafCallToSubfieldFilter(
 
   const auto* leftSide = call.inputs()[0].get();
   VELOX_CHECK_NOT_NULL(leftSide);
+
+  // TIMESTAMP WITH TIME ZONE has kind BIGINT, so a subfield filter would be a
+  // BigintRange over packed millis-plus-zone-key values. Those bounds are not
+  // order- or equality-isomorphic to the instant domain (two values that
+  // denote the same instant in different zones pack differently yet compare
+  // equal under TimestampWithTimeZoneType), so pushing the filter to the
+  // reader would silently drop rows. Leave the filter on the FilterNode.
+  if (isTimestampWithTimeZoneType(leftSide->type())) {
+    return std::nullopt;
+  }
 
   common::Subfield subfield;
   if (auto kind = comparisonKind(call.name())) {
