@@ -603,17 +603,21 @@ TEST_F(IcebergGeometryReadTest, nestedWkbHeadersAreValidated) {
 // The validator must accept every legal nested XY shape, including empties and
 // both byte orders, so the recursive check does not over-reject.
 TEST_F(IcebergGeometryReadTest, nestedXyWkbIsAccepted) {
-  for (
-      const std::string& wkt : {
-          "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 1))",
-          "GEOMETRYCOLLECTION (MULTIPOINT ((1 2), (3 4)))",
-          "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2)))",
-          "GEOMETRYCOLLECTION (POLYGON ((0 0, 1 0, 1 1, 0 0)))",
-          "GEOMETRYCOLLECTION (MULTIPOINT EMPTY, POINT (1 2))",
-          "GEOMETRYCOLLECTION EMPTY",
-          "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))",
-          "MULTILINESTRING ((0 0, 5 5), (10 10, 20 20))",
-      }) {
+  // Held as std::string rather than iterated straight off a braced list of
+  // string literals: binding 'const std::string&' to a 'const char*' element
+  // would construct a temporary per iteration, which
+  // -Werror=range-loop-construct rejects.
+  const std::vector<std::string> nestedXyWkts = {
+      "GEOMETRYCOLLECTION (POINT (1 2), LINESTRING (0 0, 1 1))",
+      "GEOMETRYCOLLECTION (MULTIPOINT ((1 2), (3 4)))",
+      "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION (POINT (1 2)))",
+      "GEOMETRYCOLLECTION (POLYGON ((0 0, 1 0, 1 1, 0 0)))",
+      "GEOMETRYCOLLECTION (MULTIPOINT EMPTY, POINT (1 2))",
+      "GEOMETRYCOLLECTION EMPTY",
+      "MULTIPOLYGON (((0 0, 4 0, 4 4, 0 4, 0 0)), ((5 5, 9 5, 9 9, 5 9, 5 5)))",
+      "MULTILINESTRING ((0 0, 5 5), (10 10, 20 20))",
+  };
+  for (const auto& wkt : nestedXyWkts) {
     auto input = makeVarbinaryVector({toWkb(wkt)});
     auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
     ASSERT_TRUE(isGeometryType(converted->type())) << wkt;

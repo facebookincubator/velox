@@ -92,22 +92,28 @@ constexpr uint32_t kUint32Size = 4;
 class WkbHeaderValidator {
  public:
   WkbHeaderValidator(StringView wkb, const std::string& columnPath)
-      : data_{reinterpret_cast<const uint8_t*>(wkb.data())},
-        size_{wkb.size()},
-        columnPath_{columnPath} {}
+      : wkb_{wkb}, columnPath_{columnPath} {}
 
   void validate() {
     validateGeometry();
     // Trailing bytes mean the payload does not describe exactly one geometry.
     VELOX_USER_CHECK_EQ(
         position_,
-        size_,
+        size(),
         "Invalid well-known binary (WKB) in Iceberg geometry column '{}': {} trailing byte(s) after the geometry",
         columnPath_,
-        size_ - position_);
+        size() - position_);
   }
 
  private:
+  const uint8_t* data() const {
+    return reinterpret_cast<const uint8_t*>(wkb_.data());
+  }
+
+  uint64_t size() const {
+    return wkb_.size();
+  }
+
   // Validates one geometry at the current position and advances past it.
   void validateGeometry() {
     const bool littleEndian = readByteOrder();
@@ -170,7 +176,7 @@ class WkbHeaderValidator {
   // Returns true for little endian. Rejects any other marker.
   bool readByteOrder() {
     require(1);
-    const uint8_t marker = data_[position_++];
+    const uint8_t marker = data()[position_++];
     if (marker == kWkbLittleEndian) {
       return true;
     }
@@ -185,7 +191,7 @@ class WkbHeaderValidator {
 
   uint32_t readUint32(bool littleEndian) {
     require(kUint32Size);
-    const uint8_t* p = data_ + position_;
+    const uint8_t* p = data() + position_;
     position_ += kUint32Size;
     if (littleEndian) {
       return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
@@ -211,16 +217,21 @@ class WkbHeaderValidator {
   void require(uint64_t numBytes) {
     VELOX_USER_CHECK_LE(
         numBytes,
-        size_ - position_,
+        size() - position_,
         "Invalid well-known binary (WKB) in Iceberg geometry column '{}': truncated payload, need {} more byte(s) at offset {} of {}",
         columnPath_,
         numBytes,
         position_,
-        size_);
+        size());
   }
 
-  const uint8_t* const data_;
-  const uint64_t size_;
+  // Held by value rather than as a cached data()/size() pair: a StringView of
+  // 12 bytes or fewer stores its characters inline, so data() points into the
+  // StringView object itself. Caching the pointer from a by-value constructor
+  // parameter left it dangling as soon as the constructor returned, which ASAN
+  // reported as a stack-use-after-scope for short payloads such as the EMPTY
+  // forms. A member copy owns its inline bytes for the validator's lifetime.
+  const StringView wkb_;
   const std::string& columnPath_;
   uint64_t position_{0};
 };
