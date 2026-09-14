@@ -35,8 +35,10 @@ namespace facebook::velox::exec {
 /// together with that transport's client, so it always knows the concrete
 /// client type and can reach the transport's own data plane directly.
 ///
-/// Implementations must be safe to call from multiple threads: Task adds remote
-/// tasks from the split path while drivers consume data.
+/// The control-plane operations addRemoteTaskId(), noMoreRemoteTasks(), and
+/// close() must be safe to call from multiple threads: Task adds remote tasks
+/// from the split path while drivers consume data. The status accessors provide
+/// best-effort snapshots for diagnostics.
 class ExchangeClient {
  public:
   virtual ~ExchangeClient() = default;

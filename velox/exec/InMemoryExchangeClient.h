@@ -151,6 +151,7 @@ class InMemoryExchangeClient
         sources_.size() == 1;
   }
 
+  // Implements close() so the destructor does not call a virtual method.
   void closeImpl();
 
   folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
@@ -169,6 +170,7 @@ class InMemoryExchangeClient
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
 
+  // Mutable because stats() lazily populates this cache.
   mutable folly::F14FastMap<std::string, RuntimeMetric> stats_;
 
   // The minimum byte size the consumer is expected to consume from
