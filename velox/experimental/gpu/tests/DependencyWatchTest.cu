@@ -17,6 +17,7 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <cuda/atomic> // @manual
+#include <thread>
 #include "velox/experimental/gpu/Common.h"
 
 DEFINE_int32(grid_size, 1024, "");

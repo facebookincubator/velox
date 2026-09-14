@@ -122,14 +122,12 @@ std::shared_ptr<CudaEvent> CudfNestedLoopJoinBridge::getBuildReadyEvent() {
   return buildReadyEvent_;
 }
 
-void CudfNestedLoopJoinBridge::setBuildStream(
-    rmm::cuda_stream_view buildStream) {
+void CudfNestedLoopJoinBridge::setBuildStream(cuda::stream_ref buildStream) {
   std::lock_guard<std::mutex> l(mutex_);
   buildStream_ = buildStream;
 }
 
-std::optional<rmm::cuda_stream_view>
-CudfNestedLoopJoinBridge::getBuildStream() {
+std::optional<cuda::stream_ref> CudfNestedLoopJoinBridge::getBuildStream() {
   std::lock_guard<std::mutex> l(mutex_);
   return buildStream_;
 }
@@ -435,7 +433,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
     // but not GPU streams. A peer's CPU thread may have returned from
     // getOutput() while its GPU work (updating buildMatchedFlags_) is still
     // in flight. join_streams establishes GPU-side ordering.
-    std::vector<rmm::cuda_stream_view> inputStreams;
+    std::vector<cuda::stream_ref> inputStreams;
     if (lastProbeStream_.has_value()) {
       inputStreams.push_back(lastProbeStream_.value());
     }
@@ -473,7 +471,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
       // binary_operation is async on `stream`; the old column destructs via
       // cudaFreeAsync on its allocation stream (not `stream`), so the free
       // can race the kernel. Drain `stream` before the move-assign.
-      stream.synchronize();
+      stream.sync();
       buildMatchedFlags_ = std::move(orResult);
     }
   }
@@ -544,7 +542,7 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
         cudf::numeric_scalar<bool>(false, true, initStream, get_temp_mr());
     buildMatchedFlags_ = cudf::make_column_from_scalar(
         falseScalar, numRows, initStream, get_temp_mr());
-    initStream.synchronize();
+    initStream.sync();
   }
 
   // Precompute build-side sub-expressions for filter evaluation (once, here,
@@ -561,14 +559,13 @@ exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
         precomputeStream);
     buildExtendedView_ =
         makeExtendedTableView(buildData_->table->view(), buildPrecomputed_);
-    precomputeStream.synchronize();
+    precomputeStream.sync();
   }
 
   return exec::BlockingReason::kNotBlocked;
 }
 
-void CudfNestedLoopJoinProbe::waitForBuildReady(
-    rmm::cuda_stream_view probeStream) {
+void CudfNestedLoopJoinProbe::waitForBuildReady(cuda::stream_ref probeStream) {
   if (buildReadyEvent_ != nullptr) {
     // joinWithBuildBatch() is called once per probe input batch, and each
     // call gets a fresh stream from cudfGlobalStreamPool(). The event was
@@ -583,7 +580,7 @@ void CudfNestedLoopJoinProbe::waitForBuildReady(
 }
 
 void CudfNestedLoopJoinProbe::recordReadCompletion(
-    rmm::cuda_stream_view probeStream) {
+    cuda::stream_ref probeStream) {
   if (buildStream_.has_value()) {
     // buildData_'s underlying device memory is allocated on buildStream_
     // (see CudfNestedLoopJoinBuild::doNoMoreInput()), so its eventual free
@@ -606,7 +603,7 @@ std::pair<std::unique_ptr<cudf::column>, std::unique_ptr<cudf::column>>
 CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
     cudf::table_view probeTableView,
     cudf::table_view buildView,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     bool needBuildIndices) {
   VELOX_NVTX_FUNC_RANGE();
   auto mr = get_temp_mr();
@@ -649,13 +646,13 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
       probeIndices->view(),
       cudf::out_of_bounds_policy::DONT_CHECK,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
   auto gatheredBuild = cudf::gather(
       buildView,
       buildIndices->view(),
       cudf::out_of_bounds_policy::DONT_CHECK,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
   std::vector<cudf::column_view> combinedViews;
   auto gatheredProbeView = gatheredProbe->view();
@@ -676,13 +673,13 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
   auto filterColumn = filterEvaluator_->eval(combinedViews, stream, mr);
   auto mask = asView(filterColumn);
 
-  auto filteredProbeIndices = cudf::apply_boolean_mask(
+  auto filteredProbeIndices = cudf::apply_retention_mask(
       cudf::table_view{{probeIndices->view()}}, mask, stream, mr);
   auto probeIndicesCols = filteredProbeIndices->release();
 
   std::unique_ptr<cudf::column> filteredBuildIndicesCol;
   if (needBuildIndices) {
-    auto filteredBuildIndices = cudf::apply_boolean_mask(
+    auto filteredBuildIndices = cudf::apply_retention_mask(
         cudf::table_view{{buildIndices->view()}}, mask, stream, mr);
     filteredBuildIndicesCol = std::move(filteredBuildIndices->release()[0]);
   }
@@ -692,7 +689,7 @@ CudfNestedLoopJoinProbe::crossJoinConditionalIndices(
 std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::crossJoinZeroColumnBuild(
     cudf::table_view probeView,
     cudf::size_type buildRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // With no build columns, the cross join only multiplies probe cardinality:
   // repeat each probe row buildRows times (probe-major, matching
   // cudf::cross_join's row order). The output is exactly the probe output
@@ -714,7 +711,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
     cudf::table_view probeTableView,
     cudf::table_view buildView,
     cudf::size_type buildRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VELOX_NVTX_FUNC_RANGE();
 
   // Both call sites are in doGetOutput(), which already waits for the
@@ -831,7 +828,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
           get_temp_mr());
-      stream.synchronize();
+      stream.sync();
       buildMatchedFlags_ = std::move(updatedFlags);
     }
 
@@ -845,14 +842,14 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
         leftIndicesView,
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        get_output_mr());
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
     auto gatheredBuild = cudf::gather(
         buildGatherView,
         rightIndicesView,
         cudf::out_of_bounds_policy::DONT_CHECK,
         stream,
-        get_output_mr());
+        cudf::memory_resources{get_output_mr(), get_temp_mr()});
 
     std::vector<std::unique_ptr<cudf::column>> outCols(numOutputColumns);
     auto probeCols = gatheredProbe->release();
@@ -895,7 +892,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::joinWithBuildBatch(
 
 std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
     cudf::table_view probeTableView,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   cudf::size_type numUnmatched;
   std::unique_ptr<cudf::table> unmatchedProbe;
 
@@ -944,7 +941,7 @@ std::unique_ptr<cudf::table> CudfNestedLoopJoinProbe::emitProbeMismatchRows(
 }
 
 RowVectorPtr CudfNestedLoopJoinProbe::emitBuildMismatchRows(
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Unfiltered cross_join already emitted every build row, so no mismatches
   // to emit. buildMatchedFlags_ is not allocated in that case.
   if (!buildMatchedFlags_) {

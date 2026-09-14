@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
@@ -49,7 +50,7 @@ const cudf::ast::expression& createRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
@@ -65,7 +66,7 @@ const cudf::ast::expression& createRangeExpr(
 
   auto addLiteral = [&](auto value) -> const cudf::ast::expression& {
     scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
-    stream.synchronize();
+    stream.sync();
     return tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
   };
@@ -255,7 +256,7 @@ auto createFloatingPointRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) -> const cudf::ast::expression& {
   return createRangeExpr<
       facebook::velox::common::FloatingPointRange<T>,
@@ -267,7 +268,7 @@ const cudf::ast::expression& createBytesRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return createRangeExpr<
       facebook::velox::common::BytesRange,
@@ -284,7 +285,7 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view /*stream*/,
+    cuda::stream_ref /*stream*/,
     rmm::device_async_resource_ref /*mr*/,
     const TypePtr& columnTypePtr) {
   using NativeT = typename TypeTraits<Kind>::NativeType;
@@ -361,7 +362,7 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
 
   switch (filter.kind()) {
@@ -453,7 +454,7 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
       scalars.emplace_back(
           std::make_unique<cudf::numeric_scalar<bool>>(
               matchesTrue, true, stream, mr));
-      stream.synchronize();
+      stream.sync();
       auto const& matchesBoolExpr = tree.push(
           cudf::ast::literal{
               *static_cast<cudf::numeric_scalar<bool>*>(scalars.back().get())});

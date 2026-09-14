@@ -64,7 +64,7 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
-      cudf::ast::expression const* subfieldFilterExpr);
+      const cudf::ast::expression* subfieldFilterAst);
 
   virtual ~CudfSplitReader() = default;
 
@@ -87,13 +87,16 @@ class CudfSplitReader : public NvtxHelper {
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
 
   /// Get the stream.
-  rmm::cuda_stream_view stream() const {
+  cuda::stream_ref stream() const {
     return stream_;
   }
 
  protected:
   // Performs split-specific setup after base reader state is reset.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
+
+  // Returns whether the split is skipped.
+  virtual bool isSplitSkipped() const;
 
   // Setup the cuDF reader.
   virtual void setupReader();
@@ -114,8 +117,8 @@ class CudfSplitReader : public NvtxHelper {
   // Read file metadatas.
   void fileMetaDatas();
 
-  // Return the logical subfield filter used after reading.
-  cudf::ast::expression const* subfieldFilter() const;
+  // Return the logical subfield filter AST used after reading.
+  const cudf::ast::expression* subfieldFilterAst() const;
 
   // Return whether the pushdown filter was built for the current split.
   bool hasSplitSpecificPushdownFilter() const;
@@ -133,7 +136,7 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<io::IoStatistics> ioStatistics_;
   std::shared_ptr<IoStats> ioStats_;
 
-  rmm::cuda_stream_view stream_;
+  cuda::stream_ref stream_{cudaStream_t{cudaStreamDefault}};
 
   // Parquet metadata(s) for the current split(s).
   std::vector<cudf::io::parquet::FileMetaData> fileMetaData_;
@@ -166,7 +169,7 @@ class CudfSplitReader : public NvtxHelper {
   bool useExperimentalCudfReader_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
-  cudf::ast::expression const* subfieldFilterExpr_;
+  const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   PushdownFilterBuilder pushdownFilterBuilder_;
   bool hasSplitSpecificPushdownFilter_{false};
