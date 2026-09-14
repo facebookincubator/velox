@@ -2510,6 +2510,108 @@ TEST_F(ParquetTableScanTest, timestampWithTimeZonePostScanFilterReturnsRows) {
       .assertResults(expected);
 }
 
+// End-to-end using natural SQL: a filter expressed as a Presto function call
+// that produces a TSTZ constant. PrestoExprToSubfieldFilterParser refuses to
+// convert the TSTZ leaf-call, so the HiveTableHandle carries the whole
+// expression as the remaining filter and the scan evaluates it per row.
+TEST_F(ParquetTableScanTest, timestampWithTimeZoneRemainingFilter) {
+  registerTimestampWithTimeZoneType();
+
+  const std::vector<Timestamp> timestamps = {
+      Timestamp(1, 0),
+      Timestamp(2, 0),
+      Timestamp(3, 0),
+  };
+  auto data =
+      makeRowVector({"ts_tz"}, {makeFlatVector<Timestamp>(timestamps)});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  writerOptions.parquetWriteTimestampTimeZone = "UTC";
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {data}, writerOptions);
+
+  const auto rowType = ROW({"ts_tz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(rowType)
+                  .remainingFilter(
+                      "ts_tz = from_iso8601_timestamp('1970-01-01T00:00:02Z')")
+                  .endTableScan()
+                  .planNode();
+
+  const auto utcKey = tz::getTimeZoneID("UTC");
+  auto expected = makeRowVector(
+      {"ts_tz"},
+      {makeFlatVector<int64_t>(
+          {pack(2'000, utcKey)}, TIMESTAMP_WITH_TIME_ZONE())});
+
+  AssertQueryBuilder(plan)
+      .split(makeSplit(file->getPath()))
+      .assertResults(expected);
+}
+
+// End-to-end using natural SQL where the filter sits above the TableScan in a
+// FilterNode built by PlanBuilder::filter(). The scan does not attempt
+// pushdown, so this exercises the vanilla post-scan filter path from a plan
+// the parser accepts.
+TEST_F(ParquetTableScanTest, timestampWithTimeZoneFilterNodeAboveScan) {
+  registerTimestampWithTimeZoneType();
+
+  const std::vector<Timestamp> timestamps = {
+      Timestamp(1, 0),
+      Timestamp(2, 0),
+      Timestamp(3, 0),
+  };
+  auto data =
+      makeRowVector({"ts_tz"}, {makeFlatVector<Timestamp>(timestamps)});
+  ParquetWriterOptions writerOptions;
+  writerOptions.parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
+  writerOptions.parquetWriteTimestampTimeZone = "UTC";
+  auto file = TempFilePath::create();
+  writeToParquetFile(file->getPath(), {data}, writerOptions);
+
+  const auto rowType = ROW({"ts_tz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  auto plan =
+      PlanBuilder(pool_.get())
+          .startTableScan()
+          .outputType(rowType)
+          .endTableScan()
+          .filter("ts_tz > from_iso8601_timestamp('1970-01-01T00:00:01Z')")
+          .planNode();
+
+  const auto utcKey = tz::getTimeZoneID("UTC");
+  auto expected = makeRowVector(
+      {"ts_tz"},
+      {makeFlatVector<int64_t>(
+          {pack(2'000, utcKey), pack(3'000, utcKey)},
+          TIMESTAMP_WITH_TIME_ZONE())});
+
+  AssertQueryBuilder(plan)
+      .split(makeSplit(file->getPath()))
+      .assertResults(expected);
+}
+
+// PlanBuilder::subfieldFilter() is a hard directive: the caller has declared
+// this expression should be pushed as a range filter. For TSTZ the leaf-call
+// parser refuses, and toSubfieldFilter surfaces that as an
+// "Unsupported expression for range filter" build-time error rather than
+// silently dropping to a remaining filter. Guards against a future change
+// that would silently push the filter without honoring the block.
+TEST_F(ParquetTableScanTest, timestampWithTimeZoneSubfieldFilterRejected) {
+  registerTimestampWithTimeZoneType();
+
+  const auto rowType = ROW({"ts_tz"}, {TIMESTAMP_WITH_TIME_ZONE()});
+  VELOX_ASSERT_THROW(
+      PlanBuilder(pool_.get())
+          .startTableScan()
+          .outputType(rowType)
+          .subfieldFilter(
+              "ts_tz = from_iso8601_timestamp('1970-01-01T00:00:02Z')")
+          .endTableScan()
+          .planNode(),
+      "Unsupported expression for range filter");
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   folly::Init init{&argc, &argv, false};
