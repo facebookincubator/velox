@@ -104,6 +104,22 @@ TEST_F(TreeOfLosersTest, singleWithEquals) {
   }
 }
 
+TEST_F(TreeOfLosersTest, singleDuplicatesWithEquals) {
+  std::vector<std::unique_ptr<TestingStream>> streams;
+  // TestingStream produces values in reverse order.
+  streams.push_back(
+      std::make_unique<TestingStream>(std::vector<uint32_t>{3, 2, 2, 1}));
+  TreeOfLosers<TestingStream> merge(std::move(streams));
+
+  for (const auto& expected : std::vector<std::pair<uint32_t, bool>>{
+           {1, false}, {2, true}, {2, false}, {3, false}}) {
+    const auto result = merge.nextWithEquals();
+    EXPECT_EQ(result.first->current()->value(), expected.first);
+    EXPECT_EQ(result.second, expected.second);
+    result.first->pop();
+  }
+}
+
 TEST_F(TreeOfLosersTest, allDuplicates) {
   const int kNumsPerStream = 40;
   const int kNumStreams = 20;
@@ -127,8 +143,9 @@ TEST_F(TreeOfLosersTest, allDuplicates) {
       if (testNextEqual) {
         auto result = merge.nextWithEquals();
         stream = result.first;
-        // NOTE: the last stream has no other stream with equal value.
-        if (i < (kNumStreams - 1) * kNumsPerStream) {
+        // Every row except the last has an equal successor, either in another
+        // stream or in the same stream.
+        if (i < kNumStreams * kNumsPerStream - 1) {
           ASSERT_TRUE(result.second) << i;
         } else {
           ASSERT_FALSE(result.second) << i;
