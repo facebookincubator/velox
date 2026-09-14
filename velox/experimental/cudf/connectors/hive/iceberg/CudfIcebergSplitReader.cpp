@@ -135,6 +135,8 @@ void CudfIcebergSplitReader::resetSplit() {
   deleteBitmap_ = nullptr;
   deviceBitmap_.reset();
   deleteMask_.reset();
+  // Call base `resetSplit()` function
+  CudfSplitReader::resetSplit();
 }
 
 bool CudfIcebergSplitReader::isSplitSkipped() const {
@@ -183,8 +185,9 @@ const cudf::ast::expression* CudfIcebergSplitReader::deferredFilter() const {
 
 void CudfIcebergSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& runtimeStats) {
-  // Reset delete readers and column injection
-  resetSplit();
+  // Base `prepareSplit` already called `resetSplit()` through virtual
+  // dispatch, which for this class clears both the iceberg-specific state
+  // and the base reader state.
 
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();

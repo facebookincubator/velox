@@ -294,6 +294,7 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
+    cudfSplitReader_->resetSplit();
     return nullptr;
   }
   auto cudfTable = std::move(chunkOpt.value());

@@ -82,9 +82,10 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Override to apply Iceberg deletes after reading a cudf table chunk.
   std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
 
+  // Clear delete readers, column injection, and the base reader state.
+  void resetSplit() override;
+
  private:
-  // Clear delete readers and column injection
-  void resetSplit();
 
   // Selects applicable positional delete, equality delete, and deletion vector
   // files that apply to the split without opening any files.

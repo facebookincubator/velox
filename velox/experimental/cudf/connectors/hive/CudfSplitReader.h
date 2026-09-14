@@ -96,6 +96,10 @@ class CudfSplitReader : public NvtxHelper {
     return stream_;
   }
 
+  /// Releases the reader, data source, parquet metadata and any pending
+  /// column chunk fetches.
+  virtual void resetSplit();
+
  protected:
   // Performs split-specific setup after base reader state is reset.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
@@ -174,9 +178,6 @@ class CudfSplitReader : public NvtxHelper {
     // Owns the device data of the current pass.
     ByteRangeFetch fetch;
   };
-
-  // Clear splitReaders and datasources after split has been fully processed.
-  void resetSplit();
 
   // Setup the cuDF reader options
   void setupReaderOptions();
