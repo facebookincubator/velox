@@ -95,7 +95,6 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    bool useExperimentalCudfReader,
     const cudf::ast::expression* subfieldFilterAst,
     const common::SubfieldFilters* subfieldFilters)
     : CudfSplitReader(
@@ -109,7 +108,6 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           cudfHiveConfig,
           ioStatistics,
           ioStats,
-          useExperimentalCudfReader,
           subfieldFilterAst),
       icebergSplit_(std::move(icebergSplit)),
       hiveConfig_(hiveConfig),
@@ -141,12 +139,6 @@ void CudfIcebergSplitReader::resetSplit() {
 
 bool CudfIcebergSplitReader::isSplitSkipped() const {
   return skipSplit_;
-}
-
-void CudfIcebergSplitReader::setupReader() {
-  if (not noColumnsToRead_) {
-    CudfSplitReader::setupReader();
-  }
 }
 
 cudf::ast::expression const* CudfIcebergSplitReader::pushdownFilter() const {
@@ -233,7 +225,9 @@ void CudfIcebergSplitReader::prepareSplitInternal(
            "columns or unavailable split-specific decimal types.";
   }
 
-  setupReader();
+  if (not noColumnsToRead_) {
+    createCudfReader();
+  }
 }
 
 rmm::device_async_resource_ref

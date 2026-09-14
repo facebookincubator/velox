@@ -63,7 +63,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      bool useExperimentalCudfReader,
       const cudf::ast::expression* subfieldFilterAst,
       const common::SubfieldFilters* subfieldFilters);
 
@@ -73,9 +72,6 @@ class CudfIcebergSplitReader : public CudfSplitReader {
 
   // Override to report a split the filter rejects as skipped.
   bool isSplitSkipped() const override;
-
-  // Override to only setup cuDF reader if we have columns to read.
-  void setupReader() override;
 
   // Skip Parquet pushdown when the subfield filter must run after reading.
   cudf::ast::expression const* pushdownFilter() const override;
