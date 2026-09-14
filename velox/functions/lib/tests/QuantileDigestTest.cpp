@@ -398,12 +398,12 @@ class QuantileDigestTest : public QuantileDigestTestBase {
     QuantileDigest<T> digestWeighted{StlAllocator<T>(allocator()), 0.8};
     for (int i = 0; i < N; ++i) {
       auto v = dist(gen);
-      digest.add(v, i % 7 + 1);
+      digestWeighted.add(v, i % 7 + 1);
       values.insert(values.end(), i % 7 + 1, v);
     }
     std::sort(std::begin(values), std::end(values));
     checkQuantiles<QuantileDigest<T>, false>(
-        values, digest, 0.0, values.size() * kAccuracy);
+        values, digestWeighted, 0.0, values.size() * kAccuracy);
   }
 
   template <typename T>

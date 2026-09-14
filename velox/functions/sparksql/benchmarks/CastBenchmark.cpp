@@ -43,7 +43,12 @@ core::TypedExprPtr makeCastExpr(
 // expression on the input row vector for a number of iterations.
 // This is used when 'DuckSqlExpressionsParser' cannot be used to parse the
 // expression, e.g. when the input type is TIMESTAMP_UTC.
-void addTypedCastBenchmark(
+// Returns the expression set so that the caller keeps it alive. folly holds
+// the registered benchmark callbacks in a global that is destroyed after
+// main() returns, by which point the memory pools backing the vectors are
+// gone. The callback therefore only captures raw pointers, and ownership of
+// both the input vector and the expression set stays with the caller.
+std::shared_ptr<exec::ExprSet> addTypedCastBenchmark(
     const std::string& name,
     const RowVectorPtr& input,
     core::TypedExprPtr castExpr,
@@ -51,14 +56,17 @@ void addTypedCastBenchmark(
     int32_t iterations) {
   auto exprSet = std::make_shared<exec::ExprSet>(
       std::vector<core::TypedExprPtr>{std::move(castExpr)}, &execCtx);
-  folly::addBenchmark(__FILE__, name, [input, exprSet, &execCtx, iterations]() {
-    exec::EvalCtx evalCtx(&execCtx, exprSet.get(), input.get());
-    SelectivityVector rows(input->size());
+  auto* inputVector = input.get();
+  auto* rawExprSet = exprSet.get();
+  folly::addBenchmark(
+      __FILE__, name, [inputVector, rawExprSet, &execCtx, iterations]() {
+    exec::EvalCtx evalCtx(&execCtx, rawExprSet, inputVector);
+    SelectivityVector rows(inputVector->size());
     std::vector<VectorPtr> results(1);
 
     int64_t count = 0;
     for (auto i = 0; i < iterations; ++i) {
-      exprSet->eval(rows, evalCtx, results);
+      rawExprSet->eval(rows, evalCtx, results);
       BaseVector::flattenVector(results[0]);
       results[0]->prepareForReuse();
       count += results[0]->size();
@@ -66,6 +74,7 @@ void addTypedCastBenchmark(
     folly::doNotOptimizeAway(count);
     return 1;
   });
+  return exprSet;
 }
 
 } // namespace
@@ -160,18 +169,21 @@ int main(int argc, char** argv) {
 
   auto queryCtx = core::QueryCtx::create();
   core::ExecCtx execCtx(benchmarkBuilder.pool(), queryCtx.get());
-  addTypedCastBenchmark(
+  // Held here so that the expression sets outlive the benchmark run but are
+  // destroyed while the memory manager is still alive.
+  std::vector<std::shared_ptr<exec::ExprSet>> exprSets;
+  exprSets.push_back(addTypedCastBenchmark(
       setName + "##cast_timestamp_as_timestamp_utc",
       timestampInput,
       makeCastExpr(TIMESTAMP(), "timestamp", TIMESTAMP_UTC()),
       execCtx,
-      iterations);
-  addTypedCastBenchmark(
+      iterations));
+  exprSets.push_back(addTypedCastBenchmark(
       setName + "##cast_timestamp_utc_as_timestamp",
       timestampInput,
       makeCastExpr(TIMESTAMP_UTC(), "timestamp_utc", TIMESTAMP()),
       execCtx,
-      iterations);
+      iterations));
 
   benchmarkBuilder.registerBenchmarks();
   folly::runBenchmarks();

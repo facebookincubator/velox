@@ -1351,8 +1351,6 @@ void toTypeSql(const TypePtr& type, std::ostream& out) {
 }
 
 std::string IntervalDayTimeType::valueToString(int64_t value) const {
-  static const char* kIntervalFormat = "%s%lld %02d:%02d:%02d.%03d";
-
   int128_t remainMillis = value;
   std::string sign{};
   if (remainMillis < 0) {
@@ -1367,19 +1365,18 @@ std::string IntervalDayTimeType::valueToString(int64_t value) const {
   remainMillis -= minutes * kMillisInMinute;
   const int64_t seconds = remainMillis / kMillisInSecond;
   remainMillis -= seconds * kMillisInSecond;
-  char buf[64];
-  snprintf(
-      buf,
-      sizeof(buf),
-      kIntervalFormat,
-      sign.c_str(),
+  // Format through fmt rather than snprintf. The conversion specifiers of a
+  // variadic format string are not checked against the argument types, and
+  // passing int64_t and int128_t to "%d" reads the wrong bytes out of the
+  // variadic argument area on AArch64.
+  return fmt::format(
+      "{}{} {:02}:{:02}:{:02}.{:03}",
+      sign,
       days,
       hours,
       minutes,
       seconds,
-      remainMillis);
-
-  return buf;
+      static_cast<int64_t>(remainMillis));
 }
 
 std::string IntervalYearMonthType::valueToString(int32_t value) const {

@@ -36,7 +36,15 @@ void StringIdMap::release(uint64_t id) {
     if (--it->second.numInUse == 0) {
       pinnedSize_ -= it->second.string.size();
       auto strIter = stringToId_.find(it->second.string);
-      VELOX_DCHECK(strIter != stringToId_.end());
+      // Fail loudly instead of erasing an end() iterator. VELOX_DCHECK is
+      // compiled out in release builds, so a broken invariant would otherwise
+      // silently corrupt memory.
+      VELOX_CHECK(
+          strIter != stringToId_.end(),
+          "StringIdMap is inconsistent: id {} maps to string '{}' which is "
+          "missing from the string index",
+          id,
+          it->second.string);
       stringToId_.erase(strIter);
       idToEntry_.erase(it);
     }

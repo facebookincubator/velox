@@ -24,15 +24,72 @@ using namespace facebook::velox::test;
 
 class ArrayShuffleTest : public SparkFunctionBaseTest {
  protected:
+  // shuffle() is registered as non-deterministic and permutes through
+  // std::shuffle, which draws from the generator using
+  // std::uniform_int_distribution. That mapping is implementation defined, so
+  // the same seed yields a different permutation on libstdc++ and libc++.
+  // Verify that every row holds the same elements as 'expected' rather than
+  // pinning one standard library's ordering.
+  void assertSameElementsPerRow(
+      const VectorPtr& actualVector,
+      const VectorPtr& expectedVector) {
+    ASSERT_EQ(actualVector->size(), expectedVector->size());
+    DecodedVector actualDecoded(*actualVector);
+    DecodedVector expectedDecoded(*expectedVector);
+    auto* actualArray = actualDecoded.base()->as<ArrayVector>();
+    auto* expectedArray = expectedDecoded.base()->as<ArrayVector>();
+    ASSERT_NE(actualArray, nullptr);
+    ASSERT_NE(expectedArray, nullptr);
+    const auto& actualElements = actualArray->elements();
+    const auto& expectedElements = expectedArray->elements();
+
+    for (auto row = 0; row < actualVector->size(); ++row) {
+      SCOPED_TRACE(fmt::format("row {}", row));
+      ASSERT_EQ(actualDecoded.isNullAt(row), expectedDecoded.isNullAt(row));
+      if (actualDecoded.isNullAt(row)) {
+        continue;
+      }
+      const auto actualIndex = actualDecoded.index(row);
+      const auto expectedIndex = expectedDecoded.index(row);
+      const auto size = actualArray->sizeAt(actualIndex);
+      ASSERT_EQ(size, expectedArray->sizeAt(expectedIndex));
+
+      const auto actualOffset = actualArray->offsetAt(actualIndex);
+      const auto expectedOffset = expectedArray->offsetAt(expectedIndex);
+      std::vector<bool> matched(size, false);
+      for (auto i = 0; i < size; ++i) {
+        bool found = false;
+        for (auto j = 0; j < size; ++j) {
+          if (!matched[j] &&
+              actualElements->equalValueAt(
+                  expectedElements.get(), actualOffset + i, expectedOffset + j)) {
+            matched[j] = true;
+            found = true;
+            break;
+          }
+        }
+        ASSERT_TRUE(found) << "no match for element " << i;
+      }
+    }
+  }
+
   void testShuffle(
       const VectorPtr& input,
       const VectorPtr& expected,
       int64_t seed,
       int32_t partitionId = 0) {
     setSparkPartitionId(partitionId);
-    assertEqualVectors(
-        evaluate(fmt::format("shuffle(c0, {})", seed), makeRowVector({input})),
-        expected);
+    const auto expression = fmt::format("shuffle(c0, {})", seed);
+    const auto rowVector = makeRowVector({input});
+    const auto actual = evaluate(expression, rowVector);
+
+    // The seed argument exists to make the permutation reproducible, so the
+    // same seed must produce the same ordering. This holds on every platform,
+    // unlike the specific permutation itself.
+    assertEqualVectors(actual, evaluate(expression, rowVector));
+
+    // The permutation must contain exactly the input elements.
+    assertSameElementsPerRow(actual, expected);
   }
 
   template <typename T>

@@ -75,11 +75,14 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
       "numSucceded 0 numAborted 0 numFailures 0 numNonReclaimableAttempts 0 "
       "reclaimedFreeCapacity 0B reclaimedUsedCapacity 0B maxCapacity 6.00GB "
       "freeCapacity 5.50GB freeReservedCapacity 0B] CONFIG[kind=SHARED;"
+      // Extra configs are emitted in key order.
       "capacity=6.00GB;arbitrationStateCheckCb=(set);"
-      "memory-pool-abort-capacity-limit=0B;memory-pool-min-reclaim-pct=0;"
-      "memory-pool-reserved-capacity=0B;"
+      "global-arbitration-enabled=true;"
+      "memory-pool-abort-capacity-limit=0B;"
       "memory-pool-initial-capacity=536870912B;"
-      "global-arbitration-enabled=true;memory-pool-min-reclaim-bytes=0B;"
+      "memory-pool-min-reclaim-bytes=0B;"
+      "memory-pool-min-reclaim-pct=0;"
+      "memory-pool-reserved-capacity=0B;"
       "reserved-capacity=0B;]]"
       "\n\n"
       "Memory Pool[",

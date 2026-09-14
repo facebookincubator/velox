@@ -35,6 +35,36 @@ const double kStandardError =
     1.04 / std::sqrt(SetDigest<int64_t>::kNumberOfBuckets);
 } // namespace
 
+// std::uniform_int_distribution and std::uniform_real_distribution are not
+// specified to map engine output to values identically across standard library
+// implementations, so the same seed produces different data on libstdc++ and
+// libc++. These helpers keep the generated data identical everywhere, which is
+// what the fixed seed below is meant to guarantee.
+int32_t portableUniformInt32(std::mt19937& rand, int32_t low, int32_t high) {
+  const uint64_t range = static_cast<uint64_t>(high) - low + 1;
+  // Reject the tail that would otherwise make the low values of the range
+  // slightly more likely than the high ones.
+  const uint64_t limit = std::mt19937::max() - (std::mt19937::max() % range);
+  uint64_t draw;
+  do {
+    draw = rand();
+  } while (draw >= limit);
+  return static_cast<int32_t>(low + draw % range);
+}
+
+int64_t portableUniformInt64(std::mt19937& rand) {
+  const uint64_t hi = rand();
+  const uint64_t lo = rand();
+  return static_cast<int64_t>((hi << 32) | lo);
+}
+
+double portableUniformDouble(std::mt19937& rand) {
+  // 53 random bits scaled into [0, 1).
+  const uint64_t hi = rand() >> 5;
+  const uint64_t lo = rand() >> 6;
+  return ((hi << 26) + lo) / 9007199254740992.0;
+}
+
 class SetDigestTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
@@ -562,8 +592,7 @@ void SetDigestTest::testIntersectionCardinalityHelper(
   std::mt19937 rand(0); // Same seed as Java for reproducibility
   // Generate random size from each power of ten in [10, 100,000,000]
   for (int32_t i = 10; i < 100000000; i *= 10) {
-    std::uniform_int_distribution<int32_t> dist(10, i + 9);
-    sizes.push_back(dist(rand));
+    sizes.push_back(portableUniformInt32(rand, 10, i + 9));
   }
 
   for (int32_t size : sizes) {
@@ -577,18 +606,16 @@ void SetDigestTest::testIntersectionCardinalityHelper(
         static_cast<int8_t>(std::log2(numBuckets2)),
         maxHashes2);
 
-    std::uniform_int_distribution<int64_t> valueDist;
-    std::uniform_real_distribution<double> probDist(0.0, 1.0);
 
     for (int32_t j = 0; j < size; j++) {
       int32_t added = 0;
-      int64_t value = valueDist(rand);
+      int64_t value = portableUniformInt64(rand);
 
-      if (probDist(rand) < 0.5) {
+      if (portableUniformDouble(rand) < 0.5) {
         digest1.add(value);
         added++;
       }
-      if (probDist(rand) < 0.5) {
+      if (portableUniformDouble(rand) < 0.5) {
         digest2.add(value);
         added++;
       }
@@ -640,8 +667,7 @@ TEST_F(SetDigestTest, testSmallLargeIntersections) {
 
   std::mt19937 rand(0); // Same seed as Java
   for (int32_t i = 1000; i < 1000000; i *= 10) {
-    std::uniform_int_distribution<int32_t> dist(10, i + 9);
-    sizes.push_back(dist(rand));
+    sizes.push_back(portableUniformInt32(rand, 10, i + 9));
   }
 
   for (size_t size1_idx = 0; size1_idx < sizes.size(); ++size1_idx) {
@@ -650,8 +676,6 @@ TEST_F(SetDigestTest, testSmallLargeIntersections) {
     std::vector<std::pair<std::unique_ptr<SetDigest<int64_t>>, int32_t>>
         smallerSets;
 
-    std::uniform_int_distribution<int64_t> valueDist;
-    std::uniform_real_distribution<double> probDist(0.0, 1.0);
 
     for (size_t size2_idx = 0; size2_idx < size1_idx; ++size2_idx) {
       int32_t size2 = sizes[size2_idx];
@@ -664,15 +688,15 @@ TEST_F(SetDigestTest, testSmallLargeIntersections) {
         std::mt19937 innerRand(rand());
 
         for (int32_t j = 0; j < size1; j++) {
-          int64_t value = valueDist(innerRand);
+          int64_t value = portableUniformInt64(innerRand);
           digest1.add(value);
 
-          if (probDist(innerRand) < size2 / static_cast<double>(size1)) {
-            if (probDist(innerRand) * 10 < overlap) {
+          if (portableUniformDouble(innerRand) < size2 / static_cast<double>(size1)) {
+            if (portableUniformDouble(innerRand) * 10 < overlap) {
               digest2->add(value);
               expectedCardinality++;
             } else {
-              digest2->add(valueDist(innerRand));
+              digest2->add(portableUniformInt64(innerRand));
             }
           }
         }

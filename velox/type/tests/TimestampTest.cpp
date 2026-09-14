@@ -293,7 +293,14 @@ bool checkUtcToEpoch(int year, int mon, int mday, int hour, int min, int sec) {
   tm.tm_year = year;
   errno = 0;
   auto expected = timegm(&tm);
-  bool error = expected == -1 && errno != 0;
+  // timegm() reports failure by returning -1, but -1 is also the valid result
+  // for 1969-12-31T23:59:59 UTC. Only some platforms additionally set errno
+  // (macOS does not), so treat -1 as a failure unless the input really is that
+  // instant.
+  const bool isNegativeOneInstant = tm.tm_year == 69 && tm.tm_mon == 11 &&
+      tm.tm_mday == 31 && tm.tm_hour == 23 && tm.tm_min == 59 &&
+      tm.tm_sec == 59;
+  bool error = expected == -1 && (errno != 0 || !isNegativeOneInstant);
   auto actual = Timestamp::calendarUtcToEpoch(tm);
   if (!error) {
     EXPECT_EQ(actual, expected);
@@ -327,7 +334,6 @@ TEST(TimestampTest, utcToEpoch) {
   ASSERT_TRUE(checkUtcToEpoch(1969, 12, 31, 23, 59, 59));
   ASSERT_TRUE(checkUtcToEpoch(1969, 12, 31, 23, 59, 58));
   ASSERT_TRUE(checkUtcToEpoch(INT32_MAX, 11, 30, 23, 59, 59));
-  ASSERT_TRUE(checkUtcToEpoch(INT32_MIN, 1, 1, 0, 0, 0));
   ASSERT_TRUE(checkUtcToEpoch(
       INT32_MAX - INT32_MAX / 11,
       INT32_MAX,
@@ -335,6 +341,11 @@ TEST(TimestampTest, utcToEpoch) {
       INT32_MAX,
       INT32_MAX,
       INT32_MAX));
+  // Apple's timegm() supports a narrower range of negative years than glibc
+  // and returns -1 for these inputs, so no reference value is available to
+  // compare against.
+#ifndef __APPLE__
+  ASSERT_TRUE(checkUtcToEpoch(INT32_MIN, 1, 1, 0, 0, 0));
   ASSERT_TRUE(checkUtcToEpoch(
       INT32_MIN - INT32_MIN / 11,
       INT32_MIN,
@@ -342,6 +353,7 @@ TEST(TimestampTest, utcToEpoch) {
       INT32_MIN,
       INT32_MIN,
       INT32_MIN));
+#endif
 }
 
 TEST(TimestampTest, utcToEpochRandomInputs) {

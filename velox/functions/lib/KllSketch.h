@@ -206,10 +206,15 @@ struct KllSketch {
   uint32_t k_;
   Allocator allocator_;
 
-  // mt19937 uses too much memory (up to 5000 bytes), we choose to use
-  // default_random_engine here to sacrifice some randomness for memory.
-  std::independent_bits_engine<std::default_random_engine, 1, uint32_t>
-      randomBit_;
+  // mt19937 uses too much memory (up to 5000 bytes), we choose a linear
+  // congruential engine here to sacrifice some randomness for memory.
+  //
+  // std::minstd_rand0 is named explicitly rather than using
+  // std::default_random_engine, which is an implementation defined alias
+  // (minstd_rand0 in libstdc++, minstd_rand in libc++). Naming the engine
+  // keeps a given seed producing the same sketch, and therefore the same
+  // approximate results, on every platform.
+  std::independent_bits_engine<std::minstd_rand0, 1, uint32_t> randomBit_;
 
   size_t n_;
   T minValue_;
