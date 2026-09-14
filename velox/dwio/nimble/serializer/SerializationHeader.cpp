@@ -24,7 +24,7 @@ namespace {
 
 inline SerializationVersion validateVersion(uint8_t versionByte) {
   const auto version = static_cast<SerializationVersion>(versionByte);
-  NIMBLE_CHECK(
+  NIMBLE_USER_CHECK(
       version == SerializationVersion::kLegacy ||
           version == SerializationVersion::kLegacyCompact ||
           version == SerializationVersion::kLegacySerialization ||
@@ -80,7 +80,7 @@ readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
   SerializationHeader header;
 
   if (hasHeader) {
-    NIMBLE_CHECK_GE(end - pos, 1, "Truncated header (version)");
+    NIMBLE_USER_CHECK_GE(end - pos, 1, "Truncated header (version)");
     header.version = validateVersion(static_cast<uint8_t>(*pos++));
   }
 
