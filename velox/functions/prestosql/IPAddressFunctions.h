@@ -256,13 +256,6 @@ struct IPPrefixCollapseFunction {
     }
   }
 
-  // An IP address is an unsigned 128 bit value carried in an int128_t, so the
-  // helpers below take uint128_t. Half the IPv6 address space is negative in
-  // the signed interpretation, which makes signed arithmetic on addresses
-  // overflow at ordinary inputs: 8000::/1 holds more addresses than INT128_MAX
-  // can count, and the address after 7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
-  // is not representable.
-
   // Returns the number of bits needed to represent 'num', i.e. floor(log2(num))
   // + 1 for num > 0.
   FOLLY_ALWAYS_INLINE static int64_t bitLength(uint128_t num) {
