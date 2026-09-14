@@ -294,6 +294,7 @@ class RLEEncodingBase
         slicedRuns.leadingSkipRows,
         length,
         buffer,
+        /*valueDelta=*/0,
         options);
   }
 
