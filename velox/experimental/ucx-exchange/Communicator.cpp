@@ -148,8 +148,8 @@ void Communicator::run() {
   const bool blockingMode = CudfConfig::getInstance().ucxxBlockingProgress;
   // Intra-node sources poll the transfer registry by re-enqueuing themselves.
   // Therefore workQueue_ can remain non-empty indefinitely. Process it in
-  // bounded batches so deferred handshakes, endpoint cleanup, and heartbeat
-  // work at the top of this loop cannot be starved.
+  // bounded batches so no local queue can starve the others or heartbeat work.
+  constexpr size_t kMaxDeferredEndpointCleanupsPerLoop = 256;
   constexpr size_t kMaxDeferredActionsPerLoop = 256;
   constexpr size_t kMaxWorkItemsPerLoop = 256;
   while (running_) {
@@ -204,7 +204,13 @@ void Communicator::run() {
       // UCX callbacks cannot call closeBlocking() (which progresses the
       // worker) or iterate communicators_, so they defer cleanup to
       // this main loop via deferEndpointCleanup().
-      while (auto ep = deferredEndpointCleanup_.pop()) {
+      for (size_t endpointCleanupsThisLoop = 0;
+           endpointCleanupsThisLoop < kMaxDeferredEndpointCleanupsPerLoop;
+           ++endpointCleanupsThisLoop) {
+        auto ep = deferredEndpointCleanup_.pop();
+        if (!ep) {
+          break;
+        }
         VLOG(3) << "Processing deferred endpoint cleanup";
         // First, close all communicators associated with this endpoint.
         // This must happen before removeEndpointRef() which may destroy

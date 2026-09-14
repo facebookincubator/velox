@@ -1089,14 +1089,15 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
 // A same-process consumer can connect before the producer task has initialized
 // its output queue. The handshake must wait for the real output kind instead of
 // permanently falling back to remote UCX based on the placeholder queue.
-TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
+TEST_P(UcxExchangeTest, partitionedPlaceholderDefersHandshakeWithBusyWorker) {
   // This test doesn't use parameters — run only for the first param set.
   {
     ExchangeTestParams p = GetParam();
     if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
         p.numChunks != 100 || p.numUpstreamTasks != 1 ||
         p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "partitionedPlaceholderUsesIntraNodePath: runs only once";
+      GTEST_SKIP()
+          << "partitionedPlaceholderDefersHandshakeWithBusyWorker: runs only once";
     }
   }
 
@@ -1135,6 +1136,15 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
     }
     return metricSum(sinkDriver->exchangeClientStats(), name) >= target;
   };
+  auto waitForPlaceholder = [this](const std::string& taskId) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!queueManager_->stats(taskId).has_value() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return queueManager_->stats(taskId).has_value();
+  };
 
   // Establish one intra-node source with no data. It continuously re-enqueues
   // itself while polling the transfer registry, keeping the communicator work
@@ -1159,8 +1169,13 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
   pollingSplits.emplace_back(remoteSplit(pollingSrcTaskId, /*partitionId=*/0));
   pollingSinkDriver->addSplits(pollingSplits);
   pollingSinkDriver->run();
-  EXPECT_TRUE(waitForMetric(
-      pollingSinkDriver, "ucxExchangeSource.intraNodeSources", 1));
+  if (!waitForMetric(
+          pollingSinkDriver, "ucxExchangeSource.intraNodeSources", 1)) {
+    pollingSinkTask->requestAbort();
+    pollingSinkDriver->joinThreads();
+    FAIL() << "Polling source did not select intra-node transfer";
+    return;
+  }
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   core::PlanNodeId exchangeNodeId;
   auto sinkTask = createExchangeTask(
@@ -1171,10 +1186,17 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
   splits.emplace_back(remoteSplit(srcTaskId, /*partitionId=*/0));
   sinkDriver->addSplits(splits);
 
-  // Start the consumer first and give its handshake time to reach the server.
-  // At this point the producer is represented only by an uninitialized task ID.
+  // Start the consumer first. Waiting for the placeholder proves that its
+  // handshake has reached the output queue while the producer is uninitialized.
   sinkDriver->run();
-  std::this_thread::sleep_for(std::chrono::seconds(1));
+  if (!waitForPlaceholder(srcTaskId)) {
+    sinkTask->requestAbort();
+    pollingSinkTask->requestAbort();
+    sinkDriver->joinThreads();
+    pollingSinkDriver->joinThreads();
+    FAIL() << "Consumer handshake did not create the producer placeholder";
+    return;
+  }
   EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
 
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
@@ -1188,8 +1210,14 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderUsesIntraNodePath) {
   // This specifically catches starvation in Communicator::run(): the polling
   // source above keeps workQueue_ non-empty while this handshake is submitted
   // through deferredActions_.
-  EXPECT_TRUE(
-      waitForMetric(sinkDriver, "ucxExchangeSource.intraNodeSources", 1));
+  if (!waitForMetric(sinkDriver, "ucxExchangeSource.intraNodeSources", 1)) {
+    sinkTask->requestAbort();
+    pollingSinkTask->requestAbort();
+    sinkDriver->joinThreads();
+    pollingSinkDriver->joinThreads();
+    FAIL() << "Deferred handshake did not select intra-node transfer";
+    return;
+  }
   auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
       srcTaskId,
       /*numDrivers=*/1,

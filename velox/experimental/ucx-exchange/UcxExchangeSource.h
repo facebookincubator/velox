@@ -57,6 +57,8 @@ struct UcxExchangeMetrics {
   RuntimeMetric intraNodeBytes_;
   RuntimeMetric remotePackedColumns_;
   RuntimeMetric remoteBytes_;
+  // Completed source handshakes by selected transport, not a live-source
+  // gauge.
   RuntimeMetric intraNodeSources_;
   RuntimeMetric remoteSources_;
   RuntimeMetric rttPerRequest_;
