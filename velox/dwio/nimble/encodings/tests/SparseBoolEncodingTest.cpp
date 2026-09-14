@@ -871,6 +871,53 @@ static SliceInnerInfo sparseBoolPositionSliceInfo(
   };
 }
 
+TYPED_TEST(SparseBoolEncodingTest, sliceWithZeroBitWidthFbwPositions) {
+  // An all-false SparseBool source has no set positions -- only the terminator
+  // sentinel. Cost-based nested selection picks FBW<uint32> with rowCount=1
+  // and bitWidth=0 for that single-value position stream, so the shared slice
+  // path routes through FBW::slice with a zero-bit-width packed payload --
+  // exercising the copyPackedBits() guard this diff added.
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  nimble::Vector<bool> values{this->pool_.get()};
+  for (uint32_t row = 0; row < 128; ++row) {
+    values.push_back(false);
+  }
+  const auto encoded =
+      nimble::test::Encoder<nimble::SparseBoolEncoding>::encode(
+          *this->buffer_,
+          values,
+          nimble::CompressionType::Uncompressed,
+          options,
+          /*realNestedSelection=*/true);
+
+  struct Range {
+    const char* name;
+    uint32_t offset;
+    uint32_t length;
+  };
+  for (const auto range :
+       {Range{"prefix", 0, 32},
+        Range{"middle", 50, 30},
+        Range{"suffix", 96, 32}}) {
+    SCOPED_TRACE(range.name);
+    nimble::Buffer sliceBuffer{*this->pool_};
+    const auto sliced = nimble::SparseBoolEncoding::slice(
+        encoded, range.offset, range.length, sliceBuffer, options);
+    nimble::SparseBoolEncoding encoding{
+        *this->pool_,
+        sliced,
+        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+        options};
+    ASSERT_EQ(encoding.rowCount(), range.length);
+    nimble::Vector<bool> result(this->pool_.get(), range.length);
+    encoding.materialize(range.length, result.data());
+    for (uint32_t i = 0; i < range.length; ++i) {
+      EXPECT_EQ(result[i], false) << "row " << i;
+    }
+  }
+}
+
 TYPED_TEST(SparseBoolEncodingTest, sliceWithTrivialPositionsFallback) {
   // Default nested selection makes the sparse positions Trivial. The slice
   // path re-emits the retained positions through the source's captured
