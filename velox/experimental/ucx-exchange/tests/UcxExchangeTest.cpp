@@ -144,51 +144,10 @@ struct ExchangeTestParamsPrinter {
   }
 };
 
-class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
- protected:
-  // Chosen per process in SetUpTestCase() rather than hardcoded. The
-  // communicator opens a listener on this port without address reuse, so two
-  // runs of this binary in quick succession fail the second with
-  // "bind(0.0.0.0:21346) failed: Address already in use" while the first port
-  // is still in TIME_WAIT.
-  static uint16_t communicatorPort_;
-
-  // UcxExchangeSource computes the UCX port as the split URL's port + 3
-  // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
-  // communicator's port for the round trip to land back on it.
-  static constexpr int kSplitUrlPortOffset = 3;
-
-  static constexpr auto kUnusedCoordinatorUrl =
-      std::string_view("http://localhost:12345/bla");
-
-  static std::shared_ptr<UcxOutputQueueManager> queueManager_;
-  static std::shared_ptr<std::thread> communicatorThread_;
-  static std::shared_ptr<Communicator> communicator_;
-  static std::atomic<uint32_t> testCounter_;
-
-  // Generate a unique task ID prefix for this test run to avoid collisions
-  // between parametrized tests
-  std::string getUniqueTaskPrefix() {
-    return "t" + std::to_string(testCounter_.fetch_add(1)) + "_";
-  }
-
-  // Get the row type based on the table type from test params
-  facebook::velox::RowTypePtr getRowType(TableType tableType) {
-    if (tableType == TableType::WIDE) {
-      return WideTestTable::kRowType;
-    }
-    return UcxTestData::kTestRowType;
-  }
-
-  // Check if we should skip this test for wide table configurations
-  // Some tests are not yet compatible with WideTestTable
-  bool shouldSkipWideTable() {
-    ExchangeTestParams p = GetParam();
-    return p.tableType == TableType::WIDE;
-  }
-
-  static void SetUpTestCase() {
-    VLOG(0) << "setup test case, creating queue manager, communicator, etc..";
+class UcxExchangeTestBase : public testing::Test {
+ public:
+  static void setUpEnvironment() {
+    VLOG(0) << "setting up UCX exchange test environment";
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
     // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
@@ -213,11 +172,51 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
     future.wait();
   }
 
-  static void TearDownTestCase() {
+  static void tearDownEnvironment() {
+    if (communicator_ == nullptr) {
+      return;
+    }
     communicator_->stop();
     communicator_.reset();
-    communicatorThread_->join();
+    if (communicatorThread_ != nullptr && communicatorThread_->joinable()) {
+      communicatorThread_->join();
+    }
     communicatorThread_.reset();
+  }
+
+ protected:
+  // Chosen once per process by UcxExchangeTestEnvironment rather than
+  // hardcoded. The communicator opens a listener on this port without address
+  // reuse, so two runs of this binary in quick succession fail the second with
+  // "bind(0.0.0.0:21346) failed: Address already in use" while the first port
+  // is still in TIME_WAIT.
+  static uint16_t communicatorPort_;
+
+  // UcxExchangeSource computes the UCX port as the split URL's port + 3
+  // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
+  // communicator's port for the round trip to land back on it.
+  static constexpr int kSplitUrlPortOffset = 3;
+
+  static constexpr auto kUnusedCoordinatorUrl =
+      std::string_view("http://localhost:12345/bla");
+
+  static std::shared_ptr<UcxOutputQueueManager> queueManager_;
+  static std::shared_ptr<std::thread> communicatorThread_;
+  static std::shared_ptr<Communicator> communicator_;
+  static std::atomic<uint32_t> testCounter_;
+
+  // Generate a unique task ID prefix for this test run to avoid collisions
+  // between parametrized tests
+  std::string getUniqueTaskPrefix() {
+    return "t" + std::to_string(testCounter_.fetch_add(1)) + "_";
+  }
+
+  // Get the row type based on the table type.
+  facebook::velox::RowTypePtr getRowType(TableType tableType) {
+    if (tableType == TableType::WIDE) {
+      return WideTestTable::kRowType;
+    }
+    return UcxTestData::kTestRowType;
   }
 
   void SetUp() override {
@@ -239,6 +238,31 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
 
   std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
 };
+
+class UcxExchangeTest : public UcxExchangeTestBase,
+                        public testing::WithParamInterface<ExchangeTestParams> {
+ protected:
+  // Some tests are not yet compatible with WideTestTable.
+  bool shouldSkipWideTable() {
+    return GetParam().tableType == TableType::WIDE;
+  }
+};
+
+class UcxExchangeFocusedTest : public UcxExchangeTestBase {};
+
+class UcxExchangeTestEnvironment : public testing::Environment {
+ public:
+  void SetUp() override {
+    UcxExchangeTestBase::setUpEnvironment();
+  }
+
+  void TearDown() override {
+    UcxExchangeTestBase::tearDownEnvironment();
+  }
+};
+
+[[maybe_unused]] const auto* kUcxExchangeTestEnvironment =
+    testing::AddGlobalTestEnvironment(new UcxExchangeTestEnvironment);
 
 INSTANTIATE_TEST_SUITE_P(
     UcxExchangeTest,
@@ -924,12 +948,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
 // task-split path, to isolate close behavior after the client is populated.
 // Closing one operator must not close the shared client while another operator
 // still needs to drain data.
-TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
-  // This test doesn't use parameters - run only for the first param set.
-  if (GetParam() != generateTestParams().front()) {
-    GTEST_SKIP() << "sharedClientSurvivesOneExchangeClose: runs only once";
-  }
-
+TEST_F(UcxExchangeFocusedTest, sharedClientSurvivesOneExchangeClose) {
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "sharedClientSrc";
   const std::string sinkTaskId = taskPrefix + "sharedClientSink";
@@ -1013,17 +1032,7 @@ TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
 // Test that verifies intra-node exchange does not livelock when a producing
 // task is removed while the consumer is polling IntraNodeTransferRegistry.
 // Before the fix: test times out (livelock). After the fix: test passes.
-TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "intraNodeTaskRemovalLivelock: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcProducerNeverSends";
   const std::string sinkTaskId = taskPrefix + "sinkConsumer";
@@ -1090,17 +1099,7 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
 // The fix disables intra-node at handshake time for broadcast tasks, falling
 // back to UCXX. This test verifies that broadcast with intra-node enabled
 // completes without crash and delivers correct data.
-TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "broadcastIntraNodeFallback: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, broadcastIntraNodeFallback) {
   // Enable intra-node exchange so the Acceptor's broadcast guard is exercised.
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
@@ -1179,17 +1178,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
 // the placeholder was already created with intra-node enabled.
 // Without a fix, this causes a SIGSEGV when the intra-node source
 // destructively moves gpu_data from the shared packed_columns object.
-TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "broadcastIntraNodePlaceholderRace: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, broadcastIntraNodePlaceholderRace) {
   // Enable intra-node exchange so the race condition can manifest.
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
@@ -1269,17 +1258,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
 // Test that UcxPartitionedOutput's batch accumulation correctly merges many
 // small input chunks into fewer, larger output chunks while preserving all rows
 // and data integrity.
-TEST_P(UcxExchangeTest, batchAccumulationTest) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "batchAccumulationTest: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
   const int kTargetRows = UcxPartitionedOutput::kDefaultTargetRowsPerChunk;
 
   // --- Scenario 1: Small chunks that SHOULD be accumulated ---
@@ -1571,17 +1550,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 // buffer) while UCX was still using it, causing cudaErrorIllegalAddress in
 // ucp_mem_type_unpack.  The fix moves outstanding requests to
 // Communicator::deferredRequests_ so buffers stay alive until UCX finishes.
-TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "deferredRequestCleanupOnTaskAbort: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   // Ensure intra-node is disabled so we exercise the UCXX path (tagRecv).
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
@@ -1660,10 +1629,10 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   config.intraNodeExchange = origIntraNode;
 }
 
-std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
-std::shared_ptr<std::thread> UcxExchangeTest::communicatorThread_;
-std::shared_ptr<Communicator> UcxExchangeTest::communicator_;
-std::atomic<uint32_t> UcxExchangeTest::testCounter_{0};
-uint16_t UcxExchangeTest::communicatorPort_{0};
+std::shared_ptr<UcxOutputQueueManager> UcxExchangeTestBase::queueManager_;
+std::shared_ptr<std::thread> UcxExchangeTestBase::communicatorThread_;
+std::shared_ptr<Communicator> UcxExchangeTestBase::communicator_;
+std::atomic<uint32_t> UcxExchangeTestBase::testCounter_{0};
+uint16_t UcxExchangeTestBase::communicatorPort_{0};
 
 } // namespace facebook::velox::ucx_exchange
