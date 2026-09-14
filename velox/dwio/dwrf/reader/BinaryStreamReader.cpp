@@ -54,11 +54,12 @@ BinaryStripeStreams::BinaryStripeStreams(
 
 std::vector<proto::ColumnEncoding> BinaryStripeStreams::getEncodings(
     const uint32_t nodeId) const {
-  if (encodingKeys_.count(nodeId) == 0) {
+  const auto encodingKeysIt = encodingKeys_.find(nodeId);
+  if (encodingKeysIt == encodingKeys_.end()) {
     return {};
   }
 
-  auto sequenceIds = encodingKeys_.at(nodeId);
+  auto sequenceIds = encodingKeysIt->second;
   std::sort(sequenceIds.begin(), sequenceIds.end());
 
   std::vector<proto::ColumnEncoding> encodings;
@@ -75,11 +76,12 @@ std::vector<proto::ColumnEncoding> BinaryStripeStreams::getEncodings(
 
 std::vector<DwrfStreamIdentifier> BinaryStripeStreams::getStreamIdentifiers(
     const uint32_t nodeId) const {
-  if (nodeToStreamIdMap_.count(nodeId) == 0) {
+  const auto streamIdsIt = nodeToStreamIdMap_.find(nodeId);
+  if (streamIdsIt == nodeToStreamIdMap_.end()) {
     return {};
   }
 
-  return nodeToStreamIdMap_.at(nodeId);
+  return streamIdsIt->second;
 }
 
 BinaryStreamReader::BinaryStreamReader(
