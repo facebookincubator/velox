@@ -378,6 +378,11 @@ const DataInput::BufferRef& DirectDataInput::bufferRef(uint32_t index) const {
   return bufferRefs_[index];
 }
 
+std::span<const DataInput::BufferRef> DirectDataInput::bufferRefs() const {
+  NIMBLE_CHECK_EQ(state_, State::kLoaded);
+  return bufferRefs_;
+}
+
 void DirectDataInput::clear() {
   state_ = State::kInit;
   regions_.clear();
@@ -659,6 +664,11 @@ const DataInput::BufferRef& CachedDataInput::bufferRef(uint32_t index) const {
   NIMBLE_CHECK(loaded_, "Data has not been loaded");
   NIMBLE_CHECK_LT(index, bufferRefs_.size());
   return bufferRefs_[index];
+}
+
+std::span<const DataInput::BufferRef> CachedDataInput::bufferRefs() const {
+  NIMBLE_CHECK(loaded_, "Data has not been loaded");
+  return bufferRefs_;
 }
 
 void CachedDataInput::clear() {

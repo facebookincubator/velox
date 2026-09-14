@@ -94,6 +94,14 @@ class DataInput {
   /// after load().
   virtual const BufferRef& bufferRef(uint32_t index) const = 0;
 
+  /// All loaded BufferRefs as a random-access span, indexable by the
+  /// per-region indices returned by enqueue(). Only valid after load().
+  /// Hot-path callers (per-stream lookups inside a per-stripe loop) should
+  /// fetch this span once per stripe and index into it directly, avoiding
+  /// the vtable dispatch + per-call state check that bufferRef(index)
+  /// otherwise pays on every access.
+  virtual std::span<const BufferRef> bufferRefs() const = 0;
+
   /// Release all state (loaded buffers, enqueued requests).
   virtual void clear() = 0;
 };
@@ -129,6 +137,8 @@ class DirectDataInput : public DataInput {
   Handle load() override;
 
   const BufferRef& bufferRef(uint32_t index) const override;
+
+  std::span<const BufferRef> bufferRefs() const override;
 
   void clear() override;
 
@@ -267,6 +277,8 @@ class CachedDataInput final : public DataInput {
 
   /// Returns the loaded bytes for a previously enqueued stream region.
   const BufferRef& bufferRef(uint32_t index) const override;
+
+  std::span<const BufferRef> bufferRefs() const override;
 
   /// Clears request state without releasing pins owned by a returned handle.
   void clear() override;
