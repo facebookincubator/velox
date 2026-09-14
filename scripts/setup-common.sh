@@ -224,7 +224,10 @@ function install_re2 {
 
 function install_glog {
   wget_and_untar https://github.com/google/glog/archive/"${GLOG_VERSION}".tar.gz glog
-  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
+  # Always Release. A Debug glog installs as libglogd.so instead of libglog.so,
+  # so a binary linked against it will not start in an image that has the
+  # Release build. We never need to debug into glog itself.
+  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
 }
 
 function install_lzo {
