@@ -258,12 +258,12 @@ class ALPEncoding final
     }
     patchExceptions(sourceStart, numSelected, physicalValues);
 
-    // For non-hook visitors, mutableValues() returns rawValues() + numValues.
-    // processFixedWidthRun() applies numValues as its offset, so rebase to the
-    // beginning of the output buffer to avoid applying the offset twice. Hook
-    // visitors must retain the scratch-buffer pointer returned by
-    // mutableValues().
     if constexpr (!Visitor::kHasHook) {
+      // For non-hook visitors, mutableValues() returns rawValues() + numValues.
+      // processFixedWidthRun() applies numValues as its offset, so rebase to
+      // the beginning of the output buffer to avoid applying the offset twice.
+      // Hook visitors must retain the scratch-buffer pointer returned by
+      // mutableValues().
       values = reinterpret_cast<cppDataType*>(visitor.reader().rawValues());
     }
     auto numValues = visitor.reader().numValues();
