@@ -54,11 +54,16 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
+  /// An empty 'value' leaves the session timezone unset, since the config
+  /// rejects an empty timezone.
   void setTimezone(const std::string& value) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kSessionTimezone, value},
+    std::unordered_map<std::string, std::string> values{
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
-    });
+    };
+    if (!value.empty()) {
+      values.emplace(core::QueryConfig::kSessionTimezone, value);
+    }
+    queryCtx_->testingOverrideConfigUnsafe(std::move(values));
   }
 
   void setSessionStartTimeAndTimeZone(
