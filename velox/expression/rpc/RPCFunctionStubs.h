@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "velox/expression/FunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::exec::rpc {
@@ -30,8 +31,12 @@ namespace facebook::velox::exec::rpc {
 ///
 /// @param name Full 3-part Velox name (e.g., "native.rpc.fb_llm_inference")
 /// @param signatures Function signatures (arg types, return type)
+/// @param metadata Declaration forwarded to the Velox registry. The stub never
+/// executes, so this is read only by the sidecar, which turns it into the
+/// determinism and null-call clause it publishes to the coordinator.
 void registerRPCFunctionStub(
     const std::string& name,
-    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures);
+    std::vector<std::shared_ptr<exec::FunctionSignature>> signatures,
+    exec::VectorFunctionMetadata metadata);
 
 } // namespace facebook::velox::exec::rpc

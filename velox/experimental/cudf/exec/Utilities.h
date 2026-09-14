@@ -20,7 +20,7 @@
 
 #include <cudf/table/table.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 #include <span>
@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox {
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -55,7 +55,7 @@ namespace facebook::velox::cudf_velox {
 [[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -91,7 +91,7 @@ namespace facebook::velox::cudf_velox {
 getConcatenatedTableBatched(
     std::vector<CudfVectorPtr>&& tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -105,7 +105,7 @@ getConcatenatedTableBatched(
     memory::MemoryPool* pool,
     std::vector<CudfVectorPtr>&& vectors,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -164,7 +164,7 @@ class CudaEvent {
    * @param stream The CUDA stream in which to record the event
    * @return Reference to this CudaEvent for method chaining
    */
-  const CudaEvent& recordFrom(rmm::cuda_stream_view stream) const;
+  const CudaEvent& recordFrom(cuda::stream_ref stream) const;
 
   /**
    * @brief Makes the specified stream wait until this event has been recorded.
@@ -177,7 +177,7 @@ class CudaEvent {
    * @param stream The CUDA stream that should wait for this event
    * @return Reference to this CudaEvent for method chaining
    */
-  const CudaEvent& waitOn(rmm::cuda_stream_view stream) const;
+  const CudaEvent& waitOn(cuda::stream_ref stream) const;
 
  private:
   cudaEvent_t event_{};
@@ -196,8 +196,8 @@ class CudaEvent {
  */
 void streamsWaitForStream(
     CudaEvent& event,
-    std::span<const rmm::cuda_stream_view> streams,
-    rmm::cuda_stream_view stream);
+    std::span<const cuda::stream_ref> streams,
+    cuda::stream_ref stream);
 
 /**
  * @brief Orders CudfVector deallocations after work on a target stream.
@@ -209,8 +209,8 @@ void streamsWaitForStream(
  */
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
-    std::span<const rmm::cuda_stream_view> inputStreams,
-    rmm::cuda_stream_view stream);
+    std::span<const cuda::stream_ref> inputStreams,
+    cuda::stream_ref stream);
 
 /// Extract the base function name from a possibly-prefixed name.
 /// Handles both Presto-style "presto.default.lag" and simple "lag".
