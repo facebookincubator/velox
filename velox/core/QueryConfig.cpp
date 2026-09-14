@@ -289,14 +289,6 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
   return kProperties;
 }
 
-bool QueryConfig::ignoreTimeZoneLabel() const {
-  const auto ignoreTimeZoneLabel = get<bool>(kIgnoreTimeZoneLabel);
-  if (ignoreTimeZoneLabel.has_value()) {
-    return ignoreTimeZoneLabel.value();
-  }
-  return get<bool>(kUseSessionTimezoneForTimestampWithTimezone, false);
-}
-
 QueryConfig::QueryConfig(std::unordered_map<std::string, std::string> values)
     : QueryConfig{
           ConfigTag{},
@@ -309,20 +301,42 @@ QueryConfig::QueryConfig(
   validateConfig();
 }
 
+folly::Try<uint64_t> QueryConfig::resolveBytes(
+    const std::string& key,
+    const std::string& defaultValue) const {
+  return folly::makeTryWith([&]() {
+    const auto value = config_->get<std::string>(key, defaultValue);
+    try {
+      return config::toCapacity(value, config::CapacityUnit::BYTE);
+    } catch (const VeloxUserError&) {
+      VELOX_USER_FAIL("Invalid value for query config {}: {}", key, value);
+    }
+  });
+}
+
+folly::Try<bool> QueryConfig::resolveIgnoreTimeZoneLabel() const {
+  return folly::makeTryWith([this] {
+    if (auto value = read<bool>(kIgnoreTimeZoneLabel)) {
+      return *value;
+    }
+    return read<bool>(kUseSessionTimezoneForTimestampWithTimezone)
+        .value_or(kIgnoreTimeZoneLabelProperty::defaultValue);
+  });
+}
+
 void QueryConfig::validateConfig() {
-  // Validate if timezone name can be recognized.
-  if (auto tz = config_->get<std::string>(QueryConfig::kSessionTimezone)) {
+  if (sessionTimezone_) {
     VELOX_USER_CHECK(
-        tz::getTimeZoneID(*tz, false) != -1,
+        tz::getTimeZoneID(*sessionTimezone_, false) != -1,
         "session '{}' set with invalid value '{}'",
-        QueryConfig::kSessionTimezone,
-        *tz);
+        kSessionTimezone,
+        *sessionTimezone_);
   }
 }
 
 void QueryConfig::testingOverrideConfigUnsafe(
     std::unordered_map<std::string, std::string>&& values) {
-  config_ = std::make_unique<config::ConfigBase>(std::move(values));
+  *this = QueryConfig{std::move(values)};
 }
 
 std::unordered_map<std::string, std::string> QueryConfig::rawConfigsCopy()

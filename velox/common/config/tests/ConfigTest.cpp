@@ -263,6 +263,14 @@ TEST_F(ConfigTest, capacityConversion) {
   }
 }
 
+TEST_F(ConfigTest, capacityConversionBounds) {
+  EXPECT_EQ(toCapacity("1.5B", CapacityUnit::BYTE), 1);
+  EXPECT_EQ(toCapacity("16383PB", CapacityUnit::BYTE), 16'383ULL << 50);
+  VELOX_ASSERT_USER_THROW(
+      toCapacity("16384PB", CapacityUnit::BYTE),
+      "Capacity out of range: 16384PB");
+}
+
 TEST_F(ConfigTest, durationConversion) {
   folly::Random::DefaultGenerator rng;
   rng.seed(1);
