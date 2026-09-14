@@ -432,7 +432,7 @@ std::vector<int64_t> getRawTilesCoveringGeometry(
       auto children = BingTileType::bingTileChildren(
           entry.tile, BingTileType::bingTileZoom(entry.tile) + 1, 1);
       if (FOLLY_UNLIKELY(children.hasError())) {
-        VELOX_FAIL(children.error());
+        VELOX_USER_FAIL(children.error());
       }
       std::for_each(
           children.value().begin(), children.value().end(), addIntersecting);
@@ -460,7 +460,7 @@ std::vector<int64_t> getMinimalTilesCoveringGeometry(
     auto expectedChildren =
         BingTileType::bingTileChildren(thisTile, zoom, maxZoomShift);
     if (FOLLY_UNLIKELY(expectedChildren.hasError())) {
-      VELOX_FAIL(expectedChildren.error());
+      VELOX_USER_FAIL(expectedChildren.error());
     }
     outputTiles.insert(
         outputTiles.end(),
