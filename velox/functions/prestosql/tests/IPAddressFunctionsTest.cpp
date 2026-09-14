@@ -552,8 +552,12 @@ TEST_F(IPAddressFunctionsTest, ipPrefixCollapseTest) {
     ::facebook::velox::test::assertEqualVectors(ret, expected);
   }
 
-  // Test the upper half of the IPv6 address space, whose addresses are negative
-  // when the underlying int128_t is read as a signed value.
+  // Test the upper half of the IPv6 address space. An IP address is an unsigned
+  // 128 bit value carried in an int128_t, so half the space is negative in the
+  // signed interpretation and signed arithmetic on addresses overflows at
+  // ordinary inputs: 8000::/1 holds more addresses than INT128_MAX can count,
+  // and the address after 7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff is not
+  // representable.
   {
     std::vector<std::vector<std::optional<std::tuple<int128_t, int8_t>>>> data =
         {{makeIPPrefixFunc("8000::/1")}};
