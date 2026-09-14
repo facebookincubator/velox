@@ -19,6 +19,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -167,12 +168,17 @@ TEST_F(VectorSearchJoinTest, codec) {
 }
 
 TEST_F(VectorSearchJoinTest, driversAndBatches) {
-  // The build rows come from several build drivers, and the results fill
-  // several output batches.
-  queryBuilder(makeCodecPlan(makeCodecProbe(), makeCodecs()))
-      .maxDrivers(4)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
-      .assertResults(makeCodecResults());
+  const auto plan = makeCodecPlan(makeCodecProbe(), makeCodecs());
+  const auto expected = makeCodecResults();
+  // The probe estimates row size, so use the maximum to force one row per
+  // output batch.
+  const auto task = queryBuilder(plan)
+                        .maxDrivers(4)
+                        .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+                        .assertResults(expected);
+  EXPECT_EQ(
+      toPlanStats(task->taskStats()).at(plan->id()).outputVectors,
+      expected->size());
 }
 
 TEST_F(VectorSearchJoinTest, noKeys) {

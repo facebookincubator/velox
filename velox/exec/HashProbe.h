@@ -409,9 +409,6 @@ class HashProbe : public Operator {
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const vector_size_t outputBatchSize_;
 
-  // QueryConfig is fixed for the life of the query.
-  const uint64_t preferredOutputBatchBytes_;
-
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
   const core::JoinType joinType_;
@@ -421,6 +418,8 @@ class HashProbe : public Operator {
   const bool nullAsValue_;
 
   const RowTypePtr probeType_;
+
+  const bool mixedGroupedModeHashJoinSpillEnabled_;
 
   // Flag to indicate whether this hash probe operator can output build-side
   // rows in parallel with the peer operators for the current hash table.

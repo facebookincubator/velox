@@ -404,17 +404,13 @@ RowVectorPtr HashAggregation::getOutput() {
     return distinctOutput;
   }
 
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const auto maxOutputRows =
       isGlobal_ ? 1 : outputBatchRows(estimatedOutputRowSize_);
   // Reuse output vectors if possible.
   prepareOutput(maxOutputRows);
 
   const bool hasData = groupingSet_->getOutput(
-      maxOutputRows,
-      queryConfig.preferredOutputBatchBytes(),
-      resultIterator_,
-      output_);
+      maxOutputRows, preferredOutputBatchBytes(), resultIterator_, output_);
   if (!hasData) {
     resultIterator_.reset();
     resetPartialOutputIfNeed();
@@ -480,12 +476,11 @@ RowVectorPtr HashAggregation::getDistinctOutput() {
     return nullptr;
   }
 
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const auto maxOutputRows = outputBatchRows(estimatedOutputRowSize_);
   prepareOutput(maxOutputRows);
   if (!groupingSet_->getOutput(
           maxOutputRows,
-          queryConfig.preferredOutputBatchBytes(),
+          preferredOutputBatchBytes(),
           resultIterator_,
           output_)) {
     finished_ = true;

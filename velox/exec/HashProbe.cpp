@@ -141,13 +141,14 @@ HashProbe::HashProbe(
               ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
-      preferredOutputBatchBytes_{
-          driverCtx->queryConfig().preferredOutputBatchBytes()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
       nullAsValue_{joinNode_->isNullAsValue()},
       probeType_(joinNode_->sources()[0]->outputType()),
+      mixedGroupedModeHashJoinSpillEnabled_(
+          spillConfig_.has_value() && driverCtx->task->isGroupedExecution() &&
+          driverCtx->queryConfig().mixedGroupedModeHashJoinSpillEnabled()),
       canOutputBuildRowsInParallel_(
           driverCtx->queryConfig().parallelOutputJoinBuildRowsEnabled() &&
           !canSpill()),
@@ -1138,9 +1139,7 @@ bool HashProbe::canSpill() const {
     return false;
   }
   if (operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get())) {
-    return operatorCtx_->driverCtx()
-               ->queryConfig()
-               .mixedGroupedModeHashJoinSpillEnabled() &&
+    return mixedGroupedModeHashJoinSpillEnabled_ &&
         operatorCtx_->task()->concurrentSplitGroups() == 1;
   }
   return true;
@@ -1406,7 +1405,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          preferredOutputBatchBytes_);
+          preferredOutputBatchBytes());
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -2093,7 +2092,7 @@ void HashProbe::ensureOutputFits() {
   }
 
   const uint64_t bytesToReserve = static_cast<uint64_t>(
-      static_cast<double>(preferredOutputBatchBytes_) * 1.2);
+      static_cast<double>(preferredOutputBatchBytes()) * 1.2);
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }

@@ -363,7 +363,8 @@ class GroupingSet {
   tsan_atomic<bool>* const nonReclaimableSection_;
 
   const common::SpillConfig* const spillConfig_;
-  const core::QueryConfig* const queryConfig_;
+  // Batch size used to reserve output memory for spillable final aggregation.
+  const uint64_t preferredOutputBatchBytes_;
   memory::MemoryPool* const pool_;
   exec::SpillStats* const spillStats_;
 

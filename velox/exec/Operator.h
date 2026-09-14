@@ -667,12 +667,19 @@ class Operator : public BaseRuntimeStatWriter {
 
   /// Returns the number of rows for the output batch. This uses averageRowSize
   /// to calculate how many rows fit in preferredOutputBatchBytes. It caps the
-  /// number of rows at 10K and returns at least one row. The averageRowSize
-  /// must not be negative. If the averageRowSize is 0 which is not advised,
-  /// returns maxOutputBatchRows. If the averageRowSize is not given, returns
+  /// number of rows at maxOutputBatchRows. A zero averageRowSize returns
+  /// maxOutputBatchRows. An absent averageRowSize returns
   /// preferredOutputBatchRows.
   vector_size_t outputBatchRows(
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
+
+  uint64_t preferredOutputBatchBytes() const {
+    return preferredOutputBatchBytes_;
+  }
+
+  vector_size_t maxOutputBatchRows() const {
+    return maxOutputBatchRows_;
+  }
 
   /// Load 'vector' if lazy. Potential large memory usage site that might
   /// trigger arbitration. Hence this call is made reclaimable. This is often
@@ -734,6 +741,12 @@ class Operator : public BaseRuntimeStatWriter {
   bool shouldYield() const {
     return operatorCtx_->driverCtx()->driver->shouldYield();
   }
+
+ private:
+  // Snapshot batch sizing settings when the operator is constructed.
+  const uint64_t preferredOutputBatchBytes_;
+  const vector_size_t preferredOutputBatchRows_;
+  const vector_size_t maxOutputBatchRows_;
 };
 
 /// Given a row type returns indices for the specified subset of columns.
