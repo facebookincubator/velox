@@ -244,57 +244,94 @@ class ALPEncoding final
       logicalValues[i] = detail::alp::toLogical<cppDataType>(values[i]);
     }
 
-    ScopedVector<uint64_t> encodedValues{rowCount, pool, options.bufferPool};
-    ScopedVector<uint32_t> exceptionPositions{
-        /*size=*/0, pool, options.bufferPool};
-    ScopedVector<physicalType> exceptionValues{
-        /*size=*/0, pool, options.bufferPool};
     const auto [exponent, factor] = findBestExponentFactorByCount(
         std::span<const cppDataType>{
             logicalValues.data(), logicalValues.size()});
 
+    return encodeWithExponentFactor(
+        selection,
+        values,
+        {logicalValues.data(), logicalValues.size()},
+        exponent,
+        factor,
+        buffer,
+        options);
+  }
+
+  static std::string_view encodeWithExponentFactor(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      std::span<const cppDataType> logicalValues,
+      uint8_t exponent,
+      uint8_t factor,
+      Buffer& buffer,
+      const Encoding::Options& options = {}) {
+    if (values.empty()) {
+      NIMBLE_INCOMPATIBLE_ENCODING("ALP encoding cannot encode empty data.");
+    }
+    NIMBLE_CHECK_EQ(values.size(), logicalValues.size());
+    NIMBLE_CHECK_LE(exponent, kMaxExponent);
+    NIMBLE_CHECK_LE(factor, kMaxFactor);
+
+    const uint32_t rowCount = values.size();
+    auto* pool = &buffer.getMemoryPool();
+    ScopedVector<uint64_t> encodedValues{rowCount, pool, options.bufferPool};
+    ScopedVector<uint32_t> exceptionPositions{0, pool, options.bufferPool};
+    ScopedVector<physicalType> exceptionValues{0, pool, options.bufferPool};
     const double exponentMultiplier = kPow10Double[exponent];
     const double factorMultiplier = kPow10Double[factor];
     alignas(64) uint64_t zigZagLanes[kBatchSize];
     alignas(64) bool okLanes[kBatchSize];
 
-    uint32_t i = 0;
-    for (; i + kBatchSize <= rowCount; i += kBatchSize) {
+    uint32_t row = 0;
+    for (; row + kBatchSize <= rowCount; row += kBatchSize) {
       batchTransform(
-          logicalValues.data() + i,
-          values.data() + i,
+          logicalValues.data() + row,
+          values.data() + row,
           exponentMultiplier,
           factorMultiplier,
           zigZagLanes,
           okLanes);
-      for (std::size_t k = 0; k < kBatchSize; ++k) {
-        const uint32_t position = i + static_cast<uint32_t>(k);
-        if (!okLanes[k]) {
-          encodedValues[position] = 0;
+      for (std::size_t lane = 0; lane < kBatchSize; ++lane) {
+        const uint32_t position = row + static_cast<uint32_t>(lane);
+        if (!okLanes[lane]) {
           exceptionPositions.push_back(position);
           exceptionValues.push_back(values[position]);
           continue;
         }
-        encodedValues[position] = zigZagLanes[k];
+        encodedValues[position] = zigZagLanes[lane];
       }
     }
-    for (; i < rowCount; ++i) {
+    for (; row < rowCount; ++row) {
       uint64_t zigZag = 0;
       if (!scalarTransformOne(
-              logicalValues[i],
-              values[i],
+              logicalValues[row],
+              values[row],
               exponentMultiplier,
               factorMultiplier,
               zigZag)) {
-        encodedValues[i] = 0;
-        exceptionPositions.push_back(i);
-        exceptionValues.push_back(values[i]);
+        exceptionPositions.push_back(row);
+        exceptionValues.push_back(values[row]);
         continue;
       }
-      encodedValues[i] = zigZag;
+      encodedValues[row] = zigZag;
     }
 
     const uint32_t exceptionCount = exceptionPositions.size();
+    if (exceptionCount > 0) {
+      uint64_t placeholder = 0;
+      if (exceptionCount < rowCount) {
+        uint32_t firstRepresentable = 0;
+        while (firstRepresentable < exceptionCount &&
+               exceptionPositions[firstRepresentable] == firstRepresentable) {
+          ++firstRepresentable;
+        }
+        placeholder = encodedValues[firstRepresentable];
+      }
+      for (const auto position : exceptionPositions) {
+        encodedValues[position] = placeholder;
+      }
+    }
 
     ScopedEncodingBuffer scopedBuffer{
         &buffer.getMemoryPool(), options.encodingBufferPool};
@@ -460,14 +497,12 @@ class ALPEncoding final
 
     const uint64_t rowCount = values.size();
     const uint32_t sampleSize = estimateSampleSize(rowCount);
-
-    std::vector<physicalType> sampledValues;
-    sampledValues.reserve(sampleSize);
-    // Select evenly spaced input positions without accumulating rounding error.
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
-      sampledValues.push_back(values[inputIndex]);
+    if (sampleSize == rowCount) {
+      return estimateSizeFromSample(rowCount, values, options);
     }
+
+    std::vector<physicalType> sampledValues(sampleSize);
+    gatherSample<physicalType>(values, sampledValues);
 
     return estimateSizeFromSample(rowCount, sampledValues, options);
   }
@@ -492,43 +527,33 @@ class ALPEncoding final
       logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
     }
 
-    const auto [exponent, factor] = findBestExponentFactorByCount(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
-
-    std::vector<uint64_t> encodedValues;
-    encodedValues.reserve(sampleSize);
+    const auto [exponent, factor] =
+        findBestExponentFactorByCount(logicalValues);
+    const auto winnerScore =
+        scoreCombination(logicalValues, exponent, factor, options);
     std::vector<uint32_t> exceptionPositions;
-    exceptionPositions.reserve(sampleSize);
+    exceptionPositions.reserve(winnerScore.exceptionCount);
     std::vector<physicalType> exceptionValues;
-    exceptionValues.reserve(sampleSize);
+    exceptionValues.reserve(winnerScore.exceptionCount);
     uint64_t sampleExceptionCount{0};
-    for (auto i = 0; i < sampleSize; ++i) {
+    for (uint32_t sampleIndex = 0; sampleIndex < sampleSize; ++sampleIndex) {
       if (!canRepresentExactly(
-              logicalValues[i],
-              sampledValues[static_cast<size_t>(i)],
+              logicalValues[sampleIndex],
+              sampledValues[sampleIndex],
               exponent,
               factor)) {
-        encodedValues.push_back(0);
         exceptionPositions.push_back(
-            sampledValueIndex(i, rowCount, sampleSize));
-        exceptionValues.push_back(sampledValues[static_cast<size_t>(i)]);
+            sampledValueIndex(sampleIndex, rowCount, sampleSize));
+        exceptionValues.push_back(sampledValues[sampleIndex]);
         ++sampleExceptionCount;
-        continue;
       }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues.push_back(velox::ZigZag::encode(encoded));
     }
 
-    const auto encodedStats = Statistics<uint64_t>::create(
-        std::span<const uint64_t>{encodedValues.data(), encodedValues.size()});
     // Model the inexpensive scalar candidates without recursively estimating
     // complex nested encodings.
     const uint64_t nestedEncodedValuesSize = std::min(
         FixedBitWidthEncoding<uint64_t>::estimateSize(
-            rowCount, encodedStats, options),
+            rowCount, winnerScore.zigZagMin, winnerScore.zigZagMax, options),
         TrivialEncoding<uint64_t>::estimateSize(rowCount));
     const uint64_t exceptionCount =
         (sampleExceptionCount * rowCount + sampleSize - 1) / sampleSize;
@@ -567,15 +592,52 @@ class ALPEncoding final
     return std::min(static_cast<uint32_t>(rowCount), kSampleSize);
   }
 
-  /// Maps a dense sample ordinal to an evenly spaced input row.
   static uint64_t sampledValueIndex(
       uint32_t sampleIndex,
       uint64_t rowCount,
       uint32_t sampleSize) {
-    return sampleIndex * rowCount / sampleSize;
+    if (sampleSize == 0) {
+      return 0;
+    }
+    if (sampleSize == rowCount || sampleSize <= kSamplingChunks ||
+        sampleSize % kSamplingChunks != 0) {
+      return static_cast<uint64_t>(sampleIndex) * rowCount / sampleSize;
+    }
+    const uint32_t chunkSize = sampleSize / kSamplingChunks;
+    const uint32_t chunk = sampleIndex / chunkSize;
+    return std::min<uint64_t>(
+        static_cast<uint64_t>(chunk) * rowCount / kSamplingChunks +
+            sampleIndex % chunkSize,
+        rowCount - 1);
   }
 
  private:
+  template <typename SampleType>
+  static void gatherSample(
+      std::span<const SampleType> values,
+      std::span<SampleType> sample) {
+    const uint32_t sampleSize = sample.size();
+    if (sampleSize == values.size()) {
+      std::copy(values.begin(), values.end(), sample.begin());
+      return;
+    }
+    if (sampleSize <= kSamplingChunks || sampleSize % kSamplingChunks != 0) {
+      for (uint32_t sampleIndex = 0; sampleIndex < sampleSize; ++sampleIndex) {
+        sample[sampleIndex] =
+            values[sampledValueIndex(sampleIndex, values.size(), sampleSize)];
+      }
+      return;
+    }
+    const uint32_t chunkSize = sampleSize / kSamplingChunks;
+    for (uint32_t chunk = 0; chunk < kSamplingChunks; ++chunk) {
+      const uint32_t sampleIndex = chunk * chunkSize;
+      const auto inputIndex =
+          sampledValueIndex(sampleIndex, values.size(), sampleSize);
+      std::copy_n(
+          values.data() + inputIndex, chunkSize, sample.data() + sampleIndex);
+    }
+  }
+
   struct SlicedExceptionStreams {
     uint32_t count{0};
     std::string_view positions;
@@ -675,6 +737,9 @@ class ALPEncoding final
       1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
       1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22, 1e23};
 
+  static constexpr uint32_t kSampleSize{1024};
+  static constexpr uint32_t kSamplingChunks{32};
+
  private:
   // Largest exponent and factor values backed by kPow10Double.
   static constexpr int kMaxExponent{23};
@@ -685,8 +750,6 @@ class ALPEncoding final
   static constexpr double kInt64MaxExclusiveAsDouble{0x1p63};
   // ALP-specific control word following the standard Encoding prefix.
   static constexpr uint32_t kHeaderSize{3};
-  // Sample up to this many values to find the best (exponent, factor) pair.
-  static constexpr uint32_t kSampleSize{1024};
 
   static bool
   tryRoundToInt64(double scaled, double factorMultiplier, int64_t& result) {
@@ -842,7 +905,101 @@ class ALPEncoding final
     }
   }
 
+  struct CombinationScore {
+    uint64_t estimatedBytes;
+    uint32_t exceptionCount;
+    uint64_t zigZagMin;
+    uint64_t zigZagMax;
+  };
+
+  static constexpr uint64_t kUnusableScore =
+      std::numeric_limits<uint64_t>::max();
+
+  FOLLY_NOINLINE static CombinationScore scoreCombination(
+      std::span<const cppDataType> logicalValues,
+      int exponent,
+      int factor,
+      const Encoding::Options& options) {
+    NIMBLE_CHECK(
+        exponent >= 0 && exponent <= kMaxExponent,
+        "ALP exponent must be between 0 and {}.",
+        kMaxExponent);
+    NIMBLE_CHECK(
+        factor >= 0 && factor <= kMaxFactor,
+        "ALP factor must be between 0 and {}.",
+        kMaxFactor);
+
+    const auto sampleSize = logicalValues.size();
+    const auto physicals =
+        EncodingPhysicalType<cppDataType>::asEncodingPhysicalTypeSpan(
+            logicalValues);
+    uint64_t zigZagMin = std::numeric_limits<uint64_t>::max();
+    uint64_t zigZagMax = 0;
+    uint32_t exceptionCount = 0;
+    const double exponentMultiplier = kPow10Double[exponent];
+    const double factorMultiplier = kPow10Double[factor];
+    alignas(64) uint64_t zigZagLanes[kBatchSize];
+    alignas(64) bool okLanes[kBatchSize];
+
+    size_t row = 0;
+    for (; row + kBatchSize <= sampleSize; row += kBatchSize) {
+      batchTransform(
+          logicalValues.data() + row,
+          physicals.data() + row,
+          exponentMultiplier,
+          factorMultiplier,
+          zigZagLanes,
+          okLanes);
+      for (size_t lane = 0; lane < kBatchSize; ++lane) {
+        if (!okLanes[lane]) {
+          ++exceptionCount;
+          continue;
+        }
+        zigZagMin = std::min(zigZagMin, zigZagLanes[lane]);
+        zigZagMax = std::max(zigZagMax, zigZagLanes[lane]);
+      }
+    }
+    for (; row < sampleSize; ++row) {
+      uint64_t zigZag = 0;
+      if (!scalarTransformOne(
+              logicalValues[row],
+              physicals[row],
+              exponentMultiplier,
+              factorMultiplier,
+              zigZag)) {
+        ++exceptionCount;
+        continue;
+      }
+      zigZagMin = std::min(zigZagMin, zigZag);
+      zigZagMax = std::max(zigZagMax, zigZag);
+    }
+    if (exceptionCount == sampleSize) {
+      return {kUnusableScore, exceptionCount, 0, 0};
+    }
+    const auto integerBytes = std::min(
+        FixedBitWidthEncoding<uint64_t>::estimateSize(
+            sampleSize, zigZagMin, zigZagMax, options),
+        TrivialEncoding<uint64_t>::estimateSize(sampleSize));
+    return {
+        integerBytes +
+            static_cast<uint64_t>(exceptionCount) *
+                (sizeof(uint32_t) + sizeof(physicalType)),
+        exceptionCount,
+        zigZagMin,
+        zigZagMax};
+  }
+
  private:
+  static std::span<const cppDataType> selectionSample(
+      std::span<const cppDataType> values,
+      std::array<cppDataType, kSampleSize>& buffer) {
+    if (values.size() <= kSampleSize) {
+      return values;
+    }
+    gatherSample<cppDataType>(values, buffer);
+    return buffer;
+  }
+
   // Counts the values exactly representable under (exponent, factor), routing
   // through the vectorized transform with a scalar tail. Kept out of line
   // because the candidate grid calls it a few hundred times, so a single
@@ -887,12 +1044,13 @@ class ALPEncoding final
     return representableCount;
   }
 
+ public:
   // Selects the sampled (exponent, factor) pair that preserves the most values.
   static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
       std::span<const cppDataType> values) {
-    const uint32_t sampleSize =
-        std::min(static_cast<uint32_t>(values.size()), kSampleSize);
-    const auto sample = values.subspan(0, sampleSize);
+    std::array<cppDataType, kSampleSize> sampleBuffer;
+    const auto sample = selectionSample(values, sampleBuffer);
+    const uint32_t sampleSize = sample.size();
     // Free: physicalType has the same width as cppDataType, and the cast is
     // exactly what toPhysical does per value.
     const physicalType* physicals =
@@ -934,6 +1092,7 @@ class ALPEncoding final
     return {bestExponent, bestFactor};
   }
 
+ private:
   // Converts a floating-point value to the integer stored by ALP.
   static int64_t encodeValue(double value, int exponent, int factor) {
     const double scaled = value * kPow10Double[exponent];

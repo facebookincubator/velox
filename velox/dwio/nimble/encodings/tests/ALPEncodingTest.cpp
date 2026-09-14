@@ -344,6 +344,547 @@ void expectInterleavedMaterializeAndSkip(
   }
 }
 
+template <typename DataType>
+std::string_view encodeAtPair(
+    nimble::Buffer& buffer,
+    std::span<const DataType> values,
+    uint8_t exponent,
+    uint8_t factor,
+    const nimble::Encoding::Options& options) {
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  const auto physicals =
+      nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalTypeSpan(
+          values);
+  auto policy =
+      std::make_unique<nimble::ManualEncodingSelectionPolicy<DataType>>(
+          std::vector<std::pair<nimble::EncodingType, float>>{
+              {nimble::EncodingType::FixedBitWidth, 1.0},
+              {nimble::EncodingType::Trivial, 1.0}},
+          std::nullopt,
+          std::nullopt);
+  nimble::EncodingSelection<PhysicalType> selection{
+      {.encodingType = nimble::EncodingType::ALP},
+      nimble::Statistics<PhysicalType>::create(physicals),
+      std::move(policy)};
+  return nimble::ALPEncoding<DataType>::encodeWithExponentFactor(
+      selection, physicals, values, exponent, factor, buffer, options);
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationRejectsInvalidIndices) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const std::array<DataType, 1> values{DataType{1}};
+  const auto outOfBounds = static_cast<int>(Alp::kPow10Double.size());
+  for (size_t sampleSize : {0, 1}) {
+    const std::span<const DataType> sample{values.data(), sampleSize};
+    for (int invalidIndex :
+         {-1,
+          outOfBounds,
+          std::numeric_limits<int>::min(),
+          std::numeric_limits<int>::max()}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "sampleSize={} invalidIndex={}", sampleSize, invalidIndex));
+      NIMBLE_ASSERT_THROW(
+          Alp::scoreCombination(sample, invalidIndex, 0, options),
+          "ALP exponent must be between 0 and 23.");
+      NIMBLE_ASSERT_THROW(
+          Alp::scoreCombination(sample, 0, invalidIndex, options),
+          "ALP factor must be between 0 and 23.");
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationBytesMatchClosedForm) {
+  using DataType = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  using Alp = nimble::ALPEncoding<DataType>;
+  for (bool exactBits : {false, true}) {
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = TypeParam::useVarint,
+        .fixedBitWidthUseExactBits = exactBits};
+    std::vector<DataType> values{
+        DataType{100.00}, DataType{100.01}, DataType{100.50}, DataType{102.00}};
+    for (bool withExceptions : {false, true}) {
+      if (withExceptions) {
+        values.insert(
+            values.begin(), std::numeric_limits<DataType>::infinity());
+        values.push_back(-DataType{0});
+        values.push_back(std::numeric_limits<DataType>::quiet_NaN());
+      }
+      const auto score = Alp::scoreCombination(values, 2, 0, options);
+      const uint32_t expectedExceptions = withExceptions ? 3 : 0;
+      EXPECT_EQ(score.exceptionCount, expectedExceptions);
+      EXPECT_EQ(score.zigZagMin, 20'000);
+      EXPECT_EQ(score.zigZagMax, 20'400);
+      const auto integerBytes = std::min(
+          nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+              values.size(), 20'000, 20'400, options),
+          nimble::TrivialEncoding<uint64_t>::estimateSize(values.size()));
+      EXPECT_EQ(
+          score.estimatedBytes,
+          integerBytes +
+              expectedExceptions * (sizeof(uint32_t) + sizeof(PhysicalType)));
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationUnusableWhenAllExceptions) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const std::array<DataType, 5> values{
+      DataType{0.5}, DataType{1.5}, DataType{2.5}, DataType{3.5}, -DataType{0}};
+  const auto score = Alp::scoreCombination(values, 0, 0, options);
+  EXPECT_EQ(score.exceptionCount, values.size());
+  EXPECT_EQ(score.estimatedBytes, Alp::kUnusableScore);
+  EXPECT_EQ(score.zigZagMin, 0);
+  EXPECT_EQ(score.zigZagMax, 0);
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationMatchesScalarAcrossGrid) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const std::vector<DataType> values{
+      DataType{0},
+      -DataType{0},
+      DataType{0.5},
+      DataType{-1.25},
+      DataType{100.01},
+      DataType{-1'000'000},
+      DataType{1'000'000},
+      std::numeric_limits<DataType>::infinity(),
+      -std::numeric_limits<DataType>::infinity(),
+      std::numeric_limits<DataType>::quiet_NaN(),
+      std::numeric_limits<DataType>::denorm_min(),
+      static_cast<DataType>(0x1p63),
+      static_cast<DataType>(-0x1p63)};
+  for (uint8_t exponent = 0; exponent < Alp::kPow10Double.size(); ++exponent) {
+    for (uint8_t factor = 0; factor <= exponent; ++factor) {
+      uint32_t exceptions = 0;
+      uint64_t minimum = std::numeric_limits<uint64_t>::max();
+      uint64_t maximum = 0;
+      for (const auto value : values) {
+        uint64_t zigZag = 0;
+        if (!Alp::scalarTransformOne(
+                value,
+                nimble::detail::alp::toPhysical<DataType>(value),
+                Alp::kPow10Double[exponent],
+                Alp::kPow10Double[factor],
+                zigZag)) {
+          ++exceptions;
+          continue;
+        }
+        minimum = std::min(minimum, zigZag);
+        maximum = std::max(maximum, zigZag);
+      }
+      const auto score =
+          Alp::scoreCombination(values, exponent, factor, options);
+      EXPECT_EQ(score.exceptionCount, exceptions);
+      EXPECT_EQ(score.zigZagMin, minimum);
+      EXPECT_EQ(score.zigZagMax, maximum);
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationMatchesEstimator) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const std::array<DataType, 8> values{
+      DataType{100.00},
+      DataType{100.01},
+      DataType{100.50},
+      DataType{100.99},
+      DataType{101.00},
+      DataType{101.25},
+      DataType{101.50},
+      DataType{102.00}};
+  const auto physicals =
+      nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalTypeSpan(
+          values);
+  const auto [exponent, factor] = Alp::findBestExponentFactorByCount(values);
+  for (bool exactBits : {false, true}) {
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = TypeParam::useVarint,
+        .fixedBitWidthUseExactBits = exactBits};
+    const auto score = Alp::scoreCombination(values, exponent, factor, options);
+    ASSERT_EQ(score.exceptionCount, 0);
+    ASSERT_GT(score.zigZagMin, 0);
+    for (uint32_t rowCount : {8, 8192}) {
+      const auto integerBytes = std::min(
+          nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+              rowCount, score.zigZagMin, score.zigZagMax, options),
+          nimble::TrivialEncoding<uint64_t>::estimateSize(rowCount));
+      const auto estimate =
+          Alp::estimateSizeFromSample(rowCount, physicals, options);
+      ASSERT_TRUE(estimate.has_value());
+      EXPECT_EQ(
+          *estimate,
+          nimble::EncodingPrefix::serializedSize(
+              rowCount, options.useVarintRowCount) +
+              3 + nimble::varint::varintSize(integerBytes) + integerBytes);
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, scoreCombinationUsesEntireSuppliedSample) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  std::vector<DataType> values(Alp::kSampleSize + 3, DataType{100});
+  values[Alp::kSampleSize] = DataType{99};
+  values[Alp::kSampleSize + 1] = DataType{102};
+  const auto physicals =
+      nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalTypeSpan(
+          std::span<const DataType>{values});
+  for (bool exactBits : {false, true}) {
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = TypeParam::useVarint,
+        .fixedBitWidthUseExactBits = exactBits};
+    const auto score = Alp::scoreCombination(values, 0, 0, options);
+    EXPECT_EQ(score.exceptionCount, 0);
+    EXPECT_EQ(score.zigZagMin, 198);
+    EXPECT_EQ(score.zigZagMax, 204);
+    const auto integerBytes = std::min(
+        nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+            values.size(), 198, 204, options),
+        nimble::TrivialEncoding<uint64_t>::estimateSize(values.size()));
+    EXPECT_EQ(score.estimatedBytes, integerBytes);
+    const auto estimate =
+        Alp::estimateSizeFromSample(values.size(), physicals, options);
+    ASSERT_TRUE(estimate.has_value());
+    EXPECT_EQ(
+        *estimate,
+        nimble::EncodingPrefix::serializedSize(
+            values.size(), options.useVarintRowCount) +
+            3 + nimble::varint::varintSize(integerBytes) + integerBytes);
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, exceptionPlaceholdersPreserveIntegerRange) {
+  using DataType = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  using Alp = nimble::ALPEncoding<DataType>;
+  for (bool exactBits : {false, true}) {
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = TypeParam::useVarint,
+        .fixedBitWidthUseExactBits = exactBits};
+    std::vector<DataType> values(2 * Alp::kBatchSize + 3, DataType{1'000'000});
+    values.front() = std::numeric_limits<DataType>::infinity();
+    values[1] = -DataType{0};
+    values[Alp::kBatchSize] = std::numeric_limits<DataType>::quiet_NaN();
+    values.back() = -std::numeric_limits<DataType>::infinity();
+    const auto serialized =
+        encodeAtPair<DataType>(*this->buffer_, values, 0, 0, options);
+    const char* position = serialized.data() +
+        nimble::EncodingPrefix::prefixSize(
+                               serialized, options.useVarintRowCount);
+    const auto header = nimble::detail::alp::readHeader(position);
+    EXPECT_EQ(header.exponent, 0);
+    EXPECT_EQ(header.factor, 0);
+    ASSERT_TRUE(header.hasExceptions);
+    EXPECT_EQ(nimble::varint::readVarint32(&position), 4);
+    const auto integerBytes = nimble::varint::readVarint32(&position);
+    auto integers = nimble::EncodingFactory{}.create(
+        *this->pool_,
+        {position, integerBytes},
+        [](uint32_t) -> void* { return nullptr; },
+        options);
+    std::vector<uint64_t> encodedValues(values.size());
+    integers->materialize(values.size(), encodedValues.data());
+    for (const auto encoded : encodedValues) {
+      EXPECT_EQ(encoded, 2'000'000);
+    }
+
+    auto encoding = nimble::EncodingFactory{}.create(
+        *this->pool_,
+        serialized,
+        [](uint32_t) -> void* { return nullptr; },
+        options);
+    std::vector<PhysicalType> decoded(values.size());
+    encoding->materialize(values.size(), decoded.data());
+    for (size_t row = 0; row < values.size(); ++row) {
+      EXPECT_EQ(
+          decoded[row], nimble::detail::alp::toPhysical<DataType>(values[row]));
+    }
+    const auto physicals =
+        nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalTypeSpan(
+            std::span<const DataType>{values});
+    const auto estimate =
+        Alp::estimateSizeFromSample(values.size(), physicals, options);
+    ASSERT_TRUE(estimate.has_value());
+    const auto score = Alp::scoreCombination(values, 0, 0, options);
+    const auto estimatedIntegerBytes = std::min(
+        nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+            values.size(), score.zigZagMin, score.zigZagMax, options),
+        nimble::TrivialEncoding<uint64_t>::estimateSize(values.size()));
+    const std::array<uint32_t, 4> exceptionPositions{
+        0, 1, Alp::kBatchSize, static_cast<uint32_t>(values.size() - 1)};
+    std::array<PhysicalType, 4> exceptionValues;
+    for (size_t exception = 0; exception < exceptionPositions.size();
+         ++exception) {
+      exceptionValues[exception] = physicals[exceptionPositions[exception]];
+    }
+    const auto positionStats =
+        nimble::Statistics<uint32_t>::create(exceptionPositions);
+    const auto valueStats =
+        nimble::Statistics<PhysicalType>::create(exceptionValues);
+    const auto positionBytes = std::min(
+        nimble::FixedBitWidthEncoding<uint32_t>::estimateSize(
+            4, positionStats, options),
+        nimble::TrivialEncoding<uint32_t>::estimateSize(4));
+    const auto valueBytes = std::min(
+        nimble::FixedBitWidthEncoding<PhysicalType>::estimateSize(
+            4, valueStats, options),
+        nimble::TrivialEncoding<PhysicalType>::estimateSize(4));
+    EXPECT_EQ(
+        *estimate,
+        nimble::EncodingPrefix::serializedSize(
+            values.size(), options.useVarintRowCount) +
+            3 + nimble::varint::varintSize(4) +
+            nimble::varint::varintSize(estimatedIntegerBytes) +
+            estimatedIntegerBytes + nimble::varint::varintSize(positionBytes) +
+            positionBytes + nimble::varint::varintSize(valueBytes) +
+            valueBytes);
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, allExceptionPlaceholdersAreZero) {
+  using DataType = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  std::vector<DataType> values(Alp::kBatchSize + 1, DataType{0.5});
+  const auto serialized =
+      encodeAtPair<DataType>(*this->buffer_, values, 0, 0, options);
+  const char* position = serialized.data() +
+      nimble::EncodingPrefix::prefixSize(serialized, options.useVarintRowCount);
+  ASSERT_TRUE(nimble::detail::alp::readHeader(position).hasExceptions);
+  EXPECT_EQ(nimble::varint::readVarint32(&position), values.size());
+  const auto integerBytes = nimble::varint::readVarint32(&position);
+  auto integers = nimble::EncodingFactory{}.create(
+      *this->pool_,
+      {position, integerBytes},
+      [](uint32_t) -> void* { return nullptr; },
+      options);
+  std::vector<uint64_t> encodedValues(values.size());
+  integers->materialize(values.size(), encodedValues.data());
+  for (const auto encoded : encodedValues) {
+    EXPECT_EQ(encoded, 0);
+  }
+  auto encoding = nimble::EncodingFactory{}.create(
+      *this->pool_,
+      serialized,
+      [](uint32_t) -> void* { return nullptr; },
+      options);
+  std::vector<PhysicalType> decoded(values.size());
+  encoding->materialize(values.size(), decoded.data());
+  for (size_t row = 0; row < values.size(); ++row) {
+    EXPECT_EQ(
+        decoded[row], nimble::detail::alp::toPhysical<DataType>(values[row]));
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, placeholderCanComeFromScalarTail) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  std::vector<DataType> values(
+      2 * Alp::kBatchSize + 1, std::numeric_limits<DataType>::infinity());
+  values.back() = DataType{-123};
+  const auto serialized =
+      encodeAtPair<DataType>(*this->buffer_, values, 0, 0, options);
+  const char* position = serialized.data() +
+      nimble::EncodingPrefix::prefixSize(serialized, options.useVarintRowCount);
+  ASSERT_TRUE(nimble::detail::alp::readHeader(position).hasExceptions);
+  EXPECT_EQ(nimble::varint::readVarint32(&position), values.size() - 1);
+  const auto integerBytes = nimble::varint::readVarint32(&position);
+  auto integers = nimble::EncodingFactory{}.create(
+      *this->pool_,
+      {position, integerBytes},
+      [](uint32_t) -> void* { return nullptr; },
+      options);
+  std::vector<uint64_t> encodedValues(values.size());
+  integers->materialize(values.size(), encodedValues.data());
+  for (const auto encoded : encodedValues) {
+    EXPECT_EQ(encoded, velox::ZigZag::encode(int64_t{-123}));
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, chunkedStrideSamplingCoversInput) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const uint32_t chunkSize = Alp::kSampleSize / Alp::kSamplingChunks;
+  for (uint64_t rowCount : {1025, 10'003, 1'000'000}) {
+    const auto sampleSize = Alp::estimateSampleSize(rowCount);
+    ASSERT_EQ(sampleSize, Alp::kSampleSize);
+    uint64_t previous = 0;
+    for (uint32_t sampleIndex = 0; sampleIndex < sampleSize; ++sampleIndex) {
+      const auto index =
+          Alp::sampledValueIndex(sampleIndex, rowCount, sampleSize);
+      EXPECT_LT(index, rowCount);
+      if (sampleIndex > 0) {
+        EXPECT_GT(index, previous);
+      }
+      EXPECT_EQ(
+          index,
+          (sampleIndex / chunkSize) * rowCount / Alp::kSamplingChunks +
+              sampleIndex % chunkSize);
+      previous = index;
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, smallInputSamplingUsesEveryRow) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  EXPECT_EQ(Alp::sampledValueIndex(0, 0, 0), 0);
+  for (uint32_t rowCount = 1; rowCount <= Alp::kSampleSize; ++rowCount) {
+    const auto sampleSize = Alp::estimateSampleSize(rowCount);
+    ASSERT_EQ(sampleSize, rowCount);
+    for (uint32_t sampleIndex = 0; sampleIndex < sampleSize; ++sampleIndex) {
+      ASSERT_EQ(
+          Alp::sampledValueIndex(sampleIndex, rowCount, sampleSize),
+          sampleIndex)
+          << "rowCount=" << rowCount << " sampleIndex=" << sampleIndex;
+    }
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, smallSampleFallbackMatchesStridedMapping) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  for (uint32_t sampleSize = 1; sampleSize <= Alp::kSamplingChunks;
+       ++sampleSize) {
+    for (uint32_t sampleIndex = 0; sampleIndex < sampleSize; ++sampleIndex) {
+      EXPECT_EQ(
+          Alp::sampledValueIndex(sampleIndex, 10'003, sampleSize),
+          static_cast<uint64_t>(sampleIndex) * 10'003 / sampleSize);
+    }
+  }
+  for (uint32_t sampleSize : {33, 63, 65, 1023}) {
+    for (uint32_t sampleIndex = 0; sampleIndex < sampleSize; ++sampleIndex) {
+      EXPECT_EQ(
+          Alp::sampledValueIndex(sampleIndex, 10'003, sampleSize),
+          static_cast<uint64_t>(sampleIndex) * 10'003 / sampleSize);
+    }
+  }
+}
+
+TYPED_TEST(
+    ALPEncodingTest,
+    selectionSampleMatchesEstimateOnUnrepresentativeHead) {
+  using DataType = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  nimble::Vector<DataType> values{this->pool_.get(), 65'537};
+  values.fill(DataType{1.25});
+  std::fill_n(values.begin(), Alp::kSampleSize, DataType{1});
+  const std::span<const DataType> logicals{values.data(), values.size()};
+  const auto headPair =
+      Alp::findBestExponentFactorByCount(logicals.first(Alp::kSampleSize));
+  std::vector<DataType> sampled;
+  std::vector<PhysicalType> sampledPhysicals;
+  for (uint32_t sampleIndex = 0; sampleIndex < Alp::kSampleSize;
+       ++sampleIndex) {
+    const auto value = values[Alp::sampledValueIndex(
+        sampleIndex, values.size(), Alp::kSampleSize)];
+    sampled.push_back(value);
+    sampledPhysicals.push_back(
+        nimble::detail::alp::toPhysical<DataType>(value));
+  }
+  const auto samplePair = Alp::findBestExponentFactorByCount(sampled);
+  EXPECT_NE(headPair, samplePair);
+  EXPECT_EQ(Alp::findBestExponentFactorByCount(logicals), samplePair);
+  const auto serialized = encodeWithLayout<DataType>(
+      *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options);
+  const char* position = serialized.data() +
+      nimble::EncodingPrefix::prefixSize(serialized, options.useVarintRowCount);
+  const auto header = nimble::detail::alp::readHeader(position);
+  EXPECT_EQ(header.exponent, samplePair.first);
+  EXPECT_EQ(header.factor, samplePair.second);
+  const auto physicals =
+      nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalTypeSpan(
+          logicals);
+  EXPECT_EQ(
+      Alp::estimateSize(physicals, options),
+      Alp::estimateSizeFromSample(values.size(), sampledPhysicals, options));
+}
+
+TYPED_TEST(ALPEncodingTest, partialChunksDoNotOmitSmallInputValues) {
+  using DataType = typename TypeParam::data_type;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  for (uint32_t rowCount : {34, 63, 65, 1023, 1024}) {
+    std::vector<DataType> values(rowCount, DataType{1});
+    values[rowCount / 2 - 1] = DataType{1.25};
+    const auto physicals =
+        nimble::EncodingPhysicalType<DataType>::asEncodingPhysicalTypeSpan(
+            std::span<const DataType>{values});
+    EXPECT_EQ(
+        Alp::estimateSize(physicals, options),
+        Alp::estimateSizeFromSample(rowCount, physicals, options))
+        << "rowCount=" << rowCount;
+  }
+}
+
+TYPED_TEST(ALPEncodingTest, chunkedEstimateMatchesMappedExceptions) {
+  using DataType = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint,
+      .fixedBitWidthUseExactBits = true};
+  constexpr uint32_t kRowCount = 65'537;
+  const auto clean = nimble::detail::alp::toPhysical<DataType>(DataType{100});
+  const auto exception = nimble::detail::alp::toPhysical<DataType>(
+      std::numeric_limits<DataType>::infinity());
+  std::vector<PhysicalType> values(kRowCount, clean);
+  const uint32_t chunkSize = Alp::kSampleSize / Alp::kSamplingChunks;
+  std::vector<PhysicalType> sample;
+  for (uint32_t sampleIndex = 0; sampleIndex < Alp::kSampleSize;
+       ++sampleIndex) {
+    const uint32_t chunk = sampleIndex / chunkSize;
+    const auto index =
+        static_cast<uint64_t>(chunk) * kRowCount / Alp::kSamplingChunks +
+        sampleIndex % chunkSize;
+    if (sampleIndex % 7 == 0 || sampleIndex % chunkSize == chunkSize - 1) {
+      values[index] = exception;
+    }
+    sample.push_back(values[index]);
+  }
+  EXPECT_EQ(
+      Alp::estimateSize(values, options),
+      Alp::estimateSizeFromSample(kRowCount, sample, options));
+}
+
+TYPED_TEST(ALPEncodingTest, strideSamplerEstimateStableOnUniformInput) {
+  using DataType = typename TypeParam::data_type;
+  using PhysicalType = typename nimble::TypeTraits<DataType>::physicalType;
+  using Alp = nimble::ALPEncoding<DataType>;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  for (uint32_t rowCount : {31, 63, 1023, 1025, 100'000}) {
+    const auto physical =
+        nimble::detail::alp::toPhysical<DataType>(DataType{1.25});
+    const std::vector<PhysicalType> values(rowCount, physical);
+    const std::vector<PhysicalType> sample(
+        Alp::estimateSampleSize(rowCount), physical);
+    const auto estimate = Alp::estimateSize(values, options);
+    ASSERT_TRUE(estimate.has_value());
+    EXPECT_EQ(estimate, Alp::estimateSizeFromSample(rowCount, sample, options));
+  }
+}
+
 // batchTransform (xsimd) must produce lane-by-lane byte-identical output to
 // the scalar path (scalarTransformOne). This is the correctness contract that
 // lets the encode loop and the selection grid route through the vectorized
