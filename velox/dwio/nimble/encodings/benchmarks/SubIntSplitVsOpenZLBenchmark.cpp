@@ -116,6 +116,14 @@ using T = uint64_t;
 constexpr DataType kDataType = DataType::Uint64;
 constexpr int kBitWidth = 64;
 
+// Shared by every arm. The production writer always supplies one, so an
+// encoding that cannot use it is measured unfairly against one that can.
+facebook::velox::BufferPool& scratchBufferPool() {
+  static facebook::velox::BufferPool pool{
+      facebook::velox::BufferPool::kDefaultCapacity};
+  return pool;
+}
+
 // ---------------------------------------------------------------------------
 // Seeded data generators, parameterized by element count and trial seed.
 // ---------------------------------------------------------------------------
@@ -408,6 +416,43 @@ std::vector<std::pair<EncodingType, float>> tunedReadFactors() {
   return factors;
 }
 
+// SubIntSplit driven entirely from config: the caller names the bit ranges, the
+// same way BitRangeSplit has to be configured. No planner runs.
+Encoded encodeSubIntSplitConfigured(
+    const Vector<T>& data,
+    const std::string& ranges,
+    CompressionType compressionType) {
+  auto& pool = benchmarkPool();
+  Buffer buffer{*pool};
+  std::span<const T> values{data.data(), data.size()};
+
+  std::optional<CompressionOptions> compressionOptions;
+  if (compressionType != CompressionType::Uncompressed) {
+    CompressionOptions options;
+    options.compressionType = compressionType;
+    options.compressionAcceptRatio = 1.0f;
+    options.zstdMinCompressionSize = 0;
+    options.openzlMinCompressionSize = 0;
+    compressionOptions = options;
+  }
+  ManualEncodingSelectionPolicyFactory factory{
+      tunedReadFactors(), compressionOptions};
+
+  EncodingSelectionResult result{
+      .encodingType = EncodingType::SubIntSplit,
+      .encodingConfig = EncodingLayout::Config{
+          {{std::string(subintsplit::kSplitModeConfigKey),
+            std::string(subintsplit::kSplitModePreserve)},
+           {std::string(subintsplit::kSplitBoundariesConfigKey), ranges}}}};
+  EncodingSelection<T> selection{
+      std::move(result),
+      Statistics<T>::create(values.subspan(0, 1)),
+      factory.createPolicy(kDataType)};
+
+  auto encoded = SubIntSplitEncoding<T>::encode(selection, values, buffer, {});
+  return {std::string{encoded.data(), encoded.size()}, true};
+}
+
 Encoded encodeSubIntSplitWith(
     const Vector<T>& data,
     std::vector<std::pair<EncodingType, float>> readFactors,
@@ -437,6 +482,7 @@ Encoded encodeSubIntSplitWith(
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
   Encoding::Options encodeOptions;
+  encodeOptions.bufferPool = &scratchBufferPool();
   encodeOptions.subIntSplitDecodeCostBitsPerValue = FLAGS_decode_cost_bits;
   encodeOptions.subIntSplitPlannerMaxSamples =
       static_cast<uint32_t>(FLAGS_planner_samples);
@@ -508,8 +554,10 @@ Encoded encodeBitRangeSplitWith(
       Statistics<T>::create(values.subspan(0, 1)),
       factory.createPolicy(kDataType)};
 
-  auto encoded =
-      BitRangeSplitEncoding<T>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  encodeOptions.bufferPool = &scratchBufferPool();
+  auto encoded = BitRangeSplitEncoding<T>::encode(
+      selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
@@ -554,6 +602,22 @@ std::vector<Method> makeMethods() {
        [](const std::string& c, uint32_t) {
          decompressWith(CompressionType::Zstd, c);
        }});
+  // SubIntSplit given the same pinned split BitRangeSplit gets, so the two are
+  // configured identically and only the codecs differ.
+  methods.push_back(
+      {"SubIntSplitConfigured",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitConfigured(
+             d, plannedSplitBoundaries(d), CompressionType::Zstd);
+       },
+       decodeSubIntSplit});
+  methods.push_back(
+      {"SubIntSplitConfiguredFixed",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitConfigured(
+             d, "0-31;32-63", CompressionType::Zstd);
+       },
+       decodeSubIntSplit});
   // Same sections as SubIntSplitTuned, so any delta is codec, not planner.
   methods.push_back(
       {"BitRangeSplitSameSplit",
