@@ -212,7 +212,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
    private:
     folly::Executor* executor_{nullptr};
-    QueryConfig queryConfig_{QueryConfig{{}}};
+    // Optional so that build() constructs the default config, which resolves
+    // every property, only when queryConfig() was not called.
+    std::optional<QueryConfig> queryConfig_;
     std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>
         connectorConfigs_;
     cache::AsyncDataCache* cache_{cache::AsyncDataCache::getInstance()};
@@ -552,10 +554,14 @@ class ExecCtx {
 
   struct OptimizationParams {
     explicit OptimizationParams(QueryCtx* queryCtx) {
-      const core::QueryConfig defaultQueryConfig = core::QueryConfig({});
+      // Constructed only when needed: QueryConfig resolves every property up
+      // front.
+      std::optional<core::QueryConfig> defaultQueryConfig;
 
-      const core::QueryConfig& queryConfig =
-          queryCtx ? queryCtx->queryConfig() : defaultQueryConfig;
+      const core::QueryConfig& queryConfig = queryCtx
+          ? queryCtx->queryConfig()
+          : defaultQueryConfig.emplace(
+                std::unordered_map<std::string, std::string>{});
 
       exprEvalCacheEnabled = queryConfig.isExpressionEvaluationCacheEnabled();
       dictionaryMemoizationEnabled =

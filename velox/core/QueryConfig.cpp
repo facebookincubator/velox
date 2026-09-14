@@ -290,6 +290,19 @@ QueryConfig::QueryConfig(
   validateConfig();
 }
 
+folly::Try<uint64_t> QueryConfig::resolveBytes(
+    const std::string& key,
+    const std::string& defaultValue) const {
+  return folly::makeTryWith([&]() {
+    const auto value = config_->get<std::string>(key, defaultValue);
+    try {
+      return config::toCapacity(value, config::CapacityUnit::BYTE);
+    } catch (const VeloxUserError&) {
+      VELOX_USER_FAIL("Invalid value for query config {}: {}", key, value);
+    }
+  });
+}
+
 void QueryConfig::validateConfig() {
   // Validate if timezone name can be recognized.
   if (auto tz = config_->get<std::string>(QueryConfig::kSessionTimezone)) {
@@ -303,7 +316,7 @@ void QueryConfig::validateConfig() {
 
 void QueryConfig::testingOverrideConfigUnsafe(
     std::unordered_map<std::string, std::string>&& values) {
-  config_ = std::make_unique<config::ConfigBase>(std::move(values));
+  *this = QueryConfig{std::move(values)};
 }
 
 std::unordered_map<std::string, std::string> QueryConfig::rawConfigsCopy()

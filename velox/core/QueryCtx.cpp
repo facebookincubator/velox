@@ -47,7 +47,7 @@ std::shared_ptr<QueryCtx> QueryCtx::create(
 std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
   std::shared_ptr<QueryCtx> queryCtx(new QueryCtx(
       executor_,
-      std::move(queryConfig_),
+      queryConfig_.has_value() ? std::move(*queryConfig_) : QueryConfig{{}},
       std::move(connectorConfigs_),
       cache_,
       std::move(pool_),

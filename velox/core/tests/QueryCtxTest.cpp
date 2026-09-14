@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -137,4 +138,15 @@ TEST_F(QueryCtxTest, builderReleaseCallbacks) {
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "builder_test_query_id");
 }
+
+TEST_F(QueryCtxTest, builderQueryConfig) {
+  auto queryCtx = QueryCtx::Builder().build();
+  EXPECT_THAT(queryCtx->queryConfig().rawConfigsCopy(), testing::IsEmpty());
+
+  queryCtx = QueryCtx::Builder()
+                 .queryConfig(QueryConfig{{{QueryConfig::kMaxSpillLevel, "2"}}})
+                 .build();
+  EXPECT_EQ(queryCtx->queryConfig().maxSpillLevel(), 2);
+}
+
 } // namespace facebook::velox::core::test
