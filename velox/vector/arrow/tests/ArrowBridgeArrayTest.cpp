@@ -908,6 +908,23 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGapWithAllNullTimestampValues) {
   ASSERT_OK(array->ValidateFull());
 }
 
+TEST_F(ArrowBridgeArrayExportTest, missingValuesWithNonNulls) {
+  constexpr vector_size_t kSize = 2;
+  auto nulls = AlignedBuffer::allocate<bool>(kSize, pool_.get());
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  bits::fillBits(rawNulls, 0, kSize, bits::kNotNull);
+  bits::setNull(rawNulls, 0);
+  EXPECT_THROW(
+      std::make_shared<FlatVector<int64_t>>(
+          pool_.get(),
+          BIGINT(),
+          nulls,
+          kSize,
+          /*values=*/nullptr,
+          std::vector<BufferPtr>{}),
+      VeloxRuntimeError);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   auto elements = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
   elements->setNull(3, true);
