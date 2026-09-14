@@ -61,6 +61,7 @@ add_library(
   views/FixedBitWidthEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
+  views/EncodingViewUtils.h
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
