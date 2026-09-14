@@ -81,8 +81,6 @@ class CacheTest : public ::testing::Test {
     }
     if (cache_ != nullptr) {
       cache_->shutdown();
-    }
-    if (cache_ != nullptr) {
       auto* ssdCache = cache_->ssdCache();
       if (ssdCache != nullptr) {
         ssdCacheHelper_->deleteFiles();
