@@ -25,6 +25,7 @@
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -93,6 +94,12 @@ DEFINE_int32(
     "N=5 means 20% chance, N=2 means 50% chance.");
 
 DEFINE_int32(
+    table_evolution_coverage_interval_sec,
+    60,
+    "Minimum interval between cumulative coverage snapshots emitted while an "
+    "iteration is running. Zero disables periodic snapshots.");
+
+DEFINE_int32(
     batches_per_file,
     8,
     "Number of independently-fuzzed batches written per file (one writer "
@@ -139,6 +146,141 @@ std::ostream& operator<<(
 }
 
 namespace {
+
+int64_t runtimeStatSum(const OperatorStats& op, std::string_view key) {
+  auto it = op.runtimeStats.find(std::string(key));
+  return it != op.runtimeStats.end() ? it->second.sum : 0;
+}
+
+TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
+    const std::shared_ptr<exec::Task>& task) {
+  TableEvolutionFuzzer::ScanPlanCoverage result;
+  result.numQueries = 1;
+  auto taskStats = task->taskStats();
+  for (const auto& pipeline : taskStats.pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "TableScan") {
+        result.numSplits += op.numSplits;
+        result.rawInputPositions += op.rawInputPositions;
+        result.rawInputBytes += op.rawInputBytes;
+        result.outputPositions += op.outputPositions;
+        result.outputBytes += op.outputBytes;
+
+        result.skippedSplits += runtimeStatSum(op, "skippedSplits");
+        result.skippedSplitBytes += runtimeStatSum(op, "skippedSplitBytes");
+        result.skippedStrides += runtimeStatSum(op, "skippedStrides");
+        result.processedStrides += runtimeStatSum(op, "processedStrides");
+
+        result.numStripeLoads += runtimeStatSum(op, "numStripeLoads");
+        result.numIndexFilterConversions +=
+            runtimeStatSum(op, "numIndexFilterConversions");
+
+        result.storageReadBytes += runtimeStatSum(op, "storageReadBytes");
+        result.ramReadBytes += runtimeStatSum(op, "ramReadBytes");
+        result.metadataStorageReadBytes +=
+            runtimeStatSum(op, "metadata.storageReadBytes");
+        result.prefetchBytes += runtimeStatSum(op, "prefetchBytes");
+        result.overreadBytes += runtimeStatSum(op, "overreadBytes");
+      }
+
+      // These stats belong to the operator active when the reader or LazyVector
+      // records them, which can be a scan, aggregation, or intervening project.
+      result.dataSourceLazyInputBytes +=
+          runtimeStatSum(op, "dataSourceLazyInputBytes");
+      result.dataSourceLazyCpuNanos +=
+          runtimeStatSum(op, "dataSourceLazyCpuNanos");
+      result.dataSourceLazyWallNanos +=
+          runtimeStatSum(op, "dataSourceLazyWallNanos");
+      result.numStringDictionaryEncodingPreserved += runtimeStatSum(
+          op, nimble::fuzzer::kStringDictionaryEncodingPreserved);
+      result.numStringDictionaryEncodingAbandoned += runtimeStatSum(
+          op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
+    }
+  }
+  result.numQueriesWithLazyIo = result.dataSourceLazyInputBytes > 0 ||
+      result.dataSourceLazyCpuNanos > 0 || result.dataSourceLazyWallNanos > 0;
+  return result;
+}
+
+void addScanStats(
+    const TableEvolutionFuzzer::ScanPlanCoverage& stats,
+    TableEvolutionFuzzer::ScanPlanCoverage& coverage) {
+  coverage.numQueries += stats.numQueries;
+  coverage.numSplits += stats.numSplits;
+  coverage.rawInputPositions += stats.rawInputPositions;
+  coverage.rawInputBytes += stats.rawInputBytes;
+  coverage.outputPositions += stats.outputPositions;
+  coverage.outputBytes += stats.outputBytes;
+
+  coverage.skippedSplits += stats.skippedSplits;
+  coverage.skippedSplitBytes += stats.skippedSplitBytes;
+  coverage.skippedStrides += stats.skippedStrides;
+  coverage.processedStrides += stats.processedStrides;
+
+  coverage.numStripeLoads += stats.numStripeLoads;
+  coverage.numIndexFilterConversions += stats.numIndexFilterConversions;
+  coverage.numStringDictionaryEncodingPreserved +=
+      stats.numStringDictionaryEncodingPreserved;
+  coverage.numStringDictionaryEncodingAbandoned +=
+      stats.numStringDictionaryEncodingAbandoned;
+  coverage.numQueriesWithLazyIo += stats.numQueriesWithLazyIo;
+  coverage.dataSourceLazyInputBytes += stats.dataSourceLazyInputBytes;
+  coverage.dataSourceLazyCpuNanos += stats.dataSourceLazyCpuNanos;
+  coverage.dataSourceLazyWallNanos += stats.dataSourceLazyWallNanos;
+
+  coverage.storageReadBytes += stats.storageReadBytes;
+  coverage.ramReadBytes += stats.ramReadBytes;
+  coverage.metadataStorageReadBytes += stats.metadataStorageReadBytes;
+  coverage.prefetchBytes += stats.prefetchBytes;
+  coverage.overreadBytes += stats.overreadBytes;
+}
+
+void logScanStats(
+    std::string_view label,
+    const TableEvolutionFuzzer::ScanPlanCoverage& stats) {
+  VLOG(1) << "ScanCoverage[" << label
+          << "] volume: numSplits=" << stats.numSplits
+          << " rawInputPos=" << stats.rawInputPositions
+          << " rawInputBytes=" << stats.rawInputBytes
+          << " outputPos=" << stats.outputPositions
+          << " outputBytes=" << stats.outputBytes;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] pruning: skippedSplits=" << stats.skippedSplits
+          << " skippedSplitBytes=" << stats.skippedSplitBytes
+          << " skippedStrides=" << stats.skippedStrides
+          << " processedStrides=" << stats.processedStrides;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] nimble: stripeLoads=" << stats.numStripeLoads
+          << " indexFilterConv=" << stats.numIndexFilterConversions
+          << " dictionaryEncodingPreserved="
+          << stats.numStringDictionaryEncodingPreserved
+          << " dictionaryEncodingAbandoned="
+          << stats.numStringDictionaryEncodingAbandoned;
+  VLOG(1) << "ScanCoverage[" << label << "] operatorScopedLazyIO: inputBytes="
+          << stats.dataSourceLazyInputBytes
+          << " cpuNs=" << stats.dataSourceLazyCpuNanos
+          << " wallNs=" << stats.dataSourceLazyWallNanos;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] ioSource: storageBytes=" << stats.storageReadBytes
+          << " ramBytes=" << stats.ramReadBytes
+          << " metadataStorageBytes=" << stats.metadataStorageReadBytes
+          << " prefetchBytes=" << stats.prefetchBytes
+          << " overreadBytes=" << stats.overreadBytes;
+}
+
+std::vector<TableEvolutionFuzzer::InputFile> extractInputFiles(
+    const std::vector<Split>& splits) {
+  std::vector<TableEvolutionFuzzer::InputFile> files;
+  files.reserve(splits.size());
+  for (const auto& split : splits) {
+    auto fileSplit =
+        std::dynamic_pointer_cast<connector::hive::FileConnectorSplit>(
+            split.connectorSplit);
+    VELOX_CHECK_NOT_NULL(fileSplit);
+    files.push_back({fileSplit->filePath, fileSplit->fileFormat});
+  }
+  return files;
+}
 
 // Default vector size for the fuzzer; the actual per-batch row count is chosen
 // adaptively per setup to hit a byte target (see computeAdaptiveVectorSize).
@@ -240,6 +382,52 @@ bool hasEmptyElement(const RowVectorPtr& data, int columnIndex) {
 }
 
 } // namespace
+
+void TableEvolutionFuzzer::CoverageAccumulator::add(
+    const QueryCoverage& query) {
+  ++numQueriesAttempted;
+  if (query.countConfigCoverage) {
+    configs.numFlatmapEligible += query.flatmapEligible;
+    configs.numFlatmapEligibleColumns += query.numFlatmapEligibleColumns;
+    for (const auto& type : query.flatmapEligibleKeyTypes) {
+      ++configs.flatmapEligibleByKeyType[type];
+    }
+    for (const auto& type : query.flatmapEligibleValueTypes) {
+      ++configs.flatmapEligibleByValueType[type];
+    }
+    configs.numBucketed += query.bucketed;
+    configs.numBucketSelected += query.bucketSelected;
+    for (const auto& type : query.bucketColumnTypes) {
+      ++configs.bucketColumnsByType[type];
+    }
+    if (query.bucketed) {
+      ++configs.bucketedByColumnCount[query.numBucketColumns];
+      auto bucketColumnTypes = query.bucketColumnTypes;
+      std::sort(bucketColumnTypes.begin(), bucketColumnTypes.end());
+      ++configs.bucketColumnTypeSignaturesByCount[query.numBucketColumns]
+                                                 [folly::join(
+                                                     "+", bucketColumnTypes)];
+    }
+    if (query.bucketSelected) {
+      ++configs.bucketSelectedByBucketCount[query.bucketCount];
+    }
+  }
+
+  if (!query.executionSucceeded) {
+    ++numExecutionFailures;
+    return;
+  }
+
+  ++numQueriesCompleted;
+  if (query.verificationPassed) {
+    ++numVerificationsPassed;
+  } else {
+    ++numVerificationsFailed;
+  }
+
+  addScanStats(query.pushdown, pushdown);
+  addScanStats(query.reference, reference);
+}
 
 int TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
     double bytesPerRow,
@@ -783,7 +971,65 @@ bool containsIdentifier(const std::string& expr, const std::string& name) {
   }
   return false;
 }
+
+void addTypeEvolution(
+    const TypePtr& previous,
+    const TypePtr& current,
+    std::string_view position,
+    TableEvolutionFuzzer::ConfigCoverage& coverage) {
+  if (previous->kind() != current->kind()) {
+    ++coverage.numTypeTransitions;
+    ++coverage.schemaEvolutionByType[fmt::format(
+        "{}->{}", previous->kindName(), current->kindName())];
+    ++coverage.schemaEvolutionByPosition[std::string(position)];
+    return;
+  }
+
+  if (previous->isArray()) {
+    addTypeEvolution(
+        previous->asArray().elementType(),
+        current->asArray().elementType(),
+        "arrayElement",
+        coverage);
+    return;
+  }
+  if (previous->isMap()) {
+    addTypeEvolution(
+        previous->asMap().keyType(),
+        current->asMap().keyType(),
+        "mapKey",
+        coverage);
+    addTypeEvolution(
+        previous->asMap().valueType(),
+        current->asMap().valueType(),
+        "mapValue",
+        coverage);
+    return;
+  }
+  if (previous->isRow()) {
+    const auto& previousRow = previous->asRow();
+    const auto& currentRow = current->asRow();
+    const auto commonSize = std::min(previousRow.size(), currentRow.size());
+    for (uint32_t i = 0; i < commonSize; ++i) {
+      addTypeEvolution(
+          previousRow.childAt(i), currentRow.childAt(i), "rowField", coverage);
+    }
+    for (uint32_t i = commonSize; i < currentRow.size(); ++i) {
+      ++coverage.numAddedFields;
+      ++coverage.schemaEvolutionByType[fmt::format(
+          "ADDED->{}", currentRow.childAt(i)->kindName())];
+      ++coverage.schemaEvolutionByPosition["rowField"];
+    }
+  }
+}
+
 } // namespace
+
+void TableEvolutionFuzzer::CoverageAccumulator::addSchemaEvolution(
+    const RowTypePtr& previous,
+    const RowTypePtr& current) {
+  addTypeEvolution(previous, current, "topLevel", configs);
+}
 
 bool TableEvolutionFuzzer::isColumnUsedByAggregation(
     const std::string& columnName,
@@ -969,6 +1215,7 @@ void TableEvolutionFuzzer::run() {
         finalExpectedData,
         globalMapColumnKeys,
         globallyConsistentColumnIndexVector,
+        /*countConfigCoverage=*/shape == 0,
         shouldGenerateRemainingFilters,
         generatedRemainingFilters,
         columnNameMapping,
@@ -1088,6 +1335,7 @@ void TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
         finalExpectedData,
         globalMapColumnKeys,
         globallyConsistentColumnIndexVector,
+        /*countConfigCoverage=*/shape == 0,
         /*shouldGenerateRemainingFilters=*/false,
         noRemainingFilters,
         noColumnNameMapping,
@@ -1103,6 +1351,7 @@ void TableEvolutionFuzzer::runQueryShape(
     const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
         globalMapColumnKeys,
     const std::vector<int>& globallyConsistentColumnIndexVector,
+    bool countConfigCoverage,
     bool shouldGenerateRemainingFilters,
     const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
         generatedRemainingFilters,
@@ -1131,6 +1380,8 @@ void TableEvolutionFuzzer::runQueryShape(
       ? makeInputFileSplits(*inputFile_)
       : createScanSplitsFromWriteResults(
             writeResults, testSetups, bucketColumnIndices, selectedBucket);
+  const auto pushdownFiles = extractInputFiles(actualSplits);
+  const auto referenceFiles = extractInputFiles(expectedSplits);
 
   // Step 5: Setup scan tasks with filters and optional aggregation pushdown
   auto rowType = testSetups.back().schema;
@@ -1221,6 +1472,13 @@ void TableEvolutionFuzzer::runQueryShape(
   // plans. buildFlatmapAsStructSchema draws an rng coin per compatible map
   // column; computing it separately per plan could make the pushdown and
   // FilterNode plans disagree on a column's read mode (MAP vs struct).
+  const bool flatmapEligible = std::any_of(
+      globallyConsistentColumnIndexVector.begin(),
+      globallyConsistentColumnIndexVector.end(),
+      [&](int columnIndex) {
+        const auto keys = globalMapColumnKeys.find(columnIndex);
+        return keys != globalMapColumnKeys.end() && !keys->second.empty();
+      });
   RowTypePtr fullOutSchema = buildFlatmapAsStructSchema(
       rowType, globalMapColumnKeys, globallyConsistentColumnIndexVector);
 
@@ -1257,24 +1515,141 @@ void TableEvolutionFuzzer::runQueryShape(
     oomInjectorReadPath.enable();
   }
 
-  // Step 6: Execute scan tasks and verify results
-  auto scanResults = runTaskCursors(scanTasks, executor);
-
-  // Skip result verification when OOM injection is enabled
-  if (!FLAGS_enable_oom_injection_write_path &&
-      !FLAGS_enable_oom_injection_read_path) {
-    try {
-      checkResultsEqual(scanResults[0], scanResults[1]);
-    } catch (const std::exception&) {
-      for (const auto& [key, value] : readSessionProperties_.first) {
-        LOG(ERROR) << "Pushdown scan property: " << key << "=" << value;
-      }
-      for (const auto& [key, value] : readSessionProperties_.second) {
-        LOG(ERROR) << "Reference scan property: " << key << "=" << value;
-      }
-      throw;
+  std::vector<std::string> flatmapEligibleKeyTypes;
+  std::vector<std::string> flatmapEligibleValueTypes;
+  for (uint32_t i = 0; i < rowType->size(); ++i) {
+    if (!rowType->childAt(i)->isMap()) {
+      continue;
+    }
+    const auto& mapType = rowType->childAt(i)->asMap();
+    const auto columnIndex = static_cast<int>(i);
+    const auto keys = globalMapColumnKeys.find(columnIndex);
+    const bool columnEligible =
+        std::find(
+            globallyConsistentColumnIndexVector.begin(),
+            globallyConsistentColumnIndexVector.end(),
+            columnIndex) != globallyConsistentColumnIndexVector.end() &&
+        keys != globalMapColumnKeys.end() && !keys->second.empty();
+    if (columnEligible) {
+      flatmapEligibleKeyTypes.emplace_back(mapType.keyType()->kindName());
+      flatmapEligibleValueTypes.emplace_back(mapType.valueType()->kindName());
     }
   }
+
+  std::vector<std::string> bucketColumnTypes;
+  bucketColumnTypes.reserve(bucketColumnIndices.size());
+  for (const auto columnIndex : bucketColumnIndices) {
+    bucketColumnTypes.emplace_back(rowType->childAt(columnIndex)->kindName());
+  }
+
+  VLOG(1) << "ScanCoverage[context]:"
+          << " subfieldFilters=" << pushdownConfig.subfieldFiltersMap.size()
+          << " remainingFilter=" << !pushdownConfig.remainingFilter.empty()
+          << " aggFunctions="
+          << (aggConfig ? folly::join(",", aggConfig->aggregates) : "none")
+          << " groupKeys="
+          << (aggConfig ? folly::join(",", aggConfig->groupingKeys) : "none")
+          << " filterOnlyCols=" << droppedColumns.size() << " bucket="
+          << (selectedBucket ? std::to_string(*selectedBucket) : "none");
+
+  // Step 6: Execute scan tasks and verify results
+  const bool collectCoverage = !FLAGS_enable_oom_injection_write_path &&
+      !FLAGS_enable_oom_injection_read_path;
+  const auto numFlatmapEligibleColumns =
+      static_cast<int64_t>(flatmapEligibleKeyTypes.size());
+  QueryCoverage queryCoverage{
+      .pushdownFiles = pushdownFiles,
+      .referenceFiles = referenceFiles,
+      .pushdown = {},
+      .reference = {},
+      .flatmapEligibleKeyTypes = std::move(flatmapEligibleKeyTypes),
+      .flatmapEligibleValueTypes = std::move(flatmapEligibleValueTypes),
+      .bucketColumnTypes = std::move(bucketColumnTypes),
+      .flatmapEligible = flatmapEligible,
+      .countConfigCoverage = countConfigCoverage,
+      .bucketed = !bucketColumnIndices.empty(),
+      .bucketSelected = selectedBucket.has_value(),
+      .numFlatmapEligibleColumns = numFlatmapEligibleColumns,
+      .numBucketColumns = static_cast<int64_t>(bucketColumnIndices.size()),
+      .bucketCount = testSetups.back().bucketCount(),
+      .executionSucceeded = false,
+      .verificationPassed = false,
+  };
+
+  auto notifyCoverageObserver = [&] {
+    if (config_.queryCoverageObserver) {
+      try {
+        config_.queryCoverageObserver(queryCoverage);
+      } catch (const std::exception& observerError) {
+        LOG(ERROR) << "Query coverage observer failed: "
+                   << observerError.what();
+      } catch (...) {
+        LOG(ERROR) << "Query coverage observer failed with an unknown error";
+      }
+    }
+  };
+
+  auto recordCoverage = [&] {
+    coverageStats_.add(queryCoverage);
+    maybeLogCoverageSummary();
+    notifyCoverageObserver();
+  };
+
+  auto recordCoverageAndRethrow = [&](std::exception_ptr error) -> void {
+    coverageStats_.add(queryCoverage);
+    maybeLogCoverageSummary();
+    notifyCoverageObserver();
+    std::rethrow_exception(error);
+  };
+
+  std::vector<std::vector<RowVectorPtr>> scanResults;
+  try {
+    scanResults = runTaskCursors(scanTasks, executor);
+  } catch (...) {
+    if (collectCoverage) {
+      recordCoverageAndRethrow(std::current_exception());
+    }
+    throw;
+  }
+
+  if (!collectCoverage) {
+    return;
+  }
+
+  auto pushdownStats = extractScanStats(scanTasks[0]->task());
+  auto referenceStats = extractScanStats(scanTasks[1]->task());
+  queryCoverage.pushdown = pushdownStats;
+  queryCoverage.reference = referenceStats;
+  queryCoverage.executionSucceeded = true;
+  logScanStats("pushdown", pushdownStats);
+  logScanStats("reference", referenceStats);
+
+  const double pushdownVsReferenceOutputRatio =
+      referenceStats.outputPositions > 0
+      ? static_cast<double>(pushdownStats.outputPositions) /
+          static_cast<double>(referenceStats.outputPositions)
+      : 1.0;
+  const uint64_t rowsReducedByPushdown =
+      referenceStats.outputPositions > pushdownStats.outputPositions
+      ? referenceStats.outputPositions - pushdownStats.outputPositions
+      : 0;
+  VLOG(1) << "ScanCoverage[derived]:"
+          << " pushdownVsReferenceOutputRatio="
+          << pushdownVsReferenceOutputRatio
+          << " rowsReducedByPushdown=" << rowsReducedByPushdown;
+  try {
+    checkResultsEqual(scanResults[0], scanResults[1]);
+    queryCoverage.verificationPassed = true;
+  } catch (...) {
+    for (const auto& [key, value] : readSessionProperties_.first) {
+      LOG(ERROR) << "Pushdown scan property: " << key << "=" << value;
+    }
+    for (const auto& [key, value] : readSessionProperties_.second) {
+      LOG(ERROR) << "Reference scan property: " << key << "=" << value;
+    }
+    recordCoverageAndRethrow(std::current_exception());
+  }
+  recordCoverage();
 }
 
 int TableEvolutionFuzzer::Setup::bucketCount() const {
@@ -1440,6 +1815,7 @@ std::vector<TableEvolutionFuzzer::Setup> TableEvolutionFuzzer::makeSetups(
     } else {
       setups[i].schema = evolveRowType(
           *setups[i - 1].schema, bucketColumnIndices, columnNameMapping);
+      coverageStats_.addSchemaEvolution(setups[i - 1].schema, setups[i].schema);
     }
     if (!bucketColumnIndices.empty()) {
       if (i == 0) {
@@ -2091,6 +2467,104 @@ void TableEvolutionFuzzer::applyRemainingFilters(
   } else if (filterStrings.size() > 1) {
     pushownConfig.remainingFilter =
         "(" + folly::join(") AND (", filterStrings) + ")";
+  }
+}
+
+void TableEvolutionFuzzer::logCoverageSummary() const {
+  const auto& stats = coverageStats_;
+  const auto formatCounts = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [name, count] : counts) {
+      entries.push_back(fmt::format("{}={}", name, count));
+    }
+    return entries.empty() ? std::string{"none"} : folly::join(",", entries);
+  };
+  const auto formatCountsByLine = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [name, count] : counts) {
+      entries.push_back(fmt::format("      {}={}", name, count));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  const auto formatTypeSignatures = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [signature, count] : counts) {
+      entries.push_back(fmt::format("({})x{}", signature, count));
+    }
+    return entries.empty() ? std::string{"none"} : folly::join(",", entries);
+  };
+  const auto formatBucketCounts = [](const auto& counts) {
+    std::vector<std::string> entries;
+    entries.reserve(counts.size());
+    for (const auto& [numBuckets, numSetups] : counts) {
+      entries.push_back(fmt::format("{} buckets x {}", numBuckets, numSetups));
+    }
+    return entries.empty() ? std::string{"none"} : folly::join(", ", entries);
+  };
+  const auto formatBucketColumnsByCount = [&] {
+    std::vector<std::string> entries;
+    entries.reserve(stats.configs.bucketedByColumnCount.size());
+    for (const auto& [numColumns, numQueries] :
+         stats.configs.bucketedByColumnCount) {
+      entries.push_back(
+          fmt::format(
+              "      {}:\n"
+              "        total: {}\n"
+              "        typeSignatures: {}",
+              numColumns,
+              numQueries,
+              formatTypeSignatures(
+                  stats.configs.bucketColumnTypeSignaturesByCount.at(
+                      numColumns))));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  LOG(WARNING) << fmt::format(
+      "queries: attempted={} completed={} failed={}\n"
+      "verification: passed={} failed={}\n\n"
+      "TableEvolutionCoverage:\n"
+      "  bucket:\n"
+      "    bucketedSetups: {}\n"
+      "    selectedSetups: {}\n"
+      "    columnsByType: {}\n"
+      "    bucketedByColumnCount:\n{}\n"
+      "    setupsByBucketCount: {}\n"
+      "  schemaEvolution:\n"
+      "    transitions: {}\n"
+      "    addedFields: {}\n"
+      "    byType:\n{}\n"
+      "    byPosition: {}",
+      stats.numQueriesAttempted,
+      stats.numQueriesCompleted,
+      stats.numExecutionFailures,
+      stats.numVerificationsPassed,
+      stats.numVerificationsFailed,
+      stats.configs.numBucketed,
+      stats.configs.numBucketSelected,
+      formatCounts(stats.configs.bucketColumnsByType),
+      formatBucketColumnsByCount(),
+      formatBucketCounts(stats.configs.bucketSelectedByBucketCount),
+      stats.configs.numTypeTransitions,
+      stats.configs.numAddedFields,
+      formatCountsByLine(stats.configs.schemaEvolutionByType),
+      formatCounts(stats.configs.schemaEvolutionByPosition));
+}
+
+void TableEvolutionFuzzer::maybeLogCoverageSummary() {
+  if (FLAGS_table_evolution_coverage_interval_sec <= 0) {
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  if (now - lastCoverageLogTime_ >=
+      std::chrono::seconds(FLAGS_table_evolution_coverage_interval_sec)) {
+    logCoverageSummary();
+    lastCoverageLogTime_ = now;
   }
 }
 
