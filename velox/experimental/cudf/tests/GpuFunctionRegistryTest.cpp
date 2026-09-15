@@ -34,7 +34,7 @@ std::unique_ptr<cudf::column> launcherA(
     const std::vector<GpuArgView>&,
     cudf::size_type,
     cudf::data_type,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref) {
   return nullptr;
 }
@@ -43,7 +43,7 @@ std::unique_ptr<cudf::column> launcherB(
     const std::vector<GpuArgView>&,
     cudf::size_type,
     cudf::data_type,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref) {
   return nullptr;
 }

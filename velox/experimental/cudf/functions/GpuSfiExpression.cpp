@@ -195,7 +195,7 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
 
 ColumnOrView GpuSfiExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
     bool /*finalize*/) {
   // Results of delegated children have to outlive the launch.
