@@ -20,6 +20,8 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 
+#include <cuda/stream>
+
 namespace facebook::velox::ucx_exchange {
 
 /// This is the cudf equivalent of the PartitionedOutput operator for cudf.
@@ -76,12 +78,12 @@ class UcxPartitionedOutput : public exec::Operator,
 
   // Partitions the cudf table view using the partition keys and a hash
   // function using the given stream.
-  void hashPartition(cudf::table_view tableView, rmm::cuda_stream_view stream);
+  void hashPartition(cudf::table_view tableView, cuda::stream_ref stream);
 
   // Splits the cudf table view into equal sizes. This is used when
   // RoundRobin partitioning is requested but round robin on a
   // row-by-row basis is not meaningful for UCX exchange.
-  void equalPartition(cudf::table_view tableView, rmm::cuda_stream_view stream);
+  void equalPartition(cudf::table_view tableView, cuda::stream_ref stream);
 
   // Splits the table along the given offsets and enqueues each offset
   // to the corresponding partition, i.e. first split to the partition 0,
@@ -89,7 +91,7 @@ class UcxPartitionedOutput : public exec::Operator,
   void splitAndEnqueue(
       cudf::table_view tableView,
       std::vector<cudf::size_type> offsets,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   // Routes the table to destinations by partition, hashing on the partition
   // keys when they are known and splitting into equal sizes otherwise.
@@ -98,7 +100,7 @@ class UcxPartitionedOutput : public exec::Operator,
   void partitionAndEnqueue(
       cudf::table_view tableView,
       vector_size_t numRows,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   // Splits a column-less payload across the destinations by row count alone.
   // There is no GPU data to move and no partition key to hash, so each
@@ -107,7 +109,7 @@ class UcxPartitionedOutput : public exec::Operator,
   void equalPartitionRowCountOnly(
       cudf::table_view tableView,
       vector_size_t numRows,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   // Sends the rows that must reach every destination -- rows with a null
   // partition key, plus one arbitrary row over the lifetime of this operator --
@@ -115,7 +117,7 @@ class UcxPartitionedOutput : public exec::Operator,
   void replicateNullsAndAnyThenPartition(
       cudf::table_view tableView,
       vector_size_t numRows,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   // Packs the table separately for each destination and enqueues one private
   // copy per destination. A shared packed_columns cannot be used: the
@@ -123,7 +125,7 @@ class UcxPartitionedOutput : public exec::Operator,
   // data for every other destination.
   void packAndEnqueueToAllDestinations(
       cudf::table_view tableView,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   const std::weak_ptr<UcxOutputQueueManager> queueManager_;
   std::vector<column_index_t> partitionKeyIndices_;

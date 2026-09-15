@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <algorithm>
+#include <cuda/stream>
 #include <memory>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
@@ -70,7 +71,7 @@ class UcxPartitionedOutputTest : public testing::Test {
   std::unique_ptr<cudf::column> makeKeyColumn(
       const std::vector<int32_t>& values,
       const std::vector<cudf::size_type>& nullRows,
-      rmm::cuda_stream_view stream) {
+      cuda::stream_ref stream) {
     const auto numRows = static_cast<cudf::size_type>(values.size());
     auto column = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT32},
@@ -83,7 +84,7 @@ class UcxPartitionedOutputTest : public testing::Test {
         values.data(),
         values.size() * sizeof(int32_t),
         cudaMemcpyHostToDevice,
-        stream.value()));
+        stream.get()));
     for (const auto row : nullRows) {
       cudf::set_null_mask(view.null_mask(), row, row + 1, false, stream);
     }
@@ -94,7 +95,7 @@ class UcxPartitionedOutputTest : public testing::Test {
     // replicate-nulls probes would then be vacuous.
     column->set_null_count(
         cudf::null_count(view.null_mask(), 0, numRows, stream));
-    stream.synchronize();
+    stream.sync();
     return column;
   }
 
@@ -131,7 +132,7 @@ class UcxPartitionedOutputTest : public testing::Test {
   void feedBatch(
       UcxPartitionedOutput* partitionedOutput,
       std::unique_ptr<cudf::column> keyColumn,
-      rmm::cuda_stream_view stream) {
+      cuda::stream_ref stream) {
     const auto numRows = keyColumn->size();
     std::vector<std::unique_ptr<cudf::column>> columns;
     columns.push_back(std::move(keyColumn));
@@ -144,7 +145,7 @@ class UcxPartitionedOutputTest : public testing::Test {
     columns.push_back(make_strings_column_from_host(
         std::vector<std::string>(numRows, "payload")));
     auto table = std::make_unique<cudf::table>(std::move(columns));
-    stream.synchronize();
+    stream.sync();
 
     auto cudfVector = std::make_shared<cudf_velox::CudfVector>(
         partitionedOutput->pool(),
@@ -169,7 +170,7 @@ class UcxPartitionedOutputTest : public testing::Test {
   void runPartitionedOutput(
       const std::shared_ptr<Task>& task,
       std::unique_ptr<cudf::column> keyColumn,
-      rmm::cuda_stream_view stream) {
+      cuda::stream_ref stream) {
     auto partitionedOutput = makePartitionedOutput(task);
     feedBatch(partitionedOutput.get(), std::move(keyColumn), stream);
     finishPartitionedOutput(partitionedOutput.get());
@@ -202,7 +203,7 @@ class UcxPartitionedOutputTest : public testing::Test {
           getColVector<int32_t>(
               unpacked.column(0),
               unpacked.num_rows(),
-              rmm::cuda_stream_default));
+              cuda::stream_ref{cudaStream_t{cudaStreamDefault}}));
     }
     return packets;
   }
@@ -266,7 +267,7 @@ TEST_F(UcxPartitionedOutputTest, requiresProcessWideQueueManager) {
 // from CudfVector must therefore be preserved separately, including when
 // multiple inputs are buffered into one output page.
 TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
-  auto stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
   const auto rowType = ROW({}, {});
   constexpr vector_size_t kFirstBatchRows = 2;
   constexpr vector_size_t kSecondBatchRows = 5;
@@ -338,7 +339,7 @@ TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
 // The bug: both null-keyed rows land in a single hash bucket, so two of the
 // three destinations receive none of them.
 TEST_F(UcxPartitionedOutputTest, replicatesNullPartitionKeysToAllDestinations) {
-  auto stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
   const std::vector<int32_t> keyValues{
       10, 20, kNullSentinel, 30, kNullSentinel, 40};
   const std::vector<cudf::size_type> nullRows{2, 4};
@@ -391,7 +392,7 @@ TEST_F(UcxPartitionedOutputTest, replicatesNullPartitionKeysToAllDestinations) {
 // pass replicateNullsAndAny=false -- or a plan builder that quietly forced it
 // on -- would leave every assertion above passing for the wrong reason.
 TEST_F(UcxPartitionedOutputTest, routesNullPartitionKeysByHashWithoutTheFlag) {
-  auto stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
   const std::vector<int32_t> keyValues{
       10, 20, kNullSentinel, 30, kNullSentinel, 40};
   const std::vector<cudf::size_type> nullRows{2, 4};
@@ -434,7 +435,7 @@ TEST_F(UcxPartitionedOutputTest, routesNullPartitionKeysByHashWithoutTheFlag) {
 // The "and any" half of the contract, which no existing test covers: with no
 // null keys at all, one arbitrary row still reaches every destination.
 TEST_F(UcxPartitionedOutputTest, replicatesOneArbitraryRowWithNullFreeKeys) {
-  auto stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
   const std::vector<int32_t> keyValues{10, 20, 30, 40, 50, 60};
 
   auto keyColumn = makeKeyColumn(keyValues, {}, stream);
@@ -476,7 +477,7 @@ TEST_F(UcxPartitionedOutputTest, replicatesOneArbitraryRowWithNullFreeKeys) {
 // of every later batch across all destinations, and the join on the other side
 // then counts those rows several times.
 TEST_F(UcxPartitionedOutputTest, replicatesArbitraryRowOncePerOperator) {
-  auto stream = rmm::cuda_stream_default;
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
   // Disjoint value ranges, so each batch's row 0 is identifiable at the
   // destination. The second batch carries the nulls, which makes the two
   // flushes distinguishable: see the packet check below.
