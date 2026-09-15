@@ -114,6 +114,82 @@ TEST_F(ExprToSubfieldFilterTest, eqExpr) {
   VELOX_ASSERT_FILTER(equal(42), filter);
 }
 
+TEST_F(ExprToSubfieldFilterTest, wideningCast) {
+  auto verify = [&](const std::string& expression,
+                    const RowTypePtr& type,
+                    std::unique_ptr<common::Filter> expected,
+                    bool negated = false) {
+    SCOPED_TRACE(expression);
+    auto call = parseCallExpr(expression, type);
+    auto [subfield, filter] = leafCallToSubfieldFilter(call, negated);
+    ASSERT_TRUE(filter) << call->toString();
+    validateSubfield(subfield, {"a"});
+    VELOX_ASSERT_FILTER(expected, filter);
+  };
+
+  verify(
+      "cast(a as bigint) = cast('1695324055' as bigint)",
+      ROW("a", INTEGER()),
+      equal(1'695'324'055));
+  verify(
+      "cast(a as smallint) <> 42",
+      ROW("a", TINYINT()),
+      bigintOr(lessThan(42), greaterThan(42)));
+  verify("cast(a as integer) < 42", ROW("a", SMALLINT()), lessThan(42));
+  verify("cast(a as bigint) <= 42", ROW("a", INTEGER()), lessThanOrEqual(42));
+  verify("cast(a as bigint) > 42", ROW("a", INTEGER()), greaterThan(42));
+  verify(
+      "cast(a as bigint) >= 42", ROW("a", INTEGER()), greaterThanOrEqual(42));
+  verify("42 < cast(a as bigint)", ROW("a", INTEGER()), greaterThan(42));
+  verify(
+      "cast(a as bigint) = 42",
+      ROW("a", INTEGER()),
+      bigintOr(lessThan(42), greaterThan(42)),
+      /*negated=*/true);
+}
+
+TEST_F(ExprToSubfieldFilterTest, wideningCastOutOfRange) {
+  auto verify = [&](const std::string& expression,
+                    std::unique_ptr<common::Filter> expected) {
+    SCOPED_TRACE(expression);
+    auto [subfield, filter] = leafCallToSubfieldFilter(
+        parseCallExpr(expression, ROW("a", INTEGER())));
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+    VELOX_ASSERT_FILTER(expected, filter);
+  };
+
+  verify(
+      "cast(a as bigint) = 2147483648",
+      std::make_unique<common::AlwaysFalse>());
+  verify("cast(a as bigint) <> 2147483648", isNotNull());
+  verify("cast(a as bigint) < 2147483648", isNotNull());
+  verify(
+      "cast(a as bigint) > 2147483648",
+      std::make_unique<common::AlwaysFalse>());
+  verify(
+      "cast(a as bigint) < -2147483649",
+      std::make_unique<common::AlwaysFalse>());
+  verify("cast(a as bigint) > -2147483649", isNotNull());
+}
+
+TEST_F(ExprToSubfieldFilterTest, unsupportedCast) {
+  for (const auto& [expression, type] :
+       std::vector<std::pair<std::string, RowTypePtr>>{
+           {"cast(a as integer) = 42", ROW("a", BIGINT())},
+           {"cast(a as double) = 42.0", ROW("a", INTEGER())},
+           {"cast(a as decimal(10, 2)) = cast(1 as decimal(10, 2))",
+            ROW("a", INTEGER())},
+           {"cast(a as bigint) = 42", ROW("a", DATE())},
+           {"try_cast(a as bigint) = 42", ROW("a", INTEGER())},
+       }) {
+    SCOPED_TRACE(expression);
+    auto [subfield, filter] =
+        leafCallToSubfieldFilter(parseCallExpr(expression, type));
+    EXPECT_FALSE(filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, eqSubfield) {
   auto call = parseCallExpr("a.b = 42", ROW("a", ROW("b", BIGINT())));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
