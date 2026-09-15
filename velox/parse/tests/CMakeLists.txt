@@ -14,6 +14,11 @@
 
 add_executable(velox_parse_test QueryPlannerTest.cpp)
 
+# QueryPlannerTest includes velox/parse/QueryPlanner.h, which pulls in
+# <duckdb.hpp>. The vendored DuckDB headers do not compile as C++23 (constexpr
+# ~unique_ptr over an incomplete duckdb::QueryNode).
+set_target_properties(velox_parse_test PROPERTIES CXX_STANDARD 20)
+
 add_test(velox_parse_test velox_parse_test)
 
 target_link_libraries(velox_parse_test velox_parse_parser GTest::gtest GTest::gtest_main)
