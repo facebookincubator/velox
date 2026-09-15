@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
@@ -980,6 +981,20 @@ void collectStreamOffsets(
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
         offsets.insert(flatMap.inMapDescriptorAt(i).offset());
         collectStreamOffsets(*flatMap.childAt(i), offsets);
+      }
+      break;
+    }
+    case nimble::Kind::HybridFlatMap: {
+      const auto& hybridMap = type.asHybridFlatMap();
+      offsets.insert(hybridMap.nullsDescriptor().offset());
+      collectStreamOffsets(*hybridMap.valueTemplate(), offsets);
+      const auto physicalLayout = hybridFlatMapPhysicalLayout(hybridMap);
+      ASSERT_TRUE(physicalLayout.has_value());
+      for (const auto& group : physicalLayout->groups) {
+        offsets.insert(group.keyHasEntriesStreamOffset);
+        offsets.insert(group.inMapStreamOffset);
+        offsets.insert(
+            group.valueStreamOffsets.begin(), group.valueStreamOffsets.end());
       }
       break;
     }

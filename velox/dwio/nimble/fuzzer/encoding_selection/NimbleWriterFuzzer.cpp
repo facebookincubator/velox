@@ -398,6 +398,9 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "Nimble writer fuzzer does not support hybrid FlatMap.");
   }
   NIMBLE_UNREACHABLE("Unsupported schema kind: {}.", type.kind());
 }

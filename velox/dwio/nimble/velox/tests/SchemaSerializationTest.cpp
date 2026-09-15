@@ -14,16 +14,139 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaGenerated.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
+#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
 
 using namespace facebook;
 using namespace facebook::nimble;
+using testing::ElementsAre;
+using testing::FieldsAre;
+TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
+  const HybridFlatMapLayout layout{
+      .groups =
+          {
+              {.groupId = 0, .keys = {"1", "2"}},
+              {.groupId = 1, .keys = {"10"}},
+              {.groupId = kHybridFlatMapDefaultGroupId, .keys = {}},
+          },
+  };
+  const auto serializedLayout = serializeHybridFlatMapLayout(layout);
+  EXPECT_EQ(serializedLayout, "3;0;2;1:1;1:2;1;1;2:10;4294967295;0;");
+  const HybridFlatMapPhysicalLayout physicalLayout{
+      .groups =
+          {
+              {.groupId = 0,
+               .keyHasEntriesStreamOffset = 11,
+               .inMapStreamOffset = 12,
+               .valueStreamOffsets = {13, 14}},
+              {.groupId = 1,
+               .keyHasEntriesStreamOffset = 21,
+               .inMapStreamOffset = 22,
+               .valueStreamOffsets = {23}},
+              {.groupId = kHybridFlatMapDefaultGroupId,
+               .keyHasEntriesStreamOffset = 31,
+               .inMapStreamOffset = 32,
+               .valueStreamOffsets = {33}},
+          },
+  };
+  const auto serializedPhysicalLayout =
+      serializeHybridFlatMapPhysicalLayout(physicalLayout);
 
+  SchemaBuilder schemaBuilder;
+  auto row = schemaBuilder.createRowTypeBuilder(1);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  features->setValueTemplate(
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Double));
+  features->setAttributes({
+      {std::string(kHybridFlatMapLogicalGroupingAttribute), serializedLayout},
+      {std::string(kHybridFlatMapPhysicalStreamsAttribute),
+       serializedPhysicalLayout},
+  });
+  row->addChild("features", features);
+
+  SchemaSerializer serializer;
+  SchemaDeserializer deserializer;
+  const auto serializedSchema = serializer.serialize(schemaBuilder);
+  const auto* serialized =
+      flatbuffers::GetRoot<serialization::Schema>(serializedSchema.data());
+  ASSERT_EQ(serialized->nodes()->size(), 3);
+  EXPECT_EQ(
+      serialized->nodes()->Get(1)->kind(),
+      serialization::Kind_HybridFlatMapInt64);
+  EXPECT_EQ(serialized->nodes()->Get(1)->children(), 1);
+  EXPECT_EQ(serialized->nodes()->Get(2)->name(), nullptr);
+  const auto schema = deserializer.deserialize(serializedSchema);
+
+  const auto& hybridFlatMap = schema->asRow().childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(hybridFlatMap.kind(), Kind::HybridFlatMap);
+  EXPECT_EQ(hybridFlatMap.keyScalarKind(), ScalarKind::Int64);
+  EXPECT_EQ(
+      hybridFlatMap.valueTemplate()->asScalar().scalarDescriptor().scalarKind(),
+      ScalarKind::Double);
+  EXPECT_EQ(features->attributes(), hybridFlatMap.attributes());
+
+  const auto roundTrippedLayout = hybridFlatMapLayout(hybridFlatMap);
+  ASSERT_TRUE(roundTrippedLayout.has_value());
+  EXPECT_THAT(
+      roundTrippedLayout->groups,
+      ElementsAre(
+          FieldsAre(0, ElementsAre("1", "2")),
+          FieldsAre(1, ElementsAre("10")),
+          FieldsAre(kHybridFlatMapDefaultGroupId, ElementsAre())));
+
+  const auto roundTrippedPhysicalLayout =
+      hybridFlatMapPhysicalLayout(hybridFlatMap);
+  ASSERT_TRUE(roundTrippedPhysicalLayout.has_value());
+  EXPECT_THAT(
+      roundTrippedPhysicalLayout->groups,
+      ElementsAre(
+          FieldsAre(0, 11, 12, ElementsAre(13, 14)),
+          FieldsAre(1, 21, 22, ElementsAre(23)),
+          FieldsAre(kHybridFlatMapDefaultGroupId, 31, 32, ElementsAre(33))));
+
+  const auto reserializedSchema = serializer.serialize(*schema);
+  const auto reserializedType = deserializer.deserialize(reserializedSchema);
+  const auto& reserializedHybridMap =
+      reserializedType->asRow().childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(hybridFlatMap.attributes(), reserializedHybridMap.attributes());
+}
+
+TEST(SchemaSerializationTest, hybridFlatMapKeyKindsRoundTrip) {
+  SchemaSerializer serializer;
+  for (const auto keyKind : {
+           ScalarKind::Int8,
+           ScalarKind::UInt8,
+           ScalarKind::Int16,
+           ScalarKind::UInt16,
+           ScalarKind::Int32,
+           ScalarKind::UInt32,
+           ScalarKind::Int64,
+           ScalarKind::UInt64,
+           ScalarKind::Float,
+           ScalarKind::Double,
+           ScalarKind::Bool,
+           ScalarKind::String,
+           ScalarKind::Binary,
+       }) {
+    SchemaBuilder schemaBuilder;
+    auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(keyKind);
+    hybridMap->setValueTemplate(
+        schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+
+    const auto serializedSchema = serializer.serialize(schemaBuilder);
+    const auto schema = SchemaDeserializer::deserialize(serializedSchema);
+    ASSERT_TRUE(schema->isHybridFlatMap());
+    EXPECT_EQ(schema->asHybridFlatMap().keyScalarKind(), keyKind);
+  }
+}
 namespace {
 
 std::shared_ptr<const Type> roundTrip(SchemaBuilder& schemaBuilder) {

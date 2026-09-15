@@ -46,6 +46,7 @@ class ArrayType;
 class ArrayWithOffsetsType;
 class MapType;
 class FlatMapType;
+class HybridFlatMapType;
 class SlidingWindowMapType;
 
 class Type {
@@ -59,6 +60,7 @@ class Type {
   bool isArrayWithOffsets() const;
   bool isMap() const;
   bool isFlatMap() const;
+  bool isHybridFlatMap() const;
   bool isSlidingWindowMap() const;
 
   const ScalarType& asScalar() const;
@@ -68,6 +70,7 @@ class Type {
   const ArrayWithOffsetsType& asArrayWithOffsets() const;
   const MapType& asMap() const;
   const FlatMapType& asFlatMap() const;
+  const HybridFlatMapType& asHybridFlatMap() const;
   const SlidingWindowMapType& asSlidingWindowMap() const;
 
   /// Returns the per-type string-keyed attribute bag. Insertion order
@@ -238,6 +241,25 @@ class FlatMapType : public Type {
   std::vector<std::shared_ptr<const Type>> children_;
 };
 
+class HybridFlatMapType : public Type {
+ public:
+  HybridFlatMapType(
+      StreamDescriptor nullsDescriptor,
+      ScalarKind keyScalarKind,
+      std::shared_ptr<const Type> valueTemplate,
+      std::vector<std::pair<std::string, std::string>> attributes = {});
+
+  const StreamDescriptor& nullsDescriptor() const;
+  ScalarKind keyScalarKind() const;
+  /// Returns the logical value shape. Its descriptor offsets are not written.
+  const std::shared_ptr<const Type>& valueTemplate() const;
+
+ private:
+  StreamDescriptor nullsDescriptor_;
+  ScalarKind keyScalarKind_;
+  std::shared_ptr<const Type> valueTemplate_;
+};
+
 class ArrayWithOffsetsType : public Type {
  public:
   ArrayWithOffsetsType(
@@ -317,6 +339,9 @@ std::ostream& operator<<(
 /// as a hotspot in the Deserializer's per-batch flatmap in-map detection
 /// over hundreds of keys. Concrete-typed callables remove that dispatch
 /// without forcing every caller to materialize an intermediate offset list.
+/// HybridFlatMap is an exception: its logical value template is not
+/// written, and its physical value streams live in layout metadata. This
+/// generic walker therefore reports no value anchors for that kind.
 template <typename Visitor>
 bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
   switch (type.kind()) {
@@ -361,6 +386,11 @@ bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
       }
       return false;
     }
+    case Kind::HybridFlatMap:
+      // The value template describes shape only and is never written. Physical
+      // aware callers must visit the physical group offsets from the layout
+      // attribute instead.
+      return false;
     default:
       NIMBLE_UNREACHABLE("Unsupported type kind: {}", type.kind());
   }
@@ -375,7 +405,8 @@ bool visitValueStreamLeaves(const Type& type, Visitor&& visit) {
 /// Visits stream offsets whose presence proves `type` has data in the current
 /// stripe. Unlike visitValueStreamLeaves(), this includes container presence
 /// streams such as Row and FlatMap null streams, and nested FlatMap in-map
-/// streams.
+/// streams. For HybridFlatMap this visits only the logical null stream;
+/// Hybrid FlatMap callers must visit group streams from the physical layout.
 template <typename Visitor>
 bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
   switch (type.kind()) {
@@ -432,6 +463,11 @@ bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
         }
       }
       return false;
+    }
+    case Kind::HybridFlatMap: {
+      // Physical group streams are hidden from the logical type tree. The
+      // nulls stream is the only written presence stream represented here.
+      return visit(type.asHybridFlatMap().nullsDescriptor().offset());
     }
     default:
       NIMBLE_UNREACHABLE("Unsupported type kind: {}", type.kind());

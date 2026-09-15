@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+
+#include <algorithm>
+
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
@@ -51,6 +54,10 @@ FlatMapTypeBuilder& TypeBuilder::asFlatMap() {
   return dynamic_cast<FlatMapTypeBuilder&>(*this);
 }
 
+HybridFlatMapTypeBuilder& TypeBuilder::asHybridFlatMap() {
+  return dynamic_cast<HybridFlatMapTypeBuilder&>(*this);
+}
+
 ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() {
   return dynamic_cast<ArrayWithOffsetsTypeBuilder&>(*this);
 }
@@ -83,12 +90,28 @@ const FlatMapTypeBuilder& TypeBuilder::asFlatMap() const {
   return dynamic_cast<const FlatMapTypeBuilder&>(*this);
 }
 
+const HybridFlatMapTypeBuilder& TypeBuilder::asHybridFlatMap() const {
+  return dynamic_cast<const HybridFlatMapTypeBuilder&>(*this);
+}
+
 const ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() const {
   return dynamic_cast<const ArrayWithOffsetsTypeBuilder&>(*this);
 }
 
 Kind TypeBuilder::kind() const {
   return kind_;
+}
+
+void TypeBuilder::setAttribute(std::string key, std::string value) {
+  const auto it = std::find_if(
+      attributes_.begin(), attributes_.end(), [&](const auto& attribute) {
+        return attribute.first == key;
+      });
+  if (it == attributes_.end()) {
+    attributes_.emplace_back(std::move(key), std::move(value));
+    return;
+  }
+  it->second = std::move(value);
 }
 
 ScalarTypeBuilder::ScalarTypeBuilder(
@@ -346,6 +369,76 @@ const StreamDescriptorBuilder& FlatMapTypeBuilder::addChild(
   return *inMapDescriptor;
 }
 
+HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
+    SchemaBuilder& schemaBuilder,
+    ScalarKind keyScalarKind)
+    : TypeBuilder{schemaBuilder, Kind::HybridFlatMap},
+      keyScalarKind_{keyScalarKind},
+      nullsDescriptor_{
+          schemaBuilder_.allocateStreamOffset(),
+          ScalarKind::Bool} {}
+
+const StreamDescriptorBuilder& HybridFlatMapTypeBuilder::nullsDescriptor()
+    const {
+  return nullsDescriptor_;
+}
+
+ScalarKind HybridFlatMapTypeBuilder::keyScalarKind() const {
+  return keyScalarKind_;
+}
+
+const TypeBuilder& HybridFlatMapTypeBuilder::valueTemplate() const {
+  NIMBLE_CHECK_NOT_NULL(
+      valueTemplate_,
+      "HybridFlatMapTypeBuilder value template is not initialized.");
+  return *valueTemplate_;
+}
+
+void HybridFlatMapTypeBuilder::setValueTemplate(
+    std::shared_ptr<TypeBuilder> valueTemplate) {
+  NIMBLE_CHECK_NULL(
+      valueTemplate_,
+      "HybridFlatMapTypeBuilder value template already initialized.");
+  schemaBuilder_.registerChild(valueTemplate);
+  valueTemplate_ = std::move(valueTemplate);
+}
+
+HybridFlatMapTypeBuilder::GroupStreamDescriptors
+HybridFlatMapTypeBuilder::addGroup(std::shared_ptr<TypeBuilder> values) {
+  schemaBuilder_.registerChild(values);
+  auto& group = groups_.emplace_back(
+      Group{
+          .keyHasEntries = std::make_unique<StreamDescriptorBuilder>(
+              schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
+          .inMap = std::make_unique<StreamDescriptorBuilder>(
+              schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
+          .values = std::move(values),
+      });
+  return {
+      .keyHasEntries = *group.keyHasEntries,
+      .inMap = *group.inMap,
+  };
+}
+
+size_t HybridFlatMapTypeBuilder::groupCount() const {
+  return groups_.size();
+}
+
+HybridFlatMapTypeBuilder::GroupStreamDescriptors
+HybridFlatMapTypeBuilder::groupStreamDescriptorsAt(size_t index) const {
+  NIMBLE_CHECK_LT(index, groups_.size(), "Index out of range.");
+  const auto& group = groups_[index];
+  return {
+      .keyHasEntries = *group.keyHasEntries,
+      .inMap = *group.inMap,
+  };
+}
+
+const TypeBuilder& HybridFlatMapTypeBuilder::groupValuesAt(size_t index) const {
+  NIMBLE_CHECK_LT(index, groups_.size(), "Index out of range.");
+  return *groups_[index].values;
+}
+
 std::shared_ptr<ScalarTypeBuilder> SchemaBuilder::createScalarTypeBuilder(
     ScalarKind scalarKind) {
   struct MakeSharedEnabler : public ScalarTypeBuilder {
@@ -455,6 +548,17 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
 
   // This new type builder is not attached to a parent, therefore it is a new
   // tree "root" (as of now), so we add it to the roots list.
+  roots_.insert(type);
+  return type;
+}
+
+std::shared_ptr<HybridFlatMapTypeBuilder>
+SchemaBuilder::createHybridFlatMapTypeBuilder(ScalarKind keyScalarKind) {
+  struct MakeSharedEnabler : public HybridFlatMapTypeBuilder {
+    MakeSharedEnabler(SchemaBuilder& schemaBuilder, ScalarKind keyScalarKind)
+        : HybridFlatMapTypeBuilder(schemaBuilder, keyScalarKind) {}
+  };
+  auto type = std::make_shared<MakeSharedEnabler>(*this, keyScalarKind);
   roots_.insert(type);
   return type;
 }
@@ -673,6 +777,18 @@ void addSchemaNode(
 
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& map = type.asHybridFlatMap();
+      nodes.emplace_back(
+          type.kind(),
+          map.nullsDescriptor().offset(),
+          map.keyScalarKind(),
+          std::move(name),
+          /*childrenCount*/ 1,
+          type.attributes());
+      addSchemaNode(nodes, schemaChild(map.valueTemplate()));
+      break;
+    }
 
     default:
       NIMBLE_UNREACHABLE("Unknown type kind: {}.", toString(type.kind()));
@@ -761,6 +877,13 @@ void printType(
             // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
             map.nameAt(i));
       }
+      out << "\n";
+      break;
+    }
+    case Kind::HybridFlatMap: {
+      const auto& map = builder.asHybridFlatMap();
+      out << "[" << map.nullsDescriptor().offset() << "]HYBRIDFLATMAP\n";
+      printType(out, map.valueTemplate(), indentation + 2, "valueTemplate");
       out << "\n";
       break;
     }

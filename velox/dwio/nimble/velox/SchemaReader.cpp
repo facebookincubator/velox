@@ -30,6 +30,7 @@ inline std::string getKindName(Kind kind) {
       {Kind::Array, "Array"},
       {Kind::Map, "Map"},
       {Kind::FlatMap, "FlatMap"},
+      {Kind::HybridFlatMap, "HybridFlatMap"},
   };
 
   auto it = names.find(kind);
@@ -82,6 +83,10 @@ bool Type::isMap() const {
 
 bool Type::isFlatMap() const {
   return kind_ == Kind::FlatMap;
+}
+
+bool Type::isHybridFlatMap() const {
+  return kind_ == Kind::HybridFlatMap;
 }
 
 bool Type::isSlidingWindowMap() const {
@@ -138,6 +143,14 @@ const FlatMapType& Type::asFlatMap() const {
       "Cannot cast to FlatMap. Current type is {}.",
       getKindName(kind_));
   return dynamic_cast<const FlatMapType&>(*this);
+}
+
+const HybridFlatMapType& Type::asHybridFlatMap() const {
+  NIMBLE_CHECK(
+      isHybridFlatMap(),
+      "Cannot cast to HybridFlatMap. Current type is {}.",
+      getKindName(kind_));
+  return dynamic_cast<const HybridFlatMapType&>(*this);
 }
 
 const SlidingWindowMapType& Type::asSlidingWindowMap() const {
@@ -345,6 +358,31 @@ std::optional<size_t> FlatMapType::findChild(std::string_view name) const {
   return it - names_.begin();
 }
 
+HybridFlatMapType::HybridFlatMapType(
+    StreamDescriptor nullsDescriptor,
+    ScalarKind keyScalarKind,
+    std::shared_ptr<const Type> valueTemplate,
+    std::vector<std::pair<std::string, std::string>> attributes)
+    : Type(Kind::HybridFlatMap, std::move(attributes)),
+      nullsDescriptor_{std::move(nullsDescriptor)},
+      keyScalarKind_{keyScalarKind},
+      valueTemplate_{std::move(valueTemplate)} {
+  NIMBLE_CHECK_NOT_NULL(
+      valueTemplate_, "Hybrid FlatMap value template must be set.");
+}
+
+const StreamDescriptor& HybridFlatMapType::nullsDescriptor() const {
+  return nullsDescriptor_;
+}
+
+ScalarKind HybridFlatMapType::keyScalarKind() const {
+  return keyScalarKind_;
+}
+
+const std::shared_ptr<const Type>& HybridFlatMapType::valueTemplate() const {
+  return valueTemplate_;
+}
+
 ArrayWithOffsetsType::ArrayWithOffsetsType(
     StreamDescriptor offsetsDescriptor,
     StreamDescriptor lengthsDescriptor,
@@ -487,6 +525,23 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
               std::move(attributes)),
           .name = node.name()};
     }
+    case Kind::HybridFlatMap: {
+      NIMBLE_CHECK_EQ(
+          node.childrenCount(),
+          1,
+          "Hybrid FlatMap must have exactly one value template child.");
+      auto valueTemplate = getType(index, nodes);
+      NIMBLE_CHECK(
+          !valueTemplate.name.has_value(),
+          "Hybrid FlatMap value template child must be unnamed.");
+      return {
+          .type = std::make_shared<HybridFlatMapType>(
+              StreamDescriptor{offset, ScalarKind::Bool},
+              node.scalarKind(),
+              std::move(valueTemplate.type),
+              std::move(attributes)),
+          .name = node.name()};
+    }
     case Kind::ArrayWithOffsets: {
       const auto& offsetsNode = nodes[index++];
       NIMBLE_CHECK(
@@ -598,6 +653,16 @@ void traverseSchema(
       }
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& map = type->asHybridFlatMap();
+      traverseSchema(
+          index,
+          level + 1,
+          map.valueTemplate(),
+          visitor,
+          {.name = "valueTemplate", .parentType = type.get()});
+      break;
+    }
     case Kind::SlidingWindowMap: {
       auto& map = type->asSlidingWindowMap();
       traverseSchema(
@@ -672,6 +737,10 @@ std::ostream& operator<<(
             out << map.nameAt(i) << (i < map.childrenCount() - 1 ? "," : "");
           }
           out << "]\n";
+        } else if (type.isHybridFlatMap()) {
+          const auto& map = type.asHybridFlatMap();
+          out << "[" << map.nullsDescriptor().offset() << "]"
+              << "HYBRIDFLATMAP\n";
         }
       });
   return out;

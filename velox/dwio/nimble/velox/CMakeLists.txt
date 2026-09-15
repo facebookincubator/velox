@@ -11,7 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(nimble_velox_common SchemaUtils.cpp SchemaUtils.h)
+add_library(
+  nimble_velox_common
+  HybridFlatMap.cpp
+  HybridFlatMap.h
+  SchemaUtils.cpp
+  SchemaUtils.h
+)
 target_link_libraries(nimble_velox_common nimble_common velox_type Folly::folly fmt::fmt)
 
 add_library(
