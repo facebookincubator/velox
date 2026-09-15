@@ -890,22 +890,23 @@ void exportValues(
   const auto& type = vec.type();
   out.n_buffers = 2;
 
-  if (!rows.changed() && isFlatScalarZeroCopy(type, options)) {
-    // Arrow does not allow a nullptr for the values buffer. If the input vector
-    // has no values buffer (all-null case), allocate an empty buffer of size 0.
-    auto values =
-        vec.values() ? vec.values() : AlignedBuffer::allocate<uint8_t>(0, pool);
-    holder.setBuffer(1, values);
+  if (vec.values() && !rows.changed() && isFlatScalarZeroCopy(type, options)) {
+    holder.setBuffer(1, vec.values());
     return;
   }
 
-  // Otherwise we will need a new buffer and copy the data.
+  // Allocate a C Data-compatible values buffer or gather into it.
   auto size = getArrowElementSize(type, options);
   auto values = type->isBoolean()
       ? AlignedBuffer::allocate<bool>(out.length, pool)
       : AlignedBuffer::allocate<uint8_t>(
             checkedMultiply<size_t>(out.length, size), pool);
-  if (type->kind() == TypeKind::TIMESTAMP) {
+  if (!vec.values()) {
+    VELOX_CHECK_EQ(
+        out.null_count,
+        out.length,
+        "Missing values buffer is only supported for all-null vectors.");
+  } else if (type->kind() == TypeKind::TIMESTAMP) {
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
   } else if (
       type->kind() == TypeKind::BIGINT && type->isTime() &&
