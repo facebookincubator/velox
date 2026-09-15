@@ -167,17 +167,18 @@ uint32_t DirectDataInput::enqueue(Region region) {
   return {payloadSize, prevRegionEnd};
 }
 
-std::vector<DirectDataInput::IoGroup> DirectDataInput::computeIoGroups(
+void DirectDataInput::computeIoGroups(
     const std::vector<EnqueuedRegion>& sortedRegions) {
-  std::vector<int32_t> items(sortedRegions.size());
-  std::iota(items.begin(), items.end(), 0);
+  coalesceIoRanges_.clear();
+  coalesceIoRanges_.resize(sortedRegions.size());
+  std::iota(coalesceIoRanges_.begin(), coalesceIoRanges_.end(), 0);
 
   int64_t coalescedBytes = 0;
-  std::vector<IoGroup> ioGroups;
-  ioGroups.reserve(sortedRegions.size());
+  ioGroups_.clear();
+  ioGroups_.reserve(sortedRegions.size());
 
   const auto coalesceStats = velox::coalesceIo<int32_t, char>(
-      items,
+      coalesceIoRanges_,
       /*maxGap=*/maxCoalesceDistance_,
       /*rangesPerIo=*/std::numeric_limits<int32_t>::max(),
       /*offsetFunc=*/
@@ -223,13 +224,12 @@ std::vector<DirectDataInput::IoGroup> DirectDataInput::computeIoGroups(
         group.readSize = readRegion.length;
         group.payloadSize = payloadSize;
         group.regions = groupRegions;
-        ioGroups.emplace_back(group);
+        ioGroups_.emplace_back(group);
       });
 
   ioStats_->readGap().merge(coalesceStats.gaps);
   ioStats_->incDuplicateRead(
       coalesceStats.duplicateRegions, coalesceStats.duplicateBytes);
-  return ioGroups;
 }
 
 void DirectDataInput::populateBufferRefs(
@@ -280,20 +280,20 @@ void DirectDataInput::executeIoGroups(
     char* buffer,
     uint64_t bufferSize) {
   NIMBLE_CHECK(!ioGroups.empty());
-  std::vector<velox::common::Region> readRegions;
-  readRegions.reserve(ioGroups.size());
-  std::vector<folly::Range<char*>> readBuffers;
-  readBuffers.reserve(ioGroups.size());
+  readRegions_.clear();
+  readRegions_.reserve(ioGroups.size());
+  readBuffers_.clear();
+  readBuffers_.reserve(ioGroups.size());
   for (const auto& ioGroup : ioGroups) {
-    readRegions.emplace_back(ioGroup.readOffset, ioGroup.readSize);
-    readBuffers.emplace_back(
+    readRegions_.emplace_back(ioGroup.readOffset, ioGroup.readSize);
+    readBuffers_.emplace_back(
         buffer + ioGroup.bufferOffset, static_cast<size_t>(ioGroup.readSize));
   }
   const auto bytesRead = file_->preadv(
       folly::Range<const velox::common::Region*>(
-          readRegions.data(), readRegions.size()),
+          readRegions_.data(), readRegions_.size()),
       folly::Range<const folly::Range<char*>*>(
-          readBuffers.data(), readBuffers.size()));
+          readBuffers_.data(), readBuffers_.size()));
   NIMBLE_CHECK_EQ(bytesRead, bufferSize, "preadv returned a short read");
 }
 
@@ -344,9 +344,9 @@ DataInput::Handle DirectDataInput::load() {
     prevGroupEnd = lastRegion.offset + lastRegion.length;
   }
 
-  auto ioGroups = computeIoGroups(regions_);
+  computeIoGroups(regions_);
 
-  const auto [readBytes, payloadBytes] = computeIoSizes(ioGroups);
+  const auto [readBytes, payloadBytes] = computeIoSizes(ioGroups_);
   NIMBLE_CHECK_GE(readBytes, payloadBytes);
   NIMBLE_CHECK_EQ(readBytes % alignment_, 0);
 
@@ -355,10 +355,10 @@ DataInput::Handle DirectDataInput::load() {
   uint64_t ioUs{0};
   {
     velox::MicrosecondTimer ioTimer(&ioUs);
-    executeIoGroups(ioGroups, buffer, readBytes);
+    executeIoGroups(ioGroups_, buffer, readBytes);
   }
 
-  for (const auto& group : ioGroups) {
+  for (const auto& group : ioGroups_) {
     ioStats_->read().increment(group.readSize);
     ioStats_->incRawBytesRead(group.payloadSize);
     ioStats_->incRawOverreadBytes(group.readSize - group.payloadSize);
@@ -366,7 +366,7 @@ DataInput::Handle DirectDataInput::load() {
   ioStats_->storageReadLatencyUs().increment(ioUs);
   ioStats_->incTotalScanTimeNs(ioUs * 1'000);
 
-  populateBufferRefs(ioGroups, buffer);
+  populateBufferRefs(ioGroups_, buffer);
 
   regions_.clear();
   return handle;
