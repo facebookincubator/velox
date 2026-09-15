@@ -392,14 +392,15 @@ IcebergDataSink::IcebergDataSink(
     const bool isOmittedColumn = !insertedColSet.empty() &&
         insertedColSet.find(columnHandle->name()) == insertedColSet.end();
     if (writeDefault.has_value() && isOmittedColumn) {
+      const auto& colType = inputType_->childAt(i);
       writeDefaultColumns_.push_back(
           {i,
            newConstantFromString(
-               inputType_->childAt(i),
+               colType,
                writeDefault.value(),
                connectorQueryCtx_->memoryPool(),
-               false,
-               false)});
+               /*isLocalTimestamp=*/false,
+               /*isDaysSinceEpoch=*/colType->isDate())});
     }
   }
 
@@ -416,15 +417,24 @@ void IcebergDataSink::appendData(RowVectorPtr input) {
   if (!writeDefaultColumns_.empty()) {
     std::vector<VectorPtr> children(input->children());
     for (const auto& col : writeDefaultColumns_) {
-      // Only replace when every row in the batch is null. Omitted columns
-      // arrive as an all-NULL vector; a partially-null column means some rows
-      // carry explicit values that must not be overwritten with the default.
+      // The set of write-default columns is fixed at plan time: a column
+      // enters writeDefaultColumns_ only when it is absent from the INSERT
+      // column list, which is a statement-level decision, so it is absent
+      // for every row in every batch. We substitute unconditionally.
       const auto& child = children[col.index];
-      if (BaseVector::countNulls(child->nulls(), input->size()) ==
-          input->size()) {
-        children[col.index] =
-            BaseVector::wrapInConstant(input->size(), 0, col.constantVector);
-      }
+      const auto nullCount = child->getNullCount();
+      VELOX_CHECK(
+          nullCount.has_value() &&
+              nullCount.value() == static_cast<vector_size_t>(input->size()),
+          "Non-null value found in write-default column '{}' (channel {}). "
+          "Omitted INSERT columns must be entirely null. "
+          "null count: {}, size: {}.",
+          inputType_->nameOf(col.index),
+          col.index,
+          nullCount.has_value() ? std::to_string(nullCount.value()) : "unknown",
+          input->size());
+      children[col.index] =
+          BaseVector::wrapInConstant(input->size(), 0, col.constantVector);
     }
     input = std::make_shared<RowVector>(
         input->pool(),
