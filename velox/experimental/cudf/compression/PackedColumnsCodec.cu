@@ -49,18 +49,13 @@ namespace {
 // columns. It is a codec heuristic, not a format requirement.
 constexpr std::size_t kMinimumTypedElementCount = 4096;
 
-// Residual ANS is skipped below one native nvCOMP chunk. This is an empirical
-// launch-amortization policy and may be tuned independently of the format.
-constexpr std::size_t kMinimumResidualAnsInputSize =
-    detail::kNvcompAnsChunkSize;
-
 constexpr int kThreadsPerBlock = 256;
 
 // ASCII "VLXPCOMP". Format identity and version are separate wire fields.
 constexpr int64_t kDescriptorMagic = 0x564c5850434f4d50LL;
-constexpr int64_t kDescriptorVersion = 1;
-constexpr std::size_t kDescriptorHeaderWordCount = 5;
-constexpr std::size_t kRegionFixedWordCount = 8;
+constexpr int64_t kDescriptorVersion = 2;
+constexpr std::size_t kDescriptorHeaderWordCount = 4;
+constexpr std::size_t kRegionFixedWordCount = 6;
 constexpr std::size_t kMaximumBytePlaneCount = sizeof(uint64_t);
 static_assert(kMaximumBytePlaneCount <= detail::kAnsSizeStagingCapacity);
 constexpr std::size_t kMinimumStagingIndex = 0;
@@ -77,12 +72,10 @@ enum class RegionCodec : int64_t {
 };
 
 struct EncodedRegion {
-  std::size_t blobOffset{0};
   std::size_t rawSize{0};
   RegionCodec codec{RegionCodec::kRaw};
   cudf::data_type logicalType{cudf::type_id::EMPTY};
-  uint64_t baseBits{0};
-  uint64_t firstBits{0};
+  uint64_t referenceBits{0};
   std::vector<uint32_t> segmentSizes;
 };
 
@@ -166,14 +159,13 @@ class DescriptorReader {
   }
 
   const auto uncompressedSize = reader.readSize();
-  const auto compressedSize = reader.readSize();
   const auto regionCount = reader.readSize();
-  if (!uncompressedSize || !compressedSize || !regionCount ||
-      *uncompressedSize == 0 || *compressedSize == 0 || *regionCount == 0) {
+  if (!uncompressedSize || !regionCount || *uncompressedSize == 0 ||
+      *regionCount == 0) {
     return std::nullopt;
   }
 
-  // Each region has eight fixed fields before its segment-size list. This
+  // Each region has six fixed fields before its segment-size list. This
   // bound prevents an untrusted count from causing a disproportionate reserve.
   if (*regionCount > reader.remaining() / kRegionFixedWordCount) {
     return std::nullopt;
@@ -181,23 +173,20 @@ class DescriptorReader {
 
   ParsedDescriptor parsed;
   parsed.uncompressedSize = *uncompressedSize;
-  parsed.compressedSize = *compressedSize;
   parsed.regions.reserve(*regionCount);
 
   std::size_t rawCoverage = 0;
   std::size_t encodedCoverage = 0;
   for (std::size_t index = 0; index < *regionCount; ++index) {
-    const auto blobOffset = reader.readSize();
     const auto rawSize = reader.readSize();
     const auto codecValue = reader.read();
     const auto typeValue = reader.read();
     const auto scaleValue = reader.read();
-    const auto baseValue = reader.read();
-    const auto firstValue = reader.read();
+    const auto referenceValue = reader.read();
     const auto segmentCount = reader.readSize();
-    if (!blobOffset || !rawSize || !codecValue || !typeValue || !scaleValue ||
-        !baseValue || !firstValue || !segmentCount || *rawSize == 0 ||
-        *segmentCount > reader.remaining() || *blobOffset != rawCoverage) {
+    if (!rawSize || !codecValue || !typeValue || !scaleValue ||
+        !referenceValue || !segmentCount || *rawSize == 0 ||
+        *segmentCount > reader.remaining()) {
       return std::nullopt;
     }
 
@@ -213,12 +202,10 @@ class DescriptorReader {
     }
 
     EncodedRegion region;
-    region.blobOffset = *blobOffset;
     region.rawSize = *rawSize;
     region.codec = codec;
     region.logicalType = *logicalType;
-    region.baseBits = std::bit_cast<uint64_t>(*baseValue);
-    region.firstBits = std::bit_cast<uint64_t>(*firstValue);
+    region.referenceBits = std::bit_cast<uint64_t>(*referenceValue);
     region.segmentSizes.reserve(*segmentCount);
     for (std::size_t segment = 0; segment < *segmentCount; ++segment) {
       const auto segmentSize = reader.readUint32();
@@ -232,7 +219,7 @@ class DescriptorReader {
     if (codec == RegionCodec::kRaw) {
       if (!region.segmentSizes.empty() ||
           region.logicalType.id() != cudf::type_id::EMPTY ||
-          region.baseBits != 0 || region.firstBits != 0) {
+          region.referenceBits != 0) {
         return std::nullopt;
       }
       regionEncodedSize = region.rawSize;
@@ -240,7 +227,7 @@ class DescriptorReader {
       if (codec == RegionCodec::kByteAns) {
         if (region.segmentSizes.empty() ||
             region.logicalType.id() != cudf::type_id::EMPTY ||
-            region.baseBits != 0 || region.firstBits != 0) {
+            region.referenceBits != 0) {
           return std::nullopt;
         }
       } else {
@@ -250,15 +237,10 @@ class DescriptorReader {
         const auto elementWidth = cudf::size_of(region.logicalType);
         if ((elementWidth != 4 && elementWidth != 8) ||
             region.rawSize % elementWidth != 0 ||
-            region.blobOffset % elementWidth != 0 ||
-            region.segmentSizes.empty() ||
+            rawCoverage % elementWidth != 0 || region.segmentSizes.empty() ||
             region.segmentSizes.size() > kMaximumBytePlaneCount ||
             (codec == RegionCodec::kFrameOfReference &&
-             region.segmentSizes.size() > elementWidth) ||
-            (codec == RegionCodec::kFrameOfReference &&
-             region.firstBits != 0) ||
-            (codec == RegionCodec::kDeltaFrameOfReference &&
-             region.baseBits != 0)) {
+             region.segmentSizes.size() > elementWidth)) {
           return std::nullopt;
         }
       }
@@ -278,17 +260,16 @@ class DescriptorReader {
         !detail::tryAddSizes(rawCoverage, region.rawSize, rawCoverage) ||
         rawCoverage > parsed.uncompressedSize ||
         !detail::tryAddSizes(
-            encodedCoverage, regionWireSize, encodedCoverage) ||
-        encodedCoverage > parsed.compressedSize) {
+            encodedCoverage, regionWireSize, encodedCoverage)) {
       return std::nullopt;
     }
     parsed.regions.push_back(std::move(region));
   }
 
-  if (!reader.empty() || rawCoverage != parsed.uncompressedSize ||
-      encodedCoverage != parsed.compressedSize) {
+  if (!reader.empty() || rawCoverage != parsed.uncompressedSize) {
     return std::nullopt;
   }
+  parsed.compressedSize = encodedCoverage;
   return parsed;
 }
 
@@ -302,8 +283,7 @@ class DescriptorReader {
 
 [[nodiscard]] std::vector<int64_t> serializeDescriptor(
     const std::vector<EncodedRegion>& regions,
-    std::size_t uncompressedSize,
-    std::size_t compressedSize) {
+    std::size_t uncompressedSize) {
   std::size_t wordCount = kDescriptorHeaderWordCount;
   for (const auto& region : regions) {
     wordCount = detail::checkedAddSizes(
@@ -319,17 +299,14 @@ class DescriptorReader {
   words.push_back(kDescriptorMagic);
   words.push_back(kDescriptorVersion);
   words.push_back(checkedDescriptorWord(uncompressedSize));
-  words.push_back(checkedDescriptorWord(compressedSize));
   words.push_back(checkedDescriptorWord(regions.size()));
 
   for (const auto& region : regions) {
-    words.push_back(checkedDescriptorWord(region.blobOffset));
     words.push_back(checkedDescriptorWord(region.rawSize));
     words.push_back(static_cast<int64_t>(region.codec));
     words.push_back(static_cast<int64_t>(region.logicalType.id()));
     words.push_back(static_cast<int64_t>(region.logicalType.scale()));
-    words.push_back(std::bit_cast<int64_t>(region.baseBits));
-    words.push_back(std::bit_cast<int64_t>(region.firstBits));
+    words.push_back(std::bit_cast<int64_t>(region.referenceBits));
     words.push_back(checkedDescriptorWord(region.segmentSizes.size()));
     for (const auto size : region.segmentSizes) {
       words.push_back(static_cast<int64_t>(size));
@@ -356,7 +333,6 @@ template <typename T>
   using Unsigned = std::make_unsigned_t<T>;
   return std::bit_cast<T>(static_cast<Unsigned>(bits));
 }
-
 
 [[nodiscard]] bool usesUnsignedStorage(cudf::data_type type) noexcept {
   return type.id() == cudf::type_id::UINT32 ||
@@ -595,24 +571,6 @@ class DeferredAnsStatusChecks {
   return planes;
 }
 
-struct EncodedTypedRegion {
-  EncodedRegion descriptor;
-  rmm::device_buffer data;
-};
-
-template <typename T>
-[[nodiscard]] EncodedTypedRegion encodeTypedRegion(
-    const uint8_t* blobBase,
-    const TypedRegion& region,
-    detail::PackedColumnsCodecState& state);
-
-template <typename T>
-void decodeTypedRegion(cudf::device_span<const uint8_t> input,
-                       const EncodedRegion& region,
-                       uint8_t* blobBase,
-                       DeferredAnsStatusChecks& pending,
-                       detail::PackedColumnsCodecState& state);
-
 } // namespace
 
 namespace detail {
@@ -641,6 +599,11 @@ class PackedColumnsCodecState {
 } // namespace detail
 
 namespace {
+
+struct EncodedTypedRegion {
+  EncodedRegion descriptor;
+  rmm::device_buffer data;
+};
 
 template <typename T>
 EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
@@ -770,14 +733,13 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
       temporaryMemoryResource};
 
   EncodedRegion descriptor;
-  descriptor.blobOffset = region.offset;
   descriptor.rawSize = detail::checkedMultiplySizes(
       region.elementCount, sizeof(T), "Typed region size overflow");
   descriptor.logicalType = region.logicalType;
 
   if (useDelta) {
     descriptor.codec = RegionCodec::kDeltaFrameOfReference;
-    descriptor.firstBits = firstBits;
+    descriptor.referenceBits = firstBits;
     subtractAndSplitKernel<uint64_t>
         <<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
             deltaValues,
@@ -788,7 +750,7 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
             planeCount);
   } else {
     descriptor.codec = RegionCodec::kFrameOfReference;
-    descriptor.baseBits = valueBits(minimum);
+    descriptor.referenceBits = valueBits(minimum);
     subtractAndSplitKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
         values,
         minimum,
@@ -811,7 +773,7 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
 template <typename T>
 void decodeTypedRegion(cudf::device_span<const uint8_t> input,
                        const EncodedRegion& region,
-                       uint8_t* blobBase,
+                       uint8_t* output,
                        DeferredAnsStatusChecks& pending,
                        detail::PackedColumnsCodecState& state) {
   const auto elementWidth = sizeof(T);
@@ -828,14 +790,13 @@ void decodeTypedRegion(cudf::device_span<const uint8_t> input,
 
   auto planes = decodePlanes(
       input, region.segmentSizes, elementCount, pending, state.ans);
-  auto* output = blobBase + region.blobOffset;
   const auto planeCount = static_cast<int>(region.segmentSizes.size());
   const auto planeStride = detail::nvcompAlignedSize(elementCount);
 
   if (region.codec == RegionCodec::kFrameOfReference) {
     recombineAndAddKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
         static_cast<const uint8_t*>(planes.data()),
-        valueFromBits<T>(region.baseBits),
+        valueFromBits<T>(region.referenceBits),
         output,
         elementCount,
         planeStride,
@@ -881,7 +842,7 @@ void decodeTypedRegion(cudf::device_span<const uint8_t> input,
                                               stream.value()));
 
   finalizeDeltaKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
-      deltaValues, region.firstBits, output, elementCount);
+      deltaValues, region.referenceBits, output, elementCount);
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -966,10 +927,9 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
     }
 
     EncodedRegion region;
-    region.blobOffset = offset;
     region.rawSize = size;
-    auto compressed = detail::compressAns(
-        {blobBase + offset, size}, kMinimumResidualAnsInputSize, state_->ans);
+    auto compressed =
+        detail::compressAns({blobBase + offset, size}, state_->ans);
     if (compressed) {
       region.codec = RegionCodec::kByteAns;
       region.segmentSizes = compressed->segmentSizes;
@@ -1034,11 +994,12 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
   CUDF_CUDA_TRY(
       cudaMemsetAsync(output.data(), 0, output.size(), state_->stream.value()));
   std::size_t outputOffset = 0;
+  std::size_t rawOffset = 0;
   for (std::size_t index = 0; index < regions.size(); ++index) {
     const auto& region = regions[index];
     const auto size = encodedRegionSize(region);
     const auto* source = region.codec == RegionCodec::kRaw
-        ? blobBase + region.blobOffset
+        ? blobBase + rawOffset
         : static_cast<const uint8_t*>(payloads[index].data());
     CUDF_CUDA_TRY(
         cudaMemcpyAsync(static_cast<uint8_t*>(output.data()) + outputOffset,
@@ -1046,6 +1007,8 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
                         size,
                         cudaMemcpyDeviceToDevice,
                         state_->stream.value()));
+    rawOffset = detail::checkedAddSizes(
+        rawOffset, region.rawSize, "Packed-column input offset overflow");
     outputOffset =
         detail::checkedAddSizes(outputOffset,
                                 detail::nvcompAlignedSize(size),
@@ -1053,7 +1016,7 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
   }
   state_->stream.synchronize();
 
-  auto descriptorWords = serializeDescriptor(regions, blobSize, compressedSize);
+  auto descriptorWords = serializeDescriptor(regions, blobSize);
   return CompressedPackedColumns{
       std::move(output), PackedColumnsDescriptor{std::move(descriptorWords)}};
 }
@@ -1074,9 +1037,10 @@ rmm::device_buffer PackedColumnsCodec::decompress(
 
   rmm::device_buffer output{
       parsed->uncompressedSize, state_->stream, state_->outputMemoryResource};
-  auto* blobBase = static_cast<uint8_t*>(output.data());
+  auto* outputBase = static_cast<uint8_t*>(output.data());
   DeferredAnsStatusChecks pending;
   std::size_t inputOffset = 0;
+  std::size_t outputOffset = 0;
 
   for (const auto& region : parsed->regions) {
     const auto regionEncodedSize = encodedRegionSize(region);
@@ -1085,7 +1049,7 @@ rmm::device_buffer PackedColumnsCodec::decompress(
 
     switch (region.codec) {
       case RegionCodec::kRaw:
-        CUDF_CUDA_TRY(cudaMemcpyAsync(blobBase + region.blobOffset,
+        CUDF_CUDA_TRY(cudaMemcpyAsync(outputBase + outputOffset,
                                       regionInput.data(),
                                       regionInput.size(),
                                       cudaMemcpyDeviceToDevice,
@@ -1094,7 +1058,7 @@ rmm::device_buffer PackedColumnsCodec::decompress(
       case RegionCodec::kByteAns: {
         auto decoded = detail::decompressAns(
             regionInput, region.segmentSizes, region.rawSize, state_->ans);
-        CUDF_CUDA_TRY(cudaMemcpyAsync(blobBase + region.blobOffset,
+        CUDF_CUDA_TRY(cudaMemcpyAsync(outputBase + outputOffset,
                                       decoded.data(),
                                       region.rawSize,
                                       cudaMemcpyDeviceToDevice,
@@ -1105,21 +1069,29 @@ rmm::device_buffer PackedColumnsCodec::decompress(
       case RegionCodec::kDeltaFrameOfReference:
         if (cudf::size_of(region.logicalType) == 8) {
           if (usesUnsignedStorage(region.logicalType)) {
-            decodeTypedRegion<uint64_t>(
-                regionInput, region, blobBase, pending, *state_);
+            decodeTypedRegion<uint64_t>(regionInput,
+                                        region,
+                                        outputBase + outputOffset,
+                                        pending,
+                                        *state_);
           } else {
-            decodeTypedRegion<int64_t>(
-                regionInput, region, blobBase, pending, *state_);
+            decodeTypedRegion<int64_t>(regionInput,
+                                       region,
+                                       outputBase + outputOffset,
+                                       pending,
+                                       *state_);
           }
         } else if (usesUnsignedStorage(region.logicalType)) {
           decodeTypedRegion<uint32_t>(
-              regionInput, region, blobBase, pending, *state_);
+              regionInput, region, outputBase + outputOffset, pending, *state_);
         } else {
           decodeTypedRegion<int32_t>(
-              regionInput, region, blobBase, pending, *state_);
+              regionInput, region, outputBase + outputOffset, pending, *state_);
         }
         break;
     }
+    outputOffset = detail::checkedAddSizes(
+        outputOffset, region.rawSize, "Packed-column output offset overflow");
     inputOffset =
         detail::checkedAddSizes(inputOffset,
                                 detail::nvcompAlignedSize(regionEncodedSize),
