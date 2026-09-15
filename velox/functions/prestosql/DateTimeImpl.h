@@ -38,18 +38,12 @@ FOLLY_ALWAYS_INLINE Timestamp fromUnixtime(double unixtime) {
     return Timestamp(0, 0);
   }
 
-  static const int64_t kMin = std::numeric_limits<int64_t>::min();
-
-  if (FOLLY_UNLIKELY(unixtime >= kMinDoubleAboveInt64Max)) {
+  if (FOLLY_UNLIKELY(unixtime >= static_cast<double>(Timestamp::kMaxSeconds))) {
     return Timestamp::maxMillis();
   }
 
-  if (FOLLY_UNLIKELY(unixtime <= kMin)) {
+  if (FOLLY_UNLIKELY(unixtime <= static_cast<double>(Timestamp::kMinSeconds))) {
     return Timestamp::minMillis();
-  }
-
-  if (FOLLY_UNLIKELY(std::isinf(unixtime))) {
-    return unixtime < 0 ? Timestamp::minMillis() : Timestamp::maxMillis();
   }
 
   auto seconds = std::floor(unixtime);

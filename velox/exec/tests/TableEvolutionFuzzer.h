@@ -173,9 +173,13 @@ class TableEvolutionFuzzer {
 
   std::string makeNewName();
 
-  TypePtr makeNewType(int maxDepth);
+  /// When 'allowTimestamp' is false, TIMESTAMP is left out of the generated
+  /// type, at any nesting depth. Used for bucket columns; see
+  /// makeInitialSchema().
+  TypePtr makeNewType(int maxDepth, bool allowTimestamp = true);
 
   RowTypePtr makeInitialSchema(
+      const std::vector<column_index_t>& bucketColumnIndices = {},
       const std::vector<std::string>& additionalColumnNames = {},
       const std::vector<TypePtr>& additionalColumnTypes = {});
 
