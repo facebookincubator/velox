@@ -296,10 +296,10 @@ class UcxExchangeSource
   /// while deliverEndMarker() reads it on the Communicator thread.
   std::atomic<bool> registered_{false};
 
-  /// True if the server detected that this source is on the same node.
+  /// True if the server detected that this source uses the same Communicator
+  /// instance (and therefore the same process).
   /// Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
-  /// server determines by comparing this source's listener address (sent in
-  /// HandshakeMsg) with its own Communicator's listener address.
+  /// server determines by comparing the source and server worker IDs.
   /// When true, intra-node transfer optimizations bypass UCXX transfers.
   bool isIntraNodeTransfer_{false};
 

@@ -173,6 +173,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// later properly, and eventually the callback fires.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
+  /// @param eligibilityCallbacks Receives pending callbacks so the manager can
+  /// invoke them after clearing stale cancellation state for a reused task ID.
   bool initialize(
       std::shared_ptr<exec::Task> task,
       uint32_t numDestinations,

@@ -19,6 +19,7 @@
 #include <velox/exec/OutputBufferManager.h>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <mutex>
 #include <string_view>
 #include <unordered_set>
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
@@ -159,6 +160,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   // that exceed the placeholder's undersized queues_ vector.
   folly::Synchronized<std::unordered_set<std::string>, std::mutex>
       removedTasks_;
+
+  // Serializes task initialization and removal with registry cancellation.
+  // A newly initialized queue must never be visible while a cancellation from
+  // its previous task incarnation is still active.
+  std::mutex taskLifecycleMutex_;
 };
 
 } // namespace facebook::velox::ucx_exchange

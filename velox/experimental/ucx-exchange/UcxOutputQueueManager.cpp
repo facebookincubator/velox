@@ -41,26 +41,33 @@ void UcxOutputQueueManager::initializeTask(
     const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
   std::vector<UcxIntraNodeEligibilityCallback> eligibilityCallbacks;
-  queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskId);
-    if (it == queues.end()) {
-      queues[taskId] = std::make_shared<UcxOutputQueue>(
-          std::move(task), numDestinations, numDrivers, kind);
-    } else {
-      if (!it->second->initialize(
-              task, numDestinations, numDrivers, kind, &eligibilityCallbacks)) {
-        VELOX_FAIL(
-            "Registering a cudf output queue for pre-existing taskId {}",
-            taskId);
+  {
+    std::lock_guard<std::mutex> lifecycleLock(taskLifecycleMutex_);
+    // A reused task ID must clear the previous incarnation's cancellation
+    // before publishing its initialized queue to handshake callbacks.
+    IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+    queues_.withLock([&](auto& queues) {
+      // Keep queues_ before removedTasks_ lock ordering, matching removeTask()
+      // and getData().
+      removedTasks_.withLock([&](auto& removed) { removed.erase(taskId); });
+      auto it = queues.find(taskId);
+      if (it == queues.end()) {
+        queues[taskId] = std::make_shared<UcxOutputQueue>(
+            std::move(task), numDestinations, numDrivers, kind);
+      } else {
+        if (!it->second->initialize(
+                task,
+                numDestinations,
+                numDrivers,
+                kind,
+                &eligibilityCallbacks)) {
+          VELOX_FAIL(
+              "Registering a cudf output queue for pre-existing taskId {}",
+              taskId);
+        }
       }
-    }
-  });
-  // Clear any stale "removed" state so that getData() calls after this
-  // initializeTask() create proper placeholder queues if needed.
-  removedTasks_.withLock([&](auto& removed) { removed.erase(taskId); });
-  // Clear any stale "cancelled" state in the intra-node registry so
-  // that the cancelledTasks_ set doesn't grow unboundedly across queries.
-  IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+    });
+  }
 
   const bool canUseIntraNode =
       kind != core::PartitionedOutputNode::Kind::kBroadcast;
@@ -197,33 +204,37 @@ void UcxOutputQueueManager::notifyOnIntraNodeEligibility(
 
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
-  auto queue =
-      queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
-        auto it = queues.find(taskIdStr);
-        if (it == queues.end()) {
-          // Already removed. Clear any stale "removed" state so the task ID
-          // can be reused.
+  std::shared_ptr<UcxOutputQueue> queue;
+  {
+    std::lock_guard<std::mutex> lifecycleLock(taskLifecycleMutex_);
+    queue = queues_.withLock(
+        [&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
+          auto it = queues.find(taskIdStr);
+          if (it == queues.end()) {
+            // Already removed. Clear any stale "removed" state so the task ID
+            // can be reused.
+            removedTasks_.withLock(
+                [&](auto& removed) { removed.erase(taskIdStr); });
+            return nullptr;
+          }
+          auto taskQueue = it->second;
+          queues.erase(it);
+          // Insert into removedTasks_ while still holding the queues_ lock
+          // to prevent getData() from seeing a gap between erase and insert,
+          // which would cause it to create a zombie placeholder queue.
           removedTasks_.withLock(
-              [&](auto& removed) { removed.erase(taskIdStr); });
-          return nullptr;
-        }
-        auto taskQueue = it->second;
-        queues.erase(it);
-        // Insert into removedTasks_ while still holding the queues_ lock
-        // to prevent getData() from seeing a gap between erase and insert,
-        // which would cause it to create a zombie placeholder queue.
-        removedTasks_.withLock(
-            [&](auto& removed) { removed.insert(taskIdStr); });
-        return taskQueue;
-      });
+              [&](auto& removed) { removed.insert(taskIdStr); });
+          return taskQueue;
+        });
+    // Publish cancellation before a subsequent initialization is allowed to
+    // clear it for a new task incarnation.
+    IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);
+  }
   VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
           << " queueExists=" << (queue != nullptr);
   if (queue != nullptr) {
     queue->terminate();
   }
-  // Notify the intra-node registry so that any sources polling for this
-  // task get an atEnd result instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
