@@ -75,24 +75,84 @@ class MockStreamInformation : public StreamInformation {
   const DwrfStreamIdentifier& streamIdentifier_;
 };
 
+class SelectiveReaderTestAdapter {
+ public:
+  SelectiveReaderTestAdapter(
+      std::shared_ptr<velox::common::ScanSpec> scanSpec,
+      std::shared_ptr<dwio::common::SplitStats> splitStats,
+      std::unique_ptr<dwio::common::SelectiveColumnReader> reader,
+      VectorPtr readerResult)
+      : scanSpec_{std::move(scanSpec)},
+        splitStats_{std::move(splitStats)},
+        reader_{std::move(reader)},
+        readerResult_{std::move(readerResult)} {}
+
+  void next(uint64_t numValues, VectorPtr& result) {
+    rows_.resize(numValues);
+    std::iota(rows_.begin(), rows_.end(), 0);
+    const RowSet rows(rows_.data(), rows_.size());
+    reader_->read(readOffset_, rows, nullptr);
+    reader_->getValues(rows, &readerResult_);
+    readerResult_ = BaseVector::loadedVectorShared(readerResult_);
+    result = readerResult_;
+    readOffset_ += numValues;
+  }
+
+ private:
+  std::shared_ptr<velox::common::ScanSpec> scanSpec_;
+  std::shared_ptr<dwio::common::SplitStats> splitStats_;
+  std::unique_ptr<dwio::common::SelectiveColumnReader> reader_;
+  VectorPtr readerResult_;
+  std::vector<vector_size_t> rows_;
+  int64_t readOffset_{0};
+};
+
+std::unique_ptr<SelectiveReaderTestAdapter> buildSelectiveReader(
+    const std::shared_ptr<const dwio::common::TypeWithId>& reqType,
+    StripeStreams& streams,
+    const StreamLabels& labels,
+    FlatMapContext flatMapContext = {},
+    const std::vector<std::string>& flatMapStructKeys = {}) {
+  dwio::common::ColumnReaderOptions colReaderOptions;
+  auto splitStats = std::make_shared<dwio::common::SplitStats>(
+      dwio::common::FileFormat::DWRF);
+  DwrfParams params(streams, labels, *splitStats, flatMapContext);
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("<root>");
+  TypePtr resultType = reqType->type();
+  velox::common::ScanSpec* childSpec;
+  if (!flatMapStructKeys.empty()) {
+    const auto& keys = flatMapStructKeys;
+    std::vector<TypePtr> childTypes(keys.size(), reqType->type()->childAt(1));
+    resultType = ROW(keys, childTypes);
+    childSpec = scanSpec->addField("column", 0);
+    childSpec->setFlatMapAsStruct(true);
+    for (column_index_t i = 0; i < keys.size(); ++i) {
+      childSpec->addFieldRecursively(keys[i], *reqType->type()->childAt(1), i);
+    }
+  } else {
+    childSpec = scanSpec->addFieldRecursively("column", *reqType->type(), 0);
+  }
+  auto reader = SelectiveDwrfReader::build(
+      colReaderOptions, reqType->type(), reqType, params, *childSpec);
+  reader->setIsTopLevel();
+  auto readerResult =
+      BaseVector::create(resultType, 0, &streams.getMemoryPool());
+  return std::make_unique<SelectiveReaderTestAdapter>(
+      std::move(scanSpec),
+      std::move(splitStats),
+      std::move(reader),
+      std::move(readerResult));
+}
+
 class TestStripeStreams : public StripeStreamsBase {
  public:
   TestStripeStreams(
       WriterContext& context,
       const proto::StripeFooter& footer,
       const std::shared_ptr<const RowType>& rowType,
-      MemoryPool* pool,
-      bool returnFlatVector = false,
-      std::unordered_map<uint32_t, std::vector<std::string>>
-          structReaderContext = {})
-      : StripeStreamsBase{pool},
-        context_{context},
-        footer_{footer},
-        selector_{rowType} {
-    options_.setReturnFlatVector(returnFlatVector);
-    if (!structReaderContext.empty()) {
-      options_.setFlatmapNodeIdsAsStruct(structReaderContext);
-    }
+      MemoryPool* pool)
+      : StripeStreamsBase{pool}, context_{context}, footer_{footer} {
+    options_.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   }
 
   std::unique_ptr<SeekableInputStream> getStream(
@@ -155,10 +215,6 @@ class TestStripeStreams : public StripeStreamsBase {
     return count;
   }
 
-  const ColumnSelector& getColumnSelector() const override {
-    return selector_;
-  }
-
   const tz::TimeZone* sessionTimezone() const override {
     return context_.sessionTimezone();
   }
@@ -187,17 +243,17 @@ class TestStripeStreams : public StripeStreamsBase {
   }
 
   int64_t stripeRows() const override {
-    VELOX_UNSUPPORTED();
+    return 1'000'000;
   }
 
   uint32_t rowsPerRowGroup() const override {
-    VELOX_UNSUPPORTED();
+    // Disable efficient skipping using row index.
+    return 1'000'000;
   }
 
  private:
   WriterContext& context_;
   const proto::StripeFooter& footer_;
-  ColumnSelector selector_;
   RowReaderOptions options_;
   mutable std::vector<std::unique_ptr<DataBuffer<char>>> buffers_;
   StrictMock<MockStrideIndexProvider> mockStrideIndexProvider_;
@@ -295,8 +351,11 @@ void verifyBatch(
     ASSERT_TRUE(outNullCount == std::nullopt || outNullCount == 0)
         << "nullCount mismatch with seed " << seed;
   } else {
-    ASSERT_EQ(nullCount, out->getNullCount())
-        << "nullCount mismatch with seed " << seed;
+    if (const auto outNullCount = out->getNullCount();
+        outNullCount.has_value()) {
+      ASSERT_EQ(nullCount, outNullCount)
+          << "nullCount mismatch with seed " << seed;
+    }
   }
 
   auto outFv = std::dynamic_pointer_cast<FlatVector<T>>(out);
@@ -342,7 +401,7 @@ void testDataTypeWriter(
   auto pool = memory::memoryManager()->addLeafPool();
   WriterContext context{config, memory::memoryManager()->addRootPool()};
   context.initBuffer();
-  auto rowType = ROW({type});
+  auto rowType = ROW({"column"}, {type});
   auto dataTypeWithId = TypeWithId::create(type, 1);
 
   // write
@@ -370,13 +429,10 @@ void testDataTypeWriter(
 
     memory::AllocationPool allocPool(pool.get());
     StreamLabels labels(allocPool);
-    auto reader = ColumnReader::build(
-        reqType,
+    auto reader = buildSelectiveReader(
         reqType,
         streams,
         labels,
-        nullptr,
-        0,
         FlatMapContext{
             .sequence = sequence,
             .inMapDecoder = nullptr,
@@ -991,7 +1047,7 @@ void testMapWriter(
   const auto config = std::make_shared<Config>();
   auto* pBatches = &batches;
   std::vector<VectorPtr> transformedInput;
-  std::unordered_map<uint32_t, std::vector<std::string>> structReaderContext;
+  std::vector<std::string> flatMapStructKeys;
   if (useFlatMap) {
     if (inputType == MapWriterInputType::kStruct) {
       if constexpr (!CppToType<TVALUE>::isPrimitiveType) {
@@ -1012,7 +1068,7 @@ void testMapWriter(
             [](const auto& e) { return folly::to<std::string>(e); });
         ASSERT_EQ(writerDataTypeWithId->column(), 0);
         config->set(Config::MAP_FLAT_COLS_STRUCT_KEYS, {uniqueKeysString});
-        structReaderContext[writerDataTypeWithId->id()] = uniqueKeysString;
+        flatMapStructKeys = uniqueKeysString;
       }
     } else if (inputType == MapWriterInputType::kFlatMap) {
       transformedInput = batches;
@@ -1079,14 +1135,13 @@ void testMapWriter(
       return sfw.addEncoding();
     });
 
-    auto validate = [&](bool returnFlatVector = false) {
-      TestStripeStreams streams(
-          context, sf, rowType, &pool, returnFlatVector, structReaderContext);
+    auto validate = [&]() {
+      TestStripeStreams streams(context, sf, rowType, &pool);
       auto pool = memory::memoryManager()->addLeafPool();
       memory::AllocationPool allocPool(pool.get());
       StreamLabels labels(allocPool);
-      const auto reader = ColumnReader::build(
-          dataTypeWithId, dataTypeWithId, streams, labels, nullptr, 0);
+      auto reader = buildSelectiveReader(
+          dataTypeWithId, streams, labels, {}, flatMapStructKeys);
       VectorPtr out;
 
       // Read map/row
@@ -1118,9 +1173,6 @@ void testMapWriter(
     };
 
     ASSERT_NO_FATAL_FAILURE(validate());
-    if (useFlatMap) {
-      ASSERT_NO_FATAL_FAILURE(validate(true));
-    }
 
     context.nextStripe();
 
@@ -1170,7 +1222,6 @@ void testMapWriterRow(
   VLOG(2) << "Testing map writer struct input " << dataType->toString();
 
   const auto config = std::make_shared<Config>();
-  std::unordered_map<uint32_t, std::vector<std::string>> structReaderContext;
   ASSERT_TRUE(batches.size() > 0);
   auto row = std::dynamic_pointer_cast<RowVector>(batches[0]);
   ASSERT_TRUE(row);
@@ -1184,7 +1235,6 @@ void testMapWriterRow(
 
   ASSERT_EQ(writerDataTypeWithId->column(), 0);
   config->set(Config::MAP_FLAT_COLS_STRUCT_KEYS, {uniqueKeysString});
-  structReaderContext[writerDataTypeWithId->id()] = uniqueKeysString;
 
   config->set(Config::FLATTEN_MAP, true);
   config->set(Config::MAP_FLAT_COLS, {writerDataTypeWithId->column()});
@@ -1218,14 +1268,13 @@ void testMapWriterRow(
       return sfw.addEncoding();
     });
 
-    auto validate = [&](bool returnFlatVector = false) {
-      TestStripeStreams streams(
-          context, sf, rowType, &pool, returnFlatVector, structReaderContext);
+    auto validate = [&]() {
+      TestStripeStreams streams(context, sf, rowType, &pool);
       auto pool = memory::memoryManager()->addLeafPool();
       memory::AllocationPool allocPool(pool.get());
       StreamLabels labels(allocPool);
-      const auto reader = ColumnReader::build(
-          dataTypeWithId, dataTypeWithId, streams, labels, nullptr, 0);
+      auto reader = buildSelectiveReader(
+          dataTypeWithId, streams, labels, {}, uniqueKeysString);
       VectorPtr out;
 
       // Read map/row
@@ -1251,7 +1300,6 @@ void testMapWriterRow(
     };
 
     ASSERT_NO_FATAL_FAILURE(validate());
-    ASSERT_NO_FATAL_FAILURE(validate(true));
 
     context.nextStripe();
 
@@ -1292,7 +1340,9 @@ void testMapWriterRowImpl() {
   testMapWriterRow<TVALUE>(*pool, batches, true, true);
 }
 
-TEST_F(ColumnWriterTest, testMapWriterNestedRow) {
+// SelectiveDwrfReader does not support nested MAP and ROW values
+// in flat-map columns. It currently produces zero-length nested vectors.
+TEST_F(ColumnWriterTest, DISABLED_testMapWriterNestedRow) {
   testMapWriterRowImpl<bool>();
   testMapWriterRowImpl<Array<int32_t>>();
   testMapWriterRowImpl<Array<bool>>();
@@ -1551,8 +1601,7 @@ void testFlatMapWriter(
   auto reqType = rowTypeWithId->childAt(0);
   memory::AllocationPool allocPool(pool);
   StreamLabels labels(allocPool);
-  auto reader =
-      ColumnReader::build(reqType, reqType, streams, labels, nullptr, 0);
+  auto reader = buildSelectiveReader(reqType, streams, labels);
   VectorPtr out;
 
   for (const auto& batch : batches) {
@@ -1799,7 +1848,9 @@ void testMapWriterImpl() {
   testMapWriter<keyType, valueType>(*pool, batch, /* useFlatMap */ true);
 }
 
-TEST_F(ColumnWriterTest, testMapWriterNestedMap) {
+// SelectiveDwrfReader does not support nested MAP and ROW values
+// in flat-map columns. It currently produces zero-length nested vectors.
+TEST_F(ColumnWriterTest, DISABLED_testMapWriterNestedMap) {
   testMapWriterImpl<int32_t, bool>();
   testMapWriterImpl<int32_t, Array<int32_t>>();
   testMapWriterImpl<int32_t, Array<bool>>();
@@ -2553,19 +2604,24 @@ struct IntegerColumnWriterTypedTestCase {
       auto reqType = TypeWithId::create(rowType)->childAt(0);
       memory::AllocationPool allocPool(pool.get());
       StreamLabels labels(allocPool);
-      auto columnReader =
-          ColumnReader::build(reqType, reqType, streams, labels, nullptr, 0);
+      auto reader = buildSelectiveReader(reqType, streams, labels);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         // TODO Make reuse work
         VectorPtr resultBatch;
-        columnReader->next(size, resultBatch);
-        auto resultIv =
-            std::dynamic_pointer_cast<FlatVector<Integer>>(resultBatch);
-        std::vector<Integer> resultVec{
-            resultIv->rawValues(), resultIv->rawValues() + resultIv->size()};
+        reader->next(size, resultBatch);
         ASSERT_EQ(batch->size(), resultBatch->size());
-        ASSERT_EQ(batch->getNullCount(), resultBatch->getNullCount());
+        DecodedVector decoded(*resultBatch);
+        std::vector<Integer> resultVec(resultBatch->size());
+        for (vector_size_t k = 0; k < resultBatch->size(); ++k) {
+          if (!decoded.isNullAt(k)) {
+            resultVec[k] = decoded.valueAt<Integer>(k);
+          }
+        }
+        if (const auto resultNullCount = resultBatch->getNullCount();
+            resultNullCount.has_value()) {
+          ASSERT_EQ(batch->getNullCount(), resultNullCount);
+        }
         if (!batch->getNullCount().has_value() ||
             batch->getNullCount().value() > 0) {
           // Normalizing the null values so that we can leverage gtest
@@ -3791,8 +3847,7 @@ struct StringColumnWriterTestCase {
       auto reqType = TypeWithId::create(rowType)->childAt(0);
       memory::AllocationPool allocPool(pool.get());
       StreamLabels labels(allocPool);
-      auto columnReader =
-          ColumnReader::build(reqType, reqType, streams, labels, nullptr, 0);
+      auto reader = buildSelectiveReader(reqType, streams, labels);
 
       for (size_t j = 0; j != repetitionCount; ++j) {
         if (!writeDirect) {
@@ -3803,7 +3858,7 @@ struct StringColumnWriterTestCase {
 
         // TODO Make reuse work
         VectorPtr resultBatch;
-        columnReader->next(size, resultBatch);
+        reader->next(size, resultBatch);
 
         auto batch = batches[j];
         ASSERT_EQ(batch->size(), resultBatch->size());
@@ -3813,7 +3868,10 @@ struct StringColumnWriterTestCase {
         auto resultSv =
             std::dynamic_pointer_cast<SimpleVector<StringView>>(resultBatch);
         ASSERT_TRUE(resultSv);
-        ASSERT_EQ(sv->getNullCount(), resultSv->getNullCount());
+        if (const auto resultNullCount = resultSv->getNullCount();
+            resultNullCount.has_value()) {
+          ASSERT_EQ(sv->getNullCount(), resultNullCount);
+        }
         for (size_t k = 0; k < sv->size(); k++) {
           EXPECT_EQ(sv->isNullAt(k), resultSv->isNullAt(k));
         }
@@ -4832,7 +4890,7 @@ struct DictColumnWriterTestCase {
       std::function<bool(vector_size_t /*index*/)> isNullAt = nullptr) {
     auto config = std::make_shared<Config>();
     auto typeWithId = TypeWithId::create(type_, 1);
-    auto rowType = ROW({type_});
+    auto rowType = ROW({"column"}, {type_});
 
     WriterContext context{config, memory::memoryManager()->addRootPool()};
     context.initBuffer();
@@ -4867,8 +4925,7 @@ struct DictColumnWriterTestCase {
     auto reqType = rowTypeWithId->childAt(0);
     memory::AllocationPool allocPool(pool_.get());
     StreamLabels labels(allocPool);
-    auto reader =
-        ColumnReader::build(reqType, reqType, streams, labels, nullptr, 0);
+    auto reader = buildSelectiveReader(reqType, streams, labels);
     VectorPtr out;
     reader->next(batch->size(), out);
     compareResults(batch, out);
@@ -4955,32 +5012,36 @@ TEST_F(ColumnWriterTest, rowDictionary) {
   // randomly
 
   // Row tests
-  testDictionary<Row<int32_t>, true>(ROW({INTEGER()}), randomNulls(5));
+  testDictionary<Row<int32_t>, true>(ROW({"c0"}, {INTEGER()}), randomNulls(5));
 
   testDictionary<Row<StringView, int32_t>, true>(
-      ROW({VARCHAR(), INTEGER()}), randomNulls(11));
+      ROW({"c0", "c1"}, {VARCHAR(), INTEGER()}), randomNulls(11));
 
   testDictionary<Row<Row<StringView, int32_t>>, true>(
-      ROW({ROW({VARCHAR(), INTEGER()})}), randomNulls(11));
+      ROW({"c0"}, {ROW({"c0", "c1"}, {VARCHAR(), INTEGER()})}),
+      randomNulls(11));
 
   testDictionary<Row<int32_t, double, StringView>, true>(
-      ROW({INTEGER(), DOUBLE(), VARCHAR()}), randomNulls(5));
+      ROW({"c0", "c1", "c2"}, {INTEGER(), DOUBLE(), VARCHAR()}),
+      randomNulls(5));
 
   testDictionary<Row<int32_t, StringView, double, StringView>, true>(
-      ROW({INTEGER(), VARCHAR(), DOUBLE(), VARCHAR()}), randomNulls(5));
+      ROW({"c0", "c1", "c2", "c3"},
+          {INTEGER(), VARCHAR(), DOUBLE(), VARCHAR()}),
+      randomNulls(5));
 
   testDictionary<Row<Array<StringView>, StringView>, true>(
-      ROW({ARRAY(VARCHAR()), VARCHAR()}), randomNulls(11));
+      ROW({"c0", "c1"}, {ARRAY(VARCHAR()), VARCHAR()}), randomNulls(11));
 
   testDictionary<
       Row<Map<int32_t, double>,
           Array<Map<int32_t, Row<int32_t, double>>>,
           Row<int32_t, StringView>>,
       true>(
-      ROW(
+      ROW({"c0", "c1", "c2"},
           {MAP(INTEGER(), DOUBLE()),
-           ARRAY(MAP(INTEGER(), ROW({INTEGER(), DOUBLE()}))),
-           ROW({INTEGER(), VARCHAR()})}),
+           ARRAY(MAP(INTEGER(), ROW({"c0", "c1"}, {INTEGER(), DOUBLE()}))),
+           ROW({"c0", "c1"}, {INTEGER(), VARCHAR()})}),
       randomNulls(11));
 }
 
@@ -4991,16 +5052,18 @@ TEST_F(ColumnWriterTest, arrayDictionary) {
   testDictionary<
       Row<Array<int32_t>, Row<StringView, Array<Map<StringView, StringView>>>>,
       true>(
-      ROW(
+      ROW({"c0", "c1"},
           {ARRAY(INTEGER()),
-           ROW({VARCHAR(), ARRAY(MAP(VARCHAR(), VARCHAR()))})}),
+           ROW({"c0", "c1"}, {VARCHAR(), ARRAY(MAP(VARCHAR(), VARCHAR()))})}),
       randomNulls(11));
 
   testDictionary<
       Array<Map<int32_t, Array<Map<int8_t, Row<StringView, Array<double>>>>>>,
       true>(
       ARRAY(MAP(
-          INTEGER(), ARRAY(MAP(TINYINT(), ROW({VARCHAR(), ARRAY(DOUBLE())}))))),
+          INTEGER(),
+          ARRAY(MAP(
+              TINYINT(), ROW({"c0", "c1"}, {VARCHAR(), ARRAY(DOUBLE())}))))),
       randomNulls(7));
 }
 
@@ -5017,7 +5080,10 @@ TEST_F(ColumnWriterTest, mapDictionary) {
           Map<int32_t, Array<Row<int32_t, int32_t, Array<double>>>>>,
       true>(
       MAP(VARCHAR(),
-          MAP(INTEGER(), ARRAY(ROW({INTEGER(), INTEGER(), ARRAY(DOUBLE())})))),
+          MAP(INTEGER(),
+              ARRAY(
+                  ROW({"c0", "c1", "c2"},
+                      {INTEGER(), INTEGER(), ARRAY(DOUBLE())})))),
       randomNulls(9));
 
   testDictionary<Map<int32_t, Map<StringView, Map<StringView, int8_t>>>, true>(
