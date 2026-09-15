@@ -102,10 +102,10 @@ class SubfieldFilterAstTest : public OperatorTestBase {
 
       for (int i = 0; i < vector->size(); ++i) {
         if (fieldVec->isNullAt(i)) {
-          if (filter.testNull()) {
-            EXPECT_FALSE(boolVector->isNullAt(i)) << "Mismatch at row " << i;
-            EXPECT_TRUE(boolVector->valueAt(i)) << "Mismatch at row " << i;
-          }
+          EXPECT_EQ(
+              filter.testNull(),
+              !boolVector->isNullAt(i) && boolVector->valueAt(i))
+              << "Null mismatch at row " << i;
           continue;
         }
 
@@ -900,6 +900,55 @@ INSTANTIATE_TEST_SUITE_P(
 // MultiRange tests (FilterKind::kMultiRange)
 // MultiRange wraps arbitrary sub-filters with OR semantics. Common use case:
 // not-equal predicates represented as (< X) OR (> X).
+TEST_F(SubfieldFilterAstTest, multiRangeParentNullPolicy) {
+  const std::string columnName = "c0";
+  const auto rowType = ROW(columnName, DOUBLE());
+  auto vector = makeRowVector(
+      {columnName},
+      {makeNullableFlatVector<double>({std::nullopt, -1, 0, 1, 2})});
+  const common::Subfield subfield(columnName);
+  auto check = [&](const common::Filter& filter) {
+    SCOPED_TRACE(filter.toString());
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const auto& expr =
+        createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType);
+    testFilterExecution(rowType, columnName, filter, vector, expr);
+  };
+
+  check(common::IsNull());
+  check(common::IsNotNull());
+  for (const bool nullAllowed : {false, true}) {
+    for (const bool childNullAllowed : {false, true}) {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNull>());
+      filters.push_back(
+          std::make_unique<common::DoubleRange>(
+              0, false, false, 1, false, false, childNullAllowed));
+      common::MultiRange filter(std::move(filters), nullAllowed);
+      check(filter);
+
+      std::vector<std::unique_ptr<common::Filter>> outerFilters;
+      outerFilters.push_back(filter.clone());
+      outerFilters.push_back(std::make_unique<common::IsNull>());
+      check(common::MultiRange(std::move(outerFilters), !nullAllowed));
+    }
+
+    {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNull>());
+      filters.push_back(std::make_unique<common::IsNull>());
+      check(common::MultiRange(std::move(filters), nullAllowed));
+    }
+    {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNull>());
+      filters.push_back(std::make_unique<common::IsNotNull>());
+      check(common::MultiRange(std::move(filters), nullAllowed));
+    }
+  }
+}
+
 TEST_F(SubfieldFilterAstTest, multiRangeDoubleNotEqual) {
   const std::string columnName = "c0";
   auto rowType = ROW({{columnName, DOUBLE()}});

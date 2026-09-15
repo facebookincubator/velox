@@ -502,6 +502,13 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
         result =
             &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
       }
+      if (filter.kind() == common::FilterKind::kMultiRange) {
+        // IsNull children must not override the outer filter's null policy.
+        // The public wrapper applies that policy after building the predicate.
+        auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+        auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
+        return tree.push(Operation{Op::NULL_LOGICAL_AND, isNotNull, *result});
+      }
       return *result;
     }
 
