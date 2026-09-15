@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
+#include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 
 #include <numeric>

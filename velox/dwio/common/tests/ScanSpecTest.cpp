@@ -18,10 +18,18 @@
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <atomic>
+#include <thread>
 
 namespace facebook::velox::common {
 namespace {
+
+using testing::Each;
+using testing::ElementsAre;
+using testing::SizeIs;
 
 class ScanSpecTest : public testing::Test, public test::VectorTestBase {
  protected:
@@ -161,6 +169,208 @@ TEST_F(ScanSpecTest, testFilterOnConstant) {
         child.setFilter(std::make_shared<IsNotNull>());
       },
       false);
+}
+
+// A child added after the first reader tree was built has to show up in
+// stableChildren(), at the end.
+TEST_F(ScanSpecTest, stableChildrenAfterAddingChild) {
+  ScanSpec scanSpec("<root>");
+  scanSpec.addField("c0", 0);
+  scanSpec.addField("c1", 1);
+
+  auto* first = scanSpec.childByName("c0");
+  auto* second = scanSpec.childByName("c1");
+  const auto beforeAdd = scanSpec.stableChildren();
+  EXPECT_THAT(*beforeAdd, ElementsAre(first, second));
+
+  auto* third = scanSpec.addField("c2", 2);
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first, second, third));
+
+  // The snapshot a reader tree is walking is never mutated.
+  EXPECT_THAT(*beforeAdd, ElementsAre(first, second));
+
+  // 'c2' is the only child with a filter, so it sorts to the front. The
+  // stable order must not follow.
+  scanSpec.childByName("c2")->setFilter(
+      std::make_shared<BigintRange>(10, 20, false));
+  scanSpec.resetCachedValues(true);
+  ASSERT_EQ(scanSpec.children().front().get(), third);
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first, second, third));
+}
+
+// An add drops the published snapshot. The next call republishes the whole
+// order, whether or not anyone held the last one.
+TEST_F(ScanSpecTest, stableChildrenRepublishedAfterAdd) {
+  ScanSpec scanSpec("<root>");
+  auto* first = scanSpec.addField("c0", 0);
+  // Published and dropped, so nothing holds it when 'c1' is added.
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first));
+
+  auto* second = scanSpec.addField("c1", 1);
+  const auto held = scanSpec.stableChildren();
+  EXPECT_THAT(*held, ElementsAre(first, second));
+
+  // Held this time, so adding 'c2' must leave 'held' alone.
+  auto* third = scanSpec.addField("c2", 2);
+  EXPECT_THAT(*held, ElementsAre(first, second));
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(first, second, third));
+}
+
+// Two threads calling getOrCreateChild() for one name must get one child. A
+// lookup outside the insert's lock lets both miss and both create.
+TEST_F(ScanSpecTest, getOrCreateChildConcurrently) {
+  constexpr int32_t kNumThreads = 4;
+  constexpr int32_t kNumIterations = 10;
+  for (int32_t iteration = 0; iteration < kNumIterations; ++iteration) {
+    ScanSpec scanSpec("<root>");
+    // Releases every thread at once, widening the lookup-to-insert window.
+    std::atomic_bool start{false};
+    std::vector<ScanSpec*> children(kNumThreads);
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int32_t i = 0; i < kNumThreads; ++i) {
+      threads.emplace_back([&, i] {
+        while (!start.load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        children[i] = scanSpec.getOrCreateChild("c0");
+      });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    ASSERT_THAT(scanSpec.children(), SizeIs(1));
+    auto* child = scanSpec.childByName("c0");
+    ASSERT_EQ(child, scanSpec.children()[0].get());
+    EXPECT_THAT(children, Each(child));
+  }
+}
+
+// Stands in for a real updater: only the presence of the pointer decides
+// whether a column counts as delta updated.
+class NoopDeltaColumnUpdater : public dwio::common::DeltaColumnUpdater {
+ public:
+  void update(const RowSet& /*baseRows*/, VectorPtr& /*result*/) override {
+    VELOX_UNREACHABLE();
+  }
+};
+
+// setDeltaUpdate() takes filtering away from the reader and
+// resetDeltaUpdates() gives it back. hasFilter() is memoized up the tree, so
+// both have to invalidate it.
+TEST_F(ScanSpecTest, deltaUpdateDisablesFilter) {
+  ScanSpec scanSpec("<root>");
+  auto* child = scanSpec.addField("c0", 0);
+  child->setFilter(std::make_shared<BigintRange>(10, 20, false));
+  scanSpec.resetCachedValues(false);
+  ASSERT_TRUE(scanSpec.hasFilter());
+  ASSERT_TRUE(child->hasFilter());
+
+  NoopDeltaColumnUpdater updater;
+  child->setDeltaUpdate(&updater);
+  // Memoized as true just above, so this only holds if the root was reset too.
+  EXPECT_FALSE(scanSpec.hasFilter());
+  EXPECT_FALSE(child->hasFilter());
+  // The filter stays on the spec for whoever applies it once values are final.
+  EXPECT_TRUE(child->hasFilterApplicableToConstant());
+
+  scanSpec.resetDeltaUpdates();
+  EXPECT_EQ(child->deltaUpdate(), nullptr);
+  EXPECT_TRUE(scanSpec.hasFilter());
+  EXPECT_TRUE(child->hasFilter());
+}
+
+// resetDeltaUpdates() clears the columns that still carry an updater and
+// leaves the rest alone.
+TEST_F(ScanSpecTest, resetDeltaUpdatesOnlyClearsUpdatedColumns) {
+  ScanSpec scanSpec("<root>");
+  auto* first = scanSpec.addField("c0", 0);
+  auto* second = scanSpec.addField("c1", 1);
+  first->setFilter(std::make_shared<BigintRange>(10, 20, false));
+  second->setFilter(std::make_shared<BigintRange>(30, 40, false));
+  scanSpec.resetCachedValues(false);
+  ASSERT_TRUE(scanSpec.hasFilter());
+
+  NoopDeltaColumnUpdater updater;
+  first->setDeltaUpdate(&updater);
+  second->setDeltaUpdate(&updater);
+  ASSERT_FALSE(scanSpec.hasFilter());
+
+  first->setDeltaUpdate(nullptr);
+  ASSERT_TRUE(first->hasFilter());
+  ASSERT_FALSE(second->hasFilter());
+  // The root filters again as soon as one column does.
+  ASSERT_TRUE(scanSpec.hasFilter());
+
+  scanSpec.resetDeltaUpdates();
+  EXPECT_EQ(second->deltaUpdate(), nullptr);
+  EXPECT_TRUE(first->hasFilter());
+  EXPECT_TRUE(second->hasFilter());
+
+  // Nothing carries an updater now, so this changes nothing.
+  scanSpec.resetDeltaUpdates();
+  EXPECT_TRUE(first->hasFilter());
+  EXPECT_TRUE(second->hasFilter());
+  EXPECT_TRUE(scanSpec.hasFilter());
+}
+
+std::shared_ptr<ScanSpec> makeAdaptationSpec() {
+  auto spec = std::make_shared<ScanSpec>("<root>");
+  spec->addField("c0", 0);
+  spec->addField("c1", 1);
+  return spec;
+}
+
+// moveAdaptationFrom() skips a child that is constant on either side, because
+// a filter on a constant was evaluated at split start. Not so for a delta
+// updated column: nothing evaluated its filter.
+TEST_F(ScanSpecTest, moveAdaptationFromDeferredFilter) {
+  auto from = makeAdaptationSpec();
+  from->childByName("c0")->setFilter(
+      std::make_shared<BigintRange>(10, 20, false));
+  from->childByName("c1")->setFilter(
+      std::make_shared<BigintRange>(30, 40, false));
+
+  // Null constants, the shape a column missing from the file takes. Only 'c0'
+  // is delta updated.
+  auto to = makeAdaptationSpec();
+  for (const auto& name : {"c0", "c1"}) {
+    to->childByName(name)->setConstantValue(
+        BaseVector::createNullConstant(BIGINT(), 1, pool()));
+  }
+  NoopDeltaColumnUpdater updater;
+  to->childByName("c0")->setDeltaUpdate(&updater);
+
+  to->moveAdaptationFrom(*from);
+
+  EXPECT_TRUE(to->childByName("c0")->hasFilterApplicableToConstant());
+  EXPECT_FALSE(to->childByName("c1")->hasFilterApplicableToConstant());
+  // Moved out of 'from', not copied, and only for the child that received it.
+  EXPECT_EQ(from->childByName("c0")->filter(), nullptr);
+  EXPECT_NE(from->childByName("c1")->filter(), nullptr);
+}
+
+// A source holding no filter has nothing to carry. Taking its null filter
+// anyway would drop the one the destination holds.
+TEST_F(ScanSpecTest, moveAdaptationFromWithoutFilter) {
+  auto from = makeAdaptationSpec();
+
+  auto to = makeAdaptationSpec();
+  auto* deferred = to->childByName("c0");
+  deferred->setFilter(std::make_shared<BigintRange>(10, 20, false));
+  deferred->setConstantValue(
+      BaseVector::createNullConstant(BIGINT(), 1, pool()));
+  NoopDeltaColumnUpdater updater;
+  deferred->setDeltaUpdate(&updater);
+  // Neither side is constant, the case that predates deferred filtering.
+  auto* plain = to->childByName("c1");
+  plain->setFilter(std::make_shared<BigintRange>(30, 40, false));
+
+  to->moveAdaptationFrom(*from);
+
+  EXPECT_TRUE(deferred->hasFilterApplicableToConstant());
+  EXPECT_NE(plain->filter(), nullptr);
 }
 
 class TypedScanSpecTest : public testing::TestWithParam<TypePtr>,
