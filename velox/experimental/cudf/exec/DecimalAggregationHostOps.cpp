@@ -39,7 +39,7 @@ void validateIntermediateColumnType(cudf::column_view const& column) {
 cudf::column_view castDecimalInputToDecimal128(
     cudf::column_view inputCol,
     std::unique_ptr<cudf::column>& holder,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   const auto inputType = inputCol.type().id();
   if (inputType != cudf::type_id::DECIMAL32 &&
       inputType != cudf::type_id::DECIMAL64) {
@@ -55,7 +55,7 @@ cudf::column_view castDecimalInputToDecimal128(
 
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (count->type().id() != cudf::type_id::INT64) {
     count = cudf::cast(
         *count, cudf::data_type{cudf::type_id::INT64}, stream, get_temp_mr());
@@ -66,7 +66,7 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
 std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   count = castCountColumnToInt64(std::move(count), stream);
   return serializeDecimalSumState(sum->view(), count->view(), stream, mr);
@@ -76,7 +76,7 @@ std::unique_ptr<cudf::column> finalizeDecimalAverage(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
     const TypePtr& resultType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   count = castCountColumnToInt64(std::move(count), stream);
   auto avgCol = computeDecimalAverage(sum->view(), count->view(), stream, mr);
