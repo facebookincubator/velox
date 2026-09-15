@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/expression/StringWriter.h"
 #include "velox/external/md5/md5.h"
 #include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringCore.h"
@@ -529,21 +530,11 @@ trimAscii(TOutString& output, const TInString& input, TShouldTrim shouldTrim) {
   output.setNoCopy(StringView(start, curPos - start + 1));
 }
 
-template <
-    bool leftTrim,
-    bool rightTrim,
-    typename TOutString,
-    typename TInString>
+template <bool leftTrim, bool rightTrim, typename TInString>
 FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
-    TOutString& output,
+    exec::StringWriter& output,
     const TInString& input) {
-  auto emptyOutput = [&]() {
-    if constexpr (std::is_same_v<TOutString, StringView>) {
-      output = StringView("");
-    } else {
-      output.setEmpty();
-    }
-  };
+  auto emptyOutput = [&]() { output.setEmpty(); };
   if (input.empty()) {
     emptyOutput();
     return;
@@ -592,11 +583,7 @@ FOLLY_ALWAYS_INLINE void trimUnicodeWhiteSpace(
   }
 
   auto view = StringView(stringStart, endIndex - startIndex + 1);
-  if constexpr (std::is_same_v<TOutString, StringView>) {
-    output = view;
-  } else {
-    output.setNoCopy(view);
-  }
+  output.setNoCopy(view);
 }
 
 template <bool ascii, typename TOutString, typename TInString>

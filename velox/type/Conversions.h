@@ -303,7 +303,7 @@ struct Converter<
             break;
           }
         }
-        if (!std::isdigit(v[index])) {
+        if (!std::isdigit(static_cast<unsigned char>(v[index]))) {
           return folly::makeUnexpected(
               Status::UserError("Encountered a non-digit character"));
         }
@@ -321,7 +321,7 @@ struct Converter<
             break;
           }
         }
-        if (!std::isdigit(v[index])) {
+        if (!std::isdigit(static_cast<unsigned char>(v[index]))) {
           return folly::makeUnexpected(
               Status::UserError("Encountered a non-digit character"));
         }
@@ -338,6 +338,9 @@ struct Converter<
   static Expected<T> tryCast(std::string_view v) {
     if constexpr (TPolicy::truncate) {
       return convertStringToInt(v);
+    } else if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
+      // Spark cast hooks have already applied Spark-compatible string trim.
+      return detail::callFollyTo<T>(v);
     } else {
       auto trimmed = trimWhiteSpace(v.data(), v.size());
       return detail::callFollyTo<T>(trimmed);
@@ -347,6 +350,9 @@ struct Converter<
   static Expected<T> tryCast(const StringView& v) {
     if constexpr (TPolicy::truncate) {
       return convertStringToInt(std::string_view(v));
+    } else if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
+      // Spark cast hooks have already applied Spark-compatible string trim.
+      return detail::callFollyTo<T>(std::string_view(v));
     } else {
       auto trimmed = trimWhiteSpace(v.data(), v.size());
       return detail::callFollyTo<T>(trimmed);
@@ -356,6 +362,9 @@ struct Converter<
   static Expected<T> tryCast(const std::string& v) {
     if constexpr (TPolicy::truncate) {
       return convertStringToInt(v);
+    } else if constexpr (std::is_same_v<TPolicy, SparkTryCastPolicy>) {
+      // Spark cast hooks have already applied Spark-compatible string trim.
+      return detail::callFollyTo<T>(v);
     } else {
       auto trimmed = trimWhiteSpace(v.data(), v.length());
       return detail::callFollyTo<T>(trimmed);
