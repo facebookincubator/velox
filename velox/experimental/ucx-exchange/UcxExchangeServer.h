@@ -93,6 +93,18 @@ class UcxExchangeServer
   /// @brief Completion handler after data has been sent.
   void sendComplete(ucs_status_t status, std::shared_ptr<void> arg);
 
+  // Records a metadata send completion for communicator-thread finalization.
+  void metadataSendComplete(ucs_status_t status, bool endOfStream);
+
+  // Waits for the consumer to abandon this destination.
+  void receiveDestinationCancellation();
+
+  // Records a destination cancellation for communicator-thread finalization.
+  void destinationCancellationComplete(ucs_status_t status);
+
+  // Finalizes terminal delivery or destination cancellation exactly once.
+  void finalizeTerminalMetadata();
+
   /// @brief Completion handler for intra-node transfer after source retrieves
   /// data.
   void onIntraNodeRetrieveComplete();
@@ -128,6 +140,22 @@ class UcxExchangeServer
   std::recursive_mutex dataMutex_;
   std::atomic<bool> closed_{false};
 
+  enum class TerminalMetadataState : uint8_t {
+    NotStarted,
+    Pending,
+    Succeeded,
+    Failed,
+    Finalized,
+  };
+
+  TerminalMetadataState terminalMetadataState_{
+      TerminalMetadataState::NotStarted};
+  ucs_status_t terminalMetadataStatus_{UCS_OK};
+  std::atomic<bool> destinationCancelled_{false};
+
+  // Binds asynchronous completion to the original task generation.
+  std::shared_ptr<UcxOutputQueue> outputQueue_;
+
   /// Future for intra-node transfer - signaled when source retrieves data.
   std::future<void> intraNodeRetrieveFuture_;
 
@@ -143,6 +171,7 @@ class UcxExchangeServer
   // and must therefore exist until the upcall is done.
   std::shared_ptr<ucxx::Request> metaRequest_{nullptr};
   std::shared_ptr<ucxx::Request> dataRequest_{nullptr};
+  std::shared_ptr<ucxx::Request> cancellationRequest_{nullptr};
 
   // Completed UCXX requests are kept alive here to prevent use-after-free.
   // UCP's ucp_wireup_replay_pending_requests can fire callbacks on already-
