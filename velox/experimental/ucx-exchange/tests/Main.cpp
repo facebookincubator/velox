@@ -15,11 +15,13 @@
  */
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <rmm/mr/per_device_resource.hpp>
 
 DEFINE_int32(
     exchange_log_level,
@@ -37,5 +39,9 @@ int main(int argc, char** argv) {
   // production code enables it via the "cudf.exchange" session config.
   cudfConfig.exchange = true;
   cudfConfig.exchangeLogLevel = FLAGS_exchange_log_level;
-  return RUN_ALL_TESTS();
+  facebook::velox::cudf_velox::output_mr_.emplace(
+      rmm::mr::get_current_device_resource_ref());
+  const auto result = RUN_ALL_TESTS();
+  facebook::velox::cudf_velox::output_mr_.reset();
+  return result;
 }
