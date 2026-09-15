@@ -15,6 +15,7 @@
  */
 
 #include "velox/dwio/common/ScanSpec.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/dwio/common/Statistics.h"
@@ -398,6 +399,15 @@ bool testFilter(
   if (mayHaveNull && filter->testNull()) {
     return true;
   }
+  if (isTimestampWithTimeZoneType(type)) {
+    // The filter bounds are packed TIMESTAMP WITH TIME ZONE values
+    // ((millisUtc << 12) | zoneKey) while these statistics are raw timestamps
+    // in the file's own unit. Comparing the two would prune row groups that do
+    // contain matching rows, so decline to prune. The column reader applies the
+    // translated filter to the values themselves.
+    return true;
+  }
+
   if (type->isDecimal()) {
     // The min and max value in the metadata for decimal type in Parquet can be
     // stored in different physical types, including int32, int64 and

@@ -39,6 +39,12 @@ enum class TokenType {
   Double,
   String,
   Binary,
+  // TimestampWithTimeZone must precede Timestamp: the tokenizer matches
+  // keywords by prefix in this declaration order, so "timestamp" would
+  // otherwise greedily match the first 9 characters of "timestamp with local
+  // time zone" and leave the rest unconsumed. Same ordering requirement as
+  // TimeMicroUtc/Time below.
+  TimestampWithTimeZone,
   Timestamp,
   Opaque,
   List,
