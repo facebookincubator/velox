@@ -426,6 +426,59 @@ TEST_F(UcxPartitionedOutputTest, replicatesNullFirstRowOncePerDestination) {
   EXPECT_EQ(totalRows, kNumPartitions * numNullRows + (kNumRows - numNullRows));
 }
 
+TEST_F(UcxPartitionedOutputTest, replicatesNullsAcrossPartitionKeys) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  const std::vector<int32_t> rowIds{10, 20, 30, 40, 50, 60};
+  const std::vector<int32_t> keyValues{1, 2, 3, 4, 5, 6};
+  const std::vector<cudf::size_type> firstNullRows{0};
+  const std::vector<cudf::size_type> secondNullRows{4};
+  constexpr int kNumNullRows = 2;
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(makeKeyColumn(rowIds, {}, stream));
+  columns.push_back(makeKeyColumn(keyValues, firstNullRows, stream));
+  columns.push_back(makeKeyColumn(keyValues, secondNullRows, stream));
+  ASSERT_EQ(columns[0]->view().null_count(), 0);
+  ASSERT_EQ(columns[1]->view().null_count(), firstNullRows.size());
+  ASSERT_EQ(columns[2]->view().null_count(), secondNullRows.size());
+
+  const auto rowType =
+      ROW({"row_id", "key1", "key2"}, {INTEGER(), INTEGER(), INTEGER()});
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      rowType,
+      kNumPartitions,
+      {"row_id", "key1", "key2"},
+      FOUR_GBYTES,
+      {},
+      /*replicateNullsAndAny=*/true);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      kNumPartitions,
+      /*numDrivers=*/1);
+
+  auto partitionedOutput = makePartitionedOutput(task);
+  auto table = std::make_unique<cudf::table>(std::move(columns));
+  stream.sync();
+  auto input = std::make_shared<cudf_velox::CudfVector>(
+      pool_.get(), rowType, kNumRows, std::move(table), stream);
+  partitionedOutput->addInput(std::move(input));
+  partitionedOutput->getOutput();
+  finishPartitionedOutput(partitionedOutput.get());
+
+  int totalRows = 0;
+  for (int destination = 0; destination < kNumPartitions; ++destination) {
+    const auto keys = drainKeyColumn(destination);
+    totalRows += static_cast<int>(keys.size());
+    EXPECT_EQ(countValue(keys, rowIds[0]), 1);
+    EXPECT_EQ(countValue(keys, rowIds[4]), 1);
+  }
+  EXPECT_EQ(
+      totalRows, kNumPartitions * kNumNullRows + (kNumRows - kNumNullRows));
+}
+
 // Negative control for the replication tests: with the flag off, the operator
 // must not replicate anything. Without this, a harness that lost the ability to
 // pass replicateNullsAndAny=false -- or a plan builder that quietly forced it
