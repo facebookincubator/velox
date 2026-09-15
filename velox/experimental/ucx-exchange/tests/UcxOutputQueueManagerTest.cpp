@@ -22,11 +22,15 @@
 #include <folly/synchronization/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <atomic>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <type_traits>
 #include <optional>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -37,6 +41,7 @@ using namespace facebook::velox::ucx_exchange;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::core;
+using namespace facebook::velox::common::testutil;
 
 class UcxOutputQueueManagerTest : public testing::Test {
  protected:
@@ -735,6 +740,70 @@ TEST_F(
   EXPECT_TRUE(*eligibility);
   EXPECT_FALSE(registryPollResult.has_value());
   queueManager_->removeTask(taskId);
+}
+
+DEBUG_ONLY_TEST_F(
+    UcxOutputQueueManagerTest,
+    initializationDoesNotClearConcurrentRemovalCancellation) {
+  const std::string taskId = "concurrentLifecycle";
+  queueManager_->removeTask(taskId);
+
+  auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
+  std::atomic<bool> queuePublished{false};
+  std::atomic<bool> removeStarted{false};
+
+  TestValue::enable();
+  SCOPE_EXIT {
+    TestValue::disable();
+  };
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxOutputQueueManager::initializeTask::queuePublished",
+      std::function<void(void*)>([&](void*) {
+        queuePublished.store(true, std::memory_order_release);
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!removeStarted.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        VELOX_CHECK(
+            removeStarted.load(std::memory_order_acquire),
+            "Concurrent removal did not start");
+      }));
+
+  std::thread initializer([&] {
+    queueManager_->initializeTask(
+        task,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        /*numDestinations=*/1,
+        /*numDrivers=*/1);
+  });
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!queuePublished.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (!queuePublished.load(std::memory_order_acquire)) {
+    removeStarted.store(true, std::memory_order_release);
+    initializer.join();
+    FAIL() << "Initialization did not publish its queue";
+    return;
+  }
+
+  std::thread remover([&] {
+    removeStarted.store(true, std::memory_order_release);
+    queueManager_->removeTask(taskId);
+  });
+  initializer.join();
+  remover.join();
+
+  const auto result = IntraNodeTransferRegistry::getInstance()->poll(
+      IntraNodeTransferKey{
+          taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
 }
 
 // --- Broadcast tests ---

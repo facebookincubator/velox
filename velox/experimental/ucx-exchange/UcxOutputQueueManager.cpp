@@ -20,6 +20,7 @@
 #include <cudf/table/table.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/exec_policy.hpp>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -67,6 +68,10 @@ void UcxOutputQueueManager::initializeTask(
         }
       }
     });
+    // Test hook for the initializeTask()/removeTask() lifecycle race.
+    common::testutil::TestValue::adjust(
+        "facebook::velox::ucx_exchange::UcxOutputQueueManager::initializeTask::queuePublished",
+        nullptr);
   }
 
   const bool canUseIntraNode =
