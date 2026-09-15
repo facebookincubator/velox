@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/BloomFilter.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -35,15 +35,20 @@ class BloomFilterAggAggregateTest
     registerAggregateFunctions("");
   }
 
-  VectorPtr getSerializedBloomFilter(int32_t capacity) {
-    BloomFilter bloomFilter;
-    bloomFilter.reset(capacity);
+  static int32_t numBlocksForBits(int64_t numBits) {
+    return static_cast<int32_t>(std::max<int64_t>(
+        1, numBits / (8 * sizeof(SplitBlockBloomFilter::Block))));
+  }
+
+  VectorPtr getSerializedBloomFilter(int32_t numBlocks) {
+    std::vector<SplitBlockBloomFilter::Block> blocks(numBlocks);
+    SplitBlockBloomFilter bloomFilter(blocks);
     for (auto i = 0; i < 9; ++i) {
       bloomFilter.insert(folly::hasher<int64_t>()(i));
     }
-    std::string data;
-    data.resize(bloomFilter.serializedSize());
-    bloomFilter.serialize(data.data());
+    std::string data(
+        reinterpret_cast<const char*>(blocks.data()),
+        blocks.size() * sizeof(SplitBlockBloomFilter::Block));
     return makeConstant(StringView(data), 1, VARBINARY());
   }
 };
@@ -52,7 +57,7 @@ class BloomFilterAggAggregateTest
 TEST_F(BloomFilterAggAggregateTest, basic) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
-  auto expected = {makeRowVector({getSerializedBloomFilter(11)})};
+  auto expected = {makeRowVector({getSerializedBloomFilter(1)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
 }
 
@@ -60,14 +65,16 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
 
-  auto expected1 = {makeRowVector({getSerializedBloomFilter(13)})};
+  auto expected1 = {makeRowVector({getSerializedBloomFilter(1)})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 6)"}, expected1);
 
-  auto expected2 = {makeRowVector({getSerializedBloomFilter(524'288)})};
+  auto expected2 = {
+      makeRowVector({getSerializedBloomFilter(numBlocksForBits(8'388'608))})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
 
   // Max bits case: bloom filter is at its largest possible size.
-  auto expected3 = {makeRowVector({getSerializedBloomFilter(4'194'304)})};
+  auto expected3 = {
+      makeRowVector({getSerializedBloomFilter(numBlocksForBits(67'108'864))})};
   testAggregations(vectors, {}, {"bloom_filter_agg(c0, 10000000)"}, expected3);
 }
 
@@ -91,7 +98,7 @@ TEST_F(BloomFilterAggAggregateTest, config) {
   auto vector = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
   std::vector<RowVectorPtr> expected = {
-      makeRowVector({getSerializedBloomFilter(100)})};
+      makeRowVector({getSerializedBloomFilter(numBlocksForBits(1'600))})};
 
   // This config will decide the bloom filter capacity, the expected value is
   // the serialized bloom filter, it should be consistent.
