@@ -56,8 +56,8 @@ RPCRateLimiter::Token::~Token() {
 
 // --- RPCRateLimiter ---
 
-RPCRateLimiter::RPCRateLimiter(std::string tierKey)
-    : tierKey_{std::move(tierKey)} {}
+RPCRateLimiter::RPCRateLimiter(std::string backendKey)
+    : backendKey_{std::move(backendKey)} {}
 
 void RPCRateLimiter::setDefaultCapacity(int64_t capacity) {
   defaultCapacityRef().store(capacity);
@@ -108,11 +108,11 @@ void RPCRateLimiter::initializeOnce(
           wanted.ceiling != config_.ceiling) {
         // Per backend, not LOG_FIRST_N: that is process-wide, so the first
         // backend to take this path would silence the warning for every other
-        // one even though the message names a specific tier.
+        // one even though the message names a specific backend.
         if (!loggedDivergentSettings_) {
           loggedDivergentSettings_ = true;
           RPC_RATE_LIMITER_LOG(WARNING)
-              << "backend " << tierKey_
+              << "backend " << backendKey_
               << " is already initialized; ignoring different settings from a "
                  "later query. One configuration is shared by every query on a "
                  "backend, and it is fixed by the first of them.";
@@ -166,7 +166,7 @@ void RPCRateLimiter::applyMutationLocked(
   if (was != config_.adaptive) {
     RPC_RATE_LIMITER_LOG(WARNING)
         << "adaptive capacity " << (config_.adaptive ? "ENABLED" : "DISABLED")
-        << " for backend " << tierKey_ << " (floor=" << config_.floor
+        << " for backend " << backendKey_ << " (floor=" << config_.floor
         << ", decrease=" << config_.decreaseFactor << ")";
   }
 }
@@ -204,7 +204,7 @@ void RPCRateLimiter::notePeakPending(int64_t pending) {
 RPCRateLimiter::Token RPCRateLimiter::acquire() {
   const int64_t pending = ++pending_;
   notePeakPending(pending);
-  RPC_RATE_LIMITER_VLOG(2) << "acquire[" << tierKey_
+  RPC_RATE_LIMITER_VLOG(2) << "acquire[" << backendKey_
                            << "]: pending=" << pending;
   return Token{this};
 }
@@ -263,12 +263,12 @@ RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
   const int64_t capacity = capacityLocked();
   if (pending < capacity) {
     RPC_RATE_LIMITER_VLOG(2)
-        << "admitOrWait[" << tierKey_ << "]: admitted (pending=" << pending
+        << "admitOrWait[" << backendKey_ << "]: admitted (pending=" << pending
         << ", capacity=" << capacity << ")";
     result.admitted = true;
     return result;
   }
-  RPC_RATE_LIMITER_VLOG(1) << "admitOrWait[" << tierKey_
+  RPC_RATE_LIMITER_VLOG(1) << "admitOrWait[" << backendKey_
                            << "]: waiting (pending=" << pending
                            << ", capacity=" << capacity << "), waiter #"
                            << waiters_.size();
@@ -311,7 +311,7 @@ void RPCRateLimiter::onOverload() {
   if (lowWater_ == 0 || next < lowWater_) {
     lowWater_ = next;
   }
-  RPC_RATE_LIMITER_VLOG(1) << "RPC congestion: capacity[" << tierKey_ << "] "
+  RPC_RATE_LIMITER_VLOG(1) << "RPC congestion: capacity[" << backendKey_ << "] "
                            << current << " -> " << next << " (overload)";
 }
 
@@ -355,7 +355,7 @@ void RPCRateLimiter::release() {
   while (pending > 0 && !pending_.compare_exchange_weak(pending, pending - 1)) {
   }
   pending = std::max<int64_t>(0, pending - 1);
-  RPC_RATE_LIMITER_VLOG(2) << "release[" << tierKey_
+  RPC_RATE_LIMITER_VLOG(2) << "release[" << backendKey_
                            << "]: pending=" << pending;
 
   // Hold the lock across check-and-dequeue. Otherwise a waiter parked by
@@ -368,7 +368,7 @@ void RPCRateLimiter::release() {
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (pending < capacityLocked() && !waiters_.empty()) {
-      RPC_RATE_LIMITER_VLOG(1) << "release[" << tierKey_ << "]: waking 1 of "
+      RPC_RATE_LIMITER_VLOG(1) << "release[" << backendKey_ << "]: waking 1 of "
                                << waiters_.size() << " waiters";
       toNotify = std::move(waiters_.front());
       waiters_.pop_front();
@@ -396,13 +396,13 @@ RPCRateLimiterRegistry& RPCRateLimiterRegistry::global() {
   return registry;
 }
 
-RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& tierKey) {
+RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& backendKey) {
   // Fast path: the backend already exists, so concurrent lookups from every
   // driver share the lock rather than serializing. Values are held by
   // unique_ptr, so the reference outlives later insertions.
   {
     std::shared_lock<std::shared_mutex> rl(mutex_);
-    auto it = backends_.find(tierKey);
+    auto it = backends_.find(backendKey);
     if (it != backends_.end()) {
       return *it->second;
     }
@@ -410,12 +410,12 @@ RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& tierKey) {
   // Slow path: first sight of this backend. Re-check under the exclusive lock
   // in case another thread created it between the two locks.
   std::unique_lock<std::shared_mutex> wl(mutex_);
-  auto it = backends_.find(tierKey);
+  auto it = backends_.find(backendKey);
   if (it != backends_.end()) {
     return *it->second;
   }
-  auto [inserted, _] =
-      backends_.emplace(tierKey, std::make_unique<RPCRateLimiter>(tierKey));
+  auto [inserted, _] = backends_.emplace(
+      backendKey, std::make_unique<RPCRateLimiter>(backendKey));
   return *inserted->second;
 }
 
@@ -426,7 +426,7 @@ void RPCRateLimiterRegistry::testingReset() {
   // operator that acquired them and release through a back-pointer, so
   // destroying a RPCRateLimiter that still has outstanding tokens would leave
   // them writing through a dangling pointer.
-  for (auto& [tierKey, admission] : backends_) {
+  for (auto& [backendKey, admission] : backends_) {
     admission->testingReset();
   }
 }

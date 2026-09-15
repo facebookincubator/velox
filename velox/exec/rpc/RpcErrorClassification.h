@@ -16,15 +16,16 @@
 
 #pragma once
 
-#include <folly/ExceptionWrapper.h>
-#include <folly/futures/Future.h> // folly::FutureTimeout
+#include <stdexcept>
+#include <string>
 
-#include <thrift/lib/cpp/TApplicationException.h>
-#include <thrift/lib/cpp/transport/TTransportException.h>
+#include <folly/ExceptionWrapper.h>
+
+#include "velox/common/rpc/RPCTypes.h"
 
 namespace facebook::velox::exec::rpc {
 
-/// Reports whether the failure carried by `ew` is a timeout.
+/// Reports whether the failure is a timeout.
 ///
 /// Recognizes the three ways a timeout surfaces from a ServiceRouter/Thrift2
 /// async call:
@@ -39,22 +40,45 @@ namespace facebook::velox::exec::rpc {
 /// rather than folding it into the generic-error majority fraction. Uses
 /// `with_exception` (matches subclasses, never rethrows) so it is safe and
 /// cheap in a `.thenTry` handler.
-inline bool isTimeout(const folly::exception_wrapper& ew) {
-  bool timedOut = false;
-  if (ew.with_exception(
-          [&](const apache::thrift::transport::TTransportException& e) {
-            timedOut = e.getType() ==
-                apache::thrift::transport::TTransportException::TIMED_OUT;
-          })) {
-    return timedOut;
-  }
-  if (ew.with_exception([&](const apache::thrift::TApplicationException& e) {
-        timedOut =
-            e.getType() == apache::thrift::TApplicationException::TIMEOUT;
-      })) {
-    return timedOut;
-  }
-  return ew.is_compatible_with<folly::FutureTimeout>();
-}
+bool isTimeout(const folly::exception_wrapper& exception);
+
+/// Reports whether the failure originated here rather than at
+/// the backend: a framework invariant tripping (`VeloxRuntimeError` -- a
+/// payload read back as the wrong type, a broken function contract) or the
+/// process running out of memory.
+///
+/// The row still degrades to NULL like any other failure; what this changes is
+/// the kind it is tagged with. `RPCErrorKind::kInternalError` keeps such a
+/// failure countable on its own instead of inflating the backend error rate,
+/// and keeps it out of the congestion window -- a bug in this process should
+/// not throttle concurrency against a backend that is answering fine.
+bool isInternalFailure(const folly::exception_wrapper& exception);
+
+/// An exception that already knows what kind of failure it is.
+///
+/// A transport often classifies a failure precisely -- rate-limited, invalid
+/// request, a polling deadline -- and then has to hand it up the future chain.
+/// Propagating the raw exception throws that away: errorKindFor() can only
+/// re-derive internal/timeout/backend from the type, so a rate-limit arrives
+/// as a plain backend error and the congestion policy loses the immediate
+/// backoff it should have triggered. Carrying the kind keeps the metric and
+/// the row saying the same thing.
+struct RpcClassifiedError : public std::runtime_error {
+  /// Preserves the classification while propagating through a future chain.
+  RpcClassifiedError(velox::rpc::RPCErrorKind kind, const std::string& message);
+
+  /// Identifies how metrics and congestion control treat the failure.
+  velox::rpc::RPCErrorKind kind;
+};
+
+/// Returns the `RPCErrorKind` to record when an exception becomes a failed row.
+///
+/// Three outcomes, in priority order: a fault of ours (`kInternalError`), a
+/// deadline (`kTimeout`, which the congestion policy reads as hard overload),
+/// or the backend refusing (`kBackendError`). Shared by every site that
+/// degrades an exception so the per-row and batch paths cannot disagree on
+/// what a given failure was.
+velox::rpc::RPCErrorKind errorKindFor(
+    const folly::exception_wrapper& exception);
 
 } // namespace facebook::velox::exec::rpc
