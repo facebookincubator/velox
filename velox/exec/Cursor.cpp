@@ -50,10 +50,13 @@ class TaskQueue {
 
   // Adds a batch of rows to the queue and returns kNotBlocked if the
   // producer may continue. Returns kWaitForConsumer if the queue is
-  // full after the addition and sets 'future' to a future that is
+  // full after the addition and sets '*future' to a future that is
   // realized when the producer may continue.
+  //
+  // 'future' may be null, and is only dereferenced when 'vector' is set: a
+  // producer-done signal cannot fill the queue, so it never blocks.
   exec::BlockingReason
-  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture& future);
+  enqueue(RowVectorPtr vector, bool drained, velox::ContinueFuture* future);
 
   // Returns the next batch if one is available. Otherwise returns nullptr and,
   // if more output may still arrive, sets 'future' to a future realized when
@@ -92,7 +95,7 @@ class TaskQueue {
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
     bool drained,
-    velox::ContinueFuture& future) {
+    velox::ContinueFuture* future) {
   if (!vector) {
     // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
     // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
@@ -147,7 +150,7 @@ exec::BlockingReason TaskQueue::enqueue(
       auto [unblockPromise, unblockFuture] =
           makeVeloxContinuePromiseContract("TaskQueue::enqueue");
       producerUnblockPromises_.emplace_back(std::move(unblockPromise));
-      future = std::move(unblockFuture);
+      *future = std::move(unblockFuture);
       reason = exec::BlockingReason::kWaitForConsumer;
     }
   }
@@ -356,14 +359,14 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           }
 
           if (!vector || !copyResult) {
-            return queue->enqueue(vector, drained, *future);
+            return queue->enqueue(vector, drained, future);
           }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
           return queue->enqueue(
               std::static_pointer_cast<RowVector>(std::move(copy)),
               drained,
-              *future);
+              future);
         },
         0,
         std::move(spillDiskOpts),
