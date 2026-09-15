@@ -228,5 +228,126 @@ TEST_F(AggregationTest, DISABLED_tpchQ1) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+class AggregationBugTest : public AggregationTest {
+ protected:
+  static constexpr int32_t kRows = 100000;
+
+  // AggregationTest suppresses the base TearDown, which leaves the periodic
+  // stats reporter running and makes every subsequent SetUp throw.
+  void TearDown() override {
+    OperatorTestBase::TearDown();
+  }
+
+  // Group key is 'row % cardinality', value is a small positive int so that no
+  // sum can overflow.
+  RowVectorPtr makeGroupedInput(int32_t cardinality) {
+    return makeRowVector(
+        {"g", "v"},
+        {makeFlatVector<int64_t>(kRows, [&](int i) { return i % cardinality; }),
+         makeFlatVector<int64_t>(kRows, [](int i) { return (i % 7) + 1; })});
+  }
+
+  RowVectorPtr expectedGrouped(int32_t cardinality) {
+    std::vector<int64_t> sums(cardinality, 0);
+    for (int32_t i = 0; i < kRows; ++i) {
+      sums[i % cardinality] += (i % 7) + 1;
+    }
+    return makeRowVector(
+        {makeFlatVector<int64_t>(cardinality, folly::identity),
+         makeFlatVector<int64_t>(cardinality, [&](int i) { return sums[i]; })});
+  }
+
+  void checkCardinality(int32_t cardinality) {
+    SCOPED_TRACE(fmt::format("cardinality={}", cardinality));
+    auto plan = PlanBuilder()
+                    .values({makeGroupedInput(cardinality)})
+                    .project({"g", "v + 0 as p"})
+                    .singleAggregation({"g"}, {"sum(p)"})
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(expectedGrouped(cardinality));
+  }
+
+  void checkAccumulators(int32_t numAccumulators) {
+    SCOPED_TRACE(fmt::format("accumulators={}", numAccumulators));
+    std::vector<std::string> names;
+    std::vector<VectorPtr> columns;
+    std::vector<std::string> projections;
+    std::vector<std::string> aggregates;
+    std::vector<VectorPtr> expectedColumns;
+    for (int32_t j = 0; j < numAccumulators; ++j) {
+      names.push_back(fmt::format("c{}", j));
+      columns.push_back(makeFlatVector<int64_t>(kRows, [&](int i) {
+        return (i % 7) + j + 1;
+      }));
+      projections.push_back(fmt::format("c{} + 0 as p{}", j, j));
+      aggregates.push_back(fmt::format("sum(p{})", j));
+      int64_t sum = 0;
+      for (int32_t i = 0; i < kRows; ++i) {
+        sum += (i % 7) + j + 1;
+      }
+      expectedColumns.push_back(
+          makeFlatVector<int64_t>(1, [&](int) { return sum; }));
+    }
+    auto plan = PlanBuilder()
+                    .values({makeRowVector(names, columns)})
+                    .project(projections)
+                    .singleAggregation({}, aggregates)
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(makeRowVector(expectedColumns));
+  }
+};
+
+// Grouped sum reported wrong when the number of result groups is a multiple of
+// kBlockSize (256).
+class GroupCardinalityTest : public AggregationBugTest,
+                             public testing::WithParamInterface<int32_t> {};
+
+TEST_P(GroupCardinalityTest, groupedSum) {
+  checkCardinality(GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AggregationBug,
+    GroupCardinalityTest,
+    testing::Values(
+        1,
+        64,
+        255,
+        256,
+        257,
+        384,
+        511,
+        512,
+        513,
+        768,
+        1000,
+        1023,
+        1024,
+        1025,
+        1536,
+        2048,
+        4096),
+    [](const testing::TestParamInfo<int32_t>& info) {
+      return fmt::format("card{}", info.param);
+    });
+
+// Ungrouped sum reported wrong once an aggregation has enough accumulators for
+// the warps to race on the shared scratch area. The threshold is not fixed; it
+// depends on how much work sits between the barriers.
+class AccumulatorCountTest : public AggregationBugTest,
+                             public testing::WithParamInterface<int32_t> {};
+
+TEST_P(AccumulatorCountTest, ungroupedSum) {
+  checkAccumulators(GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AggregationBug,
+    AccumulatorCountTest,
+    testing::Values(1, 4, 8, 11, 12, 13, 14, 16, 24, 32),
+    [](const testing::TestParamInfo<int32_t>& info) {
+      return fmt::format("acc{}", info.param);
+    });
+
 } // namespace
 } // namespace facebook::velox::wave

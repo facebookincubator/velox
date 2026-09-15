@@ -65,6 +65,10 @@ void SplitStaging::copyColumns(
   }
 }
 
+// Splits with more than this many bytes of column data are copied to the
+// staging buffer by several threads.
+constexpr int64_t kParallelStagingBytes = 2'000'000;
+
 // Shared pool of 1-2GB of pinned host memory for staging. May
 // transiently exceed 2GB but settles to 2GB after the peak.
 GpuArena& getTransferArena() {
@@ -93,12 +97,14 @@ void SplitStaging::transfer(
   WaveTime startTime = WaveTime::now();
   deviceBuffer_ = waveStream.deviceArena().allocate<char>(fill_);
   hostBuffer_ = getTransferArena().allocate<char>(fill_);
-  auto transferBuffer = hostBuffer_->as<char>();
+  // Each shard of the copy writes at 'offsets_' of the columns it copies, so
+  // every shard starts from the beginning of the staging buffer.
+  auto* transferBuffer = hostBuffer_->as<char>();
   int firstToCopy = 0;
   int64_t copySize = 0;
   auto targetCopySize = FLAGS_staging_bytes_per_thread;
   int32_t numThreads = 0;
-  if (fill_ > 2000000) {
+  if (fill_ > kParallelStagingBytes) {
     for (auto i = 0; i < staging_.size(); ++i) {
       auto columnSize = staging_[i].size;
       copySize += columnSize;
@@ -108,7 +114,6 @@ void SplitStaging::transfer(
             [i, firstToCopy, transferBuffer, this]() {
               copyColumns(firstToCopy, i + 1, transferBuffer, true);
             });
-        transferBuffer += copySize;
         copySize = 0;
         firstToCopy = i + 1;
       }
