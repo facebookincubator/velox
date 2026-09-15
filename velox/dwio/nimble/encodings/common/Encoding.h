@@ -157,6 +157,40 @@ class Encoding {
     /// until ALP is production-ready.
     bool allowNestedAlpSelection{false};
 
+    /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
+    /// splitting it into bit ranges, keeping whichever form encodes smaller.
+    ///
+    /// A monotone counter's low bits are maximally random viewed absolutely
+    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
+    /// compress them while the delta form is trivial. This mirrors OpenZL,
+    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
+    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
+    /// huge unsigned values.
+    ///
+    /// Delta-encoded streams can only be read sequentially from row 0, so
+    /// skip() and readWithVisitor() reject them. Do not enable for production
+    /// until restatement points are added.
+    bool subIntSplitDeltaPreTransform{false};
+
+    /// Output elements SubIntSplit combines per pass when decoding.
+    ///
+    /// Measured flat across 4096/2048/1024/512 on 20 data patterns, so there is
+    /// no tuning win here on current hardware; the knob exists for unusual
+    /// cache geometries. 0 selects the default.
+    uint32_t subIntSplitDecodeChunkSize{0};
+
+    /// EXPERIMENTATION: Decode cost SubIntSplit's split planner charges per
+    /// additional section, in bits per value.
+    ///
+    /// The planner otherwise optimises storage alone and will buy a section for
+    /// a fraction of a percent of size while costing a full extra pass over the
+    /// output at decode. This term lets a caller trade a little storage back
+    /// for decode throughput. It changes the chosen split, so encoded output
+    /// differs from the default.
+    ///
+    /// 0.0 keeps the storage-only plan.
+    double subIntSplitDecodeCostBitsPerValue{0.0};
+
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
 

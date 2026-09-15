@@ -46,6 +46,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
@@ -53,6 +54,9 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 
 using namespace facebook::nimble;
 using namespace facebook::nimble::benchmarks;
@@ -69,6 +73,15 @@ DEFINE_int64(
     only_size,
     0,
     "If >0, run the CSV sweep for only this element count (e.g. 100000000).");
+DEFINE_int32(
+    decode_chunk,
+    0,
+    "SubIntSplit decode chunk size in elements; 0 keeps the built-in default.");
+DEFINE_double(
+    decode_cost_bits,
+    0.0,
+    "SubIntSplit planner decode cost per extra section, in bits per value; "
+    "0 keeps the storage-only split.");
 DEFINE_bool(
     layout,
     false,
@@ -401,29 +414,72 @@ Encoded encodeSubIntSplitWith(
       std::move(result),
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
-  auto encoded =
-      SubIntSplitEncoding<uint64_t>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  encodeOptions.subIntSplitDecodeCostBitsPerValue = FLAGS_decode_cost_bits;
+  auto encoded = SubIntSplitEncoding<uint64_t>::encode(
+      selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
 void decodeNimble(const std::string& encoded, uint32_t n) {
   auto& pool = benchmarkPool();
   std::vector<T> out(n);
-  auto enc = EncodingFactory{}.create(*pool, encoded, nullFactory());
+  Encoding::Options options;
+  options.subIntSplitDecodeChunkSize =
+      static_cast<uint32_t>(FLAGS_decode_chunk);
+  auto enc =
+      EncodingFactory{options}.create(*pool, encoded, nullFactory(), options);
   enc->materialize(n, out.data());
   folly::doNotOptimizeAway(out);
 }
 
-// SubIntSplit is not wired into EncodingFactory dispatch, so decode it by
-// constructing the encoding directly. This is driver-only: the production
-// EncodingFactory is unchanged. Nested (possibly Zstd/OpenZL-compressed)
-// sections are still built through the constructor's internal factory.
 void decodeSubIntSplit(const std::string& encoded, uint32_t n) {
+  decodeNimble(encoded, n);
+}
+
+// The split SubIntSplit's DP planner picks for `data`, in the wire format both
+// encodings use for their boundary config. Feeding it to BitRangeSplit isolates
+// the codecs from the planner: same sections, different implementation.
+std::string plannedSplitBoundaries(const Vector<T>& data) {
+  std::vector<uint64_t> samples;
+  subintsplit::sampleIntoU64<T>({data.data(), data.size()}, samples);
+  const auto plan = subintsplit::selectSplits(samples, kBitWidth, data.size());
+  return subintsplit::serializeSplitBoundaries(plan.sections);
+}
+
+// BitRangeSplit has no planner, so its sections have to be named up front.
+Encoded encodeBitRangeSplitWith(
+    const Vector<T>& data,
+    const std::string& ranges,
+    CompressionType compressionType) {
   auto& pool = benchmarkPool();
-  std::vector<T> out(n);
-  SubIntSplitEncoding<T> enc{*pool, encoded, nullFactory()};
-  enc.materialize(n, out.data());
-  folly::doNotOptimizeAway(out);
+  Buffer buffer{*pool};
+  std::span<const T> values{data.data(), data.size()};
+
+  std::optional<CompressionOptions> compressionOptions;
+  if (compressionType != CompressionType::Uncompressed) {
+    CompressionOptions options;
+    options.compressionType = compressionType;
+    options.compressionAcceptRatio = 1.0f;
+    options.zstdMinCompressionSize = 0;
+    options.openzlMinCompressionSize = 0;
+    compressionOptions = options;
+  }
+  ManualEncodingSelectionPolicyFactory factory{
+      tunedReadFactors(), compressionOptions};
+
+  EncodingSelectionResult result{
+      .encodingType = EncodingType::BitRangeSplit,
+      .encodingConfig = EncodingLayout::Config{
+          {{std::string(BitRangeSplitEncoding<T>::kRangesConfigKey), ranges}}}};
+  EncodingSelection<T> selection{
+      std::move(result),
+      Statistics<T>::create(values.subspan(0, 1)),
+      factory.createPolicy(kDataType)};
+
+  auto encoded =
+      BitRangeSplitEncoding<T>::encode(selection, values, buffer, {});
+  return {std::string{encoded.data(), encoded.size()}, true};
 }
 
 std::vector<Method> makeMethods() {
@@ -467,6 +523,22 @@ std::vector<Method> makeMethods() {
        [](const std::string& c, uint32_t) {
          decompressWith(CompressionType::Zstd, c);
        }});
+  // Same sections as SubIntSplitTuned, so any delta is codec, not planner.
+  methods.push_back(
+      {"BitRangeSplitSameSplit",
+       [](const Vector<T>& d) {
+         return encodeBitRangeSplitWith(
+             d, plannedSplitBoundaries(d), CompressionType::Zstd);
+       },
+       decodeNimble});
+  // A fixed half/half split, standing in for BitRangeSplit configured by hand
+  // without a planner to consult.
+  methods.push_back(
+      {"BitRangeSplitFixed",
+       [](const Vector<T>& d) {
+         return encodeBitRangeSplitWith(d, "0-31;32-63", CompressionType::Zstd);
+       },
+       decodeNimble});
   methods.push_back(
       {"FixedBitWidth",
        [](const Vector<T>& d) {

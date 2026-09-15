@@ -59,6 +59,8 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .allowNestedAlpSelection = allowNestedAlpSelection,
+        .subIntSplitDeltaPreTransform =
+            FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
