@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -390,6 +391,43 @@ TEST_F(CountAggregationTest, unknownType) {
           makeFlatVector<int32_t>({0, 1}),
           makeFlatVector<int64_t>({0, 0}),
       }));
+}
+
+TEST_F(CountAggregationTest, toIntermediate) {
+  constexpr vector_size_t kBatchSize = 10;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 2; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "c"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int64_t>(kBatchSize, [](auto row) { return row; })}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation({"k"}, {"count(c)"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults("SELECT k, count(c) FROM tmp GROUP BY k");
+
+  const auto stats = toPlanStats(task->taskStats());
+  EXPECT_LT(
+      0,
+      stats.at(partialNodeId)
+          .customStats.at("abandonedPartialAggregationRows")
+          .sum);
+  EXPECT_GT(
+      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      0);
 }
 
 } // namespace
