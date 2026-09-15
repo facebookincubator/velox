@@ -5346,4 +5346,37 @@ TEST_F(
           .copyResults(pool());
   EXPECT_EQ(result->size(), totalRows);
 }
+
+// Regression test for distinct aggregation with spilling merge enabled:
+// The first spill contains the distinct hash table, which has already been
+// output. The second and third spills are smaller and will be pre-merged.
+TEST_F(AggregationTest, distinctWithSpillingAndPreMerge) {
+  const std::vector<RowVectorPtr> inputs{
+      makeRowVector({makeFlatVector<int64_t>(
+          100, [](vector_size_t row) { return row; })}),
+      makeRowVector({makeFlatVector<int64_t>(
+          1, [](vector_size_t /* row */) { return 100; })}),
+      makeRowVector({makeFlatVector<int64_t>(
+          1, [](vector_size_t /* row */) { return 101; })}),
+  };
+  createDuckDbTable(inputs);
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .spillDirectory(spillDirectory->getPath())
+                  .config(QueryConfig::kSpillEnabled, true)
+                  .config(QueryConfig::kAggregationSpillEnabled, true)
+                  .config(QueryConfig::kSpillNumPartitionBits, "0")
+                  .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
+                  .maxDrivers(1)
+                  .plan(
+                      PlanBuilder()
+                          .values(inputs)
+                          .singleAggregation({"c0"}, {}, {})
+                          .planNode())
+                  .assertResults("SELECT distinct c0 FROM tmp");
+
+  OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
 } // namespace facebook::velox::exec::test
