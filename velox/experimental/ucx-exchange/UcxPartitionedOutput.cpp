@@ -139,7 +139,7 @@ void UcxPartitionedOutput::flushPending() {
 
   try {
     cudf::table_view tableView;
-    rmm::cuda_stream_view stream = pendingInputs_.back()->stream();
+    cuda::stream_ref stream = pendingInputs_.back()->stream();
     // Keeps the merged table alive while tableView references it.
     std::unique_ptr<cudf::table> mergedTable;
 
@@ -183,7 +183,7 @@ void UcxPartitionedOutput::flushPending() {
     } else {
       // Collect (remapped) table views.
       std::vector<cudf::table_view> views;
-      std::vector<rmm::cuda_stream_view> inputStreams;
+      std::vector<cuda::stream_ref> inputStreams;
       views.reserve(pendingInputs_.size());
       inputStreams.reserve(pendingInputs_.size());
       for (auto& v : pendingInputs_) {
@@ -222,7 +222,7 @@ void UcxPartitionedOutput::flushPending() {
       }
     } else if (numRows > 0) {
       auto packedCols = cudf::pack(tableView, stream, get_output_mr());
-      stream.synchronize();
+      stream.sync();
       auto packedColsPtr = std::make_unique<cudf::packed_columns>(
           std::move(packedCols.metadata), std::move(packedCols.gpu_data));
       queueManager->enqueue(
@@ -343,7 +343,7 @@ void UcxPartitionedOutput::initPartitionKeys(
 void UcxPartitionedOutput::partitionAndEnqueue(
     cudf::table_view tableView,
     vector_size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (tableView.num_columns() == 0) {
     // No columns means no partition key to hash on -- initPartitionKeys()
     // resolves keys through the output row type, so a HASH spec over an empty
@@ -362,7 +362,7 @@ void UcxPartitionedOutput::partitionAndEnqueue(
 void UcxPartitionedOutput::equalPartitionRowCountOnly(
     cudf::table_view tableView,
     vector_size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VELOX_CHECK_EQ(
       tableView.num_columns(), 0, "Expected a column-less payload here");
   if (numRows == 0) {
@@ -398,7 +398,7 @@ void UcxPartitionedOutput::equalPartitionRowCountOnly(
         std::move(packed.metadata), std::move(packed.gpu_data));
   }
   // UCX is not stream aware, so the packs must be complete before enqueueing.
-  stream.synchronize();
+  stream.sync();
 
   auto queueManager = sharedQueueManager();
   for (size_t destination = 0; destination < numPartitions_; ++destination) {
@@ -416,7 +416,7 @@ void UcxPartitionedOutput::equalPartitionRowCountOnly(
 void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
     cudf::table_view tableView,
     vector_size_t numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // This path only runs for a payload with partition keys, so the table can
   // report its own rows and the two counts must agree.
   VELOX_CHECK_EQ(tableView.num_rows(), numRows);
@@ -511,7 +511,7 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
 
 void UcxPartitionedOutput::packAndEnqueueToAllDestinations(
     cudf::table_view tableView,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Only reached for a payload with partition keys, so num_rows() is the real
   // count here. A column-less payload goes through equalPartitionRowCountOnly.
   VELOX_CHECK_GT(tableView.num_columns(), 0);
@@ -529,7 +529,7 @@ void UcxPartitionedOutput::packAndEnqueueToAllDestinations(
             std::move(packed.metadata), std::move(packed.gpu_data)));
   }
   // UCX is not stream aware, so the packs must be complete before enqueueing.
-  stream.synchronize();
+  stream.sync();
 
   auto queueManager = sharedQueueManager();
   for (size_t destination = 0; destination < numPartitions_; ++destination) {
@@ -543,7 +543,7 @@ void UcxPartitionedOutput::packAndEnqueueToAllDestinations(
 
 void UcxPartitionedOutput::hashPartition(
     cudf::table_view tableView,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
           << " Hashing and partitioning into " << numPartitions_ << " chunks";
 
@@ -574,7 +574,7 @@ void UcxPartitionedOutput::hashPartition(
 
 void UcxPartitionedOutput::equalPartition(
     cudf::table_view tableView,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
           << " Splitting into " << numPartitions_ << " chunks";
   std::vector<cudf::size_type> offsets;
@@ -589,7 +589,7 @@ void UcxPartitionedOutput::equalPartition(
 void UcxPartitionedOutput::splitAndEnqueue(
     cudf::table_view tableView,
     std::vector<cudf::size_type> offsets,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // cudf::contiguous_split returns no partitions at all for a column-less
   // table, which the loop below would index out of bounds. Such payloads are
   // routed to equalPartitionRowCountOnly instead and never arrive here.
@@ -600,7 +600,7 @@ void UcxPartitionedOutput::splitAndEnqueue(
   // Synchronize the stream to ensure CUDA operations complete before enqueuing.
   // UCXX/UCX is not stream-aware, so without syncing, data could be sent before
   // the GPU kernels have finished writing to the buffers.
-  stream.synchronize();
+  stream.sync();
 
   VELOX_CHECK_EQ(
       offsets.size() + 1, numPartitions_, "mismatch in numPartitions_");
