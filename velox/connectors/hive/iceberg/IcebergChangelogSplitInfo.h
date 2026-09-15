@@ -16,13 +16,26 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
-#include <vector>
+#include <string_view>
 
 namespace facebook::velox::connector::hive::iceberg {
 
 /// Type of operation recorded in a changelog entry.
 enum class ChangelogOperation { INSERT, DELETE, UPDATE_BEFORE, UPDATE_AFTER };
+
+/// String names for each ChangelogOperation value, used as the literal value
+/// stored in the "operation" output column.
+inline constexpr std::string_view kChangelogOpInsert = "INSERT";
+inline constexpr std::string_view kChangelogOpDelete = "DELETE";
+inline constexpr std::string_view kChangelogOpUpdateBefore = "UPDATE_BEFORE";
+inline constexpr std::string_view kChangelogOpUpdateAfter = "UPDATE_AFTER";
+
+/// Column names of the changelog output schema
+/// (operation VARCHAR, ordinal BIGINT, snapshotid BIGINT, rowdata ROW<…>).
+inline constexpr std::string_view kChangelogColOperation = "operation";
+inline constexpr std::string_view kChangelogColOrdinal = "ordinal";
+inline constexpr std::string_view kChangelogColSnapshotId = "snapshotid";
+inline constexpr std::string_view kChangelogColRowdata = "rowdata";
 
 /// Metadata for a changelog split describing the operation type, sequence,
 /// and snapshot ID for a batch of changelog records.
@@ -33,9 +46,6 @@ struct ChangelogSplitInfo {
   int64_t ordinal;
   /// Snapshot this row-level change was made in.
   int64_t snapshotId;
-
-  ChangelogSplitInfo(ChangelogOperation op, int64_t ord, int64_t snapId)
-      : operation(op), ordinal(ord), snapshotId(snapId) {}
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

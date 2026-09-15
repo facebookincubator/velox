@@ -131,6 +131,15 @@ class FileSplitReader {
 
   void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
 
+  /// Returns the schema passed to the underlying row reader.
+  ///
+  /// For most split readers this is the same as the data source's output type.
+  /// IcebergChangelogSplitReader overrides this to return the *base-table*
+  /// schema (the type used to allocate and fill the inner data buffer), while
+  /// the data source's output type reports the changelog schema.  Code inside
+  /// FileSplitReader::next() and its base-class helpers must read
+  /// readerOutputType_ directly; do NOT replace those reads with this getter
+  /// without accounting for the override.
   virtual const RowTypePtr& readerOutputType() const {
     return readerOutputType_;
   }
@@ -237,6 +246,11 @@ class FileSplitReader {
 
   std::shared_ptr<const FileConnectorSplit> fileSplit_;
   const ConnectorQueryCtx* connectorQueryCtx_;
+  /// Schema for the underlying row reader.  Always read this member directly
+  /// inside FileSplitReader and its subclasses rather than calling
+  /// readerOutputType(), because IcebergChangelogSplitReader overrides the
+  /// getter to return the base-table schema while this member holds the type
+  /// that was actually passed to the row reader.
   RowTypePtr readerOutputType_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;

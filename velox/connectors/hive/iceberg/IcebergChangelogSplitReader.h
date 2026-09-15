@@ -21,10 +21,27 @@
 
 namespace facebook::velox::connector::hive::iceberg {
 
+/// Immutable scan state shared across all splits of a single changelog query.
+///
+/// Built once in IcebergDataSource's constructor from the table handle so that
+/// stats-based filter reordering and column adaptation accumulated in
+/// dataScanSpec across splits are not discarded between splits.
+struct ChangelogScanContext {
+  /// Base-table column handles keyed by column name.
+  std::shared_ptr<ColumnHandleMap> dataColumnHandles;
+
+  /// Base-table projected schema (subset of dataColumns present in
+  /// dataColumnHandles).
+  RowTypePtr dataReaderOutputType;
+
+  /// ScanSpec for the base-table scan.  Shared so that per-split adaptation
+  /// (filter reordering, bloom-filter caches) accumulates across splits.
+  std::shared_ptr<common::ScanSpec> dataScanSpec;
+};
+
 /// Split reader for Iceberg changelog table queries.
 ///
-/// Inherits the full IcebergSplitReader file-reading pipeline (positional
-/// deletes, deletion vectors, equality deletes, schema evolution) and adds
+/// Inherits the full IcebergSplitReader file-reading pipeline and adds
 /// changelog-specific behaviour:
 ///
 ///   - readerOutputType(): reports the changelog output schema
@@ -53,19 +70,15 @@ class IcebergChangelogSplitReader : public IcebergSplitReader {
       const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const FileConfig>& fileConfig,
-      const RowTypePtr& dataReaderOutputType,
+      const ChangelogScanContext& scanContext,
       const std::shared_ptr<io::IoStatistics>& dataIoStats,
       const std::shared_ptr<io::IoStatistics>& metadataIoStats,
       const std::shared_ptr<IoStats>& ioStats,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
-      std::shared_ptr<ColumnHandleMap> columnHandles,
       const RowTypePtr& changelogOutputType,
       ColumnHandleMap changelogColumnHandles,
       const common::SubfieldFilters* changelogFilters);
-
-  ~IcebergChangelogSplitReader() override = default;
 
   /// Returns the changelog output schema so FileDataSource allocates output_
   /// with the right shape and evaluates the remaining filter against changelog
@@ -82,7 +95,7 @@ class IcebergChangelogSplitReader : public IcebergSplitReader {
 
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
- protected:
+ private:
   /// Evaluates the changelog constant-column subfield filters
   /// (operation/ordinal/snapshotid) against changelogSplitInfo_.
   /// Returns true if the split passes all filters (or there are none),
@@ -106,7 +119,9 @@ class IcebergChangelogSplitReader : public IcebergSplitReader {
   const ColumnHandleMap changelogColumnHandles_;
 
   /// Changelog metadata for the current split, set in prepareSplit().
-  std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo_;
+  /// Points into the split's changelogSplitInfo optional; valid for the
+  /// lifetime of the split.
+  const ChangelogSplitInfo* changelogSplitInfo_{nullptr};
 
   /// Pointer to FileDataSource::filters_, containing the changelog
   /// constant-column subfield filters (operation/ordinal/snapshotid).

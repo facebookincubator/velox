@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -26,11 +29,13 @@ namespace facebook::velox::connector::hive::iceberg {
 /// Iceberg-specific metadata columns.
 ///
 /// When the table handle has isChangelogQuery() == true, createSplitReader()
-/// builds a data-scoped readerOutputType / scanSpec from the table handle's
-/// dataColumnHandles and instantiates an IcebergChangelogSplitReader that
-/// transforms each base-table batch into the changelog output schema
-/// (operation, ordinal, snapshotid, rowdata).  No separate data-source class
-/// is required for changelog queries.
+/// instantiates an IcebergChangelogSplitReader that reads data columns and
+/// wraps each batch into the changelog output schema
+/// (operation, ordinal, snapshotid, rowdata).
+///
+/// The ChangelogScanContext (data column handles, projected schema, scan spec)
+/// is built once in the constructor and reused across all splits so that
+/// stats-based filter reordering and column adaptation accumulate.
 class IcebergDataSource : public HiveDataSource {
  public:
   IcebergDataSource(
@@ -53,6 +58,10 @@ class IcebergDataSource : public HiveDataSource {
   /// queries these are the changelog output column handles
   /// (operation/ordinal/snapshotid/rowdata).
   std::shared_ptr<ColumnHandleMap> columnHandles_;
+
+  /// Changelog-only: scan state shared across splits (nullopt for regular
+  /// queries).
+  std::optional<ChangelogScanContext> changelogScanContext_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

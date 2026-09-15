@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::exec;
@@ -33,129 +35,91 @@ class IcebergChangelogE2ETest : public test::IcebergTestBase {
   static constexpr int32_t kDefaultNumBatches = 2;
   static constexpr int32_t kDefaultRowsPerBatch = 100;
 
-  std::string getDataFilePath(const std::string& dirPath) {
-    auto files = listFiles(dirPath);
-    VELOX_CHECK(!files.empty(), "listFiles returned empty list");
-    return files[0];
+  void SetUp() override {
+    IcebergTestBase::SetUp();
+
+    dataRowType_ = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
+    changelogOutputType_ = makeChangelogOutputType(dataRowType_);
+    changelogColumnHandles_ = makeChangelogColumnHandles(dataRowType_);
+    tableHandle_ = makeChangelogTableHandle(dataRowType_);
   }
 
-  std::vector<RowVectorPtr> createChangelogTestData() {
-    std::vector<RowVectorPtr> batches;
-
-    for (auto i = 0; i < kDefaultNumBatches; i++) {
-      auto idVector = makeFlatVector<int64_t>(
-          kDefaultRowsPerBatch,
-          [i](auto row) { return i * kDefaultRowsPerBatch + row; });
-      auto nameVector =
-          makeFlatVector<std::string>(kDefaultRowsPerBatch, [i](auto row) {
-            return "name_" + std::to_string(i * kDefaultRowsPerBatch + row);
-          });
-      batches.push_back(makeRowVector({"id", "name"}, {idVector, nameVector}));
-    }
-    return batches;
+  /// Creates kDefaultNumBatches * kDefaultRowsPerBatch rows with sequential
+  /// {id, name} values, writes them to a temp directory, and returns the
+  /// single resulting file path.
+  std::string writeTestFile() {
+    auto batches = makeTestBatches();
+    outputDirectory_ = test::TempDirectoryPath::create();
+    auto dataSink =
+        createDataSinkAndAppendData(batches, outputDirectory_->getPath(), {});
+    dataSink->close();
+    return getOnlyDataFilePath(outputDirectory_->getPath());
   }
 
-  std::shared_ptr<ConnectorSplit> makeChangelogSplit(
-      const std::string& dataFilePath,
-      ChangelogOperation operation,
-      int64_t ordinal,
-      int64_t snapshotId) {
-    auto changelogInfo =
-        std::make_shared<ChangelogSplitInfo>(operation, ordinal, snapshotId);
+  /// Returns the total number of rows in makeTestBatches().
+  int32_t expectedRows() const {
+    return kDefaultNumBatches * kDefaultRowsPerBatch;
+  }
 
-    // Get actual file size
-    const auto file = filesystems::getFileSystem(dataFilePath, nullptr)
-                          ->openFileForRead(dataFilePath);
-
-    return IcebergSplitBuilder(dataFilePath)
+  core::PlanNodePtr makeChangelogScanPlan() {
+    return PlanBuilder()
+        .startTableScan()
         .connectorId(test::kIcebergConnectorId)
-        .fileFormat(fileFormat_)
-        .start(0)
-        .length(file->size())
-        .changelogSplitInfo(changelogInfo)
-        .build();
-  }
-
-  void verifyChangelogSchema(const RowTypePtr& outputType) {
-    ASSERT_EQ(outputType->size(), 4);
-    ASSERT_EQ(outputType->nameOf(0), "operation");
-    ASSERT_EQ(outputType->childAt(0)->kind(), TypeKind::VARCHAR);
-    ASSERT_EQ(outputType->nameOf(1), "ordinal");
-    ASSERT_EQ(outputType->childAt(1)->kind(), TypeKind::BIGINT);
-    ASSERT_EQ(outputType->nameOf(2), "snapshotid");
-    ASSERT_EQ(outputType->childAt(2)->kind(), TypeKind::BIGINT);
-    ASSERT_EQ(outputType->nameOf(3), "rowdata");
-    ASSERT_EQ(outputType->childAt(3)->kind(), TypeKind::ROW);
+        .outputType(changelogOutputType_)
+        .tableHandle(tableHandle_)
+        .assignments(changelogColumnHandles_)
+        .endTableScan()
+        .planNode();
   }
 
   void verifyChangelogRecord(
       const RowVectorPtr& resultVector,
       int32_t rowIndex,
-      const std::string& expectedOperation,
+      std::string_view expectedOperation,
       int64_t expectedOrdinal,
       int64_t expectedSnapshotId) {
-    // Verify operation
     auto operationVector =
         resultVector->childAt(0)->as<SimpleVector<StringView>>();
     ASSERT_EQ(
         operationVector->valueAt(rowIndex), StringView(expectedOperation));
 
-    // Verify ordinal
     auto ordinalVector = resultVector->childAt(1)->as<SimpleVector<int64_t>>();
     ASSERT_EQ(ordinalVector->valueAt(rowIndex), expectedOrdinal);
 
-    // Verify snapshotid
     auto snapshotVector = resultVector->childAt(2)->as<SimpleVector<int64_t>>();
     ASSERT_EQ(snapshotVector->valueAt(rowIndex), expectedSnapshotId);
   }
+
+  RowTypePtr dataRowType_;
+  RowTypePtr changelogOutputType_;
+  ColumnHandleMap changelogColumnHandles_;
+  std::shared_ptr<IcebergTableHandle> tableHandle_;
+  std::shared_ptr<test::TempDirectoryPath> outputDirectory_;
 };
 
 TEST_F(IcebergChangelogE2ETest, differentOperations) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
+  std::string dataFilePath = writeTestFile();
 
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
+  std::vector<std::pair<ChangelogOperation, std::string_view>> operations = {
+      {ChangelogOperation::INSERT, kChangelogOpInsert},
+      {ChangelogOperation::DELETE, kChangelogOpDelete},
+      {ChangelogOperation::UPDATE_BEFORE, kChangelogOpUpdateBefore},
+      {ChangelogOperation::UPDATE_AFTER, kChangelogOpUpdateAfter}};
 
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
+  auto plan = makeChangelogScanPlan();
 
-  std::vector<std::pair<ChangelogOperation, std::string>> operations = {
-      {ChangelogOperation::INSERT, "INSERT"},
-      {ChangelogOperation::DELETE, "DELETE"},
-      {ChangelogOperation::UPDATE_BEFORE, "UPDATE_BEFORE"},
-      {ChangelogOperation::UPDATE_AFTER, "UPDATE_AFTER"}};
-
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
-
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
-                  .outputType(changelogOutputType)
-                  .tableHandle(tableHandle)
-                  .assignments(changelogColumnHandles)
-                  .endTableScan()
-                  .planNode();
-
-  // Verify all operation types produce correct changelog records
   for (const auto& [operation, operationStr] : operations) {
     auto changelogSplit = makeChangelogSplit(dataFilePath, operation, 1, 12345);
 
     auto resultVector =
         AssertQueryBuilder(plan).split(changelogSplit).copyResults(pool());
 
-    ASSERT_TRUE(resultVector != nullptr);
-    ASSERT_GT(resultVector->size(), 0);
+    ASSERT_NE(resultVector, nullptr);
+    ASSERT_EQ(resultVector->size(), expectedRows());
+    ASSERT_EQ(
+        *std::dynamic_pointer_cast<const RowType>(resultVector->type()),
+        *changelogOutputType_);
 
-    // Verify changelog schema
-    verifyChangelogSchema(
-        std::dynamic_pointer_cast<const RowType>(resultVector->type()));
-
-    // Verify all rows have the correct operation
     for (auto i = 0; i < resultVector->size(); i++) {
       verifyChangelogRecord(resultVector, i, operationStr, 1, 12345);
     }
@@ -163,15 +127,7 @@ TEST_F(IcebergChangelogE2ETest, differentOperations) {
 }
 
 TEST_F(IcebergChangelogE2ETest, multipleSnapshots) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
-
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
-
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
+  std::string dataFilePath = writeTestFile();
 
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
   splits.push_back(
@@ -181,72 +137,35 @@ TEST_F(IcebergChangelogE2ETest, multipleSnapshots) {
   splits.push_back(makeChangelogSplit(
       dataFilePath, ChangelogOperation::UPDATE_AFTER, 3, 200));
 
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
+  auto plan = makeChangelogScanPlan();
 
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
-                  .outputType(changelogOutputType)
-                  .tableHandle(tableHandle)
-                  .assignments(changelogColumnHandles)
-                  .endTableScan()
-                  .planNode();
-
-  // Verify multiple changelog splits can be read
   auto resultVector =
       AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  ASSERT_TRUE(resultVector != nullptr);
+  ASSERT_NE(resultVector, nullptr);
+  ASSERT_EQ(
+      *std::dynamic_pointer_cast<const RowType>(resultVector->type()),
+      *changelogOutputType_);
 
-  // Verify changelog schema
-  verifyChangelogSchema(
-      std::dynamic_pointer_cast<const RowType>(resultVector->type()));
+  const int32_t rowsPerSplit = expectedRows();
+  ASSERT_EQ(resultVector->size(), rowsPerSplit * 3);
 
-  int32_t expectedRowsPerSplit = 0;
-  for (const auto& batch : batches) {
-    expectedRowsPerSplit += batch->size();
+  for (auto i = 0; i < rowsPerSplit; i++) {
+    verifyChangelogRecord(resultVector, i, kChangelogOpInsert, 1, 100);
   }
-  int32_t expectedTotalRows = expectedRowsPerSplit * 3; // 3 splits
-
-  ASSERT_EQ(resultVector->size(), expectedTotalRows);
-
-  // Verify changelog records from each split
-  // First split: INSERT with ordinal=1, snapshotId=100
-  for (auto i = 0; i < expectedRowsPerSplit; i++) {
-    verifyChangelogRecord(resultVector, i, "INSERT", 1, 100);
+  for (auto i = rowsPerSplit; i < rowsPerSplit * 2; i++) {
+    verifyChangelogRecord(resultVector, i, kChangelogOpUpdateBefore, 2, 200);
   }
-
-  // Second split: UPDATE_BEFORE with ordinal=2, snapshotId=200
-  for (auto i = expectedRowsPerSplit; i < expectedRowsPerSplit * 2; i++) {
-    verifyChangelogRecord(resultVector, i, "UPDATE_BEFORE", 2, 200);
-  }
-
-  // Third split: UPDATE_AFTER with ordinal=3, snapshotId=200
-  for (auto i = expectedRowsPerSplit * 2; i < expectedTotalRows; i++) {
-    verifyChangelogRecord(resultVector, i, "UPDATE_AFTER", 3, 200);
+  for (auto i = rowsPerSplit * 2; i < rowsPerSplit * 3; i++) {
+    verifyChangelogRecord(resultVector, i, kChangelogOpUpdateAfter, 3, 200);
   }
 }
 
 TEST_F(IcebergChangelogE2ETest, selectMetadataColumnsOnly) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
-
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
-
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
-
+  std::string dataFilePath = writeTestFile();
   auto changelogSplit =
       makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 5, 99999);
 
-  // Select only metadata columns (operation, ordinal, snapshotid) without
-  // rowdata
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
   auto metadataOnlyType = ROW(
       {"operation", "ordinal", "snapshotid"}, {VARCHAR(), BIGINT(), BIGINT()});
 
@@ -261,13 +180,11 @@ TEST_F(IcebergChangelogE2ETest, selectMetadataColumnsOnly) {
   metadataHandles["snapshotid"] = std::make_shared<HiveColumnHandle>(
       "snapshotid", HiveColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
 
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
-
   auto plan = PlanBuilder()
                   .startTableScan()
                   .connectorId(test::kIcebergConnectorId)
                   .outputType(metadataOnlyType)
-                  .tableHandle(tableHandle)
+                  .tableHandle(tableHandle_)
                   .assignments(metadataHandles)
                   .endTableScan()
                   .planNode();
@@ -275,40 +192,25 @@ TEST_F(IcebergChangelogE2ETest, selectMetadataColumnsOnly) {
   auto resultVector =
       AssertQueryBuilder(plan).split(changelogSplit).copyResults(pool());
 
-  ASSERT_TRUE(resultVector != nullptr);
+  ASSERT_NE(resultVector, nullptr);
   ASSERT_EQ(resultVector->childrenSize(), 3);
+  ASSERT_EQ(resultVector->size(), expectedRows());
 
-  int32_t expectedRows = 0;
-  for (const auto& batch : batches) {
-    expectedRows += batch->size();
-  }
-  ASSERT_EQ(resultVector->size(), expectedRows);
-
-  // Verify all rows have correct metadata
   auto operationVector =
       resultVector->childAt(0)->as<SimpleVector<StringView>>();
   auto ordinalVector = resultVector->childAt(1)->as<SimpleVector<int64_t>>();
   auto snapshotVector = resultVector->childAt(2)->as<SimpleVector<int64_t>>();
 
   for (auto i = 0; i < resultVector->size(); i++) {
-    ASSERT_EQ(operationVector->valueAt(i), StringView("INSERT"));
+    ASSERT_EQ(operationVector->valueAt(i), StringView(kChangelogOpInsert));
     ASSERT_EQ(ordinalVector->valueAt(i), 5);
     ASSERT_EQ(snapshotVector->valueAt(i), 99999);
   }
 }
 
 TEST_F(IcebergChangelogE2ETest, filterOnMetadataColumns) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
+  std::string dataFilePath = writeTestFile();
 
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
-
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
-
-  // Create splits with different operations and ordinals
   std::vector<std::shared_ptr<ConnectorSplit>> splits;
   splits.push_back(
       makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100));
@@ -317,18 +219,13 @@ TEST_F(IcebergChangelogE2ETest, filterOnMetadataColumns) {
   splits.push_back(makeChangelogSplit(
       dataFilePath, ChangelogOperation::UPDATE_AFTER, 3, 200));
 
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
-
   // Filter: operation = 'INSERT' OR ordinal > 2
   auto plan = PlanBuilder()
                   .startTableScan()
                   .connectorId(test::kIcebergConnectorId)
-                  .outputType(changelogOutputType)
-                  .tableHandle(tableHandle)
-                  .assignments(changelogColumnHandles)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
                   .endTableScan()
                   .filter("operation = 'INSERT' OR ordinal > 2")
                   .planNode();
@@ -336,55 +233,33 @@ TEST_F(IcebergChangelogE2ETest, filterOnMetadataColumns) {
   auto resultVector =
       AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  ASSERT_TRUE(resultVector != nullptr);
+  ASSERT_NE(resultVector, nullptr);
+  // Should get rows from split 1 (INSERT) and split 3 (ordinal=3).
+  ASSERT_EQ(resultVector->size(), expectedRows() * 2);
 
-  int32_t expectedRowsPerSplit = 0;
-  for (const auto& batch : batches) {
-    expectedRowsPerSplit += batch->size();
-  }
-  // Should get rows from split 1 (INSERT) and split 3 (ordinal=3)
-  int32_t expectedTotalRows = expectedRowsPerSplit * 2;
-  ASSERT_EQ(resultVector->size(), expectedTotalRows);
-
-  // Verify filtered results
   auto operationVector =
       resultVector->childAt(0)->as<SimpleVector<StringView>>();
   auto ordinalVector = resultVector->childAt(1)->as<SimpleVector<int64_t>>();
 
   for (auto i = 0; i < resultVector->size(); i++) {
-    auto op = operationVector->valueAt(i);
-    auto ord = ordinalVector->valueAt(i);
-    // Each row should match the filter condition
-    ASSERT_TRUE(op == StringView("INSERT") || ord > 2);
+    ASSERT_TRUE(
+        operationVector->valueAt(i) == StringView(kChangelogOpInsert) ||
+        ordinalVector->valueAt(i) > 2);
   }
 }
 
 TEST_F(IcebergChangelogE2ETest, filterOnRowdataNestedColumns) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
-
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
-
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
-
+  std::string dataFilePath = writeTestFile();
   auto changelogSplit =
       makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 12345);
-
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
 
   // Filter on nested rowdata column: rowdata.id < 50
   auto plan = PlanBuilder()
                   .startTableScan()
                   .connectorId(test::kIcebergConnectorId)
-                  .outputType(changelogOutputType)
-                  .tableHandle(tableHandle)
-                  .assignments(changelogColumnHandles)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
                   .endTableScan()
                   .filter("rowdata.id < 50")
                   .planNode();
@@ -392,11 +267,10 @@ TEST_F(IcebergChangelogE2ETest, filterOnRowdataNestedColumns) {
   auto resultVector =
       AssertQueryBuilder(plan).split(changelogSplit).copyResults(pool());
 
-  ASSERT_TRUE(resultVector != nullptr);
+  ASSERT_NE(resultVector, nullptr);
   ASSERT_GT(resultVector->size(), 0);
-  ASSERT_LT(resultVector->size(), kDefaultNumBatches * kDefaultRowsPerBatch);
+  ASSERT_LT(resultVector->size(), expectedRows());
 
-  // Verify all filtered rows have id < 50
   auto rowdataVector = resultVector->childAt(3)->as<RowVector>();
   ASSERT_NE(rowdataVector, nullptr);
   auto idVector = rowdataVector->childAt(0)->as<SimpleVector<int64_t>>();
@@ -406,32 +280,44 @@ TEST_F(IcebergChangelogE2ETest, filterOnRowdataNestedColumns) {
   }
 }
 
-TEST_F(IcebergChangelogE2ETest, selectRowdataSubfieldsOnly) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
+TEST_F(IcebergChangelogE2ETest, rowdataSubfieldFilterThrows) {
+  std::string dataFilePath = writeTestFile();
+  auto changelogSplit =
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 12345);
 
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
+  // Subfield filter pushdown on rowdata.* is not supported for changelog
+  // queries — verify that it throws VeloxUserError rather than silently
+  // dropping the predicate and returning incorrect results.
+  common::SubfieldFilters filters;
+  filters[common::Subfield("rowdata.id")] = lessThan(static_cast<int64_t>(50));
+  auto tableHandle = makeChangelogTableHandle(dataRowType_, std::move(filters));
 
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
-
-  auto changelogSplit = makeChangelogSplit(
-      dataFilePath, ChangelogOperation::UPDATE_AFTER, 7, 54321);
-
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
-
-  // Project only rowdata subfields (no metadata columns)
   auto plan = PlanBuilder()
                   .startTableScan()
                   .connectorId(test::kIcebergConnectorId)
-                  .outputType(changelogOutputType)
+                  .outputType(changelogOutputType_)
                   .tableHandle(tableHandle)
-                  .assignments(changelogColumnHandles)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).split(changelogSplit).copyResults(pool()),
+      "Subfield filter pushdown on rowdata columns is not supported for "
+      "changelog queries");
+}
+
+TEST_F(IcebergChangelogE2ETest, selectRowdataSubfieldsOnly) {
+  std::string dataFilePath = writeTestFile();
+  auto changelogSplit = makeChangelogSplit(
+      dataFilePath, ChangelogOperation::UPDATE_AFTER, 7, 54321);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
                   .endTableScan()
                   .project({"rowdata.id", "rowdata.name"})
                   .planNode();
@@ -439,21 +325,14 @@ TEST_F(IcebergChangelogE2ETest, selectRowdataSubfieldsOnly) {
   auto resultVector =
       AssertQueryBuilder(plan).split(changelogSplit).copyResults(pool());
 
-  ASSERT_TRUE(resultVector != nullptr);
+  ASSERT_NE(resultVector, nullptr);
   ASSERT_EQ(resultVector->childrenSize(), 2);
+  ASSERT_EQ(resultVector->size(), expectedRows());
 
-  int32_t expectedRows = 0;
-  for (const auto& batch : batches) {
-    expectedRows += batch->size();
-  }
-  ASSERT_EQ(resultVector->size(), expectedRows);
-
-  // Verify projected columns - only data columns, no metadata
   auto rowType = std::dynamic_pointer_cast<const RowType>(resultVector->type());
   ASSERT_EQ(rowType->nameOf(0), "id");
   ASSERT_EQ(rowType->nameOf(1), "name");
 
-  // Verify data columns
   auto idVector = resultVector->childAt(0)->as<SimpleVector<int64_t>>();
   auto nameVector = resultVector->childAt(1)->as<SimpleVector<StringView>>();
 
@@ -461,359 +340,291 @@ TEST_F(IcebergChangelogE2ETest, selectRowdataSubfieldsOnly) {
     ASSERT_FALSE(idVector->isNullAt(i));
     ASSERT_FALSE(nameVector->isNullAt(i));
     ASSERT_EQ(idVector->valueAt(i), i);
-    std::string expectedName = "name_" + std::to_string(i);
+    const std::string expectedName = "name_" + std::to_string(i);
     ASSERT_EQ(nameVector->valueAt(i), StringView(expectedName));
   }
 }
 
-TEST_F(IcebergChangelogE2ETest, testAggregations) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
+// --- Aggregation tests -------------------------------------------------------
 
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
+TEST_F(IcebergChangelogE2ETest, countAllRows) {
+  std::string dataFilePath = writeTestFile();
 
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 2, 100),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::UPDATE_AFTER, 3, 200),
+  };
 
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .singleAggregation({}, {"count(1)"})
+                  .planNode();
 
-  int32_t expectedRowsPerSplit = 0;
-  for (const auto& batch : batches) {
-    expectedRowsPerSplit += batch->size();
-  }
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  // Test 1: Count all changelog records (count(*))
-  // Create fresh splits for this query
-  std::vector<std::shared_ptr<ConnectorSplit>> countSplits;
-  countSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100));
-  countSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 2, 100));
-  countSplits.push_back(makeChangelogSplit(
-      dataFilePath, ChangelogOperation::UPDATE_AFTER, 3, 200));
-
-  auto countPlan = PlanBuilder()
-                       .startTableScan()
-                       .connectorId(test::kIcebergConnectorId)
-                       .outputType(changelogOutputType)
-                       .tableHandle(tableHandle)
-                       .assignments(changelogColumnHandles)
-                       .endTableScan()
-                       .singleAggregation({}, {"count(1)"})
-                       .planNode();
-
-  auto countResult =
-      AssertQueryBuilder(countPlan).splits(countSplits).copyResults(pool());
-
-  ASSERT_TRUE(countResult != nullptr);
-  ASSERT_EQ(countResult->size(), 1);
-
-  int64_t expectedTotal = expectedRowsPerSplit * 3; // 3 splits
-  auto countVector = countResult->childAt(0)->as<SimpleVector<int64_t>>();
-  ASSERT_EQ(countVector->valueAt(0), expectedTotal);
-
-  // Test 2: Group by operation and count
-  // Create fresh splits for this query
-  std::vector<std::shared_ptr<ConnectorSplit>> groupBySplits;
-  groupBySplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100));
-  groupBySplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 2, 100));
-  groupBySplits.push_back(makeChangelogSplit(
-      dataFilePath, ChangelogOperation::UPDATE_AFTER, 3, 200));
-
-  auto groupByPlan = PlanBuilder()
-                         .startTableScan()
-                         .connectorId(test::kIcebergConnectorId)
-                         .outputType(changelogOutputType)
-                         .tableHandle(tableHandle)
-                         .assignments(changelogColumnHandles)
-                         .endTableScan()
-                         .singleAggregation({"operation"}, {"count(1)"})
-                         .planNode();
-
-  auto groupByResult =
-      AssertQueryBuilder(groupByPlan).splits(groupBySplits).copyResults(pool());
-
-  ASSERT_TRUE(groupByResult != nullptr);
-  ASSERT_EQ(groupByResult->size(), 3); // 3 different operations
-
-  // Verify each operation has the correct count
-  auto operationVector =
-      groupByResult->childAt(0)->as<SimpleVector<StringView>>();
-  auto groupCountVector =
-      groupByResult->childAt(1)->as<SimpleVector<int64_t>>();
-
-  std::unordered_map<std::string, int64_t> operationCounts;
-  for (auto i = 0; i < groupByResult->size(); i++) {
-    std::string op(
-        operationVector->valueAt(i).data(), operationVector->valueAt(i).size());
-    operationCounts[op] = groupCountVector->valueAt(i);
-  }
-
-  ASSERT_EQ(operationCounts["INSERT"], expectedRowsPerSplit);
-  ASSERT_EQ(operationCounts["DELETE"], expectedRowsPerSplit);
-  ASSERT_EQ(operationCounts["UPDATE_AFTER"], expectedRowsPerSplit);
-
-  // Test 3: Group by rowdata nested column (rowdata.id) and count
-  // Project the nested field first, then group by it
-  std::vector<std::shared_ptr<ConnectorSplit>> groupByNestedSplits;
-  groupByNestedSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100));
-
-  auto groupByNestedPlan = PlanBuilder()
-                               .startTableScan()
-                               .connectorId(test::kIcebergConnectorId)
-                               .outputType(changelogOutputType)
-                               .tableHandle(tableHandle)
-                               .assignments(changelogColumnHandles)
-                               .endTableScan()
-                               .project({"rowdata.id AS id"})
-                               .singleAggregation({"id"}, {"count(1)"})
-                               .planNode();
-
-  auto groupByNestedResult = AssertQueryBuilder(groupByNestedPlan)
-                                 .splits(groupByNestedSplits)
-                                 .copyResults(pool());
-
-  ASSERT_TRUE(groupByNestedResult != nullptr);
-  ASSERT_EQ(groupByNestedResult->size(), expectedRowsPerSplit);
-
-  // Verify each id has count of 1 (each id is unique)
-  auto idGroupVector =
-      groupByNestedResult->childAt(0)->as<SimpleVector<int64_t>>();
-  auto idCountVector =
-      groupByNestedResult->childAt(1)->as<SimpleVector<int64_t>>();
-
-  for (auto i = 0; i < groupByNestedResult->size(); i++) {
-    ASSERT_EQ(idCountVector->valueAt(i), 1);
-  }
-
-  // Test 4: Group by metadata column (operation) and aggregate rowdata
-  // Select operation (group by key) and aggregated rowdata
-  std::vector<std::shared_ptr<ConnectorSplit>> groupByMetadataSplits;
-  groupByMetadataSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100));
-  groupByMetadataSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 2, 100));
-
-  auto groupByMetadataPlan =
-      PlanBuilder()
-          .startTableScan()
-          .connectorId(test::kIcebergConnectorId)
-          .outputType(changelogOutputType)
-          .tableHandle(tableHandle)
-          .assignments(changelogColumnHandles)
-          .endTableScan()
-          .singleAggregation({"operation"}, {"count(rowdata)"})
-          .planNode();
-
-  auto groupByMetadataResult = AssertQueryBuilder(groupByMetadataPlan)
-                                   .splits(groupByMetadataSplits)
-                                   .copyResults(pool());
-
-  ASSERT_TRUE(groupByMetadataResult != nullptr);
-  ASSERT_EQ(groupByMetadataResult->size(), 2); // 2 different operations
-
-  // Verify we got operation (group key) and count of rowdata
-  auto opGroupVector =
-      groupByMetadataResult->childAt(0)->as<SimpleVector<StringView>>();
-  auto rowdataCountVector =
-      groupByMetadataResult->childAt(1)->as<SimpleVector<int64_t>>();
-
-  std::unordered_map<std::string, int64_t> operationRowdataCounts;
-  for (auto i = 0; i < groupByMetadataResult->size(); i++) {
-    std::string op(
-        opGroupVector->valueAt(i).data(), opGroupVector->valueAt(i).size());
-    operationRowdataCounts[op] = rowdataCountVector->valueAt(i);
-  }
-
-  // Each operation should have expectedRowsPerSplit rows
-  ASSERT_EQ(operationRowdataCounts["INSERT"], expectedRowsPerSplit);
-  ASSERT_EQ(operationRowdataCounts["DELETE"], expectedRowsPerSplit);
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), 1);
+  auto countVector = result->childAt(0)->as<SimpleVector<int64_t>>();
+  ASSERT_EQ(countVector->valueAt(0), expectedRows() * 3);
 }
 
-TEST_F(IcebergChangelogE2ETest, orderAndGroup) {
-  auto batches = createChangelogTestData();
-  ASSERT_FALSE(batches.empty());
+TEST_F(IcebergChangelogE2ETest, groupByOperation) {
+  std::string dataFilePath = writeTestFile();
 
-  auto outputDirectory = test::TempDirectoryPath::create();
-  auto dataSink =
-      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
-  dataSink->close();
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 2, 100),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::UPDATE_AFTER, 3, 200),
+  };
 
-  std::string dataFilePath = getDataFilePath(outputDirectory->getPath());
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .singleAggregation({"operation"}, {"count(1)"})
+                  .planNode();
 
-  auto dataRowType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
-  auto changelogOutputType = makeChangelogOutputType(dataRowType);
-  auto changelogColumnHandles = makeChangelogColumnHandles(dataRowType);
-  auto tableHandle = makeChangelogTableHandle(dataRowType);
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  int32_t expectedRowsPerSplit = 0;
-  for (const auto& batch : batches) {
-    expectedRowsPerSplit += batch->size();
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), 3);
+
+  auto operationVector = result->childAt(0)->as<SimpleVector<StringView>>();
+  auto groupCountVector = result->childAt(1)->as<SimpleVector<int64_t>>();
+
+  std::unordered_map<std::string, int64_t> counts;
+  for (auto i = 0; i < result->size(); i++) {
+    std::string op(
+        operationVector->valueAt(i).data(), operationVector->valueAt(i).size());
+    counts[op] = groupCountVector->valueAt(i);
   }
 
-  // Test 1: Order by ordinal ascending
-  // Create fresh splits for this query
-  std::vector<std::shared_ptr<ConnectorSplit>> orderBySplits;
-  orderBySplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 3, 300));
-  orderBySplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 1, 100));
-  orderBySplits.push_back(makeChangelogSplit(
-      dataFilePath, ChangelogOperation::UPDATE_AFTER, 2, 200));
+  ASSERT_EQ(counts[std::string(kChangelogOpInsert)], expectedRows());
+  ASSERT_EQ(counts[std::string(kChangelogOpDelete)], expectedRows());
+  ASSERT_EQ(counts[std::string(kChangelogOpUpdateAfter)], expectedRows());
+}
 
-  auto orderByPlan = PlanBuilder()
-                         .startTableScan()
-                         .connectorId(test::kIcebergConnectorId)
-                         .outputType(changelogOutputType)
-                         .tableHandle(tableHandle)
-                         .assignments(changelogColumnHandles)
-                         .endTableScan()
-                         .orderBy({"ordinal ASC"}, false)
-                         .planNode();
+TEST_F(IcebergChangelogE2ETest, groupByRowdataNestedColumn) {
+  std::string dataFilePath = writeTestFile();
 
-  auto orderByResult =
-      AssertQueryBuilder(orderByPlan).splits(orderBySplits).copyResults(pool());
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100),
+  };
 
-  ASSERT_TRUE(orderByResult != nullptr);
-  ASSERT_EQ(orderByResult->size(), expectedRowsPerSplit * 3);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .project({"rowdata.id AS id"})
+                  .singleAggregation({"id"}, {"count(1)"})
+                  .planNode();
 
-  // Verify ordering: first expectedRowsPerSplit rows should have ordinal=1,
-  // next should have ordinal=2, last should have ordinal=3
-  auto ordinalVector = orderByResult->childAt(1)->as<SimpleVector<int64_t>>();
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  for (auto i = 0; i < expectedRowsPerSplit; i++) {
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), expectedRows());
+
+  auto idCountVector = result->childAt(1)->as<SimpleVector<int64_t>>();
+  for (auto i = 0; i < result->size(); i++) {
+    ASSERT_EQ(idCountVector->valueAt(i), 1);
+  }
+}
+
+TEST_F(IcebergChangelogE2ETest, groupByOperationCountRowdata) {
+  std::string dataFilePath = writeTestFile();
+
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 2, 100),
+  };
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .singleAggregation({"operation"}, {"count(rowdata)"})
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), 2);
+
+  auto opGroupVector = result->childAt(0)->as<SimpleVector<StringView>>();
+  auto rowdataCountVector = result->childAt(1)->as<SimpleVector<int64_t>>();
+
+  std::unordered_map<std::string, int64_t> counts;
+  for (auto i = 0; i < result->size(); i++) {
+    std::string op(
+        opGroupVector->valueAt(i).data(), opGroupVector->valueAt(i).size());
+    counts[op] = rowdataCountVector->valueAt(i);
+  }
+
+  ASSERT_EQ(counts[std::string(kChangelogOpInsert)], expectedRows());
+  ASSERT_EQ(counts[std::string(kChangelogOpDelete)], expectedRows());
+}
+
+// --- Ordering tests ----------------------------------------------------------
+
+TEST_F(IcebergChangelogE2ETest, orderByOrdinal) {
+  std::string dataFilePath = writeTestFile();
+
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 3, 300),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 1, 100),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::UPDATE_AFTER, 2, 200),
+  };
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .orderBy({"ordinal ASC"}, false)
+                  .planNode();
+
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), expectedRows() * 3);
+
+  auto ordinalVector = result->childAt(1)->as<SimpleVector<int64_t>>();
+
+  const int32_t n = expectedRows();
+  for (auto i = 0; i < n; i++) {
     ASSERT_EQ(ordinalVector->valueAt(i), 1);
   }
-  for (auto i = expectedRowsPerSplit; i < expectedRowsPerSplit * 2; i++) {
+  for (auto i = n; i < n * 2; i++) {
     ASSERT_EQ(ordinalVector->valueAt(i), 2);
   }
-  for (auto i = expectedRowsPerSplit * 2; i < expectedRowsPerSplit * 3; i++) {
+  for (auto i = n * 2; i < n * 3; i++) {
     ASSERT_EQ(ordinalVector->valueAt(i), 3);
   }
+}
 
-  // Test 2: Group by snapshotid, count, and order by snapshotid
-  // Create fresh splits for this query
-  std::vector<std::shared_ptr<ConnectorSplit>> groupByOrderBySplits;
-  groupByOrderBySplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 3, 300));
-  groupByOrderBySplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 1, 100));
-  groupByOrderBySplits.push_back(makeChangelogSplit(
-      dataFilePath, ChangelogOperation::UPDATE_AFTER, 2, 200));
+TEST_F(IcebergChangelogE2ETest, groupBySnapshotIdOrderBySnapshotId) {
+  std::string dataFilePath = writeTestFile();
 
-  auto groupByOrderByPlan = PlanBuilder()
-                                .startTableScan()
-                                .connectorId(test::kIcebergConnectorId)
-                                .outputType(changelogOutputType)
-                                .tableHandle(tableHandle)
-                                .assignments(changelogColumnHandles)
-                                .endTableScan()
-                                .singleAggregation({"snapshotid"}, {"count(1)"})
-                                .orderBy({"snapshotid ASC"}, false)
-                                .planNode();
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 3, 300),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 1, 100),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::UPDATE_AFTER, 2, 200),
+  };
 
-  auto groupByOrderByResult = AssertQueryBuilder(groupByOrderByPlan)
-                                  .splits(groupByOrderBySplits)
-                                  .copyResults(pool());
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .singleAggregation({"snapshotid"}, {"count(1)"})
+                  .orderBy({"snapshotid ASC"}, false)
+                  .planNode();
 
-  ASSERT_TRUE(groupByOrderByResult != nullptr);
-  ASSERT_EQ(groupByOrderByResult->size(), 3); // 3 different snapshot IDs
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  // Verify results are ordered by snapshotid
-  auto snapshotVector =
-      groupByOrderByResult->childAt(0)->as<SimpleVector<int64_t>>();
-  auto countVector =
-      groupByOrderByResult->childAt(1)->as<SimpleVector<int64_t>>();
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), 3);
+
+  auto snapshotVector = result->childAt(0)->as<SimpleVector<int64_t>>();
+  auto countVector = result->childAt(1)->as<SimpleVector<int64_t>>();
 
   ASSERT_EQ(snapshotVector->valueAt(0), 100);
-  ASSERT_EQ(countVector->valueAt(0), expectedRowsPerSplit);
+  ASSERT_EQ(countVector->valueAt(0), expectedRows());
 
   ASSERT_EQ(snapshotVector->valueAt(1), 200);
-  ASSERT_EQ(countVector->valueAt(1), expectedRowsPerSplit);
+  ASSERT_EQ(countVector->valueAt(1), expectedRows());
 
   ASSERT_EQ(snapshotVector->valueAt(2), 300);
-  ASSERT_EQ(countVector->valueAt(2), expectedRowsPerSplit);
+  ASSERT_EQ(countVector->valueAt(2), expectedRows());
+}
 
-  // Test 3: Order by metadata column (ordinal) but select only rowdata
-  std::vector<std::shared_ptr<ConnectorSplit>> orderByMetadataSplits;
-  orderByMetadataSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 3, 300));
-  orderByMetadataSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 1, 100));
-  orderByMetadataSplits.push_back(makeChangelogSplit(
-      dataFilePath, ChangelogOperation::UPDATE_AFTER, 2, 200));
+TEST_F(IcebergChangelogE2ETest, orderByOrdinalSelectRowdata) {
+  std::string dataFilePath = writeTestFile();
 
-  auto orderByMetadataPlan = PlanBuilder()
-                                 .startTableScan()
-                                 .connectorId(test::kIcebergConnectorId)
-                                 .outputType(changelogOutputType)
-                                 .tableHandle(tableHandle)
-                                 .assignments(changelogColumnHandles)
-                                 .endTableScan()
-                                 .orderBy({"ordinal ASC"}, false)
-                                 .project({"rowdata"})
-                                 .planNode();
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 3, 300),
+      makeChangelogSplit(dataFilePath, ChangelogOperation::DELETE, 1, 100),
+      makeChangelogSplit(
+          dataFilePath, ChangelogOperation::UPDATE_AFTER, 2, 200),
+  };
 
-  auto orderByMetadataResult = AssertQueryBuilder(orderByMetadataPlan)
-                                   .splits(orderByMetadataSplits)
-                                   .copyResults(pool());
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(test::kIcebergConnectorId)
+                  .outputType(changelogOutputType_)
+                  .tableHandle(tableHandle_)
+                  .assignments(changelogColumnHandles_)
+                  .endTableScan()
+                  .orderBy({"ordinal ASC"}, false)
+                  .project({"rowdata"})
+                  .planNode();
 
-  ASSERT_TRUE(orderByMetadataResult != nullptr);
-  ASSERT_EQ(orderByMetadataResult->size(), expectedRowsPerSplit * 3);
-  ASSERT_EQ(orderByMetadataResult->childrenSize(), 1); // Only rowdata
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  // Verify we got rowdata (ordered by ordinal, but ordinal not in output)
-  auto orderedRowdata = orderByMetadataResult->childAt(0)->as<RowVector>();
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), expectedRows() * 3);
+  ASSERT_EQ(result->childrenSize(), 1);
+
+  auto orderedRowdata = result->childAt(0)->as<RowVector>();
   ASSERT_NE(orderedRowdata, nullptr);
-  ASSERT_EQ(orderedRowdata->childrenSize(), 2); // id and name
+  ASSERT_EQ(orderedRowdata->childrenSize(), 2);
+}
 
-  // Test 4: Order by rowdata subfield (rowdata.id) and select only metadata
-  // Project the field first, then order by it, then project only metadata
-  std::vector<std::shared_ptr<ConnectorSplit>> orderByRowdataSplits;
-  orderByRowdataSplits.push_back(
-      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100));
+TEST_F(IcebergChangelogE2ETest, orderByRowdataSubfieldSelectMetadata) {
+  std::string dataFilePath = writeTestFile();
 
-  auto orderByRowdataPlan =
+  std::vector<std::shared_ptr<ConnectorSplit>> splits = {
+      makeChangelogSplit(dataFilePath, ChangelogOperation::INSERT, 1, 100),
+  };
+
+  auto plan =
       PlanBuilder()
           .startTableScan()
           .connectorId(test::kIcebergConnectorId)
-          .outputType(changelogOutputType)
-          .tableHandle(tableHandle)
-          .assignments(changelogColumnHandles)
+          .outputType(changelogOutputType_)
+          .tableHandle(tableHandle_)
+          .assignments(changelogColumnHandles_)
           .endTableScan()
           .project({"operation", "ordinal", "snapshotid", "rowdata.id AS id"})
           .orderBy({"id ASC"}, false)
           .project({"operation", "ordinal", "snapshotid"})
           .planNode();
 
-  auto orderByRowdataResult = AssertQueryBuilder(orderByRowdataPlan)
-                                  .splits(orderByRowdataSplits)
-                                  .copyResults(pool());
+  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
-  ASSERT_TRUE(orderByRowdataResult != nullptr);
-  ASSERT_EQ(orderByRowdataResult->size(), expectedRowsPerSplit);
-  ASSERT_EQ(orderByRowdataResult->childrenSize(), 3); // Only metadata columns
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->size(), expectedRows());
+  ASSERT_EQ(result->childrenSize(), 3);
 
-  // Verify we got metadata columns (ordered by rowdata.id, but id not in
-  // output)
-  auto orderedOpVector =
-      orderByRowdataResult->childAt(0)->as<SimpleVector<StringView>>();
-  auto orderedOrdinalVector =
-      orderByRowdataResult->childAt(1)->as<SimpleVector<int64_t>>();
-  auto orderedSnapshotVector =
-      orderByRowdataResult->childAt(2)->as<SimpleVector<int64_t>>();
+  auto orderedOpVector = result->childAt(0)->as<SimpleVector<StringView>>();
+  auto orderedOrdinalVector = result->childAt(1)->as<SimpleVector<int64_t>>();
+  auto orderedSnapshotVector = result->childAt(2)->as<SimpleVector<int64_t>>();
 
-  // All rows should have same metadata since they're from same split
-  for (auto i = 0; i < orderByRowdataResult->size(); i++) {
-    ASSERT_EQ(orderedOpVector->valueAt(i), StringView("INSERT"));
+  for (auto i = 0; i < result->size(); i++) {
+    ASSERT_EQ(orderedOpVector->valueAt(i), StringView(kChangelogOpInsert));
     ASSERT_EQ(orderedOrdinalVector->valueAt(i), 1);
     ASSERT_EQ(orderedSnapshotVector->valueAt(i), 100);
   }

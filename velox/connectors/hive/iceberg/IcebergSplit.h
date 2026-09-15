@@ -53,9 +53,10 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// therefore cannot prove a transform is identity.
   std::unordered_map<int32_t, std::optional<std::string>> identityPartitionKeys;
 
-  /// Changelog split information. If present, this split represents a changelog
-  /// table query and contains metadata about the changelog operation.
-  std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo;
+  /// Changelog split information. Present when this split represents a
+  /// changelog table query; contains the operation type, ordinal, and snapshot
+  /// ID that are constant for every row in the split.
+  std::optional<ChangelogSplitInfo> changelogSplitInfo;
 
   HiveIcebergSplit(
       const std::string& connectorId,
@@ -76,7 +77,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
           identityPartitionKeys = {},
       std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
           std::nullopt,
-      std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo = nullptr);
+      std::optional<ChangelogSplitInfo> changelogSplitInfo = std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -99,7 +100,7 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
           identityPartitionKeys = {},
       std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
           std::nullopt,
-      std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo = nullptr);
+      std::optional<ChangelogSplitInfo> changelogSplitInfo = std::nullopt);
 };
 
 /// Builds Iceberg splits with named parameters.
@@ -172,8 +173,7 @@ class IcebergSplitBuilder {
     return *this;
   }
 
-  IcebergSplitBuilder& changelogSplitInfo(
-      std::shared_ptr<ChangelogSplitInfo> info) {
+  IcebergSplitBuilder& changelogSplitInfo(ChangelogSplitInfo info) {
     changelogSplitInfo_ = std::move(info);
     return *this;
   }
@@ -194,7 +194,7 @@ class IcebergSplitBuilder {
   std::unordered_map<int32_t, std::optional<std::string>>
       identityPartitionKeys_;
   std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
-  std::shared_ptr<ChangelogSplitInfo> changelogSplitInfo_;
+  std::optional<ChangelogSplitInfo> changelogSplitInfo_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

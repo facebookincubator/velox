@@ -162,9 +162,28 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& dataType);
 
   /// Builds an IcebergTableHandle configured for a changelog query over
-  /// 'dataType'.
+  /// 'dataType'. Optional subfieldFilters are baked directly into the handle
+  /// so they land in FileDataSource::filters_ and trigger validation in
+  /// IcebergDataSource::createSplitReader().
   std::shared_ptr<IcebergTableHandle> makeChangelogTableHandle(
-      const RowTypePtr& dataType);
+      const RowTypePtr& dataType,
+      common::SubfieldFilters subfieldFilters = {});
+
+  /// Returns two batches of 100 rows each with columns {id:BIGINT,
+  /// name:VARCHAR} where id and name are sequentially numbered (0..199).
+  std::vector<RowVectorPtr> makeTestBatches();
+
+  /// Returns the sole regular file found under 'directory'. CHECKs that
+  /// exactly one file exists.
+  std::string getOnlyDataFilePath(const std::string& directory);
+
+  /// Creates a HiveIcebergSplit for 'filePath' with the given changelog
+  /// metadata attached. The split covers the full file.
+  std::shared_ptr<HiveIcebergSplit> makeChangelogSplit(
+      const std::string& filePath,
+      ChangelogOperation operation,
+      int64_t ordinal,
+      int64_t snapshotId);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 

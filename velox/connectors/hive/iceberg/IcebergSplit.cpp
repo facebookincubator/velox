@@ -38,7 +38,7 @@ HiveIcebergSplit::HiveIcebergSplit(
     const std::unordered_map<int32_t, std::optional<std::string>>&
         identityPartitionKeys,
     std::optional<dwio::common::ColumnMappingMode> columnMappingMode,
-    std::shared_ptr<ChangelogSplitInfo> changelogInfo)
+    std::optional<ChangelogSplitInfo> changelogInfo)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -83,7 +83,7 @@ HiveIcebergSplit::HiveIcebergSplit(
     const std::unordered_map<int32_t, std::optional<std::string>>&
         identityPartitionKeys,
     std::optional<dwio::common::ColumnMappingMode> columnMappingMode,
-    std::shared_ptr<ChangelogSplitInfo> changelogInfo)
+    std::optional<ChangelogSplitInfo> changelogInfo)
     : HiveConnectorSplit(
           connectorId,
           filePath,

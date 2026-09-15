@@ -15,6 +15,7 @@
  */
 
 #include "velox/connectors/hive/iceberg/IcebergChangelogSplitReader.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -25,45 +26,8 @@
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
-class IcebergChangelogSplitReaderIntegrationTest
-    : public test::IcebergTestBase {
+class IcebergChangelogSplitReaderTest : public test::IcebergTestBase {
  protected:
-  std::vector<RowVectorPtr> makeTestBatches() {
-    std::vector<RowVectorPtr> batches;
-    for (int32_t batch = 0; batch < 2; ++batch) {
-      auto idVector = makeFlatVector<int64_t>(100, [batch](auto row) {
-        return static_cast<int64_t>(batch * 100 + row);
-      });
-      auto nameVector = makeFlatVector<std::string>(100, [batch](auto row) {
-        return "name_" + std::to_string(batch * 100 + row);
-      });
-      batches.push_back(makeRowVector({"id", "name"}, {idVector, nameVector}));
-    }
-    return batches;
-  }
-
-  std::string getOnlyDataFilePath(const std::string& directory) {
-    auto files = listFiles(directory);
-    VELOX_CHECK_EQ(files.size(), 1);
-    return files.front();
-  }
-
-  std::shared_ptr<HiveIcebergSplit> makeChangelogSplit(
-      const std::string& filePath,
-      ChangelogOperation operation,
-      int64_t ordinal,
-      int64_t snapshotId) {
-    auto changelogInfo =
-        std::make_shared<ChangelogSplitInfo>(operation, ordinal, snapshotId);
-    auto splits = makeIcebergSplits(filePath);
-    VELOX_CHECK_EQ(splits.size(), 1);
-
-    auto split = std::dynamic_pointer_cast<HiveIcebergSplit>(splits.front());
-    VELOX_CHECK_NOT_NULL(split);
-    split->changelogSplitInfo = std::move(changelogInfo);
-    return split;
-  }
-
   std::unique_ptr<IcebergChangelogSplitReader> makeChangelogSplitReader(
       const std::shared_ptr<HiveIcebergSplit>& split,
       const RowTypePtr& dataType,
@@ -78,18 +42,9 @@ class IcebergChangelogSplitReaderIntegrationTest
             hiveConfig->numCacheFileHandles()),
         std::make_unique<FileHandleGenerator>(sessionProperties));
 
-    return std::make_unique<IcebergChangelogSplitReader>(
-        split,
-        makeChangelogTableHandle(dataType),
-        nullptr,
-        connectorQueryCtx_.get(),
-        hiveConfig,
+    ChangelogScanContext scanContext{
+        std::make_shared<ColumnHandleMap>(makeColumnHandles(dataType)),
         dataType,
-        ioStats_,
-        metadataIoStats_,
-        connectorIoStats_,
-        fileHandleFactory_.get(),
-        nullptr,
         makeScanSpec(
             dataType,
             {},
@@ -99,13 +54,26 @@ class IcebergChangelogSplitReaderIntegrationTest
             {},
             SpecialColumnNames{},
             false,
-            pool()),
-        std::make_shared<ColumnHandleMap>(makeColumnHandles(dataType)),
+            pool())};
+    return std::make_unique<IcebergChangelogSplitReader>(
+        split,
+        makeChangelogTableHandle(dataType),
+        nullptr,
+        connectorQueryCtx_.get(),
+        hiveConfig,
+        scanContext,
+        ioStats_,
+        metadataIoStats_,
+        connectorIoStats_,
+        fileHandleFactory_.get(),
+        nullptr,
         changelogOutputType,
         std::move(changelogColumnHandles),
         changelogFilters);
   }
 
+  /// Prepares 'reader', drains all batches, concatenates them into a single
+  /// RowVector, and returns it. Returns nullptr if the split is empty.
   RowVectorPtr readAll(IcebergChangelogSplitReader& reader) {
     dwio::common::RuntimeStats runtimeStats;
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
@@ -141,7 +109,10 @@ class IcebergChangelogSplitReaderIntegrationTest
   std::unique_ptr<FileHandleFactory> fileHandleFactory_;
 };
 
-TEST_F(IcebergChangelogSplitReaderIntegrationTest, testChangelogSplitData) {
+// Writes a file with two batches (200 rows) and verifies that every
+// ChangelogOperation value produces the correct constant metadata columns
+// alongside the original data rows.
+TEST_F(IcebergChangelogSplitReaderTest, changelogSplitData) {
   auto dataType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
   const std::vector<
       std::tuple<ChangelogOperation, std::string, int64_t, int64_t>>
@@ -158,6 +129,11 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testChangelogSplitData) {
       createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
   sink->close();
 
+  int32_t expectedRows = 0;
+  for (const auto& batch : batches) {
+    expectedRows += batch->size();
+  }
+
   const auto filePath = getOnlyDataFilePath(outputDirectory->getPath());
 
   for (
@@ -172,7 +148,7 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testChangelogSplitData) {
 
     auto result = readAll(*reader);
     ASSERT_NE(result, nullptr) << "op=" << expectedOperation;
-    ASSERT_EQ(result->size(), 200) << "op=" << expectedOperation;
+    ASSERT_EQ(result->size(), expectedRows) << "op=" << expectedOperation;
 
     auto operation = result->childAt(0)->as<SimpleVector<StringView>>();
     auto ordinal = result->childAt(1)->as<SimpleVector<int64_t>>();
@@ -192,7 +168,10 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testChangelogSplitData) {
   }
 }
 
-TEST_F(IcebergChangelogSplitReaderIntegrationTest, testReaderOutputType) {
+// Verifies that readerOutputType() returns the changelog schema
+// (operation/ordinal/snapshotid/rowdata) and that the rowdata child carries
+// the original data columns.
+TEST_F(IcebergChangelogSplitReaderTest, readerOutputType) {
   auto dataType = ROW({"x", "y", "z"}, {BIGINT(), INTEGER(), VARCHAR()});
   auto changelogOutputType = makeChangelogOutputType(dataType);
   auto batch = makeRowVector(
@@ -216,16 +195,7 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testReaderOutputType) {
       changelogOutputType,
       makeChangelogColumnHandles(dataType));
 
-  const auto& reported = reader->readerOutputType();
-  ASSERT_EQ(reported->size(), 4);
-  ASSERT_EQ(reported->nameOf(0), "operation");
-  ASSERT_EQ(reported->childAt(0)->kind(), TypeKind::VARCHAR);
-  ASSERT_EQ(reported->nameOf(1), "ordinal");
-  ASSERT_EQ(reported->childAt(1)->kind(), TypeKind::BIGINT);
-  ASSERT_EQ(reported->nameOf(2), "snapshotid");
-  ASSERT_EQ(reported->childAt(2)->kind(), TypeKind::BIGINT);
-  ASSERT_EQ(reported->nameOf(3), "rowdata");
-  ASSERT_EQ(reported->childAt(3)->kind(), TypeKind::ROW);
+  ASSERT_EQ(*reader->readerOutputType(), *changelogOutputType);
 
   auto result = readAll(*reader);
   ASSERT_NE(result, nullptr);
@@ -241,7 +211,9 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testReaderOutputType) {
   ASSERT_EQ(rowdataType.nameOf(2), "z");
 }
 
-TEST_F(IcebergChangelogSplitReaderIntegrationTest, testFiltersRejects) {
+// A snapshotid filter that does not match the split constant marks the split
+// empty, so readAll() returns nullptr.
+TEST_F(IcebergChangelogSplitReaderTest, snapshotIdFilterRejects) {
   auto batches = makeTestBatches();
   auto outputDirectory = test::TempDirectoryPath::create();
   auto sink =
@@ -262,11 +234,68 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testFiltersRejects) {
       makeChangelogColumnHandles(dataType),
       &filters);
 
-  auto result = readAll(*reader);
-  ASSERT_EQ(result, nullptr);
+  ASSERT_EQ(readAll(*reader), nullptr);
 }
 
-TEST_F(IcebergChangelogSplitReaderIntegrationTest, testFilterAccepts) {
+// An operation filter that does not match the split's operation marks the
+// split empty.
+TEST_F(IcebergChangelogSplitReaderTest, operationFilterRejects) {
+  auto batches = makeTestBatches();
+  auto outputDirectory = test::TempDirectoryPath::create();
+  auto sink =
+      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
+  sink->close();
+
+  const auto filePath = getOnlyDataFilePath(outputDirectory->getPath());
+  auto dataType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
+
+  // Split has operation=INSERT; filter requires DELETE.
+  common::SubfieldFilters filters;
+  const std::string_view deleteOp = kChangelogOpDelete;
+  filters[common::Subfield(std::string(kChangelogColOperation))] =
+      std::make_shared<common::BytesValues>(
+          std::vector<std::string>{std::string(deleteOp)}, false);
+
+  auto reader = makeChangelogSplitReader(
+      makeChangelogSplit(filePath, ChangelogOperation::INSERT, 1, 100),
+      dataType,
+      makeChangelogOutputType(dataType),
+      makeChangelogColumnHandles(dataType),
+      &filters);
+
+  ASSERT_EQ(readAll(*reader), nullptr);
+}
+
+// An ordinal filter that does not match the split's ordinal marks the split
+// empty.
+TEST_F(IcebergChangelogSplitReaderTest, ordinalFilterRejects) {
+  auto batches = makeTestBatches();
+  auto outputDirectory = test::TempDirectoryPath::create();
+  auto sink =
+      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
+  sink->close();
+
+  const auto filePath = getOnlyDataFilePath(outputDirectory->getPath());
+  auto dataType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
+
+  // Split has ordinal=1; filter requires ordinal in [5, 10].
+  common::SubfieldFilters filters;
+  filters[common::Subfield(std::string(kChangelogColOrdinal))] =
+      std::make_shared<common::BigintRange>(5, 10, false);
+
+  auto reader = makeChangelogSplitReader(
+      makeChangelogSplit(filePath, ChangelogOperation::INSERT, 1, 100),
+      dataType,
+      makeChangelogOutputType(dataType),
+      makeChangelogColumnHandles(dataType),
+      &filters);
+
+  ASSERT_EQ(readAll(*reader), nullptr);
+}
+
+// A snapshotid filter that matches the split constant passes through and all
+// rows are returned.
+TEST_F(IcebergChangelogSplitReaderTest, snapshotIdFilterAccepts) {
   auto batches = makeTestBatches();
   auto outputDirectory = test::TempDirectoryPath::create();
   auto sink =
@@ -287,31 +316,75 @@ TEST_F(IcebergChangelogSplitReaderIntegrationTest, testFilterAccepts) {
       makeChangelogColumnHandles(dataType),
       &filters);
 
+  int32_t expectedRows = 0;
+  for (const auto& batch : batches) {
+    expectedRows += batch->size();
+  }
+
   auto result = readAll(*reader);
   ASSERT_NE(result, nullptr);
-  ASSERT_EQ(result->size(), 200);
+  ASSERT_EQ(result->size(), expectedRows);
 }
 
-TEST_F(IcebergChangelogSplitReaderIntegrationTest, nextDrainsAllBatches) {
+// next() drains all rows across multiple internal batches.
+TEST_F(IcebergChangelogSplitReaderTest, nextDrainsAllBatches) {
   auto batches = makeTestBatches();
   auto outputDirectory = test::TempDirectoryPath::create();
   auto sink =
       createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
   sink->close();
 
+  auto dataType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
   auto reader = makeChangelogSplitReader(
       makeChangelogSplit(
           getOnlyDataFilePath(outputDirectory->getPath()),
           ChangelogOperation::DELETE,
           3,
           42),
-      ROW({"id", "name"}, {BIGINT(), VARCHAR()}),
-      makeChangelogOutputType(ROW({"id", "name"}, {BIGINT(), VARCHAR()})),
-      makeChangelogColumnHandles(ROW({"id", "name"}, {BIGINT(), VARCHAR()})));
+      dataType,
+      makeChangelogOutputType(dataType),
+      makeChangelogColumnHandles(dataType));
+
+  int32_t expectedRows = 0;
+  for (const auto& batch : batches) {
+    expectedRows += batch->size();
+  }
 
   auto result = readAll(*reader);
   ASSERT_NE(result, nullptr);
-  ASSERT_EQ(result->size(), 200);
+  ASSERT_EQ(result->size(), expectedRows);
+}
+
+// prepareSplit() throws when changelogSplitInfo is absent from the split.
+TEST_F(IcebergChangelogSplitReaderTest, missingChangelogSplitInfoThrows) {
+  auto batches = makeTestBatches();
+  auto outputDirectory = test::TempDirectoryPath::create();
+  auto sink =
+      createDataSinkAndAppendData(batches, outputDirectory->getPath(), {});
+  sink->close();
+
+  const auto filePath = getOnlyDataFilePath(outputDirectory->getPath());
+  auto dataType = ROW({"id", "name"}, {BIGINT(), VARCHAR()});
+
+  // Build a split without changelogSplitInfo.
+  auto splits = makeIcebergSplits(filePath);
+  ASSERT_EQ(splits.size(), 1);
+  auto rawSplit = std::dynamic_pointer_cast<HiveIcebergSplit>(splits.front());
+  ASSERT_NE(rawSplit, nullptr);
+  ASSERT_FALSE(rawSplit->changelogSplitInfo.has_value());
+
+  auto reader = makeChangelogSplitReader(
+      rawSplit,
+      dataType,
+      makeChangelogOutputType(dataType),
+      makeChangelogColumnHandles(dataType));
+
+  dwio::common::RuntimeStats runtimeStats;
+  std::shared_ptr<random::RandomSkipTracker> randomSkip;
+  reader->configureReaderOptions(randomSkip);
+  VELOX_ASSERT_THROW(
+      reader->prepareSplit(nullptr, runtimeStats),
+      "HiveIcebergSplit missing changelogSplitInfo for changelog query");
 }
 
 } // namespace

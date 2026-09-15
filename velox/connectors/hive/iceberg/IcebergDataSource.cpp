@@ -17,7 +17,6 @@
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/connectors/hive/iceberg/IcebergChangelogSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
@@ -40,7 +39,59 @@ IcebergDataSource::IcebergDataSource(
           ioExecutor,
           connectorQueryCtx,
           hiveConfig),
-      columnHandles_(std::make_shared<ColumnHandleMap>(assignments)) {}
+      columnHandles_(std::make_shared<ColumnHandleMap>(assignments)) {
+  auto* icebergTableHandle =
+      dynamic_cast<const IcebergTableHandle*>(tableHandle_.get());
+  if (!icebergTableHandle || !icebergTableHandle->isChangelogQuery()) {
+    return;
+  }
+
+  // For changelog queries, build the ChangelogScanContext once so it is
+  // reused across all splits.  This lets stats-based filter reordering and
+  // column adaptation accumulate rather than being discarded after each split.
+  const auto& dataColumns = tableHandle_->dataColumns();
+  VELOX_CHECK_NOT_NULL(
+      dataColumns,
+      "IcebergDataSource: changelog query requires tableHandle.dataColumns");
+
+  const auto& rawDataHandles = icebergTableHandle->dataColumnHandles();
+  auto dataColumnHandles = std::make_shared<ColumnHandleMap>();
+  for (const auto& [name, handle] : rawDataHandles) {
+    dataColumnHandles->emplace(name, handle);
+  }
+
+  std::vector<std::string> dataNames;
+  std::vector<TypePtr> dataTypes;
+  for (uint32_t i = 0; i < dataColumns->size(); ++i) {
+    const auto& physName = dataColumns->nameOf(i);
+    if (rawDataHandles.count(physName)) {
+      dataNames.push_back(physName);
+      dataTypes.push_back(dataColumns->childAt(i));
+    }
+  }
+  auto dataReaderOutputType = ROW(std::move(dataNames), std::move(dataTypes));
+
+  // Changelog metadata filters (operation/ordinal/snapshotid) must NOT be
+  // forwarded — those names don't exist in the base-table schema.
+  // rowdata.* subfield filters are rejected in createSplitReader().
+  auto dataScanSpec = makeScanSpec(
+      dataReaderOutputType,
+      /*outputSubfields=*/{},
+      common::SubfieldFilters{},
+      /*indexColumns=*/{},
+      tableHandle_->dataColumns(),
+      partitionKeys_,
+      infoColumns_,
+      specialColumns_,
+      fileConfig_->readStatsBasedFilterReorderDisabled(
+          connectorQueryCtx_->sessionProperties()),
+      pool_);
+
+  changelogScanContext_ = ChangelogScanContext{
+      std::move(dataColumnHandles),
+      std::move(dataReaderOutputType),
+      std::move(dataScanSpec)};
+}
 
 std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   prepareSplit();
@@ -49,82 +100,47 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       dynamic_cast<const IcebergTableHandle*>(tableHandle_.get());
 
   if (icebergTableHandle && icebergTableHandle->isChangelogQuery()) {
-    // Changelog query: build a base-table readerOutputType and scanSpec from
-    // the data column handles stored in the table handle, then create an
-    // IcebergChangelogSplitReader that reads the data columns and wraps each
-    // batch into the changelog output schema.
-    const auto& dataColumns = tableHandle_->dataColumns();
-    VELOX_CHECK_NOT_NULL(
-        dataColumns,
-        "IcebergDataSource: changelog query requires tableHandle.dataColumns");
-
-    const auto& rawDataHandles = icebergTableHandle->dataColumnHandles();
-    auto dataColumnHandles = std::make_shared<ColumnHandleMap>();
-    for (const auto& [name, handle] : rawDataHandles) {
-      dataColumnHandles->emplace(name, handle);
-    }
-
-    // Build the base-table readerOutputType: include columns present in both
-    // the table schema and the data column handles.
-    std::vector<std::string> dataNames;
-    std::vector<TypePtr> dataTypes;
-    for (uint32_t i = 0; i < dataColumns->size(); ++i) {
-      const auto& physName = dataColumns->nameOf(i);
-      if (rawDataHandles.count(physName)) {
-        dataNames.push_back(physName);
-        dataTypes.push_back(dataColumns->childAt(i));
-      }
-    }
-    auto dataReaderOutputType = ROW(std::move(dataNames), std::move(dataTypes));
-
-    // Build a data-scoped scanSpec covering the projected base-table columns.
-    // Pass empty filters: changelog metadata filters (operation/ordinal/
-    // snapshotid) are constant per-split and evaluated in
-    // IcebergChangelogSplitReader::prepareSplit(); they must NOT be forwarded
-    // to makeScanSpec because those names do not exist in the base-table schema
-    // and would cause "Field not found" errors.  Data-column predicates (e.g.
-    // rowdata.id < 50) reference the nested "rowdata" namespace and are not
-    // present as bare subfield filters here; any remaining predicate is
-    // evaluated by the downstream Filter operator.
+    // Subfield filters on rowdata.* columns are silently dropped because the
+    // split reader's row reader uses dataScanSpec (no filters), so the
+    // predicate never reaches the data.  Reject such filters explicitly so the
+    // caller receives a clear error rather than incorrect results.
     //
-    // subfields_ is in changelog space (keys: operation/ordinal/snapshotid/
-    // rowdata) and must not be forwarded here: the base-table column names
-    // (id, name, …) would never match, so pruning would be silently lost
-    // anyway.  Pass an empty map so every base-table column is read in full.
-    // Proper rowdata→base-table subfield remapping can be added when needed.
-    auto dataScanSpec = makeScanSpec(
-        dataReaderOutputType,
-        /*outputSubfields=*/{},
-        common::SubfieldFilters{},
-        /*indexColumns=*/{},
-        tableHandle_->dataColumns(),
-        partitionKeys_,
-        infoColumns_,
-        specialColumns_,
-        fileConfig_->readStatsBasedFilterReorderDisabled(
-            connectorQueryCtx_->sessionProperties()),
-        pool_);
+    // Predicates on rowdata columns must be expressed as a remainingFilter
+    // (post-scan Filter operator) evaluated against the changelog output.
+    for (const auto& [subfield, filter] : filters_) {
+      const auto& path = subfield.path();
+      if (path.empty()) {
+        continue;
+      }
+      const auto* root = path[0]->as<common::Subfield::NestedField>();
+      if (root == nullptr) {
+        continue;
+      }
+      VELOX_USER_CHECK(
+          root->name() != kChangelogColRowdata,
+          "Subfield filter pushdown on rowdata columns is not supported for "
+          "changelog queries. Predicates on rowdata columns must be expressed "
+          "as a remainingFilter. Unsupported filter: {}",
+          subfield.toString());
+    }
 
-    auto changelogOutputType = getOutputType();
-    // columnHandles_ holds the changelog output column handles
-    // (operation/ordinal/snapshotid/rowdata) — passed as
-    // changelogColumnHandles.
+    VELOX_CHECK(
+        changelogScanContext_.has_value(),
+        "ChangelogScanContext not initialised — this should not happen");
     return std::make_unique<IcebergChangelogSplitReader>(
         icebergSplit,
         tableHandle_,
         &partitionKeys_,
         connectorQueryCtx_,
         fileConfig_,
-        dataReaderOutputType,
+        *changelogScanContext_,
         dataIoStats_,
         metadataIoStats_,
         ioStats_,
         fileHandleFactory_,
         ioExecutor_,
-        dataScanSpec,
-        dataColumnHandles,
-        changelogOutputType, // changelog output type
-        *columnHandles_, // changelog column handles
+        outputType(),
+        *columnHandles_,
         &filters_);
   }
 
