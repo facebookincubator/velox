@@ -79,6 +79,13 @@ class Buffer {
   /// pointers/string_views are invalidated.
   void reset();
 
+  /// Like reset(), but additionally releases trailing chunks so the retained
+  /// capacity does not exceed 'maxRetainedBytes'. The first chunk is always
+  /// retained so the arena stays usable without a fresh allocation. Bounds the
+  /// arena's high-water mark after an unusually large stripe, at the cost of
+  /// reallocating if a later stripe grows past the retained budget again.
+  void reset(uint64_t maxRetainedBytes);
+
   /// Returns the number of allocated chunks. Only for testing.
   uint32_t testingChunkCount() const {
     return chunks_.size();

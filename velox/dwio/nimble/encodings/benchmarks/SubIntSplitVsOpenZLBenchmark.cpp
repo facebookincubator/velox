@@ -46,6 +46,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
@@ -53,6 +54,9 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 
 using namespace facebook::nimble;
 using namespace facebook::nimble::benchmarks;
@@ -69,6 +73,51 @@ DEFINE_int64(
     only_size,
     0,
     "If >0, run the CSV sweep for only this element count (e.g. 100000000).");
+DEFINE_int32(
+    decode_chunk,
+    0,
+    "SubIntSplit decode chunk size in elements; 0 keeps the built-in default.");
+DEFINE_double(
+    decode_cost_bits,
+    0.0,
+    "SubIntSplit planner decode cost per extra section, in bits per value; "
+    "0 keeps the storage-only split.");
+DEFINE_int32(
+    planner_samples,
+    0,
+    "SubIntSplit planner sample count; 0 keeps the built-in default (2048).");
+DEFINE_double(
+    prune_threshold,
+    -1.0,
+    "SubIntSplit planner boundary prune threshold; negative keeps the default "
+    "(0.001).");
+DEFINE_int32(
+    max_boundaries,
+    0,
+    "SubIntSplit planner candidate boundary cap; 0 is unlimited.");
+DEFINE_int32(
+    max_section_width,
+    0,
+    "SubIntSplit planner widest scored section; 0 is unlimited.");
+DEFINE_int32(
+    freq_max_width,
+    0,
+    "SubIntSplit planner widest section given frequency metrics; 0 is "
+    "unlimited.");
+DEFINE_int32(
+    encode_iters,
+    0,
+    "Overrides the per-size encode iteration count; 0 keeps the default.");
+DEFINE_int32(
+    decode_iters,
+    0,
+    "Overrides the per-size decode iteration count; 0 keeps the default. Set "
+    "to 1 to keep decode out of an encode profile.");
+DEFINE_string(
+    only_method,
+    "",
+    "If set, the CSV sweep runs only the method with this name. Lets a "
+    "profiler attribute one arm without the others in the samples.");
 DEFINE_bool(
     layout,
     false,
@@ -80,6 +129,14 @@ namespace {
 using T = uint64_t;
 constexpr DataType kDataType = DataType::Uint64;
 constexpr int kBitWidth = 64;
+
+// Shared by every arm. The production writer always supplies one, so an
+// encoding that cannot use it is measured unfairly against one that can.
+facebook::velox::BufferPool& scratchBufferPool() {
+  static facebook::velox::BufferPool pool{
+      facebook::velox::BufferPool::kDefaultCapacity};
+  return pool;
+}
 
 // ---------------------------------------------------------------------------
 // Seeded data generators, parameterized by element count and trial seed.
@@ -373,6 +430,67 @@ std::vector<std::pair<EncodingType, float>> tunedReadFactors() {
   return factors;
 }
 
+// The section candidates BitRangeSplit allows itself. It excludes RLE and
+// MainlyConstant, whose estimateSize() walks Statistics uniques and repeats and
+// is the single largest line item in SubIntSplit's encode profile.
+std::vector<std::pair<EncodingType, float>> leanSectionReadFactors() {
+  std::vector<std::pair<EncodingType, float>> factors;
+  for (const auto& entry : tunedReadFactors()) {
+    if (entry.first != EncodingType::RLE &&
+        entry.first != EncodingType::MainlyConstant) {
+      factors.push_back(entry);
+    }
+  }
+  return factors;
+}
+
+// SubIntSplit driven entirely from config: the caller names the bit ranges, the
+// same way BitRangeSplit has to be configured. No planner runs.
+//
+// `leanSections` restricts what nested selection considers for each section to
+// the same set BitRangeSplit permits, which is the encode-side half of why
+// BitRangeSplit is faster to write.
+Encoded encodeSubIntSplitConfigured(
+    const Vector<T>& data,
+    const std::string& ranges,
+    CompressionType compressionType,
+    bool leanSections = false) {
+  auto& pool = benchmarkPool();
+  Buffer buffer{*pool};
+  std::span<const T> values{data.data(), data.size()};
+
+  std::optional<CompressionOptions> compressionOptions;
+  if (compressionType != CompressionType::Uncompressed) {
+    CompressionOptions options;
+    options.compressionType = compressionType;
+    options.compressionAcceptRatio = 1.0f;
+    options.zstdMinCompressionSize = 0;
+    options.openzlMinCompressionSize = 0;
+    compressionOptions = options;
+  }
+  ManualEncodingSelectionPolicyFactory factory{
+      tunedReadFactors(),
+      compressionOptions,
+      leanSections
+          ? std::optional<std::vector<
+                std::pair<EncodingType, float>>>{leanSectionReadFactors()}
+          : std::nullopt};
+
+  EncodingSelectionResult result{
+      .encodingType = EncodingType::SubIntSplit,
+      .encodingConfig = EncodingLayout::Config{
+          {{std::string(subintsplit::kSplitModeConfigKey),
+            std::string(subintsplit::kSplitModePreserve)},
+           {std::string(subintsplit::kSplitBoundariesConfigKey), ranges}}}};
+  EncodingSelection<T> selection{
+      std::move(result),
+      Statistics<T>::create(values.subspan(0, 1)),
+      factory.createPolicy(kDataType)};
+
+  auto encoded = SubIntSplitEncoding<T>::encode(selection, values, buffer, {});
+  return {std::string{encoded.data(), encoded.size()}, true};
+}
+
 Encoded encodeSubIntSplitWith(
     const Vector<T>& data,
     std::vector<std::pair<EncodingType, float>> readFactors,
@@ -401,29 +519,84 @@ Encoded encodeSubIntSplitWith(
       std::move(result),
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
-  auto encoded =
-      SubIntSplitEncoding<uint64_t>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  encodeOptions.bufferPool = &scratchBufferPool();
+  encodeOptions.subIntSplitDecodeCostBitsPerValue = FLAGS_decode_cost_bits;
+  encodeOptions.subIntSplitPlannerMaxSamples =
+      static_cast<uint32_t>(FLAGS_planner_samples);
+  encodeOptions.subIntSplitBoundaryPruneThreshold = FLAGS_prune_threshold;
+  encodeOptions.subIntSplitMaxCandidateBoundaries =
+      static_cast<uint32_t>(FLAGS_max_boundaries);
+  encodeOptions.subIntSplitMaxSectionWidth =
+      static_cast<uint32_t>(FLAGS_max_section_width);
+  encodeOptions.subIntSplitFrequencyMetricsMaxWidth =
+      static_cast<uint32_t>(FLAGS_freq_max_width);
+  auto encoded = SubIntSplitEncoding<uint64_t>::encode(
+      selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
 void decodeNimble(const std::string& encoded, uint32_t n) {
   auto& pool = benchmarkPool();
   std::vector<T> out(n);
-  auto enc = EncodingFactory{}.create(*pool, encoded, nullFactory());
+  Encoding::Options options;
+  options.subIntSplitDecodeChunkSize =
+      static_cast<uint32_t>(FLAGS_decode_chunk);
+  auto enc =
+      EncodingFactory{options}.create(*pool, encoded, nullFactory(), options);
   enc->materialize(n, out.data());
   folly::doNotOptimizeAway(out);
 }
 
-// SubIntSplit is not wired into EncodingFactory dispatch, so decode it by
-// constructing the encoding directly. This is driver-only: the production
-// EncodingFactory is unchanged. Nested (possibly Zstd/OpenZL-compressed)
-// sections are still built through the constructor's internal factory.
 void decodeSubIntSplit(const std::string& encoded, uint32_t n) {
+  decodeNimble(encoded, n);
+}
+
+// The split SubIntSplit's DP planner picks for `data`, in the wire format both
+// encodings use for their boundary config. Feeding it to BitRangeSplit isolates
+// the codecs from the planner: same sections, different implementation.
+std::string plannedSplitBoundaries(const Vector<T>& data) {
+  std::vector<uint64_t> samples;
+  subintsplit::sampleIntoU64<T>({data.data(), data.size()}, samples);
+  const auto plan = subintsplit::selectSplits(samples, kBitWidth, data.size());
+  return subintsplit::serializeSplitBoundaries(plan.sections);
+}
+
+// BitRangeSplit has no planner, so its sections have to be named up front.
+Encoded encodeBitRangeSplitWith(
+    const Vector<T>& data,
+    const std::string& ranges,
+    CompressionType compressionType) {
   auto& pool = benchmarkPool();
-  std::vector<T> out(n);
-  SubIntSplitEncoding<T> enc{*pool, encoded, nullFactory()};
-  enc.materialize(n, out.data());
-  folly::doNotOptimizeAway(out);
+  Buffer buffer{*pool};
+  std::span<const T> values{data.data(), data.size()};
+
+  std::optional<CompressionOptions> compressionOptions;
+  if (compressionType != CompressionType::Uncompressed) {
+    CompressionOptions options;
+    options.compressionType = compressionType;
+    options.compressionAcceptRatio = 1.0f;
+    options.zstdMinCompressionSize = 0;
+    options.openzlMinCompressionSize = 0;
+    compressionOptions = options;
+  }
+  ManualEncodingSelectionPolicyFactory factory{
+      tunedReadFactors(), compressionOptions};
+
+  EncodingSelectionResult result{
+      .encodingType = EncodingType::BitRangeSplit,
+      .encodingConfig = EncodingLayout::Config{
+          {{std::string(BitRangeSplitEncoding<T>::kRangesConfigKey), ranges}}}};
+  EncodingSelection<T> selection{
+      std::move(result),
+      Statistics<T>::create(values.subspan(0, 1)),
+      factory.createPolicy(kDataType)};
+
+  Encoding::Options encodeOptions;
+  encodeOptions.bufferPool = &scratchBufferPool();
+  auto encoded = BitRangeSplitEncoding<T>::encode(
+      selection, values, buffer, encodeOptions);
+  return {std::string{encoded.data(), encoded.size()}, true};
 }
 
 std::vector<Method> makeMethods() {
@@ -467,6 +640,48 @@ std::vector<Method> makeMethods() {
        [](const std::string& c, uint32_t) {
          decompressWith(CompressionType::Zstd, c);
        }});
+  // SubIntSplit given the same pinned split BitRangeSplit gets, so the two are
+  // configured identically and only the codecs differ.
+  methods.push_back(
+      {"SubIntSplitConfigured",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitConfigured(
+             d, plannedSplitBoundaries(d), CompressionType::Zstd);
+       },
+       decodeSubIntSplit});
+  methods.push_back(
+      {"SubIntSplitLeanSections",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitConfigured(
+             d,
+             plannedSplitBoundaries(d),
+             CompressionType::Zstd,
+             /*leanSections=*/true);
+       },
+       decodeSubIntSplit});
+  methods.push_back(
+      {"SubIntSplitConfiguredFixed",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitConfigured(
+             d, "0-31;32-63", CompressionType::Zstd);
+       },
+       decodeSubIntSplit});
+  // Same sections as SubIntSplitTuned, so any delta is codec, not planner.
+  methods.push_back(
+      {"BitRangeSplitSameSplit",
+       [](const Vector<T>& d) {
+         return encodeBitRangeSplitWith(
+             d, plannedSplitBoundaries(d), CompressionType::Zstd);
+       },
+       decodeNimble});
+  // A fixed half/half split, standing in for BitRangeSplit configured by hand
+  // without a planner to consult.
+  methods.push_back(
+      {"BitRangeSplitFixed",
+       [](const Vector<T>& d) {
+         return encodeBitRangeSplitWith(d, "0-31;32-63", CompressionType::Zstd);
+       },
+       decodeNimble});
   methods.push_back(
       {"FixedBitWidth",
        [](const Vector<T>& d) {
@@ -561,11 +776,28 @@ void emitCsv(int trials, int64_t onlySize) {
   }
 
   const auto pats = patterns();
-  const auto methods = makeMethods();
+  auto methods = makeMethods();
+  if (!FLAGS_only_method.empty()) {
+    std::vector<Method> filtered;
+    for (auto& method : methods) {
+      if (method.name == FLAGS_only_method) {
+        filtered.push_back(std::move(method));
+      }
+    }
+    NIMBLE_CHECK(
+        !filtered.empty(), "Unknown --only_method: {}", FLAGS_only_method);
+    methods = std::move(filtered);
+  }
 
   std::cout << "pattern,size,method,trials,ratio_mean,ratio_stddev,"
                "encode_mb_s_mean,decode_mb_s_mean\n";
-  for (const auto& spec : specs) {
+  for (auto& spec : specs) {
+    if (FLAGS_encode_iters > 0) {
+      spec.encodeIters = FLAGS_encode_iters;
+    }
+    if (FLAGS_decode_iters > 0) {
+      spec.decodeIters = FLAGS_decode_iters;
+    }
     const uint64_t rawBytes = spec.size * sizeof(T);
     for (const auto& pat : pats) {
       if (spec.subset && !inBigSubset(pat.name)) {

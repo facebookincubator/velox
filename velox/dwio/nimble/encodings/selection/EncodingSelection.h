@@ -149,6 +149,25 @@ class EncodingSelection {
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Encodes a nested data stream with a caller-chosen encoding rather than the
+  /// one selection would have picked.
+  ///
+  /// Selection still runs, because it is what produces the nested stream's
+  /// compression policy and config, and any stream nested inside
+  /// `encodingType` still selects normally. Only the top-level choice for this
+  /// stream is overridden.
+  ///
+  /// An encoding the data cannot use throws, rather than falling back: the
+  /// caller named it explicitly, and a silent fallback would leave them
+  /// believing a layout is in force that is not.
+  template <typename NestedT>
+  std::string_view encodeNestedAs(
+      NestedEncodingIdentifier nestedEncodingIdentifier,
+      EncodingType encodingType,
+      std::span<const NestedT> values,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
  private:
   EncodingSelectionResult selectionResult_;
   Statistics<T> statistics_;
@@ -232,6 +251,35 @@ std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
   return std::unique_ptr<T>(static_cast<T*>(src.release()));
 }
 } // namespace
+
+template <typename T>
+template <typename NestedT>
+std::string_view EncodingSelection<T>::encodeNestedAs(
+    NestedEncodingIdentifier nestedEncodingIdentifier,
+    EncodingType encodingType,
+    std::span<const NestedT> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto nestedPolicy = std::unique_ptr<EncodingSelectionPolicy<NestedT>>(
+      static_cast<EncodingSelectionPolicy<NestedT>*>(
+          selectionPolicy_
+              ->template create<NestedT>(
+                  this->encodingType(), nestedEncodingIdentifier)
+              .release()));
+  auto statistics = Statistics<NestedT>::create(values);
+  auto selectionResult = nestedPolicy->select(values, statistics, options);
+  selectionResult.encodingType = encodingType;
+  selectionResult.estimatedSize = std::nullopt;
+
+  return EncodingFactory::encode<NestedT>(
+      EncodingSelection<NestedT>{
+          std::move(selectionResult),
+          std::move(statistics),
+          std::move(nestedPolicy)},
+      values,
+      buffer,
+      options);
+}
 
 template <typename T>
 template <typename NestedT>
