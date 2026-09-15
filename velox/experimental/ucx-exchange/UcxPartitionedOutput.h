@@ -36,8 +36,8 @@ class UcxPartitionedOutput : public exec::Operator,
 
   /// @param queueManager Output queue manager the partitions are enqueued to.
   /// Comes from the same exec::OutputTransportEntry that builds this operator,
-  /// so the operator and the manager can never diverge. Held weakly, matching
-  /// exec::PartitionedOutput.
+  /// and must be the process-wide instance used by UcxExchangeServer. Held
+  /// weakly, matching exec::PartitionedOutput.
   UcxPartitionedOutput(
       int32_t operatorId,
       exec::DriverCtx* ctx,
