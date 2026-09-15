@@ -294,6 +294,7 @@ class RLEEncodingBase
         slicedRuns.leadingSkipRows,
         length,
         buffer,
+        /*valueDelta=*/0,
         options);
   }
 
@@ -390,7 +391,8 @@ class RLEEncodingBase
     constexpr uint32_t kRunLengthChunkSize{256};
     const auto maxRunLengthChunkSize =
         std::min({runCount, length, kRunLengthChunkSize});
-    Vector<uint32_t> runLengths{pool, maxRunLengthChunkSize};
+    ScopedVector<uint32_t> runLengths{
+        maxRunLengthChunkSize, pool, options.bufferPool};
     RLESliceRuns result;
     uint32_t row{0};
     for (uint32_t run = 0; run < runCount;) {

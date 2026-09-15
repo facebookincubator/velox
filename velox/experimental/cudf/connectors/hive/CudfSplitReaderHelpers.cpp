@@ -82,15 +82,15 @@ void BufferedInputDataSource::enqueueForDevice(
   auto inputStream = input_->enqueue({offset, size});
   std::shared_ptr sharedStream(std::move(inputStream));
   pendingDeviceLoads_.push_back(
-      [dst, size, sharedStream](rmm::cuda_stream_view stream) {
+      [dst, size, sharedStream](cuda::stream_ref stream) {
         std::vector<uint8_t> buffer(size);
         sharedStream->readFully(reinterpret_cast<char*>(buffer.data()), size);
         CUDF_CUDA_TRY(cudaMemcpyAsync(
-            dst, buffer.data(), size, cudaMemcpyDefault, stream.value()));
+            dst, buffer.data(), size, cudaMemcpyDefault, stream.get()));
       });
 }
 
-void BufferedInputDataSource::load(rmm::cuda_stream_view stream) {
+void BufferedInputDataSource::load(cuda::stream_ref stream) {
   input_->load(velox::dwio::common::LogType::FILE);
   std::lock_guard<std::mutex> lock(ioBatchMutex());
   for (auto& deviceLoad : pendingDeviceLoads_) {
@@ -139,7 +139,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
     size_t offset,
     size_t size,
     uint8_t* dst,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   VELOX_CHECK(input_->executor() != nullptr, "IO executor is not initialized");
   auto future = folly::via(input_->executor())
                     .thenValue([this, offset, size, dst, stream](auto&&) {
@@ -149,7 +149,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
                           hostBuffer->data(),
                           hostBuffer->size(),
                           cudaMemcpyDefault,
-                          stream.value()));
+                          stream.get()));
                       return hostBuffer->size();
                     });
   return toStdFuture(std::move(future));
@@ -177,7 +177,7 @@ std::tuple<
 fetchByteRangesAsync(
     std::shared_ptr<cudf::io::datasource> dataSource,
     cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Pad buffer sizes to be a multiple of 8 bytes. Required by
   // `decode_page_data_kernel` in cuDF Parquet reader.
@@ -231,7 +231,7 @@ fetchByteRangesAsync(
 
     // load buffered input data source
     auto syncFunction = [](std::shared_ptr<cudf::io::datasource> dataSource,
-                           rmm::cuda_stream_view stream) {
+                           cuda::stream_ref stream) {
       auto buffer =
           checkedPointerCast<BufferedInputDataSource>(dataSource.get());
       buffer->load(stream);
@@ -288,7 +288,7 @@ fetchByteRangesAsync(
 
   // device_read_async is not guaranteed to follow stream-ordering (see
   // datasource API docs)
-  stream.synchronize();
+  stream.sync();
 
   {
     std::lock_guard<std::mutex> lock(ioBatchMutex());
@@ -317,7 +317,7 @@ fetchByteRangesAsync(
                       hostBuffer->data(),
                       hostBuffer->size(),
                       cudaMemcpyDefault,
-                      stream.value()));
+                      stream.get()));
                   return ioSize;
                 }));
       }

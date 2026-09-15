@@ -1548,6 +1548,45 @@ TEST_F(MergeJoinTest, matchRatioStats) {
   }
 }
 
+TEST_F(MergeJoinTest, planNodeStats) {
+  // A MergeJoin node is implemented by two operators sharing its plan node id:
+  // the MergeJoin operator (left input) and a CallbackSink feeding the right.
+  auto left =
+      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto right =
+      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", {right});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
+              "",
+              {"t0", "u0"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .assertResults("SELECT t0, u0 FROM t, u WHERE t0 = u0");
+
+  auto planStats = toPlanStats(task->taskStats());
+  const auto& stats = planStats.at(mergeJoinNodeId);
+
+  // Two operators implement this one plan node.
+  ASSERT_EQ(stats.operatorStats.size(), 2);
+  // Node input = left (5) + right (5).
+  EXPECT_EQ(stats.inputRows, 10);
+  EXPECT_EQ(stats.outputRows, 5);
+}
+
 TEST_F(MergeJoinTest, antiJoinWithUniqueJoinKeys) {
   auto left = makeRowVector(
       {"a", "b"},

@@ -91,6 +91,12 @@ class FixedBitWidthEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  // TODO: If compressed sorted-position sub-streams become common in
+  // production or profiling shows the per-slice EncodingView allocation and
+  // virtual dispatch measurable on partial-stripe reads, add an FBW-specific
+  // fast path that shares a decompressed payload between the value-range
+  // binary search and the slice extraction. Skipped for now because
+  // production writers do not compress sorted-position sub-streams today.
   static std::string_view slice(
       std::string_view encoded,
       uint32_t offset,
@@ -463,13 +469,17 @@ std::string_view FixedBitWidthEncoding<T>::slice(
   encoding::write(baseline, pos);
   encoding::writeChar(bitWidth, pos);
 
-  if (packedBytes > 0) {
-    std::memset(pos, 0, packedBytes);
+  // FixedBitArray::bufferSize() always adds slop bytes, so the payload is never
+  // empty even at zero bit width. Zeroing keeps the slop deterministic; the bit
+  // copy is skipped at zero bit width because there is nothing to copy and
+  // copyPackedBits() rejects a zero bit count.
+  std::memset(pos, 0, packedBytes);
+  if (bitWidth > 0) {
     const auto sourceBitOffset = static_cast<uint64_t>(offset) * bitWidth;
     const auto sliceBits = static_cast<uint64_t>(length) * bitWidth;
     encoding::copyPackedBits(packedData, sourceBitOffset, sliceBits, pos);
-    pos += packedBytes;
   }
+  pos += packedBytes;
 
   NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
   return {reserved, encodingSize};

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
@@ -98,7 +99,7 @@ DateTruncFunction::DateTruncFunction(
         isTimestamp, "date_trunc {} requires timestamp input", *unitString);
   }
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
   oneScalar_ =
       std::make_unique<cudf::numeric_scalar<int32_t>>(1, true, stream, mr);
@@ -106,12 +107,12 @@ DateTruncFunction::DateTruncFunction(
       std::make_unique<cudf::numeric_scalar<int32_t>>(3, true, stream, mr);
   negOneScalar_ =
       std::make_unique<cudf::numeric_scalar<int32_t>>(-1, true, stream, mr);
-  stream.synchronize();
+  stream.sync();
 }
 
 ColumnOrView DateTruncFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK_EQ(inputColumns.size(), 1, "date_trunc expects one column input");
   auto inputCol = asView(inputColumns[0]);

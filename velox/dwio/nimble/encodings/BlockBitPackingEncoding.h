@@ -1238,7 +1238,12 @@ std::string_view BlockBitPackingEncoding<T>::slice(
     return encodedBlockRange;
   }
   return SliceEncoding<T>::wrap(
-      encodedBlockRange, skipLeadingRows, length, buffer, options);
+      encodedBlockRange,
+      skipLeadingRows,
+      length,
+      buffer,
+      /*valueDelta=*/0,
+      options);
 }
 
 template <typename T>
@@ -1252,10 +1257,12 @@ std::string_view BlockBitPackingEncoding<T>::sliceBlockRange(
     const Encoding::Options& options) {
   auto* pool = &buffer.getMemoryPool();
 
-  // Read the touched blocks' per-block byte offsets, then rebase them so the
-  // first is at 0 (positions in the output's own packedData). The rebase
-  // happens in place -- the source values are only needed to derive the
-  // payload byte range below, which is captured first.
+  // Read the touched blocks' per-block byte offsets only to derive the payload
+  // byte range copied below. The offsets themselves are handed to SliceEncoding
+  // with a negative value delta so the source offsets are rebased structurally
+  // (push-down folds -sourcePayloadStart into the source encoding's baseline
+  // where structurally possible; otherwise the on-wire delta carries the shift
+  // and the reader applies it once per decode).
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
   ScopedVector<uint32_t> blockOffsets{
       static_cast<uint64_t>(numBlocks) + 1, pool, options.bufferPool};
@@ -1270,22 +1277,24 @@ std::string_view BlockBitPackingEncoding<T>::sliceBlockRange(
   const uint32_t sourcePayloadStart = blockOffsets[0];
   const uint32_t packedPayloadSize =
       blockOffsets[numBlocks] - sourcePayloadStart;
-  for (uint32_t i = 0; i < numBlocks; ++i) {
-    blockOffsets[i] -= sourcePayloadStart;
-  }
-  // TODO: An OffsetEncoding wrapper that carries a constant delta over an
-  // inner encoding could replace this re-encode with a structural slice -- the
-  // rebase becomes "wrap the source offsets and record -sourcePayloadStart".
-  // Same shape would let FixedBitWidth / PFOR skip their own baseline
-  // re-encodes on slice too; worth a look if the offset re-encode ever shows
-  // up on a profile.
-  const auto encodedOffsets =
-      EncodingFactory::encodeWithCapturedLayout<uint32_t>(
-          source.encodedBlockOffsets,
-          std::span<const uint32_t>{blockOffsets.data(), numBlocks},
-          scopedBuffer.get(),
-          options,
-          "Captured BlockBitPacking offset layout");
+
+  // Structurally slice the offsets and record -sourcePayloadStart. When the
+  // source offsets are FixedBitWidth / PFOR / Constant (the common cost-model
+  // picks), SliceEncoding::wrap folds the shift into the inner encoding's
+  // baseline at write time and the on-wire delta is zero.
+  const auto slicedOffsets = EncodingFactory::slice(
+      source.encodedBlockOffsets,
+      firstBlock,
+      numBlocks,
+      scopedBuffer.get(),
+      options);
+  const auto encodedOffsets = SliceEncoding<uint32_t>::wrap(
+      slicedOffsets,
+      /*offset=*/0,
+      numBlocks,
+      scopedBuffer.get(),
+      /*valueDelta=*/-static_cast<int64_t>(sourcePayloadStart),
+      options);
 
   // Structurally slice the metadata sub-encodings -- values are unchanged.
   const auto encodedBaselines = EncodingFactory::slice(
