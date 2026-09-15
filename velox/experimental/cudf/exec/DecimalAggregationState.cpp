@@ -23,6 +23,7 @@
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/strings/detail/utilities.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/strings/utilities.hpp>
 
@@ -81,7 +82,9 @@ DecimalSumStateColumns deserializeDecimalSumState(
   cudf::strings_column_view strings(stateCol);
 
   auto const nullCount = stateCol.nullable() ? stateCol.null_count() : 0;
-  auto const payloadSize = strings.chars_size(stream);
+  auto const [payloadBegin, payloadEnd] =
+      cudf::strings::detail::get_first_and_last_offset(strings, stream);
+  auto const payloadSize = payloadEnd - payloadBegin;
   // serializeDecimalSumState writes 32 bytes for every row (including nulls),
   // but an Arrow round-trip compacts null rows to 0 bytes. Accept both.
   auto const fullPayloadSize =
@@ -128,6 +131,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
       sumView,
       countView,
       numRows,
+      stateCol.offset(),
       stateCol.null_mask(),
       stream);
 
