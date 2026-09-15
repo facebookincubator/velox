@@ -15,9 +15,15 @@
  */
 #pragma once
 
+#include <gflags/gflags.h>
+
 #include "velox/common/config/Config.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+
+// Read by WriterOptions::buildEncodingOptions(), which is header-inline, so the
+// flag has to be visible outside NimbleConfig.cpp.
+DECLARE_bool(nimble_subintsplit_delta_pretransform);
 
 namespace facebook::nimble {
 
