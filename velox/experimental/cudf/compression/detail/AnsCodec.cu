@@ -179,7 +179,7 @@ AnsCompressedData compressAnsBatch(
   rmm::device_buffer output{compressedSize, stream, memoryResource};
   CUDF_CUDA_TRY(
       cudaMemsetAsync(output.data(), 0, output.size(), stream.value()));
-  std::size_t outputOffset = 0;
+  outputOffset = 0;
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto size = segmentSizes[index];
     CUDF_CUDA_TRY(
