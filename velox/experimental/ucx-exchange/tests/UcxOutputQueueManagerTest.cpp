@@ -641,6 +641,77 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   EXPECT_TRUE(callback1Nullptr);
 }
 
+TEST_F(UcxOutputQueueManagerTest, queueHandleDoesNotFollowReusedTaskId) {
+  const std::string taskId = "reusedTaskId";
+  auto oldTask = initializeTask(taskId, 1, 1);
+  auto oldQueue = queueManager_->getQueueForServer(taskId, /*destination=*/0);
+
+  oldTask->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  auto newTask = initializeTask(taskId, 1, 1);
+
+  oldQueue->deleteResults(0);
+
+  EXPECT_EQ(oldTask->state(), TaskState::kAborted);
+  EXPECT_EQ(newTask->state(), TaskState::kRunning);
+  EXPECT_FALSE(queueManager_->isFinished(taskId));
+  newTask->requestAbort();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, terminateReleasesRetainedQueueResources) {
+  using Kind = core::PartitionedOutputNode::Kind;
+  for (auto kind : {Kind::kPartitioned, Kind::kBroadcast}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    const std::string taskId = "terminateRetainedQueue";
+    auto task = initializeTask(taskId, 2, 1, true, kind, 64);
+    auto queue = queueManager_->getQueueForServer(taskId, 0);
+    enqueue(taskId, 0, 100);
+    enqueue(taskId, 0, 100);
+    ContinueFuture blocked;
+    ASSERT_TRUE(queue->checkBlocked(&blocked));
+    ASSERT_FALSE(blocked.isReady());
+    std::shared_ptr<cudf::packed_columns> inFlightData;
+    queue->getData(
+        0, [&](auto data, auto, auto) { inFlightData = std::move(data); });
+    ASSERT_NE(inFlightData, nullptr);
+    std::weak_ptr<cudf::packed_columns> dataReference = inFlightData;
+
+    // Retain the same handle a server holds while waiting for transport.
+    // The helper task is not started, so explicitly remove its output once.
+    task->requestAbort().wait();
+    if (queueManager_->stats(taskId)) {
+      queueManager_->removeTask(taskId);
+    }
+    std::weak_ptr<Task> taskReference = task;
+    task.reset();
+    EXPECT_TRUE(taskReference.expired());
+    EXPECT_TRUE(blocked.isReady());
+    EXPECT_EQ(queue->stats().bufferedBytes, 0);
+    // A transport owner may still use the dequeued table. Once it lets go,
+    // neither destination queues nor broadcast history may retain the table.
+    EXPECT_FALSE(dataReference.expired());
+    inFlightData.reset();
+    EXPECT_TRUE(dataReference.expired());
+
+    for (int destination : {0, 1, 2}) {
+      auto notified = std::make_shared<bool>(false);
+      queue->getData(
+          destination,
+          [notified](auto data, auto numRows, auto remainingBytes) {
+            *notified = true;
+            EXPECT_EQ(data, nullptr);
+            EXPECT_EQ(numRows, 0);
+            EXPECT_TRUE(remainingBytes.empty());
+          });
+      EXPECT_TRUE(*notified);
+    }
+    // Repeated termination must not re-create queues or retain callbacks.
+    queue->terminate();
+    EXPECT_FALSE(queue->checkBlocked(&blocked));
+  }
+}
+
 // --- Broadcast tests ---
 
 // Basic broadcast: enqueue data, all destinations receive the same data.
