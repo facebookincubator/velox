@@ -1,0 +1,384 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include <re2/re2.h>
+
+#include "velox/functions/Udf.h"
+#include "velox/functions/lib/Re2Functions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/functions/sparksql/UriParser.h"
+
+namespace facebook::velox::functions::sparksql {
+
+/// parse_url(url, part) -> varchar
+/// parse_url(url, 'QUERY', key) -> varchar
+/// Extracts a part of a URL, reproducing the semantics of Spark's ParseUrl
+/// expression: the URL is parsed with java.net.URI rules (see detail::
+/// parseUrl) and every part is returned in its raw, still percent-encoded
+/// form. The three-argument form extracts a query parameter with the same
+/// (&|^)key=([^&]*) regex Spark compiles.
+template <typename T>
+struct ParseUrlFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Every part except a FILE that concatenates the path and query is a
+  // direct slice of the URL argument, so the result reuses its string
+  // buffer instead of copying.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
+  // ASCII input always produces ASCII result.
+  static constexpr bool is_default_ascii_behavior = true;
+
+  static constexpr std::string_view kRegexPrefix = "(&|^)";
+  static constexpr std::string_view kRegexSuffix = "=([^&]*)";
+
+  ParseUrlFunction() : cache_(0) {}
+
+  // The extractable parts, keyed once per part string instead of compared
+  // on every row.
+  enum class Part {
+    kProtocol,
+    kHost,
+    kPath,
+    kQuery,
+    kRef,
+    kFile,
+    kAuthority,
+    kUserInfo,
+    kUnknown
+  };
+
+  static Part parsePart(std::string_view part) {
+    if (part == "PROTOCOL") {
+      return Part::kProtocol;
+    } else if (part == "HOST") {
+      return Part::kHost;
+    } else if (part == "PATH") {
+      return Part::kPath;
+    } else if (part == "QUERY") {
+      return Part::kQuery;
+    } else if (part == "REF") {
+      return Part::kRef;
+    } else if (part == "FILE") {
+      return Part::kFile;
+    } else if (part == "AUTHORITY") {
+      return Part::kAuthority;
+    } else if (part == "USERINFO") {
+      return Part::kUserInfo;
+    }
+    return Part::kUnknown;
+  }
+
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* urlStr,
+      const arg_type<Varchar>* part) {
+    initialize(inputTypes, config, urlStr, part, nullptr);
+  }
+
+  FOLLY_ALWAYS_INLINE
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Varchar>* urlStr,
+      const arg_type<Varchar>* part,
+      const arg_type<Varchar>* key) {
+    cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+
+    // A constant URL is parsed once here; the parsed views point into the
+    // constant vector's string buffer, which outlives every call.
+    if (urlStr) {
+      constUrl_ = detail::ParsedUrl{};
+      if (!detail::parseUrl(
+              std::string_view(urlStr->data(), urlStr->size()), *constUrl_)) {
+        constUrl_.reset();
+        constUrlInvalid_ = true;
+      }
+    }
+    // A constant part is keyed once instead of on every row.
+    if (part) {
+      constPart_ = parsePart(std::string_view(part->data(), part->size()));
+    }
+    // A constant key is only remembered here; its regex is compiled
+    // lazily on the first call that extracts a query parameter, so an
+    // invalid key does not fail rows that never use it.
+    if (key) {
+      constKey_ = std::string(key->data(), key->size());
+    }
+  }
+
+  // Returns the parsed URL, using the cached parse for a constant URL.
+  // Returns nullptr for an invalid URL; in ANSI mode an invalid URL fails
+  // the query instead, matching Spark's ParseUrl failOnError behavior.
+  detail::ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
+    if (constUrl_.has_value()) {
+      return &*constUrl_;
+    }
+    if (constUrlInvalid_) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "The url is invalid: {}",
+            std::string_view(urlStr.data(), urlStr.size()));
+      }
+      return nullptr;
+    }
+    // parseUrl resets the scratch state itself.
+    if (!detail::parseUrl(
+            std::string_view(urlStr.data(), urlStr.size()), parsedScratch_)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "The url is invalid: {}",
+            std::string_view(urlStr.data(), urlStr.size()));
+      }
+      return nullptr;
+    }
+    return &parsedScratch_;
+  }
+
+  // Returns the part key, using the cached key for a constant part.
+  Part partArg(const arg_type<Varchar>& part) const {
+    return constPart_.has_value()
+        ? *constPart_
+        : parsePart(std::string_view(part.data(), part.size()));
+  }
+
+  FOLLY_ALWAYS_INLINE
+  bool call(
+      out_type<Varchar>& output,
+      const arg_type<Varchar>& urlStr,
+      const arg_type<Varchar>& part) {
+    const auto* parsed = parseUrlArg(urlStr);
+    if (parsed == nullptr) {
+      return false;
+    }
+    return extractPart(output, *parsed, partArg(part));
+  }
+
+  FOLLY_ALWAYS_INLINE
+  bool call(
+      out_type<Varchar>& output,
+      const arg_type<Varchar>& urlStr,
+      const arg_type<Varchar>& part,
+      const arg_type<Varchar>& key) {
+    if (partArg(part) != Part::kQuery) {
+      return false;
+    }
+    const auto* parsed = parseUrlArg(urlStr);
+    if (parsed == nullptr || !parsed->query.has_value()) {
+      return false;
+    }
+    // A key without regex metacharacters, constant or not, is extracted
+    // with a literal scan that does not consume the compiled-regex budget.
+    const std::string_view query(*parsed->query);
+    const std::string_view keyValue = constKey_.has_value()
+        ? std::string_view(*constKey_)
+        : std::string_view(key.data(), key.size());
+    if (isPlainKey(keyValue)) {
+      return extractPlainKey(output, query, keyValue);
+    }
+    const re2::RE2* pattern = nullptr;
+    if (constKey_.has_value()) {
+      // A constant key compiles its regex once, on the first call that uses
+      // it; an invalid key fails the query here.
+      if (constPattern_ == nullptr) {
+        constPattern_ = std::make_unique<re2::RE2>(buildQueryPattern(keyValue));
+        VELOX_USER_CHECK(constPattern_->ok(), "invalid key: {}", keyValue);
+      }
+      pattern = constPattern_.get();
+    } else {
+      // A non-constant key is looked up in the regex cache so each distinct
+      // key compiles at most once instead of once per row. An invalid key or
+      // a full cache fails the query, like the regexp functions.
+      const std::string queryPattern = buildQueryPattern(keyValue);
+      pattern = cache_.findOrCompile(StringView(queryPattern));
+    }
+    re2::StringPiece value;
+    if (!RE2::PartialMatch(
+            re2::StringPiece(parsed->query->data(), parsed->query->size()),
+            *pattern,
+            nullptr,
+            &value)) {
+      return false;
+    }
+    // A non-participating capture group yields a null result, matching
+    // java.util.regex's Matcher.group(2) returning null.
+    if (value.data() == nullptr) {
+      return false;
+    }
+    // The capture is a slice of the query, which is a slice of the URL
+    // argument, so it can be stored without copying.
+    output.setNoCopy(StringView(value.data(), value.size()));
+    return true;
+  }
+
+ private:
+  // Regex metacharacters; a key containing any of them must go through the
+  // regex path. The same set the regexp functions use for their fast paths.
+  static constexpr std::string_view kReservedChars = ".$|()[{^?*+\\";
+
+  // Returns true when key is a non-empty plain string with no regex
+  // metacharacters.
+  static bool isPlainKey(std::string_view key) {
+    return !key.empty() &&
+        key.find_first_of(kReservedChars) == std::string_view::npos;
+  }
+
+  // Extracts the value of a plain key from the query string by scanning for
+  // 'key=' at the start of the query or right after a '&'; the value runs
+  // to the next '&' or the end of the query. This matches the semantics of
+  // the (&|^)key=([^&]*) pattern compiled for the regex path.
+  static bool extractPlainKey(
+      out_type<Varchar>& output,
+      std::string_view query,
+      std::string_view key) {
+    for (size_t position = 0; position < query.size();) {
+      const auto keyStart = query.find(key, position);
+      if (keyStart == std::string_view::npos) {
+        return false;
+      }
+      const bool atBoundary = keyStart == 0 || query[keyStart - 1] == '&';
+      const size_t afterKey = keyStart + key.size();
+      if (atBoundary && afterKey < query.size() && query[afterKey] == '=') {
+        const size_t valueStart = afterKey + 1;
+        const auto valueEnd = query.find('&', valueStart);
+        const size_t valueSize =
+            (valueEnd == std::string_view::npos ? query.size() : valueEnd) -
+            valueStart;
+        output.setNoCopy(StringView(query.data() + valueStart, valueSize));
+        return true;
+      }
+      position = keyStart + 1;
+    }
+    return false;
+  }
+
+  // Stores a part that is a direct slice of the URL argument without
+  // copying; the result vector reuses the argument's string buffer.
+  static void assignOutput(out_type<Varchar>& output, std::string_view value) {
+    output.setNoCopy(StringView(value.data(), value.size()));
+  }
+
+  // Builds the query-parameter extraction regex for key: the same
+  // (&|^)key=([^&]*) pattern Spark compiles.
+  static std::string buildQueryPattern(std::string_view key) {
+    return fmt::format("{}{}{}", kRegexPrefix, key, kRegexSuffix);
+  }
+
+  // Returns the requested part, or false for null. A view field with
+  // data() == nullptr means the component is absent.
+  static bool extractPart(
+      out_type<Varchar>& output,
+      const detail::ParsedUrl& parsed,
+      Part part) {
+    switch (part) {
+      case Part::kProtocol:
+        if (parsed.protocol.data() == nullptr) {
+          return false;
+        }
+        assignOutput(output, parsed.protocol);
+        return true;
+      case Part::kHost:
+        if (parsed.host.data() == nullptr) {
+          return false;
+        }
+        assignOutput(output, parsed.host);
+        return true;
+      case Part::kPath:
+        if (parsed.path.data() == nullptr) {
+          return false;
+        }
+        assignOutput(output, parsed.path);
+        return true;
+      case Part::kQuery:
+        if (!parsed.query.has_value()) {
+          return false;
+        }
+        assignOutput(output, *parsed.query);
+        return true;
+      case Part::kRef:
+        if (!parsed.ref.has_value()) {
+          return false;
+        }
+        assignOutput(output, *parsed.ref);
+        return true;
+      case Part::kFile: {
+        if (parsed.path.data() == nullptr) {
+          return false;
+        }
+        // FILE synthesizes a new string that is not a slice of the URL
+        // argument, so it must be copied into the result.
+        std::string outputStr(parsed.path);
+        if (parsed.query.has_value()) {
+          outputStr += '?';
+          outputStr += *parsed.query;
+        }
+        output = outputStr;
+        return true;
+      }
+      case Part::kAuthority:
+        if (!parsed.authority.has_value()) {
+          return false;
+        }
+        assignOutput(output, *parsed.authority);
+        return true;
+      case Part::kUserInfo:
+        if (!parsed.userInfo.has_value()) {
+          return false;
+        }
+        assignOutput(output, *parsed.userInfo);
+        return true;
+      case Part::kUnknown:
+        return false;
+    }
+    return false;
+  }
+
+  // The parse of a constant URL, or an empty optional after initialize()
+  // when the constant URL is invalid. Unset when the URL is not constant.
+  std::optional<detail::ParsedUrl> constUrl_;
+  bool constUrlInvalid_ = false;
+
+  // Scratch space for parsing a non-constant URL, reused across calls;
+  // parseUrl resets it at entry.
+  detail::ParsedUrl parsedScratch_;
+
+  // A constant part, keyed once in initialize() instead of per row.
+  std::optional<Part> constPart_;
+
+  // When true, an invalid URL fails the query instead of yielding null,
+  // matching Spark's ANSI mode.
+  bool ansiEnabled_ = false;
+
+  // A constant query key, remembered in initialize(). Its compiled regex
+  // is built lazily on first use in call().
+  std::optional<std::string> constKey_;
+  std::unique_ptr<re2::RE2> constPattern_;
+
+  // Cache of compiled regexes for non-constant query keys, bounded by
+  // 'expression.max_compiled_regexes'.
+  facebook::velox::functions::detail::ReCache cache_;
+};
+
+} // namespace facebook::velox::functions::sparksql
