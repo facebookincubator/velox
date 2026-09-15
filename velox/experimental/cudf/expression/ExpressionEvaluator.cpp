@@ -231,7 +231,7 @@ cudf::data_type decimalDivisionWorkingType(
 std::unique_ptr<cudf::column> finalizeDecimalDivision(
     std::unique_ptr<cudf::column> result,
     cudf::data_type resultType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (result->type() == resultType) {
     return result;
@@ -243,7 +243,7 @@ cudf::column_view columnWithType(
     ColumnOrView& input,
     cudf::data_type targetType,
     std::unique_ptr<cudf::column>& converted,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto const view = asView(input);
   if (view.type() == targetType) {
@@ -257,7 +257,7 @@ const cudf::scalar* scalarWithType(
     const cudf::scalar& input,
     cudf::data_type targetType,
     std::unique_ptr<cudf::scalar>& converted,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (input.type() == targetType) {
     return &input;

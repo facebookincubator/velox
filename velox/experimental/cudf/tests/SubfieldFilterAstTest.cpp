@@ -872,7 +872,7 @@ TEST_F(SubfieldFilterAstTest, decimal32Range) {
       values.data(),
       values.size() * sizeof(int32_t),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
 
   auto result =
       cudf::compute_column(cudf::table_view{{input->view()}}, expr, stream, mr);
@@ -883,8 +883,8 @@ TEST_F(SubfieldFilterAstTest, decimal32Range) {
       result->view().data<bool>(),
       actual.size(),
       cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
+      stream.get()));
+  stream.sync();
   EXPECT_EQ(actual, (std::vector<uint8_t>{0, 1, 1, 1, 0}));
 }
 
@@ -920,7 +920,7 @@ TEST_F(SubfieldFilterAstTest, decimal32SingleValue) {
       values.data(),
       values.size() * sizeof(int32_t),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
 
   auto result =
       cudf::compute_column(cudf::table_view{{input->view()}}, expr, stream, mr);
@@ -931,8 +931,8 @@ TEST_F(SubfieldFilterAstTest, decimal32SingleValue) {
       result->view().data<bool>(),
       actual.size(),
       cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
+      stream.get()));
+  stream.sync();
   EXPECT_EQ(actual, (std::vector<uint8_t>{0, 1, 0}));
 }
 

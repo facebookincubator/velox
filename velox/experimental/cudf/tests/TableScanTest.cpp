@@ -103,13 +103,13 @@ void writeDecimal32Parquet(
       decimalValues.data(),
       decimalValues.size() * sizeof(int32_t),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
   CUDF_CUDA_TRY(cudaMemcpyAsync(
       idColumn->mutable_view().data<int64_t>(),
       ids.data(),
       ids.size() * sizeof(int64_t),
       cudaMemcpyHostToDevice,
-      stream.value()));
+      stream.get()));
   std::vector<cudf::bitmask_type> nullMask;
   if (!valid.empty()) {
     nullMask.resize(cudf::num_bitmask_words(valid.size()), 0);
@@ -126,10 +126,10 @@ void writeDecimal32Parquet(
         nullMask.data(),
         nullMask.size() * sizeof(cudf::bitmask_type),
         cudaMemcpyHostToDevice,
-        stream.value()));
+        stream.get()));
     decimals->set_null_count(nullCount);
   }
-  stream.synchronize();
+  stream.sync();
 
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.push_back(std::move(decimals));
