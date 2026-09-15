@@ -30,6 +30,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -201,9 +202,9 @@ std::vector<dwio::common::ParquetFieldId> IcebergSplitReader::buildFieldIds()
     return fieldIds;
   }
 
-  const auto* hiveTableHandle = tableHandle_->as<HiveTableHandle>();
-  const auto* dataColumnFieldIds = hiveTableHandle != nullptr
-      ? &hiveTableHandle->dataColumnFieldIds()
+  const auto* icebergTableHandle = tableHandle_->as<IcebergTableHandle>();
+  const auto* dataColumnFieldIds = icebergTableHandle != nullptr
+      ? &icebergTableHandle->dataColumnFieldIds()
       : nullptr;
 
   // Column handles are keyed by output alias; index them by the underlying
@@ -742,8 +743,8 @@ IcebergSplitReader::resolveEqualityColumns(
       "table data columns are not available in IcebergTableHandle.",
       deleteFile.filePath);
   std::unordered_map<int32_t, uint32_t> columnIndexByFieldId;
-  if (const auto* hiveTableHandle = tableHandle_->as<HiveTableHandle>()) {
-    const auto& dataColumnFieldIds = hiveTableHandle->dataColumnFieldIds();
+  if (const auto* icebergTableHandle = tableHandle_->as<IcebergTableHandle>()) {
+    const auto& dataColumnFieldIds = icebergTableHandle->dataColumnFieldIds();
     columnIndexByFieldId.reserve(dataColumnFieldIds.size());
     for (uint32_t i = 0; i < dataColumnFieldIds.size(); ++i) {
       columnIndexByFieldId.emplace(dataColumnFieldIds[i], i);
