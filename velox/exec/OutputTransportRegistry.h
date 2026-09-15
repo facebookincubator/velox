@@ -26,6 +26,7 @@
 
 #include "velox/common/ScopedRegistry.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/OutputBufferManager.h"
 #include "velox/exec/PartitionedOutputFactory.h"
 
