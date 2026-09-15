@@ -2819,8 +2819,11 @@ void Writer::clearEncodingBuffer() {
     encodingBufferPools_.clear();
     encodingBuffer_.reset();
   } else {
-    // Normal flush: rewind and keep chunks allocated for reuse.
-    encodingBuffer_->reset();
+    // Normal flush: rewind and keep chunks for reuse, but release any beyond
+    // the retained budget so one large stripe does not pin its peak arena
+    // allocation for the writer's lifetime.
+    encodingBuffer_->reset(
+        context_->options().encodingBufferRetainedBytesOnFlush);
   }
 }
 
