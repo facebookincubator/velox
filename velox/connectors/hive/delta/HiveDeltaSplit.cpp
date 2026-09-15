@@ -31,7 +31,8 @@ HiveDeltaSplit::HiveDeltaSplit(
     const std::shared_ptr<std::string>& extraFileInfo,
     bool cacheable,
     const std::unordered_map<std::string, std::string>& infoColumns,
-    std::optional<FileProperties> fileProperties)
+    std::optional<FileProperties> fileProperties,
+    bool hasDeletionVector)
     : HiveConnectorSplit(
           connectorId,
           filePath,
@@ -48,6 +49,7 @@ HiveDeltaSplit::HiveDeltaSplit(
           infoColumns,
           std::move(fileProperties),
           std::nullopt,
-          std::nullopt) {}
+          std::nullopt),
+      hasDeletionVector(hasDeletionVector) {}
 
 } // namespace facebook::velox::connector::hive::delta
