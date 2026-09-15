@@ -628,6 +628,7 @@ class RowContainer {
            reinterpret_cast<uintptr_t>(range.data()));
       auto row = iter->rowOffset;
       while (row + rowSize <= limit) {
+        // Tuned and validated on x86 only; unmeasured on other architectures.
 #if defined(__x86_64__)
         // Use integer arithmetic to avoid out-of-bounds pointer arithmetic when
         // the target lies past the current range; the hint itself is

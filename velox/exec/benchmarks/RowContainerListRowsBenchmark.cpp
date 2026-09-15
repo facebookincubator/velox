@@ -21,14 +21,10 @@
 // hardware prefetcher already covers, hiding the DRAM latency the prefetch
 // targets. Containers are built before timing.
 //
-// The distance is a template parameter of listRows() defaulting to the shipped
-// kListRowsPrefetchDistanceBytes, so production and the benchmark instantiate the
-// same scan. Each binary measures one distance (0 disables the prefetch for the
-// baseline); compare medians across per-distance processes:
-//
-//   c++ ... -DLIST_ROWS_BENCHMARK_DISTANCE_BYTES=0    ...  # baseline
-//   c++ ...                                           ...  # shipped default, 2048
-//   c++ ... -DLIST_ROWS_BENCHMARK_DISTANCE_BYTES=4096 ...
+// The distance is a template parameter of listRows(). For each row width the
+// binary registers the no-prefetch baseline and, relative to it, the shipped
+// distance and a farther comparison point, so one run reports the deltas
+// directly without rebuilding.
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
@@ -36,10 +32,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
@@ -51,12 +47,11 @@ namespace {
 // Representative batch size for the target workload.
 constexpr int32_t kBatchSize = 1'024;
 
-// Defaults to the shipped constant; override at compile time to sweep.
-#ifndef LIST_ROWS_BENCHMARK_DISTANCE_BYTES
-#define LIST_ROWS_BENCHMARK_DISTANCE_BYTES \
-  RowContainer::kListRowsPrefetchDistanceBytes
-#endif
-constexpr int32_t kBenchmarkDistance = LIST_ROWS_BENCHMARK_DISTANCE_BYTES;
+// Distances compared against the no-prefetch baseline. kShippedDistance is the
+// production default; kFarDistance shows the narrow-row gain has already
+// plateaued, so it is a benchmark-only sweep point, not a production value.
+constexpr int32_t kShippedDistance = RowContainer::kListRowsPrefetchDistanceBytes;
+constexpr int32_t kFarDistance = 4'096;
 
 // Pseudo-random probe table, sized above private-cache capacity to model the
 // cache pressure of a downstream hash or aggregation lookup. Power of two for
@@ -167,15 +162,35 @@ unsigned runScanAndProbe(
   return times;
 }
 
+// Registers, for one container, the no-prefetch baseline followed by the shipped
+// and farther distances as folly relative arms, so a single run prints each
+// distance's speedup against that baseline.
+void registerWidth(
+    const std::string& tag,
+    const RowContainer& container,
+    const std::vector<uint64_t>& probeTable) {
+  folly::addBenchmark(
+      __FILE__, "listRows_" + tag + "_off", [&](unsigned times) {
+        return runScanAndProbe<0>(container, probeTable, times);
+      });
+  folly::addBenchmark(
+      __FILE__, "%listRows_" + tag + "_2k", [&](unsigned times) {
+        return runScanAndProbe<kShippedDistance>(container, probeTable, times);
+      });
+  folly::addBenchmark(
+      __FILE__, "%listRows_" + tag + "_4k", [&](unsigned times) {
+        return runScanAndProbe<kFarDistance>(container, probeTable, times);
+      });
+}
+
 } // namespace
 } // namespace facebook::velox::exec
 
 int main(int argc, char** argv) {
   using namespace facebook::velox;
-  using facebook::velox::exec::kBenchmarkDistance;
   using facebook::velox::exec::kProbeSlots;
   using facebook::velox::exec::makeContainer;
-  using facebook::velox::exec::runScanAndProbe;
+  using facebook::velox::exec::registerWidth;
 
   folly::Init init{&argc, &argv};
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
@@ -198,23 +213,10 @@ int main(int argc, char** argv) {
   auto c128 = makeContainer(128, kLargeBytes, pool.get());
   auto c29Resident = makeContainer(29, kResidentBytes, pool.get());
 
-  fprintf(
-      stderr,
-      "listRows prefetch distance under test: %d bytes\n",
-      kBenchmarkDistance);
-
-  folly::addBenchmark(__FILE__, "listRows_29B_dram", [&](unsigned times) {
-    return runScanAndProbe<kBenchmarkDistance>(*c29, probeTable, times);
-  });
-  folly::addBenchmark(__FILE__, "listRows_61B_dram", [&](unsigned times) {
-    return runScanAndProbe<kBenchmarkDistance>(*c61, probeTable, times);
-  });
-  folly::addBenchmark(__FILE__, "listRows_128B_dram", [&](unsigned times) {
-    return runScanAndProbe<kBenchmarkDistance>(*c128, probeTable, times);
-  });
-  folly::addBenchmark(__FILE__, "listRows_29B_resident", [&](unsigned times) {
-    return runScanAndProbe<kBenchmarkDistance>(*c29Resident, probeTable, times);
-  });
+  registerWidth("29B_dram", *c29, probeTable);
+  registerWidth("61B_dram", *c61, probeTable);
+  registerWidth("128B_dram", *c128, probeTable);
+  registerWidth("29B_resident", *c29Resident, probeTable);
 
   folly::runBenchmarks();
   return 0;
