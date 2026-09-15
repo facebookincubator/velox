@@ -12,27 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-option(
-  VELOX_ENABLE_CUDF_COMPRESSION
-  "Build GPU compression for cudf::packed_columns."
-  OFF
+add_executable(
+  cudf_compression_test
+  CompressionTest.cpp
 )
 
-if(VELOX_ENABLE_CUDF_COMPRESSION)
-  add_subdirectory(compression)
-endif()
+add_test(
+  NAME cudf_compression_test
+  COMMAND cudf_compression_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
-add_subdirectory(connectors)
-add_subdirectory(exec)
-add_subdirectory(expression)
-add_subdirectory(vector)
+set_tests_properties(cudf_compression_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
-if(VELOX_BUILD_TESTING)
-  add_subdirectory(tests)
-elseif(VELOX_BUILD_TEST_UTILS)
-  add_subdirectory(tests/utils)
-endif()
-
-if(VELOX_ENABLE_BENCHMARKS)
-  add_subdirectory(benchmarks)
-endif()
+target_link_libraries(
+  cudf_compression_test
+  velox_cudf_compression
+  gtest
+  gtest_main
+)
