@@ -291,7 +291,7 @@ template <typename BuildOp>
 int32_t launchOverflowChecked(
     cudf::size_type size,
     BuildOp buildOp,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (size == 0) {
     return 0;
   }
@@ -322,7 +322,7 @@ struct divideColumnColumnKernel {
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
@@ -352,7 +352,7 @@ struct divideColumnScalarKernel {
   __int128_t rhsValue;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
@@ -381,7 +381,7 @@ struct divideScalarColumnKernel {
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
@@ -412,7 +412,7 @@ DecimalBinaryOpStatus decimalDivideColumnColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
@@ -426,7 +426,7 @@ DecimalBinaryOpStatus decimalDivideColumnScalar(
     __int128_t rhsValue,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
@@ -440,7 +440,7 @@ DecimalBinaryOpStatus decimalDivideScalarColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},

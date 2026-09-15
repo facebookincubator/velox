@@ -21,7 +21,7 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <cstdint>
 #include <memory>
@@ -114,7 +114,7 @@ DecimalBinaryOpStatus decimalDivideColumnColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * @brief Fixed-point decimal division with a column lhs and scalar rhs.
@@ -139,7 +139,7 @@ DecimalBinaryOpStatus decimalDivideColumnScalar(
     __int128_t rhsValue,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * @brief Fixed-point decimal division with a scalar lhs and column rhs.
@@ -164,7 +164,7 @@ DecimalBinaryOpStatus decimalDivideScalarColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 } // namespace detail
 } // namespace facebook::velox::cudf_velox

@@ -73,7 +73,7 @@ void checkDecimalBinaryOpStatus(
 std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
     cudf::data_type outputType,
     cudf::size_type size,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::make_fixed_width_column(
       outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
@@ -144,7 +144,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_EQ(lhs.size(), rhs.size(), "Decimal divide requires equal sizes");
   // Use VELOX_CHECK (not _EQ) so failed checks do not pass cudf::type_id into
@@ -192,7 +192,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");
@@ -243,7 +243,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");

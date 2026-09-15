@@ -697,7 +697,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
     const std::vector<PrecomputeInstruction>& precomputeInstructions,
     const std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   std::vector<ColumnOrView> precomputedColumns;
   precomputedColumns.reserve(precomputeInstructions.size());
 
