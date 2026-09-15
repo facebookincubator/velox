@@ -26,23 +26,20 @@ MallocAllocator::MallocAllocator(const Options& options)
       mallocContiguousEnabled_(options.mallocContiguousEnabled),
       capacity_(options.capacity),
       reservationByteLimit_(options.reservationByteLimit),
-      reserveFunc_(
-          [this](uint32_t& counter, uint32_t increment, std::mutex& lock) {
-            return incrementUsageWithReservationFunc(counter, increment, lock);
-          }),
-      releaseFunc_(
-          [&](uint32_t& counter, uint32_t decrement, std::mutex& lock) {
-            decrementUsageWithReservationFunc(counter, decrement, lock);
-            return true;
-          }),
+      reserveFunc_([this](std::atomic<uint64_t>& counter, uint64_t increment) {
+        return incrementUsageWithReservationFunc(counter, increment);
+      }),
+      releaseFunc_([&](std::atomic<uint64_t>& counter, uint64_t decrement) {
+        decrementUsageWithReservationFunc(counter, decrement);
+        return true;
+      }),
       reservations_(folly::available_concurrency()) {}
 
 MallocAllocator::~MallocAllocator() {
   // TODO: Remove the check when memory leak issue is resolved.
   if (FLAGS_velox_memory_leak_check_enabled) {
     VELOX_CHECK(
-        ((allocatedBytes_ - reservations_.read()) == 0) &&
-            (numAllocated_ == 0) && (numMapped_ == 0),
+        (totalUsedBytes() == 0) && (numAllocated_ == 0) && (numMapped_ == 0),
         "{}",
         toString());
   }

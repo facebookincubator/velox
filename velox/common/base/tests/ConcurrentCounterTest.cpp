@@ -33,9 +33,8 @@ class ConcurrentCounterTest : public testing::TestWithParam<bool> {
   void update(int64_t delta) {
     if (useUpdateFn_) {
       counter_->update(
-          delta, [&](int64_t& counter, int64_t delta, std::mutex& lock) {
-            std::lock_guard<std::mutex> l(lock);
-            counter += delta;
+          delta, [&](std::atomic<int64_t>& counter, int64_t delta) {
+            counter.fetch_add(delta, std::memory_order_relaxed);
             return true;
           });
     } else {
