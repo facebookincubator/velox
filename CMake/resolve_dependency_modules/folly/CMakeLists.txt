@@ -44,7 +44,9 @@ FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
+  PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch
+    ${CMAKE_CURRENT_LIST_DIR}/folly-sve-neonq-reinterpret.patch ${glog_patch}
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL
