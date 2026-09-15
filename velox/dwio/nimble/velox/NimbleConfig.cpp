@@ -308,6 +308,14 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.chunking.writer.max.chunk.size",
     kChunkingWriterMaxChunkSize);
 
+/// Chunks a stream once it exceeds the max chunk size, instead of waiting for
+/// the writer to also be under aggregate memory pressure. Changes chunk and
+/// stripe boundaries, so it is opt-in.
+/* static */ Config::Entry<bool>
+    Config::CHUNKING_WRITER_ENFORCE_STREAM_CHUNK_SIZE_CAP(
+        "nimble.chunking.writer.enforce.stream.chunk.size.cap",
+        false);
+
 /// Used in place of CHUNKING_WRITER_MAX_CHUNK_SIZE for large schema tables.
 /* static */ Config::Entry<uint64_t>
     Config::CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE(
