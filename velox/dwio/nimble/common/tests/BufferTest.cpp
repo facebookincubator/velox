@@ -204,6 +204,42 @@ TEST_F(BufferTest, resetReusesMultipleChunks) {
   EXPECT_EQ(bigPtr1, bigPtr2);
 }
 
+TEST_F(BufferTest, resetWithBudgetReleasesTrailingChunks) {
+  // Small initial chunk so each big reserve forces a distinct trailing chunk.
+  Buffer buffer(*pool_, 4096);
+  constexpr uint64_t bigSize = 2 * 1024 * 1024; // 2 MB
+  buffer.reserve(bigSize);
+  buffer.reserve(bigSize);
+  buffer.reserve(bigSize);
+  EXPECT_EQ(buffer.testingChunkCount(), 4);
+
+  // A tiny budget keeps only the first chunk; the 2 MB trailing chunks go.
+  buffer.reset(1);
+  EXPECT_EQ(buffer.testingChunkCount(), 1);
+  EXPECT_EQ(buffer.testingCurrentChunkIndex(), 0);
+
+  // The retained chunk is still usable without a fresh allocation.
+  char* ptr = buffer.reserve(100);
+  ASSERT_NE(ptr, nullptr);
+  EXPECT_EQ(buffer.testingChunkCount(), 1);
+  EXPECT_EQ(buffer.testingCurrentChunkIndex(), 0);
+}
+
+TEST_F(BufferTest, resetWithBudgetKeepsChunksWithinBudget) {
+  Buffer buffer(*pool_, 4096);
+  constexpr uint64_t bigSize = 2 * 1024 * 1024; // 2 MB
+  buffer.reserve(bigSize);
+  buffer.reserve(bigSize);
+  buffer.reserve(bigSize);
+  EXPECT_EQ(buffer.testingChunkCount(), 4);
+
+  // Budget comfortably spans three chunks (~4 MB) but not the fourth (~6 MB),
+  // with a 1 MB margin on each side to tolerate allocator rounding.
+  buffer.reset((4 * 1024) + (5 * 1024 * 1024));
+  EXPECT_EQ(buffer.testingChunkCount(), 3);
+  EXPECT_EQ(buffer.testingCurrentChunkIndex(), 0);
+}
+
 TEST_F(BufferTest, tryAdvanceSkipsTooSmallChunks) {
   // kMinChunkSize is 1MB. Initial chunk is 1MB.
   Buffer buffer(*pool_, 4096);
