@@ -29,11 +29,15 @@ class PartitionIdGenerator {
   /// @param maxPartitions The max number of distinct partitions.
   /// @param pool Memory pool. Used to allocate memory for storing unique
   /// partition key values.
+  /// @param enforceMaxPartitions Whether to reject inputs with more than
+  /// maxPartitions distinct partitions. If false, storage for partition values
+  /// grows as needed.
   PartitionIdGenerator(
       const RowTypePtr& inputType,
       std::vector<column_index_t> partitionChannels,
       uint32_t maxPartitions,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      bool enforceMaxPartitions = true);
 
   /// Generate sequential partition IDs for input vector.
   /// @param input Input RowVector.
@@ -77,11 +81,18 @@ class PartitionIdGenerator {
       const RowVectorPtr& input,
       vector_size_t row);
 
+  // Grows partitionValues_ to include 'partitionId'. This is used when the
+  // number of historical partitions is not limited by the number of writers
+  // that may be open simultaneously.
+  void ensurePartitionValueCapacity(uint64_t partitionId);
+
   memory::MemoryPool* const pool_;
 
   const std::vector<column_index_t> partitionChannels_;
 
   const uint32_t maxPartitions_;
+
+  const bool enforceMaxPartitions_;
 
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers_;
   bool hasMultiplierSet_ = false;
