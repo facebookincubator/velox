@@ -12,27 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-option(
-  VELOX_ENABLE_CUDF_COMPRESSION
-  "Build GPU compression for cudf::packed_columns."
-  OFF
+set(
+  GPU_COMPRESSION_SOURCES
+  detail/AnsCodec.cu
+  PackedColumnsCodec.cu
 )
 
-if(VELOX_ENABLE_CUDF_COMPRESSION)
-  add_subdirectory(compression)
-endif()
+add_library(velox_cudf_compression STATIC ${GPU_COMPRESSION_SOURCES})
 
-add_subdirectory(connectors)
-add_subdirectory(exec)
-add_subdirectory(expression)
-add_subdirectory(vector)
+target_link_libraries(
+  velox_cudf_compression
+  PUBLIC cudf::cudf CUDA::cudart
+  PRIVATE nvcomp::nvcomp_static
+)
 
 if(VELOX_BUILD_TESTING)
   add_subdirectory(tests)
-elseif(VELOX_BUILD_TEST_UTILS)
-  add_subdirectory(tests/utils)
-endif()
-
-if(VELOX_ENABLE_BENCHMARKS)
-  add_subdirectory(benchmarks)
 endif()
