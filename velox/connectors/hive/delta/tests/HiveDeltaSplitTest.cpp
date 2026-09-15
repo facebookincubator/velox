@@ -307,4 +307,31 @@ TEST_F(HiveDeltaSplitTest, inheritanceFromHiveConnectorSplit) {
   EXPECT_EQ("/path/to/file.parquet", hiveSplit->filePath);
 }
 
+TEST_F(HiveDeltaSplitTest, hasDeletionVectorDefaultsToFalse) {
+  auto split = std::make_shared<HiveDeltaSplit>(
+      "test-connector",
+      "/path/to/file.parquet",
+      dwio::common::FileFormat::PARQUET);
+  EXPECT_FALSE(split->hasDeletionVector);
+}
+
+TEST_F(HiveDeltaSplitTest, hasDeletionVectorRoundTrip) {
+  auto split = std::make_shared<HiveDeltaSplit>(
+      "test-connector",
+      "/path/to/file.parquet",
+      dwio::common::FileFormat::PARQUET,
+      /*start=*/0,
+      /*length=*/std::numeric_limits<uint64_t>::max(),
+      /*partitionKeys=*/
+      std::unordered_map<std::string, std::optional<std::string>>{},
+      /*tableBucketNumber=*/std::nullopt,
+      /*customSplitInfo=*/std::unordered_map<std::string, std::string>{},
+      /*extraFileInfo=*/std::shared_ptr<std::string>{},
+      /*cacheable=*/true,
+      /*infoColumns=*/std::unordered_map<std::string, std::string>{},
+      /*fileProperties=*/std::nullopt,
+      /*hasDeletionVector=*/true);
+  EXPECT_TRUE(split->hasDeletionVector);
+}
+
 } // namespace
