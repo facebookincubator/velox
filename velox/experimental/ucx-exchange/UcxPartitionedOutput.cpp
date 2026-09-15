@@ -82,7 +82,11 @@ UcxPartitionedOutput::UcxPartitionedOutput(
       targetRowsPerChunk_(ctx->queryConfig().get<int64_t>(
           CudfConfig::kUcxPartitionedOutputBatchRows,
           CudfConfig::getInstance().partitionedOutputBatchRows)) {
-  VELOX_CHECK_NOT_NULL(queueManager, "UCX output queue manager is null");
+  VELOX_CHECK_NOT_NULL(
+      queueManager, "UcxPartitionedOutput requires an output queue manager");
+  VELOX_CHECK(
+      queueManager == UcxOutputQueueManager::getInstanceRef(),
+      "UcxPartitionedOutput requires the process-wide output queue manager");
   this->initPartitionKeys(planNode);
   auto sources = planNode->sources();
   std::vector<std::string> inNames, outNames;
