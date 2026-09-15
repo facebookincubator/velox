@@ -61,6 +61,13 @@ void DeltaSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  // Reading files with logically deleted rows is not yet supported. Reject
+  // early rather than reading the file and returning the deleted rows.
+  const auto* deltaSplit = dynamic_cast<const HiveDeltaSplit*>(hiveSplit_.get());
+  VELOX_USER_CHECK(
+      deltaSplit == nullptr || !deltaSplit->hasDeletionVector,
+      "Reading Delta files with a deletion vector is not supported.");
+
   baseReaderOpts_.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
   createReader(fileReadOps);
   if (emptySplit_) {
@@ -77,9 +84,11 @@ void DeltaSplitReader::prepareSplit(
 }
 
 uint64_t DeltaSplitReader::next(uint64_t size, VectorPtr& output) {
+  // Mutation::deletedRows defaults to nullptr; DV-carrying splits are
+  // rejected in prepareSplit(), so there are no logically deleted rows to
+  // pass here.
   Mutation mutation;
   mutation.randomSkip = baseReaderOpts_.randomSkip().get();
-  mutation.deletedRows = nullptr;
 
   const auto actualSize = baseRowReader_->nextReadSize(size);
   if (actualSize == dwio::common::RowReader::kAtEnd) {
