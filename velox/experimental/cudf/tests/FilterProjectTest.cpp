@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -1556,6 +1557,51 @@ TEST_F(CudfFilterProjectTest, betweenOperation) {
   createDuckDbTable(vectors);
 
   testBetweenOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
+  auto input = makeRowVector(
+      {"value", "lower_bound", "upper_bound"},
+      {makeNullableFlatVector<int32_t>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
+       makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
+       makeNullableFlatVector<int32_t>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
+  // Exercise BetweenFunction rather than the AST or JIT evaluator.
+  cudf_velox::ensureBuiltinExpressionEvaluatorsRegistered();
+  auto& registry = cudf_velox::getCudfExpressionEvaluatorRegistry();
+  auto& functionPriority = registry.at("function").priority;
+  const auto previousPriority = functionPriority;
+  SCOPE_EXIT {
+    functionPriority = previousPriority;
+  };
+  auto highestPriority = functionPriority;
+  for (const auto& [name, entry] : registry) {
+    if (entry.priority > highestPriority) {
+      highestPriority = entry.priority;
+    }
+  }
+  ASSERT_LT(highestPriority, std::numeric_limits<int>::max());
+  functionPriority = highestPriority + 1;
+
+  for (const bool literalLower : {true, false}) {
+    for (const bool literalUpper : {true, false}) {
+      const auto sql = fmt::format(
+          "value BETWEEN {} AND {}",
+          literalLower ? "1" : "lower_bound",
+          literalUpper ? "9" : "upper_bound");
+      SCOPED_TRACE(sql);
+      auto plan = PlanBuilder().values({input}).project({sql}).planNode();
+      std::vector<std::optional<bool>> expected{
+          false, true, true, true, false, std::nullopt, true, true};
+      if (!literalLower) {
+        expected[6] = std::nullopt;
+      }
+      if (!literalUpper) {
+        expected[7] = std::nullopt;
+      }
+      AssertQueryBuilder(plan).assertResults(
+          makeRowVector({makeNullableFlatVector<bool>(expected)}));
+    }
+  }
 }
 
 TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
