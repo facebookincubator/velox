@@ -797,8 +797,10 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
 
   // For each applicable equality delete file, find and append any key columns
   // that are not already in the readColumnSet
+  std::vector<TypePtr> extraEqualityTypes;
   for (const auto& deleteFile : equalityDeleteFiles_) {
-    for (const auto& columnName : deleteFile.keyNames) {
+    for (size_t i = 0; i < deleteFile.keyNames.size(); ++i) {
+      const auto& columnName = deleteFile.keyNames[i];
       if (icebergSplit_->partitionKeys.contains(columnName) or
           not fileColumnNames_.contains(columnName)) {
         VELOX_NYI(
@@ -809,16 +811,21 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
       // Insert column name into readColumnSet if not already present
       if (readColumnSet.insert(columnName).second) {
         extraEqualityColumns_.push_back(columnName);
+        extraEqualityTypes.push_back(deleteFile.keyTypes[i]);
       }
     }
   }
 
   // Append extra columns to readColumn names and types so the Parquet reader
   // fetches them.
-  for (const auto& name : extraEqualityColumns_) {
-    readColumnNames_.push_back(name);
-    readColumnTypes_.push_back(dataColumns->findChild(name));
-  }
+  readColumnNames_.insert(
+      readColumnNames_.end(),
+      extraEqualityColumns_.begin(),
+      extraEqualityColumns_.end());
+  readColumnTypes_.insert(
+      readColumnTypes_.end(),
+      extraEqualityTypes.begin(),
+      extraEqualityTypes.end());
 }
 
 void CudfIcebergSplitReader::cacheSchemaFromMetadata() {
@@ -877,18 +884,16 @@ CudfIcebergSplitReader::computeSplitRowRange() const {
 }
 
 void CudfIcebergSplitReader::adaptColumns() {
-  // Skip trailing equality-delete keys and classify output + filter-only
-  // columns only.
-  VELOX_CHECK_GE(
-      readColumnNames_.size(),
-      extraEqualityColumns_.size(),
-      "Column projection must at least include the equality delete keys");
+  // Runs before the equality-delete keys are appended, so the projection holds
+  // output and filter-only columns only.
+  VELOX_CHECK(
+      extraEqualityColumns_.empty(),
+      "Columns must be adapted before the equality delete keys are appended");
   VELOX_CHECK_EQ(
       readColumnNames_.size(),
       readColumnTypes_.size(),
       "Read column names and types must remain aligned");
-  const size_t schemaSize =
-      readColumnNames_.size() - extraEqualityColumns_.size();
+  const size_t schemaSize = readColumnNames_.size();
 
   std::unordered_set<std::string> injectedNames;
   for (size_t i = 0; i < schemaSize; ++i) {
