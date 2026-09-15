@@ -30,6 +30,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/common/FileSink.h"
@@ -61,6 +62,7 @@ using namespace facebook::velox::tests::utils;
 using namespace facebook::velox::cudf_velox;
 using namespace facebook::velox::cudf_velox::exec;
 using namespace facebook::velox::cudf_velox::exec::test;
+using facebook::velox::connector::hive::FileDataSource;
 
 namespace {
 struct StatsFilterMetrics {
@@ -174,9 +176,21 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   static std::unordered_map<std::string, RuntimeMetric>
   getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
-    VELOX_NYI(
-        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
-    // return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+  }
+
+  // Verifies I/O is bounded by one footer and one data read of the unique file.
+  static void assertStorageReadStats(
+      const std::unordered_map<std::string, RuntimeMetric>& runtimeStats,
+      int64_t fileSize) {
+    for (const auto key : {
+             FileDataSource::kStorageReadBytes,
+             FileDataSource::kDwioStorageReadBytes,
+         }) {
+      const auto& metric = runtimeStats.at(std::string(key));
+      EXPECT_GT(metric.sum, 0);
+      EXPECT_LE(metric.sum, 2 * fileSize);
+    }
   }
 
   static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
@@ -364,6 +378,12 @@ TEST_P(TableScanTestParameterized, allColumnsUsingExperimentalReader) {
   //  Verifies there is no dynamic filter stats.
   ASSERT_TRUE(it->second.dynamicFilterStats.empty());
 
+  // Skip I/O stats because KvikIO bypasses Velox BufferedInput.
+  if (useBufferedInput) {
+    const auto runtimeStats = getTableScanRuntimeStats(task);
+    assertStorageReadStats(runtimeStats, filePath->fileSize());
+  }
+
   // TODO: We are not writing any customStats yet so disable this check
   // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
 }
@@ -421,17 +441,10 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   // files.
   ASSERT_GE(rawInputBytes, 400);
 
-  // TableScan runtime stats not available with CudfHive connector yet
-#if 0
-  auto overreadBytes =
-  getTableScanRuntimeStats(task).at("overreadBytes").sum;
-  ASSERT_EQ(overreadBytes, 13);
-  ASSERT_EQ(
-      getTableScanRuntimeStats(task).at("storageReadBytes").sum,
-      rawInputBytes + overreadBytes);
-  ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
-  ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
-#endif
+  const auto runtimeStats = getTableScanRuntimeStats(task);
+  assertStorageReadStats(runtimeStats, filePath->fileSize());
+  ASSERT_GT(runtimeStats.at("totalScanTime").sum, 0);
+  ASSERT_GT(runtimeStats.at("ioWaitWallNanos").sum, 0);
 }
 
 TEST_F(TableScanTest, columnAliases) {
