@@ -139,14 +139,16 @@ class InputStream {
 /// An input stream that reads from an already opened ReadFile.
 class ReadFileInputStream final : public InputStream {
  public:
-  /// Takes shared ownership of |readFile|.
+  /// Takes shared ownership of |readFile|. 'pool' is passed to every read for
+  /// the scratch memory it needs; it must outlive this stream.
   explicit ReadFileInputStream(
       std::shared_ptr<velox::ReadFile>,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
       velox::IoStats* ioStats = nullptr,
       folly::F14FastMap<std::string, std::string> fileReadOps = {},
-      bool cacheable = false);
+      bool cacheable = false,
+      memory::MemoryPool* pool = nullptr);
 
   ~ReadFileInputStream() override = default;
 
