@@ -163,6 +163,7 @@ UcxOutputQueue::UcxOutputQueue(
 
 bool UcxOutputQueue::initialize(
     std::shared_ptr<exec::Task> task,
+    std::vector<UcxDataAvailable>& notifications,
     uint32_t numDestinations,
     uint32_t numDrivers,
     core::PartitionedOutputNode::Kind kind) {
@@ -180,10 +181,9 @@ bool UcxOutputQueue::initialize(
   // needs task/kind to choose the intra-node path; getData() takes mutex_ and
   // waits for any queue expansion in this function to finish.
   initialized_.store(true, std::memory_order_release);
-  // create additional queues if there are more destinations.
-  for (int i = queues_.size(); i < numDestinations; ++i) {
-    // create the destination queues inside the vector using emplace_back.
-    queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
+  addDestinationQueuesLocked(numDestinations, notifications);
+  if (kind_ == core::PartitionedOutputNode::Kind::kPartitioned) {
+    clearPendingReadersLocked(notifications);
   }
   return true;
 }
@@ -271,15 +271,41 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
   UcxDestinationQueue::Data data;
   std::vector<ContinuePromise> promises;
   {
-    std::lock_guard<std::mutex> l(mutex_);
-    // If the queue doesn't exist yet, create an empty queue to store
-    // the notify callback. The queue will eventually be initialized when
-    // the task is being created.
-    for (int i = queues_.size(); i <= destination; ++i) {
-      // create the destination queues inside the vector using emplace_back.
-      queues_.emplace_back(std::make_unique<UcxDestinationQueue>());
+    std::unique_lock<std::mutex> l(mutex_);
+    if (terminated_) {
+      l.unlock();
+      notify(nullptr, /*numRows=*/0, {});
+      return;
     }
-    auto* queue = queues_[destination].get();
+    if (destination < 0 ||
+        (static_cast<size_t>(destination) >= queues_.size() &&
+         ((task_ && kind_ == core::PartitionedOutputNode::Kind::kPartitioned) ||
+          noMoreQueues_))) {
+      const std::string taskId = task_ ? task_->taskId() : "uninitialized";
+      const auto numQueues = queues_.size();
+      const auto kind = kind_;
+      const bool noMoreQueues = noMoreQueues_;
+      l.unlock();
+      LOG_EVERY_N(ERROR, 100)
+          << "UCX reader outside published destinations: task=" << taskId
+          << " destination=" << destination << " queues=" << numQueues
+          << " kind=" << static_cast<int>(kind)
+          << " noMoreQueues=" << noMoreQueues;
+      notify(nullptr, /*numRows=*/0, {});
+      return;
+    }
+    UcxDestinationQueue* queue;
+    if (static_cast<size_t>(destination) < queues_.size()) {
+      queue = queues_[destination].get();
+    } else {
+      // A reader's ID is not authority to allocate or backfill intermediate
+      // destinations. Wait for initialize() or updateOutputBuffers().
+      auto [it, inserted] = pendingQueues_.try_emplace(destination);
+      if (inserted) {
+        it->second = std::make_unique<UcxDestinationQueue>();
+      }
+      queue = it->second.get();
+    }
     // queue can be nullptr here if the task has terminated and results
     // have been removed. In this case, no data is returned.
     if (queue) {
@@ -423,6 +449,9 @@ bool UcxOutputQueue::isFinished() {
 }
 
 bool UcxOutputQueue::isFinishedLocked() {
+  if (!task_ || !pendingQueues_.empty()) {
+    return false;
+  }
   // For broadcast, we can only be finished after receiving the no more
   // (destination) buffers signal, matching OutputBuffer::isFinishedLocked().
   if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast &&
@@ -437,52 +466,107 @@ bool UcxOutputQueue::isFinishedLocked() {
   return true;
 }
 
-void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
-  using Kind = core::PartitionedOutputNode::Kind;
-  if (kind_ == Kind::kPartitioned) {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK_EQ(queues_.size(), numBuffers);
-    VELOX_CHECK(noMoreBuffers);
-    noMoreQueues_ = true;
+void UcxOutputQueue::addDestinationQueuesLocked(
+    int32_t numDestinations,
+    std::vector<UcxDataAvailable>& notifications) {
+  VELOX_CHECK_GE(
+      numDestinations, 0, "Number of destinations must be non-negative");
+  if (static_cast<size_t>(numDestinations) <= queues_.size()) {
     return;
   }
 
-  VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
-  bool isFinished;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
+  const bool isBroadcast =
+      kind_ == core::PartitionedOutputNode::Kind::kBroadcast;
+  VELOX_CHECK(
+      !isBroadcast || !noMoreQueues_,
+      "Cannot add broadcast destinations after no more output buffers");
 
-    if (numBuffers > queues_.size()) {
-      // Add new destination queues and backfill with broadcast data.
-      int32_t numNewBuffers = numBuffers - queues_.size();
-      queues_.reserve(numBuffers);
-      for (int32_t i = 0; i < numNewBuffers; ++i) {
-        auto buffer = std::make_unique<UcxDestinationQueue>();
-        for (const auto& [data, numRows] : dataToBroadcast_) {
-          buffer->enqueueBack(data, numRows);
-          // Account for backfilled data in queuedBytes_ so that dequeue
-          // decrements don't drive it negative.
-          queuedBytes_ += data->gpu_data->size();
-          queuedPackedColumns_++;
-        }
-        if (atEnd_) {
-          buffer->enqueueBack(nullptr, /*numRows=*/0);
-        }
-        queues_.emplace_back(std::move(buffer));
+  if (isBroadcast && !dataToBroadcast_.empty()) {
+    updateTotalQueuedBytesMsLocked();
+  }
+  queues_.reserve(numDestinations);
+  while (queues_.size() < static_cast<size_t>(numDestinations)) {
+    std::unique_ptr<UcxDestinationQueue> queue;
+    auto it = pendingQueues_.find(queues_.size());
+    if (it != pendingQueues_.end()) {
+      queue = std::move(it->second);
+      pendingQueues_.erase(it);
+    } else {
+      queue = std::make_unique<UcxDestinationQueue>();
+    }
+    if (queue && isBroadcast) {
+      for (const auto& [data, numRows] : dataToBroadcast_) {
+        queue->enqueueBack(data, numRows);
+        // Each destination's dequeue must free the bytes counted by backfill.
+        queuedBytes_ += data->gpu_data->size();
+        ++queuedPackedColumns_;
+      }
+      if (atEnd_) {
+        queue->enqueueBack(nullptr, /*numRows=*/0);
+      }
+      if (!dataToBroadcast_.empty() || atEnd_) {
+        notifications.push_back(queue->getAndClearNotify());
       }
     }
+    queues_.emplace_back(std::move(queue));
+  }
+}
 
-    if (!noMoreBuffers) {
+void UcxOutputQueue::clearPendingReadersLocked(
+    std::vector<UcxDataAvailable>& notifications) {
+  for (auto& [destination, queue] : pendingQueues_) {
+    if (queue) {
+      notifications.push_back(queue->getAndClearNotify());
+    }
+  }
+  pendingQueues_.clear();
+}
+
+void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
+  using Kind = core::PartitionedOutputNode::Kind;
+  std::vector<UcxDataAvailable> notifications;
+  std::shared_ptr<exec::Task> finishedTask;
+  size_t numRejected{0};
+  std::string taskId;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (terminated_) {
+      return;
+    }
+    if (kind_ == Kind::kPartitioned) {
+      VELOX_CHECK_EQ(queues_.size(), numBuffers);
+      VELOX_CHECK(noMoreBuffers);
+      noMoreQueues_ = true;
       return;
     }
 
-    noMoreQueues_ = true;
-    dataToBroadcast_.clear();
-    isFinished = isFinishedLocked();
-  }
+    VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
+    addDestinationQueuesLocked(numBuffers, notifications);
 
-  if (isFinished && task_) {
-    task_->setAllOutputConsumed();
+    if (noMoreBuffers) {
+      noMoreQueues_ = true;
+      dataToBroadcast_.clear();
+      const auto priorNotifications = notifications.size();
+      clearPendingReadersLocked(notifications);
+      numRejected = notifications.size() - priorNotifications;
+      if (numRejected > 0) {
+        taskId = task_ ? task_->taskId() : "uninitialized";
+      }
+    }
+    if (isFinishedLocked()) {
+      finishedTask = task_;
+    }
+  }
+  if (numRejected > 0) {
+    LOG_EVERY_N(ERROR, 100)
+        << "UCX reader requests outside final destinations: task=" << taskId
+        << " finalBuffers=" << numBuffers << " rejected=" << numRejected;
+  }
+  for (auto& notification : notifications) {
+    notification.notify();
+  }
+  if (finishedTask) {
+    finishedTask->setAllOutputConsumed();
   }
 }
 
@@ -491,10 +575,19 @@ void UcxOutputQueue::deleteResults(int destination) {
   UcxDataAvailable dataAvailable;
   std::vector<ContinuePromise> promises;
   {
-    std::lock_guard<std::mutex> l(mutex_);
-    if (destination >= queues_.size()) {
-      VLOG(1) << "deleteResults: destination " << destination
-              << " out of range (size=" << queues_.size() << "), ignoring";
+    std::unique_lock<std::mutex> l(mutex_);
+    if (destination < 0) {
+      return;
+    }
+    if (static_cast<size_t>(destination) >= queues_.size()) {
+      auto it = pendingQueues_.try_emplace(destination).first;
+      if (it->second) {
+        dataAvailable = it->second->getAndClearNotify();
+        // Keep a tombstone so publication cannot resurrect deleted results.
+        it->second.reset();
+      }
+      l.unlock();
+      dataAvailable.notify();
       return;
     }
     auto* queue = queues_[destination].get();
@@ -535,6 +628,8 @@ void UcxOutputQueue::terminate() {
       LOG(WARNING) << "UcxOutputQueue::terminate() called while task "
                    << task_->taskId() << " is still running";
     }
+    terminated_ = true;
+    clearPendingReadersLocked(pendingCallbacks);
     // Fire all pending getData callbacks with nullptr to signal end-of-stream.
     // This handles the case where a producer task fails or is cancelled before
     // noMoreData() is called, preventing consumers from being orphaned.

@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
@@ -166,10 +167,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// exists, the queue manager can create an unitialized queue just for the
   /// sake of storing the callback notification. The queue is then initialized
   /// later properly, and eventually the callback fires.
+  /// Appends ready notifications for the caller to invoke outside manager
+  /// locks.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
   bool initialize(
       std::shared_ptr<exec::Task> task,
+      std::vector<UcxDataAvailable>& notifications,
       uint32_t numDestinations,
       uint32_t numDrivers,
       core::PartitionedOutputNode::Kind kind =
@@ -306,6 +310,15 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
+  // Adds destination queues and restores broadcast data and end markers.
+  void addDestinationQueuesLocked(
+      int32_t numDestinations,
+      std::vector<UcxDataAvailable>& notifications);
+
+  // Completes unpublished readers with EOS; the caller invokes notifications
+  // outside the locks. Pending queues never contain data.
+  void clearPendingReadersLocked(std::vector<UcxDataAvailable>& notifications);
+
   // Reference to the task that owns this UcxQueue.
   std::shared_ptr<exec::Task> task_{nullptr};
 
@@ -345,6 +358,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   // One buffer per destination.
   std::vector<std::unique_ptr<UcxDestinationQueue>> queues_;
+
+  // Only control-plane updates grow queues_. Early readers keep an empty queue
+  // here for their notification. A null entry remembers deleted results until
+  // the destination is published or the final count discards it.
+  std::unordered_map<int, std::unique_ptr<UcxDestinationQueue>> pendingQueues_;
+
+  bool terminated_{false};
 
   // keep track of the number of drivers that have finished.
   uint32_t numFinished_{0};
