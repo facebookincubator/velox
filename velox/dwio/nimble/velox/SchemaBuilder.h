@@ -375,6 +375,13 @@ class SchemaBuilder {
   /// Creates a stripe dictionary stream associated with a value stream.
   offset_size createSharedDictionaryStream(offset_size valueStreamOffset);
 
+  /// Reserves the next file shared dictionary id. File dictionary ids are
+  /// resolved from this file's own catalog, so the writer allocates them
+  /// rather than asking callers to keep them unique. Independent of the
+  /// stream offsets above: the two are looked up through different tables and
+  /// their values are free to coincide.
+  uint32_t createFileSharedDictionaryId();
+
   /// Returns the stripe dictionary stream associated with a value stream.
   std::optional<offset_size> sharedDictionaryStreamOffset(
       offset_size valueStreamOffset) const;
@@ -401,6 +408,8 @@ class SchemaBuilder {
   // their value streams. File and external dictionaries have no stream here.
   folly::F14FastMap<offset_size, offset_size> sharedDictionaryStreamOffsets_;
   offset_size currentOffset_{0};
+  // Next id handed out by createFileSharedDictionaryId().
+  uint32_t nextFileSharedDictionaryId_{0};
 
   friend class ScalarTypeBuilder;
   friend class TimestampMicroNanoTypeBuilder;

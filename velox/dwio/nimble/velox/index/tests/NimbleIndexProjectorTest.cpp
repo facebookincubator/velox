@@ -5568,9 +5568,10 @@ TEST_P(NimbleIndexProjectorTest, rejectsSharedDictionaryEncoding) {
     SCOPED_TRACE(
         fmt::format("scope={}", SharedDictionaryScopeName::toName(scope)));
     SharedDictionaryConfig dictionary{.scope = scope};
-    if (scope != SharedDictionaryScope::Stripe) {
-      // Stripe scope derives the id from its auxiliary alphabet stream and
-      // rejects a caller-assigned one.
+    if (scope == SharedDictionaryScope::External) {
+      // Stripe and File scope name the dictionary inside the written file and
+      // assign the id themselves, rejecting a caller-assigned one. External
+      // dictionaries live in the caller's store, so the id is theirs to pick.
       dictionary.dictionaryId = kDictionaryId;
     }
 

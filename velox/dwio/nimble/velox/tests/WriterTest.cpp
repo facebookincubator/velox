@@ -6133,8 +6133,7 @@ DEBUG_ONLY_TEST_F(WriterTest, cachedEncodingLayoutSkipsSharedDictionary) {
               "c0",
               /*key=*/10,
               nimble::SharedDictionaryConfig{
-                  .scope = nimble::SharedDictionaryScope::File,
-                  .dictionaryId = 17})
+                  .scope = nimble::SharedDictionaryScope::File})
           .build();
 
   std::string file;
