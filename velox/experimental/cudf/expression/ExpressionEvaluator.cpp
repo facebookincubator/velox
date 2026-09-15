@@ -2827,7 +2827,7 @@ std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
 rmm::device_buffer makeBranchRowMask(
     const cudf::column_view& condition,
     bool takeWhenTrue,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // bools_to_mask clears false and null alike, already the then branch's set.
   if (takeWhenTrue) {
@@ -2860,7 +2860,7 @@ struct MaskedInputs {
 MaskedInputs maskInputRows(
     const std::vector<cudf::column_view>& inputs,
     const cudf::bitmask_type* rowMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   MaskedInputs masked;
   masked.views.reserve(inputs.size());

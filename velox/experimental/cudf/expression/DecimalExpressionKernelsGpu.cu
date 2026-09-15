@@ -302,7 +302,7 @@ int32_t launchOverflowChecked(
       grid.num_blocks,
       kOverflowCheckedBlockSize,
       0,
-      stream.value()>>>(size, op, overflowFlag.data());
+      stream.get()>>>(size, op, overflowFlag.data());
   CUDF_CUDA_TRY(cudaGetLastError());
   return overflowFlag.value(stream);
 }
@@ -449,7 +449,7 @@ DecimalBinaryOpStatus decimalDivideScalarColumn(
 
 __int128_t getDecimalScalarValue(
     const cudf::scalar& s,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (s.type().id() == cudf::type_id::DECIMAL64) {
     auto const& dec =
         static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(s);
@@ -743,7 +743,7 @@ int32_t launchDecimalBinaryColColKernel(
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outPrecision,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   checkDecimalStorageWidth<LhsRep>(lhs.type());
   checkDecimalStorageWidth<RhsRep>(rhs.type());
   checkDecimalStorageWidth<OutRep>(out.type());
@@ -777,7 +777,7 @@ int32_t launchDecimalBinaryRhsScalarKernel(
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outPrecision,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // rhsValue arrives already decoded at RhsRep, so it needs no width check.
   checkDecimalStorageWidth<LhsRep>(lhs.type());
   checkDecimalStorageWidth<OutRep>(out.type());
@@ -810,7 +810,7 @@ int32_t launchDecimalBinaryLhsScalarKernel(
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outPrecision,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // lhsValue arrives already decoded at LhsRep, so it needs no width check.
   checkDecimalStorageWidth<RhsRep>(rhs.type());
   checkDecimalStorageWidth<OutRep>(out.type());
@@ -850,7 +850,7 @@ decimalBinaryOperationColColImpl(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(lhs.size() == rhs.size(), "Decimal binop requires equal sizes");
   auto [nullMask, nullCount] =
@@ -893,7 +893,7 @@ dispatchDecimalBinaryOperationColCol(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return dispatchDecimalRep(lhs.type(), [&](auto lhsRep) {
     return dispatchDecimalRep(rhs.type(), [&](auto rhsRep) {
@@ -913,7 +913,7 @@ dispatchDecimalBinaryOperationColCol(
 template <typename ScalarRep>
 ScalarRep getTypedDecimalScalarValue(
     const cudf::scalar& s,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return static_cast<ScalarRep>(detail::getDecimalScalarValue(s, stream));
 }
 
@@ -923,7 +923,7 @@ int32_t dispatchDecimalBinaryOperationColScalar(
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto const rhsScale = numeric::scale_type{rhs.type().scale()};
   return dispatchDecimalRep(lhs.type(), [&](auto lhsRep) {
     return dispatchDecimalRep(rhs.type(), [&](auto rhsRep) {
@@ -951,7 +951,7 @@ int32_t dispatchDecimalBinaryOperationScalarCol(
     cudf::mutable_column_view out,
     cudf::binary_operator op,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto const lhsScale = numeric::scale_type{lhs.type().scale()};
   return dispatchDecimalRep(lhs.type(), [&](auto lhsRep) {
     return dispatchDecimalRep(rhs.type(), [&](auto rhsRep) {
@@ -982,7 +982,7 @@ decimalBinaryOperationWithOverflow(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
   auto [result, statusFlag] = dispatchDecimalBinaryOperationColCol(
@@ -997,7 +997,7 @@ decimalBinaryOperationWithOverflow(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
   if (!rhs.is_valid(stream)) {
@@ -1026,7 +1026,7 @@ decimalBinaryOperationWithOverflow(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   validateDecimalBinaryOp(op);
   if (!lhs.is_valid(stream)) {

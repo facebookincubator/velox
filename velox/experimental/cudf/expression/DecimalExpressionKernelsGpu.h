@@ -50,7 +50,7 @@ decimalBinaryOperationWithOverflow(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
@@ -60,7 +60,7 @@ decimalBinaryOperationWithOverflow(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 std::pair<std::unique_ptr<cudf::column>, DecimalBinaryOpStatus>
@@ -70,7 +70,7 @@ decimalBinaryOperationWithOverflow(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 namespace detail {
@@ -87,7 +87,7 @@ namespace detail {
  */
 __int128_t getDecimalScalarValue(
     const cudf::scalar& s,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * @brief Dispatches a per-row device loop for fixed-point decimal division.

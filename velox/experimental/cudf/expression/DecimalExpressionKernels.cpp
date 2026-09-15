@@ -22,7 +22,6 @@
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
-#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/table/table_view.hpp>
 
@@ -104,7 +103,7 @@ std::unique_ptr<cudf::column> decimalBinaryOperation(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto [result, status] = decimalBinaryOperationWithOverflow(
       lhs, rhs, op, outputType, outputPrecision, stream, mr);
@@ -118,7 +117,7 @@ template std::unique_ptr<cudf::column> decimalBinaryOperation(
     cudf::binary_operator,
     cudf::data_type,
     int32_t,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref);
 
 template std::unique_ptr<cudf::column> decimalBinaryOperation(
@@ -127,7 +126,7 @@ template std::unique_ptr<cudf::column> decimalBinaryOperation(
     cudf::binary_operator,
     cudf::data_type,
     int32_t,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref);
 
 template std::unique_ptr<cudf::column> decimalBinaryOperation(
@@ -136,7 +135,7 @@ template std::unique_ptr<cudf::column> decimalBinaryOperation(
     cudf::binary_operator,
     cudf::data_type,
     int32_t,
-    rmm::cuda_stream_view,
+    cuda::stream_ref,
     rmm::device_async_resource_ref);
 
 std::unique_ptr<cudf::column> decimalDivide(

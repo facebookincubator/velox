@@ -107,7 +107,7 @@ std::unique_ptr<cudf::column> decimalBinaryOperation(
     cudf::binary_operator op,
     cudf::data_type outputType,
     int32_t outputPrecision,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox
