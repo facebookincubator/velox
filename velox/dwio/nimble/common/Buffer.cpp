@@ -17,6 +17,8 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 
+#include <limits>
+
 namespace facebook::nimble {
 
 char* Buffer::reserve(uint64_t bytes) {
@@ -41,7 +43,25 @@ std::vector<velox::BufferPtr> Buffer::transferBuffers() {
 }
 
 void Buffer::reset() {
+  reset(std::numeric_limits<uint64_t>::max());
+}
+
+void Buffer::reset(uint64_t maxRetainedBytes) {
   std::scoped_lock<std::mutex> l(mutex_);
+
+  // Always keep the first chunk, then retain further chunks only while their
+  // cumulative capacity stays within budget. This drops the tail an oversized
+  // stripe allocated instead of pinning it for the writer's lifetime.
+  uint64_t retainedBytes = chunks_.front()->capacity();
+  size_t chunksToRetain = 1;
+  while (chunksToRetain < chunks_.size() &&
+         retainedBytes + chunks_[chunksToRetain]->capacity() <=
+             maxRetainedBytes) {
+    retainedBytes += chunks_[chunksToRetain]->capacity();
+    ++chunksToRetain;
+  }
+  chunks_.resize(chunksToRetain);
+
   chunkIndex_ = 0;
   pos_ = chunks_.front()->asMutable<char>();
   chunkEnd_ = pos_ + chunks_.front()->capacity();

@@ -59,6 +59,8 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .allowNestedAlpSelection = allowNestedAlpSelection,
+        .subIntSplitDeltaPreTransform =
+            FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
@@ -306,6 +308,14 @@ struct WriterOptions {
   /// Number of streams to try chunking between memory pressure evaluations.
   /// Note: this is ignored when it is time to flush a stripe.
   size_t chunkedStreamBatchSize{1024};
+
+  /// On a normal stripe flush the encoding arena is only rewound, keeping every
+  /// chunk it ever allocated, so one oversized stripe pins its peak allocation
+  /// for the writer's lifetime. Release arena chunks beyond this many bytes on
+  /// flush to bound that high-water mark; chunks are still reused up to this
+  /// budget to avoid per-stripe reallocation churn. Defaults to the target
+  /// encoded stripe size (100 MB).
+  uint64_t encodingBufferRetainedBytesOnFlush{100ULL << 20};
 
   /// The factory function that produces the root encoding selection policy.
   /// Encoding selection policy is the way to balance the tradeoffs of

@@ -15,9 +15,15 @@
  */
 #pragma once
 
+#include <gflags/gflags.h>
+
 #include "velox/common/config/Config.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+
+// Read by WriterOptions::buildEncodingOptions(), which is header-inline, so the
+// flag has to be visible outside NimbleConfig.cpp.
+DECLARE_bool(nimble_subintsplit_delta_pretransform);
 
 namespace facebook::nimble {
 
@@ -127,6 +133,21 @@ class Config : public velox::config::ConfigBase {
   /// "type:random,seed:42" or "type:default,read_factors:Trivial=0.5".
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<std::string> ENCODING_SELECTION_CONFIG;
+
+  /// Pins named top-level columns to a specific encoding, leaving every other
+  /// column to normal encoding selection. Lets one table (or one column of one
+  /// table) try an encoding without touching global defaults.
+  ///
+  /// Format: ';'-separated `<column>=<EncodingType>` pairs, e.g.
+  /// "user_id=SubIntSplit;event_ts=Delta". Encoding names are the
+  /// EncodingType enum spellings and are case-insensitive.
+  ///
+  /// Only top-level scalar columns can be pinned. Naming a missing column, a
+  /// non-scalar column, or an unknown encoding is a user error. Applies to the
+  /// column's data stream; nested streams (lengths, nulls) are untouched and
+  /// still select normally.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> COLUMN_ENCODING_OVERRIDES;
 
   // EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   // production tables without consulting the Nimble team (oncall: dwios).
