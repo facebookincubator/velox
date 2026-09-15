@@ -949,9 +949,13 @@ TEST_F(IcebergGeometryReadTest, parquetGeometryColumn) {
   for (size_t i = 0; i < ids.size(); ++i) {
     ids[i] = static_cast<int64_t>(i);
   }
-  // A sibling Iceberg `binary` column must come back untouched.
+  // A sibling Iceberg `binary` column must come back untouched. The length is
+  // derived from the literal rather than hand-counted: an over-long count here
+  // reads past the string literal, which ASAN reports as a global-buffer
+  // overflow.
+  static constexpr char kRawPayload[] = "\x01\x02\x03 raw bytes";
   std::vector<std::optional<std::string>> payload(
-      wkb.size(), std::string("\x01\x02\x03 raw bytes", 15));
+      wkb.size(), std::string(kRawPayload, sizeof(kRawPayload) - 1));
 
   auto data = makeRowVector(
       {"id", "geom", "payload"},
