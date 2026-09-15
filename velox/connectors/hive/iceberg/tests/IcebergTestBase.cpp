@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
 #include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/expression/Expr.h"
 
@@ -563,6 +564,122 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
   }
 
   return assignments;
+}
+
+RowTypePtr IcebergTestBase::makeChangelogOutputType(
+    const RowTypePtr& dataType) {
+  return ROW(
+      {std::string(kChangelogColOperation),
+       std::string(kChangelogColOrdinal),
+       std::string(kChangelogColSnapshotId),
+       std::string(kChangelogColRowdata)},
+      {VARCHAR(), BIGINT(), BIGINT(), dataType});
+}
+
+ColumnHandleMap IcebergTestBase::makeChangelogColumnHandles(
+    const RowTypePtr& dataType) {
+  ColumnHandleMap handles;
+  handles[std::string(kChangelogColOperation)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColOperation),
+          IcebergColumnHandle::ColumnType::kRegular,
+          VARCHAR(),
+          parquet::ParquetFieldId{1});
+  handles[std::string(kChangelogColOrdinal)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColOrdinal),
+          IcebergColumnHandle::ColumnType::kRegular,
+          BIGINT(),
+          parquet::ParquetFieldId{2});
+  handles[std::string(kChangelogColSnapshotId)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColSnapshotId),
+          IcebergColumnHandle::ColumnType::kRegular,
+          BIGINT(),
+          parquet::ParquetFieldId{3});
+  handles[std::string(kChangelogColRowdata)] =
+      std::make_shared<IcebergColumnHandle>(
+          std::string(kChangelogColRowdata),
+          IcebergColumnHandle::ColumnType::kRegular,
+          dataType,
+          parquet::ParquetFieldId{4});
+  return handles;
+}
+
+std::unordered_map<std::string, IcebergColumnHandlePtr>
+IcebergTestBase::makeDataColumnHandles(const RowTypePtr& dataType) {
+  std::unordered_map<std::string, IcebergColumnHandlePtr> handles;
+  int32_t fieldId = 1;
+  for (size_t i = 0; i < dataType->size(); ++i) {
+    const auto& name = dataType->nameOf(i);
+    const auto& type = dataType->childAt(i);
+    handles[name] = std::make_shared<IcebergColumnHandle>(
+        name,
+        IcebergColumnHandle::ColumnType::kRegular,
+        type,
+        parquet::ParquetFieldId{fieldId++});
+  }
+  return handles;
+}
+
+std::shared_ptr<IcebergTableHandle> IcebergTestBase::makeChangelogTableHandle(
+    const RowTypePtr& dataType,
+    common::SubfieldFilters subfieldFilters) {
+  return std::make_shared<IcebergTableHandle>(
+      kIcebergConnectorId,
+      "test_table",
+      std::move(subfieldFilters),
+      nullptr,
+      dataType,
+      std::vector<std::string>{},
+      std::unordered_map<std::string, std::string>{},
+      std::vector<IcebergColumnHandlePtr>{},
+      1.0,
+      "",
+      std::vector<int32_t>{},
+      /*isChangelogQuery=*/true,
+      makeDataColumnHandles(dataType));
+}
+
+std::vector<RowVectorPtr> IcebergTestBase::makeTestBatches() {
+  constexpr int32_t kNumBatches = 2;
+  constexpr int32_t kRowsPerBatch = 100;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    auto idVector = makeFlatVector<int64_t>(kRowsPerBatch, [batch](auto row) {
+      return static_cast<int64_t>(batch * kRowsPerBatch + row);
+    });
+    auto nameVector =
+        makeFlatVector<std::string>(kRowsPerBatch, [batch](auto row) {
+          return "name_" + std::to_string(batch * kRowsPerBatch + row);
+        });
+    batches.push_back(makeRowVector({"id", "name"}, {idVector, nameVector}));
+  }
+  return batches;
+}
+
+std::string IcebergTestBase::getOnlyDataFilePath(const std::string& directory) {
+  auto files = listFiles(directory);
+  VELOX_CHECK_EQ(files.size(), 1, "Expected exactly one file in {}", directory);
+  return files.front();
+}
+
+std::shared_ptr<HiveIcebergSplit> IcebergTestBase::makeChangelogSplit(
+    const std::string& filePath,
+    ChangelogOperation operation,
+    int64_t ordinal,
+    int64_t snapshotId) {
+  const auto file =
+      filesystems::getFileSystem(filePath, nullptr)->openFileForRead(filePath);
+  return std::dynamic_pointer_cast<HiveIcebergSplit>(
+      IcebergSplitBuilder(filePath)
+          .connectorId(kIcebergConnectorId)
+          .fileFormat(fileFormat_)
+          .start(0)
+          .length(file->size())
+          .changelogSplitInfo(
+              ChangelogSplitInfo{operation, ordinal, snapshotId})
+          .build());
 }
 
 } // namespace facebook::velox::connector::hive::iceberg::test

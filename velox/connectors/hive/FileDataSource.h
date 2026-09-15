@@ -175,6 +175,13 @@ class FileDataSource : public DataSource {
     return metadataFilter_;
   }
 
+  /// The row type for the data source output, not including filter-only
+  /// columns. Subclasses may call this from createSplitReader() to obtain
+  /// the output schema when constructing a split reader.
+  const RowTypePtr& outputType() const {
+    return outputType_;
+  }
+
   // Actual type produced by the reader after extraction pushdown.  Differs
   // from readerOutputType_ when the reader handles extraction natively
   // (e.g., MapKeys -> ARRAY).  Null if no extraction pushdown is active.
