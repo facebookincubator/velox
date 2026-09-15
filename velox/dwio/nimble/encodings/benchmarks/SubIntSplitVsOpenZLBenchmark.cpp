@@ -104,6 +104,20 @@ DEFINE_int32(
     0,
     "SubIntSplit planner widest section given frequency metrics; 0 is "
     "unlimited.");
+DEFINE_int32(
+    encode_iters,
+    0,
+    "Overrides the per-size encode iteration count; 0 keeps the default.");
+DEFINE_int32(
+    decode_iters,
+    0,
+    "Overrides the per-size decode iteration count; 0 keeps the default. Set "
+    "to 1 to keep decode out of an encode profile.");
+DEFINE_string(
+    only_method,
+    "",
+    "If set, the CSV sweep runs only the method with this name. Lets a "
+    "profiler attribute one arm without the others in the samples.");
 DEFINE_bool(
     layout,
     false,
@@ -416,12 +430,31 @@ std::vector<std::pair<EncodingType, float>> tunedReadFactors() {
   return factors;
 }
 
+// The section candidates BitRangeSplit allows itself. It excludes RLE and
+// MainlyConstant, whose estimateSize() walks Statistics uniques and repeats and
+// is the single largest line item in SubIntSplit's encode profile.
+std::vector<std::pair<EncodingType, float>> leanSectionReadFactors() {
+  std::vector<std::pair<EncodingType, float>> factors;
+  for (const auto& entry : tunedReadFactors()) {
+    if (entry.first != EncodingType::RLE &&
+        entry.first != EncodingType::MainlyConstant) {
+      factors.push_back(entry);
+    }
+  }
+  return factors;
+}
+
 // SubIntSplit driven entirely from config: the caller names the bit ranges, the
 // same way BitRangeSplit has to be configured. No planner runs.
+//
+// `leanSections` restricts what nested selection considers for each section to
+// the same set BitRangeSplit permits, which is the encode-side half of why
+// BitRangeSplit is faster to write.
 Encoded encodeSubIntSplitConfigured(
     const Vector<T>& data,
     const std::string& ranges,
-    CompressionType compressionType) {
+    CompressionType compressionType,
+    bool leanSections = false) {
   auto& pool = benchmarkPool();
   Buffer buffer{*pool};
   std::span<const T> values{data.data(), data.size()};
@@ -436,7 +469,12 @@ Encoded encodeSubIntSplitConfigured(
     compressionOptions = options;
   }
   ManualEncodingSelectionPolicyFactory factory{
-      tunedReadFactors(), compressionOptions};
+      tunedReadFactors(),
+      compressionOptions,
+      leanSections
+          ? std::optional<std::vector<
+                std::pair<EncodingType, float>>>{leanSectionReadFactors()}
+          : std::nullopt};
 
   EncodingSelectionResult result{
       .encodingType = EncodingType::SubIntSplit,
@@ -612,6 +650,16 @@ std::vector<Method> makeMethods() {
        },
        decodeSubIntSplit});
   methods.push_back(
+      {"SubIntSplitLeanSections",
+       [](const Vector<T>& d) {
+         return encodeSubIntSplitConfigured(
+             d,
+             plannedSplitBoundaries(d),
+             CompressionType::Zstd,
+             /*leanSections=*/true);
+       },
+       decodeSubIntSplit});
+  methods.push_back(
       {"SubIntSplitConfiguredFixed",
        [](const Vector<T>& d) {
          return encodeSubIntSplitConfigured(
@@ -728,11 +776,28 @@ void emitCsv(int trials, int64_t onlySize) {
   }
 
   const auto pats = patterns();
-  const auto methods = makeMethods();
+  auto methods = makeMethods();
+  if (!FLAGS_only_method.empty()) {
+    std::vector<Method> filtered;
+    for (auto& method : methods) {
+      if (method.name == FLAGS_only_method) {
+        filtered.push_back(std::move(method));
+      }
+    }
+    NIMBLE_CHECK(
+        !filtered.empty(), "Unknown --only_method: {}", FLAGS_only_method);
+    methods = std::move(filtered);
+  }
 
   std::cout << "pattern,size,method,trials,ratio_mean,ratio_stddev,"
                "encode_mb_s_mean,decode_mb_s_mean\n";
-  for (const auto& spec : specs) {
+  for (auto& spec : specs) {
+    if (FLAGS_encode_iters > 0) {
+      spec.encodeIters = FLAGS_encode_iters;
+    }
+    if (FLAGS_decode_iters > 0) {
+      spec.decodeIters = FLAGS_decode_iters;
+    }
     const uint64_t rawBytes = spec.size * sizeof(T);
     for (const auto& pat : pats) {
       if (spec.subset && !inBigSubset(pat.name)) {
