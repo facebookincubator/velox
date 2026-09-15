@@ -59,6 +59,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       return 10;
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       return 1;
     case Kind::Array:
     case Kind::ArrayWithOffsets:
@@ -73,8 +74,8 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
 inline ScalarKind getScalarKindForType(const Type& type) {
   if (type.isScalar()) {
     return type.asScalar().scalarDescriptor().scalarKind();
-  } else if (type.isRow() || type.isFlatMap()) {
-    // Row/FlatMap nulls streams are boolean.
+  } else if (type.isRow() || type.isFlatMap() || type.isHybridFlatMap()) {
+    // Complex-type nulls streams are boolean.
     return ScalarKind::Bool;
   } else if (type.isArray() || type.isMap()) {
     // Array/Map lengths streams are uint32_t.

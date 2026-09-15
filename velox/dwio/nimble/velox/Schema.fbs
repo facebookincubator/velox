@@ -48,6 +48,19 @@ enum Kind:uint8 {
   FlatMapBool,
   FlatMapString,
   FlatMapBinary,
+  HybridFlatMapInt8 = 150,
+  HybridFlatMapUInt8,
+  HybridFlatMapInt16,
+  HybridFlatMapUInt16,
+  HybridFlatMapInt32,
+  HybridFlatMapUInt32,
+  HybridFlatMapInt64,
+  HybridFlatMapUInt64,
+  HybridFlatMapFloat,
+  HybridFlatMapDouble,
+  HybridFlatMapBool,
+  HybridFlatMapString,
+  HybridFlatMapBinary,
 }
 
 // A generic string-keyed attribute pair attached to a schema node.

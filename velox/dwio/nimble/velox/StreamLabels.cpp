@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/velox/StreamLabels.h"
 
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 
 namespace facebook::nimble {
 
@@ -136,6 +137,31 @@ void addLabels(
       }
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& map = node->asHybridFlatMap();
+      const auto offset = map.nullsDescriptor().offset();
+      NIMBLE_DCHECK_LT(labelIndex, labels.size(), "Unexpected label index.");
+      NIMBLE_DCHECK_GT(offsetToLabel.size(), offset, "Unexpected offset.");
+      labels.emplace_back(labels[labelIndex] + name);
+      labelIndex = labels.size() - 1;
+      offsetToLabel[offset] = labelIndex;
+      addLabels(map.valueTemplate(), labelIndex, "", labels, offsetToLabel);
+      if (const auto layout = hybridFlatMapPhysicalLayout(map)) {
+        const auto setGroupLabel = [&](offset_size groupOffset) {
+          NIMBLE_CHECK_GT(
+              offsetToLabel.size(), groupOffset, "Unexpected group offset.");
+          offsetToLabel[groupOffset] = labelIndex;
+        };
+        for (const auto& group : layout->groups) {
+          setGroupLabel(group.keyHasEntriesStreamOffset);
+          setGroupLabel(group.inMapStreamOffset);
+          for (const auto valueOffset : group.valueStreamOffsets) {
+            setGroupLabel(valueOffset);
+          }
+        }
+      }
+      break;
+    }
     case Kind::ArrayWithOffsets: {
       const auto& array = node->asArrayWithOffsets();
       const auto offsetsOffset = array.offsetsDescriptor().offset();
@@ -212,6 +238,23 @@ StreamLabels::StreamLabels(const std::shared_ptr<const Type>& root) {
                   maxOffset, map.inMapDescriptorAt(i).offset());
             }
             labelCount += map.childrenCount();
+            break;
+          }
+          case Kind::HybridFlatMap: {
+            const auto& map = type.asHybridFlatMap();
+            maxOffset =
+                std::max<size_t>(maxOffset, map.nullsDescriptor().offset());
+            if (const auto layout = hybridFlatMapPhysicalLayout(map)) {
+              for (const auto& group : layout->groups) {
+                maxOffset = std::max<size_t>(
+                    maxOffset, group.keyHasEntriesStreamOffset);
+                maxOffset =
+                    std::max<size_t>(maxOffset, group.inMapStreamOffset);
+                for (const auto valueOffset : group.valueStreamOffsets) {
+                  maxOffset = std::max<size_t>(maxOffset, valueOffset);
+                }
+              }
+            }
             break;
           }
           case Kind::ArrayWithOffsets: {

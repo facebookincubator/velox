@@ -888,6 +888,7 @@ void configureDictionary(
     case Kind::TimestampMicroNano:
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_USER_FAIL(
           "Shared dictionary value must resolve to an integer or string "
           "scalar, array element, or map value, got {}.",
@@ -912,6 +913,7 @@ const TypeBuilder& allSubscriptValueType(
     case Kind::TimestampMicroNano:
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_USER_FAIL(
           "Shared dictionary value subfield '{}' cannot apply [*] to {}.",
           subfield,
@@ -1622,6 +1624,10 @@ void initializeEncodingLayouts(
       SET_STREAM_CONTEXT(mapBuilder, nullsDescriptor, FlatMap::NullsStream);
       return;
     }
+    if (typeBuilder.kind() == Kind::HybridFlatMap) {
+      NIMBLE_UNSUPPORTED(
+          "Hybrid FlatMap is supported only by the serialized-value writer.");
+    }
 
     switch (typeBuilder.kind()) {
       case Kind::Scalar: {
@@ -1751,6 +1757,9 @@ void initializeEncodingLayouts(
       }
       case Kind::FlatMap: {
         NIMBLE_UNREACHABLE("Flatmap handled already");
+      }
+      case Kind::HybridFlatMap: {
+        NIMBLE_UNREACHABLE("Hybrid FlatMap handled already");
       }
     }
 #undef SET_STREAM_CONTEXT

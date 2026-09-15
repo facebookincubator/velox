@@ -560,6 +560,11 @@ void NimbleDumpLib::emitSchema(bool collapseFlatMap) {
             folly::to<std::string>(type.asFlatMap().nullsDescriptor().offset());
         break;
       }
+      case Kind::HybridFlatMap: {
+        offsets = folly::to<std::string>(
+            type.asHybridFlatMap().nullsDescriptor().offset());
+        break;
+      }
       case Kind::ArrayWithOffsets: {
         offsets = "o:" +
             folly::to<std::string>(

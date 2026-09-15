@@ -727,6 +727,7 @@ void emitPlaceholderStreamOffsets(
       return;
     }
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       // Value subtrees of a FlatMap are not themselves FlatMaps per the
       // encoding invariant.
       NIMBLE_FAIL(
@@ -975,6 +976,7 @@ void projectStreamOffsets(
       return;
     }
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_FAIL("FlatMap projection is supported only for top-level columns");
   }
   NIMBLE_UNREACHABLE("Unknown type kind: {}", type->kind());

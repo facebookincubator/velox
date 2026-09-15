@@ -82,6 +82,17 @@ void appendAllNestedStreams(
       }
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& hybridMap = type.asHybridFlatMap();
+      childrenOffsets.push_back(hybridMap.nullsDescriptor().offset());
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto descriptors = hybridMap.groupStreamDescriptorsAt(i);
+        childrenOffsets.push_back(descriptors.keyHasEntries.offset());
+        childrenOffsets.push_back(descriptors.inMap.offset());
+        appendAllNestedStreams(hybridMap.groupValuesAt(i), childrenOffsets);
+      }
+      break;
+    }
   }
 }
 
