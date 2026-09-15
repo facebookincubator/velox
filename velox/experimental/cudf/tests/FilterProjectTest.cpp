@@ -15,9 +15,11 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
+#include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -29,6 +31,10 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
+
+#include <cudf/utilities/default_stream.hpp>
+
+#include <rmm/mr/device/per_device_resource.hpp>
 
 #include <folly/ScopeGuard.h>
 
@@ -1565,22 +1571,11 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
       {makeNullableFlatVector<int32_t>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
        makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
        makeNullableFlatVector<int32_t>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
-  // Exercise BetweenFunction rather than the AST or JIT evaluator.
-  cudf_velox::ensureBuiltinExpressionEvaluatorsRegistered();
-  auto& registry = cudf_velox::getCudfExpressionEvaluatorRegistry();
-  auto& functionPriority = registry.at("function").priority;
-  const auto previousPriority = functionPriority;
-  SCOPE_EXIT {
-    functionPriority = previousPriority;
-  };
-  auto highestPriority = functionPriority;
-  for (const auto& [name, entry] : registry) {
-    if (entry.priority > highestPriority) {
-      highestPriority = entry.priority;
-    }
-  }
-  ASSERT_LT(highestPriority, std::numeric_limits<int>::max());
-  functionPriority = highestPriority + 1;
+  auto queryCtx = core::QueryCtx::create();
+  core::ExecCtx execCtx(pool(), queryCtx.get());
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto table = cudf_velox::with_arrow::toCudfTable(input, pool(), stream, mr);
 
   for (const bool literalLower : {true, false}) {
     for (const bool literalUpper : {true, false}) {
@@ -1589,7 +1584,22 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
           literalLower ? "1" : "lower_bound",
           literalUpper ? "9" : "upper_bound");
       SCOPED_TRACE(sql);
-      auto plan = PlanBuilder().values({input}).project({sql}).planNode();
+      auto expression = cudf_velox::test_utils::optimizeTypedExpr(
+          sql, input->rowType(), queryCtx.get(), &execCtx);
+      ASSERT_TRUE(expression->isCallKind());
+      ASSERT_EQ(
+          expression->asUnchecked<core::CallTypedExpr>()->name(), "between");
+      // Exercise BetweenFunction rather than an alternative GPU evaluator.
+      auto evaluator = cudf_velox::FunctionExpression::create(
+          expression, input->rowType(), pool());
+      ASSERT_NE(evaluator, nullptr);
+      auto result = evaluator->eval(table->view().columns(), stream, mr);
+      auto actual = cudf_velox::with_arrow::toVeloxColumn(
+          cudf::table_view{{cudf_velox::asView(result)}},
+          pool(),
+          "result",
+          stream,
+          mr);
       std::vector<std::optional<bool>> expected{
           false, true, true, true, false, std::nullopt, true, true};
       if (!literalLower) {
@@ -1598,8 +1608,8 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
       if (!literalUpper) {
         expected[7] = std::nullopt;
       }
-      AssertQueryBuilder(plan).assertResults(
-          makeRowVector({makeNullableFlatVector<bool>(expected)}));
+      facebook::velox::test::assertEqualVectors(
+          makeNullableFlatVector<bool>(expected), actual->childAt(0));
     }
   }
 }
