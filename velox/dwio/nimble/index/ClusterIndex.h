@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -118,6 +119,20 @@ class ClusterIndex : public IndexLookup {
     return sortOrders_;
   }
 
+  /// Returns a cursor over the encoded keys of the rows in 'rows'.
+  ///
+  /// Scanning advances a chunk cursor instead of binary searching per row,
+  /// takes the partition lock once per chunk rather than once per row, and
+  /// returns views instead of owned strings. Chunks come from the same
+  /// decoded-chunk cache that lookups use, so short cursors walking
+  /// consecutive row ranges of one chunk decode it only once between them.
+  ///
+  /// A cursor holds no locks between calls and is not thread-safe; use one
+  /// per thread. Cursors share no state with one another, so concurrent
+  /// scans need no coordination beyond that. The ClusterIndex must outlive
+  /// them.
+  std::unique_ptr<KeyCursor> keyCursor(RowRange rows) const override;
+
   /// File-level index layout for diagnostic output (nimble_dump, FileLayout).
   struct Layout {
     /// Per-partition detail. Only populated when layout(detail=true).
@@ -153,6 +168,10 @@ class ClusterIndex : public IndexLookup {
   Layout layout(bool detail = true) const;
 
  private:
+  // Walks the index's keys a chunk at a time. Reached only through
+  // keyCursor().
+  class KeyIterator;
+
   ClusterIndex(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
