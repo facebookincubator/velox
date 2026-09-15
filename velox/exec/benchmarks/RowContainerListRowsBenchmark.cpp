@@ -17,8 +17,8 @@
 // Benchmarks the software prefetch that RowContainer::listRows() issues on x86.
 //
 // Drives the real listRows() (not a copy of its loop) and probes an 8 MiB table
-// once per row -- a pointer-only consumer would leave a pure sequential walk the
-// hardware prefetcher already covers, hiding the DRAM latency the prefetch
+// once per row -- a pointer-only consumer would leave a pure sequential walk
+// the hardware prefetcher already covers, hiding the DRAM latency the prefetch
 // targets. Containers are built before timing.
 //
 // The distance is a template parameter of listRows(). For each row width the
@@ -50,7 +50,8 @@ constexpr int32_t kBatchSize = 1'024;
 // Distances compared against the no-prefetch baseline. kShippedDistance is the
 // production default; kFarDistance shows the narrow-row gain has already
 // plateaued, so it is a benchmark-only sweep point, not a production value.
-constexpr int32_t kShippedDistance = RowContainer::kListRowsPrefetchDistanceBytes;
+constexpr int32_t kShippedDistance =
+    RowContainer::kListRowsPrefetchDistanceBytes;
 constexpr int32_t kFarDistance = 4'096;
 
 // Pseudo-random probe table, sized above private-cache capacity to model the
@@ -88,10 +89,8 @@ std::vector<TypePtr> keyTypesForWidth(int32_t width) {
   }
 }
 
-std::unique_ptr<RowContainer> makeContainer(
-    int32_t rowWidth,
-    int64_t targetBytes,
-    memory::MemoryPool* pool) {
+std::unique_ptr<RowContainer>
+makeContainer(int32_t rowWidth, int64_t targetBytes, memory::MemoryPool* pool) {
   auto container = std::make_unique<RowContainer>(
       keyTypesForWidth(rowWidth),
       /*nullableKeys=*/false,
@@ -110,9 +109,9 @@ std::unique_ptr<RowContainer> makeContainer(
   std::mt19937_64 rng(42);
   for (int64_t i = 0; i < numRows; ++i) {
     char* row = container->newRow();
-    // Random BIGINT in the first key indexes the probe table. The flag byte sits
-    // past the keys and stays zero, so the probed bit is clear and kNotProbed
-    // returns every row.
+    // Random BIGINT in the first key indexes the probe table. The flag byte
+    // sits past the keys and stays zero, so the probed bit is clear and
+    // kNotProbed returns every row.
     const uint64_t key = rng();
     std::memcpy(row, &key, sizeof(key));
   }
@@ -156,15 +155,16 @@ unsigned runScanAndProbe(
   for (unsigned i = 0; i < times; ++i) {
     const RowContainer* containerPtr = &container;
     folly::makeUnpredictable(containerPtr);
-    checksum += scanAndProbeOnce<prefetchDistanceBytes>(*containerPtr, probeTable);
+    checksum +=
+        scanAndProbeOnce<prefetchDistanceBytes>(*containerPtr, probeTable);
   }
   folly::doNotOptimizeAway(checksum);
   return times;
 }
 
-// Registers, for one container, the no-prefetch baseline followed by the shipped
-// and farther distances as folly relative arms, so a single run prints each
-// distance's speedup against that baseline.
+// Registers, for one container, the no-prefetch baseline followed by the
+// shipped and farther distances as folly relative arms, so a single run prints
+// each distance's speedup against that baseline.
 void registerWidth(
     const std::string& tag,
     const RowContainer& container,

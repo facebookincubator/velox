@@ -593,8 +593,8 @@ class RowContainer {
   enum class ProbeType { kAll, kProbed, kNotProbed };
 
   // Software-prefetch look-ahead for listRows() on x86, in bytes. A fixed byte
-  // distance keeps the run-ahead stable across row widths. Exposed as a template
-  // parameter so benchmarks can sweep the real scan implementation.
+  // distance keeps the run-ahead stable across row widths. Exposed as a
+  // template parameter so benchmarks can sweep the real scan implementation.
   static constexpr int32_t kListRowsPrefetchDistanceBytes = 2'048;
 
   template <
