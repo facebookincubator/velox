@@ -16,9 +16,10 @@
 
 #pragma once
 
-#include "velox/common/base/Macros.h"
 #include "velox/experimental/cudf/functions/GpuExec.h"
 #include "velox/experimental/cudf/functions/GpuVariadicView.h"
+
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/type/SimpleFunctionApi.h"
 
@@ -34,17 +35,19 @@
 ///
 /// What does carry over exactly is the three-valued truth table, and that is
 /// the part worth being careful about. NULL in Kleene logic is "unknown", not
-/// "false": a single false makes a conjunction false no matter how many unknowns
-/// sit beside it, and a single true makes a disjunction true. So the result is
-/// non-null even when an input is null, which is precisely the case default null
-/// behaviour gets wrong -- hence callNullable() rather than call() throughout.
+/// "false": a single false makes a conjunction false no matter how many
+/// unknowns sit beside it, and a single true makes a disjunction true. So the
+/// result is non-null even when an input is null, which is precisely the case
+/// default null behaviour gets wrong -- hence callNullable() rather than call()
+/// throughout.
 ///
 /// AND and OR take a variadic pack because that is how they arrive: the
 /// expression tree flattens a chain, so `a AND b AND c` is one three-argument
 /// call rather than nested pairs.
 namespace facebook::velox::cudf_velox::gpu_sfi {
 
-/// Conjunction: false if any term is false, else null if any is null, else true.
+/// Conjunction: false if any term is false, else null if any is null, else
+/// true.
 template <typename T>
 struct GpuAndFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -96,8 +99,8 @@ struct GpuOrFunction {
   }
 };
 
-/// Negation. Unknown negates to unknown, so a null input yields a null result --
-/// which is also what default null behaviour would do, but stated explicitly
+/// Negation. Unknown negates to unknown, so a null input yields a null result
+/// -- which is also what default null behaviour would do, but stated explicitly
 /// here so the three functions read alike.
 template <typename T>
 struct GpuNotFunction {

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
+
 #include "velox/expression/FunctionSignature.h"
 
 #include <string>
@@ -25,11 +26,11 @@
 
 /// Host-side view of the GPU function registry.
 ///
-/// GpuFunctionRegistry.h is the ABI that shadow-compiled .cu code shares, and so
-/// may name nothing from Velox. That restriction does not apply here: no device
-/// translation unit includes this header, which lets a registered entry hold a
-/// real exec::FunctionSignature rather than the strings it crossed the boundary
-/// as.
+/// GpuFunctionRegistry.h is the ABI that shadow-compiled .cu code shares, and
+/// so may name nothing from Velox. That restriction does not apply here: no
+/// device translation unit includes this header, which lets a registered entry
+/// hold a real exec::FunctionSignature rather than the strings it crossed the
+/// boundary as.
 ///
 /// Holding the real thing is the point. Overload resolution then becomes
 /// exec::SignatureBinder -- the matcher SimpleFunctionRegistry itself uses --

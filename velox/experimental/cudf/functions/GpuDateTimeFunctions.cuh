@@ -16,8 +16,9 @@
 
 #pragma once
 
-#include "velox/common/base/Macros.h"
 #include "velox/experimental/cudf/functions/GpuExec.h"
+
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/TimeUtilsCore.h"
 // For SimpleTypeTrait<Date>, which registration reads to name the signature.

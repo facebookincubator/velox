@@ -360,13 +360,7 @@ target_compile_options(
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
 )
-target_link_libraries(
-  velox_cudf_gpu_function_semantics_test
-  cudf::cudf
-  fmt::fmt
-  gtest
-  gtest_main
-)
+target_link_libraries(velox_cudf_gpu_function_semantics_test cudf::cudf fmt::fmt gtest gtest_main)
 add_test(
   NAME velox_cudf_gpu_function_semantics_test
   COMMAND velox_cudf_gpu_function_semantics_test

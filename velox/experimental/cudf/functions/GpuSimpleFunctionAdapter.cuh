@@ -29,8 +29,8 @@
 // include path.
 
 #include "velox/experimental/cudf/functions/GpuExec.h"
-#include "velox/experimental/cudf/functions/GpuVariadicView.h"
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
+#include "velox/experimental/cudf/functions/GpuVariadicView.h"
 
 #include "velox/core/Metaprogramming.h"
 #include "velox/type/TypeKind.h"
@@ -287,10 +287,8 @@ namespace detail {
 /// answers false and leaves per-element nullity to the function, which is the
 /// only party that knows what a null element means for it.
 template <typename TIn>
-__device__ inline bool slotIsNull(
-    const GpuArgView* arguments,
-    std::size_t i,
-    cudf::size_type row) {
+__device__ inline bool
+slotIsNull(const GpuArgView* arguments, std::size_t i, cudf::size_type row) {
   if constexpr (isGpuVariadicView<TIn>::value) {
     return false;
   } else {

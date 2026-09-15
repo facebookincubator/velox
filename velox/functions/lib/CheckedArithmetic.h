@@ -72,7 +72,9 @@ struct CheckedModulusFunction {
 template <typename T>
 struct CheckedNegateFunction {
   template <typename TInput>
-  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(TInput& result, const TInput& a) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      TInput& result,
+      const TInput& a) {
     result = checkedNegate(a);
   }
 };
