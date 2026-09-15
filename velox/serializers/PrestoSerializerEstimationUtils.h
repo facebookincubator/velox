@@ -23,8 +23,7 @@ void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
-    Scratch& scratch,
-    bool flatten = false);
+    Scratch& scratch);
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
