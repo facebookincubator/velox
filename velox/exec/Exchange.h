@@ -46,7 +46,7 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
 
 class Exchange : public SourceOperator {
  public:
-  /// 'exchangeClient' is the concrete in-memory client rather than the abstract
+  /// 'exchangeClient' is of type InMemoryExchangeClient rather than the abstract
   /// ExchangeClient, because this operator reads pages off the in-memory
   /// exchange queue, which belongs to that client's data plane and not to the
   /// abstract control plane.
@@ -89,7 +89,7 @@ class Exchange : public SourceOperator {
   // exchangeClient_.
   void getSplits(ContinueFuture* future);
 
-  // Fetches runtime stats from ExchangeClient and replaces these in this
+  // Fetches runtime stats from exchangeClient_ and replaces these in this
   // operator's stats.
   void recordExchangeClientStats();
 
@@ -106,7 +106,7 @@ class Exchange : public SourceOperator {
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
   // True if this operator is responsible for fetching splits from the Task
-  // and passing these to ExchangeClient.
+  // and passing these to exchangeClient_.
   const bool processSplits_;
 
   const int driverId_;
