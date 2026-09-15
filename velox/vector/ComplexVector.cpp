@@ -595,36 +595,77 @@ void ArrayVectorBase::copyRangesImpl(
     // stays register-resident in the hot loop; do not simplify back to
     // '.back()'.
     CopyRange run{};
-    applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
-      if (source->isNullAt(sourceIndex)) {
-        setNull(targetIndex, true);
-      } else {
-        if (setNotNulls) {
-          setNull(targetIndex, false);
-        }
-        auto wrappedIndex = source->wrappedIndex(sourceIndex);
-        auto copySize = sourceArray->sizeAt(wrappedIndex);
-
-        if (copySize > 0) {
-          auto copyOffset = sourceArray->offsetAt(wrappedIndex);
-
-          // If we're copying two adjacent ranges, merge them.  This only
-          // works if they're consecutive.
-          if (run.count != 0 && run.sourceIndex + run.count == copyOffset) {
-            run.count += copySize;
-          } else {
-            if (run.count != 0) {
-              outRanges.push_back(run);
-            }
-            run = {copyOffset, childSize, copySize};
+    auto appendRow = [&](vector_size_t targetIndex,
+                         vector_size_t copyOffset,
+                         vector_size_t copySize) {
+      if (copySize > 0) {
+        // If we're copying two adjacent ranges, merge them.  This only
+        // works if they're consecutive.
+        if (run.count != 0 && run.sourceIndex + run.count == copyOffset) {
+          run.count += copySize;
+        } else {
+          if (run.count != 0) {
+            outRanges.push_back(run);
           }
+          run = {copyOffset, childSize, copySize};
         }
-
-        mutableOffsets[targetIndex] = childSize;
-        mutableSizes[targetIndex] = copySize;
-        childSize = checkedPlus<vector_size_t>(childSize, copySize);
       }
-    });
+
+      mutableOffsets[targetIndex] = childSize;
+      mutableSizes[targetIndex] = copySize;
+      childSize = checkedPlus<vector_size_t>(childSize, copySize);
+    };
+
+    if (source == leafSource) {
+      // Identity mapping: 'source' is its own leaf vector, so wrappedIndex is
+      // a no-op and nulls/offsets/sizes can be read directly.
+      const uint64_t* srcRawNulls = source->rawNulls();
+      const auto* srcRawOffsets = sourceArray->rawOffsets();
+      const auto* srcRawSizes = sourceArray->rawSizes();
+      if (srcRawNulls == nullptr) {
+        if (setNotNulls) {
+          BaseVector::setNulls(mutableRawNulls(), ranges, false);
+        }
+        applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
+          auto copySize = srcRawSizes[sourceIndex];
+          appendRow(
+              targetIndex,
+              copySize > 0 ? srcRawOffsets[sourceIndex] : 0,
+              copySize);
+        });
+      } else {
+        applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
+          if (bits::isBitNull(srcRawNulls, sourceIndex)) {
+            setNull(targetIndex, true);
+          } else {
+            if (setNotNulls) {
+              setNull(targetIndex, false);
+            }
+            auto copySize = srcRawSizes[sourceIndex];
+            appendRow(
+                targetIndex,
+                copySize > 0 ? srcRawOffsets[sourceIndex] : 0,
+                copySize);
+          }
+        });
+      }
+    } else {
+      applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
+        if (source->isNullAt(sourceIndex)) {
+          setNull(targetIndex, true);
+        } else {
+          if (setNotNulls) {
+            setNull(targetIndex, false);
+          }
+          auto wrappedIndex = source->wrappedIndex(sourceIndex);
+          auto copySize = sourceArray->sizeAt(wrappedIndex);
+          appendRow(
+              targetIndex,
+              copySize > 0 ? sourceArray->offsetAt(wrappedIndex) : 0,
+              copySize);
+        }
+      });
+    }
 
     if (run.count != 0) {
       outRanges.push_back(run);
