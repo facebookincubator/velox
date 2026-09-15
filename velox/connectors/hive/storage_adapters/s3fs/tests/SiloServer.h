@@ -27,16 +27,16 @@ using namespace facebook::velox;
 using TempDirectoryPath = common::testutil::TempDirectoryPath;
 
 namespace {
-constexpr char const* kMinioExecutableName{"minio-2022-05-26"};
-constexpr char const* kMinioAccessKey{"minio"};
-constexpr char const* kMinioSecretKey{"miniopass"};
+constexpr char const* kSiloExecutableName{"silo"};
+constexpr char const* kSiloAccessKey{"minio"};
+constexpr char const* kSiloSecretKey{"miniopass"};
 } // namespace
 
-// A minio server, managed as a child process.
+// A silo server, managed as a child process.
 // Adapted from the Apache Arrow library.
-class MinioServer {
+class SiloServer {
  public:
-  MinioServer() : tempPath_(TempDirectoryPath::create()) {
+  SiloServer() : tempPath_(TempDirectoryPath::create()) {
     constexpr auto kHostAddressTemplate = "127.0.0.1:{}";
     auto ports = facebook::velox::exec::test::getFreePorts(2);
     connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
@@ -79,19 +79,21 @@ class MinioServer {
   const std::shared_ptr<TempDirectoryPath> tempPath_;
   std::string connectionString_;
   std::string consoleAddress_;
-  const std::string accessKey_ = kMinioAccessKey;
-  const std::string secretKey_ = kMinioSecretKey;
+  const std::string accessKey_ = kSiloAccessKey;
+  const std::string secretKey_ = kSiloSecretKey;
   std::shared_ptr<::boost::process::child> serverProcess_;
 };
 
-void MinioServer::start() {
+void SiloServer::start() {
   boost::process::environment env = boost::this_process::environment();
+  // Silo honors the legacy MinIO credential variables; renaming these
+  // breaks server authentication.
   env["MINIO_ACCESS_KEY"] = accessKey_;
   env["MINIO_SECRET_KEY"] = secretKey_;
 
-  auto exePath = boost::process::search_path(kMinioExecutableName);
+  auto exePath = boost::process::search_path(kSiloExecutableName);
   if (exePath.empty()) {
-    VELOX_FAIL("Failed to find minio executable {}'", kMinioExecutableName);
+    VELOX_FAIL("Failed to find silo executable {}'", kSiloExecutableName);
   }
 
   const auto path = tempPath_->getPath();
@@ -108,11 +110,11 @@ void MinioServer::start() {
         consoleAddress_,
         path.c_str());
   } catch (const std::exception& e) {
-    VELOX_FAIL("Failed to launch Minio server: {}", e.what());
+    VELOX_FAIL("Failed to launch Silo server: {}", e.what());
   }
 }
 
-void MinioServer::stop() {
+void SiloServer::stop() {
   if (serverProcess_ && serverProcess_->valid()) {
     // Brutal shutdown
     serverProcess_->terminate();
