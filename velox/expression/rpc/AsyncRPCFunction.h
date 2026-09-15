@@ -157,9 +157,9 @@ class AsyncRPCFunction {
     return 0;
   }
 
-  /// Returns the service tier key for rate limiting.
-  /// Empty string means "no tier configured — uses global default limit."
-  virtual std::string tierKey() const {
+  /// Returns the backend key for rate limiting.
+  /// Empty string means "no backend configured — uses global default limit."
+  virtual std::string backendKey() const {
     return "";
   }
 

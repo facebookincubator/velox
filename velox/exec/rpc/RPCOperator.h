@@ -118,9 +118,9 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
-  // Per-tier RPCRateLimiter observability (capacity trajectory), snapshotted
+  // Per-backend RPCRateLimiter observability (capacity trajectory), snapshotted
   // at close(). The rpcCongestion* stats above are the per-DRIVER window; these
-  // are the capacity shared by every driver on the tier.
+  // are the capacity shared by every driver on the backend.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
@@ -179,7 +179,8 @@ class RPCOperator : public exec::Operator {
   bool inputBufferIsFull() const;
 
   // Returns false when the flush did not happen: nothing accumulated, or the
-  // tier had no free slot. Callers loop on this so they stop rather than spin.
+  // backend had no free slot. Callers loop on this so they stop rather than
+  // spin.
   bool flushBatchRequests(int32_t maxRows = 0);
 
   // Builds the output RowVector from a completed batch (BATCH mode).
@@ -232,7 +233,7 @@ class RPCOperator : public exec::Operator {
   // Asks the backend whether it can take work and parks on the answer.
   // admitOrWait() decides and enrols under one lock, so there is no window in
   // which the caller is neither admitted nor waiting on anything.
-  exec::BlockingReason parkOnTierCapacity(ContinueFuture* future);
+  exec::BlockingReason parkOnBackendCapacity(ContinueFuture* future);
 
   // Hands 'waitFuture' to the driver and starts a block-wait measurement.
   exec::BlockingReason
@@ -270,13 +271,13 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
 
   // Identifies the provisioned capacity this operator admits against: a
-  // backend tier plus the credential used to reach it (from
-  // function_->tierKey()). Everything sharing this key shares one quota.
-  std::string tierKey_;
+  // backend plus the credential used to reach it (from
+  // function_->backendKey()). Everything sharing this key shares one quota.
+  std::string backendKey_;
 
-  // Admission control for tierKey_, resolved once in initialize(). Points into
-  // the process-scoped RPCRateLimiterRegistry, which outlives every operator
-  // and every token captured into a continuation.
+  // Admission control for backendKey_, resolved once in initialize(). Points
+  // into the process-scoped RPCRateLimiterRegistry, which outlives every
+  // operator and every token captured into a continuation.
   RPCRateLimiter* limiter_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
