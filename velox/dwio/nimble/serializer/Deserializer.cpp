@@ -378,7 +378,7 @@ void Deserializer::initialize(
     const std::shared_ptr<const velox::dwio::common::TypeWithId>& schemaWithId,
     const std::function<bool(uint32_t)>& isSelected) {
   const auto params = createFieldReaderParams();
-  parser_ = std::make_unique<serde::StreamDataParser>(pool_, options_);
+  parser_ = std::make_unique<serde::StreamDataParser>(pool_);
 
   std::vector<uint32_t> offsets;
   rootFactory_ = FieldReaderFactory::create(
@@ -587,7 +587,6 @@ void Deserializer::appendStreamSegments(
     uint32_t startRow,
     bool requiresBarrier) const {
   const auto maxStreamOffset = deserializers_.size() - 1;
-  const auto version = parser_->version();
   const auto streamEncodingUsesVarintRowCount =
       parser_->streamEncodingUsesVarintRowCount();
   const bool hasInMapChildren = !inMapChildTypes_.empty();
@@ -611,7 +610,7 @@ void Deserializer::appendStreamSegments(
     auto* decoder = deserializers_[offset];
     NIMBLE_CHECK_NOT_NULL(decoder, "Missing decoder for stream");
     BatchedStreamDecoder::as(decoder)->addBatch(
-        startRow, streamData, version, streamEncodingUsesVarintRowCount);
+        startRow, streamData, streamEncodingUsesVarintRowCount);
   });
 
   if (!hasInMapChildren) {
