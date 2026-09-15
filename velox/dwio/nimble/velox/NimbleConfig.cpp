@@ -36,6 +36,14 @@ DEFINE_bool(
     false,
     "Enable zstrong variable bit width compressor at write time. Transparent at read time.");
 
+DEFINE_bool(
+    nimble_subintsplit_delta_pretransform,
+    false,
+    "Let SubIntSplit zigzag-delta a stream before splitting it into bit ranges, "
+    "keeping whichever form encodes smaller. EXPERIMENTAL: delta streams are "
+    "sequential-only, so skip() and readWithVisitor() reject them. Do not "
+    "enable for production tables until restatement points are added.");
+
 DEFINE_string(
     nimble_writer_input_buffer_default_growth_config,
     "{\"32\":4.0,\"512\":1.414,\"4096\":1.189}",
@@ -324,6 +332,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<std::string> Config::ENCODING_SELECTION_CONFIG(
     "nimble.encoding_selection_config",
+    "");
+
+/* static */ Config::Entry<std::string> Config::COLUMN_ENCODING_OVERRIDES(
+    "nimble.column_encoding_overrides",
     "");
 
 // EXPERIMENTAL: Cluster index is not production-ready. Do not enable for

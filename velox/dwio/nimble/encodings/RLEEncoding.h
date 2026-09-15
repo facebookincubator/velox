@@ -186,11 +186,18 @@ class RLEEncodingBase
     const uint32_t valueCount = values.size();
     auto* pool = &buffer.getMemoryPool();
     Vector<uint32_t> runLengths(pool);
+    // Statistics already counted the runs on this stream, so both vectors can
+    // be sized exactly instead of being grown a run at a time. On short-run
+    // data the run count approaches the value count, and the repeated growth
+    // copies most of the stream several times over.
+    const uint64_t runCount = selection.statistics().consecutiveRepeatCount();
+    runLengths.reserve(runCount);
     ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
     std::string_view serializedRunLengths;
     std::string_view serializedRunValues;
     if constexpr (isFloatingPointType<T>()) {
       Vector<T> logicalRunValues(pool);
+      logicalRunValues.reserve(runCount);
       rle::computeRuns(
           values, &runLengths, &logicalRunValues, [](const physicalType value) {
             return EncodingPhysicalType<T>::asEncodingLogicalType(value);
@@ -204,6 +211,7 @@ class RLEEncodingBase
           selection, logicalRunValues, scopedBuffer.get(), options);
     } else {
       Vector<physicalType> runValues(pool);
+      runValues.reserve(runCount);
       rle::computeRuns(values, &runLengths, &runValues);
       serializedRunLengths = selection.template encodeNested<uint32_t>(
           EncodingIdentifiers::RunLength::RunLengths,
@@ -675,23 +683,25 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
 
   using internal::RLEEncodingBase<T, RLEEncoding<T>>::advanceRunLength;
 
+  // Values written per short run by materialize(), regardless of the run's
+  // actual length. Eight covers all but a fraction of a percent of runs on the
+  // streams measured, and is one 32-byte store for a 4-byte type.
+  static constexpr uint32_t kShortRunStores = 8;
+
   void advanceRunValue();
 
+  // Kept to a single pointer test so it inlines. advanceRunValue() calls this
+  // once per run, and runs are frequently one value long, so anything heavier
+  // lands directly in the decode loop.
   void ensureValues() {
-    NIMBLE_CHECK_NULL(
-        dictValues_,
-        "flat mode unavailable — dict mode was already initialized");
-    if (values_) {
+    if (values_ != nullptr) [[likely]] {
       return;
     }
-    NIMBLE_CHECK_NOT_NULL(valuesEncoding_);
-    values_ = std::make_unique<detail::BufferedEncoding<physicalType, 128>>(
-        std::move(valuesEncoding_));
-    for (uint32_t i = 0; i < pendingSkips_; ++i) {
-      this->currentValue_ = values_->nextValue();
-    }
-    pendingSkips_ = 0;
+    initValues();
   }
+
+  // Cold half of ensureValues(): the first read picks flat over dict mode.
+  void initValues();
 
   void ensureDictValues() {
     NIMBLE_CHECK_NULL(
@@ -882,6 +892,19 @@ RLEEncoding<T>::RLEEncoding(
 // currentValue_ from the values encoding. In dict mode,
 // advanceRunIndex() is used instead.
 template <typename T>
+FOLLY_NOINLINE void RLEEncoding<T>::initValues() {
+  NIMBLE_CHECK_NULL(
+      dictValues_, "flat mode unavailable — dict mode was already initialized");
+  NIMBLE_CHECK_NOT_NULL(valuesEncoding_);
+  values_ = std::make_unique<detail::BufferedEncoding<physicalType, 128>>(
+      std::move(valuesEncoding_));
+  for (uint32_t i = 0; i < pendingSkips_; ++i) {
+    this->currentValue_ = values_->nextValue();
+  }
+  pendingSkips_ = 0;
+}
+
+template <typename T>
 void RLEEncoding<T>::advanceRunValue() {
   ensureValues();
   this->currentValue_ = values_->nextValue();
@@ -917,25 +940,64 @@ void RLEEncoding<T>::skip(uint32_t rowCount) {
   }
 }
 
+// Real streams often hold very short runs -- a production feature column here
+// averages 1.5 values per run, with 64% of runs a single value -- so this loop
+// runs once per run and its cost is per-run overhead, not copying.
+//
+// The expensive part is deciding how much to write. A loop that stores exactly
+// `run` values exits after 1, 2, 3 or 4 iterations with no discernible pattern,
+// and the branch predictor misses most runs. So while there is room to overrun,
+// store a fixed block and advance by the true run length instead: the surplus
+// stores are overwritten by the next run, and the branch disappears. Runs too
+// long for the fixed block still go through simdFill.
 template <typename T>
 void RLEEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   ensureValues();
-  uint32_t rowsLeft = rowCount;
   auto* output = static_cast<physicalType*>(buffer);
-  while (rowsLeft > 0) {
-    if (this->copiesRemaining_ == 0) {
+  physicalType* const end = output + rowCount;
+  uint32_t copies = this->copiesRemaining_;
+  physicalType value = this->currentValue_;
+
+  // Only overrun while a whole block still fits inside the caller's buffer.
+  physicalType* const blockEnd =
+      rowCount > kShortRunStores ? end - kShortRunStores : output;
+
+  while (output < blockEnd) {
+    if (copies == 0) {
       this->advanceRun();
+      copies = this->copiesRemaining_;
+      value = this->currentValue_;
     }
-    if (rowsLeft < this->copiesRemaining_) {
-      velox::simd::simdFill(output, this->currentValue_, rowsLeft);
-      this->copiesRemaining_ -= rowsLeft;
-      return;
+    if (copies <= kShortRunStores) [[likely]] {
+      for (uint32_t i = 0; i < kShortRunStores; ++i) {
+        output[i] = value;
+      }
+      output += copies;
+      copies = 0;
+    } else {
+      const uint32_t run = std::min<uint32_t>(copies, end - output);
+      velox::simd::simdFill(output, value, run);
+      output += run;
+      copies -= run;
     }
-    velox::simd::simdFill(output, this->currentValue_, this->copiesRemaining_);
-    output += this->copiesRemaining_;
-    rowsLeft -= this->copiesRemaining_;
-    this->copiesRemaining_ = 0;
   }
+
+  // Tail: within kShortRunStores of the end, so write exactly what is left.
+  while (output < end) {
+    if (copies == 0) {
+      this->advanceRun();
+      copies = this->copiesRemaining_;
+      value = this->currentValue_;
+    }
+    const uint32_t run = std::min<uint32_t>(copies, end - output);
+    copies -= run;
+    for (uint32_t i = 0; i < run; ++i) {
+      *output++ = value;
+    }
+  }
+
+  this->copiesRemaining_ = copies;
+  this->currentValue_ = value;
 }
 
 template <typename T>

@@ -19,7 +19,7 @@
 
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
-#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 #endif
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -790,13 +790,11 @@ TEST(EncodingLayoutTests, subIntSplitCapture) {
   ASSERT_GT(captured.childrenCount(), 0u);
   EXPECT_EQ(
       captured.config().get(
-          std::string(nimble::detail::subintsplit::kSplitModeConfigKey)),
-      nimble::detail::subintsplit::kSplitModePreserve);
+          std::string(nimble::subintsplit::kSplitModeConfigKey)),
+      nimble::subintsplit::kSplitModePreserve);
   ASSERT_TRUE(
       captured.config()
-          .get(
-              std::string(
-                  nimble::detail::subintsplit::kSplitBoundariesConfigKey))
+          .get(std::string(nimble::subintsplit::kSplitBoundariesConfigKey))
           .has_value());
 
   // The encoded stream must round-trip through the encoding factory.
@@ -842,14 +840,14 @@ TEST(EncodingLayoutTests, subIntSplitCapture) {
   verifyEncodingLayout(
       captured, deserialized, /*compressionMayBeRedirected=*/false);
   auto preserveMode = deserialized.config().get(
-      std::string(nimble::detail::subintsplit::kSplitModeConfigKey));
+      std::string(nimble::subintsplit::kSplitModeConfigKey));
   ASSERT_TRUE(preserveMode.has_value());
-  EXPECT_EQ(*preserveMode, nimble::detail::subintsplit::kSplitModePreserve);
+  EXPECT_EQ(*preserveMode, nimble::subintsplit::kSplitModePreserve);
 
   auto deserializedBoundaries = deserialized.config().get(
-      std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey));
+      std::string(nimble::subintsplit::kSplitBoundariesConfigKey));
   auto capturedBoundaries = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey));
+      std::string(nimble::subintsplit::kSplitBoundariesConfigKey));
   ASSERT_TRUE(deserializedBoundaries.has_value());
   ASSERT_TRUE(capturedBoundaries.has_value());
   EXPECT_EQ(*deserializedBoundaries, *capturedBoundaries);
@@ -882,9 +880,9 @@ TEST(EncodingLayoutTests, subIntSplitPreserveBoundariesReplay) {
   nimble::EncodingLayout preserveLayout{
       nimble::EncodingType::SubIntSplit,
       nimble::EncodingLayout::Config{
-          {{std::string(nimble::detail::subintsplit::kSplitModeConfigKey),
-            std::string(nimble::detail::subintsplit::kSplitModePreserve)},
-           {std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey),
+          {{std::string(nimble::subintsplit::kSplitModeConfigKey),
+            std::string(nimble::subintsplit::kSplitModePreserve)},
+           {std::string(nimble::subintsplit::kSplitBoundariesConfigKey),
             preserveBoundaries}}},
       nimble::CompressionType::Uncompressed,
       {std::nullopt, std::nullopt, std::nullopt}};
@@ -899,12 +897,12 @@ TEST(EncodingLayoutTests, subIntSplitPreserveBoundariesReplay) {
       encoding, nimble::Encoding::Options{});
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
   auto replayedMode = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitModeConfigKey));
+      std::string(nimble::subintsplit::kSplitModeConfigKey));
   auto replayedBoundaries = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey));
+      std::string(nimble::subintsplit::kSplitBoundariesConfigKey));
   ASSERT_TRUE(replayedMode.has_value());
   ASSERT_TRUE(replayedBoundaries.has_value());
-  EXPECT_EQ(*replayedMode, nimble::detail::subintsplit::kSplitModePreserve);
+  EXPECT_EQ(*replayedMode, nimble::subintsplit::kSplitModePreserve);
   EXPECT_EQ(*replayedBoundaries, preserveBoundaries);
 }
 #endif
