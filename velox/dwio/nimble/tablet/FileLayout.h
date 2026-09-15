@@ -67,8 +67,8 @@ namespace facebook::nimble {
 /// |  Optional: "columnar.indexes" (root index manifest with named     |
 /// |            cluster and dense index payloads)                      |
 /// +-------------------------------------------------------------------+
-/// |  Optional: "columnar.chunk.stats" (root ChunkStats flatbuffer     |
-/// |            with stripe_indexes)                                   |
+/// |  Optional: chunk stats V1 ("columnar.chunk.stats") or V2          |
+/// |            ("columnar.chunk.stats.v2") root with stripe_indexes   |
 /// +-------------------------------------------------------------------+
 /// |  Optional: "schema", "stats", etc.                                |
 /// +===================================================================+
@@ -113,16 +113,24 @@ namespace facebook::nimble {
 ///   | stripe_row_counts: row count per stripe                        |
 ///   +---------------------------------------------------------------+
 ///
-/// Chunk Stats ("columnar.chunk.stats"):
+/// Chunk Stats ("columnar.chunk.stats" or "columnar.chunk.stats.v2"):
 ///   Root ChunkStats flatbuffer (see ChunkStats.fbs) containing:
 ///   - stripe_indexes: refs to per-group StripeChunkStats metadata
 ///
-///   StripeChunkStats (per stripe group):
+///   StripeChunkStats V1 (per stripe group):
 ///   +---------------------------------------------------------------+
 ///   | stream_count: total number of indexed streams                   |
 ///   | stream_chunk_counts: accumulated chunks per (stripe, stream)   |
 ///   | stream_chunk_rows: accumulated rows per chunk                  |
 ///   | stream_chunk_offsets: byte offset per chunk                    |
+///   +---------------------------------------------------------------+
+///
+///   StripeChunkStatsV2 (per stripe group):
+///   +---------------------------------------------------------------+
+///   | stream_count: total number of indexed streams                  |
+///   | stream_chunk_counts: accumulated chunks per (stream, stripe)   |
+///   | chunk_rows: Nimble-encoded accumulated rows per chunk          |
+///   | chunk_offsets: Nimble-encoded byte offsets per chunk           |
 ///   +---------------------------------------------------------------+
 
 /// Describes the physical layout of a Nimble file, including offsets and sizes
