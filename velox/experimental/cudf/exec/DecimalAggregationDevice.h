@@ -88,8 +88,9 @@ void packDecimalSumState(
  *        out-of-bounds reads when Arrow compacts null payloads.  Pass nullptr
  *        when no mask is present.
  * @param stream CUDA stream for the launch.
+ * @return true if every non-null row contains a valid serialized state.
  */
-void unpackDecimalSumState(
+bool unpackDecimalSumState(
     cudf::type_id offsetType,
     cudf::column_view offsetsView,
     const uint8_t* chars,

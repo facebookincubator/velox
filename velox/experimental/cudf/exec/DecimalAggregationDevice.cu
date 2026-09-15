@@ -16,12 +16,15 @@
 
 #include "velox/experimental/cudf/exec/DecimalAggregationDevice.h"
 
+#include "velox/common/base/Exceptions.h"
+
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
+#include <rmm/device_scalar.hpp>
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_for.cuh>
@@ -100,15 +103,18 @@ struct UnpackStateFunctor {
   cuda::std::span<int64_t> counts;
   cudf::size_type rowOffset;
   cudf::bitmask_type const* nullMask;
+  int32_t* invalidState;
 
   __device__ void operator()(cudf::size_type idx) const {
     auto const inputIdx = idx + rowOffset;
     if (nullMask && !cudf::bit_is_set(nullMask, inputIdx)) {
       return;
     }
-    assert(
-        offsets[inputIdx + 1] - offsets[inputIdx] ==
-        static_cast<OffsetT>(detail::kDecimalSumStateSize));
+    if (offsets[inputIdx + 1] - offsets[inputIdx] !=
+        static_cast<OffsetT>(detail::kDecimalSumStateSize)) {
+      atomicOr(invalidState, 1);
+      return;
+    }
     int64_t offset = static_cast<int64_t>(offsets[inputIdx]);
     auto* state = reinterpret_cast<const DecimalSumState*>(chars + offset);
     counts[idx] = state->count;
@@ -247,9 +253,10 @@ struct unpackDecimalSumStateKernel {
 
   template <typename OffsetT>
     requires OffsetStorageType<OffsetT>
-  void operator()() const {
+  bool operator()() const {
     auto const n = static_cast<size_t>(numRows);
     auto const inputSize = static_cast<size_t>(rowOffset) + n;
+    rmm::device_scalar<int32_t> invalidState{0, stream};
     launchDeviceFor(
         numRows,
         [&] {
@@ -260,15 +267,18 @@ struct unpackDecimalSumStateKernel {
               cuda::std::span<__int128_t>{sumView.data<__int128_t>(), n},
               cuda::std::span<int64_t>{countView.data<int64_t>(), n},
               rowOffset,
-              nullMask};
+              nullMask,
+              invalidState.data()};
         },
         stream);
+    return invalidState.value(stream) == 0;
   }
 
   template <typename OffsetT>
     requires(!OffsetStorageType<OffsetT>)
-  void operator()() const {
+  bool operator()() const {
     CUDF_FAIL("Invalid offset type for decimal sum state");
+    return false;
   }
 };
 
@@ -343,7 +353,7 @@ void fillOffsetsForDecimalSumState(
       fillOffsetsForDecimalSumStateKernel{offsetsView, numRows, stream});
 }
 
-void unpackDecimalSumState(
+bool unpackDecimalSumState(
     cudf::type_id offsetType,
     cudf::column_view offsetsView,
     const uint8_t* chars,
@@ -353,7 +363,11 @@ void unpackDecimalSumState(
     cudf::size_type rowOffset,
     cudf::bitmask_type const* nullMask,
     rmm::cuda_stream_view stream) {
-  cudf::type_dispatcher(
+  VELOX_CHECK_LE(
+      static_cast<size_t>(rowOffset) + static_cast<size_t>(numRows) + 1,
+      static_cast<size_t>(offsetsView.size()),
+      "Decimal sum state offsets do not include every selected row");
+  return cudf::type_dispatcher(
       cudf::data_type{offsetType},
       unpackDecimalSumStateKernel{
           offsetsView,

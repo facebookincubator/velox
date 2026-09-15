@@ -124,16 +124,19 @@ DecimalSumStateColumns deserializeDecimalSumState(
           offsetsType == cudf::type_id::INT64,
       "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
       cudf::type_to_name(offsetsView.type()));
-  detail::unpackDecimalSumState(
-      offsetsType,
-      offsetsView,
-      charsPtr,
-      sumView,
-      countView,
-      numRows,
-      stateCol.offset(),
-      stateCol.null_mask(),
-      stream);
+  VELOX_CHECK(
+      detail::unpackDecimalSumState(
+          offsetsType,
+          offsetsView,
+          charsPtr,
+          sumView,
+          countView,
+          numRows,
+          stateCol.offset(),
+          stateCol.null_mask(),
+          stream),
+      "Decimal sum state requires every non-null row to be {} bytes",
+      detail::kDecimalSumStateSize);
 
   if (stateCol.nullable()) {
     auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);

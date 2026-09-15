@@ -1282,12 +1282,12 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStatePartialNullCompact) {
   EXPECT_EQ(outCount[2], 2);
 }
 
-TEST_F(CudfDecimalTest, decimalDeserializeSumStateSlice) {
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateArrowCompactedSlice) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
-  // Slice [1, 4) so the deserializer must apply a non-zero parent offset to
-  // both the strings offsets child and the parent validity mask.
+  // Round-trip through Arrow first so the null row has a 0-byte payload, then
+  // slice [1, 4) so deserialization must shift both offsets and validity bits.
   std::vector<int64_t> sums = {10, 20, 0, 40, 50};
   std::vector<int64_t> counts = {1, 2, 0, 4, 5};
   std::vector<bool> sumValid = {true, true, false, true, true};
@@ -1296,7 +1296,21 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateSlice) {
   auto stateCol =
       serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
 
-  auto slices = cudf::slice(stateCol->view(), {1, 4});
+  auto expectedType = ROW({{"s", VARBINARY()}});
+  auto veloxRow = with_arrow::toVeloxColumn(
+      cudf::table_view{{stateCol->view()}},
+      pool(),
+      expectedType,
+      "s",
+      stream,
+      mr);
+  auto compactTable = with_arrow::toCudfTable(veloxRow, pool(), stream, mr);
+  auto compactStateView = compactTable->view().column(0);
+  cudf::strings_column_view strings(compactStateView);
+  EXPECT_LT(
+      strings.chars_size(stream), static_cast<int64_t>(sums.size()) * 32);
+
+  auto slices = cudf::slice(compactStateView, {1, 4});
   ASSERT_EQ(slices.size(), 1);
   ASSERT_EQ(slices.front().offset(), 1);
 
@@ -1446,6 +1460,23 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateAllNull) {
     EXPECT_FALSE(isValidAt(outSumMask, i));
     EXPECT_FALSE(isValidAt(outCountMask, i));
   }
+}
+
+TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
+  auto stream = cudf::get_default_stream();
+
+  // The total payload size is valid, but neither row contains a complete
+  // serialized state. This exercises the per-row check rather than the
+  // aggregate payload-size check.
+  auto offsetsCol = makeFixedWidthColumn<int32_t>(
+      cudf::data_type{cudf::type_id::INT32}, {0, 16, 64}, nullptr, stream);
+  rmm::device_buffer charsBuf(64, stream);
+  auto stateCol = cudf::make_strings_column(
+      2, std::move(offsetsCol), std::move(charsBuf), 0, rmm::device_buffer{});
+
+  VELOX_ASSERT_THROW(
+      deserializeDecimalSumState(stateCol->view(), 2, stream),
+      "Decimal sum state requires every non-null row to be 32 bytes");
 }
 
 TEST_F(CudfDecimalTest, decimalSerializeSumStateUsesInt64OffsetsWhenEnabled) {
