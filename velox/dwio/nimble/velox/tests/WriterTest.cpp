@@ -601,6 +601,13 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
     EXPECT_FALSE(encodingOptions.allowNestedAlpSelection);
+
+    // The delta pre-transform ships disabled. Assert the flag's own default
+    // too, so lowering the bar to enabling it fails here rather than silently
+    // turning on an encoding whose streams reject skip() and
+    // readWithVisitor().
+    EXPECT_FALSE(FLAGS_nimble_subintsplit_delta_pretransform);
+    EXPECT_FALSE(encodingOptions.subIntSplitDeltaPreTransform);
   }
 
   for (const auto useExactBits : {false, true}) {
@@ -620,6 +627,22 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
       EXPECT_EQ(
           encodingOptions.allowNestedAlpSelection, allowNestedAlpSelection);
     }
+  }
+}
+
+TEST_F(WriterTest, subIntSplitDeltaPreTransformFollowsItsFlag) {
+  // The SubIntSplit delta pre-transform has no WriterOptions field: the gflag
+  // is its only enablement channel, so the flag value is what must reach
+  // Encoding::Options.
+  for (const auto enabled : {false, true}) {
+    SCOPED_TRACE(fmt::format("enabled={}", enabled));
+    gflags::FlagSaver flagSaver;
+    FLAGS_nimble_subintsplit_delta_pretransform = enabled;
+
+    const nimble::WriterOptions options;
+
+    EXPECT_EQ(
+        options.buildEncodingOptions().subIntSplitDeltaPreTransform, enabled);
   }
 }
 

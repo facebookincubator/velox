@@ -111,6 +111,15 @@ class SubIntSplitEncoding
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  // Encodes one candidate form. `flags` goes into the header byte and records
+  // whether `values` are raw or zigzag deltas.
+  static std::string_view encodeImpl(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      Buffer& buffer,
+      const Encoding::Options& options,
+      uint8_t flags);
+
   std::string debugString(int offset) const final;
 
  private:
@@ -127,6 +136,14 @@ class SubIntSplitEncoding
   // Persistent scratch buffer reused across materialize() calls. Sized to
   // kMaterializeChunkSize * sizeof(physicalType) bytes on first use.
   Vector<uint8_t> scratchBuf_;
+
+  // Whether the stored sections hold zigzag deltas rather than raw values.
+  // Set from the header flag byte.
+  bool deltaEncoded_{false};
+
+  // Running prefix-sum accumulator for delta-encoded streams, carried across
+  // the chunk loop and across successive materialize() calls.
+  physicalType deltaAccumulator_{0};
 
   // Logical read cursor (rows consumed so far). Maintained across skip(),
   // materialize(), and the readWithVisitor slow path so the fast path can map
@@ -176,6 +193,32 @@ class SubIntSplitEncoding
 //
 
 namespace detail {
+
+// Flag bits carried in the SubIntSplit header's second byte, which was
+// previously reserved and always written as zero.
+inline constexpr uint8_t kSubIntSplitFlagDelta = 1u << 0;
+
+// Zigzag maps signed deltas onto unsigned values so that small negative steps
+// stay small instead of wrapping to near-2^64. Mirrors the mapping OpenZL's
+// delta path uses, and is the difference between ReverseSorted compressing and
+// actively regressing.
+template <typename U>
+inline U zigzagEncodeDelta(U current, U previous) noexcept {
+  using S = std::make_signed_t<U>;
+  constexpr int kShift = static_cast<int>(sizeof(U) * 8 - 1);
+  const S difference = static_cast<S>(current - previous);
+  return static_cast<U>(
+      (static_cast<U>(difference) << 1) ^ static_cast<U>(difference >> kShift));
+}
+
+template <typename U>
+inline U zigzagDecodeDelta(U encoded, U previous) noexcept {
+  using S = std::make_signed_t<U>;
+  const S difference =
+      static_cast<S>((encoded >> 1) ^ (~(encoded & U{1}) + U{1}));
+  return static_cast<U>(previous + static_cast<U>(difference));
+}
+
 inline constexpr uint32_t kSubIntSplitSectionHeaderSize =
     6; // bitStart+bitEnd+size
 
@@ -197,7 +240,8 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
   const auto* pos = data.data() + this->dataOffset();
 
   const uint8_t splitCount = encoding::read<uint8_t>(pos);
-  encoding::read<uint8_t>(pos); // reserved order byte
+  const uint8_t flags = encoding::read<uint8_t>(pos);
+  deltaEncoded_ = (flags & detail::kSubIntSplitFlagDelta) != 0;
 
   struct SectionMeta {
     uint8_t bitStart;
@@ -231,10 +275,15 @@ void SubIntSplitEncoding<T>::reset() {
     sec.encoding->reset();
   }
   row_ = 0;
+  deltaAccumulator_ = 0;
 }
 
 template <typename T>
 void SubIntSplitEncoding<T>::skip(uint32_t rowCount) {
+  NIMBLE_CHECK(
+      !deltaEncoded_,
+      "SubIntSplitEncoding: skip() is not supported on delta-encoded streams; "
+      "reconstructing a value requires every preceding delta.");
   for (auto& sec : sections_) {
     sec.encoding->skip(rowCount);
   }
@@ -526,6 +575,21 @@ void SubIntSplitEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
           NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
       }
     }
+
+    // Delta streams store zigzag steps, so turn them back into values. The
+    // accumulator carries across chunks and across successive materialize()
+    // calls, which is why these streams can only be read sequentially.
+    if (deltaEncoded_) {
+      for (uint32_t i = 0; i < chunkCount; ++i) {
+        if (chunkStart == 0 && i == 0 && row_ == 0) {
+          deltaAccumulator_ = chunkOutput[0];
+        } else {
+          deltaAccumulator_ = detail::zigzagDecodeDelta<physicalType>(
+              chunkOutput[i], deltaAccumulator_);
+        }
+        chunkOutput[i] = deltaAccumulator_;
+      }
+    }
   }
 
   row_ += rowCount;
@@ -536,6 +600,10 @@ template <typename V>
 void SubIntSplitEncoding<T>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
+  NIMBLE_CHECK(
+      !deltaEncoded_,
+      "SubIntSplitEncoding: readWithVisitor() is not supported on "
+      "delta-encoded streams; they require sequential reads from row 0.");
   using OutputType = detail::ValueType<typename V::DataType>;
   constexpr bool kIsSuitableWidth =
       (isFourByteIntegralType<physicalType>() ||
@@ -715,11 +783,12 @@ void SubIntSplitEncoding<T>::bulkScan(
 }
 
 template <typename T>
-std::string_view SubIntSplitEncoding<T>::encode(
+std::string_view SubIntSplitEncoding<T>::encodeImpl(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
     Buffer& buffer,
-    const Encoding::Options& options) {
+    const Encoding::Options& options,
+    uint8_t flags) {
   const bool useVarint = options.useVarintRowCount;
   const uint32_t valueCount = static_cast<uint32_t>(values.size());
 
@@ -880,7 +949,7 @@ std::string_view SubIntSplitEncoding<T>::encode(
       pos);
 
   encoding::write<uint8_t>(splitCount, pos);
-  encoding::write<uint8_t>(uint8_t{0}, pos); // reserved / order
+  encoding::write<uint8_t>(flags, pos); // flag bits (was reserved / order)
 
   for (uint8_t s = 0; s < splitCount; ++s) {
     const auto& seg = segments[s];
@@ -901,10 +970,44 @@ std::string_view SubIntSplitEncoding<T>::encode(
 }
 
 template <typename T>
+std::string_view SubIntSplitEncoding<T>::encode(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  if (!options.subIntSplitDeltaPreTransform || values.size() < 2) {
+    return encodeImpl(selection, values, buffer, options, /*flags=*/0);
+  }
+
+  // Encode both forms and keep the smaller, so the pre-transform can never
+  // regress a stream it does not suit -- InterleavedCounters, for instance,
+  // is worse under delta because interleaved shards break monotonicity.
+  const std::string_view plain =
+      encodeImpl(selection, values, buffer, options, /*flags=*/0);
+
+  auto* pool = &buffer.getMemoryPool();
+  Vector<physicalType> residuals{pool, values.size()};
+  residuals[0] = values[0];
+  for (size_t i = 1; i < values.size(); ++i) {
+    residuals[i] =
+        detail::zigzagEncodeDelta<physicalType>(values[i], values[i - 1]);
+  }
+  const std::string_view delta = encodeImpl(
+      selection,
+      std::span<const physicalType>(residuals.data(), residuals.size()),
+      buffer,
+      options,
+      detail::kSubIntSplitFlagDelta);
+
+  return delta.size() < plain.size() ? delta : plain;
+}
+
+template <typename T>
 std::string SubIntSplitEncoding<T>::debugString(int offset) const {
   std::string indent(offset, ' ');
   std::string result = indent +
-      "SubIntSplitEncoding sections=" + std::to_string(sections_.size()) + "\n";
+      "SubIntSplitEncoding sections=" + std::to_string(sections_.size()) +
+      (deltaEncoded_ ? " delta=yes" : " delta=no") + "\n";
   for (size_t s = 0; s < sections_.size(); ++s) {
     const auto& sec = sections_[s];
     result += indent + "  [" + std::to_string(sec.bitStart) + ".." +
