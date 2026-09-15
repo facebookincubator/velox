@@ -30,8 +30,8 @@ class UcxPartitionedOutput : public exec::Operator,
                              public cudf_velox::NvtxHelper {
  public:
   // Default minimum rows to accumulate before flushing. Matches HTTP
-  // PartitionedOutput's ~10,000 row target. Overridable via
-  // QueryConfig::kUcxPartitionedOutputBatchRows.
+  // PartitionedOutput's ~10,000 row target. Overridable via the
+  // CudfConfig::kUcxPartitionedOutputBatchRows query config key.
   static constexpr int64_t kDefaultTargetRowsPerChunk = 10'000;
 
   UcxPartitionedOutput(
@@ -53,8 +53,7 @@ class UcxPartitionedOutput : public exec::Operator,
     return true;
   }
 
-  // the operator is blocked if the queues are full, we are ignoring this so
-  // always return kNotBlocked
+  // Returns kWaitForConsumer when output queues are full.
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   // The operaor is finished when the queue manager say the queues have all been
