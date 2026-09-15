@@ -67,6 +67,32 @@ struct SelectorConfig {
   ///
   /// 0.0 disables the term and reproduces the storage-only plan byte for byte.
   double decodeCostBitsPerValue{0.0};
+
+  /// Ceiling on candidate boundaries, the strongest by set-rate change kept.
+  ///
+  /// `boundaryPruneThreshold` bounds planning cost only indirectly: a stream
+  /// with many genuine field edges still produces many boundaries, and the grid
+  /// is quadratic in them. A hard cap makes planning cost O(cap^2) whatever the
+  /// data, which is what a writer with a latency budget needs. 0 is unlimited.
+  size_t maxCandidateBoundaries{0};
+
+  /// Widest section the grid scores, beyond the full active range which is
+  /// always scored so the DP keeps a fallback.
+  ///
+  /// Trims the grid's upper triangle. Sections this wide are rarely chosen when
+  /// the data has structure, and when it does not, the full-range cell is the
+  /// answer anyway. 0 is unlimited.
+  int maxSectionWidth{0};
+
+  /// Widest section for which unique and dominant-value counts are collected.
+  ///
+  /// That frequency pass is the expensive half of the per-cell metrics -- on a
+  /// production ctr_mbl stream the hash map behind it was 41% of encode. It
+  /// only feeds the Dictionary and MainlyConstant cost models, which need low
+  /// cardinality to win and so almost never do on a wide section. Above this
+  /// width both models score as unusable and the pass is skipped. 0 is
+  /// unlimited.
+  int frequencyMetricsMaxWidth{0};
 };
 
 inline SelectorConfig defaultSelectorConfig() noexcept {
@@ -116,11 +142,15 @@ ActiveBitRange findActiveBitRange(
 /// rate jumps. Keeping only the jumps leaves the boundaries a real layout has,
 /// for one O(numSamples * width) popcount pass against O(width^2) metrics
 /// passes saved.
+/// `maxCount` caps how many are returned, keeping the positions with the
+/// largest set-rate change; the stream's own edges are always kept and do not
+/// count against it. 0 is unlimited.
 std::vector<int> candidateBoundaries(
     const std::vector<uint64_t>& samples,
     int lo,
     int hi,
-    double threshold);
+    double threshold,
+    size_t maxCount = 0);
 
 /// A constant bit-plane run, stored as a single Constant section (costs
 /// ~nothing to encode or decode).
