@@ -577,6 +577,23 @@ std::string_view SubIntSplitEncoding<T>::encodeImpl(
   Encoding::Options sectionOptions = options;
   sectionOptions.fixedBitWidthUseExactBits = true;
 
+  // An explicit per-section encoding list pins what each section uses; without
+  // it every section runs normal nested selection.
+  std::vector<std::optional<EncodingType>> sectionEncodings;
+  if (const auto configured = selection.getConfig(
+          std::string(subintsplit::kSectionEncodingsConfigKey))) {
+    auto parsed =
+        subintsplit::parseSectionEncodings(*configured, sections.size());
+    NIMBLE_USER_CHECK(
+        parsed.has_value(),
+        "SubIntSplit section encodings config must name a writable encoding "
+        "for each of the {} sections in the pinned split.",
+        sections.size());
+    sectionEncodings = std::move(parsed.value());
+  } else {
+    sectionEncodings.resize(sections.size());
+  }
+
   std::vector<std::string_view> payloads;
   payloads.reserve(sections.size());
   for (size_t i = 0; i < sections.size(); ++i) {
@@ -587,7 +604,8 @@ std::string_view SubIntSplitEncoding<T>::encodeImpl(
             sections[i].range(),
             static_cast<NestedEncodingIdentifier>(i),
             sectionBuffer,
-            sectionOptions));
+            sectionOptions,
+            sectionEncodings[i]));
   }
 
   return writeEncoding(

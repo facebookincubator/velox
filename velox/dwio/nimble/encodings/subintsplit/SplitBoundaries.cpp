@@ -17,6 +17,8 @@
 
 #include <charconv>
 
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+
 namespace facebook::nimble::subintsplit {
 namespace {
 
@@ -94,6 +96,69 @@ std::optional<std::vector<SectionPlan>> parseSplitBoundaries(
   return sections;
 }
 
+std::string serializeSectionEncodings(
+    std::span<const std::optional<EncodingType>> encodings) {
+  std::string result;
+  for (const auto& encoding : encodings) {
+    if (!result.empty()) {
+      result.push_back(';');
+    }
+    if (encoding.has_value()) {
+      result += toString(encoding.value());
+    }
+  }
+  return result;
+}
+
+std::optional<std::vector<std::optional<EncodingType>>> parseSectionEncodings(
+    std::string_view value,
+    size_t numSections) {
+  const auto candidates =
+      ManualEncodingSelectionPolicyFactory::possibleEncodings();
+
+  std::vector<std::optional<EncodingType>> encodings;
+  encodings.reserve(numSections);
+
+  size_t cursor = 0;
+  while (true) {
+    const auto semicolon = value.find(';', cursor);
+    const auto name = value.substr(
+        cursor,
+        semicolon == std::string_view::npos ? std::string_view::npos
+                                            : semicolon - cursor);
+
+    if (name.empty()) {
+      // An empty entry leaves the section to normal selection.
+      encodings.push_back(std::nullopt);
+    } else {
+      std::optional<EncodingType> resolved;
+      for (const auto candidate : candidates) {
+        const std::string candidateName{toString(candidate)};
+        if (name == candidateName && !isReadOnlyEncoding(candidateName)) {
+          resolved = candidate;
+          break;
+        }
+      }
+      if (!resolved.has_value()) {
+        return std::nullopt;
+      }
+      encodings.push_back(resolved);
+    }
+
+    if (semicolon == std::string_view::npos) {
+      break;
+    }
+    cursor = semicolon + 1;
+  }
+
+  // The entries index the sections positionally, so a count mismatch means the
+  // caller is describing a different split than the one in force.
+  if (encodings.size() != numSections) {
+    return std::nullopt;
+  }
+  return encodings;
+}
+
 std::unordered_map<std::string, std::string> makePreserveSplitConfig(
     std::span<const SectionPlan> sections) {
   return {
@@ -101,6 +166,16 @@ std::unordered_map<std::string, std::string> makePreserveSplitConfig(
       {std::string(kSplitBoundariesConfigKey),
        serializeSplitBoundaries(sections)},
   };
+}
+
+std::unordered_map<std::string, std::string> makePreserveSplitConfig(
+    std::span<const SectionPlan> sections,
+    std::span<const std::optional<EncodingType>> sectionEncodings) {
+  auto config = makePreserveSplitConfig(sections);
+  config.emplace(
+      std::string(kSectionEncodingsConfigKey),
+      serializeSectionEncodings(sectionEncodings));
+  return config;
 }
 
 } // namespace facebook::nimble::subintsplit

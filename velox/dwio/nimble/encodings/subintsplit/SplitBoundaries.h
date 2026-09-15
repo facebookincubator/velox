@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 
 // Encoding-selection config that pins a SubIntSplit encoding to a previously
@@ -39,6 +40,16 @@ inline constexpr std::string_view kSplitBoundariesConfigKey =
 inline constexpr std::string_view kSplitModeRecompute = "recompute";
 inline constexpr std::string_view kSplitModePreserve = "preserve";
 
+/// Per-section encodings, one entry per boundary, ';'-separated. An empty entry
+/// leaves that section to normal nested selection, so "FixedBitWidth;;RLE"
+/// pins the first and last of three sections and lets the middle choose.
+///
+/// Only meaningful alongside kSplitBoundariesConfigKey: without a pinned split
+/// the section count is whatever the planner decides, and the entries would
+/// have nothing stable to line up with.
+inline constexpr std::string_view kSectionEncodingsConfigKey =
+    "subintsplit.section_encodings";
+
 std::string serializeSplitBoundaries(std::span<const SectionPlan> sections);
 
 /// Parses boundaries covering exactly `numBits` bits. Returns nullopt when the
@@ -48,8 +59,24 @@ std::optional<std::vector<SectionPlan>> parseSplitBoundaries(
     std::string_view value,
     int numBits);
 
+/// Serializes per-section encodings; std::nullopt becomes an empty entry.
+std::string serializeSectionEncodings(
+    std::span<const std::optional<EncodingType>> encodings);
+
+/// Parses per-section encodings, which must name exactly `numSections`
+/// entries. Returns nullopt when the count is wrong or a name is not a
+/// writable encoding.
+std::optional<std::vector<std::optional<EncodingType>>> parseSectionEncodings(
+    std::string_view value,
+    size_t numSections);
+
 /// Config that makes SubIntSplit reuse `sections` verbatim.
 std::unordered_map<std::string, std::string> makePreserveSplitConfig(
     std::span<const SectionPlan> sections);
+
+/// Config that pins both the split and each section's encoding.
+std::unordered_map<std::string, std::string> makePreserveSplitConfig(
+    std::span<const SectionPlan> sections,
+    std::span<const std::optional<EncodingType>> sectionEncodings);
 
 } // namespace facebook::nimble::subintsplit

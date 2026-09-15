@@ -16,12 +16,14 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
@@ -48,6 +50,8 @@ void extractSectionValues(
 /// The section is handed to the selector as the narrowest unsigned type that
 /// fits its width, so a narrow section does not pay an 8-byte-per-value penalty
 /// when it lands in e.g. Dictionary or Trivial encoding.
+/// `forcedEncoding`, when set, pins this section's encoding instead of letting
+/// nested selection choose it.
 template <typename PhysicalType>
 std::string_view encodeSection(
     EncodingSelection<PhysicalType>& selection,
@@ -55,19 +59,27 @@ std::string_view encodeSection(
     BitSection range,
     NestedEncodingIdentifier identifier,
     Buffer& sectionBuffer,
-    const Encoding::Options& options) {
+    const Encoding::Options& options,
+    std::optional<EncodingType> forcedEncoding = std::nullopt) {
   return dispatchStorageType(
       sectionStorageBytes(range.width()),
       [&]<typename StorageType>() -> std::string_view {
-        Vector<StorageType> sectionValues{
-            &sectionBuffer.getMemoryPool(), values.size()};
+        // Pooled rather than a plain Vector: this scratch is one section's
+        // worth of values, reallocated for every section of every encode, and
+        // returning it to the buffer pool is worth ~10% of encode time.
+        ScopedVector<StorageType> scratch{
+            values.size(), &sectionBuffer.getMemoryPool(), options.bufferPool};
+        Vector<StorageType>& sectionValues = scratch;
         extractSectionValues(values, range, sectionValues.data());
+        const std::span<const StorageType> span(
+            sectionValues.data(), sectionValues.size());
+
+        if (forcedEncoding.has_value()) {
+          return selection.template encodeNestedAs<StorageType>(
+              identifier, forcedEncoding.value(), span, sectionBuffer, options);
+        }
         return selection.template encodeNested<StorageType>(
-            identifier,
-            std::span<const StorageType>(
-                sectionValues.data(), sectionValues.size()),
-            sectionBuffer,
-            options);
+            identifier, span, sectionBuffer, options);
       });
 }
 
