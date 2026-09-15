@@ -33,8 +33,7 @@
 #include "velox/type/Time.h"
 
 #include <cudf/utilities/default_stream.hpp>
-
-#include <rmm/mr/device/per_device_resource.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 
 #include <folly/ScopeGuard.h>
 
@@ -1568,21 +1567,24 @@ TEST_F(CudfFilterProjectTest, betweenOperation) {
 TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
   auto input = makeRowVector(
       {"value", "lower_bound", "upper_bound"},
-      {makeNullableFlatVector<int32_t>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
-       makeNullableFlatVector<int32_t>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
-       makeNullableFlatVector<int32_t>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
+      {makeNullableFlatVector<double>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
+       makeNullableFlatVector<double>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
+       makeNullableFlatVector<double>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
   auto queryCtx = core::QueryCtx::create();
   core::ExecCtx execCtx(pool(), queryCtx.get());
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
   auto table = cudf_velox::with_arrow::toCudfTable(input, pool(), stream, mr);
+  const auto tableView = table->view();
+  const std::vector<cudf::column_view> inputViews{
+      tableView.begin(), tableView.end()};
 
   for (const bool literalLower : {true, false}) {
     for (const bool literalUpper : {true, false}) {
       const auto sql = fmt::format(
           "value BETWEEN {} AND {}",
-          literalLower ? "1" : "lower_bound",
-          literalUpper ? "9" : "upper_bound");
+          literalLower ? "1.0" : "lower_bound",
+          literalUpper ? "9.0" : "upper_bound");
       SCOPED_TRACE(sql);
       auto expression = cudf_velox::test_utils::optimizeTypedExpr(
           sql, input->rowType(), queryCtx.get(), &execCtx);
@@ -1593,7 +1595,7 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
       auto evaluator = cudf_velox::FunctionExpression::create(
           expression, input->rowType(), pool());
       ASSERT_NE(evaluator, nullptr);
-      auto result = evaluator->eval(table->view().columns(), stream, mr);
+      auto result = evaluator->eval(inputViews, stream, mr);
       auto actual = cudf_velox::with_arrow::toVeloxColumn(
           cudf::table_view{{cudf_velox::asView(result)}},
           pool(),
