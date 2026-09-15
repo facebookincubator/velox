@@ -1,0 +1,9 @@
+configuration=Debug
+result=PASS
+tests=2/2
+total_seconds=59.31
+
+velox_abfs_test=PASS (59.11 sec)
+velox_abfs_registration_test=PASS (0.05 sec)
+
+The Stage 0 benchmark was not rerun. The accepted Stage 0 benchmark block and artifacts were preserved.

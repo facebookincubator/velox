@@ -1,0 +1,33 @@
+Stage 3 C3 AddressSanitizer validation
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Configuration
+- Clang/Compiler-rt 20.1.2.
+- Separate Debug build tree.
+- -O1 -fsanitize=address -fno-omit-frame-pointer.
+- ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=1.
+- Bundled Folly compiled under matching ASAN flags.
+- Generated bundled-Folly library-ASAN marker set to 1 after CMake
+  regeneration so fiber stack-switch wrappers dispatch to compiler-rt.
+
+Complete suites
+- velox_abfs_test: PASS.
+- velox_abfs_registration_test: PASS.
+- velox_abfs_stage1_transport_test: PASS.
+- velox_abfs_stage2_runtime_test: PASS.
+- No AddressSanitizer or LeakSanitizer finding.
+
+Focused C3 matrix
+Eight tests covering contiguous scatter, all-null discard, transport/timeout
+and short-body errors, fragmented bodies, runtime-thread rejection, file
+lifetime, and concurrency above runtime thread count passed 100 in-process
+repetitions.
+
+Environment correction
+An earlier attempt was invalid because CMake regeneration reset Folly's
+generated library-ASAN marker to 0 after it had been edited. Those binaries
+aborted at Folly's fiber invariant and produced no valid memory-safety result.
+The marker was corrected after regeneration, the affected graph was rebuilt,
+and all complete and focused gates passed. The invalid attempt is excluded.

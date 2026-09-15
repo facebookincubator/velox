@@ -1,0 +1,16 @@
+base_sha=06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+date=2026-07-20
+os=Ubuntu 24.04.4 WSL2
+kernel=6.18.33.2-microsoft-standard-WSL2
+source_filesystem=ext4 (reported by statfs as ext2/ext3)
+cmake=3.30.4
+compiler=GCC 13.3.0
+openssl=3.0.13
+azure_storage_data_lake_sdk=12.8.0
+boost=1.84.0
+folly=v2026.01.05.00
+fizz=v2026.01.05.00
+build_type=Debug
+event_backend=reference EventBase AsyncSocket/AsyncSSLSocket
+profiling_tools=GDB 15.1 and strace 6.8, rootlessly extracted under temporary storage
+limitations=WSL loopback correctness evidence only; no native-Linux or real-Azure performance claim
