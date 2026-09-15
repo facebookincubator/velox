@@ -33,6 +33,7 @@
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SparseBoolEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/TrivialEncodingView.h"
 
 namespace facebook::nimble {
@@ -131,6 +132,18 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::SubIntSplit:
+      // Mirrors SubIntSplitEncoding's own constraints: it splits a numeric word
+      // into bit ranges, so 32- and 64-bit numerics only.
+      if constexpr (
+          isNumericType<physicalType>() &&
+          (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        return std::make_unique<SubIntSplitEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SubIntSplit encoding only supports 32- and 64-bit numeric data types, got {}.",
+         TypeTraits<T>::dataType);
     case EncodingType::BitRangeSplit:
       if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
         return std::make_unique<BitRangeSplitEncodingView<T>>(
@@ -192,8 +205,9 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
-      EncodingType::BitRangeSplit,
-      EncodingType::BlockBitPacking};
+      EncodingType::BlockBitPacking,
+      EncodingType::SubIntSplit,
+      EncodingType::BitRangeSplit};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),
