@@ -21,6 +21,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -35,6 +36,8 @@
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
 #include <cudf/utilities/memory_resource.hpp>
+
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 
 using namespace facebook::velox::cudf_velox;
 using facebook::velox::exec::Task;
@@ -192,8 +195,7 @@ void UcxPartitionedOutput::flushPending() {
       }
 
       cudf::detail::join_streams(inputStreams, stream);
-      mergedTable = cudf::concatenate(
-          views, stream, cudf::get_current_device_resource_ref());
+      mergedTable = cudf::concatenate(views, stream, get_temp_mr());
 
       orderCudfVectorDeallocationsAfterStream(
           pendingInputs_, inputStreams, stream);
@@ -219,8 +221,7 @@ void UcxPartitionedOutput::flushPending() {
         partitionAndEnqueue(tableView, numRows, stream);
       }
     } else if (numRows > 0) {
-      auto packedCols = cudf::pack(
-          tableView, stream, cudf::get_current_device_resource_ref());
+      auto packedCols = cudf::pack(tableView, stream, get_output_mr());
       stream.synchronize();
       auto packedColsPtr = std::make_unique<cudf::packed_columns>(
           std::move(packedCols.metadata), std::move(packedCols.gpu_data));
@@ -368,7 +369,7 @@ void UcxPartitionedOutput::equalPartitionRowCountOnly(
     return;
   }
 
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   // Same boundaries equalPartition() computes, so the split is identical to the
   // column-bearing case and the rows still add up to numRows.
   // The products are formed in 64 bits: numRows * (destination + 1) overflows
@@ -439,13 +440,14 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
     return;
   }
 
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_temp_mr();
 
   // Only the arbitrary row needs replicating, so slicing avoids a gather.
   if (!anyKeyHasNulls) {
     // num_rows() is safe to slice on here: the check above established that it
     // equals numRows, because this path always has partition key columns.
-    const auto slices = cudf::slice(tableView, {0, 1, 1, tableView.num_rows()});
+    const auto slices =
+        cudf::slice(tableView, {0, 1, 1, tableView.num_rows()}, stream);
     packAndEnqueueToAllDestinations(slices[0], stream);
     replicatedAnyRow_ = true;
     if (slices[1].num_rows() > 0) {
@@ -483,7 +485,8 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
   // once per destination even when its own key is null.
   if (needsArbitraryRow) {
     auto maskView = replicateMask->mutable_view();
-    const auto trueScalar = cudf::numeric_scalar<bool>(true, true, stream);
+    const auto trueScalar =
+        cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
     cudf::fill_in_place(maskView, 0, 1, trueScalar, stream);
   }
 
@@ -516,7 +519,7 @@ void UcxPartitionedOutput::packAndEnqueueToAllDestinations(
     return;
   }
 
-  auto mr = cudf::get_current_device_resource_ref();
+  auto mr = get_output_mr();
   std::vector<std::unique_ptr<cudf::packed_columns>> perDestination;
   perDestination.reserve(numPartitions_);
   for (size_t destination = 0; destination < numPartitions_; ++destination) {
@@ -556,7 +559,8 @@ void UcxPartitionedOutput::hashPartition(
       numPartitions_,
       cudf::hash_id::HASH_MURMUR3,
       cudf::DEFAULT_HASH_SEED,
-      stream);
+      stream,
+      get_temp_mr());
 
   VELOX_CHECK_EQ(partitionOffsets.size(), numPartitions_ + 1);
   VELOX_CHECK_EQ(partitionOffsets[0], 0);
@@ -590,8 +594,8 @@ void UcxPartitionedOutput::splitAndEnqueue(
   // table, which the loop below would index out of bounds. Such payloads are
   // routed to equalPartitionRowCountOnly instead and never arrive here.
   VELOX_CHECK_GT(tableView.num_columns(), 0);
-  auto contiguousTables = cudf::contiguous_split(
-      tableView, offsets, stream, cudf::get_current_device_resource_ref());
+  auto contiguousTables =
+      cudf::contiguous_split(tableView, offsets, stream, get_output_mr());
 
   // Synchronize the stream to ensure CUDA operations complete before enqueuing.
   // UCXX/UCX is not stream-aware, so without syncing, data could be sent before
