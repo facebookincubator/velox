@@ -112,7 +112,9 @@ void RLEEncoding<bool>::countTrue(
   const std::string_view runLengthsData{pos, runLengthsSize};
   pos += runLengthsSize;
   NIMBLE_CHECK_EQ(
-      pos + sizeof(bool), encoded.end(), "Unexpected boolean RLE encoding end");
+      pos + sizeof(bool),
+      encoded.data() + encoded.size(),
+      "Unexpected boolean RLE encoding end");
   bool value = encoding::read<bool>(pos);
 
   NIMBLE_CHECK_EQ(
