@@ -678,6 +678,24 @@ class CudfFilterProjectTest : public OperatorTestBase {
     return {data};
   }
 
+  // A VARCHAR application-name column plus numeric columns, for multi-branch
+  // CASE coverage mirroring the production application-classification
+  // projection. n is INTEGER and d is DOUBLE to match the GPU-supported
+  // comparison paths.
+  std::vector<RowVectorPtr> makeCaseVectors() {
+    auto appName = makeNullableFlatVector<StringView>(
+        {"ChatGPT.exe"_sv,
+         "LM Studio"_sv,
+         "ollama"_sv,
+         "cursor.exe"_sv,
+         "random tool"_sv,
+         "GPT4All"_sv,
+         std::nullopt});
+    auto n = makeNullableFlatVector<int32_t>({0, 1, 2, 3, 4, 5, std::nullopt});
+    auto d = makeFlatVector<double>({0.0, 1.5, -2.5, 3.25, 4.0, 5.5, 6.0});
+    return {makeRowVector({"app_name", "n", "d"}, {appName, n, d})};
+  }
+
   folly::Random::DefaultGenerator rng_;
   RowTypePtr rowType_;
 };
@@ -2211,6 +2229,99 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
           {45676567.78 / 123.4, 6789098767.90876 / 124.5, std::nullopt}),
   });
   facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+// =============== multi-branch CASE / switch CPU-parity tests ===============
+// The multi-branch switch (>3 inputs) has no cuDF support; the 3-argument form
+// does. Branch conditions/results use only GPU-supported leaves (like, lower,
+// and, not, eq, comparisons) so these isolate the switch-arity gap.
+
+TEST_F(CudfFilterProjectTest, caseSingleBranchBaseline) {
+  // A 3-argument switch (single WHEN + ELSE) is already GPU-supported; this
+  // guards against regressing that path and should pass now and later.
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors, {"CASE WHEN n = 0 THEN 'zero' ELSE 'nonzero' END AS r"});
+}
+
+TEST_F(CudfFilterProjectTest, caseMultiBranchVarcharClassification) {
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors,
+      {"CASE "
+       "WHEN lower(app_name) LIKE '%chatgpt%' THEN 'ChatGPT' "
+       "WHEN lower(app_name) LIKE '%lm studio%' "
+       "AND NOT (lower(app_name) LIKE '%realm studio%') THEN 'LM Studio' "
+       "WHEN lower(app_name) LIKE '%ollama%' THEN 'Ollama' "
+       "WHEN lower(app_name) LIKE '%gpt4all%' THEN 'GPT4All' "
+       "WHEN lower(app_name) LIKE '%cursor%' THEN 'Cursor' "
+       "ELSE 'Other AI App' END AS category"});
+}
+
+TEST_F(CudfFilterProjectTest, caseMultiBranchResultTypes) {
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors,
+      {"CASE WHEN n = 0 THEN 10 WHEN n = 1 THEN 20 ELSE 30 END AS int_result",
+       "CASE WHEN n = 0 THEN cast(100 AS bigint) "
+       "WHEN n = 1 THEN cast(200 AS bigint) "
+       "ELSE cast(300 AS bigint) END AS bigint_result",
+       "CASE WHEN d < 0.0 THEN 0.0 WHEN d < 3.0 THEN 1.5 ELSE d END AS double_result",
+       "CASE WHEN n = 0 THEN true WHEN n = 1 THEN false ELSE true END AS bool_result",
+       "CASE WHEN n = 0 THEN DATE '2020-01-01' "
+       "WHEN n = 1 THEN DATE '2021-06-15' "
+       "ELSE DATE '2022-12-31' END AS date_result"});
+}
+
+TEST_F(CudfFilterProjectTest, caseMultiBranchNoElseYieldsNull) {
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors, {"CASE WHEN n = 0 THEN 'zero' WHEN n = 1 THEN 'one' END AS r"});
+}
+
+TEST_F(CudfFilterProjectTest, caseMultiBranchNullHandling) {
+  // Null condition (n is null) falls through; a null branch result propagates.
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors,
+      {"CASE WHEN n = 0 THEN cast(NULL AS varchar) "
+       "WHEN n > 2 THEN 'big' ELSE 'small' END AS r"});
+}
+
+TEST_F(CudfFilterProjectTest, caseNested) {
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors,
+      {"CASE WHEN n < 2 THEN (CASE WHEN n = 0 THEN 'a' ELSE 'b' END) "
+       "WHEN n < 4 THEN 'c' ELSE 'd' END AS r"});
+}
+
+TEST_F(CudfFilterProjectTest, caseSimpleForm) {
+  auto vectors = makeCaseVectors();
+  assertProjectMatchesVelox(
+      vectors,
+      {"CASE n WHEN 0 THEN 'x' WHEN 1 THEN 'y' WHEN 2 THEN 'z' ELSE 'w' END AS r"});
+}
+
+TEST_F(CudfFilterProjectTest, caseMultiBranchInFilter) {
+  auto vectors = makeCaseVectors();
+  assertFilterMatchesVelox(
+      vectors,
+      "(CASE WHEN n = 0 THEN false WHEN n < 4 THEN true ELSE false END)",
+      {"n"});
+}
+
+TEST_F(CudfFilterProjectTest, caseMultiBranchAsGroupByKey) {
+  auto vectors = makeCaseVectors();
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .project({"CASE WHEN lower(app_name) LIKE '%gpt%' THEN 'gpt' "
+                            "WHEN lower(app_name) LIKE '%llama%' THEN 'llama' "
+                            "ELSE 'other' END AS category"})
+                  .singleAggregation({"category"}, {"count(1) AS c"})
+                  .orderBy({"category ASC NULLS LAST"}, false)
+                  .planNode();
+  assertPlanMatchesVelox(plan);
 }
 
 TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
