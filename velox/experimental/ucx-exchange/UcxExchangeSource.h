@@ -97,7 +97,10 @@ class UcxExchangeSource
   /// has been received and processed. This can happen in case
   /// of an error or an operator like Limit aborting the query
   /// once it received enough data.
-  void close();
+  void close() override;
+
+  /// Reports lost input unless the consumer has already closed or received EOS.
+  void onEndpointClosed() override;
 
   /// @brief Marks this source as registered with the exchange queue.
   /// Must be called after addSourceLocked() increments numSources_ for this
@@ -233,6 +236,9 @@ class UcxExchangeSource
   // Removes the state associated with the source, called by the state-machine.
   void cleanUp();
 
+  // Notifies the producer that this destination will not receive more data.
+  void sendDestinationCancellation();
+
   /// @brief Delivers the nullptr end-of-stream marker to the queue exactly
   /// once. Safe to call from any thread. Uses atomic CAS on
   /// endMarkerDelivered_ to guarantee at-most-once delivery.
@@ -266,6 +272,9 @@ class UcxExchangeSource
   std::atomic<bool> closed_{false};
   bool atEnd_{false}; // set when "atEnd" is being received.
 
+  // Communicator-thread flag preventing duplicate response-drain timers.
+  bool handshakeCleanupScheduled_{false};
+
   /// @brief Guards exactly-once delivery of the nullptr end-of-stream marker.
   /// Only one thread can win the CAS and call enqueue(nullptr).
   std::atomic<bool> endMarkerDelivered_{false};
@@ -297,6 +306,7 @@ class UcxExchangeSource
   // NOTE: The request owns/holds a reference to the upcall function
   // and must therefore exist until the upcall is done.
   std::shared_ptr<ucxx::Request> request_{nullptr};
+  std::shared_ptr<ucxx::Request> cancellationRequest_{nullptr};
 
   // Completed UCXX requests are kept alive here to prevent use-after-free.
   // UCP's ucp_wireup_replay_pending_requests can fire callbacks on already-

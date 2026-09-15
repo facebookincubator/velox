@@ -166,14 +166,15 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// exists, the queue manager can create an unitialized queue just for the
   /// sake of storing the callback notification. The queue is then initialized
   /// later properly, and eventually the callback fires.
+  /// @param outputFinished True if all destinations were deleted before init.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
   bool initialize(
       std::shared_ptr<exec::Task> task,
       uint32_t numDestinations,
       uint32_t numDrivers,
-      core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+      core::PartitionedOutputNode::Kind kind,
+      bool& outputFinished);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;

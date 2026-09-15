@@ -24,15 +24,18 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/EventCount.h>
+#include <glog/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <future>
 #include <limits>
@@ -40,6 +43,7 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/OutputTransportRegistry.h"
@@ -52,7 +56,9 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
+#include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
 #include "velox/experimental/ucx-exchange/tests/SourceDriverMock.h"
 #include "velox/experimental/ucx-exchange/tests/UcxPartitionedOutputMock.h"
@@ -66,6 +72,84 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::core;
 
 namespace facebook::velox::ucx_exchange {
+namespace {
+
+// Captures a diagnostic emitted on the communicator thread.
+class TestLogCapture final : public google::LogSink {
+ public:
+  TestLogCapture(std::string message, google::LogSeverity severity)
+      : message_(std::move(message)), severity_(severity) {
+    google::AddLogSink(this);
+  }
+
+  ~TestLogCapture() override {
+    google::RemoveLogSink(this);
+  }
+
+  void send(
+      google::LogSeverity severity,
+      const char* /*fullFilename*/,
+      const char* /*baseFilename*/,
+      int /*line*/,
+      const struct ::tm* /*time*/,
+      const char* message,
+      size_t length) override {
+    if (severity == severity_ &&
+        std::string_view(message, length).find(message_) !=
+            std::string_view::npos) {
+      matched_.store(true);
+    }
+  }
+
+  bool matched() const {
+    return matched_.load();
+  }
+
+ private:
+  const std::string message_;
+  const google::LogSeverity severity_;
+  std::atomic<bool> matched_{false};
+};
+
+// Runs one test action on the Communicator thread.
+class TestCommAction final
+    : public CommElement,
+      public std::enable_shared_from_this<TestCommAction> {
+ public:
+  TestCommAction(
+      std::shared_ptr<Communicator> communicator,
+      std::function<void()> action)
+      : CommElement(std::move(communicator)), action_(std::move(action)) {}
+
+  void process() override {
+    auto action = std::move(action_);
+    if (action) {
+      action();
+    }
+    communicator_->unregister(shared_from_this());
+  }
+
+  void close() override {
+    action_ = nullptr;
+  }
+
+ private:
+  // Runs at most once before the element unregisters itself.
+  std::function<void()> action_;
+};
+
+// Keeps a test-created endpoint registered until cleanup.
+class TestEndpointOwner final : public CommElement {
+ public:
+  explicit TestEndpointOwner(std::shared_ptr<Communicator> communicator)
+      : CommElement(std::move(communicator)) {}
+
+  void process() override {}
+
+  void close() override {}
+};
+
+} // namespace
 
 struct ExchangeTestParams {
   int numSrcDrivers;
@@ -185,6 +269,178 @@ class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
   bool shouldSkipWideTable() {
     ExchangeTestParams p = GetParam();
     return p.tableType == TableType::WIDE;
+  }
+
+  bool shouldRunTerminalMetadataTest() {
+    return GetParam() == generateTestParams().front();
+  }
+
+  struct TerminalMetadataSession {
+    std::string taskId;
+    std::shared_ptr<exec::Task> task;
+    std::shared_ptr<TestEndpointOwner> owner;
+    std::shared_ptr<EndpointRef> endpoint;
+    std::shared_ptr<UcxExchangeServer> server;
+    std::shared_ptr<ucxx::Request> peerRequest;
+    std::shared_ptr<std::vector<uint8_t>> metadataBuffer;
+    std::atomic<int> receiveResult{-1};
+  };
+
+  void runOnCommunicator(std::function<void()> action) {
+    communicator_->registerCommElement(
+        std::make_shared<TestCommAction>(communicator_, std::move(action)));
+  }
+
+  std::shared_ptr<TerminalMetadataSession> startTerminalMetadataSend(
+      std::string taskId,
+      bool initializeTask) {
+    auto session = std::make_shared<TerminalMetadataSession>();
+    session->taskId = std::move(taskId);
+    session->task =
+        createSourceTask(session->taskId, pool_, UcxTestData::kTestRowType);
+    if (initializeTask) {
+      queueManager_->initializeTask(
+          session->task,
+          core::PartitionedOutputNode::Kind::kPartitioned,
+          /*numDestinations=*/1,
+          /*numDrivers=*/1);
+      queueManager_->noMoreData(session->taskId);
+    }
+
+    auto submitted = std::make_shared<std::promise<bool>>();
+    auto submittedFuture = submitted->get_future();
+    runOnCommunicator([=] {
+      session->owner = std::make_shared<TestEndpointOwner>(communicator_);
+      session->endpoint = communicator_->assocEndpointRef(
+          session->owner, HostPort{"127.0.0.1", communicatorPort_});
+      VELOX_CHECK_NOT_NULL(session->endpoint);
+      session->server = UcxExchangeServer::create(
+          communicator_,
+          session->endpoint,
+          PartitionKey{session->taskId, 0},
+          /*isIntraNodeTransfer=*/false);
+      session->endpoint->addCommElem(session->server);
+      communicator_->registerCommElement(session->server);
+      session->server->process();
+      session->server->process();
+      session->server->process();
+      submitted->set_value(
+          queueManager_->stats(session->taskId).has_value() &&
+          queueManager_->isFinished(session->taskId));
+    });
+
+    EXPECT_EQ(
+        submittedFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
+    if (submittedFuture.wait_for(std::chrono::seconds(0)) ==
+        std::future_status::ready) {
+      EXPECT_FALSE(submittedFuture.get())
+          << "An unmatched terminal send must keep its output alive";
+    }
+    return session;
+  }
+
+  void postTerminalMetadataReceive(
+      const std::shared_ptr<TerminalMetadataSession>& session) {
+    auto receiveReady = std::make_shared<std::promise<void>>();
+    auto receiveReadyFuture = receiveReady->get_future();
+    runOnCommunicator([=] {
+      session->metadataBuffer =
+          std::make_shared<std::vector<uint8_t>>(kMaxMetaBufSize);
+      std::weak_ptr<TerminalMetadataSession> weakSession = session;
+      session->peerRequest = session->endpoint->endpoint_->tagRecv(
+          session->metadataBuffer->data(),
+          session->metadataBuffer->size(),
+          ucxx::Tag{getMetadataTag(
+              fnv1a_32(PartitionKey{session->taskId, 0}.toString()), 0)},
+          ucxx::TagMaskFull,
+          false,
+          [weakSession](ucs_status_t status, std::shared_ptr<void> argument) {
+            if (auto locked = weakSession.lock()) {
+              auto buffer =
+                  std::static_pointer_cast<std::vector<uint8_t>>(argument);
+              locked->receiveResult = status == UCS_OK &&
+                      MetadataMsg::deserializeMetadataMsg(buffer->data()).atEnd
+                  ? 1
+                  : 0;
+            }
+          },
+          session->metadataBuffer);
+      receiveReady->set_value();
+    });
+    EXPECT_EQ(
+        receiveReadyFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
+  }
+
+  void sendDestinationCancellation(
+      const std::shared_ptr<TerminalMetadataSession>& session) {
+    auto cancellationReady = std::make_shared<std::promise<void>>();
+    auto cancellationReadyFuture = cancellationReady->get_future();
+    runOnCommunicator([=] {
+      auto cancellation = std::make_shared<uint8_t>(0);
+      session->peerRequest = session->endpoint->endpoint_->tagSend(
+          cancellation.get(),
+          sizeof(*cancellation),
+          ucxx::Tag{getDestinationCancellationTag(
+              fnv1a_32(PartitionKey{session->taskId, 0}.toString()))},
+          false,
+          [](ucs_status_t /*status*/, std::shared_ptr<void> /*arg*/) {},
+          cancellation);
+      cancellationReady->set_value();
+    });
+    EXPECT_EQ(
+        cancellationReadyFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
+  }
+
+  bool waitForOutputFinished(std::string_view taskId) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!queueManager_->isFinished(taskId) &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return queueManager_->isFinished(taskId);
+  }
+
+  bool waitForTerminalReceive(
+      const std::shared_ptr<TerminalMetadataSession>& session) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (session->receiveResult.load() == -1 &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return session->receiveResult.load() == 1;
+  }
+
+  void cleanUpTerminalMetadataSession(
+      const std::shared_ptr<TerminalMetadataSession>& session) {
+    auto cleaned = std::make_shared<std::promise<void>>();
+    auto cleanedFuture = cleaned->get_future();
+    runOnCommunicator([=] {
+      if (session->server) {
+        session->server->close();
+      }
+      if (session->peerRequest) {
+        if (!session->peerRequest->isCompleted()) {
+          session->peerRequest->cancel();
+        }
+        communicator_->deferRequestCleanup(std::move(session->peerRequest));
+      }
+      if (session->endpoint) {
+        if (session->server) {
+          session->endpoint->removeCommElem(session->server);
+        }
+        session->endpoint->removeCommElem(session->owner);
+      }
+      queueManager_->removeTask(session->taskId);
+      cleaned->set_value();
+    });
+    EXPECT_EQ(
+        cleanedFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
   }
 
   static void SetUpTestCase() {
@@ -1658,6 +1914,503 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   VLOG(0) << "deferredRequestCleanupOnTaskAbort: completed without crash";
 
   config.intraNodeExchange = origIntraNode;
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataRemovedQueueStillReceivesCancellation) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* threshold = std::getenv("UCX_RNDV_THRESH");
+  if (!threshold || std::string_view(threshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+  const auto taskId = getUniqueTaskPrefix() + "removedQueueCancellation";
+  auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      task, core::PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+  task->requestAbort();
+  queueManager_->removeTask(taskId);
+  auto session = startTerminalMetadataSend(taskId, /*initializeTask=*/false);
+  SCOPE_EXIT {
+    session->task->requestAbort();
+    cleanUpTerminalMetadataSession(session);
+  };
+  sendDestinationCancellation(session);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!session->peerRequest->isCompleted() &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(session->peerRequest->isCompleted());
+  EXPECT_EQ(session->peerRequest->getStatus(), UCS_OK);
+  EXPECT_FALSE(queueManager_->stats(taskId).has_value());
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataCancellationWithoutHandshakeResponse) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  for (bool closeBeforeHandshake : {false, true}) {
+    SCOPED_TRACE(closeBeforeHandshake);
+    auto context = ucxx::createContext({}, UCP_FEATURE_TAG | UCP_FEATURE_AM);
+    auto worker = context->createWorker();
+    std::shared_ptr<ucxx::Listener> listener;
+    std::shared_ptr<ucxx::Endpoint> peer;
+    std::shared_ptr<ucxx::Request> cancellationRequest;
+    bool handshakeReceived = false;
+    bool cancellationReceived = false;
+    const auto taskId = getUniqueTaskPrefix() + "missingHandshakeResponse";
+    const auto cancellationTag = getDestinationCancellationTag(
+        fnv1a_32(PartitionKey{taskId, 0}.toString()));
+    worker->registerAmReceiverCallback(
+        ucxx::AmReceiverCallbackInfo{
+            communicator_->kAmCallbackOwner, communicator_->kAmCallbackId},
+        [&](std::shared_ptr<ucxx::Request> /*request*/, ucp_ep_h /*endpoint*/) {
+          handshakeReceived = true;
+          auto value = std::make_shared<uint8_t>(0);
+          cancellationRequest = peer->tagRecv(
+              value.get(),
+              sizeof(*value),
+              ucxx::Tag{cancellationTag},
+              ucxx::TagMaskFull,
+              false,
+              [&](ucs_status_t status, std::shared_ptr<void> /*data*/) {
+                cancellationReceived = status == UCS_OK;
+              },
+              value);
+          // Deliberately withhold the handshake response.
+        });
+    std::function<void(ucp_conn_request_h)> accept =
+        [&](ucp_conn_request_h request) {
+          peer = listener->createEndpointFromConnRequest(request, true);
+        };
+    const auto port = exec::test::getFreePort();
+    ASSERT_GT(port, kSplitUrlPortOffset);
+    listener = worker->createListener(
+        port,
+        [](ucp_conn_request_h request, void* argument) {
+          (*static_cast<std::function<void(ucp_conn_request_h)>*>(argument))(
+              request);
+        },
+        &accept);
+    SCOPE_EXIT {
+      if (peer) {
+        peer->closeBlocking();
+      }
+    };
+    auto queue = std::make_shared<UcxExchangeQueue>(1);
+    auto created =
+        std::make_shared<std::promise<std::weak_ptr<UcxExchangeSource>>>();
+    auto createdFuture = created->get_future();
+    const auto url = fmt::format(
+        "http://127.0.0.1:{}/v1/task/{}/results/0",
+        port - kSplitUrlPortOffset,
+        taskId);
+    runOnCommunicator([created, queue, url, closeBeforeHandshake] {
+      auto source = UcxExchangeSource::create("closed-consumer", url, queue);
+      if (closeBeforeHandshake) {
+        source->close();
+      }
+      created->set_value(source);
+    });
+    ASSERT_EQ(
+        createdFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
+    const auto source = createdFuture.get();
+    bool closeSubmitted = closeBeforeHandshake;
+    bool cancellationBeforeCleanup = false;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while ((!cancellationReceived || !source.expired()) &&
+           std::chrono::steady_clock::now() < deadline) {
+      worker->progress();
+      cancellationBeforeCleanup |= cancellationReceived && !source.expired();
+      if (handshakeReceived && !closeSubmitted) {
+        runOnCommunicator([source] {
+          if (auto active = source.lock()) {
+            active->close();
+          }
+        });
+        closeSubmitted = true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_TRUE(handshakeReceived);
+    EXPECT_TRUE(cancellationReceived);
+    EXPECT_TRUE(cancellationBeforeCleanup);
+    EXPECT_TRUE(source.expired());
+  }
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataWaitsForRemoteReceive) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* rendezvousThreshold = std::getenv("UCX_RNDV_THRESH");
+  if (!rendezvousThreshold || std::string_view(rendezvousThreshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "terminalMetadataSuccess",
+      /*initializeTask=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  EXPECT_FALSE(queueManager_->isFinished(session->taskId));
+  postTerminalMetadataReceive(session);
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  EXPECT_EQ(session->receiveResult.load(), 1);
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataFailureLeavesOutputPending) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* rendezvousThreshold = std::getenv("UCX_RNDV_THRESH");
+  if (!rendezvousThreshold || std::string_view(rendezvousThreshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "terminalMetadataFailure",
+      /*initializeTask=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  TestLogCapture warning(
+      "UCX terminal metadata send failed for " + session->taskId,
+      google::GLOG_WARNING);
+  runOnCommunicator([session] {
+    // Keep endpoint cleanup from closing the server before the failed-send
+    // callback. Force-closing this test endpoint fails the unmatched send.
+    auto endpoint = session->endpoint->endpoint_;
+    endpoint->setCloseCallback(nullptr, nullptr);
+    endpoint->closeBlocking();
+    Communicator::getInstance()->removeEndpointRef(session->endpoint);
+  });
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!warning.matched() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(warning.matched());
+  EXPECT_EQ(session->task->state(), TaskState::kRunning);
+  EXPECT_FALSE(queueManager_->isFinished(session->taskId));
+
+  session->task->requestAbort();
+  EXPECT_TRUE(
+      exec::test::waitForTaskStateChange(
+          session->task.get(), TaskState::kAborted, 3'000'000));
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataCloseLeavesOutputPending) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* rendezvousThreshold = std::getenv("UCX_RNDV_THRESH");
+  if (!rendezvousThreshold || std::string_view(rendezvousThreshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "terminalMetadataClose",
+      /*initializeTask=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  auto finalized = std::make_shared<std::promise<void>>();
+  auto finalizedFuture = finalized->get_future();
+  runOnCommunicator([session, finalized] {
+    session->server->close();
+    finalized->set_value();
+  });
+  ASSERT_EQ(
+      finalizedFuture.wait_for(std::chrono::seconds(3)),
+      std::future_status::ready);
+  EXPECT_EQ(session->task->state(), TaskState::kRunning);
+  EXPECT_FALSE(queueManager_->isFinished(session->taskId));
+
+  queueManager_->deleteResults(session->taskId, 0);
+  EXPECT_TRUE(
+      exec::test::waitForTaskStateChange(
+          session->task.get(), TaskState::kFinished, 3'000'000));
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataTaskAbortRemovesUcxOutput) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+  auto queryCtx = core::QueryCtx::create(executor.get());
+  auto registry = exec::OutputTransportRegistry::create();
+  const std::string transport{core::TransportKind::kUcx};
+  registry->insert(
+      transport,
+      exec::OutputTransportEntry::make<UcxOutputQueueManager>(
+          queueManager_,
+          [](int32_t operatorId,
+             exec::DriverCtx* ctx,
+             const std::shared_ptr<const core::PartitionedOutputNode>& node,
+             bool /*eagerFlush*/,
+             const std::shared_ptr<UcxOutputQueueManager>& manager)
+              -> std::unique_ptr<exec::Operator> {
+            return std::make_unique<UcxPartitionedOutput>(
+                operatorId, ctx, node, manager);
+          }));
+  queryCtx->setRegistry(exec::OutputTransportRegistry::kRegistryKey, registry);
+  const auto& rowType = UcxTestData::kTestRowType;
+  auto input = std::static_pointer_cast<RowVector>(
+      BaseVector::create(rowType, 0, pool_.get()));
+  auto output = core::PartitionedOutputNode::single(
+      "output",
+      rowType,
+      VectorSerde::kindName(VectorSerde::Kind::kPresto),
+      transport,
+      exec::test::PlanBuilder().values({input}).planNode());
+  const auto taskId = getUniqueTaskPrefix() + "taskAbortRemovesUcxOutput";
+  auto task = exec::Task::create(
+      taskId,
+      core::PlanFragment{output},
+      0,
+      queryCtx,
+      exec::Task::ExecutionMode::kParallel);
+  SCOPE_EXIT {
+    task->requestAbort().wait();
+  };
+  task->start(1);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (task->numFinishedDrivers() != 1 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
+  ASSERT_EQ(task->outputBufferManager().lock(), queueManager_);
+  ASSERT_EQ(task->state(), TaskState::kRunning);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+  ASSERT_FALSE(queueManager_->isFinished(taskId));
+
+  // Exercise the same Task cleanup entry point used by the coordinator's
+  // DELETE request, with the UCX manager selected through the registry.
+  task->requestAbort().wait();
+  EXPECT_EQ(task->state(), TaskState::kAborted);
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataEndpointCloseReportsActiveSourceError) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  for (bool consumerClosed : {false, true}) {
+    SCOPED_TRACE(consumerClosed);
+    auto queue = std::make_shared<UcxExchangeQueue>(1);
+    {
+      std::lock_guard<std::mutex> lock(queue->mutex());
+      queue->addSourceLocked();
+    }
+    queue->noMoreSources();
+    auto completed = std::make_shared<std::promise<void>>();
+    auto completedFuture = completed->get_future();
+    runOnCommunicator(
+        [communicator = communicator_, queue, consumerClosed, completed] {
+          auto source = UcxExchangeSource::create(
+              "consumer",
+              "http://127.0.0.1:12345/v1/task/producer/results/0",
+              queue);
+          communicator->unregister(source);
+          source->setRegistered();
+          // Exercise endpoint cleanup before a receive is posted. There is no
+          // receive callback that could otherwise report the lost connection.
+          EndpointRef endpoint{nullptr};
+          endpoint.addCommElem(source);
+          if (consumerClosed) {
+            source->close();
+            communicator->unregister(source);
+          }
+          endpoint.closeAndDrainCommunicators();
+          communicator->unregister(source);
+          completed->set_value();
+        });
+    ASSERT_EQ(
+        completedFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
+    std::lock_guard<std::mutex> lock(queue->mutex());
+    bool atEnd = false;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ContinuePromise stalePromise = ContinuePromise::makeEmpty();
+    if (consumerClosed) {
+      EXPECT_EQ(
+          queue->dequeueLocked(0, &atEnd, &future, &stalePromise), nullptr);
+      EXPECT_TRUE(atEnd);
+    } else {
+      VELOX_ASSERT_THROW(
+          queue->dequeueLocked(0, &atEnd, &future, &stalePromise),
+          "UCX endpoint closed before end of stream from 127.0.0.1:12348");
+    }
+  }
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataConsumerCancellationRetiresOutput) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* rendezvousThreshold = std::getenv("UCX_RNDV_THRESH");
+  if (!rendezvousThreshold || std::string_view(rendezvousThreshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "terminalMetadataCancellation",
+      /*initializeTask=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  sendDestinationCancellation(session);
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  EXPECT_NE(session->task->state(), TaskState::kFailed);
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataCancellationBeforeTaskInit) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* rendezvousThreshold = std::getenv("UCX_RNDV_THRESH");
+  if (!rendezvousThreshold || std::string_view(rendezvousThreshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "terminalMetadataEarlyCancellation",
+      /*initializeTask=*/false);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  sendDestinationCancellation(session);
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  queueManager_->initializeTask(
+      session->task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  EXPECT_TRUE(
+      exec::test::waitForTaskStateChange(
+          session->task.get(), TaskState::kFinished, 3'000'000));
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataCallbackStaysWithOriginalTask) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  const auto* rendezvousThreshold = std::getenv("UCX_RNDV_THRESH");
+  if (!rendezvousThreshold || std::string_view(rendezvousThreshold) != "0") {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "terminalMetadataTaskReuse",
+      /*initializeTask=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  queueManager_->removeTask(session->taskId);
+  auto newTask =
+      createSourceTask(session->taskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      newTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  queueManager_->noMoreData(session->taskId);
+
+  postTerminalMetadataReceive(session);
+  EXPECT_TRUE(waitForTerminalReceive(session));
+  EXPECT_TRUE(
+      exec::test::waitForTaskStateChange(
+          session->task.get(), TaskState::kFinished, 3'000'000));
+  EXPECT_EQ(newTask->state(), TaskState::kRunning);
+  EXPECT_FALSE(queueManager_->isFinished(session->taskId));
+  newTask->requestAbort();
+  EXPECT_TRUE(
+      exec::test::waitForTaskStateChange(
+          newTask.get(), TaskState::kAborted, 3'000'000));
+}
+
+TEST_P(UcxExchangeTest, terminalMetadataCloseBeforeRemoteTaskAdded) {
+  if (!shouldRunTerminalMetadataTest()) {
+    GTEST_SKIP() << "Runs only once";
+  }
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool originalIntraNode = config.intraNodeExchange;
+  const auto originalLogLevel = google::SetVLOGLevel("Acceptor", 3);
+  SCOPE_EXIT {
+    config.intraNodeExchange = originalIntraNode;
+    google::SetVLOGLevel("Acceptor", originalLogLevel);
+  };
+  for (bool intraNode : {false, true}) {
+    SCOPED_TRACE(intraNode);
+    config.intraNodeExchange = intraNode;
+
+    const auto producerTaskId =
+        getUniqueTaskPrefix() + "closeBeforeRemoteTaskAdded";
+    auto producerTask =
+        createSourceTask(producerTaskId, pool_, UcxTestData::kTestRowType);
+    queueManager_->initializeTask(
+        producerTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        /*numDestinations=*/1,
+        /*numDrivers=*/1);
+    queueManager_->noMoreData(producerTaskId);
+    TestLogCapture responseDelivery(
+        "HandshakeResponse sent successfully to " + producerTaskId,
+        google::GLOG_INFO);
+    SCOPE_EXIT {
+      if (producerTask->isRunning()) {
+        producerTask->requestAbort();
+        exec::test::waitForTaskStateChange(
+            producerTask.get(), TaskState::kAborted, 3'000'000);
+      }
+      queueManager_->removeTask(producerTaskId);
+    };
+
+    auto split = remoteSplit(producerTaskId, /*partitionId=*/0);
+    auto remote = std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+        split.connectorSplit);
+    ASSERT_NE(remote, nullptr);
+
+    auto sourceClosed = std::make_shared<std::promise<void>>();
+    auto sourceClosedFuture = sourceClosed->get_future();
+    runOnCommunicator([remote, sourceClosed] {
+      auto client = std::make_shared<UcxExchangeClient>(
+          "closed-consumer", /*destination=*/0, /*numberOfConsumers=*/1);
+      client->close();
+      client->addRemoteTaskId(remote->taskId);
+      sourceClosed->set_value();
+    });
+    ASSERT_EQ(
+        sourceClosedFuture.wait_for(std::chrono::seconds(3)),
+        std::future_status::ready);
+
+    EXPECT_TRUE(waitForOutputFinished(producerTaskId));
+    const auto* threshold = std::getenv("UCX_RNDV_THRESH");
+    if (threshold && std::string_view(threshold) == "0") {
+      const auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (!responseDelivery.matched() &&
+             std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      EXPECT_TRUE(responseDelivery.matched())
+          << "Response draining must let the handshake reply finish";
+    }
+  }
 }
 
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
