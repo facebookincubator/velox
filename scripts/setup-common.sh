@@ -368,7 +368,9 @@ function install_minio {
     echo "Unsupported Minio platform"
   fi
 
-  wget "${WGET_OPTS[@]}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
+  # Fetch from GitHub releases rather than dl.min.io: MinIO retired the
+  # dl.min.io binary downloads and every path under it now returns HTTP 410.
+  wget "${WGET_OPTS[@]}" https://github.com/minio/minio/releases/download/RELEASE."${MINIO_VERSION}"/minio."${MINIO_OS}"-${MINIO_ARCH}.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
   chmod +x ./"${MINIO_BINARY_NAME}"
   mkdir -p "$INSTALL_PREFIX"/bin/
   ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/

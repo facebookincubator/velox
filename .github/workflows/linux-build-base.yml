@@ -458,7 +458,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y cmake patchelf cuda-toolkit-12-9
           export MINIO_VERSION="2022-05-26T05-48-41Z"
           export MINIO_BINARY_NAME="minio-2022-05-26"
-          wget https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
+          wget https://github.com/minio/minio/releases/download/RELEASE."${MINIO_VERSION}"/minio.linux-amd64.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
           sudo mv ./"${MINIO_BINARY_NAME}" /usr/local/bin/
           sudo chmod +x /usr/local/bin/"${MINIO_BINARY_NAME}"
           curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
