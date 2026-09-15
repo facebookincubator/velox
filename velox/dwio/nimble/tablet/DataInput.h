@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <fmt/core.h>
+#include <folly/Range.h>
 
 #include "velox/common/file/File.h"
 #include "velox/common/file/Region.h"
@@ -161,8 +162,9 @@ class DirectDataInput : public DataInput {
 
   // Coalesces sorted regions into physical IO groups. Exact duplicate ranges
   // can share one physical read when the caller maps them to the same bytes.
-  std::vector<IoGroup> computeIoGroups(
-      const std::vector<EnqueuedRegion>& sortedRegions);
+  // Populates ioGroups_ and reuses coalesceIoRanges_ so a per-load() alloc
+  // is not required.
+  void computeIoGroups(const std::vector<EnqueuedRegion>& sortedRegions);
 
   // Computes the unique payload size for a sorted span of regions. Exact
   // duplicate ranges do not add payload bytes. Returns {payloadSize, lastEnd}
@@ -217,6 +219,14 @@ class DirectDataInput : public DataInput {
   std::vector<uint32_t> groupOffsets_;
   // Populated by load() with pointers into the aligned buffer.
   std::vector<BufferRef> bufferRefs_;
+
+  // --- Reused across load() calls to avoid per-call allocation ---
+  // Coalescer inputs / outputs (populated by computeIoGroups).
+  std::vector<int32_t> coalesceIoRanges_;
+  std::vector<IoGroup> ioGroups_;
+  // preadv inputs (populated by executeIoGroups).
+  std::vector<velox::common::Region> readRegions_;
+  std::vector<folly::Range<char*>> readBuffers_;
 };
 
 /// Loads and caches one contiguous entry per group. Enqueued regions return

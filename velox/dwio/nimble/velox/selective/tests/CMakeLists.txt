@@ -23,6 +23,7 @@ add_executable(
   FlatMapColumnReaderTest.cpp
   NimbleDataTest.cpp
   NullColumnReaderTest.cpp
+  ReadWithVisitorTest.cpp
   ScalarColumnReaderTest.cpp
   SelectiveNimbleReaderTest.cpp
   StringColumnReaderTest.cpp
