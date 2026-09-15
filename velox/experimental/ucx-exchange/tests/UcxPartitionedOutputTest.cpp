@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <memory>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/exec/Driver.h"
 #include "velox/experimental/cudf/CudfConfig.h"
@@ -231,6 +232,35 @@ class UcxPartitionedOutputTest : public testing::Test {
   std::shared_ptr<UcxOutputQueueManager> queueManager_;
   std::shared_ptr<exec::DriverCtx> driverCtx_;
 };
+
+TEST_F(UcxPartitionedOutputTest, requiresProcessWideQueueManager) {
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      UcxTestData::kTestRowType,
+      kNumPartitions,
+      {"c0"},
+      FOUR_GBYTES);
+  auto partitionedOutputNode =
+      std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+          task->planFragment().planNode);
+  ASSERT_NE(partitionedOutputNode, nullptr);
+
+  driverCtx_ = std::make_shared<exec::DriverCtx>(
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      exec::kUngroupedGroupId,
+      /*partitionId=*/0);
+
+  VELOX_ASSERT_RUNTIME_THROW(
+      UcxPartitionedOutput(
+          /*operatorId=*/0,
+          driverCtx_.get(),
+          partitionedOutputNode,
+          std::make_shared<UcxOutputQueueManager>()),
+      "requires the process-wide output queue manager");
+}
 
 // A cuDF table with no columns always reports zero rows. The logical row count
 // from CudfVector must therefore be preserved separately, including when
