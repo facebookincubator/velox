@@ -150,6 +150,7 @@ class MapAggregateBase : public exec::Aggregate {
         auto size = mapVector->sizeAt(decodedRow);
         auto tracker = trackRowSize(group);
         checkNullKeys(decodedKeys_, offset, size);
+        accumulator->reserveAdditional(size);
         for (auto i = offset; i < offset + size; ++i) {
           accumulator->insert(decodedKeys_, decodedValues_, i, *allocator_);
         }
@@ -178,6 +179,7 @@ class MapAggregateBase : public exec::Aggregate {
         auto offset = mapVector->offsetAt(decodedRow);
         auto size = mapVector->sizeAt(decodedRow);
         checkNullKeys(decodedKeys_, offset, size);
+        accumulator->reserveAdditional(size);
         for (auto i = offset; i < offset + size; ++i) {
           accumulator->insert(decodedKeys_, decodedValues_, i, *allocator_);
         }
