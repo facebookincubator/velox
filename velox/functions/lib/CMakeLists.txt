@@ -41,6 +41,8 @@ velox_add_library(
 
 velox_link_libraries(velox_functions_lib_date_time_formatter velox_type_tz)
 
+add_subdirectory(java_regex)
+
 velox_add_library(
   velox_functions_lib
   ArrayShuffle.cpp
@@ -94,6 +96,7 @@ velox_add_library(
 
 velox_link_libraries(
   velox_functions_lib
+  velox_functions_java_regex
   velox_expression
   velox_functions_util
   velox_vector
