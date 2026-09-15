@@ -729,23 +729,33 @@ higher levels of precision.:</p>
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span> <span class="pre">(ANSI</span> <span class="pre">compliant</span></span></em><span class="sig-paren">)</span></dt>
 <dd><blockquote>
 <div><p>Returns the UNIX timestamp of time specified by <code class="docutils literal notranslate"><span class="pre">string</span></code>. Assumes the
-format <code class="docutils literal notranslate"><span class="pre">yyyy-MM-dd</span> <span class="pre">HH:mm:ss</span></code>. Returns null if <code class="docutils literal notranslate"><span class="pre">string</span></code> does not match
-<code class="docutils literal notranslate"><span class="pre">format</span></code>.</p>
+format <code class="docutils literal notranslate"><span class="pre">yyyy-MM-dd</span> <span class="pre">HH:mm:ss</span></code>. When <code class="docutils literal notranslate"><span class="pre">spark.ansi_enabled</span></code> is true, a
+<code class="docutils literal notranslate"><span class="pre">string</span></code> that does not match the format throws an error; otherwise it
+returns NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">'invalid'</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+</pre></div>
+</div>
 </div></blockquote>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark">
-<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<span class="sig-name descname"><span class="pre">unix_timestamp</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format)</span> <span class="pre">-&gt;</span> <span class="pre">bigint</span> <span class="pre">(ANSI</span> <span class="pre">compliant</span></span></em><span class="sig-paren">)</span></dt>
 <dd><blockquote>
 <div><p>Returns the UNIX timestamp of time specified by <code class="docutils literal notranslate"><span class="pre">string</span></code> using the
 format described in the <code class="docutils literal notranslate"><span class="pre">format</span></code> string. The format follows Spark’s
 <a class="reference external" href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Datetime patterns for formatting and parsing</a>.
-Returns null if <code class="docutils literal notranslate"><span class="pre">string</span></code> does not match <code class="docutils literal notranslate"><span class="pre">format</span></code> or if <code class="docutils literal notranslate"><span class="pre">format</span></code>
-is invalid.</p>
+An invalid <code class="docutils literal notranslate"><span class="pre">format</span></code> returns NULL when the legacy formatter is enabled;
+otherwise it throws an error, regardless of ANSI mode. When
+<code class="docutils literal notranslate"><span class="pre">spark.ansi_enabled</span></code> is true, a <code class="docutils literal notranslate"><span class="pre">string</span></code> that does not match a valid
+<code class="docutils literal notranslate"><span class="pre">format</span></code> throws an error; otherwise it returns NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">'invalid'</span><span class="p">,</span> <span class="s1">'yyyy-MM-dd'</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">OFF</span><span class="p">)</span> <span class="o">/</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">ANSI</span> <span class="n">ON</span><span class="p">)</span>
+<span class="n">SELECT</span> <span class="n">unix_timestamp</span><span class="p">(</span><span class="s1">'2024-10-01'</span><span class="p">,</span> <span class="s1">'invalid-format'</span><span class="p">);</span> <span class="o">--</span> <span class="n">ERROR</span> <span class="p">(</span><span class="n">non</span><span class="o">-</span><span class="n">legacy</span> <span class="n">formatter</span><span class="p">)</span>
+</pre></div>
+</div>
 </div></blockquote>
 </dd></dl>
 
