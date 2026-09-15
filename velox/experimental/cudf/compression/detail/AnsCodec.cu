@@ -122,15 +122,13 @@ AnsCompressedData compressAnsBatch(
   }
 
   auto configs = context.manager().configure_compression(inputSizes);
-  std::vector<std::size_t> outputOffsets(inputs.size());
   std::vector<uint8_t*> outputPointers(inputs.size());
   std::size_t maximumOutputSize = 0;
-  for (std::size_t index = 0; index < inputs.size(); ++index) {
-    outputOffsets[index] = maximumOutputSize;
-    maximumOutputSize = checkedAddSizes(
-        maximumOutputSize,
-        nvcompAlignedSize(configs[index].max_compressed_buffer_size),
-        "nvCOMP ANS scratch size overflow");
+  for (const auto& config : configs) {
+    maximumOutputSize =
+        checkedAddSizes(maximumOutputSize,
+                        nvcompAlignedSize(config.max_compressed_buffer_size),
+                        "nvCOMP ANS scratch size overflow");
   }
 
   const auto stream = context.stream();
@@ -138,18 +136,23 @@ AnsCompressedData compressAnsBatch(
   rmm::device_buffer scratch{maximumOutputSize, stream, memoryResource};
   CUDF_CUDA_TRY(
       cudaMemsetAsync(scratch.data(), 0, scratch.size(), stream.value()));
+  std::size_t outputOffset = 0;
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     outputPointers[index] =
-        static_cast<uint8_t*>(scratch.data()) + outputOffsets[index];
+        static_cast<uint8_t*>(scratch.data()) + outputOffset;
+    outputOffset = checkedAddSizes(
+        outputOffset,
+        nvcompAlignedSize(configs[index].max_compressed_buffer_size),
+        "nvCOMP ANS scratch offset overflow");
   }
 
   rmm::device_buffer outputSizesDevice{
       inputs.size() * sizeof(std::size_t), stream, memoryResource};
-  context.manager().compress(inputPointers.data(),
-                             outputPointers.data(),
-                             configs,
-                             static_cast<std::size_t*>(
-                                 outputSizesDevice.data()));
+  context.manager().compress(
+      inputPointers.data(),
+      outputPointers.data(),
+      configs,
+      static_cast<std::size_t*>(outputSizesDevice.data()));
 
   auto stagedSizes = context.sizeStaging(inputs.size());
   CUDF_CUDA_TRY(cudaMemcpyAsync(stagedSizes.data(),
@@ -193,9 +196,8 @@ AnsCompressedData compressAnsBatch(
 
 std::optional<AnsCompressedData> compressAns(
     cudf::device_span<const uint8_t> input,
-    std::size_t minimumInputSize,
     AnsCodecContext& context) {
-  if (input.size() < minimumInputSize) {
+  if (input.size() < kNvcompAnsChunkSize) {
     return std::nullopt;
   }
 
@@ -218,16 +220,14 @@ std::optional<AnsCompressedData> compressAns(
     std::copy(batch.segmentSizes.begin(),
               batch.segmentSizes.end(),
               segmentSizes.begin() + first);
-    compressedTotal = checkedAddSizes(compressedTotal,
-                                      batch.data.size(),
-                                      "nvCOMP ANS result size overflow");
+    compressedTotal = checkedAddSizes(
+        compressedTotal, batch.data.size(), "nvCOMP ANS result size overflow");
     batches.push_back(std::move(batch.data));
   }
 
-  if (compressedTotal == 0 ||
-      static_cast<long double>(compressedTotal) >
-          (1.0L - static_cast<long double>(kMinimumEncodedByteReduction)) *
-              static_cast<long double>(input.size())) {
+  if (static_cast<long double>(compressedTotal) >
+      (1.0L - static_cast<long double>(kMinimumEncodedByteReduction)) *
+          static_cast<long double>(input.size())) {
     stream.synchronize();
     return std::nullopt;
   }

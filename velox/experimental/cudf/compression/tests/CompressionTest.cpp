@@ -46,24 +46,17 @@ namespace {
 
 constexpr std::size_t kDescriptorVersionIndex = 1;
 constexpr std::size_t kUncompressedSizeIndex = 2;
-constexpr std::size_t kCompressedSizeIndex = 3;
-constexpr std::size_t kRegionCountIndex = 4;
-constexpr std::size_t kFirstRegionIndex = 5;
-constexpr std::size_t kRegionBaseOffset = 5;
-constexpr std::size_t kRegionFirstOffset = 6;
-constexpr std::size_t kRegionRawSizeOffset = 1;
-constexpr std::size_t kRegionCodecOffset = 2;
-constexpr std::size_t kRegionTypeOffset = 3;
-constexpr std::size_t kRegionScaleOffset = 4;
-constexpr std::size_t kRegionSegmentCountOffset = 7;
-constexpr std::size_t kRegionFixedWordCount = 8;
+constexpr std::size_t kRegionCountIndex = 3;
+constexpr std::size_t kFirstRegionIndex = 4;
+constexpr std::size_t kRegionRawSizeOffset = 0;
+constexpr std::size_t kRegionCodecOffset = 1;
+constexpr std::size_t kRegionTypeOffset = 2;
+constexpr std::size_t kRegionScaleOffset = 3;
+constexpr std::size_t kRegionReferenceOffset = 4;
+constexpr std::size_t kRegionSegmentCountOffset = 5;
+constexpr std::size_t kRegionFixedWordCount = 6;
 constexpr int64_t kRawRegionCodec = 0;
 constexpr int64_t kFrameOfReferenceRegionCodec = 2;
-constexpr int64_t kDeltaFrameOfReferenceRegionCodec = 3;
-
-std::size_t alignedEncodedSize(std::size_t size) {
-  return detail::nvcompAlignedSize(size);
-}
 
 template <typename T>
 std::unique_ptr<cudf::column> makeColumn(
@@ -363,10 +356,6 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   negativeUncompressedSize[kUncompressedSizeIndex] = -1;
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(negativeUncompressedSize));
 
-  auto wrongCompressedSize = valid;
-  wrongCompressedSize[kCompressedSizeIndex] += 1;
-  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(wrongCompressedSize));
-
   auto excessiveRegionCount = valid;
   excessiveRegionCount[kRegionCountIndex] = std::numeric_limits<int64_t>::max();
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(excessiveRegionCount));
@@ -379,36 +368,26 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   emptySegment.back() = 0;
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(emptySegment));
 
-  std::size_t typedRegionIndex = kFirstRegionIndex;
+  std::size_t untypedRegionIndex = kFirstRegionIndex;
   const auto regionCount = static_cast<std::size_t>(valid[kRegionCountIndex]);
   for (std::size_t region = 0; region < regionCount; ++region) {
-    if (valid[typedRegionIndex + kRegionCodecOffset] >=
+    if (valid[untypedRegionIndex + kRegionCodecOffset] <
         kFrameOfReferenceRegionCodec) {
       break;
     }
     const auto segmentCount = static_cast<std::size_t>(
-        valid[typedRegionIndex + kRegionSegmentCountOffset]);
-    typedRegionIndex += kRegionFixedWordCount + segmentCount;
+        valid[untypedRegionIndex + kRegionSegmentCountOffset]);
+    untypedRegionIndex += kRegionFixedWordCount + segmentCount;
   }
-  ASSERT_LT(typedRegionIndex, valid.size());
+  ASSERT_LT(untypedRegionIndex, valid.size());
 
   auto invalidCodec = valid;
   invalidCodec[kFirstRegionIndex + kRegionCodecOffset] = 99;
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidCodec));
 
-  auto nonCanonicalFrameOfReference = valid;
-  nonCanonicalFrameOfReference[typedRegionIndex + kRegionCodecOffset] =
-      kFrameOfReferenceRegionCodec;
-  nonCanonicalFrameOfReference[typedRegionIndex + kRegionFirstOffset] = 1;
-  EXPECT_FALSE(
-      PackedColumnsDescriptor::deserialize(nonCanonicalFrameOfReference));
-
-  auto nonCanonicalDeltaFrameOfReference = valid;
-  nonCanonicalDeltaFrameOfReference[typedRegionIndex + kRegionCodecOffset] =
-      kDeltaFrameOfReferenceRegionCodec;
-  nonCanonicalDeltaFrameOfReference[typedRegionIndex + kRegionBaseOffset] = 1;
-  EXPECT_FALSE(
-      PackedColumnsDescriptor::deserialize(nonCanonicalDeltaFrameOfReference));
+  auto invalidUntypedReference = valid;
+  invalidUntypedReference[untypedRegionIndex + kRegionReferenceOffset] = 1;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidUntypedReference));
 
   auto invalidType = valid;
   invalidType[kFirstRegionIndex + kRegionTypeOffset] =
@@ -423,10 +402,6 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   auto negativeSegmentCount = valid;
   negativeSegmentCount[kFirstRegionIndex + kRegionSegmentCountOffset] = -1;
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(negativeSegmentCount));
-
-  auto nonContiguousRegion = valid;
-  nonContiguousRegion[kFirstRegionIndex] = 1;
-  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(nonContiguousRegion));
 
   auto oversizedRawRegion = valid;
   oversizedRawRegion[kFirstRegionIndex + kRegionRawSizeOffset] =
@@ -568,13 +543,10 @@ TEST(PackedColumnsCodecTest, HonorsResidualAnsThreshold) {
   detail::AnsCodecContext context{stream.view(), memoryResource};
   EXPECT_FALSE(detail::compressAns(
       {static_cast<const uint8_t*>(input.data()), kResidualThreshold - 1},
-      kResidualThreshold,
       context));
 
   auto compressed = detail::compressAns(
-      {static_cast<const uint8_t*>(input.data()), kResidualThreshold},
-      kResidualThreshold,
-      context);
+      {static_cast<const uint8_t*>(input.data()), kResidualThreshold}, context);
   ASSERT_TRUE(compressed);
   auto decoded = detail::decompressAns(
       {static_cast<const uint8_t*>(compressed->data.data()),
@@ -627,20 +599,20 @@ TEST(PackedColumnsCodecTest, EncodedPaddingIsDeterministic) {
           descriptor[descriptorPosition + kRegionSegmentCountOffset]);
       const auto segmentSizes = descriptorPosition + kRegionFixedWordCount;
       if (codec == kRawRegionCodec) {
-        for (auto offset = rawSize; offset < alignedEncodedSize(rawSize);
+        for (auto offset = rawSize; offset < detail::nvcompAlignedSize(rawSize);
              ++offset) {
           EXPECT_EQ(bytes[encodedPosition + offset], 0);
         }
-        encodedPosition += alignedEncodedSize(rawSize);
+        encodedPosition += detail::nvcompAlignedSize(rawSize);
       } else {
         for (std::size_t segment = 0; segment < segmentCount; ++segment) {
           const auto size =
               static_cast<std::size_t>(descriptor[segmentSizes + segment]);
-          for (auto offset = size; offset < alignedEncodedSize(size);
+          for (auto offset = size; offset < detail::nvcompAlignedSize(size);
                ++offset) {
             EXPECT_EQ(bytes[encodedPosition + offset], 0);
           }
-          encodedPosition += alignedEncodedSize(size);
+          encodedPosition += detail::nvcompAlignedSize(size);
         }
       }
       descriptorPosition = segmentSizes + segmentCount;

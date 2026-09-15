@@ -82,14 +82,15 @@ struct AnsCompressedData {
 /**
  * Compresses one contiguous device span into native nvCOMP ANS frames.
  *
- * Large inputs are divided into bounded segments. The returned device buffer
- * contains 16-byte-aligned frame extents. `segmentSizes` records each frame's
+ * Inputs smaller than one native nvCOMP chunk are rejected as an empirical
+ * launch-amortization policy. Large inputs are divided into bounded segments.
+ * The returned device buffer contains 16-byte-aligned frame extents.
+ * `segmentSizes` records each frame's
  * true length, and all transmitted padding is initialized to zero. This
  * function synchronizes the context stream before returning.
  */
 [[nodiscard]] std::optional<AnsCompressedData> compressAns(
     cudf::device_span<const uint8_t> input,
-    std::size_t minimumInputSize,
     AnsCodecContext& context);
 
 /**
