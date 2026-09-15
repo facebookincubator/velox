@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
+#include <cudf/utilities/error.hpp>
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
@@ -39,6 +40,8 @@ int main(int argc, char** argv) {
   // production code enables it via the "cudf.exchange" session config.
   cudfConfig.exchange = true;
   cudfConfig.exchangeLogLevel = FLAGS_exchange_log_level;
+  // cuda::stream_ref::sync() requires a current CUDA context.
+  CUDF_CUDA_TRY(cudaFree(nullptr));
   facebook::velox::cudf_velox::output_mr_.emplace(
       rmm::mr::get_current_device_resource_ref());
   const auto result = RUN_ALL_TESTS();
