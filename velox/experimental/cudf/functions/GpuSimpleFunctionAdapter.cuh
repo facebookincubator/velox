@@ -413,7 +413,7 @@ struct GpuSimpleFunctionAdapter {
       const std::vector<GpuArgView>& arguments,
       cudf::size_type numRows,
       cudf::data_type outputType,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) {
     auto out = cudf::make_fixed_width_column(
         outputType, numRows, cudf::mask_state::UNALLOCATED, stream, mr);
@@ -441,7 +441,7 @@ struct GpuSimpleFunctionAdapter {
         Holder,
         TOut,
         typename gpu::GpuExec::resolver<TArgs>::in_type...>
-        <<<detail::gridSize(numRows), detail::kBlockSize, 0, stream.value()>>>(
+        <<<detail::gridSize(numRows), detail::kBlockSize, 0, stream.get()>>>(
             out->mutable_view().template data<TOut>(),
             needsValidity ? valid.data() : nullptr,
             deviceArguments.data(),
