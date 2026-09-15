@@ -72,7 +72,7 @@ struct GetTimestampFunction {
     auto dateTimeResult = formatter_->parse(std::string_view(input));
     if (dateTimeResult.hasError()) {
       if constexpr (std::is_same_v<TTimestamp, TimestampUtc>) {
-        nullOrUserFail(ansiEnabled_, "{}", dateTimeResult.error().message());
+        ansiUserFail(ansiEnabled_, "{}", dateTimeResult.error().message());
       }
       return false;
     }

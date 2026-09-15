@@ -40,7 +40,7 @@ struct ToTimestampNtzFunction {
     auto parsed = util::fromTimestampWithTimezoneString(
         input, util::TimestampParseMode::kSparkCast);
     if (parsed.hasError()) {
-      nullOrUserFail(ansiEnabled_, "{}", parsed.error().message());
+      ansiUserFail(ansiEnabled_, "{}", parsed.error().message());
       return false;
     }
     result = parsed.value().timestamp;
