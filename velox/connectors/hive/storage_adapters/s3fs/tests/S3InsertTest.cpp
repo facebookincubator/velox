@@ -37,7 +37,7 @@ class S3InsertTest : public S3Test, public test::InsertTest {
 
   void SetUp() override {
     S3Test::SetUp();
-    InsertTest::SetUp(minioServer_->s3Config(), ioExecutor_.get());
+    InsertTest::SetUp(siloServer_->s3Config(), ioExecutor_.get());
   }
 
   void TearDown() override {
@@ -50,7 +50,7 @@ class S3InsertTest : public S3Test, public test::InsertTest {
 TEST_F(S3InsertTest, s3InsertTest) {
   const int64_t kExpectedRows = 1'000;
   const std::string_view kOutputDirectory{"s3://writedata/"};
-  minioServer_->addBucket("writedata");
+  siloServer_->addBucket("writedata");
 
   runInsertTest(kOutputDirectory, kExpectedRows, pool());
 }
@@ -66,7 +66,7 @@ TEST_F(S3InsertTest, s3MultipartUploadTest) {
   // 5,242,880 / 22 ≈ 238,313 rows. Let's use 300,000 rows to be safe.
   const int64_t kExpectedRows = 300'000;
   const std::string_view kOutputDirectory{"s3://multipartdata/"};
-  minioServer_->addBucket("multipartdata");
+  siloServer_->addBucket("multipartdata");
 
   runInsertTest(kOutputDirectory, kExpectedRows, pool());
 }
