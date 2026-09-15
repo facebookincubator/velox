@@ -2213,6 +2213,42 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfFilterProjectTest, switchWithoutElseNestedTypes) {
+  // cuDF cannot build the implicit null result for a list or a struct, so
+  // these projections have to fall back and still answer like Presto.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    config.allowCpuFallback = previousFallback;
+  };
+  config.allowCpuFallback = true;
+
+  auto data = makeRowVector(
+      {"flag", "values", "pair"},
+      {
+          makeFlatVector<bool>({true, false, true}),
+          makeArrayVector<int64_t>({{1, 2}, {3}, {}}),
+          makeRowVector({
+              makeFlatVector<int64_t>({10, 20, 30}),
+              makeFlatVector<int64_t>({11, 21, 31}),
+          }),
+      });
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({
+                      "CASE WHEN flag THEN values END AS a",
+                      "CASE WHEN flag THEN pair END AS r",
+                  })
+                  .planNode();
+
+  cudf_velox::unregisterCudf();
+  auto cpuResult = AssertQueryBuilder(plan).copyResults(pool());
+  cudf_velox::registerCudf();
+  auto gpuResult = AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
 TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
   auto data = makeRowVector({
       makeFlatVector<double>({1.0, 5.0, -3.0}),
