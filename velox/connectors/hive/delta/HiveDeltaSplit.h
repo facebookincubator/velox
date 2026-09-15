@@ -38,6 +38,11 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
   /// @param infoColumns Synthesized metadata columns, e.g. $path and
   /// $file_size.
   /// @param fileProperties File properties such as row count and file size.
+  /// @param hasDeletionVector Whether the file has a deletion vector marking
+  /// some rows as logically deleted. Reading such a file is not yet
+  /// supported: the split reader rejects it rather than silently returning
+  /// logically deleted rows. When support is added, the descriptor itself
+  /// (path, offset, cardinality, ...) will be added alongside this flag.
   HiveDeltaSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -51,7 +56,12 @@ struct HiveDeltaSplit : public connector::hive::HiveConnectorSplit {
       const std::shared_ptr<std::string>& extraFileInfo = {},
       bool cacheable = true,
       const std::unordered_map<std::string, std::string>& infoColumns = {},
-      std::optional<FileProperties> fileProperties = std::nullopt);
+      std::optional<FileProperties> fileProperties = std::nullopt,
+      bool hasDeletionVector = false);
+
+  /// Whether this file has a deletion vector. Currently rejected by the
+  /// reader; see the constructor doc.
+  bool hasDeletionVector{false};
 };
 
 } // namespace facebook::velox::connector::hive::delta
