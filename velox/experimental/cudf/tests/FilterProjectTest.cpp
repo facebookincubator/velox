@@ -2213,6 +2213,99 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfFilterProjectTest, switchWithoutElse) {
+  // The fixture disables CPU fallback, so these projections must run on GPU.
+  auto data = makeRowVector(
+      {"flag", "value"},
+      {makeNullableFlatVector<bool>({true, false, std::nullopt, true}),
+       makeNullableFlatVector<int64_t>({10, 20, 30, std::nullopt})});
+  auto assertWithoutElse =
+      [&](const std::string& thenSql,
+          const core::TypedExprPtr& thenExpr,
+          const std::vector<std::optional<int64_t>>& values) {
+        SCOPED_TRACE(thenSql);
+        auto expected =
+            makeRowVector({makeNullableFlatVector<int64_t>(values)});
+        auto casePlan =
+            PlanBuilder()
+                .values({data})
+                .project({fmt::format("CASE WHEN flag THEN {} END", thenSql)})
+                .planNode();
+        AssertQueryBuilder(casePlan).assertResults(expected);
+
+        // DuckDB's SQL parser rejects two-argument IF; construct the typed
+        // call.
+        auto ifExpr = std::make_shared<core::CallTypedExpr>(
+            BIGINT(),
+            std::vector<core::TypedExprPtr>{
+                std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "flag"),
+                thenExpr},
+            "if");
+        auto ifPlan = PlanBuilder()
+                          .values({data})
+                          .addNode([&](auto nodeId, auto source) {
+                            return std::make_shared<core::ProjectNode>(
+                                nodeId,
+                                std::vector<std::string>{"result"},
+                                std::vector<core::TypedExprPtr>{ifExpr},
+                                source);
+                          })
+                          .planNode();
+        AssertQueryBuilder(ifPlan).assertResults(expected);
+      };
+
+  assertWithoutElse(
+      "value",
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "value"),
+      {10, std::nullopt, std::nullopt, std::nullopt});
+  assertWithoutElse(
+      "CAST(7 AS BIGINT)",
+      std::make_shared<core::ConstantTypedExpr>(BIGINT(), variant(int64_t{7})),
+      {7, std::nullopt, std::nullopt, 7});
+  assertWithoutElse(
+      "CAST(NULL AS BIGINT)",
+      std::make_shared<core::ConstantTypedExpr>(
+          BIGINT(), variant::null(TypeKind::BIGINT)),
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"CASE WHEN flag THEN value ELSE CAST(NULL AS BIGINT) END"})
+          .planNode();
+  auto expected = makeRowVector({makeNullableFlatVector<int64_t>(
+      {10, std::nullopt, std::nullopt, std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, switchWithoutElseNestedTypes) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    config.allowCpuFallback = previousFallback;
+  };
+  config.allowCpuFallback = true;
+
+  auto data = makeRowVector(
+      {"flag", "values", "pair"},
+      {makeNullableFlatVector<bool>({true, false, std::nullopt}),
+       makeArrayVector<int64_t>({{1, 2}, {3}, {}}),
+       makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({
+                      "CASE WHEN flag THEN values END AS a",
+                      "CASE WHEN flag THEN pair END AS r",
+                  })
+                  .planNode();
+
+  cudf_velox::unregisterCudf();
+  auto cpuResult = AssertQueryBuilder(plan).copyResults(pool());
+  cudf_velox::registerCudf();
+  auto fallbackResult = AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, fallbackResult);
+}
+
 TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
   auto data = makeRowVector({
       makeFlatVector<double>({1.0, 5.0, -3.0}),
