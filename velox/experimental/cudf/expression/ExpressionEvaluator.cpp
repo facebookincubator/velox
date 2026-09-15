@@ -1282,8 +1282,8 @@ class GreatestLeastFunction : public CudfFunction {
 
     // Holds the normalized first column for as long as views of it are read.
     std::unique_ptr<cudf::column> castedFirstColumn;
-    const auto firstColumnView =
-        columnWithType(inputColumns[order_[0]], type_, castedFirstColumn, stream, mr);
+    const auto firstColumnView = columnWithType(
+        inputColumns[order_[0]], type_, castedFirstColumn, stream, mr);
 
     // Accumulate across column inputs.
     std::unique_ptr<cudf::column> result;
