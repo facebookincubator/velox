@@ -73,14 +73,19 @@ void registerUcxTransports() {
             // UCX pages are GPU buffers allocated by RMM, not from a Velox
             // memory pool, and the sources are driven by the UCX progress
             // thread rather than by an executor, so 'context.pool',
-            // 'context.executor' and the byte-based
-            // 'context.maxExchangeBufferSize' /
-            // 'context.minExchangeOutputBatchBytes' have no meaning here.
-            // UcxExchangeClient bounds its queue by the number of packed
-            // tables instead.
+            // 'context.executor' and 'context.minExchangeOutputBatchBytes' are
+            // unused. maxExchangeBufferSize is the query-level byte budget for
+            // adaptive receive admission.
             checkCudfEnabledForUcx(context.queryConfig);
+            VELOX_USER_CHECK_GE(
+                context.maxExchangeBufferSize,
+                0,
+                "UCX max exchange buffer size must not be negative");
             return std::make_shared<UcxExchangeClient>(
-                context.taskId, context.destination, context.numberOfConsumers);
+                context.taskId,
+                context.destination,
+                context.numberOfConsumers,
+                static_cast<uint64_t>(context.maxExchangeBufferSize));
           },
           [](int32_t operatorId,
              exec::DriverCtx* ctx,

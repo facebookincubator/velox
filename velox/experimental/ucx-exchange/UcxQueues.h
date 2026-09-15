@@ -18,10 +18,14 @@
 #include <cudf/contiguous_split.hpp>
 #include <folly/stop_watch.h>
 #include <atomic>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
@@ -51,7 +55,7 @@ struct UcxDataAvailable {
 
   void notify() {
     if (callback) {
-      callback(std::move(data), numRows, remainingBytes);
+      callback(std::move(data), numRows, std::move(remainingBytes));
     }
   }
 };
@@ -72,6 +76,11 @@ class UcxDestinationQueue {
     // what has been queued
     int64_t bytesQueued{0};
     int64_t packedColumnsQueued{0};
+
+    // What has left this destination queue but is still retained by a server
+    // send or intra-node handoff.
+    int64_t bytesInFlight{0};
+    int64_t packedColumnsInFlight{0};
 
     // what has been dequeued
     int64_t bytesSent{0};
@@ -121,9 +130,24 @@ class UcxDestinationQueue {
   /// Returns the stats of this buffer.
   Stats stats() const;
 
+  /// Returns bytes queued or in-flight for this destination.
+  int64_t transferBytes() const;
+
+  /// Returns true when a server is waiting for the next payload.
+  bool waitingForData() const;
+
+  /// Marks bytes as no longer retained by an exchange transfer.
+  void releaseInFlight(int64_t bytes, int64_t numPackedColumns);
+
   std::string toString();
 
  private:
+  friend class UcxOutputQueue;
+
+  /// Rolls back the most recent non-null enqueue. Used only by broadcast's
+  /// multi-destination commit before any callback is exposed.
+  void rollbackEnqueueBack();
+
   void clearNotify();
 
   // A queued page and the logical row count the producer gave it. Paired here
@@ -206,13 +230,70 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   void enqueue(
       int destination,
       std::unique_ptr<cudf::packed_columns> data,
-      vector_size_t numRows);
+      vector_size_t numRows,
+      int64_t transferReservationBytes = 0);
 
   /// @brief Checks if the queue is over capacity and returns a future if so.
   /// This should be called after enqueueing all partitions for a batch.
   /// @param future Output parameter - populated with a future if blocked.
   /// @return True if blocked (queue over capacity), false otherwise.
   bool checkBlocked(ContinueFuture* future);
+
+  /// Checks whether queued, in-flight and reserved transfer bytes for a
+  /// destination have filled the producer's active drain window.
+  bool checkTransferCapacity(
+      int destination,
+      int64_t maxBytes,
+      ContinueFuture* future);
+
+  /// Reserves destination-local capacity before materializing a GPU payload.
+  /// Returns true when blocked and, when supplied, installs a future that is
+  /// fulfilled when that destination makes progress.
+  bool reserveTransferBytes(
+      int destination,
+      int64_t bytes,
+      int64_t maxBytes,
+      ContinueFuture* future);
+
+  /// Reserves a full contiguous-split payload against the learned task-wide
+  /// retained-byte limit and the destination's fair share.
+  bool reserveFullTransferBytes(
+      int destination,
+      int64_t bytes,
+      ContinueFuture* future);
+
+  /// Waits for room below the learned full-transfer retained-byte limit. This
+  /// does not reserve bytes.
+  bool waitForFullTransferCapacity(int64_t bytes, ContinueFuture* future);
+
+  /// Releases a destination-local materialization reservation.
+  void releaseTransferReservation(int destination, int64_t bytes);
+
+  /// Returns the shared adaptive transfer window for a destination.
+  int64_t transferWindowBytes(
+      int destination,
+      int64_t baseBytes,
+      int64_t normalBytes,
+      int64_t maxBytes);
+
+  /// Applies multiplicative decrease after allocation or admission pressure.
+  void recordTransferCongestion(int destination, int64_t baseBytes);
+
+  /// Applies additive/probe growth when a payload needs a larger window.
+  void recordTransferDemand(
+      int destination,
+      int64_t targetBytes,
+      int64_t baseBytes,
+      int64_t maxBytes);
+
+  /// Lowers the task-wide retained-byte limit after full-split pressure.
+  void recordFullTransferCongestion();
+
+  /// Releases bytes after UCXX completion or intra-node retrieval.
+  void releaseInFlightBytes(
+      int destination,
+      int64_t bytes,
+      int64_t numPackedColumns);
 
   /// @brief Returns the data for the given destination through the callback
   /// function. If data is available, notify will be called immediately. If
@@ -252,17 +333,18 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// are never processed by Presto.
   exec::OutputBuffer::Stats stats();
 
-  /// @brief Queued bytes over this queue's byte capacity, the task's configured
-  /// maxOutputBufferSize. Producers are only blocked after adding data (see
-  /// checkBlocked), so the ratio can exceed 1.0. Returns nullopt while the
+  /// @brief Retained queued and in-flight bytes over this queue's byte
+  /// capacity, the task's configured maxOutputBufferSize. Producers are only
+  /// blocked after adding data (see checkBlocked), so the ratio can exceed
+  /// 1.0. Returns nullopt while the
   /// capacity is still unknown, which is the case for a placeholder queue
   /// created by a getData() that arrived before initializeTask() supplied the
   /// task's query config.
   std::optional<double> getUtilization();
 
-  /// @brief Whether enough is queued to risk back-pressuring producers soon, or
-  /// the last data has been seen. Half the capacity is the threshold, matching
-  /// exec::OutputBuffer. Returns nullopt while the capacity is unknown, for the
+  /// @brief Whether enough data is retained to risk back-pressuring producers
+  /// soon, or the last data has been seen. Half the capacity is the threshold,
+  /// matching exec::OutputBuffer. Returns nullopt while capacity is unknown,
   /// same reason as getUtilization(): without a capacity there is no ratio to
   /// compare against, and reporting `false` there would let a placeholder queue
   /// masquerade as having spare room.
@@ -273,8 +355,18 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // be unblocked.
   static constexpr int32_t kContinuePct = 90;
 
+  /// Grows all per-destination vectors together. For broadcast, a new
+  /// destination is backfilled before a possible end marker is appended.
+  void addOutputBuffersLocked(int numBuffers);
+
   // Methods that update the statistics.
   void updateStatsWithEnqueuedLocked(int64_t bytes, int64_t rows);
+
+  /// Moves queue ownership into the server's in-flight accounting.
+  void updateStatsWithDequeuedLocked(
+      int64_t bytes,
+      int64_t numPackedColumns,
+      std::vector<ContinuePromise>& promises);
 
   // updates the counters and returns promises if the queuedBytes_ counter falls
   // below the continueSize_ low water mark. These promises then need to be
@@ -284,9 +376,36 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       int64_t numPackedCols,
       std::vector<ContinuePromise>& promises);
 
+  void updateStatsWithSendCompleteLocked(
+      int64_t bytes,
+      int64_t numPackedColumns,
+      std::vector<ContinuePromise>& promises);
+
   void updateTotalQueuedBytesMsLocked();
 
   int64_t getAverageQueueTimeMsLocked() const;
+
+  void maybeContinueProducersLocked(std::vector<ContinuePromise>& promises);
+
+  int64_t retainedBytesLocked() const;
+
+  int64_t producerBlockedBytesLocked() const;
+
+  int64_t retainedPackedColumnsLocked() const;
+
+  int64_t transferBytesLocked(int destination) const;
+
+  int64_t transferReservedBytesLocked() const;
+
+  int64_t retainedBytesWithTransferReservationsLocked() const;
+
+  int64_t activeDestinationCountLocked() const;
+
+  int64_t defaultFullTransferRetainedLimitLocked() const;
+
+  int64_t fullTransferRetainedLimitLocked() const;
+
+  void maybeGrowFullTransferRetainedLimitLocked(int64_t retainedBytes);
 
   // internal function that is called when all drivers are done.
   void noMoreDrivers();
@@ -302,10 +421,28 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
+  void releaseTransferReservationLocked(int destination, int64_t bytes);
+
+  int64_t transferWindowBytesLocked(
+      int destination,
+      int64_t baseBytes,
+      int64_t normalBytes,
+      int64_t maxBytes);
+
+  void collectTransferPromisesLocked(
+      int destination,
+      std::vector<ContinuePromise>& promises);
+
+  void collectAllTransferPromisesLocked(std::vector<ContinuePromise>& promises);
+
   void enqueueBroadcastOutputLocked(
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
+
+  /// Releases the extra retained reference used to backfill future broadcast
+  /// destinations and wakes producers if it was their limiting retention.
+  void clearBroadcastHistoryLocked(std::vector<ContinuePromise>& promises);
 
   // Reference to the task that owns this UcxQueue.
   std::shared_ptr<exec::Task> task_{nullptr};
@@ -324,12 +461,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // Paired with the row count for the same reason QueuedPage is.
   std::vector<std::pair<std::shared_ptr<cudf::packed_columns>, vector_size_t>>
       dataToBroadcast_;
+  // Conservative one-copy accounting for dataToBroadcast_. Destination queue
+  // accounting alone reaches zero after current sends complete even though
+  // these GPU buffers remain resident for late broadcast destinations.
+  int64_t broadcastHistoryBytes_{0};
+  int64_t broadcastHistoryPackedColumns_{0};
 
-  /// If 'queuedBytes_' > 'maxSize_', each producer is blocked after adding
-  /// data.
+  /// If retained queued and in-flight bytes reach 'maxSize_', each producer is
+  /// blocked after adding data.
   uint64_t maxSize_{0};
-  // When 'queuedBytes_' goes below 'continueSize_', blocked producers are
-  // resumed.
+  // When retained bytes go below 'continueSize_', blocked producers resume.
   uint64_t continueSize_{0};
 
   // Total number of drivers expected to produce results. This number will
@@ -355,9 +496,29 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // promises when buffer reached capacity and blocked further enqueueing.
   std::vector<ContinuePromise> promises_;
 
-  // actual data in 'queues_'
+  // Destination-local waiters, materialization reservations, and adaptive
+  // windows. These vectors always grow in lockstep with queues_.
+  std::vector<std::vector<ContinuePromise>> transferPromises_;
+  std::vector<int64_t> transferReservedBytes_;
+  std::vector<int64_t> transferWindowBytes_;
+
+  // Learned retained-byte congestion window for full contiguous-split
+  // materialization. Zero means use the default derived from maxSize_.
+  int64_t fullTransferRetainedLimit_{0};
+  bool fullTransferCongested_{false};
+
+  // Set when terminate() has cancelled all outstanding reservations. Late
+  // cancellation cleanup becomes a no-op instead of looking like underflow.
+  bool terminated_{false};
+
+  // Payloads still resident in destination queues.
   int64_t queuedBytes_{0};
   int64_t queuedPackedColumns_{0};
+
+  // Payloads dequeued by servers but retained by UCXX or the intra-node
+  // registry until exact completion.
+  int64_t inFlightBytes_{0};
+  int64_t inFlightPackedColumns_{0};
 
   // The total number of bytes/rows/packedColumns sent via this output queue.
   int64_t totalBytesSent_{0};
@@ -369,7 +530,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   folly::stop_watch<std::chrono::milliseconds> queueWatch_;
 
   // Total time data is queued as bytes * time.
-  double totalQueuedBytesMs_;
+  double totalQueuedBytesMs_{0};
 };
 
 } // namespace facebook::velox::ucx_exchange

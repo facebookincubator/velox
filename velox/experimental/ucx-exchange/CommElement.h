@@ -15,7 +15,12 @@
  */
 #pragma once
 
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <utility>
 
 // The CommElement is the abstract base class of both the
 // per-client context on the exchange server side as well as the
@@ -46,7 +51,38 @@ class CommElement {
   virtual void close() = 0;
 
  protected:
+  using StateEvent = std::function<void()>;
+
+  /// Hands a completion from an arbitrary UCXX callback thread to process().
+  /// Returns false if the handoff could not be queued. This entry point is
+  /// noexcept because UCXX invokes it from C callbacks, where allowing a C++
+  /// exception to escape is undefined behavior.
+  template <typename Event>
+  bool enqueueStateEvent(
+      std::shared_ptr<CommElement> self,
+      Event&& event) noexcept {
+    try {
+      return enqueueStateEventImpl(
+          std::move(self), StateEvent(std::forward<Event>(event)));
+    } catch (...) {
+      return false;
+    }
+  }
+
+  /// Runs a snapshot of queued callbacks on the communicator state-machine
+  /// thread. Events queued while draining are handled by a later dispatch.
+  /// Returns true when at least one event was run.
+  bool drainStateEvents();
+
   const std::shared_ptr<Communicator> communicator_;
   std::shared_ptr<EndpointRef> endpointRef_;
+
+ private:
+  bool enqueueStateEventImpl(
+      std::shared_ptr<CommElement> self,
+      StateEvent event) noexcept;
+
+  std::mutex stateEventMutex_;
+  std::deque<StateEvent> stateEvents_;
 };
 } // namespace facebook::velox::ucx_exchange

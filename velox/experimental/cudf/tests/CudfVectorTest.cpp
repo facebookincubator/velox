@@ -33,6 +33,7 @@
 #include <cuda_runtime_api.h>
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -277,6 +278,94 @@ TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
   targetStream.view().sync();
   EXPECT_EQ(materialized->num_columns(), 1);
   EXPECT_EQ(materialized->num_rows(), 4);
+}
+
+TEST_F(CudfVectorTest, packedTableReleaseCallbackRunsExactlyOnce) {
+  TestCudaStream stream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(stream.view(), resource);
+  int callbackCount = 0;
+
+  {
+    CudfVector vector(
+        pool_.get(),
+        ROW({"c0"}, {INTEGER()}),
+        packedTable->table.num_rows(),
+        std::move(packedTable),
+        stream.view(),
+        [&](std::exception_ptr error) {
+          EXPECT_FALSE(error);
+          ++callbackCount;
+        });
+
+    auto materialized = vector.release();
+    EXPECT_EQ(callbackCount, 1);
+    EXPECT_EQ(materialized->num_rows(), 4);
+  }
+
+  EXPECT_EQ(callbackCount, 1);
+}
+
+TEST_F(CudfVectorTest, releaseCallbackFollowsLogicalStreamDeallocation) {
+  TestCudaStream allocationStream;
+  TestCudaStream targetStream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
+  resource.reset();
+  int callbackCount = 0;
+
+  {
+    CudfVector vector(
+        pool_.get(),
+        ROW({"c0"}, {INTEGER()}),
+        packedTable->table.num_rows(),
+        std::move(packedTable),
+        targetStream.view(),
+        [&](std::exception_ptr error) {
+          EXPECT_FALSE(error);
+          EXPECT_GT(resource.deallocationCount(), 0);
+          EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
+          ++callbackCount;
+        });
+  }
+
+  EXPECT_EQ(callbackCount, 1);
+}
+
+TEST_F(CudfVectorTest, releaseCallbackSynchronizesReboundStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream targetStream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
+  std::atomic<bool> streamWorkCompleted{false};
+  bool callbackObservedCompletion = false;
+  int callbackCount = 0;
+
+  auto vector = std::make_shared<CudfVector>(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      allocationStream.view(),
+      [&](std::exception_ptr error) {
+        EXPECT_FALSE(error);
+        ++callbackCount;
+        callbackObservedCompletion =
+            streamWorkCompleted.load(std::memory_order_acquire);
+      });
+  ASSERT_TRUE(vector->rebindStream(targetStream.view()));
+  CUDF_CUDA_TRY(cudaLaunchHostFunc(
+      targetStream.value(),
+      [](void* value) {
+        static_cast<std::atomic<bool>*>(value)->store(
+            true, std::memory_order_release);
+      },
+      &streamWorkCompleted));
+
+  vector.reset();
+
+  EXPECT_TRUE(callbackObservedCompletion);
+  EXPECT_EQ(callbackCount, 1);
 }
 
 } // namespace

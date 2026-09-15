@@ -54,10 +54,9 @@ class SourceDriverMock {
  private:
   /// @brief Driver loop that sends all data chunks through the operator.
   /// Follows the standard Velox operator driver pattern:
-  /// 1. Create CudfVector with test data
-  /// 2. Check isBlocked() - if blocked, wait on future
-  /// 3. When not blocked, call addInput(cudfVector)
-  /// 4. Call getOutput() to advance operator state
+  /// 1. Wait for needsInput(), draining output or a blocking future as needed.
+  /// 2. Create and add exactly one CudfVector.
+  /// 3. Repeat without presenting the next input until needsInput() is true.
   /// @param partitionedOutput The UcxPartitionedOutput operator to drive.
   void sendAllData(UcxPartitionedOutput* partitionedOutput);
 

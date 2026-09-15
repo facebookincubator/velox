@@ -26,17 +26,23 @@
 #include <rmm/device_buffer.hpp>
 #include <algorithm>
 #include <cuda/stream>
+#include <limits>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OutputTransportRegistry.h"
+#include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
+#include "velox/experimental/ucx-exchange/tests/UcxExchangeTestBase.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
 using facebook::velox::cudf_velox::CudfConfig;
@@ -44,6 +50,78 @@ using facebook::velox::exec::Task;
 
 namespace facebook::velox::ucx_exchange {
 namespace {
+
+TEST(UcxPartitionedOutputHelpersTest, widensEqualPartitionNumerator) {
+  constexpr auto kRows = std::numeric_limits<cudf::size_type>::max();
+  EXPECT_EQ(detail::equalPartitionOffset(kRows, 0, 3), 0);
+  EXPECT_EQ(detail::equalPartitionOffset(kRows, 1, 3), 715'827'882);
+  // The pre-fix size_type multiplication overflows here before division.
+  EXPECT_EQ(detail::equalPartitionOffset(kRows, 2, 3), 1'431'655'764);
+  EXPECT_EQ(detail::equalPartitionOffset(kRows, 3, 3), kRows);
+}
+
+TEST(UcxPartitionedOutputHelpersTest, deviceAdmissionAccountsAtomically) {
+  using cudf_velox::CudfDeviceMemoryAdmissionStatus;
+  using cudf_velox::currentDeviceMemoryInfo;
+  using cudf_velox::releaseDeviceMemoryReservation;
+  using cudf_velox::tryReserveCurrentDeviceMemory;
+
+  const auto before = currentDeviceMemoryInfo();
+  ASSERT_TRUE(before.has_value());
+  const auto effectiveFree = before->poolReusableBytes >
+          std::numeric_limits<uint64_t>::max() - before->freeBytes
+      ? std::numeric_limits<uint64_t>::max()
+      : before->freeBytes + before->poolReusableBytes;
+  if (effectiveFree <= before->inProcessReservedBytes ||
+      effectiveFree - before->inProcessReservedBytes <= 2) {
+    GTEST_SKIP() << "Not enough free device memory for admission accounting";
+  }
+
+  const auto available = effectiveFree - before->inProcessReservedBytes;
+  const auto reservationBytes = available / 2 + 1;
+  const auto first =
+      tryReserveCurrentDeviceMemory(reservationBytes, /*headroom=*/0);
+  ASSERT_EQ(first.status, CudfDeviceMemoryAdmissionStatus::kAdmitted);
+  auto releaseFirst =
+      folly::makeGuard([&]() { releaseDeviceMemoryReservation(first); });
+
+  const auto during = currentDeviceMemoryInfo();
+  ASSERT_TRUE(during.has_value());
+  EXPECT_EQ(during->deviceId, before->deviceId);
+  EXPECT_EQ(
+      during->inProcessReservedBytes,
+      before->inProcessReservedBytes + reservationBytes);
+
+  // A second producer observes the first producer's reservation in the same
+  // mutex-protected admission decision and cannot consume the same headroom.
+  const auto second =
+      tryReserveCurrentDeviceMemory(reservationBytes, /*headroom=*/0);
+  auto releaseSecond =
+      folly::makeGuard([&]() { releaseDeviceMemoryReservation(second); });
+  EXPECT_EQ(second.status, CudfDeviceMemoryAdmissionStatus::kInsufficient);
+
+  releaseDeviceMemoryReservation(first);
+  releaseFirst.dismiss();
+  const auto after = currentDeviceMemoryInfo();
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->inProcessReservedBytes, before->inProcessReservedBytes);
+}
+
+TEST(UcxPartitionedOutputHelpersTest, allocationRetryRowsConverge) {
+  EXPECT_EQ(detail::smallerBatchRowsAfterAllocationFailure(9'001), 4'501);
+  EXPECT_EQ(detail::smallerBatchRowsAfterAllocationFailure(2), 1);
+
+  auto rows = std::numeric_limits<int64_t>::max();
+  int retries = 0;
+  while (rows > 1) {
+    const auto smaller = detail::smallerBatchRowsAfterAllocationFailure(rows);
+    EXPECT_LT(smaller, rows);
+    rows = smaller;
+    ++retries;
+  }
+  EXPECT_EQ(rows, 1);
+  EXPECT_LE(retries, std::numeric_limits<int64_t>::digits);
+}
 
 // Covers partitioning semantics that cannot be inferred from the packed cuDF
 // payload alone, including null-key replication and column-less row counts.
@@ -54,11 +132,9 @@ class UcxPartitionedOutputTest : public testing::Test {
   // The sentinel sits under every null slot so a raw host read is unambiguous.
   static constexpr int32_t kNullSentinel = -1;
 
-  static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
-
   void SetUp() override {
+    testValuesWereEnabled_ = common::testutil::TestValue::enabled();
+    common::testutil::TestValue::enable();
     pool_ = memory::memoryManager()->addLeafPool();
     queueManager_ = UcxOutputQueueManager::getInstanceRef();
     CudfConfig::getInstance().exchange = true;
@@ -69,6 +145,9 @@ class UcxPartitionedOutputTest : public testing::Test {
       queueManager_->deleteResults(taskId_, destination);
     }
     queueManager_->removeTask(taskId_);
+    if (!testValuesWereEnabled_) {
+      common::testutil::TestValue::disable();
+    }
   }
 
   // Builds the key column, marking the rows in 'nullRows' invalid.
@@ -97,6 +176,32 @@ class UcxPartitionedOutputTest : public testing::Test {
     // above. Trusting the requested count would let a key column that carries
     // no nulls at all still report the expected number of them, and the
     // replicate-nulls probes would then be vacuous.
+    column->set_null_count(
+        cudf::null_count(view.null_mask(), 0, numRows, stream));
+    stream.sync();
+    return column;
+  }
+
+  std::unique_ptr<cudf::column> makeSecondKeyColumn(
+      const std::vector<double>& values,
+      const std::vector<cudf::size_type>& nullRows,
+      cuda::stream_ref stream) {
+    const auto numRows = static_cast<cudf::size_type>(values.size());
+    auto column = cudf::make_fixed_width_column(
+        cudf::data_type{cudf::type_id::FLOAT64},
+        numRows,
+        cudf::mask_state::ALL_VALID,
+        stream);
+    auto view = column->mutable_view();
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        view.data<double>(),
+        values.data(),
+        values.size() * sizeof(double),
+        cudaMemcpyHostToDevice,
+        stream.get()));
+    for (const auto row : nullRows) {
+      cudf::set_null_mask(view.null_mask(), row, row + 1, false, stream);
+    }
     column->set_null_count(
         cudf::null_count(view.null_mask(), 0, numRows, stream));
     stream.sync();
@@ -182,32 +287,42 @@ class UcxPartitionedOutputTest : public testing::Test {
     return stats->bufferedPages;
   }
 
-  // Wraps 'keyColumn' in a CudfVector of kTestRowType and feeds it as one
-  // batch, mirroring how SourceDriverMock drives the operator.
-  void feedBatch(
-      UcxPartitionedOutput* partitionedOutput,
+  // Wraps 'keyColumn' in a CudfVector of kTestRowType. feedBatch() below sends
+  // it using the same operator calls as SourceDriverMock.
+  cudf_velox::CudfVectorPtr makeInputVector(
+      memory::MemoryPool* pool,
       std::unique_ptr<cudf::column> keyColumn,
-      cuda::stream_ref stream) {
+      cuda::stream_ref stream,
+      std::unique_ptr<cudf::column> secondKeyColumn = nullptr) {
     const auto numRows = keyColumn->size();
     std::vector<std::unique_ptr<cudf::column>> columns;
     columns.push_back(std::move(keyColumn));
     columns.push_back(
-        cudf::make_fixed_width_column(
-            cudf::data_type{cudf::type_id::FLOAT64},
-            numRows,
-            cudf::mask_state::ALL_VALID,
-            stream));
+        secondKeyColumn ? std::move(secondKeyColumn)
+                        : cudf::make_fixed_width_column(
+                              cudf::data_type{cudf::type_id::FLOAT64},
+                              numRows,
+                              cudf::mask_state::ALL_VALID,
+                              stream));
     columns.push_back(make_strings_column_from_host(
         std::vector<std::string>(numRows, "payload")));
     auto table = std::make_unique<cudf::table>(std::move(columns));
     stream.sync();
 
-    auto cudfVector = std::make_shared<cudf_velox::CudfVector>(
+    return std::make_shared<cudf_velox::CudfVector>(
+        pool, UcxTestData::kTestRowType, numRows, std::move(table), stream);
+  }
+
+  void feedBatch(
+      UcxPartitionedOutput* partitionedOutput,
+      std::unique_ptr<cudf::column> keyColumn,
+      cuda::stream_ref stream,
+      std::unique_ptr<cudf::column> secondKeyColumn = nullptr) {
+    auto cudfVector = makeInputVector(
         partitionedOutput->pool(),
-        UcxTestData::kTestRowType,
-        numRows,
-        std::move(table),
-        stream);
+        std::move(keyColumn),
+        stream,
+        std::move(secondKeyColumn));
 
     partitionedOutput->addInput(cudfVector);
     partitionedOutput->getOutput();
@@ -239,26 +354,36 @@ class UcxPartitionedOutputTest : public testing::Test {
   std::vector<std::vector<int32_t>> drainKeyPackets(int destination) {
     std::vector<std::vector<int32_t>> packets;
     while (true) {
+      std::shared_ptr<UcxOutputQueue> outputQueue;
       std::shared_ptr<cudf::packed_columns> payload;
-      queueManager_->getData(
+      queueManager_->getDataWithQueue(
           taskId_,
           destination,
-          [&payload](
+          [&outputQueue, &payload](
+              std::shared_ptr<UcxOutputQueue> stableQueue,
               std::shared_ptr<cudf::packed_columns> data,
               vector_size_t /*numRows*/,
               std::vector<int64_t> /*remainingBytes*/) {
+            outputQueue = std::move(stableQueue);
             payload = std::move(data);
           });
       // A null payload is the end-of-stream marker.
       if (payload == nullptr) {
         break;
       }
+      VELOX_CHECK_NOT_NULL(outputQueue);
+      VELOX_CHECK_LE(
+          payload->gpu_data->size(),
+          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
+      const auto payloadBytes = static_cast<int64_t>(payload->gpu_data->size());
       auto unpacked = cudf::unpack(*payload);
       packets.push_back(
           getColVector<int32_t>(
               unpacked.column(0),
               unpacked.num_rows(),
               cuda::stream_ref{cudaStream_t{cudaStreamDefault}}));
+      outputQueue->releaseInFlightBytes(
+          destination, payloadBytes, /*numPackedColumns=*/1);
     }
     return packets;
   }
@@ -283,10 +408,12 @@ class UcxPartitionedOutputTest : public testing::Test {
     return static_cast<int>(std::count(keys.begin(), keys.end(), value));
   }
 
-  const std::string taskId_{"ucx-partitioned-output-test"};
+  const std::string taskId_{
+      UcxExchangeTestEnvironment::nextTaskPrefix() + "partitioned-output"};
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<UcxOutputQueueManager> queueManager_;
   std::shared_ptr<exec::DriverCtx> driverCtx_;
+  bool testValuesWereEnabled_{false};
 };
 
 TEST_F(UcxPartitionedOutputTest, requiresProcessWideQueueManager) {
@@ -334,7 +461,10 @@ TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
       rowType,
       kNumPartitions,
       /*partitionKeys=*/{},
-      FOUR_GBYTES);
+      FOUR_GBYTES,
+      {},
+      false,
+      std::make_shared<exec::RoundRobinPartitionFunctionSpec>());
   queueManager_->initializeTask(
       task,
       core::PartitionedOutputNode::Kind::kPartitioned,
@@ -382,6 +512,10 @@ TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
       EXPECT_EQ(unpacked.num_columns(), 0);
       EXPECT_EQ(unpacked.num_rows(), 0);
       destinationRows += payloadRows;
+      const auto payloadBytes = static_cast<int64_t>(payload->gpu_data->size());
+      payload.reset();
+      queueManager_->releaseInFlightBytes(
+          taskId_, destination, payloadBytes, /*numPackedColumns=*/1);
     }
     EXPECT_EQ(numPages, 1);
     rowsPerDestination.push_back(destinationRows);
@@ -454,6 +588,194 @@ TEST_F(UcxPartitionedOutputTest, eagerFlushFromSessionPropertySendsEachBatch) {
 
   finishPartitionedOutput(partitionedOutput);
 }
+#ifndef NDEBUG
+TEST_F(UcxPartitionedOutputTest, allocationRetrySlicesAcrossInputsExactly) {
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  const std::unordered_map<std::string, std::string> extraConfig{
+      {CudfConfig::kUcxPartitionedOutputBatchRows, "8"}};
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      UcxTestData::kTestRowType,
+      /*numPartitions=*/1,
+      {},
+      FOUR_GBYTES,
+      extraConfig);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numPartitions=*/1,
+      /*numDrivers=*/1);
+
+  auto partitionedOutput = makePartitionedOutput(task);
+  bool injected = false;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxPartitionedOutput::"
+      "flushPending::concatenate",
+      std::function<void(void*)>([&](void*) {
+        if (!injected) {
+          injected = true;
+          throw std::bad_alloc{};
+        }
+      }));
+  feedBatch(
+      partitionedOutput.get(), makeKeyColumn({10, 11, 12}, {}, stream), stream);
+  EXPECT_TRUE(partitionedOutput->needsInput());
+  feedBatch(
+      partitionedOutput.get(), makeKeyColumn({13, 14, 15}, {}, stream), stream);
+  EXPECT_TRUE(partitionedOutput->needsInput());
+  feedBatch(
+      partitionedOutput.get(), makeKeyColumn({16, 17, 18}, {}, stream), stream);
+  finishPartitionedOutput(partitionedOutput.get());
+
+  ASSERT_TRUE(injected);
+  const auto packets = drainKeyPackets(/*destination=*/0);
+  ASSERT_EQ(packets.size(), 2);
+  EXPECT_THAT(packets[0], testing::ElementsAre(10, 11, 12, 13, 14));
+  EXPECT_THAT(packets[1], testing::ElementsAre(15, 16, 17, 18));
+}
+#endif
+
+TEST_F(UcxPartitionedOutputTest, downsizesRecoverableInputUnderDevicePressure) {
+  constexpr uint64_t kOutputBufferBytes = 1024 * 1024;
+  constexpr uint64_t kUnreservedBytes = kOutputBufferBytes / 2;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  const std::unordered_map<std::string, std::string> extraConfig{
+      {CudfConfig::kUcxPartitionedOutputBatchRows, "1"}};
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      UcxTestData::kTestRowType,
+      kNumPartitions,
+      {"c0"},
+      kOutputBufferBytes,
+      extraConfig);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      kNumPartitions,
+      /*numDrivers=*/1);
+
+  auto partitionedOutput = makePartitionedOutput(task);
+  auto input = makeInputVector(
+      partitionedOutput->pool(),
+      makeKeyColumn(std::vector<int32_t>(9, 42), {}, stream),
+      stream);
+
+  const auto before = cudf_velox::currentDeviceMemoryInfo();
+  ASSERT_TRUE(before.has_value());
+  const auto effectiveFree = before->poolReusableBytes >
+          std::numeric_limits<uint64_t>::max() - before->freeBytes
+      ? std::numeric_limits<uint64_t>::max()
+      : before->freeBytes + before->poolReusableBytes;
+  if (effectiveFree <= before->inProcessReservedBytes ||
+      effectiveFree - before->inProcessReservedBytes <=
+          2 * kOutputBufferBytes) {
+    GTEST_SKIP() << "Not enough free device memory to force admission pressure";
+  }
+
+  // Leave less than one payload window in the admission budget without
+  // actually allocating it. addInput() must respond by transactionally
+  // requeuing the nine-row input at a five-row cap, not by treating the lack of
+  // retained output as terminal.
+  const auto pressure = cudf_velox::tryReserveCurrentDeviceMemory(
+      effectiveFree - before->inProcessReservedBytes - kUnreservedBytes,
+      /*headroom=*/0);
+  ASSERT_EQ(
+      pressure.status, cudf_velox::CudfDeviceMemoryAdmissionStatus::kAdmitted);
+  auto releasePressure = folly::makeGuard(
+      [&]() { cudf_velox::releaseDeviceMemoryReservation(pressure); });
+
+  ASSERT_NO_THROW(partitionedOutput->addInput(input));
+  EXPECT_FALSE(partitionedOutput->needsInput());
+
+  cudf_velox::releaseDeviceMemoryReservation(pressure);
+  releasePressure.dismiss();
+  finishPartitionedOutput(partitionedOutput.get());
+
+  std::vector<size_t> packetRows;
+  size_t totalRows = 0;
+  for (int destination = 0; destination < kNumPartitions; ++destination) {
+    for (const auto& packet : drainKeyPackets(destination)) {
+      packetRows.push_back(packet.size());
+      totalRows += packet.size();
+      EXPECT_THAT(packet, testing::Each(42));
+    }
+  }
+  EXPECT_EQ(totalRows, 9);
+  EXPECT_THAT(packetRows, testing::ElementsAre(5, 4));
+}
+
+#ifndef NDEBUG
+TEST_F(UcxPartitionedOutputTest, retriesDrainStateAllocationWithoutLosingRows) {
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      UcxTestData::kTestRowType,
+      /*numPartitions=*/1,
+      {},
+      /*maxOutputBufferSize=*/1,
+      {{CudfConfig::kUcxPartitionedOutputBatchRows, "1"}});
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numPartitions=*/1,
+      /*numDrivers=*/1);
+  auto partitionedOutput = makePartitionedOutput(task);
+  feedBatch(partitionedOutput.get(), makeKeyColumn({10}, {}, stream), stream);
+
+  // Leave the first payload retained so a failed allocation has a real
+  // consumer completion to wake its retry.
+  bool injected = false;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxPartitionedOutput::"
+      "initializePartitionDrainState",
+      std::function<void(void*)>([&](void*) {
+        if (!injected) {
+          injected = true;
+          throw std::bad_alloc{};
+        }
+      }));
+  auto secondInput = makeInputVector(
+      partitionedOutput->pool(), makeKeyColumn({20}, {}, stream), stream);
+  ASSERT_NO_THROW(partitionedOutput->addInput(secondInput));
+  ASSERT_TRUE(injected);
+
+  ContinueFuture future;
+  ASSERT_EQ(
+      partitionedOutput->isBlocked(&future),
+      exec::BlockingReason::kWaitForConsumer);
+  ASSERT_TRUE(future.valid());
+
+  bool received = false;
+  queueManager_->getDataWithQueue(
+      taskId_,
+      /*destination=*/0,
+      [&](std::shared_ptr<UcxOutputQueue> queue,
+          std::shared_ptr<cudf::packed_columns> payload,
+          vector_size_t numRows,
+          std::vector<int64_t>) {
+        received = true;
+        ASSERT_NE(payload, nullptr);
+        EXPECT_EQ(numRows, 1);
+        auto unpacked = cudf::unpack(*payload);
+        EXPECT_THAT(
+            getColVector<int32_t>(unpacked.column(0), numRows, stream),
+            testing::ElementsAre(10));
+        queue->releaseInFlightBytes(
+            /*destination=*/0,
+            static_cast<int64_t>(payload->gpu_data->size()),
+            /*numPackedColumns=*/1);
+      });
+  ASSERT_TRUE(received);
+  ASSERT_TRUE(future.isReady());
+  std::move(future).get();
+
+  finishPartitionedOutput(partitionedOutput.get());
+  EXPECT_THAT(drainKeyColumn(/*destination=*/0), testing::ElementsAre(20));
+}
+#endif
 
 // The bug: both null-keyed rows land in a single hash bucket, so two of the
 // three destinations receive none of them.
@@ -596,6 +918,57 @@ TEST_F(UcxPartitionedOutputTest, replicatesNullsAcrossPartitionKeys) {
   }
   EXPECT_EQ(
       totalRows, kNumPartitions * kNumNullRows + (kNumRows - kNumNullRows));
+}
+
+// A row is replicated when any partition key is null, not just when the first
+// key is null. This guards the multi-column anti-join contract independently of
+// cuDF's hash placement for nulls.
+TEST_F(UcxPartitionedOutputTest, replicatesNullInAnyPartitionKey) {
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  const std::vector<int32_t> firstKeyValues{10, 20, 30, 40, 50, 60};
+  const std::vector<double> secondKeyValues{1, 2, 3, 4, 5, 6};
+  const std::vector<cudf::size_type> secondKeyNullRows{2, 4};
+
+  auto firstKeyColumn = makeKeyColumn(firstKeyValues, {}, stream);
+  auto secondKeyColumn =
+      makeSecondKeyColumn(secondKeyValues, secondKeyNullRows, stream);
+  ASSERT_EQ(firstKeyColumn->view().null_count(), 0);
+  ASSERT_EQ(
+      secondKeyColumn->view().null_count(),
+      static_cast<int>(secondKeyNullRows.size()));
+
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      UcxTestData::kTestRowType,
+      kNumPartitions,
+      {"c0", "c1"},
+      FOUR_GBYTES,
+      {},
+      /*replicateNullsAndAny=*/true);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      kNumPartitions,
+      /*numDrivers=*/1);
+
+  auto partitionedOutput = makePartitionedOutput(task);
+  feedBatch(
+      partitionedOutput.get(),
+      std::move(firstKeyColumn),
+      stream,
+      std::move(secondKeyColumn));
+  finishPartitionedOutput(partitionedOutput.get());
+
+  int totalRows = 0;
+  for (int destination = 0; destination < kNumPartitions; ++destination) {
+    const auto keys = drainKeyColumn(destination);
+    totalRows += static_cast<int>(keys.size());
+    EXPECT_EQ(countValue(keys, firstKeyValues[0]), 1);
+    EXPECT_EQ(countValue(keys, firstKeyValues[2]), 1);
+    EXPECT_EQ(countValue(keys, firstKeyValues[4]), 1);
+  }
+  EXPECT_EQ(totalRows, kNumPartitions * 3 + (kNumRows - 3));
 }
 
 // Negative control for the replication tests: with the flag off, the operator

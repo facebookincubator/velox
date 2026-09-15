@@ -25,6 +25,12 @@
 
 namespace facebook::velox::ucx_exchange {
 
+using UcxManagedDataAvailableCallback = std::function<void(
+    std::shared_ptr<UcxOutputQueue> outputQueue,
+    std::shared_ptr<cudf::packed_columns> data,
+    vector_size_t numRows,
+    std::vector<int64_t> remainingBytes)>;
+
 class UcxOutputQueueManager : public exec::OutputBufferManager {
  public:
   /// Returns the process-wide output queue manager used by UCX producers and
@@ -77,7 +83,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       std::string_view taskId,
       int destination,
       std::unique_ptr<cudf::packed_columns> txData,
-      vector_size_t numRows);
+      vector_size_t numRows,
+      int64_t transferReservationBytes = 0);
 
   /// @brief Checks if the queue for a task is over capacity.
   /// Should be called after enqueueing all partitions for a batch.
@@ -85,6 +92,62 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @param future Output parameter - populated with a future if blocked.
   /// @return True if blocked (queue over capacity), false otherwise.
   bool checkBlocked(std::string_view taskId, ContinueFuture* future);
+
+  bool checkTransferCapacity(
+      std::string_view taskId,
+      int destination,
+      int64_t maxBytes,
+      ContinueFuture* future);
+
+  bool reserveTransferBytes(
+      std::string_view taskId,
+      int destination,
+      int64_t bytes,
+      int64_t maxBytes,
+      ContinueFuture* future);
+
+  bool reserveFullTransferBytes(
+      std::string_view taskId,
+      int destination,
+      int64_t bytes,
+      ContinueFuture* future);
+
+  bool waitForFullTransferCapacity(
+      std::string_view taskId,
+      int64_t bytes,
+      ContinueFuture* future);
+
+  void releaseTransferReservation(
+      std::string_view taskId,
+      int destination,
+      int64_t bytes);
+
+  int64_t transferWindowBytes(
+      std::string_view taskId,
+      int destination,
+      int64_t baseBytes,
+      int64_t normalBytes,
+      int64_t maxBytes);
+
+  void recordTransferCongestion(
+      std::string_view taskId,
+      int destination,
+      int64_t baseBytes);
+
+  void recordTransferDemand(
+      std::string_view taskId,
+      int destination,
+      int64_t targetBytes,
+      int64_t baseBytes,
+      int64_t maxBytes);
+
+  void recordFullTransferCongestion(std::string_view taskId);
+
+  void releaseInFlightBytes(
+      std::string_view taskId,
+      int destination,
+      int64_t bytes,
+      int64_t numPackedColumns);
 
   /// @brief Indicates that no more data will be coming for this task.
   void noMoreData(std::string_view taskId);
@@ -105,10 +168,21 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
-  void getData(
+  /// Returns a stable queue reference so the server can finish exact
+  /// in-flight accounting after removeTask() removes the manager entry.
+  std::shared_ptr<UcxOutputQueue> getData(
       std::string_view taskId,
       int destination,
       UcxDataAvailableCallback notify);
+
+  /// Server-facing variant that supplies the exact stable queue to the
+  /// callback, including when getData() invokes the callback synchronously.
+  /// This prevents completion accounting from falling through a task-ID
+  /// lookup after removeTask() or task-ID reuse.
+  std::shared_ptr<UcxOutputQueue> getDataWithQueue(
+      std::string_view taskId,
+      int destination,
+      UcxManagedDataAvailableCallback notify);
 
   /// Returns true if the given task can use intra-node transfer.
   /// Returns false if the task is not yet initialized (placeholder queue
@@ -139,6 +213,10 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   // Retrieves the queue for a task if it exists.
   // Returns NULL if task not found.
   std::shared_ptr<UcxOutputQueue> getQueueIfExists(std::string_view taskId);
+
+  // Returns null only for a task known to have been removed; unknown IDs are
+  // programming errors.
+  std::shared_ptr<UcxOutputQueue> getQueueIfActive(std::string_view taskId);
 
   // Throws an exception if queue doesn't exist.
   std::shared_ptr<UcxOutputQueue> getQueue(std::string_view taskId);

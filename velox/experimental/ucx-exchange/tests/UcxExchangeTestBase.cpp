@@ -87,7 +87,7 @@ namespace {
 void UcxExchangeTestBase::SetUp() {
   VLOG(0) << "creating pool";
   pool_ = facebook::velox::memory::memoryManager()->addLeafPool(
-      "UcxTestMemoryPool");
+      getUniqueTaskPrefix() + "pool");
 }
 
 exec::Split UcxExchangeTestBase::remoteSplit(

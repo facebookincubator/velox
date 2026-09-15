@@ -181,26 +181,99 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
       numRows,
       tableView.num_rows());
   auto gpuDataSize = data.gpuDataSize();
+  auto stream = data.stream;
 
   if (numRows == 0) {
     // An empty page carries no rows to hand on, and Operator::getOutput() must
     // never return an empty vector. Drop it and let the next isBlocked() fetch
     // the following page or reach the end of the stream. Producers do not
     // enqueue empty pages, so this is a defence rather than a live path.
-    currentData_.reset();
+    releaseCurrentData();
     return nullptr;
+  }
+
+  cudf_velox::CudfVector::ReleaseCallback releaseCallback;
+  if (exchangeClient_->tracksInFlightReceiveBytes()) {
+    std::weak_ptr<UcxExchangeClient> client{exchangeClient_};
+    releaseCallback = [client, gpuDataSize](std::exception_ptr error) {
+      if (auto locked = client.lock()) {
+        if (error) {
+          locked->failReceive(
+              "Failed to synchronize a released UCX receive buffer");
+        } else {
+          locked->releaseInFlightReceiveBytes(gpuDataSize);
+        }
+      }
+    };
   }
 
   // Use the stream that was allocated in UcxExchangeSource::onMetadata
   // and the packed_table constructor of CudfVector to avoid copying data.
-  auto result = std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, numRows, std::move(data.packedTable), data.stream);
+  RowVectorPtr result;
+  try {
+    result = std::make_shared<cudf_velox::CudfVector>(
+        pool(),
+        outputType_,
+        numRows,
+        std::move(data.packedTable),
+        stream,
+        std::move(releaseCallback));
+  } catch (...) {
+    // The vector callback is not guaranteed to run when its constructor
+    // throws. Ensure stream-ordered cleanup is complete before returning the
+    // dequeued table's credit.
+    currentData_.reset();
+    bool cleanupSynchronized = true;
+    try {
+      stream.sync();
+    } catch (const std::exception& e) {
+      cleanupSynchronized = false;
+      LOG(ERROR) << "Failed to synchronize UCX receive cleanup: " << e.what();
+      exchangeClient_->failReceive("Failed to synchronize UCX receive cleanup");
+    } catch (...) {
+      cleanupSynchronized = false;
+      LOG(ERROR) << "Failed to synchronize UCX receive cleanup";
+      exchangeClient_->failReceive("Failed to synchronize UCX receive cleanup");
+    }
+    if (cleanupSynchronized && exchangeClient_->tracksInFlightReceiveBytes()) {
+      exchangeClient_->releaseInFlightReceiveBytes(gpuDataSize);
+    }
+    throw;
+  }
 
   recordInputStats(gpuDataSize, result);
   // free the memory owned by PackedTableWithStream and set it to nullptr;
   currentData_.reset();
 
   return result;
+}
+
+void UcxExchange::releaseCurrentData() {
+  if (!currentData_) {
+    return;
+  }
+
+  const auto bytes = currentData_->gpuDataSize();
+  const auto stream = currentData_->stream;
+  currentData_.reset();
+  if (!exchangeClient_ || !exchangeClient_->tracksInFlightReceiveBytes()) {
+    return;
+  }
+
+  try {
+    stream.sync();
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Failed to synchronize dropped UCX receive: " << e.what();
+    exchangeClient_->failReceive(
+        "Failed to synchronize a dropped UCX receive buffer");
+    return;
+  } catch (...) {
+    LOG(ERROR) << "Failed to synchronize dropped UCX receive";
+    exchangeClient_->failReceive(
+        "Failed to synchronize a dropped UCX receive buffer");
+    return;
+  }
+  exchangeClient_->releaseInFlightReceiveBytes(bytes);
 }
 
 RowVectorPtr UcxExchange::getOutput() {
@@ -223,7 +296,7 @@ void UcxExchange::close() {
   }
   closed_ = true;
   SourceOperator::close();
-  currentData_.reset();
+  releaseCurrentData();
   if (exchangeClient_) {
     recordExchangeClientStats();
   }
