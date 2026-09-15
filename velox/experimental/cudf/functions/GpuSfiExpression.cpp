@@ -23,6 +23,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
 #include "velox/experimental/cudf/functions/GpuSfiExpression.h"
+
 #include "velox/expression/SignatureBinder.h"
 #include "velox/type/TypeCoercer.h"
 
@@ -73,11 +74,11 @@ const gpu_sfi::GpuFunctionEntry* resolve(const core::TypedExprPtr& expr) {
   }
 
   // Overload resolution is exec::SignatureBinder, the matcher
-  // SimpleFunctionRegistry::resolveFunction uses, so a GPU overload is chosen by
-  // the same rules as its CPU counterpart. Coercions are deliberately not
-  // requested: the CPU registry only allows them on an explicit second pass, and
-  // silently widening an argument would make the GPU result disagree with the
-  // CPU one for the same query.
+  // SimpleFunctionRegistry::resolveFunction uses, so a GPU overload is chosen
+  // by the same rules as its CPU counterpart. Coercions are deliberately not
+  // requested: the CPU registry only allows them on an explicit second pass,
+  // and silently widening an argument would make the GPU result disagree with
+  // the CPU one for the same query.
   for (const auto& entry : entries->second) {
     exec::SignatureBinder binder(
         *entry.signature, argumentTypes, TypeCoercer::defaults());

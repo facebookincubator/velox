@@ -40,9 +40,7 @@ set(VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuPrestoFunctions.cu)
 if(${VELOX_ENABLE_SPARK_FUNCTIONS})
   list(APPEND VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES GpuSparkFunctions.cu)
 endif()
-add_library(
-  velox_cudf_gpu_simple_functions ${VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES}
-)
+add_library(velox_cudf_gpu_simple_functions ${VELOX_CUDF_GPU_SIMPLE_FUNCTION_SOURCES})
 
 target_include_directories(
   velox_cudf_gpu_simple_functions

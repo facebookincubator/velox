@@ -19,9 +19,9 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
-#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
+#include "velox/experimental/cudf/functions/GpuSfiExpression.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -132,7 +132,8 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiIsRegisteredAtItsConfiguredPriority) {
   const auto& registry = getCudfExpressionEvaluatorRegistry();
   const auto it = registry.find(kGpuSfiEvaluatorName);
   ASSERT_NE(it, registry.end()) << "GPU SFI evaluator was never registered";
-  EXPECT_EQ(it->second.priority, CudfConfig::getInstance().gpuSfiExpressionPriority);
+  EXPECT_EQ(
+      it->second.priority, CudfConfig::getInstance().gpuSfiExpressionPriority);
 }
 
 // GPU SFI only recognises calls, so the node kinds that are not calls -- a
@@ -203,10 +204,10 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsCheckedIntegerArithmetic) {
   EXPECT_TRUE(GpuSfiExpression::canEvaluate(doubles));
 }
 
-// A chained AND arrives flattened -- `a AND b AND c` is one three-argument call,
-// not nested pairs -- so a fixed-arity registration would match the two-term
-// case and silently miss every longer one. These are registered with a variadic
-// tail, which is what makes the arity irrelevant.
+// A chained AND arrives flattened -- `a AND b AND c` is one three-argument
+// call, not nested pairs -- so a fixed-arity registration would match the
+// two-term case and silently miss every longer one. These are registered with a
+// variadic tail, which is what makes the arity irrelevant.
 TEST_F(CudfExpressionSelectionTest, gpuSfiMatchesVariadicConjunctions) {
   for (const auto& sql :
        {"a > 1 AND b > 2",
@@ -224,8 +225,8 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiMatchesVariadicConjunctions) {
 // A variadic tail must not turn into a wildcard: it still has an element type,
 // and arguments of another type have to be refused.
 TEST_F(CudfExpressionSelectionTest, variadicTailStillChecksElementType) {
-  auto expr =
-      optimizeTypedExpr("not(a > 1)", rowType_, queryCtx_.get(), execCtx_.get());
+  auto expr = optimizeTypedExpr(
+      "not(a > 1)", rowType_, queryCtx_.get(), execCtx_.get());
   EXPECT_TRUE(GpuSfiExpression::canEvaluate(expr));
 
   // and() takes booleans; a bigint pack is not a match despite the same shape.

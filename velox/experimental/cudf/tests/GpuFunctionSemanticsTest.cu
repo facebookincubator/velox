@@ -27,16 +27,17 @@
 // so the functions instantiated are the same ones GpuPrestoFunctions.cu
 // registers.
 
+#include "velox/experimental/cudf/functions/GpuDateTimeFunctions.cuh"
+#include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
+
+#include "velox/functions/prestosql/Arithmetic.h"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstring>
 #include <ctime>
 #include <vector>
-
-#include "velox/experimental/cudf/functions/GpuDateTimeFunctions.cuh"
-#include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
-#include "velox/functions/prestosql/Arithmetic.h"
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 namespace {
@@ -116,9 +117,26 @@ TEST(GpuFunctionSemanticsTest, dateFieldsMatchTheCLibrary) {
   // Epoch and its neighbours, both sides of a leap day, a century non-leap
   // year, the TPC-H range, and far enough out either way to leave the range any
   // real query touches.
-  for (int32_t day : {0,      -1,     1,      365,    366,    -365,  8035,
-                      10592,  19000,  7305,   7304,   -25567, 50000, -700000,
-                      700000, 100000, -50000, 250000, -250000}) {
+  for (int32_t day :
+       {0,
+        -1,
+        1,
+        365,
+        366,
+        -365,
+        8035,
+        10592,
+        19000,
+        7305,
+        7304,
+        -25567,
+        50000,
+        -700000,
+        700000,
+        100000,
+        -50000,
+        250000,
+        -250000}) {
     days.push_back(day);
   }
   for (int32_t day = -3000; day <= 3000; day += 7) {
@@ -214,8 +232,7 @@ TEST(GpuFunctionSemanticsTest, kleeneLogicOverAllTristateCombinations) {
 
   for (size_t i = 0; i < cases.size(); ++i) {
     const auto& terms = cases[i].terms;
-    SCOPED_TRACE(
-        fmt::format("({}, {}, {})", terms[0], terms[1], terms[2]));
+    SCOPED_TRACE(fmt::format("({}, {}, {})", terms[0], terms[1], terms[2]));
 
     bool sawNull = false;
     bool sawFalse = false;
@@ -267,27 +284,28 @@ roundAndTruncate(const RoundCase* cases, RoundResults* out, int count) {
 // query, so the bar is bit equality rather than approximate equality.
 TEST(GpuFunctionSemanticsTest, roundAndTruncateAgreeWithHostBitForBit) {
   std::vector<RoundCase> cases;
-  for (double value : {0.0,
-                       -0.0,
-                       0.5,
-                       -0.5,
-                       1.5,
-                       2.5,
-                       -2.5,
-                       1.005,
-                       2.675,
-                       123.456789,
-                       -123.456789,
-                       0.000001234,
-                       1e15,
-                       -1e15,
-                       // Either side of the threshold where round() switches
-                       // from the factor path to splitting the number.
-                       17592186044415.5,
-                       17592186044416.5,
-                       1e300,
-                       3.14159265358979,
-                       -9.99999999}) {
+  for (double value :
+       {0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1.5,
+        2.5,
+        -2.5,
+        1.005,
+        2.675,
+        123.456789,
+        -123.456789,
+        0.000001234,
+        1e15,
+        -1e15,
+        // Either side of the threshold where round() switches
+        // from the factor path to splitting the number.
+        17592186044415.5,
+        17592186044416.5,
+        1e300,
+        3.14159265358979,
+        -9.99999999}) {
     for (int32_t decimals : {-3, -1, 0, 1, 2, 3, 7, 15}) {
       cases.push_back(RoundCase{value, decimals});
     }
@@ -307,7 +325,8 @@ TEST(GpuFunctionSemanticsTest, roundAndTruncateAgreeWithHostBitForBit) {
   };
 
   for (size_t i = 0; i < cases.size(); ++i) {
-    SCOPED_TRACE(fmt::format("round({}, {})", cases[i].value, cases[i].decimals));
+    SCOPED_TRACE(
+        fmt::format("round({}, {})", cases[i].value, cases[i].decimals));
 
     double expectedRound{};
     functions::RoundFunction<void>{}.call(

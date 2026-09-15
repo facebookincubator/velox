@@ -29,9 +29,10 @@
 // Bitwise.h calls bits::countBits but includes only Macros.h, so it relies on
 // an includer having pulled BitUtil.h first. Included explicitly rather than
 // depending on that.
-#include "velox/common/base/BitUtil.h"
 #include "velox/experimental/cudf/functions/GpuDateTimeFunctions.cuh"
 #include "velox/experimental/cudf/functions/GpuLogicalFunctions.cuh"
+
+#include "velox/common/base/BitUtil.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
@@ -133,7 +134,8 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuBinaryNumericWithTReturn<LteFunction, bool>({prefix + "lte"});
   registerGpuBinaryNumericWithTReturn<GtFunction, bool>({prefix + "gt"});
   registerGpuBinaryNumericWithTReturn<GteFunction, bool>({prefix + "gte"});
-  registerGpuTernaryNumericWithTReturn<BetweenFunction, bool>({prefix + "between"});
+  registerGpuTernaryNumericWithTReturn<BetweenFunction, bool>(
+      {prefix + "between"});
 
   // --- Bitwise ------------------------------------------------------------
   registerGpuFunction<BitwiseAndFunction, int64_t, int64_t, int64_t>(

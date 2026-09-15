@@ -21,8 +21,9 @@
 // name sanitizing, overload coexistence, and overwrite-on-collision.
 
 #include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
-#include "velox/type/TypeCoercer.h"
+
 #include "velox/expression/SignatureBinder.h"
+#include "velox/type/TypeCoercer.h"
 
 #include <gtest/gtest.h>
 
@@ -48,11 +49,13 @@ std::unique_ptr<cudf::column> launcherB(
 }
 
 GpuFunctionSignature doubleBinary() {
-  return GpuFunctionSignature{"double", {"double", "double"}};
+  return GpuFunctionSignature{
+      "double", {"double", "double"}, /*variadicTail=*/false, {}};
 }
 
 GpuFunctionSignature bigintBinary() {
-  return GpuFunctionSignature{"bigint", {"bigint", "bigint"}};
+  return GpuFunctionSignature{
+      "bigint", {"bigint", "bigint"}, /*variadicTail=*/false, {}};
 }
 
 const std::vector<GpuFunctionEntry>* lookup(const std::string& name) {
@@ -204,13 +207,13 @@ TEST_F(GpuFunctionRegistryTest, numericBreadthMatchesVeloxTypeSets) {
   EXPECT_EQ(signaturesOf(lookup("ceil")), signaturesOf(lookup("ceiling")));
 
   // Floating point only, matching registerUnaryFloatingPoint for negate.
-  EXPECT_EQ(
-      signaturesOf(lookup("truncate")).size(), 4u); // 2 types x 2 arities
+  EXPECT_EQ(signaturesOf(lookup("truncate")).size(), 4u); // 2 types x 2 arities
 
   // Genuinely double-only upstream: breadth here would be a divergence, not an
   // improvement.
   EXPECT_EQ(
-      signaturesOf(lookup("ln")), (std::vector<std::string>{"(double) -> double"}));
+      signaturesOf(lookup("ln")),
+      (std::vector<std::string>{"(double) -> double"}));
 }
 
 // A decimal signature is the case where the type string is not just the type
