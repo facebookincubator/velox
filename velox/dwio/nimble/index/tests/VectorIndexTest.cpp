@@ -223,6 +223,11 @@ class VectorIndexTest : public ::testing::Test {
         Section{MetadataBuffer{std::move(directoryBuffer)}}, indexOptions);
   }
 
+  std::shared_ptr<MetadataBuffer> makeMetadataBuffer(std::string_view data) {
+    return std::make_shared<MetadataBuffer>(MetadataBuffer::decompress(
+        data, CompressionType::Uncompressed, pool()));
+  }
+
   // Materializes the single index expected by most focused tests.
   std::shared_ptr<const VectorIndex> readIndex(const WrittenIndexes& written) {
     const auto directory = readDirectory(written);
@@ -613,6 +618,24 @@ TEST_F(VectorIndexTest, serializationRoundTrip) {
   }
 }
 
+TEST_F(VectorIndexTest, retainsPoolBackedSerializedIndex) {
+  constexpr uint32_t kNumVectors{500};
+  const auto written = [&] {
+    const auto data = generateRandomVectors(kNumVectors, kDimensions);
+    return writeIndex(
+        makeConfig(VectorIndexType::kIvfRaBitQ),
+        {makeInputFromVectors(data, kDimensions)});
+  }();
+
+  const auto bytesBeforeLoad = pool()->usedBytes();
+  auto reader = readIndex(written);
+  ASSERT_NE(reader, nullptr);
+  EXPECT_GE(pool()->usedBytes() - bytesBeforeLoad, written.indexData.size());
+
+  reader.reset();
+  EXPECT_EQ(pool()->usedBytes(), bytesBeforeLoad);
+}
+
 TEST_F(VectorIndexTest, truncatedFaissIndexRejected) {
   constexpr uint32_t kNumVectors{100};
   auto written = writeIndex(
@@ -631,7 +654,7 @@ TEST_F(VectorIndexTest, truncatedFaissIndexRejected) {
               .indexType = VectorIndexType::kIvfFlat,
               .numVectors = kNumVectors,
           },
-          written.indexData),
+          makeMetadataBuffer(written.indexData)),
       NimbleUserError);
 }
 
@@ -711,7 +734,7 @@ TEST_F(VectorIndexTest, zeroVectorMetadataRejected) {
               .indexType = VectorIndexType::kIvfFlat,
               .numVectors = 0,
           },
-          written.indexData),
+          makeMetadataBuffer(written.indexData)),
       "VectorIndex vector count must be positive");
 }
 
