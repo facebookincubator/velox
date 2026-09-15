@@ -36,6 +36,7 @@ UcxPartitionedOutputMock::UcxPartitionedOutputMock(
       tableGenerator_(tableGenerator) {}
 
 void UcxPartitionedOutputMock::run() {
+  stopRequested_ = false;
   threads_.clear();
   for (int32_t driver = 0; driver < numDrivers_; ++driver) {
     threads_.emplace_back(&UcxPartitionedOutputMock::publishDataChunks, this);
@@ -55,6 +56,9 @@ void UcxPartitionedOutputMock::publishDataChunks() {
   auto stream = rmm::cuda_stream_default;
   for (size_t partition = 0; partition < numPartitions_; ++partition) {
     for (uint32_t dataChunk = 0; dataChunk < numDataChunks_; ++dataChunk) {
+      if (stopRequested_) {
+        return;
+      }
       VLOG(3)
           << "In UcxPartitionedOutputMock::publishDataChunks writing to partition "
           << partition << " chunk " << dataChunk;

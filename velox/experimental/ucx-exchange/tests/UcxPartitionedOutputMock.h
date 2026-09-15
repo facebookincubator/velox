@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestData.h"
 
@@ -40,6 +41,11 @@ class UcxPartitionedOutputMock {
   /// @brief Wait for all threads to complete.
   void joinThreads();
 
+  /// @brief Request publisher threads to stop before the next data chunk.
+  void requestStop() {
+    stopRequested_ = true;
+  }
+
  private:
   // creates numPartitions_ x numDataChunks_ data chunks and
   // pushes it into the destination queues identified by the taskId.
@@ -52,6 +58,7 @@ class UcxPartitionedOutputMock {
   const uint32_t numDataChunks_;
   const size_t numRowsPerChunk_;
   const std::shared_ptr<BaseTableGenerator> tableGenerator_;
+  std::atomic_bool stopRequested_{false};
   std::vector<std::thread> threads_;
 };
 
