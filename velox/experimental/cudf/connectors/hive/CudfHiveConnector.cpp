@@ -20,10 +20,52 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/TableHandle.h"
+#include "velox/core/Expressions.h"
+
+#include <string_view>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
+
+namespace {
+
+constexpr std::string_view kDateFormatName{"date_format"};
+
+bool isSparkDateFormatCall(std::string_view functionName) {
+  return functionName.size() >= kDateFormatName.size() &&
+      functionName.compare(
+          functionName.size() - kDateFormatName.size(),
+          kDateFormatName.size(),
+          kDateFormatName) == 0;
+}
+
+bool containsSparkDateFormatCall(const core::TypedExprPtr& expression) {
+  if (expression == nullptr) {
+    return false;
+  }
+  const auto call =
+      std::dynamic_pointer_cast<const core::CallTypedExpr>(expression);
+  if (call && isSparkDateFormatCall(call->name())) {
+    return true;
+  }
+  for (const auto& input : expression->inputs()) {
+    if (containsSparkDateFormatCall(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+bool isCudfTableScanSupported(const ConnectorTableHandlePtr& tableHandle) {
+  const auto hiveTableHandle = std::dynamic_pointer_cast<
+      const facebook::velox::connector::hive::HiveTableHandle>(tableHandle);
+  return hiveTableHandle != nullptr &&
+      !containsSparkDateFormatCall(hiveTableHandle->remainingFilter());
+}
 
 CudfHiveConnector::CudfHiveConnector(
     const std::string& id,
@@ -44,7 +86,7 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
   // TODO (dm): Make this ^^^ happen
   // Problem: this information is in split, not table handle
 
-  if (cudfIsRegistered()) {
+  if (cudfIsRegistered() && isCudfTableScanSupported(tableHandle)) {
     return std::make_unique<CudfHiveDataSource>(
         outputType,
         tableHandle,
