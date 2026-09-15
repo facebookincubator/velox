@@ -15,11 +15,9 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
-#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
-#include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -32,11 +30,9 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
-#include <cudf/utilities/default_stream.hpp>
-#include <cudf/utilities/memory_resource.hpp>
-
 #include <folly/ScopeGuard.h>
 
+#include <atomic>
 #include <limits>
 
 using namespace facebook::velox;
@@ -1570,14 +1566,34 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
       {makeNullableFlatVector<double>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
        makeNullableFlatVector<double>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
        makeNullableFlatVector<double>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx(pool(), queryCtx.get());
-  auto stream = cudf::get_default_stream();
-  auto mr = cudf::get_current_device_resource_ref();
-  auto table = cudf_velox::with_arrow::toCudfTable(input, pool(), stream, mr);
-  const auto tableView = table->view();
-  const std::vector<cudf::column_view> inputViews{
-      tableView.begin(), tableView.end()};
+  // Exercise BetweenFunction rather than the AST or JIT evaluator.
+  cudf_velox::ensureBuiltinExpressionEvaluatorsRegistered();
+  auto& registry = cudf_velox::getCudfExpressionEvaluatorRegistry();
+  auto& functionEntry = registry.at("function");
+  const auto previousEntry = functionEntry;
+  std::atomic<size_t> betweenCreations{0};
+  SCOPE_EXIT {
+    functionEntry = previousEntry;
+  };
+  functionEntry.create = [create = previousEntry.create, &betweenCreations](
+                             const core::TypedExprPtr& expr,
+                             const RowTypePtr& rowType,
+                             memory::MemoryPool* pool) {
+    auto evaluator = create(expr, rowType, pool);
+    if (expr->isCallKind() &&
+        expr->asUnchecked<core::CallTypedExpr>()->name() == "between") {
+      ++betweenCreations;
+    }
+    return evaluator;
+  };
+  auto highestPriority = functionEntry.priority;
+  for (const auto& [name, entry] : registry) {
+    if (entry.priority > highestPriority) {
+      highestPriority = entry.priority;
+    }
+  }
+  ASSERT_LT(highestPriority, std::numeric_limits<int>::max());
+  functionEntry.priority = highestPriority + 1;
 
   for (const bool literalLower : {true, false}) {
     for (const bool literalUpper : {true, false}) {
@@ -1586,22 +1602,7 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
           literalLower ? "1.0" : "lower_bound",
           literalUpper ? "9.0" : "upper_bound");
       SCOPED_TRACE(sql);
-      auto expression = cudf_velox::test_utils::optimizeTypedExpr(
-          sql, input->rowType(), queryCtx.get(), &execCtx);
-      ASSERT_TRUE(expression->isCallKind());
-      ASSERT_EQ(
-          expression->asUnchecked<core::CallTypedExpr>()->name(), "between");
-      // Exercise BetweenFunction rather than an alternative GPU evaluator.
-      auto evaluator = cudf_velox::FunctionExpression::create(
-          expression, input->rowType(), pool());
-      ASSERT_NE(evaluator, nullptr);
-      auto result = evaluator->eval(inputViews, stream, mr);
-      auto actual = cudf_velox::with_arrow::toVeloxColumn(
-          cudf::table_view{{cudf_velox::asView(result)}},
-          pool(),
-          "result",
-          stream,
-          mr);
+      auto plan = PlanBuilder().values({input}).project({sql}).planNode();
       std::vector<std::optional<bool>> expected{
           false, true, true, true, false, std::nullopt, true, true};
       if (!literalLower) {
@@ -1610,8 +1611,10 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
       if (!literalUpper) {
         expected[7] = std::nullopt;
       }
-      facebook::velox::test::assertEqualVectors(
-          makeNullableFlatVector<bool>(expected), actual->childAt(0));
+      betweenCreations = 0;
+      AssertQueryBuilder(plan).assertResults(
+          makeRowVector({makeNullableFlatVector<bool>(expected)}));
+      ASSERT_GT(betweenCreations.load(), 0);
     }
   }
 }
