@@ -34,8 +34,8 @@ namespace facebook::velox::ucx_exchange {
 // first:
 // - Bits 63..32 (4 bytes): FNV-1a hash of the producing taskId, which is
 //   unique within a cluster.
-// - Bits 31..24 (1 byte): Operation type (metadata, data, or handshake
-//   response).
+// - Bits 31..24 (1 byte): Operation type (metadata, data, handshake response,
+//   or destination cancellation).
 // - Bits 23..0  (3 bytes): Sequence number of the chunk exchanged between 2
 //   tasks.
 
@@ -43,6 +43,7 @@ namespace facebook::velox::ucx_exchange {
 constexpr uint64_t METADATA_TAG = 0x02000000;
 constexpr uint64_t DATA_TAG = 0x03000000;
 constexpr uint64_t HANDSHAKE_RESPONSE_TAG = 0x04000000;
+constexpr uint64_t DESTINATION_CANCELLATION_TAG = 0x05000000;
 
 // Implementation of the fowler-noll-vo hash function for 32 bits.
 uint32_t fnv1a_32(std::string_view s);
@@ -63,6 +64,12 @@ inline uint64_t getDataTag(uint64_t taskHash, uint64_t sequenceNumber) {
 // Note: taskHash is implicitly converted to 64 bits.
 inline uint64_t getHandshakeResponseTag(uint64_t taskHash) {
   return (taskHash << 32) | HANDSHAKE_RESPONSE_TAG;
+}
+
+// Gets the tag used to abandon one destination.
+// Note: taskHash is implicitly converted to 64 bits.
+inline uint64_t getDestinationCancellationTag(uint64_t taskHash) {
+  return (taskHash << 32) | DESTINATION_CANCELLATION_TAG;
 }
 
 /// @brief Request that is sent from the client (UcxExchangeSource) to the
