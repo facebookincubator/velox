@@ -336,7 +336,8 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
                                lowCardinalityInt64(kRows),
                                stream.view(),
-                               memoryResource));
+                               memoryResource,
+                               true));
   const auto observation =
       roundTrip(std::move(columns), stream.view(), memoryResource);
   ASSERT_FALSE(observation.serializedDescriptor.empty());
@@ -489,7 +490,7 @@ TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
   rmm::cuda_stream stream;
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
 
-  auto selectedCodecs = [&](std::size_t rowCount) {
+  auto selectedCodecs = [&](std::size_t rowCount, bool expectCompression) {
     std::vector<std::unique_ptr<cudf::column>> columns;
     columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
                                  std::vector<int64_t>(rowCount, 7),
@@ -499,7 +500,7 @@ TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
     auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
     PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
     auto compressed = codec.compress(packed);
-    EXPECT_TRUE(compressed);
+    EXPECT_EQ(compressed.has_value(), expectCompression);
     if (!compressed) {
       return std::vector<int64_t>{};
     }
@@ -519,13 +520,13 @@ TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
     return codecs;
   };
 
-  const auto belowThreshold = selectedCodecs(kTypedThreshold - 1);
+  const auto belowThreshold = selectedCodecs(kTypedThreshold - 1, false);
   EXPECT_TRUE(std::none_of(
       belowThreshold.begin(), belowThreshold.end(), [](int64_t codec) {
         return codec >= kFrameOfReferenceRegionCodec;
       }));
 
-  const auto atThreshold = selectedCodecs(kTypedThreshold);
+  const auto atThreshold = selectedCodecs(kTypedThreshold, true);
   EXPECT_TRUE(
       std::any_of(atThreshold.begin(), atThreshold.end(), [](int64_t codec) {
         return codec >= kFrameOfReferenceRegionCodec;
