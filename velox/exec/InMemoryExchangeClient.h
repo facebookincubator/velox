@@ -25,10 +25,7 @@ namespace facebook::velox::exec {
 /// their pages in an in-memory ExchangeQueue. This may be shared by multiple
 /// Exchange operators, one per consumer thread.
 ///
-/// This is the client of the built-in in-memory transport. Its data plane --
-/// next() and queue() -- is deliberately not part of the ExchangeClient
-/// interface: page payloads are transport specific, so the operator that reads
-/// them reaches this class directly.
+/// This is the client of the built-in in-memory transport.
 class InMemoryExchangeClient
     : public ExchangeClient,
       public std::enable_shared_from_this<InMemoryExchangeClient> {
