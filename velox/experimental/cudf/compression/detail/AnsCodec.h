@@ -37,6 +37,7 @@ namespace facebook::velox::cudf_velox::compression::detail {
 // Internal native-ANS chunk size passed to nvCOMP. The codec's descriptor
 // indexes the larger frames submitted to the manager, not these inner chunks.
 inline constexpr std::size_t kNvcompAnsChunkSize = 64u << 10;
+inline constexpr double kMinimumEncodedByteReduction = 0.02;
 
 // One pinned size entry is required for every ANS segment submitted together.
 // Callers statically assert that their largest batch fits this shared staging.
@@ -73,6 +74,11 @@ struct AnsCompressedData {
   std::vector<uint32_t> segmentSizes;
 };
 
+/** Compresses one bounded batch of independent ANS inputs. */
+[[nodiscard]] AnsCompressedData compressAnsBatch(
+    std::span<const cudf::device_span<const uint8_t>> inputs,
+    AnsCodecContext& context);
+
 /**
  * Compresses one contiguous device span into native nvCOMP ANS frames.
  *
@@ -83,7 +89,6 @@ struct AnsCompressedData {
  */
 [[nodiscard]] std::optional<AnsCompressedData> compressAns(
     cudf::device_span<const uint8_t> input,
-    double minimumByteReduction,
     std::size_t minimumInputSize,
     AnsCodecContext& context);
 

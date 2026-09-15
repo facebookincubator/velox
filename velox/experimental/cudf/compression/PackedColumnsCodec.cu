@@ -35,8 +35,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cmath>
-#include <cstring>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -359,12 +357,6 @@ template <typename T>
   return std::bit_cast<T>(static_cast<Unsigned>(bits));
 }
 
-template <typename T>
-[[nodiscard]] T stagedValue(uint64_t slot) noexcept {
-  T value;
-  std::memcpy(&value, &slot, sizeof(T));
-  return value;
-}
 
 [[nodiscard]] bool usesUnsignedStorage(cudf::data_type type) noexcept {
   return type.id() == cudf::type_id::UINT32 ||
@@ -505,11 +497,6 @@ void collectTypedRegions(const cudf::column_view& column,
   }
 }
 
-struct EncodedPlanes {
-  rmm::device_buffer data;
-  std::vector<uint32_t> sizes;
-};
-
 class DeferredAnsStatusChecks {
  public:
   void add(std::vector<nvcomp::DecompressionConfig> configs) {
@@ -530,7 +517,7 @@ class DeferredAnsStatusChecks {
   std::vector<std::vector<nvcomp::DecompressionConfig>> pending_;
 };
 
-[[nodiscard]] EncodedPlanes encodePlanes(
+[[nodiscard]] detail::AnsCompressedData encodePlanes(
     cudf::device_span<const uint8_t> planes,
     uint32_t elementCount,
     int planeCount,
@@ -545,85 +532,14 @@ class DeferredAnsStatusChecks {
       "Invalid byte-plane compression input",
       std::invalid_argument);
 
-  std::vector<std::size_t> inputSizes(planeCount, elementCount);
-  auto configs = context.manager().configure_compression(inputSizes);
-  std::vector<const uint8_t*> inputPointers(planeCount);
-  std::vector<uint8_t*> outputPointers(planeCount);
-  std::vector<std::size_t> outputOffsets(planeCount);
-  std::size_t maximumOutputSize = 0;
+  std::vector<cudf::device_span<const uint8_t>> inputs;
+  inputs.reserve(planeCount);
   for (int plane = 0; plane < planeCount; ++plane) {
-    inputPointers[plane] =
-        planes.data() + static_cast<std::size_t>(plane) * planeStride;
-    outputOffsets[plane] = maximumOutputSize;
-    maximumOutputSize = detail::checkedAddSizes(
-        maximumOutputSize,
-        detail::nvcompAlignedSize(configs[plane].max_compressed_buffer_size),
-        "nvCOMP byte-plane scratch size overflow");
+    inputs.emplace_back(
+        planes.data() + static_cast<std::size_t>(plane) * planeStride,
+        elementCount);
   }
-
-  const auto stream = context.stream();
-  const auto temporaryMemoryResource = context.temporaryMemoryResource();
-  rmm::device_buffer scratch{
-      maximumOutputSize, stream, temporaryMemoryResource};
-  CUDF_CUDA_TRY(
-      cudaMemsetAsync(scratch.data(), 0, scratch.size(), stream.value()));
-  for (int plane = 0; plane < planeCount; ++plane) {
-    outputPointers[plane] =
-        static_cast<uint8_t*>(scratch.data()) + outputOffsets[plane];
-  }
-
-  rmm::device_buffer outputSizesDevice{
-      static_cast<std::size_t>(planeCount) * sizeof(std::size_t),
-      stream,
-      temporaryMemoryResource};
-  context.manager().compress(
-      inputPointers.data(),
-      outputPointers.data(),
-      configs,
-      static_cast<std::size_t*>(outputSizesDevice.data()));
-
-  auto stagedSizes = context.sizeStaging(planeCount);
-  CUDF_CUDA_TRY(cudaMemcpyAsync(
-      stagedSizes.data(),
-      outputSizesDevice.data(),
-      static_cast<std::size_t>(planeCount) * sizeof(std::size_t),
-      cudaMemcpyDeviceToHost,
-      stream.value()));
-  stream.synchronize();
-
-  std::vector<uint32_t> sizes(planeCount);
-  std::size_t compressedSize = 0;
-  for (int plane = 0; plane < planeCount; ++plane) {
-    CUDF_EXPECTS(
-        *configs[plane].get_status() == nvcompSuccess &&
-            stagedSizes[plane] != 0 &&
-            stagedSizes[plane] <= configs[plane].max_compressed_buffer_size &&
-            stagedSizes[plane] <= std::numeric_limits<uint32_t>::max(),
-        "nvCOMP byte-plane compression failed");
-    sizes[plane] = static_cast<uint32_t>(stagedSizes[plane]);
-    compressedSize =
-        detail::checkedAddSizes(compressedSize,
-                                detail::nvcompAlignedSize(stagedSizes[plane]),
-                                "nvCOMP byte-plane result size overflow");
-  }
-
-  rmm::device_buffer output{compressedSize, stream, temporaryMemoryResource};
-  CUDF_CUDA_TRY(
-      cudaMemsetAsync(output.data(), 0, output.size(), stream.value()));
-  std::size_t outputOffset = 0;
-  for (int plane = 0; plane < planeCount; ++plane) {
-    CUDF_CUDA_TRY(
-        cudaMemcpyAsync(static_cast<uint8_t*>(output.data()) + outputOffset,
-                        outputPointers[plane],
-                        sizes[plane],
-                        cudaMemcpyDeviceToDevice,
-                        stream.value()));
-    outputOffset =
-        detail::checkedAddSizes(outputOffset,
-                                detail::nvcompAlignedSize(sizes[plane]),
-                                "Byte-plane output offset overflow");
-  }
-  return EncodedPlanes{std::move(output), std::move(sizes)};
+  return detail::compressAnsBatch(inputs, context);
 }
 
 [[nodiscard]] rmm::device_buffer decodePlanes(
@@ -789,8 +705,8 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
                                 stream.value()));
   stream.synchronize();
 
-  const auto minimum = stagedValue<T>(staged[kMinimumStagingIndex]);
-  const auto maximum = stagedValue<T>(staged[kMaximumStagingIndex]);
+  const auto minimum = valueFromBits<T>(staged[kMinimumStagingIndex]);
+  const auto maximum = valueFromBits<T>(staged[kMaximumStagingIndex]);
   using Unsigned = std::make_unsigned_t<T>;
   const auto frameRange = static_cast<uint64_t>(static_cast<Unsigned>(maximum) -
                                                 static_cast<Unsigned>(minimum));
@@ -841,7 +757,7 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
   const auto deltaPlaneCount =
       bytePlaneCount(staged[kDeltaMaximumStagingIndex]);
   const auto firstBits =
-      valueBits(stagedValue<T>(staged[kFirstValueStagingIndex]));
+      valueBits(valueFromBits<T>(staged[kFirstValueStagingIndex]));
   const auto useDelta = deltaPlaneCount < framePlaneCount;
   const auto planeCount = useDelta ? deltaPlaneCount : framePlaneCount;
   const auto planeStride = detail::nvcompAlignedSize(elementCount);
@@ -888,7 +804,7 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
                    elementCount,
                    planeCount,
                    state.ans);
-  descriptor.segmentSizes = std::move(encoded.sizes);
+  descriptor.segmentSizes = std::move(encoded.segmentSizes);
   return EncodedTypedRegion{std::move(descriptor), std::move(encoded.data)};
 }
 
@@ -1013,13 +929,7 @@ PackedColumnsCodec::PackedColumnsCodec(
 PackedColumnsCodec::~PackedColumnsCodec() = default;
 
 std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
-    const cudf::packed_columns& input,
-    const CompressionOptions& options) {
-  CUDF_EXPECTS(std::isfinite(options.minimumByteReduction) &&
-                   options.minimumByteReduction >= 0.0 &&
-                   options.minimumByteReduction < 1.0,
-               "minimumByteReduction must be finite and in [0, 1)",
-               std::invalid_argument);
+    const cudf::packed_columns& input) {
   CUDF_EXPECTS(input.metadata != nullptr && input.gpu_data != nullptr,
                "Cannot compress moved-from packed columns",
                std::invalid_argument);
@@ -1058,10 +968,8 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
     EncodedRegion region;
     region.blobOffset = offset;
     region.rawSize = size;
-    auto compressed = detail::compressAns({blobBase + offset, size},
-                                          options.minimumByteReduction,
-                                          kMinimumResidualAnsInputSize,
-                                          state_->ans);
+    auto compressed = detail::compressAns(
+        {blobBase + offset, size}, kMinimumResidualAnsInputSize, state_->ans);
     if (compressed) {
       region.codec = RegionCodec::kByteAns;
       region.segmentSizes = compressed->segmentSizes;
@@ -1115,7 +1023,7 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
         "Packed-column compressed size overflow");
   }
   if (static_cast<long double>(compressedSize) >
-      (1.0L - static_cast<long double>(options.minimumByteReduction)) *
+      (1.0L - static_cast<long double>(detail::kMinimumEncodedByteReduction)) *
           static_cast<long double>(blobSize)) {
     state_->stream.synchronize();
     return std::nullopt;

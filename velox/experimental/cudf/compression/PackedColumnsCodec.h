@@ -56,12 +56,6 @@ class PackedColumnsDescriptor {
   std::vector<int64_t> words_;
 };
 
-/** Controls codec-local byte-size acceptance, not transport profitability. */
-struct CompressionOptions {
-  /// Reject an encoded result unless it is at least this fraction smaller.
-  double minimumByteReduction{0.02};
-};
-
 struct CompressedPackedColumns {
   rmm::device_buffer data;
   PackedColumnsDescriptor descriptor;
@@ -94,8 +88,7 @@ class PackedColumnsCodec {
    * byte-reduction safeguard.
    */
   [[nodiscard]] std::optional<CompressedPackedColumns> compress(
-      const cudf::packed_columns& input,
-      const CompressionOptions& options = {});
+      const cudf::packed_columns& input);
 
   /** Reconstructs the packed GPU allocation byte-exactly. */
   [[nodiscard]] rmm::device_buffer decompress(
