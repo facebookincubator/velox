@@ -22,8 +22,8 @@ across calls. Calls are synchronous with respect to that stream, and the codec
 must be destroyed before its stream.
 
 The codec automatically chooses an encoding for each region. It has no
-link-rate or UCX state. When invoked, it rejects output that does not meet the
-caller-supplied minimum byte reduction. The consumer decides whether attempting
+link-rate or UCX state. When invoked, it rejects output that does not meet its
+minimum byte-reduction safeguard. The consumer decides whether attempting
 compression is expected to improve end-to-end runtime.
 
 ## Build option

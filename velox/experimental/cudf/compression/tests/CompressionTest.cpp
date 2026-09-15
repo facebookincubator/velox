@@ -31,7 +31,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <future>
 #include <limits>
@@ -109,8 +108,7 @@ struct RoundTripObservation {
 RoundTripObservation roundTrip(
     std::vector<std::unique_ptr<cudf::column>> columns,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref memoryResource,
-    double minimumByteReduction = 0.02) {
+    rmm::device_async_resource_ref memoryResource) {
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream, memoryResource);
   stream.synchronize();
@@ -125,8 +123,7 @@ RoundTripObservation roundTrip(
   stream.synchronize();
 
   PackedColumnsCodec codec{stream, memoryResource, memoryResource};
-  auto compressed =
-      codec.compress(packed, CompressionOptions{minimumByteReduction});
+  auto compressed = codec.compress(packed);
   EXPECT_TRUE(compressed.has_value());
   if (!compressed) {
     return {packed.gpu_data->size(), 0, {}};
@@ -474,7 +471,7 @@ TEST(PackedColumnsCodecTest, DecompressRejectsWrongInputExtent) {
       std::invalid_argument);
 }
 
-TEST(PackedColumnsCodecTest, EnforcesMinimumReductionAndValidOptions) {
+TEST(PackedColumnsCodecTest, RejectsInsufficientReduction) {
   constexpr std::size_t kRows = 1u << 18;
   rmm::cuda_stream stream;
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
@@ -494,19 +491,6 @@ TEST(PackedColumnsCodecTest, EnforcesMinimumReductionAndValidOptions) {
   PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
 
   EXPECT_FALSE(codec.compress(packed));
-  EXPECT_FALSE(codec.compress(packed, CompressionOptions{0.95}));
-  EXPECT_THROW(codec.compress(packed, CompressionOptions{-0.01}),
-               std::invalid_argument);
-  EXPECT_THROW(codec.compress(packed, CompressionOptions{1.0}),
-               std::invalid_argument);
-  EXPECT_THROW(
-      codec.compress(
-          packed, CompressionOptions{std::numeric_limits<double>::quiet_NaN()}),
-      std::invalid_argument);
-  EXPECT_THROW(
-      codec.compress(
-          packed, CompressionOptions{std::numeric_limits<double>::infinity()}),
-      std::invalid_argument);
 }
 
 TEST(PackedColumnsCodecTest, SmallInputIsNotExpanded) {
@@ -539,7 +523,7 @@ TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
     cudf::table table{std::move(columns)};
     auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
     PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
-    auto compressed = codec.compress(packed, CompressionOptions{0.0});
+    auto compressed = codec.compress(packed);
     EXPECT_TRUE(compressed);
     if (!compressed) {
       return std::vector<int64_t>{};
@@ -584,13 +568,11 @@ TEST(PackedColumnsCodecTest, HonorsResidualAnsThreshold) {
   detail::AnsCodecContext context{stream.view(), memoryResource};
   EXPECT_FALSE(detail::compressAns(
       {static_cast<const uint8_t*>(input.data()), kResidualThreshold - 1},
-      0.0,
       kResidualThreshold,
       context));
 
   auto compressed = detail::compressAns(
       {static_cast<const uint8_t*>(input.data()), kResidualThreshold},
-      0.0,
       kResidualThreshold,
       context);
   ASSERT_TRUE(compressed);
@@ -604,31 +586,6 @@ TEST(PackedColumnsCodecTest, HonorsResidualAnsThreshold) {
   EXPECT_TRUE(std::all_of(decodedBytes.begin(),
                           decodedBytes.end(),
                           [](uint8_t value) { return value == 0; }));
-}
-
-TEST(PackedColumnsCodecTest, EnforcesExactReductionBoundary) {
-  constexpr std::size_t kRows = 1u << 18;
-  rmm::cuda_stream stream;
-  const auto memoryResource = rmm::mr::get_current_device_resource_ref();
-  std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               lowCardinalityInt64(kRows),
-                               stream.view(),
-                               memoryResource));
-  cudf::table table{std::move(columns)};
-  auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
-  PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
-
-  auto encoded = codec.compress(packed, CompressionOptions{0.0});
-  ASSERT_TRUE(encoded);
-  const auto reduction = 1.0 -
-      static_cast<double>(encoded->data.size()) /
-          static_cast<double>(packed.gpu_data->size());
-  ASSERT_GT(reduction, 0.0);
-  EXPECT_TRUE(codec.compress(
-      packed, CompressionOptions{std::nextafter(reduction, 0.0)}));
-  EXPECT_FALSE(codec.compress(
-      packed, CompressionOptions{std::nextafter(reduction, 1.0)}));
 }
 
 TEST(PackedColumnsCodecTest, EncodedPaddingIsDeterministic) {
@@ -648,8 +605,8 @@ TEST(PackedColumnsCodecTest, EncodedPaddingIsDeterministic) {
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
 
-  auto first = codec.compress(packed, CompressionOptions{0.0});
-  auto second = codec.compress(packed, CompressionOptions{0.0});
+  auto first = codec.compress(packed);
+  auto second = codec.compress(packed);
   ASSERT_TRUE(first);
   ASSERT_TRUE(second);
   const auto descriptor = first->descriptor.serialize();
