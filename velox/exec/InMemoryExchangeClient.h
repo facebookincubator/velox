@@ -15,6 +15,15 @@
  */
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <queue>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <vector>
+
 #include "velox/exec/ExchangeClient.h"
 #include "velox/exec/ExchangeQueue.h"
 #include "velox/exec/ExchangeSource.h"

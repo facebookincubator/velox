@@ -15,6 +15,19 @@
  */
 #include "velox/exec/InMemoryExchangeClient.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <ostream>
+#include <queue>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 
