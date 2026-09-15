@@ -3726,6 +3726,73 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
       exceededMaxSpillLevelCount + 16);
 }
 
+TEST_P(HashJoinTest, fullJoinNullKeysSpillParity) {
+  // Null join keys hash to a constant, so hash-partitioned spilling routes
+  // every null-key row into one spill partition, which can never split at
+  // deeper spill levels. Full (and right) joins retain null-key build rows
+  // for miss output, so a null-heavy build side concentrates into an
+  // un-splittable partition; once the max spill level disables re-spilling,
+  // the whole null population must fit in memory at once (production
+  // signature: memory cap exceeded on restore). The fix scatters null-key
+  // rows across spill partitions -- they can never match, so their partition
+  // assignment is semantically free. This test pins result parity for a
+  // spilled full join with null-heavy keys on BOTH sides (build-side and
+  // probe-side scatter); the partition-balance discriminator lives in
+  // SpillerTest::nullKeyRowsSpillScatter.
+  const vector_size_t numBuildVectors = 8;
+  const vector_size_t buildVectorSize = 5'000;
+  std::vector<RowVectorPtr> buildVectors;
+  buildVectors.reserve(numBuildVectors);
+  for (auto v = 0; v < numBuildVectors; ++v) {
+    auto keys = makeFlatVector<int64_t>(
+        buildVectorSize,
+        [&](auto row) { return v * buildVectorSize + row; },
+        [](auto row) { return row % 10 != 0; }); // 90% null keys.
+    auto payloads = makeFlatVector<int64_t>(
+        buildVectorSize, [&](auto row) { return v * buildVectorSize + row; });
+    buildVectors.push_back(makeRowVector({"u_k", "u_p"}, {keys, payloads}));
+  }
+
+  const vector_size_t numProbeVectors = 2;
+  const vector_size_t probeVectorSize = 1'000;
+  std::vector<RowVectorPtr> probeVectors;
+  probeVectors.reserve(numProbeVectors);
+  for (auto v = 0; v < numProbeVectors; ++v) {
+    auto keys = makeFlatVector<int64_t>(
+        probeVectorSize,
+        [&](auto row) { return (v * probeVectorSize + row) * 10; },
+        [](auto row) { return row % 3 == 0; }); // ~30% null probe keys.
+    auto payloads = makeFlatVector<int64_t>(
+        probeVectorSize, [](auto row) { return row; });
+    probeVectors.push_back(makeRowVector({"t_k", "t_p"}, {keys, payloads}));
+  }
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors)
+                  .hashJoin(
+                      {"t_k"},
+                      {"u_k"},
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors)
+                          .planNode(),
+                      "",
+                      {"t_k", "t_p", "u_k", "u_p"},
+                      core::JoinType::kFull)
+                  .planNode();
+
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(1)
+      .planNode(plan)
+      .injectSpill(true)
+      .referenceQuery(
+          "SELECT t_k, t_p, u_k, u_p FROM t FULL OUTER JOIN u ON t_k = u_k")
+      .run();
+}
+
 TEST_P(HashJoinTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
