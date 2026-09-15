@@ -17,6 +17,7 @@
 #include "velox/dwio/dwrf/writer/Writer.h"
 
 #include <folly/ScopeGuard.h>
+#include <typeinfo>
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/Counters.h"
@@ -192,6 +193,14 @@ void addOrcWriterConfigs(
 #define NON_RECLAIMABLE_SECTION_CHECK() \
   VELOX_CHECK(nonReclaimableSection_ == nullptr || *nonReclaimableSection_);
 } // namespace
+
+std::shared_ptr<dwio::common::FormatSpecificOptions> DwrfWriterOptions::clone()
+    const {
+  VELOX_CHECK(
+      typeid(*this) == typeid(DwrfWriterOptions),
+      "DwrfWriterOptions subclass must override clone().");
+  return std::make_shared<DwrfWriterOptions>(*this);
+}
 
 std::shared_ptr<const Config> Writer::makeWriterConfig(
     const dwio::common::WriterOptions& options,
