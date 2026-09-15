@@ -377,7 +377,9 @@ footerSize, compressionType, checksum, version, magic
     │   Schema         "columnar.schema"          — type tree                 │
     │   Metadata       "columnar.metadata"        — key-value pairs           │
     │   Stats          "columnar.vectorized_stats"— per-column stats          │
-    │   ChunkStats     "columnar.chunk.stats"     — root → per-group blobs   │
+    │   ChunkStats     (at most one version is present):                     │
+    │     V1 "columnar.chunk.stats"     — root → per-group blobs             │
+    │     V2 "columnar.chunk.stats.v2"  — root → per-group blobs             │
     │   FileIndexes    "columnar.indexes"         — named index manifest     │
     │   StrideIndex    "columnar.stride.index"    — root → per-group blobs   │
     ├──────────────────────────────────────────────────────────────────────────┤
@@ -400,11 +402,18 @@ Per-Group FlatBuffer Details
       stream_sizes:    [uint32]   flattened [stripe x stream]
           ↑ locates individual stream bytes within stripe data
 
-    StripeChunkStats (one per group)
+    StripeChunkStats V1 (one per group)
       stream_count:          uint32
       stream_chunk_counts:   [uint32]   prefix-sum [stripe x stream]
       stream_chunk_rows:     [uint32]   prefix-sum row counts per chunk
       stream_chunk_offsets:  [uint32]   byte offset per chunk
+
+    StripeChunkStatsV2 (one per group)
+      stream_count:          uint32
+      stream_chunk_counts:   [uint32]   prefix-sum [stream x stripe]
+      chunk_rows:            [EncodedStream]   prefix-sum row counts per chunk
+      chunk_offsets:         [EncodedStream]   byte offset per chunk
+      chunk_null_counts:     [EncodedStream]   null count per chunk
 
     StripeStrideIndex (one per group, *** NEW ***)
       stride_size:           uint32    (e.g. 10,000 rows)
@@ -435,7 +444,8 @@ Footer = Directory of Pointers
                        │                                                {0x9000, 248, Zstd}]
                        │                              optional_sections:
                        │                                "columnar.schema"        → {0xB000, ...}
-                       │                                "columnar.chunk.stats"   → {0xC000, ...}
+                       │                                "columnar.chunk.stats" or
+                       │                                "columnar.chunk.stats.v2" → {0xC000, ...}
                        │                                "columnar.indexes"       → {0xD000, ...}
                        │
                        ├─ 0x8000: StripeGroup 0 blob
