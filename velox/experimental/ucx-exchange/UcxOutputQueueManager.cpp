@@ -102,12 +102,10 @@ void UcxOutputQueueManager::deleteResults(
   }
 }
 
-void UcxOutputQueueManager::getData(
+std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueForServer(
     std::string_view taskId,
-    int destination,
-    UcxDataAvailableCallback notify) {
+    int destination) {
   std::shared_ptr<UcxOutputQueue> outputQueue;
-  bool taskRemoved = false;
   std::string taskIdStr{taskId};
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskIdStr);
@@ -120,7 +118,6 @@ void UcxOutputQueueManager::getData(
               [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
                 << " getData ignored (task already removed)";
-        taskRemoved = true;
         return;
       }
       // create the queue structures such that the notify callback can be
@@ -135,14 +132,23 @@ void UcxOutputQueueManager::getData(
       outputQueue = it->second;
     }
   });
-  if (taskRemoved) {
+  return outputQueue;
+}
+
+std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getData(
+    std::string_view taskId,
+    int destination,
+    UcxDataAvailableCallback notify) {
+  auto outputQueue = getQueueForServer(taskId, destination);
+  if (!outputQueue) {
     // Fire callback immediately with nullptr to signal end-of-stream.
     notify(nullptr, /*numRows=*/0, {});
-    return;
+    return nullptr;
   }
   // outside of lock. Queue must exist.
   // get the data or install the notify callback.
   outputQueue->getData(destination, notify);
+  return outputQueue;
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {

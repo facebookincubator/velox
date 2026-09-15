@@ -30,7 +30,31 @@ add_test(
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+add_test(
+  NAME ucx_exchange_terminal_metadata_test
+  COMMAND ucx_exchange_test --gtest_filter=*terminalMetadata*
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_test(
+    NAME ucx_exchange_terminal_metadata_failure_test
+    COMMAND ucx_exchange_test --gtest_filter=*terminalMetadataFailureFailsOriginalTask*
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+endif()
+
 set_tests_properties(ucx_exchange_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+set_tests_properties(
+  ucx_exchange_terminal_metadata_test
+  PROPERTIES LABELS cuda_driver TIMEOUT 60 ENVIRONMENT "UCX_RNDV_THRESH=0"
+)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set_tests_properties(
+    ucx_exchange_terminal_metadata_failure_test
+    PROPERTIES LABELS cuda_driver TIMEOUT 60 ENVIRONMENT "UCX_RNDV_THRESH=0"
+  )
+endif()
 
 target_link_libraries(
   ucx_exchange_test

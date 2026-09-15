@@ -558,6 +558,17 @@ void UcxOutputQueue::terminate() {
   }
 }
 
+void UcxOutputQueue::setError(std::string_view message) {
+  std::shared_ptr<exec::Task> task;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    task = task_;
+  }
+  if (task) {
+    task->setError(std::string(message));
+  }
+}
+
 std::optional<double> UcxOutputQueue::getUtilization() {
   std::lock_guard<std::mutex> l(mutex_);
   if (maxSize_ == 0) {

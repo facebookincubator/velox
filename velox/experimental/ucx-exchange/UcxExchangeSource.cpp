@@ -108,6 +108,7 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
 void UcxExchangeSource::process() {
   if (closed_) {
     // Driver thread called closed
+    sendDestinationCancellation();
     cleanUp();
     return;
   }
@@ -215,6 +216,9 @@ void UcxExchangeSource::cleanUp() {
       communicator_->deferRequestCleanup(std::move(req));
     }
     completedRequests_.clear();
+    if (cancellationRequest_) {
+      communicator_->deferRequestCleanup(std::move(cancellationRequest_));
+    }
   }
 
   if (endpointRef_) {
@@ -248,6 +252,28 @@ void UcxExchangeSource::close() {
   // Let the Communicator progress thread do the actual clean-up.
   setState(ReceiverState::Done);
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::sendDestinationCancellation() {
+  if (atEnd_ || isIntraNodeTransfer_ || !endpointRef_ ||
+      !endpointRef_->endpoint_->isAlive() || cancellationRequest_) {
+    return;
+  }
+
+  auto cancellation = std::make_shared<uint8_t>(0);
+  cancellationRequest_ = endpointRef_->endpoint_->tagSend(
+      cancellation.get(),
+      sizeof(*cancellation),
+      ucxx::Tag{getDestinationCancellationTag(partitionKeyHash_)},
+      false,
+      [key = partitionKey_.toString()](
+          ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+        if (status != UCS_OK) {
+          VLOG(1) << "Failed to cancel UCX destination " << key << ": "
+                  << ucs_status_string(status);
+        }
+      },
+      cancellation);
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
