@@ -260,6 +260,10 @@ void UcxExchangeSource::resumeFromBackpressure() {
   }
 }
 
+folly::F14FastMap<std::string, int64_t> UcxExchangeSource::stats() const {
+  VELOX_UNREACHABLE();
+}
+
 folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeSource::metrics()
     const {
   std::lock_guard<std::mutex> lock(metricsMutex_);

@@ -89,9 +89,16 @@ UcxExchangeClient::collectStatsLocked() const {
   folly::F14FastMap<std::string, RuntimeMetric> stats;
 
   for (const auto& source : sources_) {
-    for (const auto& [name, value] : source->metrics()) {
-      auto [iter, inserted] = stats.try_emplace(name, value.unit);
-      iter->second.merge(value);
+    if (source->supportsMetrics()) {
+      for (const auto& [name, value] : source->metrics()) {
+        auto [iter, inserted] = stats.try_emplace(name, value.unit);
+        iter->second.merge(value);
+      }
+    } else {
+      for (const auto& [name, value] : source->stats()) {
+        auto [iter, inserted] = stats.try_emplace(name);
+        iter->second.addValue(value);
+      }
     }
   }
 

@@ -101,6 +101,10 @@ class UcxExchangeSource
       std::string_view url,
       const std::shared_ptr<UcxExchangeQueue>& queue);
 
+  bool supportsMetrics() const {
+    return true;
+  }
+
   /// @brief Advances the UCXX communication that was started by issuing
   /// "request"
   void process() override;
@@ -127,6 +131,11 @@ class UcxExchangeSource
   // Backpressure thresholds. Public so UcxExchangeClient can use them.
   static constexpr int32_t kBackpressureHighWaterMark = 32;
   static constexpr int32_t kBackpressureLowWaterMark = 16;
+
+  // Returns runtime statistics. ExchangeSource is expected to report
+  // background CPU time by including a runtime metric named
+  // ExchangeClient::kBackgroundCpuTimeMs.
+  folly::F14FastMap<std::string, int64_t> stats() const;
 
   /// Returns runtime statistics. ExchangeSource is expected to report
   /// Specify units of individual counters in ExchangeSource.
