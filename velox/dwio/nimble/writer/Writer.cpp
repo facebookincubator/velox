@@ -1489,6 +1489,36 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   return *descriptor.context<WriterStreamContext>();
 }
 
+void initializeEncodingLayouts(
+    const TypeBuilder& typeBuilder,
+    const EncodingLayoutTree& encodingLayoutTree);
+
+// Keeps per-key layout replay and shared-dictionary setup on the same path so
+// predefined and dynamically discovered FlatMap keys cannot diverge.
+void configureFlatMapValueStreams(
+    detail::WriterContext& context,
+    const FlatmapEncodingLayoutContext& flatMapContext,
+    std::string_view fieldKey,
+    const TypeBuilder& fieldType) {
+  if (context.options().encodingLayoutTree.has_value()) {
+    auto it = flatMapContext.keyEncodings.find(fieldKey);
+    if (it != flatMapContext.keyEncodings.end()) {
+      initializeEncodingLayouts(fieldType, *it->second);
+    }
+  }
+
+  auto it = flatMapContext.valueDictionaries.find(std::string{fieldKey});
+  if (it == flatMapContext.valueDictionaries.end()) {
+    return;
+  }
+  for (const auto& valueDictionary : it->second) {
+    configureDictionary(
+        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
+        valueDictionary.dictionary,
+        context.schemaBuilder());
+  }
+}
+
 // Applies writer context that depends on the TypeBuilder node just created.
 // FlatMap value configs live on the parent FlatMap node so the key-add handler
 // can apply them when each keyed value stream is materialized.
@@ -1514,10 +1544,37 @@ void configureAddedType(
     if (dictionaryIt != dictionaryConfigs.flatMaps.end()) {
       valueDictionaries = dictionaryIt->second;
     }
-    if (!keyEncodings.empty() || !valueDictionaries.empty()) {
+    const bool hasFlatMapValueEncoding =
+        !keyEncodings.empty() || !valueDictionaries.empty();
+    if (hasFlatMapValueEncoding) {
       type.setContext(
           std::make_unique<FlatmapEncodingLayoutContext>(
               std::move(keyEncodings), std::move(valueDictionaries)));
+    }
+    const auto* predefinedKeys = context.getFlatMapNodeKeys(nodeId);
+    if (predefinedKeys != nullptr && hasFlatMapValueEncoding) {
+      // Apply value encodings now because predefined keys are materialized
+      // before this parent context is installed. Dynamic keys use the key-add
+      // callback.
+      const auto* flatMapContext = type.context<FlatmapEncodingLayoutContext>();
+      NIMBLE_CHECK_NOT_NULL(flatMapContext);
+      const auto& flatMapBuilder = type.asFlatMap();
+      NIMBLE_CHECK_EQ(
+          flatMapBuilder.childrenCount(),
+          predefinedKeys->size(),
+          "Predefined FlatMap key count does not match materialized children.");
+      auto keyIt = predefinedKeys->begin();
+      for (size_t index = 0; index < flatMapBuilder.childrenCount(); ++index) {
+        const auto& fieldKey = flatMapBuilder.nameAt(index);
+        const auto& predefinedKey = *keyIt;
+        NIMBLE_CHECK_EQ(
+            fieldKey,
+            predefinedKey,
+            "Materialized FlatMap child does not match its predefined key.");
+        ++keyIt;
+        configureFlatMapValueStreams(
+            context, *flatMapContext, fieldKey, flatMapBuilder.childAt(index));
+      }
     }
   }
 
@@ -1774,24 +1831,7 @@ void configureAddedFlatMapField(
   if (flatMapContext == nullptr) {
     return;
   }
-
-  if (context.options().encodingLayoutTree.has_value()) {
-    auto it = flatMapContext->keyEncodings.find(fieldKey);
-    if (it != flatMapContext->keyEncodings.end()) {
-      initializeEncodingLayouts(fieldType, *it->second);
-    }
-  }
-
-  auto it = flatMapContext->valueDictionaries.find(std::string{fieldKey});
-  if (it == flatMapContext->valueDictionaries.end()) {
-    return;
-  }
-  for (const auto& valueDictionary : it->second) {
-    configureDictionary(
-        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
-        valueDictionary.dictionary,
-        context.schemaBuilder());
-  }
+  configureFlatMapValueStreams(context, *flatMapContext, fieldKey, fieldType);
 }
 
 // Returns nullptr when no vector index is configured. The implementation comes

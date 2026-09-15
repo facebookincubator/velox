@@ -38,11 +38,13 @@ add_library(
   SharedDictionaryCatalog.cpp
   SharedDictionaryCatalog.h
   SharedDictionaryEncoding.cpp
+  SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
+  common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
@@ -59,6 +61,7 @@ add_library(
   views/FixedBitWidthEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
+  views/EncodingViewUtils.h
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
@@ -72,6 +75,7 @@ add_library(
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
   common/EncodingUtils.h
+  common/SortedPositionSlots.h
   common/EncodingType.h
   common/EncodingPrimitives.h
   common/EncodingPrefix.h

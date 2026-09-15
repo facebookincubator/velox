@@ -19,6 +19,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/common/BufferedEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -113,7 +114,8 @@ class SparseBoolEncoding final : public TypedEncoding<bool, bool> {
       const Encoding::Options& options = {});
 
   /// Slices rows [offset, offset + length) and counts true values before and
-  /// inside the slice while walking sparse positions once.
+  /// inside the slice from the sparse-position bounds located during slicing,
+  /// avoiding a second pass over the position stream.
   static SliceResult sliceAndCount(
       std::string_view encoded,
       uint32_t offset,
@@ -169,15 +171,6 @@ class SparseBoolEncoding final : public TypedEncoding<bool, bool> {
   }
 
  private:
-  // Encodes a sliced SparseBool stream from sparse positions relative to the
-  // slice start and with the row-count sentinel appended.
-  static std::string_view encodeWithSlicedIndices(
-      std::string_view encoded,
-      uint32_t length,
-      std::span<const uint32_t> slicedIndicesWithSentinel,
-      Buffer& buffer,
-      const Encoding::Options& options = {});
-
   // SparseBool stores one byte after the common encoding prefix to indicate
   // whether the sparse indices refer to set bits or unset bits.
   static constexpr int kPrefixSize = sizeof(uint8_t);

@@ -23,17 +23,24 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/common/Zigzag.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
+#include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -98,6 +105,21 @@ class SliceEncodingTest : public ::testing::Test {
     nimble::Vector<T> output{pool_.get(), rowCount};
     encoding.materialize(rowCount, output.data());
     return std::vector<T>(output.begin(), output.end());
+  }
+
+  // Extracts the on-wire valueDelta of a SliceEncoding blob without
+  // constructing the encoding. Push-down success is signalled by a stored
+  // delta of zero even when the caller asked for a non-zero delta.
+  // `useVarintRowCount` MUST match the option under which `wrapped` was
+  // produced -- the prefix size depends on it and parsing with the wrong
+  // value slides the read past the intended byte.
+  int64_t readStoredValueDelta(
+      std::string_view wrapped,
+      bool useVarintRowCount = false) {
+    const uint32_t prefixSize =
+        nimble::EncodingPrefix::prefixSize(wrapped, useVarintRowCount);
+    const char* pos = wrapped.data() + prefixSize + sizeof(uint32_t);
+    return nimble::zigzag::zigzagDecode64(nimble::varint::readVarint64(&pos));
   }
 
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
@@ -650,7 +672,7 @@ TEST_F(SliceEncodingTest, zeroDeltaTrivialRoundTrip) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/1, /*length=*/4, *buffer_, {}, /*valueDelta=*/0);
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, /*valueDelta=*/0, {});
 
   auto encoding = createEncoding(wrapped);
   EXPECT_EQ(encoding->rowCount(), 4);
@@ -665,7 +687,7 @@ TEST_F(SliceEncodingTest, zeroDeltaFixedBitWidthRoundTrip) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/1, /*length=*/3, *buffer_, {}, /*valueDelta=*/0);
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/0, {});
 
   auto encoding = createEncoding(wrapped);
   EXPECT_EQ(encoding->rowCount(), 3);
@@ -680,7 +702,7 @@ TEST_F(SliceEncodingTest, zeroDeltaConstantRoundTrip) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/2, /*length=*/3, *buffer_, {}, /*valueDelta=*/0);
+      encoded, /*offset=*/2, /*length=*/3, *buffer_, /*valueDelta=*/0, {});
 
   auto encoding = createEncoding(wrapped);
   EXPECT_EQ(encoding->rowCount(), 3);
@@ -698,7 +720,7 @@ TEST_F(SliceEncodingTest, zeroDeltaCostsOneByte) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/0, /*length=*/5, *buffer_, {}, /*valueDelta=*/0);
+      encoded, /*offset=*/0, /*length=*/5, *buffer_, /*valueDelta=*/0, {});
 
   const auto prefixSize = nimble::EncodingPrefix::serializedSize(
       /*rowCount=*/5, /*useVarint=*/false);
@@ -714,7 +736,7 @@ TEST_F(SliceEncodingTest, positiveDeltaFixedBitWidth) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/1, /*length=*/3, *buffer_, {}, /*valueDelta=*/5);
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/5, {});
 
   auto encoding = createEncoding(wrapped);
   EXPECT_EQ(encoding->rowCount(), 3);
@@ -733,7 +755,7 @@ TEST_F(SliceEncodingTest, positiveDeltaLargeInt32) {
 
   constexpr int64_t kDelta = std::numeric_limits<int32_t>::max() / 2;
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/0, /*length=*/4, *buffer_, {}, kDelta);
+      encoded, /*offset=*/0, /*length=*/4, *buffer_, kDelta, {});
 
   auto encoding = createEncoding(wrapped);
   const std::vector<int32_t> expected{
@@ -751,7 +773,7 @@ TEST_F(SliceEncodingTest, positiveDeltaTrivialUint64) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<uint64_t>::wrap(
-      encoded, /*offset=*/1, /*length=*/3, *buffer_, {}, /*valueDelta=*/1000);
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/1000, {});
 
   auto encoding = createEncoding(wrapped);
   const std::vector<uint64_t> expected{1020, 1030, 1040};
@@ -765,7 +787,7 @@ TEST_F(SliceEncodingTest, negativeDeltaTrivialInt32) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/0, /*length=*/4, *buffer_, {}, /*valueDelta=*/-3);
+      encoded, /*offset=*/0, /*length=*/4, *buffer_, /*valueDelta=*/-3, {});
 
   auto encoding = createEncoding(wrapped);
   const std::vector<int32_t> expected{97, 98, 99, 100};
@@ -783,8 +805,8 @@ TEST_F(SliceEncodingTest, negativeDeltaLargeInt64) {
       /*offset=*/0,
       /*length=*/3,
       *buffer_,
-      {},
-      /*valueDelta=*/-1'000'000);
+      /*valueDelta=*/-1'000'000,
+      {});
 
   auto encoding = createEncoding(wrapped);
   const std::vector<int64_t> expected{1'000'000, 1'000'001, 1'000'002};
@@ -801,7 +823,7 @@ TEST_F(SliceEncodingTest, uint32DeltaWrapsAsPhysicalAdd) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
-      encoded, /*offset=*/0, /*length=*/3, *buffer_, {}, /*valueDelta=*/-6);
+      encoded, /*offset=*/0, /*length=*/3, *buffer_, /*valueDelta=*/-6, {});
 
   auto encoding = createEncoding(wrapped);
   const auto out = materialize<uint32_t>(*encoding, 3);
@@ -821,7 +843,7 @@ TEST_F(SliceEncodingTest, rejectDeltaOnFloat) {
 
   EXPECT_THROW(
       nimble::SliceEncoding<float>::wrap(
-          encoded, /*offset=*/0, /*length=*/3, *buffer_, {}, /*valueDelta=*/5),
+          encoded, /*offset=*/0, /*length=*/3, *buffer_, /*valueDelta=*/5, {}),
       nimble::NimbleInternalError);
 }
 
@@ -832,7 +854,7 @@ TEST_F(SliceEncodingTest, rejectDeltaOnBool) {
 
   EXPECT_THROW(
       nimble::SliceEncoding<bool>::wrap(
-          encoded, /*offset=*/0, /*length=*/6, *buffer_, {}, /*valueDelta=*/3),
+          encoded, /*offset=*/0, /*length=*/6, *buffer_, /*valueDelta=*/3, {}),
       nimble::NimbleInternalError);
 }
 
@@ -850,7 +872,7 @@ TEST_F(SliceEncodingTest, rejectDeltaOnString) {
 
   EXPECT_THROW(
       nimble::SliceEncoding<std::string_view>::wrap(
-          encoded, /*offset=*/0, /*length=*/3, *buffer_, {}, /*valueDelta=*/1),
+          encoded, /*offset=*/0, /*length=*/3, *buffer_, /*valueDelta=*/1, {}),
       nimble::NimbleInternalError);
 }
 
@@ -880,16 +902,16 @@ TEST_F(SliceEncodingTest, wrapAcceptsDeltaOnSharedDictionaryInner) {
           /*offset=*/0,
           /*length=*/0,
           *buffer_,
-          {},
-          /*valueDelta=*/1));
+          /*valueDelta=*/1,
+          {}));
   EXPECT_NO_THROW(
       nimble::SliceEncoding<int32_t>::wrap(
           syntheticInner,
           /*offset=*/0,
           /*length=*/0,
           *buffer_,
-          {},
-          /*valueDelta=*/0));
+          /*valueDelta=*/0,
+          {}));
 }
 
 TEST_F(SliceEncodingTest, deltaAppliesOverSharedDictionaryInner) {
@@ -923,8 +945,8 @@ TEST_F(SliceEncodingTest, deltaAppliesOverSharedDictionaryInner) {
       /*offset=*/0,
       /*length=*/static_cast<uint32_t>(indices.size()),
       *buffer_,
-      options,
-      delta);
+      delta,
+      options);
 
   auto encoding = createEncoding(wrapped, options);
   const std::vector<int32_t> expected{15, 25, 35, 45, 35, 25};
@@ -938,7 +960,7 @@ TEST_F(SliceEncodingTest, zeroDeltaOnFloatOK) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<float>::wrap(
-      encoded, /*offset=*/1, /*length=*/2, *buffer_, {}, /*valueDelta=*/0);
+      encoded, /*offset=*/1, /*length=*/2, *buffer_, /*valueDelta=*/0, {});
 
   auto encoding = createEncoding(wrapped);
   const std::vector<float> expected{2.5f, 3.5f};
@@ -952,7 +974,7 @@ TEST_F(SliceEncodingTest, zeroDeltaOnBoolStillWorks) {
       *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<bool>::wrap(
-      encoded, /*offset=*/1, /*length=*/4, *buffer_, {}, /*valueDelta=*/0);
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, /*valueDelta=*/0, {});
 
   auto encoding = createEncoding(wrapped);
   EXPECT_EQ(encoding->rowCount(), 4);
@@ -971,7 +993,7 @@ TEST_F(SliceEncodingTest, resetPreservesDelta) {
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
-      encoded, /*offset=*/1, /*length=*/3, *buffer_, {}, /*valueDelta=*/7);
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/7, {});
 
   auto encoding = createEncoding(wrapped);
 
@@ -988,16 +1010,545 @@ TEST_F(SliceEncodingTest, rejectDeltaOutOfPhysicalTypeRangeOnRead) {
   // wrap() has no range check on the delta today, so a caller can hand it a
   // value that does not fit in the physical type. The constructor's guard
   // catches it -- otherwise materialize() would silently alias the shift.
-  // Use RLE as the inner: it is stable across follow-up push-down work as an
-  // encoding that never absorbs a delta, so the out-of-range delta stays on
-  // the wire where the reader-side guard can see it.
+  // Use RLE as the inner: it declines push-down so the out-of-range delta
+  // stays on the wire where the reader-side guard can see it.
   const auto values = makeVector<int8_t>({10, 10, 10, 20});
   const auto encoded =
       nimble::test::Encoder<nimble::RLEEncoding<int8_t>>::encode(
           *buffer_, values);
 
   const auto wrapped = nimble::SliceEncoding<int8_t>::wrap(
-      encoded, /*offset=*/0, /*length=*/4, *buffer_, {}, /*valueDelta=*/500);
+      encoded, /*offset=*/0, /*length=*/4, *buffer_, /*valueDelta=*/500, {});
 
   EXPECT_THROW(createEncoding(wrapped), nimble::NimbleInternalError);
+}
+
+// --- Value delta push-down ------------------------------------------------
+//
+// When the inner encoding structurally supports it, wrap() folds the delta
+// into the copied inner bytes at write time and stores zero on the wire, so
+// the read-time shift loop is skipped. When it does not, the delta rides on
+// the wire and the read-time loop applies it as the fallback.
+
+TEST_F(SliceEncodingTest, pushDownFixedBitWidth) {
+  const auto values = makeVector<int32_t>({100, 101, 102, 103, 104});
+  const auto encoded =
+      nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/1000, {});
+
+  // Push-down absorbs the delta into the inner FBW's baseline field, so the
+  // on-wire delta is zero.
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{1101, 1102, 1103};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownPfor) {
+  // PFOR needs at least one outlier to select a base bit width worth checking,
+  // but even a run of near-min values exercises the baseline-shift path.
+  const auto values =
+      makeVector<int32_t>({500, 501, 502, 503, 504, 505, 506, 507});
+  const auto encoded =
+      nimble::test::Encoder<nimble::PFOREncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/2, /*length=*/4, *buffer_, /*valueDelta=*/10, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{512, 513, 514, 515};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 4), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownConstant) {
+  const auto values = makeVector<int32_t>({42, 42, 42, 42, 42, 42});
+  const auto encoded =
+      nimble::test::Encoder<nimble::ConstantEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/2, /*length=*/3, *buffer_, /*valueDelta=*/-8, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{34, 34, 34};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownTrivialUint32) {
+  const auto values = makeVector<uint32_t>({10, 20, 30, 40, 50});
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/1000, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<uint32_t> expected{1020, 1030, 1040};
+  EXPECT_EQ(materialize<uint32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownNullableTrivialChild) {
+  // Nullable+Trivial values child: push-down recurses into the values child
+  // and shifts each stored non-null value in place; the nulls sub-stream is
+  // copied verbatim. `values` is the non-null-values array; `nulls` marks
+  // which of the row_count rows are non-null (true = non-null).
+  const auto values = makeVector<uint32_t>({10, 30, 50});
+  const auto nulls = makeVector<bool>({true, false, true, false, true});
+  const auto encoded =
+      nimble::test::Encoder<nimble::NullableEncoding<uint32_t>>::encodeNullable(
+          *buffer_, values, nulls);
+
+  const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
+      encoded,
+      /*offset=*/0,
+      /*length=*/5,
+      *buffer_,
+      /*valueDelta=*/500,
+      {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  nimble::Vector<uint32_t> output{pool_.get(), 5};
+  encoding->materialize(5, output.data());
+  // Non-null positions (0, 2, 4) carry shifted values; null positions (1, 3)
+  // are left at Nullable's default fill (0) because the push-down leaves the
+  // null slots untouched and the read-time shift loop is skipped.
+  EXPECT_EQ(output[0], 510u);
+  EXPECT_EQ(output[2], 530u);
+  EXPECT_EQ(output[4], 550u);
+  // Pin the default null-slot fill: skipping the read-time shift loop
+  // must not alias the previous buffer contents into the null slots.
+  EXPECT_EQ(output[1], 0u);
+  EXPECT_EQ(output[3], 0u);
+}
+
+TEST_F(SliceEncodingTest, pushDownFallbackRle) {
+  // RLE cannot absorb a constant shift structurally, so the delta stays on
+  // the wire and the read-time loop applies it.
+  const auto values = makeVector<int32_t>({10, 10, 11, 11, 11, 12, 12});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  constexpr int64_t kDelta = 1000;
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/5, *buffer_, kDelta, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{1010, 1011, 1011, 1011, 1012};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 5), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownFallbackDictionary) {
+  const auto values = makeVector<int32_t>({10, 20, 10, 30, 20, 10});
+  const auto encoded =
+      nimble::test::Encoder<nimble::DictionaryEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  constexpr int64_t kDelta = 1000;
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/4, *buffer_, kDelta, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{1020, 1010, 1030, 1020};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 4), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownFallbackHuffman) {
+  const auto values = makeVector<int32_t>({10, 20, 10, 30, 20, 10, 40, 10});
+  const auto encoded =
+      nimble::test::Encoder<nimble::HuffmanEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  constexpr int64_t kDelta = 1000;
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/5, *buffer_, kDelta, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{1020, 1010, 1030, 1020, 1010};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 5), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownRejectsCompressedTrivial) {
+  // Compressed Trivial hides its values behind the compressor, so we cannot
+  // shift them in place -- the read-time loop takes over instead. Use a
+  // pattern the compressor won't reject as "not worth it" (Zstd falls back
+  // to Uncompressed when compressed bytes exceed input bytes, so we need
+  // enough repetition to make a compressed representation smaller).
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (int i = 0; i < 200; ++i) {
+    values.push_back(10 + (i % 4));
+  }
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Zstd);
+
+  // Confirm the encoder actually landed on a compressed representation, so
+  // the "rejects compressed Trivial" property is really being exercised.
+  const uint32_t prefixSize = nimble::EncodingPrefix::serializedSize(
+      /*rowCount=*/static_cast<uint32_t>(values.size()),
+      /*useVarint=*/false);
+  ASSERT_NE(
+      static_cast<nimble::CompressionType>(encoded[prefixSize]),
+      nimble::CompressionType::Uncompressed);
+
+  constexpr int64_t kDelta = 1000;
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, kDelta, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{
+      static_cast<int32_t>(values[1]) + 1000,
+      static_cast<int32_t>(values[2]) + 1000,
+      static_cast<int32_t>(values[3]) + 1000};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownRejectsNullableWithRleChild) {
+  // Manually build a Nullable whose values child is an RLE. The Trivial-based
+  // Encoder helper always picks Trivial for both children, so use the two-
+  // stream encodeNullable() overload to bolt an RLE values child in place.
+  const auto values = makeVector<int32_t>({10, 10, 20, 20, 30});
+  const auto nulls = makeVector<bool>({true, true, true, true, true});
+  const auto rleValues =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values);
+  const auto trivialNulls =
+      nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
+          *buffer_, nulls);
+  const auto encoded = nimble::NullableEncoding<int32_t>::encodeNullable(
+      /*rowCount=*/5, rleValues, trivialNulls, *buffer_, {});
+
+  constexpr int64_t kDelta = 1000;
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/0, /*length=*/5, *buffer_, kDelta, {});
+
+  // Nullable's values child is RLE (not push-downable), so the delta rides
+  // on the wire and the read-time loop applies it.
+  EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{1010, 1010, 1020, 1020, 1030};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 5), expected);
+}
+
+TEST_F(SliceEncodingTest, zeroDeltaSkipsPushDownMachinery) {
+  // With delta=0 the wrap() decision short-circuits before ever asking the
+  // push-down helpers, so a push-downable inner produces the same wire bytes
+  // as any other zero-delta wrap -- i.e. inner-bytes copied verbatim.
+  const auto values = makeVector<int32_t>({100, 101, 102, 103, 104});
+  const auto encoded =
+      nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/0, /*length=*/5, *buffer_, /*valueDelta=*/0, {});
+
+  const uint32_t prefixSize = nimble::EncodingPrefix::serializedSize(
+      /*rowCount=*/5, /*useVarint=*/false);
+  const auto innerOnWire = std::string_view{
+      wrapped.data() + prefixSize + sizeof(uint32_t) + /*deltaVarint=*/1,
+      encoded.size()};
+  EXPECT_EQ(innerOnWire, encoded);
+
+  auto encoding = createEncoding(wrapped);
+  const std::vector<int32_t> expected{100, 101, 102, 103, 104};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 5), expected);
+}
+
+TEST_F(SliceEncodingTest, pushDownDeclinesForNullableSharedDictionary) {
+  // Hand-craft a Nullable whose values child is a synthetic SharedDictionary
+  // prefix. wrap() recurses through Nullable, hits the SharedDictionary child,
+  // and gets false back from SliceEncodingPushDown::canApply -- so the delta
+  // rides on the wire instead of being folded into a nonsensical shift of the
+  // shared- dictionary indices.
+  const uint32_t sharedDictPrefixSize = nimble::EncodingPrefix::serializedSize(
+      /*rowCount=*/0, /*useVarint=*/false);
+  char* sharedDictReserved = buffer_->reserve(sharedDictPrefixSize);
+  char* sharedDictPos = sharedDictReserved;
+  nimble::EncodingPrefix::serialize(
+      nimble::EncodingType::SharedDictionary,
+      nimble::DataType::Uint32,
+      /*rowCount=*/0,
+      /*useVarint=*/false,
+      sharedDictPos);
+  const std::string_view sharedDictInner{
+      sharedDictReserved, sharedDictPrefixSize};
+
+  const auto nulls = makeVector<bool>({true, true, true});
+  const auto trivialNulls =
+      nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
+          *buffer_, nulls);
+
+  const auto nullableWrapped =
+      nimble::NullableEncoding<uint32_t>::encodeNullable(
+          /*rowCount=*/3, sharedDictInner, trivialNulls, *buffer_, {});
+
+  constexpr int64_t kDelta = 5;
+  const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
+      nullableWrapped, /*offset=*/0, /*length=*/3, *buffer_, kDelta, {});
+
+  EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+}
+
+TEST_F(SliceEncodingTest, pushDownNullableFixedBitWidthChild) {
+  // Nullable+FixedBitWidth values child: push-down recurses into the values
+  // child and rewrites its baseline in place; nulls sub-stream copied verbatim.
+  const auto values = makeVector<uint32_t>({100, 200, 300});
+  const auto nulls = makeVector<bool>({true, false, true, false, true});
+  const auto encoded =
+      nimble::test::Encoder<nimble::NullableEncoding<uint32_t>>::encodeNullable(
+          *buffer_, values, nulls);
+
+  constexpr int64_t kDelta = 42;
+  const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
+      encoded, /*offset=*/0, /*length=*/5, *buffer_, kDelta, {});
+
+  // Push-down folded the delta into the FBW child's baseline, so the on-wire
+  // delta is zero.
+  EXPECT_EQ(readStoredValueDelta(wrapped), 0);
+
+  auto encoding = createEncoding(wrapped);
+  nimble::Vector<uint32_t> output{pool_.get(), 5};
+  encoding->materialize(5, output.data());
+  EXPECT_EQ(output[0], 142u);
+  EXPECT_EQ(output[2], 242u);
+  EXPECT_EQ(output[4], 342u);
+  EXPECT_EQ(output[1], 0u);
+  EXPECT_EQ(output[3], 0u);
+}
+
+TEST_F(SliceEncodingTest, pushDownSliceOfSlice) {
+  // Slice inside Slice: SliceEncodingPushDown::canApply does not natively fold
+  // across SliceEncoding, so the outer delta rides on the wire. At read time
+  // each layer applies its own delta after its inner materialize() completes,
+  // so the deltas accumulate additively.
+  const auto values = makeVector<int32_t>({100, 101, 102, 103, 104, 105});
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values);
+
+  constexpr int64_t kInnerDelta = 3;
+  const auto innerWrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded,
+      /*offset=*/1,
+      /*length=*/4,
+      *buffer_,
+      /*valueDelta=*/kInnerDelta,
+      {});
+
+  constexpr int64_t kOuterDelta = 20;
+  const auto outerWrapped = nimble::SliceEncoding<int32_t>::wrap(
+      innerWrapped,
+      /*offset=*/0,
+      /*length=*/4,
+      *buffer_,
+      /*valueDelta=*/kOuterDelta,
+      {});
+
+  // The outer delta rides on the wire because the inner Slice is not a
+  // push-down target.
+  EXPECT_EQ(readStoredValueDelta(outerWrapped), kOuterDelta);
+
+  auto encoding = createEncoding(outerWrapped);
+  // Source[1..4) = {101, 102, 103, 104}; +inner(3) +outer(20) = {124..127}.
+  const std::vector<int32_t> expected{124, 125, 126, 127};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 4), expected);
+}
+
+TEST_F(SliceEncodingTest, extremeDeltaInt64Roundtrip) {
+  // Push-down for compressed Trivial is rejected, so INT64_MAX / INT64_MIN
+  // deltas ride on the wire and take a full 10-byte zigzag varint.
+  nimble::Vector<int64_t> values{pool_.get()};
+  for (int64_t i = 0; i < 200; ++i) {
+    values.push_back(int64_t{100} + (i % 4));
+  }
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<int64_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Zstd);
+  const uint32_t innerPrefixSize = nimble::EncodingPrefix::serializedSize(
+      /*rowCount=*/static_cast<uint32_t>(values.size()),
+      /*useVarint=*/false);
+  ASSERT_NE(
+      static_cast<nimble::CompressionType>(encoded[innerPrefixSize]),
+      nimble::CompressionType::Uncompressed);
+
+  for (const int64_t kDelta :
+       {std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::min()}) {
+    SCOPED_TRACE(kDelta);
+    const auto wrapped = nimble::SliceEncoding<int64_t>::wrap(
+        encoded, /*offset=*/0, /*length=*/3, *buffer_, kDelta, {});
+    EXPECT_EQ(readStoredValueDelta(wrapped), kDelta);
+
+    const uint32_t outerPrefixSize = nimble::EncodingPrefix::serializedSize(
+        /*rowCount=*/3, /*useVarint=*/false);
+    const size_t expectedSize = outerPrefixSize + sizeof(uint32_t) +
+        /*deltaVarint=*/10 + encoded.size();
+    EXPECT_EQ(wrapped.size(), expectedSize);
+
+    auto encoding = createEncoding(wrapped);
+    const std::vector<int64_t> expected{
+        static_cast<int64_t>(
+            static_cast<uint64_t>(values[0]) + static_cast<uint64_t>(kDelta)),
+        static_cast<int64_t>(
+            static_cast<uint64_t>(values[1]) + static_cast<uint64_t>(kDelta)),
+        static_cast<int64_t>(
+            static_cast<uint64_t>(values[2]) + static_cast<uint64_t>(kDelta))};
+    EXPECT_EQ(materialize<int64_t>(*encoding, 3), expected);
+  }
+}
+
+// --- Push-down under useVarintRowCount --------------------------------------
+//
+// Production callers set Options::useVarintRowCount, so exercise the write /
+// read path (prefix layout differs, and push-down folders derive their offsets
+// from prefixSize) with the flag toggled.
+
+class SliceEncodingPushDownVarintTest
+    : public SliceEncodingTest,
+      public ::testing::WithParamInterface<bool> {};
+
+INSTANTIATE_TEST_SUITE_P(_, SliceEncodingPushDownVarintTest, ::testing::Bool());
+
+TEST_P(SliceEncodingPushDownVarintTest, pushDownFixedBitWidth) {
+  const bool useVarint = GetParam();
+  const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+  const auto values = makeVector<int32_t>({100, 101, 102, 103, 104});
+  const auto encoded =
+      nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/3, *buffer_, /*valueDelta=*/7, options);
+
+  EXPECT_EQ(readStoredValueDelta(wrapped, useVarint), 0);
+
+  auto encoding = createEncoding(wrapped, options);
+  const std::vector<int32_t> expected{108, 109, 110};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_P(SliceEncodingPushDownVarintTest, pushDownConstant) {
+  const bool useVarint = GetParam();
+  const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+  const auto values = makeVector<int32_t>({42, 42, 42, 42, 42, 42});
+  const auto encoded =
+      nimble::test::Encoder<nimble::ConstantEncoding<int32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded,
+      /*offset=*/2,
+      /*length=*/3,
+      *buffer_,
+      /*valueDelta=*/-8,
+      options);
+
+  EXPECT_EQ(readStoredValueDelta(wrapped, useVarint), 0);
+
+  auto encoding = createEncoding(wrapped, options);
+  const std::vector<int32_t> expected{34, 34, 34};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 3), expected);
+}
+
+TEST_P(SliceEncodingPushDownVarintTest, pushDownTrivialUint32) {
+  const bool useVarint = GetParam();
+  const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+  const auto values = makeVector<uint32_t>({10, 20, 30, 40, 50});
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+
+  const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
+      encoded,
+      /*offset=*/1,
+      /*length=*/3,
+      *buffer_,
+      /*valueDelta=*/1000,
+      options);
+
+  EXPECT_EQ(readStoredValueDelta(wrapped, useVarint), 0);
+
+  auto encoding = createEncoding(wrapped, options);
+  const std::vector<uint32_t> expected{1020, 1030, 1040};
+  EXPECT_EQ(materialize<uint32_t>(*encoding, 3), expected);
+}
+
+TEST_P(SliceEncodingPushDownVarintTest, pushDownNullableTrivialChild) {
+  const bool useVarint = GetParam();
+  const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+  const auto values = makeVector<uint32_t>({10, 30, 50});
+  const auto nulls = makeVector<bool>({true, false, true, false, true});
+  const auto encoded =
+      nimble::test::Encoder<nimble::NullableEncoding<uint32_t>>::encodeNullable(
+          *buffer_,
+          values,
+          nulls,
+          nimble::CompressionType::Uncompressed,
+          options);
+
+  const auto wrapped = nimble::SliceEncoding<uint32_t>::wrap(
+      encoded,
+      /*offset=*/0,
+      /*length=*/5,
+      *buffer_,
+      /*valueDelta=*/500,
+      options);
+
+  EXPECT_EQ(readStoredValueDelta(wrapped, useVarint), 0);
+
+  auto encoding = createEncoding(wrapped, options);
+  nimble::Vector<uint32_t> output{pool_.get(), 5};
+  encoding->materialize(5, output.data());
+  EXPECT_EQ(output[0], 510u);
+  EXPECT_EQ(output[2], 530u);
+  EXPECT_EQ(output[4], 550u);
+  EXPECT_EQ(output[1], 0u);
+  EXPECT_EQ(output[3], 0u);
+}
+
+TEST_P(SliceEncodingPushDownVarintTest, pushDownFallbackRle) {
+  const bool useVarint = GetParam();
+  const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+
+  const auto values = makeVector<int32_t>({10, 10, 11, 11, 11, 12, 12});
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+
+  constexpr int64_t kDelta = 1000;
+  const auto wrapped = nimble::SliceEncoding<int32_t>::wrap(
+      encoded, /*offset=*/1, /*length=*/5, *buffer_, kDelta, options);
+
+  EXPECT_EQ(readStoredValueDelta(wrapped, useVarint), kDelta);
+
+  auto encoding = createEncoding(wrapped, options);
+  const std::vector<int32_t> expected{1010, 1011, 1011, 1011, 1012};
+  EXPECT_EQ(materialize<int32_t>(*encoding, 5), expected);
 }
