@@ -15,11 +15,20 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <cinttypes>
+#include <deque>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include <cudf/contiguous_split.hpp>
 #include <atomic>
-#include <cinttypes>
 #include <cuda/stream>
-#include <memory>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/future/VeloxPromise.h"
 #include "velox/vector/TypeAliases.h"
@@ -45,7 +54,14 @@ struct PackedTableWithStream {
       std::unique_ptr<cudf::packed_table>&& table,
       cuda::stream_ref s,
       vector_size_t numRows)
-      : packedTable(std::move(table)), stream(s), numRows(numRows) {}
+      : packedTable(std::move(table)), stream(s), numRows(numRows) {
+    // Intra-node payloads were allocated on the producer's stream. Release
+    // them on the receive stream so synchronizing it also completes the free
+    // before returning receive credit, including when a page is dropped.
+    if (packedTable && packedTable->data.gpu_data) {
+      packedTable->data.gpu_data->set_stream(stream);
+    }
+  }
 
   /// Returns the size of the GPU data buffer, or 0 if packedTable is null.
   size_t gpuDataSize() const {
@@ -57,8 +73,11 @@ using PackedTableWithStreamPtr = std::unique_ptr<PackedTableWithStream>;
 
 class UcxExchangeQueue {
  public:
-  explicit UcxExchangeQueue(int32_t numberOfConsumers)
-      : numberOfConsumers_{numberOfConsumers} {
+  explicit UcxExchangeQueue(
+      int32_t numberOfConsumers,
+      uint64_t receiveHighWaterBytes = 0)
+      : numberOfConsumers_{numberOfConsumers},
+        receiveHighWaterBytes_{receiveHighWaterBytes} {
     VELOX_CHECK_GE(numberOfConsumers, 1);
   }
 
@@ -84,7 +103,9 @@ class UcxExchangeQueue {
   /// not completed serving data, no 'promises' will be added and returned.
   void enqueueLocked(
       PackedTableWithStreamPtr&& data,
-      std::vector<ContinuePromise>& promises);
+      std::vector<ContinuePromise>& promises,
+      uint64_t reservedReceiveBytes = 0,
+      bool* receiveReservationActive = nullptr);
 
   /// If data is permanently not available, e.g. the source cannot be
   /// contacted, this registers an error message and causes the reading
@@ -115,9 +136,128 @@ class UcxExchangeQueue {
   }
 
   /// Returns the total bytes held by packed tables in 'this'.
-  int64_t totalBytes() const {
+  uint64_t totalBytes() const {
     return totalBytes_;
   }
+
+  /// Bytes still owned by the receive path: queued tables, allocations for
+  /// posted receives, and dequeued tables retained by downstream CudfVectors.
+  /// Caller must hold mutex().
+  uint64_t retainedReceiveBytesLocked() const {
+    const auto max = std::numeric_limits<uint64_t>::max();
+    VELOX_CHECK_LE(
+        reservedBytes_, max - totalBytes_, "UCX retained byte overflow");
+    const auto queuedBytes = totalBytes_ + reservedBytes_;
+    VELOX_CHECK_LE(
+        inFlightBytes_, max - queuedBytes, "UCX retained byte overflow");
+    return queuedBytes + inFlightBytes_;
+  }
+
+  /// Bytes that can block another receive. Dequeued tables are deliberately
+  /// excluded so stateful downstream operators cannot prevent metadata/EOS
+  /// progress by retaining input until end-of-stream.
+  uint64_t queuedReceiveBytesLocked() const {
+    VELOX_CHECK_LE(
+        reservedBytes_,
+        std::numeric_limits<uint64_t>::max() - totalBytes_,
+        "UCX queued receive byte overflow");
+    return totalBytes_ + reservedBytes_;
+  }
+
+  uint64_t reservedReceiveBytesLocked() const {
+    return reservedBytes_;
+  }
+
+  uint64_t inFlightReceiveBytesLocked() const {
+    return inFlightBytes_;
+  }
+
+  bool tracksInFlightReceiveBytes() const {
+    return receiveHighWaterBytes_ > 0;
+  }
+
+  uint64_t receiveHighWaterBytes() const {
+    return receiveHighWaterBytes_;
+  }
+
+  uint64_t receivePipelineTableLimitLocked() const {
+    // Keep one large payload available to each consumer without allowing the
+    // receive queue to scale with the number of sources.
+    return std::max<uint64_t>(2, static_cast<uint64_t>(numberOfConsumers_));
+  }
+
+  uint64_t estimatedReceivePayloadBytesLocked() const {
+    return std::max<uint64_t>(
+        averageReceivedTablesBytes(), receiveHighWaterBytes_);
+  }
+
+  uint64_t defaultReceivePrefetchByteLimitLocked() const {
+    VELOX_CHECK_GT(receiveHighWaterBytes_, 0);
+
+    const auto payloadBytes = estimatedReceivePayloadBytesLocked();
+    const auto tableLimit = receivePipelineTableLimitLocked();
+    const auto payloadWithSlack =
+        saturatingAdd(payloadBytes, receiveHighWaterBytes_);
+    if (payloadWithSlack > std::numeric_limits<uint64_t>::max() / tableLimit) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+    return payloadWithSlack * tableLimit;
+  }
+
+  uint64_t receivePrefetchByteLimitLocked() const {
+    if (receiveHighWaterBytes_ == 0) {
+      return std::numeric_limits<uint64_t>::max();
+    }
+
+    const auto defaultLimit = defaultReceivePrefetchByteLimitLocked();
+    return receivePrefetchLimitActive_
+        ? std::min(receivePrefetchByteLimit_, defaultLimit)
+        : defaultLimit;
+  }
+
+  bool receiveBytesBelowPrefetchLimitLocked() const {
+    const auto limit = receivePrefetchByteLimitLocked();
+    if (limit == std::numeric_limits<uint64_t>::max()) {
+      return true;
+    }
+
+    const auto queuedBytes = queuedReceiveBytesLocked();
+    if (queuedBytes == 0) {
+      // Always admit one oversized payload so a source cannot deadlock solely
+      // because its next table is larger than the configured target.
+      return true;
+    }
+    const auto payloadBytes = estimatedReceivePayloadBytesLocked();
+    return queuedBytes <= limit && payloadBytes <= limit - queuedBytes;
+  }
+
+  bool receiveCanPrefetchLocked() const {
+    return receiveBytesBelowPrefetchLimitLocked();
+  }
+
+  /// Attempts to reserve bytes before allocating or posting a UCX receive.
+  /// Caller must hold mutex().
+  bool tryReserveReceiveBytesLocked(uint64_t bytes);
+
+  /// Releases a posted/pending receive reservation. Caller must hold mutex().
+  void releaseReceiveBytesLocked(uint64_t bytes);
+
+  /// Consumes a reservation without growing the adaptive window. Use this when
+  /// the reservation is transferred to queued ownership, or immediately before
+  /// recording allocation pressure: neither case represents memory becoming
+  /// available to the process. Caller must hold mutex().
+  void consumeReceiveReservationLocked(uint64_t bytes);
+
+  /// Releases bytes retained by a downstream CudfVector. Caller must hold
+  /// mutex().
+  void releaseInFlightReceiveBytesLocked(uint64_t bytes);
+
+  /// Records allocation pressure and shrinks the adaptive receive window.
+  /// Returns true only when queued or reserved exchange memory can be drained
+  /// before retry. Downstream in-flight memory is not independently drainable
+  /// because a stateful operator may retain it until end-of-stream.
+  /// Caller must hold mutex().
+  bool recordReceiveAllocationPressureLocked(uint64_t attemptedBytes);
 
   /// Returns the maximum value of total bytes.
   uint64_t peakBytes() const {
@@ -151,9 +291,45 @@ class UcxExchangeQueue {
     size_.store(static_cast<int32_t>(queue_.size()), std::memory_order_relaxed);
   }
 
+  static constexpr uint64_t saturatingAdd(uint64_t left, uint64_t right) {
+    const auto max = std::numeric_limits<uint64_t>::max();
+    return left > max - right ? max : left + right;
+  }
+
+  void maybeGrowReceivePrefetchLimitLocked() {
+    if (!receivePrefetchLimitActive_ || receiveHighWaterBytes_ == 0) {
+      return;
+    }
+
+    const auto defaultLimit = defaultReceivePrefetchByteLimitLocked();
+    if (receivePrefetchByteLimit_ >= defaultLimit) {
+      receivePrefetchByteLimit_ = 0;
+      receivePrefetchLimitActive_ = false;
+      return;
+    }
+
+    if (retainedReceiveBytesLocked() > receivePrefetchByteLimit_ / 2) {
+      return;
+    }
+
+    const auto increment = std::max<uint64_t>(
+        receiveHighWaterBytes_, estimatedReceivePayloadBytesLocked() / 2);
+    receivePrefetchByteLimit_ =
+        saturatingAdd(receivePrefetchByteLimit_, increment);
+    if (receivePrefetchByteLimit_ >= defaultLimit) {
+      receivePrefetchByteLimit_ = 0;
+      receivePrefetchLimitActive_ = false;
+    }
+  }
+
   std::vector<ContinuePromise> closeLocked() {
     queue_.clear();
     publishSizeLocked();
+    totalBytes_ = 0;
+    reservedBytes_ = 0;
+    inFlightBytes_ = 0;
+    receiveAccountingClosed_ = true;
+    atEnd_ = true;
     return clearAllPromisesLocked();
   }
 
@@ -221,14 +397,24 @@ class UcxExchangeQueue {
   // throw an exception with this message.
   std::string error_;
   // Total size of packed tables in queue.
-  int64_t totalBytes_{0};
+  uint64_t totalBytes_{0};
+  // Bytes reserved for pending or posted receives not yet enqueued.
+  uint64_t reservedBytes_{0};
+  // Bytes dequeued from this queue but retained by downstream CudfVectors.
+  uint64_t inFlightBytes_{0};
+  const uint64_t receiveHighWaterBytes_{0};
+  bool receivePrefetchLimitActive_{false};
+  uint64_t receivePrefetchByteLimit_{0};
+  // close() and setError() invalidate all outstanding receive accounting at
+  // once. Late UCX callbacks are expected and release as explicit no-ops.
+  bool receiveAccountingClosed_{false};
   // Number of packed tables received.
-  int64_t receivedTables_{0};
+  uint64_t receivedTables_{0};
   // Total size of packed tables received. Used to calculate an average
   // expected size.
-  int64_t receivedBytes_{0};
+  uint64_t receivedBytes_{0};
   // Maximum value of totalBytes_.
-  int64_t peakBytes_{0};
+  uint64_t peakBytes_{0};
   // Peak queue size (number of items). Used for high-water-mark alerts.
   int64_t peakSize_{0};
 };

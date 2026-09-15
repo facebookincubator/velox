@@ -24,6 +24,8 @@
 
 #include <cuda/stream>
 
+#include <exception>
+#include <functional>
 #include <memory>
 #include <utility>
 #include <variant>
@@ -42,6 +44,11 @@ namespace facebook::velox::cudf_velox {
 // constructing or rebinding a CudfVector.
 class CudfVector : public RowVector {
  public:
+  /// Invoked after the vector releases its packed GPU storage. A non-null
+  /// exception indicates that synchronizing the storage's final stream failed,
+  /// so callers must not treat the allocation as safely reusable.
+  using ReleaseCallback = std::function<void(std::exception_ptr)>;
+
   /// Constructs a CudfVector from an owned cudf::table.
   CudfVector(
       velox::memory::MemoryPool* pool,
@@ -58,7 +65,10 @@ class CudfVector : public RowVector {
       TypePtr type,
       vector_size_t size,
       std::unique_ptr<cudf::packed_table>&& packedTable,
-      cuda::stream_ref stream);
+      cuda::stream_ref stream,
+      ReleaseCallback releaseCallback = nullptr);
+
+  ~CudfVector() override;
 
   cuda::stream_ref stream() const {
     return stream_;
@@ -82,6 +92,12 @@ class CudfVector : public RowVector {
   uint64_t estimateFlatSize() const override;
 
  private:
+  /// Synchronizes the vector's current stream, then invokes and clears the
+  /// callback. noexcept because this is also called from the destructor.
+  void runReleaseCallback(
+      bool synchronizeStream = true,
+      std::exception_ptr synchronizationError = nullptr) noexcept;
+
   uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override;
 
   // Storage for either an owned table or packed table.
@@ -97,6 +113,7 @@ class CudfVector : public RowVector {
 
   cuda::stream_ref stream_;
   uint64_t flatSize_;
+  ReleaseCallback releaseCallback_;
 };
 
 using CudfVectorPtr = std::shared_ptr<CudfVector>;

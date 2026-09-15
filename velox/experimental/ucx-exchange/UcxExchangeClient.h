@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include "velox/exec/ExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
@@ -41,10 +43,15 @@ class UcxExchangeClient : public exec::ExchangeClient {
   /// each split URL names the partition its source fetches.
   /// @param numberOfConsumers Number of UcxExchange operators sharing this
   /// client.
+  /// @param receiveHighWaterBytes Query-level target for receive buffering.
+  /// Zero disables byte accounting and retains the legacy table-count limit.
+  /// @param requestDataSizesMaxWaitSec Max wait for a data-size request.
   UcxExchangeClient(
       std::string taskId,
       int destination,
-      int32_t numberOfConsumers);
+      int32_t numberOfConsumers,
+      uint64_t receiveHighWaterBytes = 0,
+      int32_t requestDataSizesMaxWaitSec = 10);
 
   ~UcxExchangeClient() override;
 
@@ -79,10 +86,34 @@ class UcxExchangeClient : public exec::ExchangeClient {
   PackedTableWithStreamPtr
   next(int consumerId, bool* atEnd, ContinueFuture* future);
 
+  /// Called exactly once when a dequeued packed table's CudfVector releases
+  /// its GPU storage.
+  void releaseInFlightReceiveBytes(uint64_t bytes);
+
+  /// Terminates receive processing after downstream discovers that retained
+  /// GPU data is not safe to release (for example, stream synchronization
+  /// failed). Safe to call from a CudfVector release callback.
+  void failReceive(std::string_view error) noexcept;
+
+  bool tracksInFlightReceiveBytes() const {
+    return queue_->tracksInFlightReceiveBytes();
+  }
+
+  /// Max wait for a data-size request to a producer.
+  std::chrono::seconds requestDataSizesMaxWaitSec() const {
+    return requestDataSizesMaxWaitSec_;
+  }
+
+  /// Ids of the upstream tasks added so far.
+  const std::unordered_set<std::string>& getRemoteTaskIdList() const {
+    return remoteTaskIds_;
+  }
+
  private:
   // Handy for ad-hoc logging.
   const std::string taskId_;
   const int32_t maxQueuedColumns_;
+  const std::chrono::seconds requestDataSizesMaxWaitSec_;
 
   const std::shared_ptr<UcxExchangeQueue> queue_;
 

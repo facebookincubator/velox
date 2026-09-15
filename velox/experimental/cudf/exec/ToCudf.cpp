@@ -33,6 +33,7 @@
 #endif
 
 #include "folly/Conv.h"
+#include "folly/ScopeGuard.h"
 #include "velox/common/base/Exceptions.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
@@ -368,13 +369,21 @@ void registerCudf() {
   initializeGpuCapabilities(contextDevice);
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto base = cudf_velox::createMemoryResource(
-      mrMode, CudfConfig::getInstance().memoryPercent);
+  std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> base;
+  // createMemoryResource() publishes an async pool handle so memory snapshots
+  // can include reusable pool capacity. Declare the guard after its local
+  // owner so failure clears the non-owning handle before destroying the pool.
+  auto clearTrackedMemoryResourceOnFailure =
+      folly::makeGuard([] { clearCurrentDeviceMemoryInfo(); });
+  base.emplace(
+      cudf_velox::createMemoryResource(
+          mrMode, CudfConfig::getInstance().memoryPercent, true));
   // Wrap the device resource in a statistics adaptor so that
   // cudfAllocatedBytes() can report live device memory.
-  statsMr_.emplace(std::move(base));
+  statsMr_.emplace(std::move(*base));
   mr_ = statsMr_.value();
   cudf::set_current_device_resource(mr_.value());
+  clearTrackedMemoryResourceOnFailure.dismiss();
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
@@ -419,6 +428,8 @@ void unregisterCudf() {
   // CudfConfig::exchange was set when registerCudf() ran.
   ucx_exchange::unregisterUcxTransports();
 #endif
+  // Stop publishing raw async-pool handles before destroying their owner.
+  clearCurrentDeviceMemoryInfo();
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
   output_mr_.reset();

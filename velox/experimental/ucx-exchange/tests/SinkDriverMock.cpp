@@ -95,7 +95,7 @@ void SinkDriverMock::receiveAllData(UcxExchange* hybridExchange) {
             std::dynamic_pointer_cast<facebook::velox::cudf_velox::CudfVector>(
                 res);
         numBytes_.fetch_add(cudfRes->estimateFlatSize());
-        numRows_ += cudfRes->getTableView().num_rows();
+        numRows_ += cudfRes->size();
         numChunksReceived_.fetch_add(1);
         // If we have Reference data check the received data is the same
         if (referenceData_)

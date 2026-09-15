@@ -19,11 +19,11 @@
 #include <ucxx/utils/ucx.h>
 #include <algorithm>
 #include <iostream>
+#include "UcxExchangeModules.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
-#include "velox/experimental/ucx-exchange/UcxExchangeModules.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
 
@@ -181,13 +181,18 @@ void Communicator::run() {
           std::lock_guard<std::recursive_mutex> lock(endpointsMutex_);
           numEndpoints = endpoints_.size();
         }
+        std::size_t deferredRequestCount;
+        {
+          std::lock_guard<std::mutex> deferredLock(deferredRequestsMutex_);
+          deferredRequestCount = deferredRequests_.size();
+        }
         VLOG(2) << "[COMM-HEARTBEAT] workQueue=" << workQueue_.size()
                 << " elements=" << elements_.size()
                 << " (servers=" << numServers << " sources=" << numSources
                 << ")"
                 << " endpoints=" << numEndpoints
                 << " deferredCleanup=" << deferredEndpointCleanup_.size()
-                << " deferredRequests=" << deferredRequests_.size()
+                << " deferredRequests=" << deferredRequestCount
                 << " workItemsProcessed=" << workItemsProcessed_
                 << " GPU=" << gpuUsedMB << "/" << gpuTotalMB << "MB"
                 << " (free=" << gpuFreeMB << "MB)";
@@ -208,9 +213,15 @@ void Communicator::run() {
         removeEndpointRef(ep);
       }
 
-      // Process the work queue. Make sure that communication is progressed
-      // after each call to a comms element, otherwise we will deadlock.
-      while (auto comms = workQueue_.pop()) {
+      // Process one snapshot. Intra-node transfers requeue themselves while
+      // polling, so draining until empty could starve deferred cleanup and
+      // prevent stop() from being observed.
+      const auto workItems = workQueue_.size();
+      for (size_t i = 0; i < workItems && running_; ++i) {
+        auto comms = workQueue_.pop();
+        if (!comms) {
+          break;
+        }
         comms->process();
         ++workItemsProcessed_;
         // Progress after each work item to allow UCXX to advance
@@ -220,10 +231,9 @@ void Communicator::run() {
         worker_->progress();
       }
 
-      // Clean up deferred requests that UCX has fully processed.
-      // These are cancelled requests whose GPU buffers needed to stay
-      // alive until UCX finished any in-flight operations on them.
-      if (!deferredRequests_.empty()) {
+      // Clean up detached requests once UCXX has fully processed them.
+      {
+        std::lock_guard<std::mutex> lock(deferredRequestsMutex_);
         deferredRequests_.erase(
             std::remove_if(
                 deferredRequests_.begin(),
@@ -232,7 +242,11 @@ void Communicator::run() {
             deferredRequests_.end());
       }
 
-      // All queues are drained. Now wait for UCXX network events.
+      if (!running_ || !workQueue_.empty()) {
+        continue;
+      }
+
+      // No work is ready. Now wait for UCXX network events.
       // In blocking mode, this will block until a UCXX event arrives
       // or worker_->signal() is called (from addToWorkQueue,
       // deferEndpointCleanup, or stop).
@@ -354,8 +368,19 @@ void Communicator::deferEndpointCleanup(std::shared_ptr<EndpointRef> ep) {
 }
 
 void Communicator::deferRequestCleanup(std::shared_ptr<ucxx::Request> request) {
-  if (request) {
+  if (!request) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(deferredRequestsMutex_);
     deferredRequests_.push_back(std::move(request));
+  }
+  // Insertion already succeeded, so a wake-up failure must not make the caller
+  // retry and store the same request twice. The next worker event or shutdown
+  // pass will still retire it.
+  try {
+    signalWorker();
+  } catch (...) {
   }
 }
 

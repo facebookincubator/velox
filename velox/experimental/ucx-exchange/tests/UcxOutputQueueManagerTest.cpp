@@ -22,6 +22,7 @@
 #include <folly/synchronization/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <vector>
@@ -41,10 +42,6 @@ using namespace facebook::velox::core;
 class UcxOutputQueueManagerTest : public testing::Test {
  protected:
   UcxOutputQueueManagerTest() {}
-
-  static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-  }
 
   void SetUp() override {
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
@@ -81,6 +78,15 @@ class UcxOutputQueueManagerTest : public testing::Test {
     return cols;
   }
 
+  std::unique_ptr<cudf::packed_columns> makeZeroColumnPackedColumns() {
+    cuda::stream_ref stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+    cudf::table table;
+    auto cols = std::make_unique<cudf::packed_columns>(
+        cudf::pack(table.view(), stream));
+    stream.sync();
+    return cols;
+  }
+
   void enqueue(std::string_view taskId, vector_size_t size) {
     enqueue(taskId, 0, size);
   }
@@ -100,15 +106,20 @@ class UcxOutputQueueManagerTest : public testing::Test {
       int destination,
       bool expectedEndMarker = false) {
     bool receivedData = false;
-    queueManager_->getData(
+    queueManager_->getDataWithQueue(
         taskId,
         destination,
         [destination, expectedEndMarker, &receivedData](
+            std::shared_ptr<UcxOutputQueue> outputQueue,
             std::shared_ptr<cudf::packed_columns> data,
             vector_size_t /*numRows*/,
             std::vector<int64_t> remainingBytes) {
           ASSERT_EQ(expectedEndMarker, data == nullptr)
               << "for destination " << destination;
+          if (data) {
+            outputQueue->releaseInFlightBytes(
+                destination, static_cast<int64_t>(data->gpu_data->size()), 1);
+          }
           receivedData = true;
         });
     ASSERT_TRUE(receivedData) << "for destination " << destination;
@@ -150,25 +161,28 @@ class UcxOutputQueueManagerTest : public testing::Test {
     EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
   }
 
-  UcxDataAvailableCallback receiveData(int destination, bool& receivedData) {
-    receivedData = false;
-    return [destination, &receivedData](
-               std::shared_ptr<cudf::packed_columns> data,
-               vector_size_t /*numRows*/,
-               std::vector<int64_t> /*remainingBytes*/) {
-      EXPECT_FALSE(receivedData) << "for destination " << destination;
-      EXPECT_TRUE(data != nullptr) << "for destination " << destination;
-      receivedData = true;
-    };
-  }
-
   void registerForData(
       std::string_view taskId,
       int destination,
       bool& receivedData) {
     receivedData = false;
-    queueManager_->getData(
-        taskId, destination, receiveData(destination, receivedData));
+    queueManager_->getDataWithQueue(
+        taskId,
+        destination,
+        [destination, &receivedData](
+            std::shared_ptr<UcxOutputQueue> outputQueue,
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/) {
+          EXPECT_FALSE(receivedData) << "for destination " << destination;
+          EXPECT_NE(outputQueue, nullptr) << "for destination " << destination;
+          EXPECT_NE(data, nullptr) << "for destination " << destination;
+          if (outputQueue && data) {
+            outputQueue->releaseInFlightBytes(
+                destination, static_cast<int64_t>(data->gpu_data->size()), 1);
+          }
+          receivedData = true;
+        });
     EXPECT_FALSE(receivedData) << "for destination " << destination;
   }
 
@@ -188,16 +202,19 @@ class UcxOutputQueueManagerTest : public testing::Test {
       bool atEnd{false};
       folly::EventCount dataWait;
       auto dataWaitKey = dataWait.prepareWait();
-      queueManager_->getData(
+      queueManager_->getDataWithQueue(
           taskId,
           destination,
-          [&](std::shared_ptr<cudf::packed_columns> data,
+          [&](std::shared_ptr<UcxOutputQueue> outputQueue,
+              std::shared_ptr<cudf::packed_columns> data,
               vector_size_t /*numRows*/,
               std::vector<int64_t> /*remainingBytes*/) {
             if (data == nullptr) {
               atEnd = true;
             } else {
               received++;
+              outputQueue->releaseInFlightBytes(
+                  destination, static_cast<int64_t>(data->gpu_data->size()), 1);
             }
             dataWait.notify();
           });
@@ -478,30 +495,32 @@ TEST_F(UcxOutputQueueManagerTest, basicAsyncFetch) {
 
 TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
   const vector_size_t size = 10;
-  const std::string taskId = "t0";
+  const std::string taskId = "lateTaskCreation.placeholder";
   int numPartitions = 1;
   bool earlyTermination = false;
   int destination = 0;
 
-  // Clear stale state from prior tests (removeTask on a non-existing queue
-  // clears the removedTasks_ set, allowing getData to create a placeholder).
-  queueManager_->removeTask(taskId);
-
   // Fetch data from a non-existing task.
   struct Response {
+    std::shared_ptr<UcxOutputQueue> outputQueue;
     std::shared_ptr<cudf::packed_columns> data;
     std::vector<int64_t> remainingBytes;
   };
   folly::Promise<Response> promise;
   auto future = promise.getSemiFuture();
-  queueManager_->getData(
+  queueManager_->getDataWithQueue(
       taskId,
       destination,
       [&promise](
+          std::shared_ptr<UcxOutputQueue> outputQueue,
           std::shared_ptr<cudf::packed_columns> data,
           vector_size_t /*numRows*/,
           std::vector<int64_t> remainingBytes) {
-        promise.setValue(Response{std::move(data), std::move(remainingBytes)});
+        promise.setValue(
+            Response{
+                std::move(outputQueue),
+                std::move(data),
+                std::move(remainingBytes)});
       });
 
   // getData() above created a placeholder queue with no known capacity yet:
@@ -528,17 +547,23 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
       // nullptr -> end of transmission.
       break;
     }
+    response.outputQueue->releaseInFlightBytes(
+        destination, static_cast<int64_t>(response.data->gpu_data->size()), 1);
     folly::Promise<Response> promise;
     future = promise.getSemiFuture();
-    queueManager_->getData(
+    queueManager_->getDataWithQueue(
         taskId,
         destination,
         [&promise](
+            std::shared_ptr<UcxOutputQueue> outputQueue,
             std::shared_ptr<cudf::packed_columns> data,
             vector_size_t /*numRows*/,
             std::vector<int64_t> remainingBytes) {
           promise.setValue(
-              Response{std::move(data), std::move(remainingBytes)});
+              Response{
+                  std::move(outputQueue),
+                  std::move(data),
+                  std::move(remainingBytes)});
         });
   }
   ASSERT_EQ(i, 2);
@@ -608,8 +633,9 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
 // called without initializeTask() ever being called. The pending callback
 // must fire with nullptr to unblock the consumer.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
-  const std::string taskId = "orphanTest";
-  queueManager_->removeTask(taskId); // ensure clean state
+  // This must be a fresh ID: removeTask() deliberately tombstones absent IDs
+  // so stale servers cannot recreate placeholder queues.
+  const std::string taskId = "callbackBeforeInit.fresh";
 
   bool callbackFired = false;
   bool receivedNullptr = false;
@@ -640,11 +666,10 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
 // initializeTask() was called but noMoreData() was never called.
 // removeTask() must fire pending callbacks with nullptr.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
-  const std::string taskId = "crashTest";
-  queueManager_->removeTask(taskId); // ensure clean state
+  const std::string taskId = "callbackAfterInit.fresh";
 
-  auto task =
-      initializeTask(taskId, 2 /* numDestinations */, 1 /* numDrivers */);
+  auto task = initializeTask(
+      taskId, 2 /* numDestinations */, 1 /* numDrivers */, false /* cleanup */);
 
   // Register callbacks on both destinations.
   bool callback0Fired = false;
@@ -686,6 +711,32 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   EXPECT_TRUE(callback0Nullptr);
   EXPECT_TRUE(callback1Fired);
   EXPECT_TRUE(callback1Nullptr);
+}
+
+TEST_F(UcxOutputQueueManagerTest, callbackFiredOnDeleteResults) {
+  const std::string taskId = "callbackOnDeleteResults.fresh";
+  auto task = initializeTask(
+      taskId, 1 /* numDestinations */, 1 /* numDrivers */, false /* cleanup */);
+
+  bool callbackFired = false;
+  queueManager_->getData(
+      taskId,
+      0,
+      [&](std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t numRows,
+          std::vector<int64_t> remainingBytes) {
+        EXPECT_EQ(data, nullptr);
+        EXPECT_EQ(numRows, 0);
+        EXPECT_TRUE(remainingBytes.empty());
+        callbackFired = true;
+      });
+  ASSERT_FALSE(callbackFired);
+
+  queueManager_->deleteResults(taskId, 0);
+  EXPECT_TRUE(callbackFired);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
 }
 
 // --- Broadcast tests ---
@@ -826,5 +877,423 @@ TEST_F(UcxOutputQueueManagerTest, broadcastEndMarkerToLateDestination) {
   fetchEndMarker(taskId, 1);
 
   EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, transferReservationBlocksAndWakes) {
+  const std::string taskId = "adaptive.reservation";
+  auto task = initializeTask(taskId, 2, 1, false /* cleanup */);
+
+  EXPECT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, 100, 100, nullptr));
+  ContinueFuture destinationFuture;
+  EXPECT_TRUE(queueManager_->reserveTransferBytes(
+      taskId, 0, 1, 100, &destinationFuture));
+  EXPECT_FALSE(destinationFuture.isReady());
+
+  // Destination windows are independent.
+  EXPECT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 1, 100, 100, nullptr));
+  queueManager_->releaseTransferReservation(taskId, 0, 100);
+  EXPECT_TRUE(destinationFuture.isReady());
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 0, 1));
+
+  ContinueFuture cancelledFuture;
+  EXPECT_TRUE(
+      queueManager_->reserveTransferBytes(taskId, 1, 1, 100, &cancelledFuture));
+  EXPECT_FALSE(cancelledFuture.isReady());
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  EXPECT_TRUE(cancelledFuture.isReady());
+}
+
+TEST_F(UcxOutputQueueManagerTest, enqueueConsumesReservationExactlyOnce) {
+  const std::string taskId = "adaptive.enqueueReservationCommit";
+  auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+  auto page = makePackedColumns(10);
+  const auto bytes = static_cast<int64_t>(page->gpu_data->size());
+  ASSERT_GT(bytes, 0);
+
+  std::shared_ptr<UcxOutputQueue> stableQueue;
+  std::shared_ptr<cudf::packed_columns> received;
+  queueManager_->getDataWithQueue(
+      taskId,
+      0,
+      [&](std::shared_ptr<UcxOutputQueue> outputQueue,
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/) {
+        stableQueue = std::move(outputQueue);
+        received = std::move(data);
+      });
+  ASSERT_EQ(received, nullptr);
+
+  EXPECT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, bytes, bytes, nullptr));
+  EXPECT_NO_THROW(queueManager_->enqueue(
+      taskId, 0, std::move(page), /*numRows=*/10, bytes));
+  ASSERT_NE(stableQueue, nullptr);
+  ASSERT_NE(received, nullptr);
+
+  // enqueue atomically converted the reservation into in-flight ownership.
+  // A producer scope guard must therefore be dismissed after the call returns.
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 0, bytes));
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
+  stableQueue->releaseInFlightBytes(0, bytes, 1);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, retainedUntilTransferCompletion) {
+  const std::string taskId = "adaptive.inFlight";
+  auto task = initializeTask(
+      taskId,
+      1,
+      1,
+      false /* cleanup */,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      1 /* maxOutputBufferSize */);
+
+  enqueue(taskId, 0, 10);
+  const auto queuedStats = queueManager_->stats(taskId);
+  ASSERT_TRUE(queuedStats.has_value());
+  ASSERT_GT(queuedStats->bufferedBytes, 0);
+
+  ContinueFuture blockedFuture;
+  ASSERT_TRUE(queueManager_->checkBlocked(taskId, &blockedFuture));
+  std::shared_ptr<UcxOutputQueue> stableQueue;
+  std::shared_ptr<cudf::packed_columns> packet;
+  queueManager_->getDataWithQueue(
+      taskId,
+      0,
+      [&](std::shared_ptr<UcxOutputQueue> queue,
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/) {
+        stableQueue = std::move(queue);
+        packet = std::move(data);
+      });
+  ASSERT_NE(packet, nullptr);
+  EXPECT_EQ(
+      queueManager_->stats(taskId)->bufferedBytes, queuedStats->bufferedBytes);
+  EXPECT_TRUE(queueManager_->checkBlocked(taskId, nullptr));
+  EXPECT_FALSE(blockedFuture.isReady());
+
+  stableQueue->releaseInFlightBytes(
+      0, static_cast<int64_t>(packet->gpu_data->size()), 1);
+  EXPECT_TRUE(blockedFuture.isReady());
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, adaptiveWindowDecreaseAndGrowth) {
+  const std::string taskId = "adaptive.window";
+  auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+
+  EXPECT_EQ(queueManager_->transferWindowBytes(taskId, 0, 100, 200, 800), 200);
+  // Keep enough destination-local demand present that the getter doesn't
+  // immediately perform idle recovery from the decreased window.
+  EXPECT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, 60, 800, nullptr));
+  queueManager_->recordTransferCongestion(taskId, 0, 100);
+  EXPECT_EQ(queueManager_->transferWindowBytes(taskId, 0, 100, 200, 800), 100);
+  queueManager_->recordTransferDemand(taskId, 0, 350, 100, 800);
+  EXPECT_EQ(queueManager_->transferWindowBytes(taskId, 0, 100, 200, 800), 350);
+  queueManager_->recordTransferDemand(taskId, 0, 100, 100, 800);
+  EXPECT_EQ(queueManager_->transferWindowBytes(taskId, 0, 100, 200, 800), 450);
+  queueManager_->recordTransferCongestion(taskId, 0, 100);
+  EXPECT_EQ(queueManager_->transferWindowBytes(taskId, 0, 100, 200, 800), 225);
+  queueManager_->releaseTransferReservation(taskId, 0, 60);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, zeroBytePageReleasesPackedColumn) {
+  const std::string taskId = "adaptive.zeroByte";
+  auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+  auto zeroColumnPage = makeZeroColumnPackedColumns();
+  ASSERT_EQ(zeroColumnPage->gpu_data->size(), 0);
+  queueManager_->enqueue(taskId, 0, std::move(zeroColumnPage), /*numRows=*/17);
+  ASSERT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  ASSERT_EQ(queueManager_->stats(taskId)->bufferedPages, 1);
+
+  std::shared_ptr<UcxOutputQueue> stableQueue;
+  vector_size_t receivedRows = 0;
+  queueManager_->getDataWithQueue(
+      taskId,
+      0,
+      [&](std::shared_ptr<UcxOutputQueue> queue,
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t numRows,
+          std::vector<int64_t> /*remainingBytes*/) {
+        stableQueue = std::move(queue);
+        ASSERT_NE(data, nullptr);
+        EXPECT_EQ(data->gpu_data->size(), 0);
+        receivedRows = numRows;
+      });
+  ASSERT_NE(stableQueue, nullptr);
+  EXPECT_EQ(receivedRows, 17);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 1);
+  EXPECT_NO_THROW(stableQueue->releaseInFlightBytes(0, 0, 1));
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
+  EXPECT_ANY_THROW(stableQueue->releaseInFlightBytes(0, 0, 1));
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, broadcastHistoryRetainsOneCopy) {
+  const std::string taskId = "adaptive.broadcastHistory";
+  auto task = initializeTask(
+      taskId,
+      1,
+      1,
+      false /* cleanup */,
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      1 /* maxOutputBufferSize */);
+
+  enqueue(taskId, 0, 10);
+  std::shared_ptr<UcxOutputQueue> stableQueue;
+  std::shared_ptr<cudf::packed_columns> packet;
+  queueManager_->getDataWithQueue(
+      taskId,
+      0,
+      [&](std::shared_ptr<UcxOutputQueue> queue,
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/) {
+        stableQueue = std::move(queue);
+        packet = std::move(data);
+      });
+  ASSERT_NE(packet, nullptr);
+  const auto bytes = static_cast<int64_t>(packet->gpu_data->size());
+  ASSERT_GT(bytes, 0);
+  stableQueue->releaseInFlightBytes(0, bytes, 1);
+
+  // The current destination is complete, but the same physical GPU buffer is
+  // still retained for a possible late broadcast destination.
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 1);
+  ContinueFuture historyFuture;
+  EXPECT_TRUE(queueManager_->checkBlocked(taskId, &historyFuture));
+  EXPECT_FALSE(historyFuture.isReady());
+
+  queueManager_->updateOutputBuffers(taskId, 1, true);
+  EXPECT_TRUE(historyFuture.isReady());
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, removeTaskTombstoneIsIdempotent) {
+  const std::string taskId = "lifecycle.idempotentTombstone";
+  queueManager_->removeTask(taskId);
+  queueManager_->removeTask(taskId);
+
+  int staleCallbacks = 0;
+  auto staleQueue = queueManager_->getDataWithQueue(
+      taskId,
+      0,
+      [&](std::shared_ptr<UcxOutputQueue> outputQueue,
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/) {
+        EXPECT_EQ(outputQueue, nullptr);
+        EXPECT_EQ(data, nullptr);
+        ++staleCallbacks;
+      });
+  EXPECT_EQ(staleQueue, nullptr);
+  EXPECT_EQ(staleCallbacks, 1);
+
+  // Explicit initialization is the only operation that clears the tombstone.
+  auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+  bool liveCallback = false;
+  auto liveQueue = queueManager_->getDataWithQueue(
+      taskId,
+      0,
+      [&](std::shared_ptr<UcxOutputQueue> outputQueue,
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/) {
+        EXPECT_NE(outputQueue, nullptr);
+        EXPECT_EQ(data, nullptr);
+        liveCallback = true;
+      });
+  EXPECT_NE(liveQueue, nullptr);
+  EXPECT_FALSE(liveCallback);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  EXPECT_TRUE(liveCallback);
+}
+
+TEST_F(UcxOutputQueueManagerTest, maximumConfiguredCapacityDoesNotOverflow) {
+  constexpr uint64_t kMaximumCapacity =
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+  auto directTask = createSourceTask(
+      "capacity.maximum.direct",
+      pool_,
+      UcxTestData::kTestRowType,
+      kMaximumCapacity);
+  std::shared_ptr<UcxOutputQueue> directQueue;
+  EXPECT_NO_THROW(
+      directQueue = std::make_shared<UcxOutputQueue>(directTask, 1, 1));
+  ASSERT_NE(directQueue, nullptr);
+  EXPECT_EQ(directQueue->getUtilization(), 0.0);
+
+  auto initializedTask = createSourceTask(
+      "capacity.maximum.initialize",
+      pool_,
+      UcxTestData::kTestRowType,
+      kMaximumCapacity);
+  auto placeholder = std::make_shared<UcxOutputQueue>(nullptr, 1, 0);
+  bool initialized = false;
+  EXPECT_NO_THROW(initialized = placeholder->initialize(initializedTask, 1, 1));
+  EXPECT_TRUE(initialized);
+  EXPECT_EQ(placeholder->getUtilization(), 0.0);
+}
+
+TEST_F(UcxOutputQueueManagerTest, fullTransferWindowRecoveryIsBounded) {
+  const std::string taskId = "adaptive.fullWindowRecovery";
+  auto task = initializeTask(
+      taskId,
+      2,
+      1,
+      false /* cleanup */,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      100 /* maxOutputBufferSize */);
+
+  queueManager_->recordFullTransferCongestion(taskId);
+  auto diagnostics = queueManager_->toString(taskId);
+  EXPECT_NE(
+      diagnostics.find("fullTransferRetainedLimit=175"), std::string::npos);
+  EXPECT_NE(diagnostics.find("fullTransferCongested=1"), std::string::npos);
+
+  EXPECT_FALSE(queueManager_->reserveFullTransferBytes(taskId, 0, 50, nullptr));
+  // With 50 retained bytes, the 175-byte learned window is below half full.
+  // One additive recovery step reaches the 200-byte default (100 * 2
+  // destinations) and exits custom congestion mode.
+  EXPECT_FALSE(queueManager_->waitForFullTransferCapacity(taskId, 1, nullptr));
+  const auto recovered = queueManager_->toString(taskId);
+  EXPECT_NE(recovered.find("fullTransferRetainedLimit=200"), std::string::npos);
+  EXPECT_NE(recovered.find("fullTransferCongested=0"), std::string::npos);
+  EXPECT_FALSE(queueManager_->waitForFullTransferCapacity(taskId, 1, nullptr));
+  EXPECT_EQ(queueManager_->toString(taskId), recovered);
+
+  queueManager_->releaseTransferReservation(taskId, 0, 50);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, fullTransferCanAdmitMaterializedAggregate) {
+  const std::string taskId = "adaptive.fullWindowAggregateAdmission";
+  auto task = initializeTask(
+      taskId,
+      2,
+      1,
+      false /* cleanup */,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      100 /* maxOutputBufferSize */);
+
+  EXPECT_FALSE(
+      queueManager_->reserveFullTransferBytes(taskId, 0, 150, nullptr));
+  // The already-materialized full split is larger than the ordinary
+  // 100-bytes-per-destination aggregate. Before any congestion signal, admit
+  // it exactly rather than deadlocking on memory that is already resident.
+  EXPECT_FALSE(
+      queueManager_->reserveFullTransferBytes(taskId, 1, 100, nullptr));
+  queueManager_->releaseTransferReservation(taskId, 0, 150);
+  queueManager_->releaseTransferReservation(taskId, 1, 100);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    fullTransferWindowClampsAfterDestinationDelete) {
+  const std::string taskId = "adaptive.fullWindowDestinationShrink";
+  auto task = initializeTask(
+      taskId,
+      4,
+      1,
+      false /* cleanup */,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      100 /* maxOutputBufferSize */);
+
+  EXPECT_FALSE(
+      queueManager_->reserveFullTransferBytes(taskId, 0, 300, nullptr));
+  queueManager_->recordFullTransferCongestion(taskId);
+  EXPECT_NE(
+      queueManager_->toString(taskId).find("fullTransferRetainedLimit=263"),
+      std::string::npos);
+
+  queueManager_->deleteResults(taskId, 1);
+  queueManager_->deleteResults(taskId, 2);
+  queueManager_->deleteResults(taskId, 3);
+  const auto shrunk = queueManager_->toString(taskId);
+  EXPECT_NE(shrunk.find("fullTransferRetainedLimit=100"), std::string::npos);
+  EXPECT_NE(shrunk.find("fullTransferCongested=1"), std::string::npos);
+  EXPECT_TRUE(queueManager_->waitForFullTransferCapacity(taskId, 1, nullptr));
+
+  queueManager_->releaseTransferReservation(taskId, 0, 300);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, broadcastInFlightIsRetained) {
+  const std::string taskId = "adaptive.broadcastInFlight";
+  auto task = initializeTask(
+      taskId,
+      2,
+      1,
+      false /* cleanup */,
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      1 /* maxOutputBufferSize */);
+  // Disable late-destination history so this case isolates the two committed
+  // sends. Broadcast has no transfer reservations, so base backpressure must
+  // account for them directly.
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+  enqueue(taskId, 0, 10);
+
+  std::vector<std::shared_ptr<cudf::packed_columns>> packets(2);
+  std::shared_ptr<UcxOutputQueue> stableQueue;
+  for (int destination = 0; destination < 2; ++destination) {
+    queueManager_->getDataWithQueue(
+        taskId,
+        destination,
+        [&, destination](
+            std::shared_ptr<UcxOutputQueue> queue,
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/) {
+          stableQueue = std::move(queue);
+          packets[destination] = std::move(data);
+        });
+    ASSERT_NE(packets[destination], nullptr);
+  }
+
+  ContinueFuture retainedFuture;
+  ASSERT_TRUE(queueManager_->checkBlocked(taskId, &retainedFuture));
+  EXPECT_FALSE(retainedFuture.isReady());
+  stableQueue->releaseInFlightBytes(
+      0, static_cast<int64_t>(packets[0]->gpu_data->size()), 1);
+  EXPECT_FALSE(retainedFuture.isReady());
+  EXPECT_TRUE(queueManager_->checkBlocked(taskId, nullptr));
+  stableQueue->releaseInFlightBytes(
+      1, static_cast<int64_t>(packets[1]->gpu_data->size()), 1);
+  EXPECT_TRUE(retainedFuture.isReady());
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
+
+  task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 }

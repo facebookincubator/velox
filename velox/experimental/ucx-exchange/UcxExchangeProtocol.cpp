@@ -17,7 +17,6 @@
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 
 #include <cstring>
-#include <stdexcept>
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -29,6 +28,37 @@ uint32_t fnv1a_32(std::string_view s) {
     hash *= 0x01000193u; // FNV prime
   }
   return hash;
+}
+
+uint32_t MetadataMsg::getSerializedSize() const {
+  uint64_t totalSize = 0;
+  auto addField = [&](uint64_t bytes, std::string_view field) {
+    VELOX_CHECK_LE(
+        bytes,
+        static_cast<uint64_t>(kMaxMetaBufSize) - totalSize,
+        "UCX metadata {} exceeds the maximum serialized size of {} bytes",
+        field,
+        kMaxMetaBufSize);
+    totalSize += bytes;
+  };
+
+  addField(sizeof(kMagicNumber), "magic number");
+  addField(sizeof(uint32_t), "total-size field");
+  addField(sizeof(WireLengthType), "cuDF metadata length");
+  addField(cudfMetadata ? cudfMetadata->size() : 0, "cuDF metadata");
+  addField(sizeof(dataSizeBytes), "data size");
+  addField(sizeof(numRows), "row count");
+  addField(sizeof(WireLengthType), "remaining-byte count");
+  VELOX_CHECK_LE(
+      remainingBytes.size(),
+      kMaxMetaBufSize / sizeof(remainingBytes[0]),
+      "UCX remaining-byte count exceeds the maximum metadata buffer size");
+  addField(
+      remainingBytes.size() * sizeof(remainingBytes[0]),
+      "remaining-byte values");
+  addField(sizeof(uint8_t), "end flag");
+
+  return static_cast<uint32_t>(totalSize);
 }
 
 std::pair<std::shared_ptr<uint8_t>, size_t> MetadataMsg::serialize() {
@@ -86,71 +116,105 @@ std::pair<std::shared_ptr<uint8_t>, size_t> MetadataMsg::serialize() {
       std::move(buffer), totalSize);
 }
 
-MetadataMsg MetadataMsg::deserializeMetadataMsg(const uint8_t* buffer) {
+MetadataMsg MetadataMsg::deserializeMetadataMsg(
+    const uint8_t* buffer,
+    size_t bufferCapacity) {
+  VELOX_CHECK_NOT_NULL(buffer, "UCX metadata buffer is null");
+  VELOX_CHECK_GE(
+      bufferCapacity,
+      kMetaHeaderSize,
+      "UCX metadata buffer is too small for its header");
+
   const uint8_t* ptr = buffer;
+  size_t remaining = bufferCapacity;
+
+  auto readField =
+      [&](void* destination, size_t bytes, std::string_view field) {
+        VELOX_CHECK_LE(
+            bytes,
+            remaining,
+            "Insufficient UCX metadata for {}: need {} bytes, have {}",
+            field,
+            bytes,
+            remaining);
+        std::memcpy(destination, ptr, bytes);
+        ptr += bytes;
+        remaining -= bytes;
+      };
 
   MetadataMsg record;
 
   uint32_t magicNumber = 0;
-  std::memcpy(&magicNumber, ptr, sizeof(magicNumber));
-  VELOX_CHECK_EQ(magicNumber, kMagicNumber);
-  ptr += sizeof(magicNumber);
+  readField(&magicNumber, sizeof(magicNumber), "magic number");
+  VELOX_CHECK_EQ(
+      magicNumber, kMagicNumber, "Invalid UCX metadata magic number");
 
   uint32_t totalSize = 0;
-  std::memcpy(&totalSize, ptr, sizeof(totalSize));
-  ptr += sizeof(totalSize);
-
-  const uint8_t* endPtr = buffer + totalSize;
+  readField(&totalSize, sizeof(totalSize), "total size");
+  constexpr size_t kMinimumSerializedSize = kMetaHeaderSize +
+      sizeof(WireLengthType) + sizeof(WireDataSizeType) +
+      sizeof(WireRowCountType) + sizeof(WireLengthType) + sizeof(uint8_t);
+  VELOX_CHECK_GE(
+      totalSize,
+      kMinimumSerializedSize,
+      "UCX metadata total size is too small");
+  VELOX_CHECK_LE(
+      totalSize,
+      kMaxMetaBufSize,
+      "UCX metadata total size exceeds the protocol maximum");
+  VELOX_CHECK_LE(
+      totalSize,
+      bufferCapacity,
+      "UCX metadata total size exceeds the receive buffer");
+  // The receive buffer is normally the fixed one-megabyte maximum. Restrict
+  // every subsequent read to the peer-declared record within that capacity.
+  remaining = totalSize - kMetaHeaderSize;
 
   WireLengthType metaSize = 0;
-  if (ptr + sizeof(metaSize) > endPtr) {
-    throw std::runtime_error("Insufficient data for cudfMetadata size");
-  }
-  std::memcpy(&metaSize, ptr, sizeof(metaSize));
-  ptr += sizeof(metaSize);
+  readField(&metaSize, sizeof(metaSize), "cuDF metadata size");
+  VELOX_CHECK_LE(
+      metaSize,
+      remaining,
+      "UCX cuDF metadata size exceeds the serialized record");
+  VELOX_CHECK_LE(
+      metaSize,
+      kMaxMetaBufSize,
+      "UCX cuDF metadata size exceeds the protocol maximum");
 
-  record.cudfMetadata = std::make_unique<std::vector<uint8_t>>(metaSize);
+  record.cudfMetadata =
+      std::make_unique<std::vector<uint8_t>>(static_cast<size_t>(metaSize));
   if (metaSize > 0) {
-    if (ptr + metaSize > endPtr) {
-      throw std::runtime_error("Insufficient data for cudfMetadata bytes");
-    }
-    std::memcpy(record.cudfMetadata->data(), ptr, metaSize);
-    ptr += metaSize;
+    readField(
+        record.cudfMetadata->data(),
+        static_cast<size_t>(metaSize),
+        "cuDF metadata bytes");
   }
 
-  if (ptr + sizeof(record.dataSizeBytes) > endPtr) {
-    throw std::runtime_error("Insufficient data for dataSizeBytes");
-  }
-  std::memcpy(&record.dataSizeBytes, ptr, sizeof(record.dataSizeBytes));
-  ptr += sizeof(record.dataSizeBytes);
+  readField(&record.dataSizeBytes, sizeof(record.dataSizeBytes), "data size");
 
-  if (ptr + sizeof(record.numRows) > endPtr) {
-    throw std::runtime_error("Insufficient data for numRows");
-  }
-  std::memcpy(&record.numRows, ptr, sizeof(record.numRows));
-  ptr += sizeof(record.numRows);
+  readField(&record.numRows, sizeof(record.numRows), "row count");
 
   WireLengthType numRemaining = 0;
-  if (ptr + sizeof(numRemaining) > endPtr) {
-    throw std::runtime_error("Insufficient data for remainingBytes count");
-  }
-  std::memcpy(&numRemaining, ptr, sizeof(numRemaining));
-  ptr += sizeof(numRemaining);
+  readField(&numRemaining, sizeof(numRemaining), "remaining-byte count");
+  VELOX_CHECK_GE(
+      remaining, sizeof(uint8_t), "UCX metadata is missing its end flag");
+  VELOX_CHECK_LE(
+      numRemaining,
+      (remaining - sizeof(uint8_t)) / sizeof(WireRemainingElementType),
+      "UCX remaining-byte count exceeds the serialized record");
 
-  record.remainingBytes.resize(numRemaining);
+  record.remainingBytes.resize(static_cast<size_t>(numRemaining));
   if (numRemaining > 0) {
-    auto bytesSize = numRemaining * sizeof(record.remainingBytes[0]);
-    if (ptr + bytesSize > endPtr) {
-      throw std::runtime_error("Insufficient data for remainingBytes values");
-    }
-    std::memcpy(record.remainingBytes.data(), ptr, bytesSize);
-    ptr += bytesSize;
+    const auto bytesSize =
+        static_cast<size_t>(numRemaining) * sizeof(record.remainingBytes[0]);
+    readField(record.remainingBytes.data(), bytesSize, "remaining-byte values");
   }
 
-  if (ptr + 1 > endPtr) {
-    throw std::runtime_error("Insufficient data for atEnd flag");
-  }
-  record.atEnd = (*ptr != 0);
+  uint8_t atEnd = 0;
+  readField(&atEnd, sizeof(atEnd), "end flag");
+  VELOX_CHECK_LE(atEnd, 1, "Invalid UCX metadata end flag");
+  record.atEnd = atEnd != 0;
+  VELOX_CHECK_EQ(remaining, 0, "UCX metadata record contains trailing bytes");
 
   return record;
 }
