@@ -213,6 +213,8 @@ FileDataSource::FileDataSource(
       ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       fileConfig_(fileConfig),
+      deferLazyColumnPrefetch_(fileConfig->deferLazyColumnPrefetch(
+          connectorQueryCtx->sessionProperties())),
       pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
@@ -615,6 +617,14 @@ std::optional<RowVectorPtr> FileDataSource::next(
     }
   }
 
+  // The first batch with rows passing all filters means the lazily loaded
+  // columns will be read; start their deferred prefetch now instead of on the
+  // first actual read.
+  if (deferLazyColumnPrefetch_ && !lazyColumnsHintSent_) {
+    lazyColumnsHintSent_ = true;
+    splitReader_->hintLazyColumnsNeeded();
+  }
+
   if (outputType_->size() == 0) {
     return exec::wrap(rowsRemaining, remainingIndices, rowVector);
   }
@@ -774,6 +784,7 @@ vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 }
 
 void FileDataSource::resetSplit() {
+  lazyColumnsHintSent_ = false;
   split_.reset();
   splitReader_->resetSplit();
   // Keep readers around to hold adaptation.

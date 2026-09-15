@@ -152,6 +152,12 @@ void FileSplitReader::prepareSplit(
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 }
 
+void FileSplitReader::hintLazyColumnsNeeded() {
+  if (baseRowReader_) {
+    baseRowReader_->hintLazyColumnsNeeded();
+  }
+}
+
 uint64_t FileSplitReader::next(uint64_t size, VectorPtr& output) {
   if (!baseReaderOpts_.randomSkip()) {
     return baseRowReader_->next(size, output);

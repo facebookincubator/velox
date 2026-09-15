@@ -17,6 +17,8 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
@@ -30,6 +32,7 @@ namespace facebook::velox::parquet {
 
 enum class LevelMode;
 class PageReader;
+class ParquetData;
 class ParquetParams;
 
 class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
@@ -54,6 +57,23 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   std::shared_ptr<dwio::common::BufferedInput> loadRowGroup(
       uint32_t index,
       const std::shared_ptr<dwio::common::BufferedInput>& input);
+
+  /// Root reader only. If set, the lazy columns (top-level children produced
+  /// as LazyVectors: projected, no filter) are not enqueued with their row
+  /// group until the scan shows they are needed: markAllLazyColumnsNeeded()
+  /// marks all of them, a first read of one of them marks that column only. A
+  /// needed lazy column is enqueued with every following row group; for the
+  /// row groups already buffered its chunks are enqueued into a separate
+  /// input and loaded right away.
+  void setDeferLazyColumnPrefetch(bool defer) {
+    deferLazyColumnPrefetch_ = defer;
+  }
+
+  /// A row passed the filters, so all lazy columns will be read.
+  void markAllLazyColumnsNeeded();
+
+  /// Drops the inputs kept for deferred chunks of 'index'th row group.
+  void releaseRowGroup(uint32_t index);
 
   // No-op in Parquet. All readers switch row groups at the same time, there is
   // no on-demand skipping to a new row group.
@@ -106,6 +126,35 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
 
   // Reader subtree used for getting nullability information for 'this'.
   dwio::common::SelectiveColumnReader* repDefSourceReader_{nullptr};
+
+  // Resolves lazyColumns_ and lazyColumnLeaves_ on first use (isTopLevel is
+  // set after construction).
+  void resolveLazyColumns();
+
+  // Marks 'column' as needed and enqueues + loads the chunks of all needed
+  // lazy columns that are missing in the buffered row groups.
+  void markLazyColumnNeeded(dwio::common::SelectiveColumnReader* column);
+
+  void prefetchNeededLazyColumns();
+
+  bool deferLazyColumnPrefetch_{false};
+  bool lazyColumnsResolved_{false};
+  std::unordered_set<dwio::common::SelectiveColumnReader*> lazyColumns_;
+  std::unordered_set<dwio::common::SelectiveColumnReader*> neededLazyColumns_;
+  // Physical columns (leaves) of the lazy columns, with their lazy column.
+  std::vector<std::pair<ParquetData*, dwio::common::SelectiveColumnReader*>>
+      lazyColumnLeaves_;
+  // BufferedInput of each buffered row group.
+  std::unordered_map<uint32_t, std::weak_ptr<dwio::common::BufferedInput>>
+      rowGroupInputs_;
+  // Inputs of the deferred loads, per row group. Each time more lazy columns
+  // become needed for a buffered row group, their chunks are enqueued into a
+  // new input that is loaded once (a BufferedInput must not be loaded twice).
+  // All are kept until the row group is released.
+  std::unordered_map<
+      uint32_t,
+      std::vector<std::shared_ptr<dwio::common::BufferedInput>>>
+      deferredInputs_;
 
   // Mode for getting nulls from repdefs. kStructOverLists if the source is
   // below an ARRAY or MAP.

@@ -133,6 +133,8 @@ class FileDataSource : public DataSource {
   folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<FileConfig> fileConfig_;
+  // FileConfig::deferLazyColumnPrefetch for this query.
+  const bool deferLazyColumnPrefetch_;
   memory::MemoryPool* const pool_;
 
   std::shared_ptr<FileConnectorSplit> split_;
@@ -140,6 +142,8 @@ class FileDataSource : public DataSource {
   std::shared_ptr<common::ScanSpec> scanSpec_;
   VectorPtr output_;
   std::unique_ptr<FileSplitReader> splitReader_;
+  // Set once a batch of the current split passed all filters.
+  bool lazyColumnsHintSent_{false};
 
   /// Output type from file reader. This is different from outputType_ in that
   /// it contains column names before assignment, and columns that are only used
