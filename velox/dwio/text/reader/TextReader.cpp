@@ -21,6 +21,7 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/dwio/text/reader/TextFieldParser.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::text {
@@ -751,51 +752,14 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0;
   }
 
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
-  char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+  auto parsed = TextFieldParser::parseNarrowInteger<T>(
+      std::string_view(str), /*allowTrailingDecimal=*/true);
+  if (!parsed.has_value()) {
     isNull = true;
     return 0;
   }
-
-  int64_t v = 0;
-  unsigned long long scanPos = 0;
-  errno = 0;
-  auto scanCount = sscanf(str.c_str(), "%" SCNd64 "%lln", &v, &scanPos);
-  if (scanCount != 1 || errno == ERANGE) {
-    isNull = true;
-    return 0;
-  }
-  if (scanPos < str.size()) {
-    // Check if the string is a valid decimal.
-    for (uint64_t i = scanPos; i < str.size(); i++) {
-      if (i == scanPos && str[i] == '.') {
-        continue;
-      }
-      if (str[i] >= '0' && str[i] <= '9') {
-        continue;
-      }
-      isNull = true;
-      return 0;
-    }
-  }
-
-  if (!std::is_same<T, int64_t>::value) {
-    if (static_cast<int64_t>(static_cast<T>(v)) != v) {
-      isNull = true;
-      return 0;
-    }
-  }
-  return static_cast<T>(v);
+  return *parsed;
 }
-
-namespace {
-
-static constexpr std::string_view kTrueStringView{"TRUE"};
-static constexpr std::string_view kFalseStringView{"FALSE"};
-
-} // namespace
 
 bool TextRowReader::getBoolean(
     TextRowReader& th,
@@ -808,30 +772,13 @@ bool TextRowReader::getBoolean(
   if (isNull) {
     return false;
   }
-  if (str.compare(kTrueStringView) == 0) {
-    return true;
-  }
-  if (str.compare(kFalseStringView) == 0) {
+  auto parsed = TextFieldParser::parseBoolean(
+      std::string_view(str), /*allowOneZero=*/false);
+  if (!parsed.has_value()) {
+    isNull = true;
     return false;
   }
-
-  switch (str.size()) {
-    case 4:
-      if (boost::algorithm::iequals(str, kTrueStringView)) {
-        return true;
-      }
-      break;
-    case 5:
-      if (boost::algorithm::iequals(str, kFalseStringView)) {
-        return false;
-      }
-      break;
-    default:
-      break;
-  }
-
-  isNull = true;
-  return false;
+  return *parsed;
 }
 
 namespace {
@@ -862,6 +809,11 @@ bool unacceptableFloatingPoint(std::string& s) {
   return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
 }
 
+// Trims all ASCII control-and-space characters (bytes <= 0x20) from both
+// ends of `s` in place. This is the legacy Hive text-reader semantics —
+// intentionally broader than TextFieldParser's Spark CSV trim (which strips
+// only ' ', '\t', '\r', '\n'). Do not unify the two without confirming that
+// no Hive test relies on stripping other control bytes.
 void trimStringInPlace(std::string& s) {
   const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
   size_t start = 0;
