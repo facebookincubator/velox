@@ -15,6 +15,8 @@
  */
 #include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
 #include <fmt/format.h>
+#include <algorithm>
+#include <iterator>
 #include <limits>
 #include "velox/core/PlanNode.h"
 #include "velox/core/QueryConfig.h"
@@ -424,14 +426,14 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
     return;
   }
 
-  bool anyKeyHasNulls = false;
-  for (const auto keyIndex : partitionKeyIndices_) {
-    if (tableView.column(static_cast<cudf::size_type>(keyIndex)).null_count() >
-        0) {
-      anyKeyHasNulls = true;
-      break;
-    }
-  }
+  const auto firstNullableKey = std::find_if(
+      partitionKeyIndices_.begin(),
+      partitionKeyIndices_.end(),
+      [&](const auto keyIndex) {
+        return tableView.column(static_cast<cudf::size_type>(keyIndex))
+                   .null_count() > 0;
+      });
+  const bool anyKeyHasNulls = firstNullableKey != partitionKeyIndices_.end();
   const bool needsArbitraryRow = !replicatedAnyRow_;
 
   // Nothing to replicate, so route exactly as an operator without the flag.
@@ -459,27 +461,28 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
   // A row is replicated when any of its partition keys is null, matching
   // exec::PartitionedOutput::collectNullRows(). cudf::is_null yields a
   // non-nullable BOOL8 column, which is what the stream compaction below needs.
-  std::unique_ptr<cudf::column> replicateMask;
-  for (const auto keyIndex : partitionKeyIndices_) {
+  auto replicateMask = cudf::is_null(
+      tableView.column(static_cast<cudf::size_type>(*firstNullableKey)),
+      stream,
+      mr);
+  for (auto key = std::next(firstNullableKey);
+       key != partitionKeyIndices_.end();
+       ++key) {
+    const auto keyIndex = *key;
     const auto keyColumn =
         tableView.column(static_cast<cudf::size_type>(keyIndex));
     if (keyColumn.null_count() == 0) {
       continue;
     }
     auto keyIsNull = cudf::is_null(keyColumn, stream, mr);
-    if (replicateMask == nullptr) {
-      replicateMask = std::move(keyIsNull);
-    } else {
-      replicateMask = cudf::binary_operation(
-          replicateMask->view(),
-          keyIsNull->view(),
-          cudf::binary_operator::LOGICAL_OR,
-          cudf::data_type{cudf::type_id::BOOL8},
-          stream,
-          mr);
-    }
+    replicateMask = cudf::binary_operation(
+        replicateMask->view(),
+        keyIsNull->view(),
+        cudf::binary_operator::LOGICAL_OR,
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        mr);
   }
-  VELOX_CHECK_NOT_NULL(replicateMask, "Null partition key mask is null");
 
   // The arbitrary row rides along in the same mask, so it is replicated exactly
   // once per destination even when its own key is null.

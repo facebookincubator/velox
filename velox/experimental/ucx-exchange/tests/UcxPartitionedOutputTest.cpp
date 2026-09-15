@@ -387,7 +387,46 @@ TEST_F(UcxPartitionedOutputTest, replicatesNullPartitionKeysToAllDestinations) {
       kNumPartitions * (numNullRows + 1) + (kNumRows - numNullRows - 1));
 }
 
-// Negative control for the two tests around it: with the flag off, the operator
+TEST_F(UcxPartitionedOutputTest, replicatesNullFirstRowOncePerDestination) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  const std::vector<int32_t> keyValues{
+      kNullSentinel, 20, 30, 40, kNullSentinel, 50};
+  const std::vector<cudf::size_type> nullRows{0, 4};
+  const auto numNullRows = static_cast<int>(nullRows.size());
+
+  auto keyColumn = makeKeyColumn(keyValues, nullRows, stream);
+  ASSERT_EQ(keyColumn->view().null_count(), numNullRows);
+
+  auto task = createPartitionedOutputTask(
+      taskId_,
+      pool_,
+      UcxTestData::kTestRowType,
+      kNumPartitions,
+      {"c0"},
+      FOUR_GBYTES,
+      {},
+      /*replicateNullsAndAny=*/true);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      kNumPartitions,
+      /*numDrivers=*/1);
+
+  runPartitionedOutput(task, std::move(keyColumn), stream);
+
+  int totalRows = 0;
+  std::vector<int> nullKeysPerDestination;
+  for (int destination = 0; destination < kNumPartitions; ++destination) {
+    const auto keys = drainKeyColumn(destination);
+    totalRows += static_cast<int>(keys.size());
+    nullKeysPerDestination.push_back(countSentinels(keys));
+  }
+
+  EXPECT_THAT(nullKeysPerDestination, testing::Each(numNullRows));
+  EXPECT_EQ(totalRows, kNumPartitions * numNullRows + (kNumRows - numNullRows));
+}
+
+// Negative control for the replication tests: with the flag off, the operator
 // must not replicate anything. Without this, a harness that lost the ability to
 // pass replicateNullsAndAny=false -- or a plan builder that quietly forced it
 // on -- would leave every assertion above passing for the wrong reason.
