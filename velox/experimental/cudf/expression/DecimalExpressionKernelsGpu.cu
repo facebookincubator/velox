@@ -68,8 +68,8 @@ constexpr __int128_t kLongDecimalMin = -kLongDecimalPowerOfTen38 + 1;
 // ADD/SUB/MUL/MOD kernels.
 //
 // Distinct bits keep division-by-zero separate from overflow (matching
-// cudf::errc OVERFLOW=1 / DIVISION_BY_ZERO=2), letting the host raise the
-// matching error kind.
+// cudf::errc ARITHMETIC_OVERFLOW=1 / DIVISION_BY_ZERO=2), letting the host
+// raise the matching error kind.
 //
 // Errors are accumulated in a thread-local register during the grid-stride
 // loop; each thread performs at most one global atomicOr when it finishes.
@@ -506,7 +506,7 @@ __device__ cuda::std::expected<numeric::decimal<Rep>, errc> checkedRescale(
     auto const multiplier =
         numeric::detail::ipow<Rep, numeric::Radix::BASE_10>(growDigits);
     if (numeric::multiplication_overflow<Rep>(value.value(), multiplier)) {
-      return cuda::std::unexpected{errc::OVERFLOW};
+      return cuda::std::unexpected{errc::ARITHMETIC_OVERFLOW};
     }
   }
   return value.rescaled(targetScale);
@@ -527,7 +527,7 @@ __device__ cuda::std::expected<numeric::decimal<Rep>, errc> applyCheckedBinOp(
     case cudf::binary_operator::MOD:
       return cudf::detail::ops::mod_overflow(lhs, rhs);
     default:
-      return cuda::std::unexpected{errc::OVERFLOW};
+      return cuda::std::unexpected{errc::ARITHMETIC_OVERFLOW};
   }
 }
 
