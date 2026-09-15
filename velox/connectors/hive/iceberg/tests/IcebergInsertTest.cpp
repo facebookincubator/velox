@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -21,6 +22,7 @@
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -122,12 +124,12 @@ class IcebergInsertTest : public test::IcebergTestBase {
         insertedColumns);
   }
 
-  /// Write @p vectors through a sink built from @p handle and return commit
-  /// tasks. Mirrors createDataSinkAndAppendData but accepts a custom handle.
+  // Writes @p vectors through a sink built from @p handle, asserts that the
+  // sink finishes cleanly, and returns the commit tasks.
   std::vector<std::string> writeThroughHandle(
       const RowTypePtr& rowType,
       const IcebergInsertTableHandlePtr& handle,
-      const std::vector<RowVectorPtr>& vectors) {
+      const std::vector<RowVectorPtr>& batches) {
     auto sink = std::make_shared<IcebergDataSink>(
         rowType,
         handle,
@@ -139,11 +141,13 @@ class IcebergInsertTest : public test::IcebergTestBase {
             std::unordered_map<std::string, std::string>{
                 {IcebergConfig::kFunctionPrefixConfig,
                  IcebergConfig::kDefaultFunctionPrefix}})));
-    for (const auto& v : vectors) {
-      sink->appendData(v);
+    for (const auto& batch : batches) {
+      sink->appendData(batch);
     }
     EXPECT_TRUE(sink->finish());
-    return sink->close();
+    auto commitTasks = sink->close();
+    EXPECT_FALSE(commitTasks.empty());
+    return commitTasks;
   }
 };
 
@@ -495,13 +499,35 @@ TEST_F(IcebergInsertTest, multipleWriteDefaultColumns) {
            makeFlatVector<bool>({true, true, true, true})}));
 }
 
-// All scalar write-default types (VARCHAR, DOUBLE, BIGINT, INTEGER, BOOLEAN)
-// are materialised when their columns are omitted from the INSERT.
-TEST_F(IcebergInsertTest, writeDefaultAllScalarTypes) {
+// All write-default types are materialised when their columns are omitted.
+// Covers: VARCHAR, DOUBLE, BIGINT, INTEGER, BOOLEAN (plain scalars),
+// DATE, TIMESTAMP, and DECIMAL (decimal literal string) in a single
+// write + read.
+// DATE and TIMESTAMP use the ISO forms the coordinator emits for defaults,
+// in UTC — not the numeric encoding partition values use. The coordinator
+// always writes six fractional digits on a TIMESTAMP, so 'ts' carries them.
+// DECIMAL uses "99.99" parsed by DecimalUtil::castFromString → 9999.
+TEST_F(IcebergInsertTest, writeDefaultAllTypes) {
   const auto outputDir = TempDirectoryPath::create();
   const auto rowType =
-      ROW({"id", "name", "score", "count", "priority", "active"},
-          {BIGINT(), VARCHAR(), DOUBLE(), BIGINT(), INTEGER(), BOOLEAN()});
+      ROW({"id",
+           "name",
+           "score",
+           "count",
+           "priority",
+           "active",
+           "dt",
+           "ts",
+           "price"},
+          {BIGINT(),
+           VARCHAR(),
+           DOUBLE(),
+           BIGINT(),
+           INTEGER(),
+           BOOLEAN(),
+           DATE(),
+           TIMESTAMP(),
+           DECIMAL(10, 2)});
 
   icebergAddInputWithDefault(
       rowType,
@@ -511,7 +537,14 @@ TEST_F(IcebergInsertTest, writeDefaultAllScalarTypes) {
        {"score", "0.0"},
        {"count", "0"},
        {"priority", "5"},
-       {"active", "false"}},
+       {"active", "false"},
+       // DATE: ISO date string parsed as 19737 days since epoch.
+       {"dt", "2024-01-15"},
+       // TIMESTAMP: ISO datetime string parsed as UTC, with the six
+       // fractional digits the coordinator always emits.
+       {"ts", "2024-01-15 10:30:00.000000"},
+       // DECIMAL(10,2): "99.99" → scaled integer 9999.
+       {"price", "99.99"}},
       {makeRowVector(
           rowType->names(),
           {makeFlatVector<int64_t>({2, 3}),
@@ -519,7 +552,12 @@ TEST_F(IcebergInsertTest, writeDefaultAllScalarTypes) {
            makeNullableFlatVector<double>({std::nullopt, std::nullopt}),
            makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt}),
            makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
-           makeNullableFlatVector<bool>({std::nullopt, std::nullopt})})});
+           makeNullableFlatVector<bool>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int32_t>(
+               {std::nullopt, std::nullopt}, DATE()),
+           makeNullableFlatVector<Timestamp>({std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int64_t>(
+               {std::nullopt, std::nullopt}, DECIMAL(10, 2))})});
 
   auto splits = createSplitsForDirectory(outputDir->getPath());
   ASSERT_EQ(splits.size(), 1U);
@@ -533,7 +571,11 @@ TEST_F(IcebergInsertTest, writeDefaultAllScalarTypes) {
            makeFlatVector<double>({0.0, 0.0}),
            makeFlatVector<int64_t>({0, 0}),
            makeFlatVector<int32_t>({5, 5}),
-           makeFlatVector<bool>({false, false})}));
+           makeFlatVector<bool>({false, false}),
+           makeFlatVector<int32_t>({19737, 19737}, DATE()),
+           makeFlatVector<Timestamp>(
+               {Timestamp(1705314600, 0), Timestamp(1705314600, 0)}),
+           makeFlatVector<int64_t>({9999, 9999}, DECIMAL(10, 2))}));
 }
 
 // Simulates ALTER TABLE … SET DEFAULT: two consecutive INSERTs each use a
@@ -589,6 +631,389 @@ TEST_F(IcebergInsertTest, changedWriteDefaultAcrossInserts) {
           {makeFlatVector<int64_t>({2, 3, 4, 5}),
            makeFlatVector<double>({200.0, 201.0, 300.0, 301.0}),
            makeFlatVector<std::string>({"IN", "IN", "US", "US"})}));
+}
+
+// An omitted column arrives as a null ConstantVector — the natural encoding
+// the planner produces. The sink must substitute the write-default correctly
+// regardless of the input's null encoding.
+TEST_F(IcebergInsertTest, writeDefaultWithConstantNullInput) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "status"}, {BIGINT(), VARCHAR()});
+  const auto handle = makeWriteDefaultHandle(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      {{"status", "ACTIVE"}});
+
+  // 128 rows so the batch exercises more than one uint64_t word of null bits.
+  const vector_size_t batchSize = 128;
+  auto ids =
+      makeFlatVector<int64_t>(batchSize, [](vector_size_t i) { return i + 1; });
+  auto statuses = BaseVector::createNullConstant(VARCHAR(), batchSize, pool());
+
+  auto batch = std::make_shared<RowVector>(
+      pool(),
+      rowType,
+      /*nulls=*/nullptr,
+      batchSize,
+      std::vector<VectorPtr>{ids, statuses});
+
+  writeThroughHandle(rowType, handle, {batch});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>(
+               batchSize, [](vector_size_t i) { return i + 1; }),
+           makeFlatVector<std::string>(
+               batchSize, [](vector_size_t) { return "ACTIVE"; })}));
+}
+
+// An omitted column produced by IcebergMergeSink::makeInsertBatch arrives as a
+// DictionaryVector wrapping a flat all-null base (wrapInDictionary with
+// nulls=nullptr over each input child). The DictionaryVector has no
+// wrapper-level null buffer, so isNullAt() follows indices into the base.
+// The sink must substitute the write-default correctly for this encoding too.
+TEST_F(IcebergInsertTest, writeDefaultWithDictionaryNullInput) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "status"}, {BIGINT(), VARCHAR()});
+  const auto handle = makeWriteDefaultHandle(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      {{"status", "ACTIVE"}});
+
+  const vector_size_t batchSize = 4;
+  auto ids = makeFlatVector<int64_t>({10, 20, 30, 40});
+
+  // wrapInDictionary returns the base unchanged when it is a ConstantVector
+  // and nulls==nullptr, so use a FlatVector base to actually get a
+  // DictionaryVector encoding.
+  auto flatNullBase = makeNullableFlatVector<std::string>(
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  auto indices = makeIndices(batchSize, [](vector_size_t i) { return i; });
+  auto dictStatuses = BaseVector::wrapInDictionary(
+      /*nulls=*/nullptr, indices, batchSize, flatNullBase);
+  ASSERT_EQ(dictStatuses->encoding(), VectorEncoding::Simple::DICTIONARY);
+
+  auto batch = std::make_shared<RowVector>(
+      pool(),
+      rowType,
+      /*nulls=*/nullptr,
+      batchSize,
+      std::vector<VectorPtr>{ids, dictStatuses});
+
+  writeThroughHandle(rowType, handle, {batch});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({10, 20, 30, 40}),
+           makeFlatVector<std::string>(
+               {"ACTIVE", "ACTIVE", "ACTIVE", "ACTIVE"})}));
+}
+
+// A non-null value in a write-default column is a planner bug: the column
+// was classified as omitted at plan time so no row should ever carry a value
+// for it. The sink must surface this immediately via VELOX_CHECK.
+TEST_F(IcebergInsertTest, writeDefaultNonNullInputThrows) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "status"}, {BIGINT(), VARCHAR()});
+  const auto handle = makeWriteDefaultHandle(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      {{"status", "ACTIVE"}});
+
+  // 'status' has a non-null value in row 1 — contradicts its omitted
+  // classification. The sink must throw.
+  auto batch = makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>({1, 2}),
+       makeNullableFlatVector<std::string>({"EXPLICIT", std::nullopt})});
+
+  VELOX_ASSERT_THROW(
+      writeThroughHandle(rowType, handle, {batch}),
+      "Non-null value found at row 0 in write-default column 'status'");
+}
+
+// A partitioned table where a non-partition column has a write-default.
+// Rows go to different partition buckets; the defaulted column must be
+// materialised correctly in every partition file.
+TEST_F(IcebergInsertTest, writeDefaultPartitionedTable) {
+  const auto outputDir = TempDirectoryPath::create();
+  // Table: id BIGINT (partition), country VARCHAR (write-default='US')
+  const auto rowType = ROW({"id", "country"}, {BIGINT(), VARCHAR()});
+
+  // Build a partitioned handle: 'id' is the identity-partition column,
+  // 'country' is a regular column with a write-default.
+  std::vector<IcebergColumnHandlePtr> columnHandles;
+  columnHandles.push_back(
+      std::make_shared<const IcebergColumnHandle>(
+          "id",
+          FileColumnHandle::ColumnType::kPartitionKey,
+          BIGINT(),
+          parquet::ParquetFieldId{1, {}}));
+  columnHandles.push_back(
+      std::make_shared<const IcebergColumnHandle>(
+          "country",
+          FileColumnHandle::ColumnType::kRegular,
+          VARCHAR(),
+          parquet::ParquetFieldId{2, {}},
+          /*requiredSubfields=*/std::vector<common::Subfield>{},
+          /*initialDefaultValue=*/std::nullopt,
+          /*icebergMetadata=*/IcebergFieldMetadata{},
+          /*postProcessor=*/std::function<void(VectorPtr&)>{},
+          /*writeDefaultValue=*/"US"));
+
+  const std::vector<IcebergPartitionSpec::Field> fields = {
+      {"id", BIGINT(), TransformType::kIdentity, std::nullopt}};
+  auto partitionSpec = std::make_shared<IcebergPartitionSpec>(1, fields);
+
+  auto locationHandle = std::make_shared<LocationHandle>(
+      outputDir->getPath(),
+      outputDir->getPath(),
+      LocationHandle::TableType::kNew);
+
+  auto handle = std::make_shared<const IcebergInsertTableHandle>(
+      columnHandles,
+      locationHandle,
+      fileFormat_,
+      partitionSpec,
+      common::CompressionKind::CompressionKind_ZSTD,
+      /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+      IcebergInsertTableHandle::WriteKind::kData,
+      /*existingDeletionVectors=*/
+      std::unordered_map<
+          std::string,
+          IcebergInsertTableHandle::ExistingDeletionVector>{},
+      std::make_shared<const IcebergFileNameGenerator>(),
+      /*insertedColumns=*/std::vector<std::string>{"id"});
+
+  // Two rows with different 'id' values → two partition directories.
+  // 'country' is omitted → write-default 'US' must appear in both.
+  auto batch = makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>({1, 2}),
+       makeNullableFlatVector<std::string>({std::nullopt, std::nullopt})});
+
+  writeThroughHandle(rowType, handle, {batch});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 2U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2}),
+           makeFlatVector<std::string>({"US", "US"})}));
+}
+
+// A partially-null column that is in insertedColumns must have its NULLs
+// preserved — the all-null invariant check must NOT fire for it, and neither
+// must the write-default substitution.
+TEST_F(IcebergInsertTest, partiallyNullInsertedColumnPreservesNulls) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "status"}, {BIGINT(), VARCHAR()});
+
+  // 'status' IS in insertedColumns, so it never enters writeDefaultColumns_.
+  // A partially-null batch (some rows NULL, some non-NULL) must be written
+  // as-is without substitution or assertion failure.
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id", "status"},
+      {{"status", "ACTIVE"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeNullableFlatVector<std::string>(
+               {"PENDING", std::nullopt, "DONE"})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeNullableFlatVector<std::string>(
+               {"PENDING", std::nullopt, "DONE"})}));
+}
+
+// The engine lowercases INSERT statement column names while column handle
+// names keep the Iceberg schema's spelling, so a mixed-case column named
+// explicitly in the INSERT must not be treated as omitted.
+TEST_F(IcebergInsertTest, writeDefaultMixedCaseColumnName) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "Status"}, {BIGINT(), VARCHAR()});
+
+  icebergAddInputWithDefault(
+      rowType,
+      outputDir->getPath(),
+      // The engine sends lowercased statement names; the schema spells the
+      // column 'Status'. Both the supplied value and the explicit NULL must
+      // survive.
+      /*insertedColumns=*/{"id", "status"},
+      {{"Status", "ACTIVE"}},
+      {makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2}),
+           makeNullableFlatVector<std::string>({"PENDING", std::nullopt})})});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2}),
+           makeNullableFlatVector<std::string>({"PENDING", std::nullopt})}));
+}
+
+// toString() includes writeDefaultValue when set.
+TEST_F(IcebergInsertTest, columnHandleToStringIncludesWriteDefault) {
+  auto col = std::make_shared<IcebergColumnHandle>(
+      "country",
+      FileColumnHandle::ColumnType::kRegular,
+      VARCHAR(),
+      parquet::ParquetFieldId{3, {}},
+      /*requiredSubfields=*/std::vector<common::Subfield>{},
+      /*initialDefaultValue=*/std::nullopt,
+      /*icebergMetadata=*/IcebergFieldMetadata{},
+      /*postProcessor=*/std::function<void(VectorPtr&)>{},
+      /*writeDefaultValue=*/"US");
+  EXPECT_NE(col->toString().find("writeDefaultValue: US"), std::string::npos);
+}
+
+// A write-default on a partition column decides which partition file a row
+// lands in. Substitution happens before HiveDataSink computes partition IDs,
+// so a defaulted partition key must route rows to the correct partition.
+TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
+  const auto outputDir = TempDirectoryPath::create();
+  // Table: region VARCHAR (identity-partition, write-default='APAC'),
+  //        value BIGINT (inserted explicitly).
+  const auto rowType = ROW({"region", "value"}, {VARCHAR(), BIGINT()});
+
+  std::vector<IcebergColumnHandlePtr> columnHandles;
+  columnHandles.push_back(
+      std::make_shared<const IcebergColumnHandle>(
+          "region",
+          FileColumnHandle::ColumnType::kPartitionKey,
+          VARCHAR(),
+          parquet::ParquetFieldId{1, {}},
+          /*requiredSubfields=*/std::vector<common::Subfield>{},
+          /*initialDefaultValue=*/std::nullopt,
+          /*icebergMetadata=*/IcebergFieldMetadata{},
+          /*postProcessor=*/std::function<void(VectorPtr&)>{},
+          /*writeDefaultValue=*/"APAC"));
+  columnHandles.push_back(
+      std::make_shared<const IcebergColumnHandle>(
+          "value",
+          FileColumnHandle::ColumnType::kRegular,
+          BIGINT(),
+          parquet::ParquetFieldId{2, {}}));
+
+  const std::vector<IcebergPartitionSpec::Field> fields = {
+      {"region", VARCHAR(), TransformType::kIdentity, std::nullopt}};
+  auto partitionSpec = std::make_shared<IcebergPartitionSpec>(1, fields);
+
+  auto locationHandle = std::make_shared<LocationHandle>(
+      outputDir->getPath(),
+      outputDir->getPath(),
+      LocationHandle::TableType::kNew);
+
+  auto handle = std::make_shared<const IcebergInsertTableHandle>(
+      columnHandles,
+      locationHandle,
+      fileFormat_,
+      partitionSpec,
+      common::CompressionKind::CompressionKind_ZSTD,
+      /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+      IcebergInsertTableHandle::WriteKind::kData,
+      /*existingDeletionVectors=*/
+      std::unordered_map<
+          std::string,
+          IcebergInsertTableHandle::ExistingDeletionVector>{},
+      std::make_shared<const IcebergFileNameGenerator>(),
+      /*insertedColumns=*/std::vector<std::string>{"value"});
+
+  // 'region' is omitted → write-default 'APAC' must determine the partition.
+  // All rows land in the same partition directory (region=APAC).
+  auto batch = makeRowVector(
+      rowType->names(),
+      {makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+       makeFlatVector<int64_t>({10, 20})});
+
+  writeThroughHandle(rowType, handle, {batch});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  // Both rows go to the same partition → exactly one data file.
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<std::string>({"APAC", "APAC"}),
+           makeFlatVector<int64_t>({10, 20})}));
+}
+
+// Multiple batches per sink: the pre-computed constant vector must be
+// re-wrapped correctly for each batch, including batches of different sizes.
+TEST_F(IcebergInsertTest, writeDefaultMultipleBatches) {
+  const auto outputDir = TempDirectoryPath::create();
+  const auto rowType = ROW({"id", "label"}, {BIGINT(), VARCHAR()});
+
+  const auto handle = makeWriteDefaultHandle(
+      rowType,
+      outputDir->getPath(),
+      /*insertedColumns=*/{"id"},
+      {{"label", "DEFAULT"}});
+
+  // Three batches of different sizes to exercise re-wrapping.
+  auto batch1 = makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>({1}),
+       makeNullableFlatVector<std::string>({std::nullopt})});
+  auto batch2 = makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>({2, 3, 4}),
+       makeNullableFlatVector<std::string>(
+           {std::nullopt, std::nullopt, std::nullopt})});
+  auto batch3 = makeRowVector(
+      rowType->names(),
+      {makeFlatVector<int64_t>({5, 6}),
+       makeNullableFlatVector<std::string>({std::nullopt, std::nullopt})});
+
+  writeThroughHandle(rowType, handle, {batch1, batch2, batch3});
+
+  auto splits = createSplitsForDirectory(outputDir->getPath());
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(
+      rowType,
+      splits,
+      makeRowVector(
+          rowType->names(),
+          {makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}),
+           makeFlatVector<std::string>(
+               {"DEFAULT",
+                "DEFAULT",
+                "DEFAULT",
+                "DEFAULT",
+                "DEFAULT",
+                "DEFAULT"})}));
 }
 
 #endif
