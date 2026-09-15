@@ -13,6 +13,22 @@
 # limitations under the License.
 
 build_flatbuffers(
+  "${CMAKE_CURRENT_SOURCE_DIR}/BlobMetadata.fbs"
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  nimble_blob_metadata_schema_fb
+  ""
+  "${CMAKE_CURRENT_BINARY_DIR}"
+  ""
+  ""
+)
+add_library(nimble_blob_metadata_fb INTERFACE)
+target_include_directories(
+  nimble_blob_metadata_fb
+  INTERFACE ${PROJECT_BINARY_DIR} ${FLATBUFFERS_INCLUDE_DIR}
+)
+add_dependencies(nimble_blob_metadata_fb nimble_blob_metadata_schema_fb)
+
+build_flatbuffers(
   "${CMAKE_CURRENT_SOURCE_DIR}/Footer.fbs"
   ""
   nimble_footer_schema_fb
@@ -162,6 +178,7 @@ add_dependencies(nimble_vector_index_fb nimble_vector_index_schema_fb)
 
 add_library(
   nimble_tablet_common
+  BlobMetadata.cpp
   Compression.cpp
   FileProperties.cpp
   MetadataBuffer.cpp
@@ -171,6 +188,7 @@ add_library(
   MetadataInput.h
   MetadataCache.h
   MetadataBuffer.h
+  BlobMetadata.h
   FileProperties.h
   Constants.h
   Compression.h
@@ -179,6 +197,7 @@ add_library(
 )
 target_link_libraries(
   nimble_tablet_common
+  nimble_blob_metadata_fb
   nimble_file_properties_fb
   nimble_footer_fb
   nimble_common
