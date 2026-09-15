@@ -18,6 +18,7 @@
 #include <fmt/core.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <random>
 
@@ -60,12 +61,14 @@ class FsstEncodingTest : public ::testing::Test {
   std::unique_ptr<EncodingSelectionPolicy<std::string_view>>
   createSelectionPolicy(
       CompressionOptions compressionOptions = {},
-      CompressionType compressionType = CompressionType::Uncompressed) {
+      CompressionType compressionType = CompressionType::Uncompressed,
+      EncodingLayout lengthsLayout = {
+          EncodingType::Trivial,
+          {},
+          CompressionType::Uncompressed}) {
     // FSST has one nested child encoding for compressed string lengths.
     std::vector<std::optional<const EncodingLayout>> children;
-    children.emplace_back(
-        EncodingLayout{
-            EncodingType::Trivial, {}, CompressionType::Uncompressed});
+    children.emplace_back(std::move(lengthsLayout));
     EncodingLayout layout{
         EncodingType::Fsst, {}, compressionType, std::move(children)};
     return std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
@@ -1009,6 +1012,183 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   std::vector<std::string_view> decoded(values.size());
   strictTargetEncoding->materialize(values.size(), decoded.data());
   EXPECT_EQ(decoded, values);
+}
+
+TEST_F(FsstEncodingTest, encodeWithReusableBuffers) {
+  std::vector<std::string> storage;
+  for (int i = 0; i < 256; ++i) {
+    storage.push_back(
+        fmt::format("common/prefix/{}/{}", i, std::string(i % 31, 'x')));
+  }
+  std::vector<std::string_view> values(storage.begin(), storage.end());
+  values[0] = "";
+  values[1] = std::string_view("embedded\0null", 13);
+
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  const EncodingLayout dictionaryLengths{
+      EncodingType::Dictionary,
+      {},
+      CompressionType::Uncompressed,
+      {trivial, trivial}};
+
+  for (const auto& lengthsLayout :
+       {trivial,
+        EncodingLayout{
+            EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed},
+        dictionaryLengths}) {
+    for (const bool useVarint : {false, true}) {
+      for (const bool fallback : {false, true}) {
+        for (const auto compressionType :
+             {CompressionType::Uncompressed, CompressionType::Zstd}) {
+          SCOPED_TRACE(
+              fmt::format(
+                  "lengths={}, varint={}, fallback={}, compression={}",
+                  lengthsLayout.encodingType(),
+                  useVarint,
+                  fallback,
+                  compressionType));
+          Encoding::Options options;
+          options.useVarintRowCount = useVarint;
+          options.fsstCompressionTargetRatio =
+              fallback ? 0 : std::numeric_limits<double>::max();
+          CompressionOptions compressionOptions;
+          compressionOptions.zstdMinCompressionSize = 0;
+          const auto encode = [&](auto input, Buffer& buffer) {
+            return EncodingFactory::encode<std::string_view>(
+                createSelectionPolicy(
+                    compressionOptions, compressionType, lengthsLayout),
+                input,
+                buffer,
+                options);
+          };
+
+          Buffer expectedBuffer{*pool_};
+          Buffer output{*pool_};
+          const auto prefix = output.writeString("previous output");
+          std::vector<std::string_view> expected;
+          std::vector<std::string_view> encoded;
+          const std::vector<uint32_t> batchSizes{256, 64, 192};
+          for (const auto size : batchSizes) {
+            expected.push_back(encode(
+                std::span<const std::string_view>(values.data(), size),
+                expectedBuffer));
+          }
+
+          {
+            EncodingBufferPool bufferPool{pool_.get()};
+            options.encodingBufferPool = &bufferPool;
+            for (const auto size : batchSizes) {
+              encoded.push_back(encode(
+                  std::span<const std::string_view>(values.data(), size),
+                  output));
+              // Force the next result into a different output chunk and keep
+              // all earlier results alive while scratch buffers are reused.
+              output.reserve(1 << 20);
+            }
+            auto scratch = bufferPool.acquire();
+            std::memset(scratch->reserve(8192), 0xa5, 8192);
+          }
+          options.encodingBufferPool = nullptr;
+
+          EXPECT_EQ(prefix, "previous output");
+          EXPECT_EQ(encoded, expected);
+          for (size_t i = 0; i < encoded.size(); ++i) {
+            auto decoder = EncodingFactory().create(
+                *pool_, encoded[i], createStringBufferFactory(), options);
+            EXPECT_EQ(
+                decoder->encodingType(),
+                fallback ? EncodingType::Trivial : EncodingType::Fsst);
+            std::vector<std::string_view> decoded(batchSizes[i]);
+            decoder->materialize(decoded.size(), decoded.data());
+            EXPECT_EQ(
+                decoded,
+                std::vector<std::string_view>(
+                    values.begin(), values.begin() + batchSizes[i]));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(FsstEncodingTest, encodesLengthsIntoPooledBuffer) {
+  const std::vector<std::string_view> values{
+      "common/prefix/one", "common/prefix/two", "common/prefix/three"};
+  Buffer output{*pool_};
+  EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+  auto cachedBuffer = bufferPool.acquire();
+  auto* cachedAddress = cachedBuffer.get();
+  // A returned buffer must be reset before FSST writes its lengths into it.
+  std::memset(cachedBuffer->reserve(128), 0xa5, 128);
+  bufferPool.release(std::move(cachedBuffer));
+
+  const auto encoded = EncodingFactory::encode<std::string_view>(
+      createSelectionPolicy(),
+      values,
+      output,
+      {.encodingBufferPool = &bufferPool,
+       .fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+  const auto lengths = FsstEncoding::lengthsEncoding(encoded);
+  auto reusedBuffer = bufferPool.acquire();
+  ASSERT_EQ(reusedBuffer.get(), cachedAddress);
+  EXPECT_EQ(
+      (std::string_view{reusedBuffer->reserve(lengths.size()), lengths.size()}),
+      lengths);
+}
+
+TEST_F(FsstEncodingTest, pooledDictionaryAlphabet) {
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  const EncodingLayout fsst{
+      EncodingType::Fsst, {}, CompressionType::Uncompressed, {trivial}};
+  const EncodingLayout dictionary{
+      EncodingType::Dictionary,
+      {},
+      CompressionType::Uncompressed,
+      {fsst, trivial}};
+  const std::vector<std::string_view> values{
+      "common/prefix/one",
+      "common/prefix/two",
+      "common/prefix/one",
+      "common/prefix/three"};
+
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(useVarint);
+    Encoding::Options options;
+    options.useVarintRowCount = useVarint;
+    options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+    const auto encode = [&](Buffer& buffer) {
+      return EncodingFactory::encode<std::string_view>(
+          std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
+              dictionary, std::nullopt, encodingSelectionPolicyCreator_),
+          values,
+          buffer,
+          options);
+    };
+    Buffer expectedBuffer{*pool_};
+    const auto expected = encode(expectedBuffer);
+    Buffer output{*pool_};
+    std::vector<std::string_view> encoded;
+    {
+      // The dictionary output scratch arena must remain checked out while
+      // FSST acquires and releases a separate arena for its lengths.
+      EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+      options.encodingBufferPool = &bufferPool;
+      for (int i = 0; i < 3; ++i) {
+        encoded.push_back(encode(output));
+      }
+    }
+    options.encodingBufferPool = nullptr;
+    for (const auto data : encoded) {
+      EXPECT_EQ(data, expected);
+      auto decoder = EncodingFactory().create(
+          *pool_, data, createStringBufferFactory(), options);
+      std::vector<std::string_view> decoded(values.size());
+      decoder->materialize(decoded.size(), decoded.data());
+      EXPECT_EQ(decoded, values);
+    }
+  }
 }
 
 TEST_F(FsstEncodingTest, skipAndMaterialize) {

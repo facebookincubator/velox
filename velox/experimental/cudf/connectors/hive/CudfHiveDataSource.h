@@ -108,8 +108,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   bool useExperimentalCudfReader_;
 
-  // Cached combined subfield filter expression owned by 'subfieldTree_'.
-  cudf::ast::expression const* subfieldFilterExpr_{nullptr};
+  // Cached combined AST filter expression compiled from 'subfieldFilters_',
+  // owned by 'subfieldTree_'.
+  const cudf::ast::expression* subfieldFilterAst_{nullptr};
 
  private:
   // Construct and cache a RowTypePtr for the table column names and types.
@@ -146,6 +147,9 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   cudf::ast::tree subfieldTree_;
   std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
   cudf::ast::tree pushdownFilterTree_;
+
+  // The table handle's subfield filters, merged with the ones extracted from
+  // its remaining filter.
   common::SubfieldFilters subfieldFilters_;
 };
 
