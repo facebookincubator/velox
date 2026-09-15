@@ -246,19 +246,69 @@ void estimateBiasedSerializedSize(
     addNullBitmapSize(sizes, rows.size());
   }
 }
+
+int32_t rowsToElementRows(
+    const folly::Range<const vector_size_t*>& rows,
+    const uint64_t* rawNulls,
+    const vector_size_t* offsets,
+    const vector_size_t* sizes,
+    vector_size_t** sizePtrs,
+    ScratchPtr<vector_size_t>& elementRowsHolder,
+    ScratchPtr<vector_size_t*>& elementSizesHolder,
+    Scratch& scratch) {
+  const vector_size_t* nonNullPositions = rows.data();
+  auto numNonNull = rows.size();
+  ScratchPtr<uint64_t, 4> nullsHolder(scratch);
+  ScratchPtr<vector_size_t, 64> nonNullPositionsHolder(scratch);
+  if (rawNulls) {
+    auto* nulls = nullsHolder.get(bits::nwords(rows.size()));
+    simd::gatherBits(rawNulls, rows, nulls);
+    auto* mutableNonNullPositions = nonNullPositionsHolder.get(rows.size());
+    numNonNull =
+        simd::indicesOfSetBits(nulls, 0, rows.size(), mutableNonNullPositions);
+    if (numNonNull != rows.size()) {
+      addNullBitmapSize(sizePtrs, rows.size());
+    }
+    nonNullPositions = mutableNonNullPositions;
+  }
+
+  vector_size_t numElements = 0;
+  for (auto i = 0; i < numNonNull; ++i) {
+    const auto parentPosition = rawNulls ? nonNullPositions[i] : i;
+    *sizePtrs[parentPosition] += sizeof(int32_t);
+    numElements += sizes[rows[parentPosition]];
+  }
+  if (numElements == 0) {
+    return 0;
+  }
+
+  auto* elementRows = elementRowsHolder.get(numElements);
+  auto* elementSizes = elementSizesHolder.get(numElements);
+  auto fill = 0;
+  for (auto i = 0; i < numNonNull; ++i) {
+    const auto parentPosition = rawNulls ? nonNullPositions[i] : i;
+    const auto parentRow = rows[parentPosition];
+    const auto end = offsets[parentRow] + sizes[parentRow];
+    for (auto elementRow = offsets[parentRow]; elementRow < end; ++elementRow) {
+      elementRows[fill] = elementRow;
+      elementSizes[fill] = sizePtrs[parentPosition];
+      ++fill;
+    }
+  }
+  return numElements;
+}
 } // namespace
 
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
-    Scratch& scratch,
-    bool flatten) {
+    Scratch& scratch) {
   const auto totalSize = rangesTotalSize(ranges);
-  std::vector<vector_size_t> rowsStorage(totalSize);
-  std::vector<vector_size_t*> rowSizesStorage(totalSize);
-  auto* allRows = rowsStorage.data();
-  auto* allRowSizes = rowSizesStorage.data();
+  ScratchPtr<vector_size_t, 64> rowsHolder(scratch);
+  ScratchPtr<vector_size_t*, 64> rowSizesHolder(scratch);
+  auto* allRows = rowsHolder.get(totalSize);
+  auto* allRowSizes = rowSizesHolder.get(totalSize);
   auto offset = 0;
   for (auto i = 0; i < ranges.size(); ++i) {
     const auto numRows = ranges[i].size;
@@ -276,7 +326,7 @@ void estimateSerializedSizeInt(
         folly::Range<const vector_size_t*>(rows, numRows),
         rowSizes,
         scratch,
-        flatten);
+        false);
     offset += numRows;
   }
 }
@@ -369,56 +419,57 @@ void estimateSerializedSizeInt(
     }
     case VectorEncoding::Simple::MAP: {
       auto* mapVector = vector->asUnchecked<MapVector>();
-      ScratchPtr<IndexRange> rangeHolder(scratch);
-      ScratchPtr<vector_size_t*> sizesHolder(scratch);
-      const auto numRanges = rowsToRanges(
+      ScratchPtr<vector_size_t> elementRowsHolder(scratch);
+      ScratchPtr<vector_size_t*> elementSizesHolder(scratch);
+      const auto numElements = rowsToElementRows(
           rows,
           mapVector->rawNulls(),
           mapVector->rawOffsets(),
           mapVector->rawSizes(),
           sizes,
-          rangeHolder,
-          &sizesHolder,
-          nullptr,
+          elementRowsHolder,
+          elementSizesHolder,
           scratch);
-      if (numRanges == 0) {
+      if (numElements == 0) {
         return;
       }
       estimateSerializedSizeInt(
           mapVector->mapKeys().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
-          sizesHolder.get(),
+          folly::Range<const vector_size_t*>(
+              elementRowsHolder.get(), numElements),
+          elementSizesHolder.get(),
           scratch,
           true);
       estimateSerializedSizeInt(
           mapVector->mapValues().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
-          sizesHolder.get(),
+          folly::Range<const vector_size_t*>(
+              elementRowsHolder.get(), numElements),
+          elementSizesHolder.get(),
           scratch,
           true);
       break;
     }
     case VectorEncoding::Simple::ARRAY: {
       auto* arrayVector = vector->as<ArrayVector>();
-      ScratchPtr<IndexRange> rangeHolder(scratch);
-      ScratchPtr<vector_size_t*> sizesHolder(scratch);
-      const auto numRanges = rowsToRanges(
+      ScratchPtr<vector_size_t> elementRowsHolder(scratch);
+      ScratchPtr<vector_size_t*> elementSizesHolder(scratch);
+      const auto numElements = rowsToElementRows(
           rows,
           arrayVector->rawNulls(),
           arrayVector->rawOffsets(),
           arrayVector->rawSizes(),
           sizes,
-          rangeHolder,
-          &sizesHolder,
-          nullptr,
+          elementRowsHolder,
+          elementSizesHolder,
           scratch);
-      if (numRanges == 0) {
+      if (numElements == 0) {
         return;
       }
       estimateSerializedSizeInt(
           arrayVector->elements().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
-          sizesHolder.get(),
+          folly::Range<const vector_size_t*>(
+              elementRowsHolder.get(), numElements),
+          elementSizesHolder.get(),
           scratch,
           true);
       break;
