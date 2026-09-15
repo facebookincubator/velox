@@ -23,6 +23,7 @@
 
 #include <folly/futures/Future.h>
 
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/type/Type.h"
@@ -37,6 +38,16 @@ namespace facebook::velox::exec::rpc {
 using velox::rpc::RpcPayload;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
+
+/// Describes how a function dispatches one logical call. An asynchronous job
+/// is submitted and completed separately from the initial request.
+enum class RpcDispatchPath {
+  kPerRow,
+  kNativeBatch,
+  kAsyncJob,
+};
+
+VELOX_DECLARE_ENUM_NAME(RpcDispatchPath);
 
 /// Reads a response's payload as the concrete type the function produced.
 ///
@@ -90,9 +101,10 @@ inline TextPayload makeTextPayload(std::string value) {
 /// RPCState wiring, and passthrough columns.
 ///
 /// Lifecycle (called by RPCOperator):
-///   1. initialize(queryConfig, inputTypes, constantInputs) — create/cache
-///      transport and RPC clients, inspect constant values (called once
-///      during operator init).
+///   1. initialize(queryConfig, inputTypes, constantInputs, instruction) —
+///      create/cache transport and RPC clients, inspect constant values, and
+///      record the requested instruction (called once during operator init).
+///      Functions with dynamic options may resolve the backend from row values.
 ///   2. dispatchPerRow(rows, args) — dispatch individual RPCs per row
 ///      OR accumulateBatch(rows, args) + flushBatch() — accumulate and
 ///      dispatch as a batch.
@@ -112,10 +124,24 @@ class AsyncRPCFunction {
   /// @param constantInputs Constant values aligned with inputTypes.
   ///        Non-constant arguments are nullptr. Constant arguments are
   ///        single-element ConstantVectors.
+  /// @param instruction What the query asked for, per-row or batch, already
+  ///        resolved from the caller's objective by the coordinator's policy.
+  ///        A function reports how it serves the instruction through
+  ///        dispatchPath(). Dynamic options may require a conservative answer.
   virtual void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) {}
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) {}
+
+  /// How this function is dispatching, for logging and metrics only. Nothing
+  /// in the framework branches on it: a function expresses the consequences of
+  /// its own choice through the other hooks it implements, not through this.
+  ///
+  /// No default. A base class cannot know whether a backend has a multi-row
+  /// call, and a backend that only runs offline jobs cannot serve per-row at
+  /// all, so there is no path the framework could answer with.
+  virtual RpcDispatchPath dispatchPath() const = 0;
 
   /// Returns the name of this RPC function.
   virtual std::string name() const = 0;
