@@ -2432,6 +2432,55 @@ TEST_F(WriterTest, encodingLayout) {
   }
 }
 
+TEST_F(WriterTest, encodingLayoutAppliesToPredefinedFlatMapKeys) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"flatmap"},
+      {vectorMaker.mapVector<int32_t, int32_t>(
+          64,
+          [](auto) { return 1; },
+          [](auto, auto) { return 1; },
+          [](auto row, auto) { return row; },
+          [](auto) { return false; })});
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      {
+          .flatMapColumns = {{"flatmap", {"1"}}},
+          .encodingLayoutTree =
+              nimble::EncodingLayoutTree{
+                  nimble::Kind::Row,
+                  {},
+                  "",
+                  {{nimble::Kind::FlatMap,
+                    {},
+                    "flatmap",
+                    {{nimble::Kind::Scalar,
+                      {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::
+                            ScalarStream,
+                        nimble::EncodingLayout{
+                            nimble::EncodingType::Trivial,
+                            {},
+                            nimble::CompressionType::Uncompressed}}},
+                      "1"}}}}},
+      });
+  writer.write(vector);
+  writer.close();
+
+  const auto layouts = captureFlatMapKeyChunkLayouts(
+      std::make_shared<velox::InMemoryReadFile>(file),
+      /*columnIndex=*/0,
+      /*key=*/"1",
+      /*expectedStripeCount=*/1);
+  ASSERT_FALSE(layouts.empty());
+  for (const auto& layout : layouts) {
+    EXPECT_EQ(layout.encodingType(), nimble::EncodingType::Trivial);
+  }
+}
+
 TEST_F(WriterTest, openZLCompressionNumericRoundTrip) {
   // E2E: force the OpenZL codec, write compressible numeric columns, and assert
   // (a) at least one numeric stream is actually OpenZL-compressed and (b) the
