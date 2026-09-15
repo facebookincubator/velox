@@ -553,6 +553,60 @@ TEST_F(TableScanTest, filterPushdown) {
 #endif
 }
 
+TEST_F(TableScanTest, mixedCasePhysicalColumnNames) {
+  auto vector = makeRowVector(
+      {"Filter_Col", "Value_Col"},
+      {makeFlatVector<std::string>({"a", "b", "c", "d"}),
+       makeFlatVector<std::string>({"a", "b", "c", "d"})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+  createDuckDbTable({vector});
+
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "filter_col",
+              std::make_unique<common::BytesRange>(
+                  "b",
+                  /*lowerUnbounded*/ false,
+                  /*lowerExclusive*/ false,
+                  "",
+                  /*upperUnbounded*/ true,
+                  /*upperExclusive*/ false,
+                  /*nullAllowed*/ false))
+          .build();
+  auto logicalRowType =
+      ROW({"filter_col", "value_col"}, {VARCHAR(), VARCHAR()});
+  auto filterColumnHandle =
+      facebook::velox::exec::test::HiveConnectorTestBase::regularColumn(
+          "Filter_Col", VARCHAR());
+  auto tableHandle =
+      std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
+          kCudfHiveConnectorId,
+          "parquet_table",
+          std::move(subfieldFilters),
+          nullptr,
+          logicalRowType,
+          std::vector<std::string>{},
+          std::unordered_map<std::string, std::string>{},
+          std::vector<facebook::velox::connector::hive::HiveColumnHandlePtr>{
+              filterColumnHandle});
+
+  facebook::velox::connector::ColumnHandleMap assignments;
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(ROW({}, {}))
+                  .tableHandle(tableHandle)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .singleAggregation({}, {"sum(1)"})
+                  .planNode();
+
+  assertQuery(
+      plan, {filePath}, "SELECT count(*) FROM tmp WHERE Filter_Col >= 'b'");
+}
+
 // Disable this test and the one below for now, pending a CUDF fix.
 // simoneves 2/25/26
 // @TODO simoneves/mattgara re-enable once fixed.
