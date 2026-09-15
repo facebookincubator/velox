@@ -1027,6 +1027,13 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
     }
   }
 
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
+
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcProducerNeverSends";
   const std::string sinkTaskId = taskPrefix + "sinkConsumer";
@@ -1041,6 +1048,7 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
       /*numDrivers=*/1);
+  EXPECT_TRUE(queueManager_->canUseIntraNode(srcTaskId));
 
   // 2. Create sink task with exchange plan node.
   core::PlanNodeId exchangeNodeId;
@@ -1290,6 +1298,9 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
   config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "broadcastSrc";
@@ -1305,6 +1316,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
+  EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
   // Finalize destinations for broadcast.
   queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
 
@@ -1353,7 +1365,6 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
 
   // Cleanup.
   queueManager_->removeTask(srcTaskId);
-  config.intraNodeExchange = origIntraNode;
 }
 
 // Regression test for broadcast + intra-node placeholder race condition.
@@ -1379,6 +1390,9 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
   config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "broadcastPlaceholderSrc";
@@ -1423,6 +1437,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
+  EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
 
   // Step 4: Finalize destinations for broadcast.
   queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
@@ -1448,7 +1463,6 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
 
   // Cleanup.
   queueManager_->removeTask(srcTaskId);
-  config.intraNodeExchange = origIntraNode;
 }
 
 // Test that UcxPartitionedOutput's batch accumulation correctly merges many
@@ -1771,6 +1785,9 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
   config.intraNodeExchange = false;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcActiveTransfer";
@@ -1841,8 +1858,6 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
 
   // If we reach here without crashing, the deferred cleanup is working.
   VLOG(0) << "deferredRequestCleanupOnTaskAbort: completed without crash";
-
-  config.intraNodeExchange = origIntraNode;
 }
 
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
