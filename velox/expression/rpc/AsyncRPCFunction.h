@@ -34,16 +34,48 @@ namespace facebook::velox::exec::rpc {
 
 // Import core RPC types from velox/common/rpc into this namespace so that
 // existing code in velox/expression/rpc can use them unqualified.
-using velox::rpc::RPCRequest;
+using velox::rpc::RpcPayload;
 using velox::rpc::RPCResponse;
 using velox::rpc::RPCStreamingMode;
+
+/// Reads a response's payload as the concrete type the function produced.
+///
+/// A transport helper shared by several functions writes one payload type for
+/// all of them, so a function does not always read back the type it wrote, and
+/// an unchecked cast would reinterpret one payload's bytes as another's. The
+/// type is therefore checked in every build. There is no "carries neither a
+/// payload nor an error" case to guard: RPCResponse cannot represent one.
+template <typename T>
+const T& responseAs(const RPCResponse& response) {
+  VELOX_CHECK(
+      !response.hasError(),
+      "RPC response carries an error, not a payload: {}",
+      response.error().message);
+  return response.payload().template get<T>();
+}
+
+/// Payload for functions whose backend returns text. A function with a richer
+/// result (an embedding, a struct) defines its own payload type instead.
+struct TextPayload {
+  /// Stores the backend-produced text.
+  std::string text;
+
+  explicit TextPayload(std::string value) : text(std::move(value)) {}
+};
+
+/// Wraps text as a response payload. Returns the payload by value: it is
+/// stored inline in the response, so there is nothing to allocate.
+inline TextPayload makeTextPayload(std::string value) {
+  return TextPayload{std::move(value)};
+}
 
 /// Base interface for async RPC functions (business logic layer).
 ///
 /// Lives in velox/expression/rpc/ because it is a function interface — it
 /// defines what an RPC function is (signature, dispatch, response format),
-/// analogous to VectorFunction in velox/expression/. Transport-layer types
-/// (IRPCClient, RPCRequest, RPCResponse) live in velox/common/rpc/.
+/// analogous to VectorFunction in velox/expression/. The framework-visible
+/// response type (RPCResponse) lives in velox/common/rpc/; the concrete
+/// request and response payload types belong to each function.
 /// The execution operator (RPCOperator) that drives async dispatch lives
 /// in velox/exec/rpc/.
 ///
@@ -69,7 +101,7 @@ class AsyncRPCFunction {
  public:
   virtual ~AsyncRPCFunction() = default;
 
-  /// Initialize the RPC function with query configuration and constant
+  /// Initializes the RPC function with query configuration and constant
   /// arguments.
   /// Called by RPCOperator during initialize(), before any dispatch.
   /// Use this to create/cache RPC clients, read session properties, and
@@ -85,13 +117,13 @@ class AsyncRPCFunction {
       const std::vector<TypePtr>& /*inputTypes*/,
       const std::vector<VectorPtr>& /*constantInputs*/) {}
 
-  /// Return the name of this RPC function.
+  /// Returns the name of this RPC function.
   virtual std::string name() const = 0;
 
-  /// Return the Velox type of the result column.
+  /// Returns the Velox type of the result column.
   virtual TypePtr resultType() const = 0;
 
-  /// The concurrency ceiling this function's own options ask for, or 0 when
+  /// Returns the concurrency ceiling requested by function options, or 0 when
   /// unset. The operator applies it alongside the session properties in a
   /// single configuration step, so a backend's whole policy lands at once
   /// rather than in two writes a concurrent query could interleave with.
@@ -99,7 +131,7 @@ class AsyncRPCFunction {
     return 0;
   }
 
-  /// Return the service tier key for rate limiting.
+  /// Returns the service tier key for rate limiting.
   /// Empty string means "no tier configured — uses global default limit."
   virtual std::string tierKey() const {
     return "";
@@ -107,7 +139,7 @@ class AsyncRPCFunction {
 
   // ── PER_ROW mode ──────────────────────────────────────────────
 
-  /// Dispatch individual RPCs for each active row.
+  /// Dispatches individual RPCs for each active row.
   /// Returns one future per active row, keyed by originalRowIndex.
   ///
   /// The function:
@@ -125,7 +157,7 @@ class AsyncRPCFunction {
 
   // ── BATCH mode ────────────────────────────────────────────────
 
-  /// Accumulate rows for batch dispatch.
+  /// Accumulates rows for batch dispatch.
   /// Called by the operator on each addInput(). The function unpacks typed
   /// data from (rows, args) and stores it internally.
   ///
@@ -144,7 +176,7 @@ class AsyncRPCFunction {
         "accumulateBatch() not implemented for function '{}'", name());
   }
 
-  /// Dispatch accumulated batch.
+  /// Dispatches the accumulated batch.
   /// Called by the operator at flush time (noMoreInput or threshold).
   /// The function builds the typed batch request from its internal
   /// accumulated state and dispatches it.
@@ -157,19 +189,19 @@ class AsyncRPCFunction {
   /// into the correct positions before stamping global row IDs. The
   /// responses may appear in any order in the vector; the operator
   /// reorders them by rowId. Null rows get
-  /// RPCResponse{.error = "null_input"}. This keeps the operator
+  /// a response carrying RPCErrorKind::kNullInput. This keeps the operator
   /// completely agnostic to null handling in batch mode.
   virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
       int32_t /*maxRows*/) {
     VELOX_UNSUPPORTED("flushBatch() not implemented for function '{}'", name());
   }
 
-  /// Convenience overload: flush all accumulated rows.
+  /// Flushes all accumulated rows.
   virtual folly::SemiFuture<std::vector<RPCResponse>> flushBatch() {
     return flushBatch(0);
   }
 
-  /// Number of rows accumulated so far (for threshold checks).
+  /// Returns the number of rows accumulated so far for threshold checks.
   /// Batch-capable functions MUST override this; the operator uses
   /// function_->pendingBatchSize() >= dispatchBatchSize_ to decide
   /// when to flush.
@@ -177,27 +209,24 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Returns the number of backend admission slots needed to flush 'numRows'.
+  /// The result must be positive and nondecreasing with 'numRows', and one row
+  /// must require exactly one unit. Native and asynchronous batch APIs consume
+  /// one slot per flush. Functions that implement a batch instruction by
+  /// issuing one RPC per row override this to return 'numRows'.
+  virtual int32_t admissionUnitsForBatch(int32_t /*numRows*/) const {
+    return 1;
+  }
+
   // ── Output ────────────────────────────────────────────────────
 
-  /// Build output vector from completed responses.
-  /// Default: VARCHAR FlatVector (errors → SQL NULL, success → string
-  /// value). Override for non-VARCHAR return types (e.g., ARRAY(REAL)
-  /// for embeddings) or custom result processing.
+  /// Builds the output vector from completed responses.
+  ///
+  /// Only the function can do this: it is the one that knows what its
+  /// payload contains and how it maps onto resultType().
   virtual VectorPtr buildOutput(
       const std::vector<RPCResponse>& responses,
-      memory::MemoryPool* pool) const {
-    const auto numRows = static_cast<vector_size_t>(responses.size());
-    auto result =
-        BaseVector::create<FlatVector<StringView>>(VARCHAR(), numRows, pool);
-    for (vector_size_t i = 0; i < numRows; ++i) {
-      if (responses[i].hasError()) {
-        result->setNull(i, true);
-      } else {
-        result->set(i, StringView(responses[i].result));
-      }
-    }
-    return result;
-  }
+      memory::MemoryPool* pool) const = 0;
 
   // ── Congestion Control ───────────────────────────────────────
 
