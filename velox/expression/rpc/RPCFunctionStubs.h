@@ -29,7 +29,7 @@ namespace facebook::velox::exec::rpc {
 /// The stub has the correct signature but throws on direct execution.
 /// This makes the function discoverable via the /v1/functions sidecar endpoint.
 ///
-/// @param name Full 3-part Velox name (e.g., "native.rpc.fb_llm_inference")
+/// @param name Full 3-part Velox name (e.g., "native.rpc.my_rpc_function")
 /// @param signatures Function signatures (arg types, return type)
 /// @param metadata Declaration forwarded to the Velox registry. The stub never
 /// executes, so this is read only by the sidecar, which turns it into the
