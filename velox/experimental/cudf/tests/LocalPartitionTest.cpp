@@ -23,6 +23,8 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <folly/ScopeGuard.h>
+
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
 namespace {
