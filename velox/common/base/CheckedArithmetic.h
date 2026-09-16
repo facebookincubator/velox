@@ -21,12 +21,20 @@
 #include "folly/Likely.h"
 #include "velox/common/base/Exceptions.h"
 
+#ifdef _WIN32
+#include "velox/common/base/windows/BuiltinUtil.h"
+#endif
+
 namespace facebook::velox {
 
 template <typename T>
 T checkedPlus(T a, T b, const char* typeName = "integer") {
   T result;
+#ifdef _WIN32
+  bool overflow = facebook::velox::windows::builtin_add_overflow(a, b, &result);
+#else
   bool overflow = __builtin_add_overflow(a, b, &result);
+#endif
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} + {}", typeName, a, b);
   }
@@ -36,7 +44,11 @@ T checkedPlus(T a, T b, const char* typeName = "integer") {
 template <typename T>
 T checkedMinus(T a, T b, const char* typeName = "integer") {
   T result;
+#ifdef _WIN32
+  bool overflow = facebook::velox::windows::builtin_sub_overflow(a, b, &result);
+#else
   bool overflow = __builtin_sub_overflow(a, b, &result);
+#endif
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} - {}", typeName, a, b);
   }
@@ -46,7 +58,11 @@ T checkedMinus(T a, T b, const char* typeName = "integer") {
 template <typename T>
 T checkedMultiply(T a, T b, const char* typeName = "integer") {
   T result;
+#ifdef _WIN32
+  bool overflow = facebook::velox::windows::builtin_mul_overflow(a, b, &result);
+#else
   bool overflow = __builtin_mul_overflow(a, b, &result);
+#endif
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} * {}", typeName, a, b);
   }
