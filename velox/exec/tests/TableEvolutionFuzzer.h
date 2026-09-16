@@ -64,6 +64,11 @@ class TableEvolutionFuzzer {
     int64_t numIndexFilterConversions{0};
     int64_t numStringDictionaryEncodingPreserved{0};
     int64_t numStringDictionaryEncodingAbandoned{0};
+    int64_t numQueriesWithValueHook{0};
+    uint64_t numValuesLoadedToValueHook{0};
+    int64_t numQueriesWithRemainingFilterEvaluation{0};
+    int64_t totalRemainingFilterCpuNanos{0};
+    int64_t totalRemainingFilterWallNanos{0};
     int64_t numQueriesWithLazyIo{0};
     int64_t dataSourceLazyInputBytes{0};
     int64_t dataSourceLazyCpuNanos{0};
@@ -82,6 +87,23 @@ class TableEvolutionFuzzer {
     std::vector<InputFile> referenceFiles;
     ScanPlanCoverage pushdown;
     ScanPlanCoverage reference;
+    bool hasSubfieldFilters{false};
+    bool hasRemainingFilter{false};
+    bool hasFilterOnlyColumns{false};
+    bool aggregationRequested{false};
+    std::vector<std::string> filterTypes;
+    std::vector<std::string> subfieldFilterTypes;
+    std::vector<std::string> remainingFilterTypes;
+    std::vector<std::string> filterKinds;
+    /// Lists types for null-accepting filters whose input contains nulls.
+    std::vector<std::string> nullAcceptingSubfieldFilterTypes;
+    std::vector<std::string> groupingKeyTypes;
+    std::vector<std::string> aggregateTypes;
+    std::vector<std::string> aggregationFunctions;
+    std::vector<std::string> projectedTypes;
+    /// One entry per selected flat-map-as-struct column.
+    std::vector<std::string> flatmapAsStructKeyTypes;
+    std::vector<std::string> flatmapAsStructValueTypes;
     /// One entry per eligible flat-map writer column.
     std::vector<std::string> flatmapEligibleKeyTypes;
     std::vector<std::string> flatmapEligibleValueTypes;
@@ -95,6 +117,11 @@ class TableEvolutionFuzzer {
     int64_t numFlatmapEligibleColumns{0};
     int64_t numBucketColumns{0};
     int32_t bucketCount{0};
+    int64_t numSubfieldFilters{0};
+    int64_t numFilterOnlyColumns{0};
+    uint64_t rowsReducedByPushdown{0};
+    /// Identifies the failed phase; empty for successful queries.
+    std::string failurePhase;
     bool executionSucceeded{false};
     bool verificationPassed{false};
   };
@@ -120,6 +147,70 @@ class TableEvolutionFuzzer {
     std::map<std::string, int64_t> schemaEvolutionByPosition;
   };
 
+  /// Tracks query counts for one generated type, filter kind, or function.
+  struct QueryDimensionCoverage {
+    int64_t numRequested{0};
+    int64_t numExecuted{0};
+    int64_t numVerified{0};
+  };
+
+  /// Tracks filter query shapes and query-level runtime effects.
+  struct FilterCoverage {
+    int64_t numRequested{0};
+    int64_t numExecuted{0};
+    int64_t numVerified{0};
+    int64_t numActivated{0};
+    int64_t numEffective{0};
+    int64_t numSubfieldRequested{0};
+    int64_t numRemainingRequested{0};
+    int64_t numSubfieldAndRemainingRequested{0};
+    int64_t numRemainingFilterEvaluated{0};
+    int64_t numFilterOnly{0};
+    int64_t numNullAcceptingSubfieldOnNullableInput{0};
+    int64_t numSubfieldFilters{0};
+    int64_t numFilterOnlyColumns{0};
+    int64_t numQueriesWithSplitPruning{0};
+    int64_t numQueriesWithStridePruning{0};
+    int64_t numQueriesWithRowReduction{0};
+    uint64_t numRowsReduced{0};
+    std::map<std::string, QueryDimensionCoverage> byType;
+    std::map<std::string, QueryDimensionCoverage> subfieldByType;
+    std::map<std::string, QueryDimensionCoverage> remainingByType;
+    std::map<std::string, QueryDimensionCoverage> byKind;
+  };
+
+  /// Tracks aggregation requests and query-level ValueHook activation.
+  struct AggregationCoverage {
+    int64_t numRequested{0};
+    int64_t numExecuted{0};
+    int64_t numPushdownPlanActivated{0};
+    int64_t numReferencePlanActivated{0};
+    int64_t numDifferentiallyVerified{0};
+    uint64_t numPushdownValuesLoaded{0};
+    uint64_t numReferenceValuesLoaded{0};
+    std::map<std::string, QueryDimensionCoverage> groupingKeyTypes;
+    std::map<std::string, QueryDimensionCoverage> aggregateTypes;
+    std::map<std::string, QueryDimensionCoverage> functions;
+  };
+
+  /// Tracks selected flat-map-as-struct read shapes.
+  struct FlatMapAsStructCoverage {
+    int64_t numSelected{0};
+    int64_t numExecuted{0};
+    int64_t numVerified{0};
+    int64_t numColumns{0};
+    std::map<std::string, int64_t> columnsByKeyType;
+    std::map<std::string, int64_t> columnsByValueType;
+  };
+
+  /// Tracks generated query semantics separately from file configuration.
+  struct QueryShapeCoverage {
+    FilterCoverage filters;
+    AggregationCoverage aggregations;
+    FlatMapAsStructCoverage flatmapAsStruct;
+    std::map<std::string, int64_t> projectedByType;
+  };
+
   /// Aggregates correlated query coverage across run() and runOnInputFile().
   struct CoverageAccumulator {
     void add(const QueryCoverage& query);
@@ -135,6 +226,8 @@ class TableEvolutionFuzzer {
     int64_t numVerificationsPassed{0};
     int64_t numVerificationsFailed{0};
     ConfigCoverage configs;
+    QueryShapeCoverage queryShapes;
+    std::map<std::string, int64_t> failuresByPhase;
     ScanPlanCoverage pushdown;
     ScanPlanCoverage reference;
   };

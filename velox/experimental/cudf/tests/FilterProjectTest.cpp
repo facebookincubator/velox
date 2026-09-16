@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -31,6 +32,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include <atomic>
 #include <limits>
 
 using namespace facebook::velox;
@@ -1558,6 +1560,65 @@ TEST_F(CudfFilterProjectTest, betweenOperation) {
   testBetweenOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
+  auto input = makeRowVector(
+      {"value", "lower_bound", "upper_bound"},
+      {makeNullableFlatVector<double>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
+       makeNullableFlatVector<double>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
+       makeNullableFlatVector<double>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
+  // Exercise BetweenFunction rather than the AST or JIT evaluator.
+  cudf_velox::ensureBuiltinExpressionEvaluatorsRegistered();
+  auto& registry = cudf_velox::getCudfExpressionEvaluatorRegistry();
+  auto& functionEntry = registry.at("function");
+  const auto previousEntry = functionEntry;
+  std::atomic<size_t> betweenCreations{0};
+  SCOPE_EXIT {
+    functionEntry = previousEntry;
+  };
+  functionEntry.create = [create = previousEntry.create, &betweenCreations](
+                             const core::TypedExprPtr& expr,
+                             const RowTypePtr& rowType,
+                             memory::MemoryPool* pool) {
+    auto evaluator = create(expr, rowType, pool);
+    if (expr->isCallKind() &&
+        expr->asUnchecked<core::CallTypedExpr>()->name() == "between") {
+      ++betweenCreations;
+    }
+    return evaluator;
+  };
+  auto highestPriority = functionEntry.priority;
+  for (const auto& [name, entry] : registry) {
+    if (entry.priority > highestPriority) {
+      highestPriority = entry.priority;
+    }
+  }
+  ASSERT_LT(highestPriority, std::numeric_limits<int>::max());
+  functionEntry.priority = highestPriority + 1;
+
+  for (const bool literalLower : {true, false}) {
+    for (const bool literalUpper : {true, false}) {
+      const auto sql = fmt::format(
+          "value BETWEEN {} AND {}",
+          literalLower ? "1.0" : "lower_bound",
+          literalUpper ? "9.0" : "upper_bound");
+      SCOPED_TRACE(sql);
+      auto plan = PlanBuilder().values({input}).project({sql}).planNode();
+      std::vector<std::optional<bool>> expected{
+          false, true, true, true, false, std::nullopt, true, true};
+      if (!literalLower) {
+        expected[6] = std::nullopt;
+      }
+      if (!literalUpper) {
+        expected[7] = std::nullopt;
+      }
+      betweenCreations = 0;
+      AssertQueryBuilder(plan).assertResults(
+          makeRowVector({makeNullableFlatVector<bool>(expected)}));
+      ASSERT_GT(betweenCreations.load(), 0);
+    }
+  }
+}
+
 TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
@@ -2109,7 +2170,7 @@ TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
   // ignored.
   auto rowType = ROW({{"c0", INTEGER()}, {"c1", INTEGER()}});
   auto vectors = makeVectors(rowType, 1, 50);
-  // Make some c0 nulls so fallback engages.
+  // Make some c0 nulls to exercise the GPU replace_nulls path.
   auto& vec = vectors[0];
   auto c0 = vec->childAt(0)->asFlatVector<int32_t>();
   for (vector_size_t i = 1; i < vec->size(); i += 4) {
@@ -2292,6 +2353,7 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

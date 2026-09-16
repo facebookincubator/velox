@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <set>
 
 #include <re2/re2.h>
 
@@ -152,10 +153,16 @@ int64_t runtimeStatSum(const OperatorStats& op, std::string_view key) {
   return it != op.runtimeStats.end() ? it->second.sum : 0;
 }
 
+int64_t runtimeStatCount(const OperatorStats& op, std::string_view key) {
+  auto it = op.runtimeStats.find(std::string(key));
+  return it != op.runtimeStats.end() ? it->second.count : 0;
+}
+
 TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
     const std::shared_ptr<exec::Task>& task) {
   TableEvolutionFuzzer::ScanPlanCoverage result;
   result.numQueries = 1;
+  bool remainingFilterEvaluated{false};
   auto taskStats = task->taskStats();
   for (const auto& pipeline : taskStats.pipelineStats) {
     for (const auto& op : pipeline.operatorStats) {
@@ -174,6 +181,13 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
         result.numStripeLoads += runtimeStatSum(op, "numStripeLoads");
         result.numIndexFilterConversions +=
             runtimeStatSum(op, "numIndexFilterConversions");
+        result.totalRemainingFilterCpuNanos +=
+            runtimeStatSum(op, "totalRemainingFilterCpuNanos");
+        result.totalRemainingFilterWallNanos +=
+            runtimeStatSum(op, "totalRemainingFilterWallNanos");
+        remainingFilterEvaluated = remainingFilterEvaluated ||
+            runtimeStatCount(op, "totalRemainingFilterCpuNanos") > 0 ||
+            runtimeStatCount(op, "totalRemainingFilterWallNanos") > 0;
 
         result.storageReadBytes += runtimeStatSum(op, "storageReadBytes");
         result.ramReadBytes += runtimeStatSum(op, "ramReadBytes");
@@ -185,6 +199,8 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
 
       // These stats belong to the operator active when the reader or LazyVector
       // records them, which can be a scan, aggregation, or intervening project.
+      result.numValuesLoadedToValueHook +=
+          runtimeStatSum(op, "loadedToValueHook");
       result.dataSourceLazyInputBytes +=
           runtimeStatSum(op, "dataSourceLazyInputBytes");
       result.dataSourceLazyCpuNanos +=
@@ -197,6 +213,8 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
           op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
     }
   }
+  result.numQueriesWithValueHook = result.numValuesLoadedToValueHook > 0;
+  result.numQueriesWithRemainingFilterEvaluation = remainingFilterEvaluated;
   result.numQueriesWithLazyIo = result.dataSourceLazyInputBytes > 0 ||
       result.dataSourceLazyCpuNanos > 0 || result.dataSourceLazyWallNanos > 0;
   return result;
@@ -223,6 +241,12 @@ void addScanStats(
       stats.numStringDictionaryEncodingPreserved;
   coverage.numStringDictionaryEncodingAbandoned +=
       stats.numStringDictionaryEncodingAbandoned;
+  coverage.numQueriesWithValueHook += stats.numQueriesWithValueHook;
+  coverage.numValuesLoadedToValueHook += stats.numValuesLoadedToValueHook;
+  coverage.numQueriesWithRemainingFilterEvaluation +=
+      stats.numQueriesWithRemainingFilterEvaluation;
+  coverage.totalRemainingFilterCpuNanos += stats.totalRemainingFilterCpuNanos;
+  coverage.totalRemainingFilterWallNanos += stats.totalRemainingFilterWallNanos;
   coverage.numQueriesWithLazyIo += stats.numQueriesWithLazyIo;
   coverage.dataSourceLazyInputBytes += stats.dataSourceLazyInputBytes;
   coverage.dataSourceLazyCpuNanos += stats.dataSourceLazyCpuNanos;
@@ -256,6 +280,13 @@ void logScanStats(
           << stats.numStringDictionaryEncodingPreserved
           << " dictionaryEncodingAbandoned="
           << stats.numStringDictionaryEncodingAbandoned;
+  VLOG(1) << "ScanCoverage[" << label
+          << "] execution: valueHookQueries=" << stats.numQueriesWithValueHook
+          << " valueHookValues=" << stats.numValuesLoadedToValueHook
+          << " remainingFilterQueries="
+          << stats.numQueriesWithRemainingFilterEvaluation
+          << " remainingFilterCpuNs=" << stats.totalRemainingFilterCpuNanos
+          << " remainingFilterWallNs=" << stats.totalRemainingFilterWallNanos;
   VLOG(1) << "ScanCoverage[" << label << "] operatorScopedLazyIO: inputBytes="
           << stats.dataSourceLazyInputBytes
           << " cpuNs=" << stats.dataSourceLazyCpuNanos
@@ -413,8 +444,79 @@ void TableEvolutionFuzzer::CoverageAccumulator::add(
     }
   }
 
+  const auto addRequested = [](const std::vector<std::string>& dimensions,
+                               auto& coverageByDimension) {
+    for (const auto& dimension : dimensions) {
+      ++coverageByDimension[dimension].numRequested;
+    }
+  };
+  const auto addExecuted = [](const std::vector<std::string>& dimensions,
+                              auto& coverageByDimension) {
+    for (const auto& dimension : dimensions) {
+      ++coverageByDimension[dimension].numExecuted;
+    }
+  };
+  const auto addVerified = [](const std::vector<std::string>& dimensions,
+                              auto& coverageByDimension) {
+    for (const auto& dimension : dimensions) {
+      ++coverageByDimension[dimension].numVerified;
+    }
+  };
+
+  auto& filterCoverage = queryShapes.filters;
+  const bool filterRequested =
+      query.hasSubfieldFilters || query.hasRemainingFilter;
+  if (filterRequested) {
+    ++filterCoverage.numRequested;
+    filterCoverage.numSubfieldRequested += query.hasSubfieldFilters;
+    filterCoverage.numRemainingRequested += query.hasRemainingFilter;
+    filterCoverage.numSubfieldAndRemainingRequested +=
+        query.hasSubfieldFilters && query.hasRemainingFilter;
+    filterCoverage.numSubfieldFilters += query.numSubfieldFilters;
+    filterCoverage.numNullAcceptingSubfieldOnNullableInput +=
+        !query.nullAcceptingSubfieldFilterTypes.empty();
+    addRequested(query.filterTypes, filterCoverage.byType);
+    addRequested(query.subfieldFilterTypes, filterCoverage.subfieldByType);
+    addRequested(query.remainingFilterTypes, filterCoverage.remainingByType);
+    addRequested(query.filterKinds, filterCoverage.byKind);
+  }
+  if (query.hasFilterOnlyColumns) {
+    ++filterCoverage.numFilterOnly;
+    filterCoverage.numFilterOnlyColumns += query.numFilterOnlyColumns;
+  }
+
+  auto& aggregationCoverage = queryShapes.aggregations;
+  if (query.aggregationRequested) {
+    ++aggregationCoverage.numRequested;
+    addRequested(query.groupingKeyTypes, aggregationCoverage.groupingKeyTypes);
+    addRequested(query.aggregateTypes, aggregationCoverage.aggregateTypes);
+    addRequested(query.aggregationFunctions, aggregationCoverage.functions);
+  }
+
+  auto& flatmapCoverage = queryShapes.flatmapAsStruct;
+  if (!query.flatmapAsStructKeyTypes.empty()) {
+    ++flatmapCoverage.numSelected;
+    flatmapCoverage.numColumns +=
+        static_cast<int64_t>(query.flatmapAsStructKeyTypes.size());
+    for (const auto& type : query.flatmapAsStructKeyTypes) {
+      ++flatmapCoverage.columnsByKeyType[type];
+    }
+    for (const auto& type : query.flatmapAsStructValueTypes) {
+      ++flatmapCoverage.columnsByValueType[type];
+    }
+  }
+
+  for (const auto& type : query.projectedTypes) {
+    ++queryShapes.projectedByType[type];
+  }
+
   if (!query.executionSucceeded) {
     ++numExecutionFailures;
+    if (query.failurePhase.empty()) {
+      ++failuresByPhase["execution"];
+    } else {
+      ++failuresByPhase[query.failurePhase];
+    }
     return;
   }
 
@@ -423,6 +525,64 @@ void TableEvolutionFuzzer::CoverageAccumulator::add(
     ++numVerificationsPassed;
   } else {
     ++numVerificationsFailed;
+    if (query.failurePhase.empty()) {
+      ++failuresByPhase["verification"];
+    } else {
+      ++failuresByPhase[query.failurePhase];
+    }
+  }
+
+  if (filterRequested) {
+    ++filterCoverage.numExecuted;
+    addExecuted(query.filterTypes, filterCoverage.byType);
+    addExecuted(query.subfieldFilterTypes, filterCoverage.subfieldByType);
+    addExecuted(query.remainingFilterTypes, filterCoverage.remainingByType);
+    addExecuted(query.filterKinds, filterCoverage.byKind);
+    if (query.verificationPassed) {
+      ++filterCoverage.numVerified;
+      addVerified(query.filterTypes, filterCoverage.byType);
+      addVerified(query.subfieldFilterTypes, filterCoverage.subfieldByType);
+      addVerified(query.remainingFilterTypes, filterCoverage.remainingByType);
+      addVerified(query.filterKinds, filterCoverage.byKind);
+    }
+    const bool remainingFilterEvaluated = query.hasRemainingFilter &&
+        query.pushdown.numQueriesWithRemainingFilterEvaluation > 0;
+    const bool activated = query.hasSubfieldFilters || remainingFilterEvaluated;
+    const bool splitPruned = query.pushdown.skippedSplits > 0;
+    const bool stridePruned = query.pushdown.skippedStrides > 0;
+    const bool rowsReduced =
+        !query.aggregationRequested && query.rowsReducedByPushdown > 0;
+    filterCoverage.numRemainingFilterEvaluated += remainingFilterEvaluated;
+    filterCoverage.numActivated += activated;
+    filterCoverage.numEffective +=
+        activated && (splitPruned || stridePruned || rowsReduced);
+    filterCoverage.numQueriesWithSplitPruning += splitPruned;
+    filterCoverage.numQueriesWithStridePruning += stridePruned;
+    filterCoverage.numQueriesWithRowReduction += rowsReduced;
+    filterCoverage.numRowsReduced +=
+        rowsReduced ? query.rowsReducedByPushdown : 0;
+  }
+
+  if (query.aggregationRequested) {
+    ++aggregationCoverage.numExecuted;
+    addExecuted(query.groupingKeyTypes, aggregationCoverage.groupingKeyTypes);
+    addExecuted(query.aggregateTypes, aggregationCoverage.aggregateTypes);
+    addExecuted(query.aggregationFunctions, aggregationCoverage.functions);
+    const auto pushdownValues = query.pushdown.numValuesLoadedToValueHook;
+    const auto referenceValues = query.reference.numValuesLoadedToValueHook;
+    const bool pushdownActivated = pushdownValues > 0;
+    const bool referenceActivated = referenceValues > 0;
+    aggregationCoverage.numPushdownPlanActivated += pushdownActivated;
+    aggregationCoverage.numReferencePlanActivated += referenceActivated;
+    aggregationCoverage.numDifferentiallyVerified +=
+        pushdownActivated && !referenceActivated && query.verificationPassed;
+    aggregationCoverage.numPushdownValuesLoaded += pushdownValues;
+    aggregationCoverage.numReferenceValuesLoaded += referenceValues;
+  }
+
+  if (!query.flatmapAsStructKeyTypes.empty()) {
+    ++flatmapCoverage.numExecuted;
+    flatmapCoverage.numVerified += query.verificationPassed;
   }
 
   addScanStats(query.pushdown, pushdown);
@@ -972,6 +1132,165 @@ bool containsIdentifier(const std::string& expr, const std::string& name) {
   return false;
 }
 
+std::vector<std::string> typeKindsForColumns(
+    const RowTypePtr& schema,
+    const std::unordered_set<std::string>& columnNames) {
+  std::set<std::string> typeKinds;
+  for (int i = 0; i < schema->size(); ++i) {
+    if (columnNames.count(schema->nameOf(i)) > 0) {
+      typeKinds.emplace(schema->childAt(i)->kindName());
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+void collectScalarTypeKinds(
+    const TypePtr& type,
+    std::set<std::string>& typeKinds) {
+  if (type->isArray()) {
+    collectScalarTypeKinds(type->asArray().elementType(), typeKinds);
+    return;
+  }
+  if (type->isMap()) {
+    collectScalarTypeKinds(type->asMap().keyType(), typeKinds);
+    collectScalarTypeKinds(type->asMap().valueType(), typeKinds);
+    return;
+  }
+  if (type->isRow()) {
+    for (const auto& child : type->asRow().children()) {
+      collectScalarTypeKinds(child, typeKinds);
+    }
+    return;
+  }
+  typeKinds.emplace(type->kindName());
+}
+
+std::vector<std::string> scalarTypeKindsForColumns(
+    const RowTypePtr& schema,
+    const std::vector<std::string>& columnNames) {
+  const std::unordered_set<std::string> selectedColumns(
+      columnNames.begin(), columnNames.end());
+  const bool readAllColumns = columnNames.empty();
+  std::set<std::string> typeKinds;
+  for (int i = 0; i < schema->size(); ++i) {
+    if (readAllColumns || selectedColumns.count(schema->nameOf(i)) > 0) {
+      collectScalarTypeKinds(schema->childAt(i), typeKinds);
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+std::vector<std::string> filterKindNames(
+    const common::SubfieldFilters& filters,
+    bool hasRemainingFilter) {
+  std::set<std::string> filterKinds;
+  for (const auto& entry : filters) {
+    filterKinds.emplace(entry.second->kindName());
+  }
+  if (hasRemainingFilter) {
+    filterKinds.emplace("RemainingExpression");
+  }
+  return {filterKinds.begin(), filterKinds.end()};
+}
+
+bool containsNull(const VectorPtr& vector) {
+  if (!vector->mayHaveNulls()) {
+    return false;
+  }
+  for (vector_size_t row = 0; row < vector->size(); ++row) {
+    if (vector->isNullAt(row)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<std::string> nullAcceptingSubfieldFilterTypeKinds(
+    const RowTypePtr& schema,
+    const RowVectorPtr& data,
+    const common::SubfieldFilters& filters) {
+  std::set<std::string> typeKinds;
+  for (const auto& [subfield, filter] : filters) {
+    if (!filter->testNull()) {
+      continue;
+    }
+    const auto values =
+        dwio::common::getChildBySubfield(data.get(), subfield, schema);
+    if (containsNull(values)) {
+      typeKinds.emplace(values->type()->kindName());
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+std::vector<std::string> aggregateFunctionNames(
+    const AggregationConfig& aggregationConfig) {
+  std::set<std::string> functions;
+  for (const auto& aggregate : aggregationConfig.aggregates) {
+    const auto openParenthesis = aggregate.find('(');
+    VELOX_CHECK_NE(
+        openParenthesis,
+        std::string::npos,
+        "Aggregate expression has no function call: {}",
+        aggregate);
+    functions.emplace(aggregate.substr(0, openParenthesis));
+  }
+  return {functions.begin(), functions.end()};
+}
+
+std::vector<std::string> aggregateInputTypeKinds(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::set<std::string> typeKinds;
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& columnName = schema->nameOf(i);
+    if (std::any_of(
+            aggregationConfig.aggregates.begin(),
+            aggregationConfig.aggregates.end(),
+            [&](const auto& aggregate) {
+              return containsIdentifier(aggregate, columnName);
+            })) {
+      typeKinds.emplace(schema->childAt(i)->kindName());
+    }
+  }
+  return {typeKinds.begin(), typeKinds.end()};
+}
+
+std::vector<std::string> groupingKeyTypeKinds(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  const std::unordered_set<std::string> groupingKeys(
+      aggregationConfig.groupingKeys.begin(),
+      aggregationConfig.groupingKeys.end());
+  return typeKindsForColumns(schema, groupingKeys);
+}
+
+std::vector<std::string> aggregationBlockingProjectExpressions(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::vector<std::string> expressions;
+  expressions.reserve(schema->size());
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    const bool isAggregateInput = std::any_of(
+        aggregationConfig.aggregates.begin(),
+        aggregationConfig.aggregates.end(),
+        [&](const auto& aggregate) {
+          return containsIdentifier(aggregate, name);
+        });
+    if (isAggregateInput) {
+      expressions.push_back(
+          fmt::format(
+              "if({0} is null, cast(null as {1}), {0}) as {0}",
+              name,
+              schema->childAt(i)->toString()));
+    } else {
+      expressions.push_back(name);
+    }
+  }
+  return expressions;
+}
+
 void addTypeEvolution(
     const TypePtr& previous,
     const TypePtr& current,
@@ -1418,13 +1737,15 @@ void TableEvolutionFuzzer::runQueryShape(
 
   // Collect all filtered columns (both subfield and remaining filters)
   std::unordered_set<std::string> allFilteredColumns = subfieldFilteredFields;
+  std::unordered_set<std::string> remainingFilteredFields;
 
   // Extract columns from remaining filter if present
   if (!pushdownConfig.remainingFilter.empty()) {
     for (const auto& name : rowType->names()) {
       // Check if the column name appears in the remaining filter
-      if (pushdownConfig.remainingFilter.find(name) != std::string::npos) {
+      if (containsIdentifier(pushdownConfig.remainingFilter, name)) {
         allFilteredColumns.insert(name);
+        remainingFilteredFields.insert(name);
       }
     }
   }
@@ -1517,6 +1838,8 @@ void TableEvolutionFuzzer::runQueryShape(
 
   std::vector<std::string> flatmapEligibleKeyTypes;
   std::vector<std::string> flatmapEligibleValueTypes;
+  std::vector<std::string> flatmapAsStructKeyTypes;
+  std::vector<std::string> flatmapAsStructValueTypes;
   for (uint32_t i = 0; i < rowType->size(); ++i) {
     if (!rowType->childAt(i)->isMap()) {
       continue;
@@ -1533,6 +1856,10 @@ void TableEvolutionFuzzer::runQueryShape(
     if (columnEligible) {
       flatmapEligibleKeyTypes.emplace_back(mapType.keyType()->kindName());
       flatmapEligibleValueTypes.emplace_back(mapType.valueType()->kindName());
+    }
+    if (fullOutSchema->childAt(i)->isRow()) {
+      flatmapAsStructKeyTypes.emplace_back(mapType.keyType()->kindName());
+      flatmapAsStructValueTypes.emplace_back(mapType.valueType()->kindName());
     }
   }
 
@@ -1555,6 +1882,26 @@ void TableEvolutionFuzzer::runQueryShape(
   // Step 6: Execute scan tasks and verify results
   const bool collectCoverage = !FLAGS_enable_oom_injection_write_path &&
       !FLAGS_enable_oom_injection_read_path;
+  auto filterTypes = typeKindsForColumns(rowType, allFilteredColumns);
+  auto subfieldFilterTypes =
+      typeKindsForColumns(rowType, subfieldFilteredFields);
+  auto remainingFilterTypes =
+      typeKindsForColumns(rowType, remainingFilteredFields);
+  auto filterKinds = filterKindNames(
+      pushdownConfig.subfieldFiltersMap,
+      !pushdownConfig.remainingFilter.empty());
+  auto nullAcceptingSubfieldFilterTypes = nullAcceptingSubfieldFilterTypeKinds(
+      rowType, finalExpectedData, pushdownConfig.subfieldFiltersMap);
+  auto groupingKeyTypes = aggConfig.has_value()
+      ? groupingKeyTypeKinds(rowType, *aggConfig)
+      : std::vector<std::string>{};
+  auto aggregateTypes = aggConfig.has_value()
+      ? aggregateInputTypeKinds(rowType, *aggConfig)
+      : std::vector<std::string>{};
+  auto aggregationFunctions = aggConfig.has_value()
+      ? aggregateFunctionNames(*aggConfig)
+      : std::vector<std::string>{};
+  auto projectedTypes = scalarTypeKindsForColumns(rowType, outputColumnNames);
   const auto numFlatmapEligibleColumns =
       static_cast<int64_t>(flatmapEligibleKeyTypes.size());
   QueryCoverage queryCoverage{
@@ -1562,6 +1909,22 @@ void TableEvolutionFuzzer::runQueryShape(
       .referenceFiles = referenceFiles,
       .pushdown = {},
       .reference = {},
+      .hasSubfieldFilters = !pushdownConfig.subfieldFiltersMap.empty(),
+      .hasRemainingFilter = !pushdownConfig.remainingFilter.empty(),
+      .hasFilterOnlyColumns = !droppedColumns.empty(),
+      .aggregationRequested = aggConfig.has_value(),
+      .filterTypes = std::move(filterTypes),
+      .subfieldFilterTypes = std::move(subfieldFilterTypes),
+      .remainingFilterTypes = std::move(remainingFilterTypes),
+      .filterKinds = std::move(filterKinds),
+      .nullAcceptingSubfieldFilterTypes =
+          std::move(nullAcceptingSubfieldFilterTypes),
+      .groupingKeyTypes = std::move(groupingKeyTypes),
+      .aggregateTypes = std::move(aggregateTypes),
+      .aggregationFunctions = std::move(aggregationFunctions),
+      .projectedTypes = std::move(projectedTypes),
+      .flatmapAsStructKeyTypes = std::move(flatmapAsStructKeyTypes),
+      .flatmapAsStructValueTypes = std::move(flatmapAsStructValueTypes),
       .flatmapEligibleKeyTypes = std::move(flatmapEligibleKeyTypes),
       .flatmapEligibleValueTypes = std::move(flatmapEligibleValueTypes),
       .bucketColumnTypes = std::move(bucketColumnTypes),
@@ -1572,6 +1935,11 @@ void TableEvolutionFuzzer::runQueryShape(
       .numFlatmapEligibleColumns = numFlatmapEligibleColumns,
       .numBucketColumns = static_cast<int64_t>(bucketColumnIndices.size()),
       .bucketCount = testSetups.back().bucketCount(),
+      .numSubfieldFilters =
+          static_cast<int64_t>(pushdownConfig.subfieldFiltersMap.size()),
+      .numFilterOnlyColumns = static_cast<int64_t>(droppedColumns.size()),
+      .rowsReducedByPushdown = 0,
+      .failurePhase = {},
       .executionSucceeded = false,
       .verificationPassed = false,
   };
@@ -1607,6 +1975,7 @@ void TableEvolutionFuzzer::runQueryShape(
     scanResults = runTaskCursors(scanTasks, executor);
   } catch (...) {
     if (collectCoverage) {
+      queryCoverage.failurePhase = "scanExecution";
       recordCoverageAndRethrow(std::current_exception());
     }
     throw;
@@ -1637,6 +2006,7 @@ void TableEvolutionFuzzer::runQueryShape(
           << " pushdownVsReferenceOutputRatio="
           << pushdownVsReferenceOutputRatio
           << " rowsReducedByPushdown=" << rowsReducedByPushdown;
+  queryCoverage.rowsReducedByPushdown = rowsReducedByPushdown;
   try {
     checkResultsEqual(scanResults[0], scanResults[1]);
     queryCoverage.verificationPassed = true;
@@ -1647,6 +2017,7 @@ void TableEvolutionFuzzer::runQueryShape(
     for (const auto& [key, value] : readSessionProperties_.second) {
       LOG(ERROR) << "Reference scan property: " << key << "=" << value;
     }
+    queryCoverage.failurePhase = "verification";
     recordCoverageAndRethrow(std::current_exception());
   }
   recordCoverage();
@@ -2183,15 +2554,19 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
 
   // Reference path: when filters are realized as a FilterNode, the filtered
   // columns must be output by the scan so the FilterNode can reference them.
-  // Add a Project to drop the filter-only columns and emit the same projected
-  // schema as the pushdown path. Projecting also blocks aggregation pushdown,
-  // so the identity-project case for aggregation is preserved when not pruned.
+  // Add a Project to drop filter-only columns. Materialize aggregate inputs in
+  // the reference plan so ValueHook activation remains specific to pushdown.
   if (useFiltersAsNode &&
       (isPruned ||
        (insertProjectToBlockPushdown &&
         pushdownConfig.aggregationConfig.has_value()))) {
-    builder.project(
-        isPruned ? projectedSchema->names() : fullOutSchema->names());
+    if (insertProjectToBlockPushdown &&
+        pushdownConfig.aggregationConfig.has_value()) {
+      builder.project(aggregationBlockingProjectExpressions(
+          projectedSchema, *pushdownConfig.aggregationConfig));
+    } else {
+      builder.project(projectedSchema->names());
+    }
   }
 
   // Add aggregation if enabled in pushdown config
@@ -2480,13 +2855,62 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
     }
     return entries.empty() ? std::string{"none"} : folly::join(",", entries);
   };
-  const auto formatCountsByLine = [](const auto& counts) {
+  const auto formatDimensionsByLine = [](const auto& dimensions) {
+    std::vector<std::string> entries;
+    entries.reserve(dimensions.size());
+    for (const auto& [name, coverage] : dimensions) {
+      entries.push_back(fmt::format("      {}={}", name, coverage.numExecuted));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  const auto formatTypeDimensionsByCategory =
+      [](const auto& dimensions, const std::string_view indentation) {
+        std::vector<std::string> complexTypeEntries;
+        std::vector<std::string> scalarTypeEntries;
+        complexTypeEntries.reserve(dimensions.size());
+        scalarTypeEntries.reserve(dimensions.size());
+        const auto entryIndentation = fmt::format("{}  ", indentation);
+        for (const auto& [name, coverage] : dimensions) {
+          const bool isComplexType =
+              name == "ARRAY" || name == "MAP" || name == "ROW";
+          auto& entries =
+              isComplexType ? complexTypeEntries : scalarTypeEntries;
+          entries.push_back(
+              fmt::format(
+                  "{}{}={}", entryIndentation, name, coverage.numExecuted));
+        }
+        const auto formatCategory = [&](const std::string_view name,
+                                        const auto& entries) {
+          return fmt::format(
+              "{}{}:\n{}",
+              indentation,
+              name,
+              entries.empty() ? fmt::format("{}none", entryIndentation)
+                              : folly::join("\n", entries));
+        };
+        return fmt::format(
+            "{}\n{}",
+            formatCategory("complexTypes", complexTypeEntries),
+            formatCategory("scalarTypes", scalarTypeEntries));
+      };
+  const auto formatExecutedDimensionsByLine = [](const auto& dimensions) {
+    std::vector<std::string> entries;
+    entries.reserve(dimensions.size());
+    for (const auto& [name, coverage] : dimensions) {
+      entries.push_back(fmt::format("      {}={}", name, coverage.numExecuted));
+    }
+    return entries.empty() ? std::string{"      none"}
+                           : folly::join("\n", entries);
+  };
+  const auto formatCountsByLine = [](const auto& counts,
+                                     const std::string_view indentation) {
     std::vector<std::string> entries;
     entries.reserve(counts.size());
     for (const auto& [name, count] : counts) {
-      entries.push_back(fmt::format("      {}={}", name, count));
+      entries.push_back(fmt::format("{}{}={}", indentation, name, count));
     }
-    return entries.empty() ? std::string{"      none"}
+    return entries.empty() ? fmt::format("{}none", indentation)
                            : folly::join("\n", entries);
   };
   const auto formatTypeSignatures = [](const auto& counts) {
@@ -2524,6 +2948,8 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
     return entries.empty() ? std::string{"      none"}
                            : folly::join("\n", entries);
   };
+  const auto& filters = stats.queryShapes.filters;
+  const auto& aggregations = stats.queryShapes.aggregations;
   LOG(WARNING) << fmt::format(
       "queries: attempted={} completed={} failed={}\n"
       "verification: passed={} failed={}\n\n"
@@ -2551,8 +2977,37 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
       formatBucketCounts(stats.configs.bucketSelectedByBucketCount),
       stats.configs.numTypeTransitions,
       stats.configs.numAddedFields,
-      formatCountsByLine(stats.configs.schemaEvolutionByType),
+      formatCountsByLine(stats.configs.schemaEvolutionByType, "      "),
       formatCounts(stats.configs.schemaEvolutionByPosition));
+  LOG(WARNING) << fmt::format(
+      "\nQueryShapeCoverage:\n"
+      "  filters:\n"
+      "    queries={}\n"
+      "    targetTypes:\n"
+      "      allFilters:\n{}\n"
+      "      subfieldFilters:\n{}\n"
+      "      remainingExpressions:\n{}\n"
+      "    predicateKinds:\n{}\n"
+      "  aggregations: queries={} pushdownActivated={} referenceActivated={} differentiallyVerified={} pushdownValues={} referenceValues={}\n"
+      "    groupingKeyTypes:\n{}\n"
+      "    aggregateTypes:\n{}\n"
+      "    functions:\n{}\n"
+      "  projectedByType:\n{}",
+      filters.numExecuted,
+      formatTypeDimensionsByCategory(filters.byType, "        "),
+      formatTypeDimensionsByCategory(filters.subfieldByType, "        "),
+      formatTypeDimensionsByCategory(filters.remainingByType, "        "),
+      formatDimensionsByLine(filters.byKind),
+      aggregations.numExecuted,
+      aggregations.numPushdownPlanActivated,
+      aggregations.numReferencePlanActivated,
+      aggregations.numDifferentiallyVerified,
+      aggregations.numPushdownValuesLoaded,
+      aggregations.numReferenceValuesLoaded,
+      formatExecutedDimensionsByLine(aggregations.groupingKeyTypes),
+      formatExecutedDimensionsByLine(aggregations.aggregateTypes),
+      formatExecutedDimensionsByLine(aggregations.functions),
+      formatCountsByLine(stats.queryShapes.projectedByType, "    "));
 }
 
 void TableEvolutionFuzzer::maybeLogCoverageSummary() {

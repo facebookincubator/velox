@@ -98,8 +98,8 @@ class BatchedStreamDecoderTest : public ::testing::Test {
     for (const auto& batch : batches) {
       const std::string blob{
           serializer.serialize(batch, OrderedRanges::of(0, batch->size()))};
-      DeserializerOptions deserializerOptions{.hasHeader = true};
-      serde::StreamDataParser parser{pool_.get(), deserializerOptions};
+      DeserializerOptions deserializerOptions{};
+      serde::StreamDataParser parser{pool_.get()};
       SerializedBatch collected;
       collected.rowCount = parser.initialize(blob);
       collected.version = parser.version();
@@ -212,7 +212,6 @@ void addBatches(
       decoder.addBatch(
           startRow,
           batch.stream(streamOffset),
-          batch.version,
           batch.streamEncodingUsesVarintRowCount);
     }
     startRow += batch.rowCount;
@@ -304,11 +303,7 @@ TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
               .useVarintRowCount = useVarintRowCount[i],
           });
       encodedBuffers.push_back(std::move(buffer));
-      decoder.addBatch(
-          startRow,
-          encodedSegments[i],
-          SerializationVersion::kTablet,
-          useVarintRowCount[i]);
+      decoder.addBatch(startRow, encodedSegments[i], useVarintRowCount[i]);
       startRow += static_cast<uint32_t>(batches[i].size());
     }
 
@@ -512,7 +507,6 @@ TEST_F(BatchedStreamDecoderTest, addBatchRejectsEmptySegment) {
       decoder.addBatch(
           0,
           std::string_view{},
-          SerializationVersion::kSerialization,
           /*streamEncodingUsesVarintRowCount=*/true),
       "Physical stream segment must be non-empty");
 }
@@ -625,7 +619,6 @@ TEST_F(
   decoder.addBatch(
       /*startRow=*/0,
       input.batches[0].stream(inMapOffsetB),
-      input.batches[0].version,
       input.batches[0].streamEncodingUsesVarintRowCount);
   decoder.addPresentInMapBatch(/*startRow=*/4, /*rowCount=*/3);
 

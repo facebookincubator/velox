@@ -69,7 +69,8 @@ class ClusterIndexWriterTest : public ::testing::Test {
 
   void SetUp() override {
     pool_ = velox::memory::memoryManager()->addLeafPool();
-    chunkStatsWriter_ = std::make_unique<ChunkStatsWriter>(*pool_, 0);
+    chunkStatsWriter_ =
+        ChunkStatsWriter::create(ChunkStatsVersion::kV1, *pool_, 0);
   }
 
   // Returns a callback that appends key stream data to TestFileIndex.
