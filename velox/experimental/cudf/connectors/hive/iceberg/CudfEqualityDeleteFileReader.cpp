@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
@@ -110,7 +111,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   // Directly read the Parquet-format equality delete file to the
   // deleteKeyTable_ using cuDF
   if (deleteFile.fileFormat == dwio::common::FileFormat::PARQUET) {
-    directReadEqualityDeleteFile(deleteFile, std::move(deleteFileInput));
+    directReadEqualityDeleteFile(
+        deleteFile, std::move(deleteFileInput), equalityColumnTypes);
     return;
   }
 
@@ -160,7 +162,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
 
 void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
     const velox_iceberg::IcebergDeleteFile& deleteFile,
-    std::shared_ptr<dwio::common::BufferedInput> bufferedInput) {
+    std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
+    const std::vector<TypePtr>& equalityColumnTypes) {
   using cudf_velox::connector::hive::BufferedInputDataSource;
 
   // Create a cuDF data source
@@ -179,8 +182,13 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
       cudf::io::parquet_reader_options::builder(std::move(sourceInfo)).build();
   options.set_column_names(equalityColumnNames_);
   auto stream = cudfGlobalStreamPool().get_stream();
-  deleteKeyTable_ =
-      cudf::io::read_parquet(options, stream, get_output_mr()).tbl;
+  auto mr = get_output_mr();
+  deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
+      cudf::io::read_parquet(options, stream, mr).tbl,
+      equalityColumnTypes,
+      /*numPrependedColumns=*/0,
+      stream,
+      mr);
   stream.sync();
 
   VELOX_CHECK_NOT_NULL(deleteKeyTable_);

@@ -36,6 +36,7 @@
 #include <cudf/io/types.hpp>
 
 #include <functional>
+#include <span>
 #include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -48,6 +49,16 @@ using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 using CudfHybridScanReader =
     cudf::io::parquet::experimental::hybrid_scan_reader;
 using CudfHybridScanReaderPtr = std::unique_ptr<CudfHybridScanReader>;
+
+/// Normalizes decimal columns, recursively, to their logical Velox types.
+/// columnTypes must describe every column after numPrependedColumns, which
+/// are left unchanged. Casts and buffer releases use the supplied stream.
+std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
+    std::unique_ptr<cudf::table>&& table,
+    std::span<const TypePtr> columnTypes,
+    size_t numPrependedColumns,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 class CudfSplitReader : public NvtxHelper {
  public:
@@ -108,7 +119,11 @@ class CudfSplitReader : public NvtxHelper {
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
   // Read the next table chunk from the parquet reader (regular or hybrid).
-  // Returns nullopt when no more data.
+  // Returns nullopt when no more data. All read decimals, including nested,
+  // filter-only and equality-delete key columns, have their logical Velox
+  // scale and storage width (DECIMAL64 for short decimals, DECIMAL128 for long
+  // decimals) before deferred filters or equality deletes consume the table.
+  // A prepended row-index column is not part of the logical read schema.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
 
   // Setup the cuDF data source
@@ -128,6 +143,8 @@ class CudfSplitReader : public NvtxHelper {
       tableHandle_;
   const RowTypePtr outputType_;
   std::vector<std::string> readColumnNames_;
+  // Logical types aligned with readColumnNames_, including hidden read columns.
+  std::vector<TypePtr> readColumnTypes_;
 
   FileHandleFactory* fileHandleFactory_;
   folly::Executor* executor_;

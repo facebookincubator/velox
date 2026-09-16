@@ -239,7 +239,17 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
                     .endTableScan()
                     .planNode();
 
-    assertQuery(plan, {filePath}, "SELECT * FROM tmp");
+    for (const bool experimental : {false, true}) {
+      SCOPED_TRACE(experimental);
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kUseExperimentalCudfReaderSession,
+              experimental ? "true" : "false")
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .assertResults("SELECT * FROM tmp");
+    }
   }
 
   RowTypePtr rowType_{
