@@ -1078,7 +1078,7 @@ class BetweenFunction : public CudfFunction {
     } else {
       leResultColumn = cudf::binary_operation(
           asView(inputColumns[0]),
-          asView(inputColumns[2]),
+          asView(inputColumns[minLiteral_ ? 1 : 2]),
           cudf::binary_operator::LESS_EQUAL,
           kBoolType,
           stream,

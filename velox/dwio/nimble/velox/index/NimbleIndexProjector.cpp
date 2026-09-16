@@ -936,6 +936,11 @@ NimbleIndexProjector::collectStripeStreamViews(
     loadedStreams.canonicalIndices.resize(numProjectedStreams);
   }
 
+  // Fetch the bufferRefs span once per stripe -- the alternative
+  // dataInput_->bufferRef(enqueueIndex) per iteration is a vtable dispatch
+  // plus a per-call state check, paid ~numProjectedStreams times per stripe.
+  const auto bufferRefs = dataInput_->bufferRefs();
+
   uint32_t streamEnqueueBase{0};
   const auto dataInputBase = stripeOffset * numProjectedStreams;
   for (size_t i = 0; i < numProjectedStreams; ++i) {
@@ -949,27 +954,32 @@ NimbleIndexProjector::collectStripeStreamViews(
     if (loadedStreams.presentIndices.empty()) {
       streamEnqueueBase = enqueueIndex;
     }
+    // Extract the three BufferRef fields to registers up front. Otherwise the
+    // compiler is forced to re-load them across the intervening writes to
+    // loadedStreams.presentIndices/streams (opaque calls like emplace_back
+    // conservatively invalidate reference-into-heap loads).
     const auto& streamLocation = projectedStreams[i];
-    const auto& bufferRef = dataInput_->bufferRef(enqueueIndex);
+    const auto& bufferRef = bufferRefs[enqueueIndex];
+    const auto bufLen = bufferRef.length;
+    const auto* bufData = bufferRef.data;
+    const auto bufCanonical = bufferRef.canonicalIndex;
     NIMBLE_CHECK_EQ(
-        bufferRef.length,
+        bufLen,
         streamLocation.size,
         "Loaded stream length must match projected stream length");
-    loadedStreams.streams[i] =
-        std::string_view(bufferRef.data, bufferRef.length);
+    loadedStreams.streams[i] = std::string_view(bufData, bufLen);
     if (!resolveCanonicalStreams) {
       continue;
     }
     loadedStreams.presentIndices.emplace_back(i);
 
     size_t canonicalProjectedIndex = i;
-    if (bufferRef.canonicalIndex != enqueueIndex) {
+    if (bufCanonical != enqueueIndex) {
       NIMBLE_CHECK_GE(
-          bufferRef.canonicalIndex,
+          bufCanonical,
           streamEnqueueBase,
           "Duplicate stream must refer to the current stripe");
-      const auto canonicalIndexOffset =
-          bufferRef.canonicalIndex - streamEnqueueBase;
+      const auto canonicalIndexOffset = bufCanonical - streamEnqueueBase;
       NIMBLE_CHECK_LT(
           canonicalIndexOffset,
           loadedStreams.presentIndices.size(),

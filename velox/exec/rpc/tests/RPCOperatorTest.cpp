@@ -51,53 +51,70 @@ class RPCOperatorTest : public OperatorTestBase {
     OperatorTestBase::SetUpTestCase();
     registerRPCPlanNodeTranslator();
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_rpc", []() { return std::make_shared<DemoAsyncRPCFunction>(); });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_held", []() {
-      auto fn = std::make_shared<DemoBatchRPCFunction>();
-      fn->testingHoldFlushes();
-      return fn;
-    });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc", []() {
-      return std::make_shared<DemoBatchRPCFunction>();
-    });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_reversed", []() {
-      return std::make_shared<DemoBatchRPCFunction>(
-          DemoBatchRPCFunction::ResponseOrder::kReversed);
-    });
+        "demo_rpc",
+        []() { return std::make_shared<DemoAsyncRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_partial_fail", []() {
+        "demo_batch_rpc_held",
+        []() {
+          auto fn = std::make_shared<DemoBatchRPCFunction>();
+          fn->testingHoldFlushes();
+          return fn;
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc",
+        []() { return std::make_shared<DemoBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_reversed",
+        []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kReversed);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_partial_fail",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{1, 3});
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_whole_fail", []() {
+        "demo_batch_rpc_whole_fail",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     // Whole-batch failure AND a fail-on-error policy (mimics
     // meta_ai_on_error='fail'): the query must still hard-fail, not degrade.
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_whole_fail_strict", []() {
+        "demo_batch_rpc_whole_fail_strict",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/true,
               /*failOnError=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     // Returns fewer responses than rows (function-contract violation): the
     // operator's scatter must hard-fail on the count mismatch.
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_wrong_count", []() {
+        "demo_batch_rpc_wrong_count",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/false,
               /*failOnError=*/false,
               /*dropOneResponse=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
   }
 
   static void TearDownTestCase() {
@@ -929,9 +946,11 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   constexpr std::chrono::milliseconds kLatency{200};
   auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
   AsyncRPCFunctionRegistry::registerFunction(
-      "slow_batch_rpc", [kLatency, rpcExecutor]() {
+      "slow_batch_rpc",
+      [kLatency, rpcExecutor]() {
         return std::make_shared<SlowBatchRPCFunction>(kLatency, rpcExecutor);
-      });
+      },
+      DemoBatchRPCFunction::signatures());
 
   constexpr int kRows = 8;
   std::vector<RowVectorPtr> inputs;

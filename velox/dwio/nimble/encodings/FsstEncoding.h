@@ -72,6 +72,13 @@ namespace facebook::nimble {
 /// independently, enabling random-access decompression without touching
 /// neighboring strings.
 ///
+/// Validates lengths and blob bounds lazily as rows are consumed, avoiding a
+/// scan of the stream during construction. Reports malformed unread rows only
+/// if a later read or skip reaches them.
+/// Callers requiring eager structural validation can call skip() in bounded
+/// batches on this encoding instance, then reset() before reading. Validating
+/// decompression itself requires materializing every row.
+///
 /// Binary layout:
 /// - Encoding::kPrefixSize bytes: standard Encoding prefix
 /// - varint: serialized FSST symbol table size
@@ -136,7 +143,7 @@ class FsstEncoding final
   // Approximate serialized symbol table size in bytes (~2KB typical).
   static constexpr uint32_t kSymbolTableOverhead = 2048;
 
-  // Maximum bytes a compressed FSST code can expand to.
+  // Maximum bytes represented by one FSST symbol.
   static constexpr size_t kMaxSymbolLength = 8;
 
   static constexpr size_t kStringPageSize = 256 * 1024;
@@ -197,9 +204,6 @@ class FsstEncoding final
       std::string_view blob,
       size_t blobOffset);
 
-  // Validates the complete nested lengths stream and compressed blob.
-  void validateLengthsAndBlob();
-
   // Checks that a sequential read remains within the row range.
   void checkReadRange(uint32_t rowCount, const char* operation) const;
 
@@ -232,11 +236,18 @@ class FsstEncoding final
       Buffer& buffer,
       const Encoding::Options& options);
 
-  // Decompresses a single compressed string and copies the result into the
-  // string buffer page. Returns a stable string_view.
+  // Decompresses a validated row payload into stable page storage, using
+  // scratch space when the page cannot hold the maximum possible expansion.
+  // The caller must first validate the containing range with
+  // validateCompressedLengths().
   std::string_view decompressToStringBuffer(std::string_view compressed);
 
-  void ensurePage(size_t requiredBytes);
+  // Returns writable storage when the current page has enough room.
+  std::optional<std::span<char>> availablePageRange(size_t requiredBytes) const;
+
+  // Ensures at least requiredBytes remain in the current page and returns the
+  // first writable byte.
+  char* ensurePage(size_t requiredBytes);
 
   const std::function<void*(uint32_t)> stringBufferFactory_;
 
@@ -265,13 +276,16 @@ class FsstEncoding final
   // Slot containing currentPage_.
   size_t currentPageIndex_{0};
 
-  // Scratch buffer for decompression output.
+  // Scratch buffer used when the remaining page capacity cannot hold the
+  // maximum possible expansion of a compressed string.
   Vector<char> decompressBuffer_;
 };
 
 template <typename V>
 void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
   if (visitor.numRows() == 0) {
+    checkReadRange(0, "Reading past end of FSST encoding.");
+    checkFinalBlobPosition();
     return;
   }
 
