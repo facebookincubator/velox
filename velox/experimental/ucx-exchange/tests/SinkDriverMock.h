@@ -75,6 +75,10 @@ class SinkDriverMock {
     return numChunksReceived_.load();
   }
 
+  folly::F14FastMap<std::string, RuntimeMetric> exchangeClientStats() const {
+    return exchangeClient_->stats();
+  }
+
   bool dataIsValid() {
     return dataValidFlag_;
   }
