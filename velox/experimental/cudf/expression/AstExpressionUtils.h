@@ -390,6 +390,10 @@ struct AstContext {
       precomputeInstructions;
   memory::MemoryPool* pool;
   const core::TypedExprPtr rootExpr;
+  /// Forwarded to createCudfExpression when a subexpression is delegated, so a
+  /// delegated evaluator resolves session settings the same way a top-level
+  /// one does.
+  const core::QueryConfig& config;
 
   cudf::ast::expression const& pushExprToTree(const core::TypedExprPtr& expr);
   cudf::ast::expression const& addPrecomputeInstructionOnSide(
@@ -527,7 +531,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if (sideIdx < 0) {
       sideIdx = 0;
     }
-    auto node = createCudfExpression(expr, inputRowSchema[sideIdx], pool);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[sideIdx], pool, config);
     VELOX_CHECK_NOT_NULL(
         node, "Failed to compile sub-expression: {}", expr->toString());
     return addPrecomputeInstructionOnSide(
