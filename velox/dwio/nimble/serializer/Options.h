@@ -280,9 +280,12 @@ struct SerializerOptions {
 
 struct DeserializerOptions {
   /// Whether the serialized data has a header byte.
-  /// - false (default): Legacy format (version 0) with no header.
-  /// - true: Version is auto-detected from the first byte of serialized data.
-  bool hasHeader{false};
+  /// - false: Legacy format (version 0) with no header. Retained for callers
+  ///   still reading pre-header raw payloads during the kLegacy deprecation.
+  /// - true (default): Version is auto-detected from the first byte of
+  ///   serialized data. Matches every current writer; callers that used to
+  ///   set this explicitly no longer need to.
+  bool hasHeader{true};
 
   /// Output type for deserializing flatmap columns as struct (ROW).
   /// When provided, each top-level flatmap column whose corresponding field in

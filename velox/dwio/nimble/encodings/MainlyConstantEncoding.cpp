@@ -34,7 +34,9 @@ MainlyConstantEncoding<std::string_view>::MainlyConstantEncoding(
       *this->pool_, {pos, otherValuesBytes}, stringBufferFactory, options);
   pos += otherValuesBytes;
   commonValue_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected mainly constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(),
+      "Unexpected mainly constant encoding end");
   auto stringBuffer =
       static_cast<char*>(stringBufferFactory(commonValue_.size()));
   std::memcpy(stringBuffer, commonValue_.data(), commonValue_.size());

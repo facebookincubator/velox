@@ -48,7 +48,7 @@ RLEEncoding<bool>::RLEEncoding(
       internal::RLEEncodingBase<bool, RLEEncoding<bool>>::getValuesStart());
   NIMBLE_CHECK(
       (internal::RLEEncodingBase<bool, RLEEncoding<bool>>::getValuesStart() +
-       1) == data.end(),
+       1) == data.data() + data.size(),
       "Unexpected run length encoding end");
   internal::RLEEncodingBase<bool, RLEEncoding<bool>>::reset();
 }
