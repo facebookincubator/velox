@@ -99,7 +99,30 @@ std::shared_ptr<ExchangeTransportEntry> makeEntry() {
       makeMockClient, buildNoOperator, buildNoOperator);
 }
 
-TEST(ExchangeTransportRegistryTest, registryOperations) {
+class ExchangeTransportRegistryTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+
+  void SetUp() override {
+    ExchangeTransportRegistry::unregisterAll();
+  }
+
+  void TearDown() override {
+    ExchangeTransportRegistry::unregisterAll();
+  }
+
+  std::shared_ptr<core::QueryCtx> queryCtxWithRegistry(
+      std::shared_ptr<ExchangeTransportRegistry::Registry> registry) {
+    auto queryCtx = core::QueryCtx::create();
+    queryCtx->setRegistry(
+        ExchangeTransportRegistry::kRegistryKey, std::move(registry));
+    return queryCtx;
+  }
+};
+
+TEST_F(ExchangeTransportRegistryTest, registryOperations) {
   ExchangeTransportRegistry::unregisterAll();
 
   const int32_t numTransports = 5;
@@ -124,7 +147,7 @@ TEST(ExchangeTransportRegistryTest, registryOperations) {
       UnorderedElementsAre(Key(std::string(core::TransportKind::kInMemory))));
 }
 
-TEST(ExchangeTransportRegistryTest, defaultTransportResolves) {
+TEST_F(ExchangeTransportRegistryTest, defaultTransportResolves) {
   // The built-in in-memory transport is seeded into the registry and pairs an
   // InMemoryExchangeClient factory with both exchange operator builders.
   auto defaultEntry = ExchangeTransportRegistry::tryGet(
@@ -135,7 +158,7 @@ TEST(ExchangeTransportRegistryTest, defaultTransportResolves) {
   EXPECT_TRUE(defaultEntry->makeMergeExchangeOperator != nullptr);
 }
 
-TEST(ExchangeTransportRegistryTest, entryMakeRejectsNullHalves) {
+TEST_F(ExchangeTransportRegistryTest, entryMakeRejectsNullHalves) {
   VELOX_ASSERT_THROW(
       ExchangeTransportEntry::make<MockExchangeClient>(
           nullptr, buildNoOperator),
@@ -152,7 +175,7 @@ TEST(ExchangeTransportRegistryTest, entryMakeRejectsNullHalves) {
   EXPECT_TRUE(entry->makeMergeExchangeOperator == nullptr);
 }
 
-TEST(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
+TEST_F(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
   // make<TClient>() binds the operator builder to the client type the
   // transport's own factory produces, so a client from another transport is
   // rejected rather than silently reinterpreted.
@@ -193,30 +216,7 @@ TEST(ExchangeTransportRegistryTest, operatorBuilderChecksClientType) {
       "Exchange client was not created by this transport's client factory");
 }
 
-class ExchangeTransportRegistryFixture : public testing::Test {
- protected:
-  static void SetUpTestSuite() {
-    memory::MemoryManager::testingSetInstance({});
-  }
-
-  void SetUp() override {
-    ExchangeTransportRegistry::unregisterAll();
-  }
-
-  void TearDown() override {
-    ExchangeTransportRegistry::unregisterAll();
-  }
-
-  std::shared_ptr<core::QueryCtx> queryCtxWithRegistry(
-      std::shared_ptr<ExchangeTransportRegistry::Registry> registry) {
-    auto queryCtx = core::QueryCtx::create();
-    queryCtx->setRegistry(
-        ExchangeTransportRegistry::kRegistryKey, std::move(registry));
-    return queryCtx;
-  }
-};
-
-TEST_F(ExchangeTransportRegistryFixture, queryScopedResolution) {
+TEST_F(ExchangeTransportRegistryTest, queryScopedResolution) {
   auto globalEntry = makeEntry();
   ExchangeTransportRegistry::global().insert("shared", globalEntry);
   ExchangeTransportRegistry::global().insert("global-only", globalEntry);
@@ -237,7 +237,7 @@ TEST_F(ExchangeTransportRegistryFixture, queryScopedResolution) {
   EXPECT_EQ(ExchangeTransportRegistry::tryGet("shared"), globalEntry);
 }
 
-TEST_F(ExchangeTransportRegistryFixture, queryScopedUnregisterAll) {
+TEST_F(ExchangeTransportRegistryTest, queryScopedUnregisterAll) {
   auto globalEntry = makeEntry();
   ExchangeTransportRegistry::global().insert("transport", globalEntry);
 
@@ -253,7 +253,7 @@ TEST_F(ExchangeTransportRegistryFixture, queryScopedUnregisterAll) {
   EXPECT_EQ(ExchangeTransportRegistry::tryGet("transport"), globalEntry);
 }
 
-TEST_F(ExchangeTransportRegistryFixture, queryScopedGetAll) {
+TEST_F(ExchangeTransportRegistryTest, queryScopedGetAll) {
   ExchangeTransportRegistry::global().insert("global-only", makeEntry());
   ExchangeTransportRegistry::global().insert("shared", makeEntry());
 
@@ -274,7 +274,7 @@ TEST_F(ExchangeTransportRegistryFixture, queryScopedGetAll) {
       UnorderedElementsAre(Key("global-only"), Key("shared"), Key(inMemory)));
 }
 
-TEST_F(ExchangeTransportRegistryFixture, isolatedQueryHasNoDefault) {
+TEST_F(ExchangeTransportRegistryTest, isolatedQueryHasNoDefault) {
   // Isolation mode (create(nullptr)) has no parent fallback, so not even the
   // built-in default is visible; an isolated query must register every
   // transport it uses.
