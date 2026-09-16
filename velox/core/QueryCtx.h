@@ -547,8 +547,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   // Per-planNode providers registered after construction, possibly while driver
   // threads are reading them, hence synchronized.
-  folly::Synchronized<
-      std::unordered_map<std::string, std::shared_ptr<filesystems::TokenProvider>>>
+  folly::Synchronized<std::unordered_map<
+      std::string,
+      std::shared_ptr<filesystems::TokenProvider>>>
       planNodeTokenProviders_;
   // Callbacks invoked before destruction to clean up external resources.
   std::deque<ReleaseCallback> releaseCallbacks_;
