@@ -397,6 +397,9 @@ struct AstContext {
       precomputeInstructions;
   memory::MemoryPool* pool;
   const core::TypedExprPtr rootExpr;
+  // Borrowed for the lifetime of this context. Forwarded to
+  // createCudfExpression for subexpressions the AST cannot represent.
+  const core::QueryConfig& config;
 
   cudf::ast::expression const& pushExprToTree(const core::TypedExprPtr& expr);
   cudf::ast::expression const& addPrecomputeInstructionOnSide(
@@ -534,7 +537,8 @@ cudf::ast::expression const& AstContext::pushExprToTree(
     if (sideIdx < 0) {
       sideIdx = 0;
     }
-    auto node = createCudfExpression(expr, inputRowSchema[sideIdx], pool);
+    auto node =
+        createCudfExpression(expr, inputRowSchema[sideIdx], pool, config);
     VELOX_CHECK_NOT_NULL(
         node, "Failed to compile sub-expression: {}", expr->toString());
     return addPrecomputeInstructionOnSide(
