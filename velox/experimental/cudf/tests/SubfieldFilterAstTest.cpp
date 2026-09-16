@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
@@ -27,8 +28,12 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
+#include <cudf/unary.hpp>
 
 #include <gtest/gtest.h>
+
+#include <array>
+#include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
@@ -64,7 +69,8 @@ class SubfieldFilterAstTest : public OperatorTestBase {
       const std::string& columnName,
       const common::Filter& filter,
       const RowVectorPtr& vector,
-      const cudf::ast::expression& expr) {
+      const cudf::ast::expression& expr,
+      const SubfieldFilterDecimalTypes* decimalTypes = nullptr) {
     auto stream = cudf::get_default_stream();
     auto mr = cudf::get_current_device_resource_ref();
 
@@ -72,6 +78,19 @@ class SubfieldFilterAstTest : public OperatorTestBase {
       auto cudfTable = cudf_velox::with_arrow::toCudfTable(
           vector, pool_.get(), stream, cudf::get_current_device_resource_ref());
       ASSERT_NE(cudfTable, nullptr);
+
+      if (decimalTypes != nullptr) {
+        auto columns = cudfTable->release();
+        for (const auto& [name, type] : *decimalTypes) {
+          const auto index = rowType->getChildIdx(name);
+          columns[index] = cudf::cast(
+              columns[index]->view(),
+              cudf::data_type{type, columns[index]->type().scale()},
+              stream,
+              mr);
+        }
+        cudfTable = std::make_unique<cudf::table>(std::move(columns));
+      }
 
       auto cudfResult =
           cudf::compute_column(cudfTable->view(), expr, stream, mr);
@@ -166,6 +185,29 @@ class SubfieldFilterAstTest : public OperatorTestBase {
             << "Mismatch at row " << i << " for " << columnName;
       }
     }
+  }
+
+  void assertPhysicalFilter(
+      const RowVectorPtr& vector,
+      const common::Filter& filter,
+      cudf::type_id physicalType) {
+    SCOPED_TRACE(filter.toString());
+    const auto& rowType = vector->rowType();
+    const auto& name = rowType->nameOf(0);
+    const common::Subfield subfield(name);
+    const SubfieldFilterDecimalTypes decimalTypes{{name, physicalType}};
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const auto& expr = createAstFromSubfieldFilter(
+        subfield, filter, tree, scalars, rowType, &decimalTypes);
+    for (const auto& scalar : scalars) {
+      EXPECT_EQ(scalar->type().id(), physicalType);
+      EXPECT_EQ(
+          scalar->type().scale(),
+          numeric::scale_type{
+              -getDecimalPrecisionScale(*rowType->childAt(0)).second});
+    }
+    testFilterExecution(rowType, name, filter, vector, expr, &decimalTypes);
   }
 };
 
@@ -587,6 +629,160 @@ TEST_F(SubfieldFilterAstTest, smallIntTypeBounds) {
   // Execution validation
   auto vec = makeTestVector(rowType, 100);
   testFilterExecution(rowType, columnName, *filter, vec, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, physicalPushdownAndLogicalDeferredDecimals) {
+  namespace iceberg = cudf_velox::connector::hive::iceberg;
+  using Op = cudf::ast::ast_operator;
+  const auto rowType = ROW({{"injected", BOOLEAN()}, {"price", DECIMAL(7, 2)}});
+  const common::Subfield subfield("price");
+  const common::BigintRange negative(-500, -500, false);
+  const common::BigintRange positive(100, 100, false);
+  const SubfieldFilterDecimalTypes decimalTypes{
+      {"price", cudf::type_id::DECIMAL32}};
+  cudf::ast::tree physicalTree;
+  cudf::ast::tree logicalTree;
+  std::vector<std::unique_ptr<cudf::scalar>> physicalScalars;
+  std::vector<std::unique_ptr<cudf::scalar>> logicalScalars;
+  auto build = [&](cudf::ast::tree& tree,
+                   std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+                   const SubfieldFilterDecimalTypes* types)
+      -> const cudf::ast::expression& {
+    const auto& injected = tree.push(cudf::ast::column_reference{0});
+    const auto& lhs = createAstFromSubfieldFilter(
+        subfield, negative, tree, scalars, rowType, types);
+    const auto& rhs = createAstFromSubfieldFilter(
+        subfield, positive, tree, scalars, rowType, types);
+    const auto& conjunction =
+        tree.push(cudf::ast::operation{Op::NULL_LOGICAL_AND, injected, lhs});
+    return tree.push(
+        cudf::ast::operation{Op::NULL_LOGICAL_OR, conjunction, rhs});
+  };
+  // An undecided injected predicate relaxes pushdown to price IN (-500, 100).
+  // The full predicate must still run at logical width on the assembled table.
+  const auto& physical = build(physicalTree, physicalScalars, &decimalTypes);
+  const auto& logical = build(logicalTree, logicalScalars, nullptr);
+  const std::array<cudf::size_type, 1> injectedIndices{0};
+  const std::array folds{iceberg::ConstantFilterFold::kUnknown};
+  auto pushed = iceberg::transformFilterForInjectedColumns(
+      physical, injectedIndices, folds);
+  auto deferred = iceberg::transformFilterForInjectedColumns(
+      logical, injectedIndices, folds);
+  ASSERT_NE(pushed.pushedExpr, nullptr);
+  ASSERT_NE(deferred.deferredExpr, nullptr);
+  EXPECT_TRUE(pushed.requiresSplitSpecificDecimalTypes);
+  const auto fileRows = makeRowVector(
+      {"price"},
+      {makeNullableFlatVector<int64_t>(
+          {-500, 100, 200, std::nullopt}, DECIMAL(7, 2))});
+  const auto accepted = common::createBigintValues({-500, 100}, false);
+  testFilterExecution(
+      fileRows->rowType(),
+      "price",
+      *accepted,
+      fileRows,
+      *pushed.pushedExpr,
+      &decimalTypes);
+
+  const auto assembled = makeRowVector(
+      {"injected", "price"},
+      {makeFlatVector<bool>({false, false, false, false}),
+       fileRows->childAt(0)});
+  // With the injected predicate false, only price = 100 survives.
+  testFilterExecution(
+      rowType, "price", positive, assembled, *deferred.deferredExpr);
+}
+
+TEST_F(SubfieldFilterAstTest, decimalPhysicalWidths) {
+  const auto vector = makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt, -500, 0, 100, 200}, DECIMAL(7, 2))});
+  const common::BigintRange filter(-500, 100, true);
+  for (const auto physicalType :
+       {cudf::type_id::DECIMAL32,
+        cudf::type_id::DECIMAL64,
+        cudf::type_id::DECIMAL128}) {
+    assertPhysicalFilter(vector, filter, physicalType);
+  }
+  const common::Subfield subfield("c0");
+  cudf::ast::tree tree;
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  const auto rowType = vector->rowType();
+  const auto& expr =
+      createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType);
+  for (const auto& scalar : scalars) {
+    EXPECT_EQ(scalar->type().id(), cudf::type_id::DECIMAL64);
+  }
+  testFilterExecution(rowType, "c0", filter, vector, expr);
+}
+
+TEST_F(SubfieldFilterAstTest, decimal32FiltersPreserveNulls) {
+  auto vector = makeRowVector({makeNullableFlatVector<int64_t>(
+      {std::nullopt, -500, 0, 100, 200}, DECIMAL(12, 2))});
+  const int64_t aboveInt32 =
+      static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1;
+  const int64_t belowInt32 =
+      static_cast<int64_t>(std::numeric_limits<int32_t>::min()) - 1;
+
+  for (const bool nullAllowed : {false, true}) {
+    auto check = [&](const common::Filter& filter) {
+      assertPhysicalFilter(vector, filter, cudf::type_id::DECIMAL32);
+    };
+    check(common::BigintRange(-500, -500, nullAllowed));
+    check(common::BigintRange(-500, 100, nullAllowed));
+    check(common::BigintRange(belowInt32, aboveInt32, nullAllowed));
+    check(common::BigintRange(belowInt32, 100, nullAllowed));
+    check(common::BigintRange(-500, aboveInt32, nullAllowed));
+    check(common::BigintRange(aboveInt32, aboveInt32, nullAllowed));
+    check(common::BigintRange(aboveInt32, aboveInt32 + 2, nullAllowed));
+    check(common::BigintRange(belowInt32 - 2, belowInt32, nullAllowed));
+    check(
+        common::BigintValuesUsingBitmask(
+            aboveInt32,
+            aboveInt32 + 2,
+            {aboveInt32, aboveInt32 + 2},
+            nullAllowed));
+    check(
+        common::BigintValuesUsingHashTable(
+            belowInt32, aboveInt32, {belowInt32, aboveInt32}, nullAllowed));
+    check(
+        common::BigintValuesUsingHashTable(
+            -500, aboveInt32, {-500, aboveInt32}, nullAllowed));
+    check(common::NegatedBigintRange(-500, 100, nullAllowed));
+    check(common::NegatedBigintRange(aboveInt32, aboveInt32 + 2, nullAllowed));
+
+    // The parent, rather than its component ranges, controls null acceptance.
+    std::vector<std::unique_ptr<common::BigintRange>> ranges;
+    ranges.push_back(
+        std::make_unique<common::BigintRange>(-500, -100, !nullAllowed));
+    ranges.push_back(
+        std::make_unique<common::BigintRange>(100, 200, !nullAllowed));
+    check(common::BigintMultiRange(std::move(ranges), nullAllowed));
+  }
+}
+
+TEST_F(SubfieldFilterAstTest, longDecimalFiltersPreserveNulls) {
+  auto vector = makeRowVector({makeNullableFlatVector<int128_t>(
+      {std::nullopt, -500, 0, 100, 200}, DECIMAL(20, 0))});
+  const auto aboveInt64 =
+      static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1;
+  for (const bool nullAllowed : {false, true}) {
+    auto check = [&](const common::Filter& filter) {
+      assertPhysicalFilter(vector, filter, cudf::type_id::DECIMAL64);
+    };
+    check(common::HugeintRange(-500, 100, nullAllowed));
+    check(common::HugeintRange(-500, aboveInt64, nullAllowed));
+    check(common::HugeintRange(-aboveInt64 - 1, 100, nullAllowed));
+    check(common::HugeintRange(aboveInt64, aboveInt64 + 2, nullAllowed));
+    check(
+        common::HugeintValuesUsingHashTable(
+            aboveInt64,
+            aboveInt64 + 2,
+            {aboveInt64, aboveInt64 + 2},
+            nullAllowed));
+    check(
+        common::HugeintValuesUsingHashTable(
+            -500, aboveInt64, {-500, aboveInt64}, nullAllowed));
+  }
 }
 
 TEST_F(SubfieldFilterAstTest, decimalRange) {
