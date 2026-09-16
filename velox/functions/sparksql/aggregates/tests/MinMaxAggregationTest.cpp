@@ -200,8 +200,11 @@ TEST_F(MinMaxAggregationTest, timestampUtc) {
   const auto afterEpoch = Timestamp::fromMicros(1);
   const Timestamp earlier{1'704'067'200, 123'456'000};
   const Timestamp later{1'704'067'200, 123'457'000};
-  const auto earliest =
-      Timestamp::fromMicros(std::numeric_limits<int64_t>::min());
+  // Keep the lower bound on a whole second to avoid overflow during truncation.
+  const Timestamp earliest{
+      std::numeric_limits<int64_t>::min() / Timestamp::kMicrosecondsInSecond,
+      0,
+  };
   const auto latest =
       Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
   const std::vector<std::string> aggregates{min("c1"), max("c1")};
@@ -228,16 +231,17 @@ TEST_F(MinMaxAggregationTest, timestampUtc) {
     };
 
     {
-      SCOPED_TRACE("Microseconds, range boundaries, and all-null groups");
+      SCOPED_TRACE(
+          "Microsecond truncation, range boundaries, and all-null groups");
       auto data = makeRowVector({
           makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 3, 3}),
           makeNullableFlatVector<Timestamp>(
               {
-                  later,
-                  earlier,
+                  Timestamp{1'704'067'200, 123'457'999},
+                  Timestamp{1'704'067'200, 123'456'789},
                   std::nullopt,
-                  beforeEpoch,
-                  afterEpoch,
+                  Timestamp{-1, 999'999'999},
+                  Timestamp{0, 1'999},
                   std::nullopt,
                   std::nullopt,
                   earliest,
