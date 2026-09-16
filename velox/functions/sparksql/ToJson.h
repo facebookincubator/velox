@@ -358,7 +358,9 @@ inline void toJson<TypeKind::MAP>(
 } // namespace detail
 
 // ToJsonFunction converts a Json object(ROW, ARRAY, or MAP) to a Json string.
-template <typename T>
+// When 'allowScalarRoot' is true, a scalar root is accepted as well. All other
+// type checks still apply, including that a MAP key cannot be or contain a MAP.
+template <typename T, bool allowScalarRoot = false>
 struct ToJsonFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
@@ -398,7 +400,8 @@ struct ToJsonFunction {
 
  private:
   // Determine whether a given input type is supported.
-  // 1. The root type can only be ROW, ARRAY, and MAP.
+  // 1. The root type can only be ROW, ARRAY, and MAP, unless
+  //    'allowScalarRoot' is set.
   // 2. The key type of MAP cannot be/contain MAP.
   bool isSupportedType(
       const TypePtr& type,
@@ -421,7 +424,7 @@ struct ToJsonFunction {
             isSupportedType(type->childAt(1));
       }
       default:
-        return !isRootType;
+        return !isRootType || allowScalarRoot;
     }
   }
 

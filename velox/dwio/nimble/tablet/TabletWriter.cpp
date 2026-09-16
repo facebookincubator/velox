@@ -44,10 +44,9 @@ TabletWriter::TabletWriter(
       pool_(&pool),
       options_(std::move(options)),
       checksum_{ChecksumFactory::create(options_.checksumType)},
-      // TODO: keeps the chunkIndex name for now; rename to the chunkStats
-      // naming once per-chunk null/min/max stats are fully rolled out.
       chunkStatsWriter_{
-          options_.enableChunkIndex ? std::make_unique<ChunkStatsWriter>(
+          options_.enableChunkStats ? ChunkStatsWriter::create(
+                                          options_.chunkStatsVersion,
                                           pool,
                                           options_.chunkStatsMinAvgChunks)
                                     : nullptr} {}
