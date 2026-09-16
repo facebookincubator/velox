@@ -53,9 +53,9 @@ constexpr int kThreadsPerBlock = 256;
 
 // ASCII "VLXPCOMP". Format identity and version are separate wire fields.
 constexpr int64_t kDescriptorMagic = 0x564c5850434f4d50LL;
-constexpr int64_t kDescriptorVersion = 2;
+constexpr int64_t kDescriptorVersion = 3;
 constexpr std::size_t kDescriptorHeaderWordCount = 4;
-constexpr std::size_t kRegionFixedWordCount = 6;
+constexpr std::size_t kRegionFixedWordCount = 8;
 constexpr std::size_t kMaximumBytePlaneCount = sizeof(uint64_t);
 static_assert(kMaximumBytePlaneCount <= detail::kAnsSizeStagingCapacity);
 constexpr std::size_t kMinimumStagingIndex = 0;
@@ -64,18 +64,24 @@ constexpr std::size_t kDeltaMaximumStagingIndex = 2;
 constexpr std::size_t kFirstValueStagingIndex = 3;
 constexpr std::size_t kNumericStagingValueCount = 4;
 
-enum class RegionCodec : int64_t {
-  kRaw = 0,
-  kByteAns = 1,
-  kFrameOfReference = 2,
-  kDeltaFrameOfReference = 3,
+enum class RegionTransform : int64_t {
+  kNone = 0,
+  kFrameOfReference = 1,
+  kDeltaFrameOfReference = 2,
+};
+
+enum class RegionEncoding : int64_t {
+  kNone = 0,
+  kAns = 1,
 };
 
 struct EncodedRegion {
   std::size_t rawSize{0};
-  RegionCodec codec{RegionCodec::kRaw};
+  RegionTransform transform{RegionTransform::kNone};
+  RegionEncoding encoding{RegionEncoding::kNone};
   cudf::data_type logicalType{cudf::type_id::EMPTY};
   uint64_t referenceBits{0};
+  uint32_t planeCount{0};
   std::vector<uint32_t> segmentSizes;
 };
 
@@ -165,8 +171,8 @@ class DescriptorReader {
     return std::nullopt;
   }
 
-  // Each region has six fixed fields before its segment-size list. This
-  // bound prevents an untrusted count from causing a disproportionate reserve.
+  // Each region has fixed fields before its segment-size list. This bound
+  // prevents an untrusted count from causing a disproportionate reserve.
   if (*regionCount > reader.remaining() / kRegionFixedWordCount) {
     return std::nullopt;
   }
@@ -179,23 +185,28 @@ class DescriptorReader {
   std::size_t encodedCoverage = 0;
   for (std::size_t index = 0; index < *regionCount; ++index) {
     const auto rawSize = reader.readSize();
-    const auto codecValue = reader.read();
+    const auto transformValue = reader.read();
+    const auto encodingValue = reader.read();
     const auto typeValue = reader.read();
     const auto scaleValue = reader.read();
     const auto referenceValue = reader.read();
+    const auto planeCount = reader.readUint32();
     const auto segmentCount = reader.readSize();
-    if (!rawSize || !codecValue || !typeValue || !scaleValue ||
-        !referenceValue || !segmentCount || *rawSize == 0 ||
-        *segmentCount > reader.remaining()) {
+    if (!rawSize || !transformValue || !encodingValue || !typeValue ||
+        !scaleValue || !referenceValue || !planeCount || !segmentCount ||
+        *rawSize == 0 || *segmentCount > reader.remaining()) {
       return std::nullopt;
     }
 
-    if (*codecValue < static_cast<int64_t>(RegionCodec::kRaw) ||
-        *codecValue >
-            static_cast<int64_t>(RegionCodec::kDeltaFrameOfReference)) {
+    if (*transformValue < static_cast<int64_t>(RegionTransform::kNone) ||
+        *transformValue >
+            static_cast<int64_t>(RegionTransform::kDeltaFrameOfReference) ||
+        *encodingValue < static_cast<int64_t>(RegionEncoding::kNone) ||
+        *encodingValue > static_cast<int64_t>(RegionEncoding::kAns)) {
       return std::nullopt;
     }
-    const auto codec = static_cast<RegionCodec>(*codecValue);
+    const auto transform = static_cast<RegionTransform>(*transformValue);
+    const auto encoding = static_cast<RegionEncoding>(*encodingValue);
     const auto logicalType = parseLogicalType(*typeValue, *scaleValue);
     if (!logicalType) {
       return std::nullopt;
@@ -203,9 +214,11 @@ class DescriptorReader {
 
     EncodedRegion region;
     region.rawSize = *rawSize;
-    region.codec = codec;
+    region.transform = transform;
+    region.encoding = encoding;
     region.logicalType = *logicalType;
     region.referenceBits = std::bit_cast<uint64_t>(*referenceValue);
+    region.planeCount = *planeCount;
     region.segmentSizes.reserve(*segmentCount);
     for (std::size_t segment = 0; segment < *segmentCount; ++segment) {
       const auto segmentSize = reader.readUint32();
@@ -215,36 +228,33 @@ class DescriptorReader {
       region.segmentSizes.push_back(*segmentSize);
     }
 
-    std::size_t regionEncodedSize = 0;
-    if (codec == RegionCodec::kRaw) {
-      if (!region.segmentSizes.empty() ||
-          region.logicalType.id() != cudf::type_id::EMPTY ||
-          region.referenceBits != 0) {
+    std::size_t elementCount = 0;
+    if (transform == RegionTransform::kNone) {
+      if (region.logicalType.id() != cudf::type_id::EMPTY ||
+          region.referenceBits != 0 || region.planeCount != 0) {
         return std::nullopt;
       }
-      regionEncodedSize = region.rawSize;
     } else {
-      if (codec == RegionCodec::kByteAns) {
-        if (region.segmentSizes.empty() ||
-            region.logicalType.id() != cudf::type_id::EMPTY ||
-            region.referenceBits != 0) {
-          return std::nullopt;
-        }
-      } else {
-        if (!cudf::is_fixed_width(region.logicalType)) {
-          return std::nullopt;
-        }
-        const auto elementWidth = cudf::size_of(region.logicalType);
-        if ((elementWidth != 4 && elementWidth != 8) ||
-            region.rawSize % elementWidth != 0 ||
-            rawCoverage % elementWidth != 0 || region.segmentSizes.empty() ||
-            region.segmentSizes.size() > kMaximumBytePlaneCount ||
-            (codec == RegionCodec::kFrameOfReference &&
-             region.segmentSizes.size() > elementWidth)) {
-          return std::nullopt;
-        }
+      if (!cudf::is_fixed_width(region.logicalType)) {
+        return std::nullopt;
       }
+      const auto elementWidth = cudf::size_of(region.logicalType);
+      if ((elementWidth != 4 && elementWidth != 8) ||
+          region.rawSize % elementWidth != 0 ||
+          rawCoverage % elementWidth != 0 || region.planeCount == 0 ||
+          region.planeCount > elementWidth) {
+        return std::nullopt;
+      }
+      elementCount = region.rawSize / elementWidth;
+    }
 
+    std::size_t regionEncodedSize = 0;
+    if (encoding == RegionEncoding::kAns) {
+      if (region.segmentSizes.empty() ||
+          (transform != RegionTransform::kNone &&
+           region.segmentSizes.size() != region.planeCount)) {
+        return std::nullopt;
+      }
       for (const auto size : region.segmentSizes) {
         std::size_t alignedSize = 0;
         if (!detail::tryNvcompAlignedSize(size, alignedSize) ||
@@ -252,6 +262,19 @@ class DescriptorReader {
                 regionEncodedSize, alignedSize, regionEncodedSize)) {
           return std::nullopt;
         }
+      }
+    } else {
+      if (!region.segmentSizes.empty()) {
+        return std::nullopt;
+      }
+      if (transform == RegionTransform::kNone) {
+        regionEncodedSize = region.rawSize;
+      } else {
+        if (elementCount >
+            std::numeric_limits<std::size_t>::max() / region.planeCount) {
+          return std::nullopt;
+        }
+        regionEncodedSize = elementCount * region.planeCount;
       }
     }
 
@@ -303,10 +326,12 @@ class DescriptorReader {
 
   for (const auto& region : regions) {
     words.push_back(checkedDescriptorWord(region.rawSize));
-    words.push_back(static_cast<int64_t>(region.codec));
+    words.push_back(static_cast<int64_t>(region.transform));
+    words.push_back(static_cast<int64_t>(region.encoding));
     words.push_back(static_cast<int64_t>(region.logicalType.id()));
     words.push_back(static_cast<int64_t>(region.logicalType.scale()));
     words.push_back(std::bit_cast<int64_t>(region.referenceBits));
+    words.push_back(checkedDescriptorWord(region.planeCount));
     words.push_back(checkedDescriptorWord(region.segmentSizes.size()));
     for (const auto size : region.segmentSizes) {
       words.push_back(static_cast<int64_t>(size));
@@ -608,6 +633,7 @@ struct EncodedTypedRegion {
 template <typename T>
 EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
                                      const TypedRegion& region,
+                                     CompressionOptions options,
                                      detail::PackedColumnsCodecState& state) {
   CUDF_EXPECTS(region.elementCount <= std::numeric_limits<uint32_t>::max(),
                "Packed column is too large for the byte-plane codec",
@@ -618,112 +644,136 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
       (elementCount % kThreadsPerBlock != 0);
   const auto stream = state.stream;
   const auto temporaryMemoryResource = state.temporaryMemoryResource;
-
-  rmm::device_buffer minMaxOutput{
-      2 * sizeof(T), stream, temporaryMemoryResource};
-  auto* minimumOutput = static_cast<T*>(minMaxOutput.data());
-  auto* maximumOutput = minimumOutput + 1;
-
-  std::size_t minimumTempSize = 0;
-  std::size_t maximumTempSize = 0;
-  CUDF_CUDA_TRY(cub::DeviceReduce::Min(nullptr,
-                                       minimumTempSize,
-                                       values,
-                                       minimumOutput,
-                                       elementCount,
-                                       stream.value()));
-  CUDF_CUDA_TRY(cub::DeviceReduce::Max(nullptr,
-                                       maximumTempSize,
-                                       values,
-                                       maximumOutput,
-                                       elementCount,
-                                       stream.value()));
-  rmm::device_buffer reductionTemporary{
-      std::max(minimumTempSize, maximumTempSize),
-      stream,
-      temporaryMemoryResource};
-  CUDF_CUDA_TRY(cub::DeviceReduce::Min(reductionTemporary.data(),
-                                       minimumTempSize,
-                                       values,
-                                       minimumOutput,
-                                       elementCount,
-                                       stream.value()));
-  CUDF_CUDA_TRY(cub::DeviceReduce::Max(reductionTemporary.data(),
-                                       maximumTempSize,
-                                       values,
-                                       maximumOutput,
-                                       elementCount,
-                                       stream.value()));
-
   auto* staged = state.numericStaging.data();
-  CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kMinimumStagingIndex,
-                                minimumOutput,
-                                sizeof(T),
-                                cudaMemcpyDeviceToHost,
-                                stream.value()));
-  CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kMaximumStagingIndex,
-                                maximumOutput,
-                                sizeof(T),
-                                cudaMemcpyDeviceToHost,
-                                stream.value()));
+
+  T minimum{};
+  int framePlaneCount = 0;
+  if (options.numericTransform != NumericTransform::kDeltaFrameOfReference) {
+    rmm::device_buffer minMaxOutput{
+        2 * sizeof(T), stream, temporaryMemoryResource};
+    auto* minimumOutput = static_cast<T*>(minMaxOutput.data());
+    auto* maximumOutput = minimumOutput + 1;
+
+    std::size_t minimumTempSize = 0;
+    std::size_t maximumTempSize = 0;
+    CUDF_CUDA_TRY(cub::DeviceReduce::Min(nullptr,
+                                         minimumTempSize,
+                                         values,
+                                         minimumOutput,
+                                         elementCount,
+                                         stream.value()));
+    CUDF_CUDA_TRY(cub::DeviceReduce::Max(nullptr,
+                                         maximumTempSize,
+                                         values,
+                                         maximumOutput,
+                                         elementCount,
+                                         stream.value()));
+    rmm::device_buffer reductionTemporary{
+        std::max(minimumTempSize, maximumTempSize),
+        stream,
+        temporaryMemoryResource};
+    CUDF_CUDA_TRY(cub::DeviceReduce::Min(reductionTemporary.data(),
+                                         minimumTempSize,
+                                         values,
+                                         minimumOutput,
+                                         elementCount,
+                                         stream.value()));
+    CUDF_CUDA_TRY(cub::DeviceReduce::Max(reductionTemporary.data(),
+                                         maximumTempSize,
+                                         values,
+                                         maximumOutput,
+                                         elementCount,
+                                         stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kMinimumStagingIndex,
+                                  minimumOutput,
+                                  sizeof(T),
+                                  cudaMemcpyDeviceToHost,
+                                  stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kMaximumStagingIndex,
+                                  maximumOutput,
+                                  sizeof(T),
+                                  cudaMemcpyDeviceToHost,
+                                  stream.value()));
+  }
+
+  std::optional<rmm::device_buffer> deltas;
+  uint64_t* deltaValues = nullptr;
+  uint64_t firstBits = 0;
+  int deltaPlaneCount = 0;
+  if (options.numericTransform != NumericTransform::kFrameOfReference) {
+    deltas.emplace(
+        detail::checkedMultiplySizes(
+            elementCount, sizeof(uint64_t), "Delta buffer size overflow"),
+        stream,
+        temporaryMemoryResource);
+    deltaValues = static_cast<uint64_t*>(deltas->data());
+    zigzagDeltaKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
+        values, deltaValues, elementCount);
+    CUDF_CUDA_TRY(cudaGetLastError());
+
+    rmm::device_buffer deltaMaximum{
+        sizeof(uint64_t), stream, temporaryMemoryResource};
+    std::size_t deltaTempSize = 0;
+    CUDF_CUDA_TRY(
+        cub::DeviceReduce::Max(nullptr,
+                               deltaTempSize,
+                               deltaValues,
+                               static_cast<uint64_t*>(deltaMaximum.data()),
+                               elementCount,
+                               stream.value()));
+    rmm::device_buffer deltaTemporary{
+        deltaTempSize, stream, temporaryMemoryResource};
+    CUDF_CUDA_TRY(
+        cub::DeviceReduce::Max(deltaTemporary.data(),
+                               deltaTempSize,
+                               deltaValues,
+                               static_cast<uint64_t*>(deltaMaximum.data()),
+                               elementCount,
+                               stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kDeltaMaximumStagingIndex,
+                                  deltaMaximum.data(),
+                                  sizeof(uint64_t),
+                                  cudaMemcpyDeviceToHost,
+                                  stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kFirstValueStagingIndex,
+                                  values,
+                                  sizeof(T),
+                                  cudaMemcpyDeviceToHost,
+                                  stream.value()));
+  }
+
+  // Automatic mode evaluates both candidates. Queue all decision readbacks
+  // before one barrier so it retains the original automatic-path schedule.
   stream.synchronize();
 
-  const auto minimum = valueFromBits<T>(staged[kMinimumStagingIndex]);
-  const auto maximum = valueFromBits<T>(staged[kMaximumStagingIndex]);
-  using Unsigned = std::make_unsigned_t<T>;
-  const auto frameRange = static_cast<uint64_t>(static_cast<Unsigned>(maximum) -
-                                                static_cast<Unsigned>(minimum));
-  const auto framePlaneCount = bytePlaneCount(frameRange);
+  if (options.numericTransform != NumericTransform::kDeltaFrameOfReference) {
+    minimum = valueFromBits<T>(staged[kMinimumStagingIndex]);
+    const auto maximum = valueFromBits<T>(staged[kMaximumStagingIndex]);
+    using Unsigned = std::make_unsigned_t<T>;
+    const auto frameRange = static_cast<uint64_t>(
+        static_cast<Unsigned>(maximum) - static_cast<Unsigned>(minimum));
+    framePlaneCount = bytePlaneCount(frameRange);
+  }
+  if (options.numericTransform != NumericTransform::kFrameOfReference) {
+    deltaPlaneCount = bytePlaneCount(staged[kDeltaMaximumStagingIndex]);
+    firstBits = valueBits(valueFromBits<T>(staged[kFirstValueStagingIndex]));
+  }
 
-  rmm::device_buffer deltas{
-      detail::checkedMultiplySizes(
-          elementCount, sizeof(uint64_t), "Delta buffer size overflow"),
-      stream,
-      temporaryMemoryResource};
-  auto* deltaValues = static_cast<uint64_t*>(deltas.data());
-  zigzagDeltaKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
-      values, deltaValues, elementCount);
-  CUDF_CUDA_TRY(cudaGetLastError());
-
-  rmm::device_buffer deltaMaximum{
-      sizeof(uint64_t), stream, temporaryMemoryResource};
-  std::size_t deltaTempSize = 0;
-  CUDF_CUDA_TRY(
-      cub::DeviceReduce::Max(nullptr,
-                             deltaTempSize,
-                             deltaValues,
-                             static_cast<uint64_t*>(deltaMaximum.data()),
-                             elementCount,
-                             stream.value()));
-  rmm::device_buffer deltaTemporary{
-      deltaTempSize, stream, temporaryMemoryResource};
-  CUDF_CUDA_TRY(
-      cub::DeviceReduce::Max(deltaTemporary.data(),
-                             deltaTempSize,
-                             deltaValues,
-                             static_cast<uint64_t*>(deltaMaximum.data()),
-                             elementCount,
-                             stream.value()));
-
-  CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kDeltaMaximumStagingIndex,
-                                deltaMaximum.data(),
-                                sizeof(uint64_t),
-                                cudaMemcpyDeviceToHost,
-                                stream.value()));
-  CUDF_CUDA_TRY(cudaMemcpyAsync(staged + kFirstValueStagingIndex,
-                                values,
-                                sizeof(T),
-                                cudaMemcpyDeviceToHost,
-                                stream.value()));
-  stream.synchronize();
-
-  const auto deltaPlaneCount =
-      bytePlaneCount(staged[kDeltaMaximumStagingIndex]);
-  const auto firstBits =
-      valueBits(valueFromBits<T>(staged[kFirstValueStagingIndex]));
-  const auto useDelta = deltaPlaneCount < framePlaneCount;
+  const auto useDelta = [&] {
+    switch (options.numericTransform) {
+      case NumericTransform::kAutomatic:
+        return deltaPlaneCount < framePlaneCount;
+      case NumericTransform::kFrameOfReference:
+        return false;
+      case NumericTransform::kDeltaFrameOfReference:
+        return true;
+    }
+    CUDF_FAIL("Invalid numeric transform", std::invalid_argument);
+  }();
   const auto planeCount = useDelta ? deltaPlaneCount : framePlaneCount;
-  const auto planeStride = detail::nvcompAlignedSize(elementCount);
+  const auto planeStride = options.entropyEncoding == EntropyEncoding::kAns
+      ? detail::nvcompAlignedSize(elementCount)
+      : static_cast<std::size_t>(elementCount);
 
   rmm::device_buffer planes{
       detail::checkedMultiplySizes(planeStride,
@@ -736,9 +786,10 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
   descriptor.rawSize = detail::checkedMultiplySizes(
       region.elementCount, sizeof(T), "Typed region size overflow");
   descriptor.logicalType = region.logicalType;
+  descriptor.planeCount = planeCount;
 
   if (useDelta) {
-    descriptor.codec = RegionCodec::kDeltaFrameOfReference;
+    descriptor.transform = RegionTransform::kDeltaFrameOfReference;
     descriptor.referenceBits = firstBits;
     subtractAndSplitKernel<uint64_t>
         <<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
@@ -749,7 +800,7 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
             planeStride,
             planeCount);
   } else {
-    descriptor.codec = RegionCodec::kFrameOfReference;
+    descriptor.transform = RegionTransform::kFrameOfReference;
     descriptor.referenceBits = valueBits(minimum);
     subtractAndSplitKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
         values,
@@ -761,13 +812,20 @@ EncodedTypedRegion encodeTypedRegion(const uint8_t* blobBase,
   }
   CUDF_CUDA_TRY(cudaGetLastError());
 
-  auto encoded =
-      encodePlanes({static_cast<const uint8_t*>(planes.data()), planes.size()},
-                   elementCount,
-                   planeCount,
-                   state.ans);
-  descriptor.segmentSizes = std::move(encoded.segmentSizes);
-  return EncodedTypedRegion{std::move(descriptor), std::move(encoded.data)};
+  if (options.entropyEncoding == EntropyEncoding::kAns) {
+    descriptor.encoding = RegionEncoding::kAns;
+    auto encoded = encodePlanes(
+        {static_cast<const uint8_t*>(planes.data()), planes.size()},
+        elementCount,
+        planeCount,
+        state.ans);
+    descriptor.segmentSizes = std::move(encoded.segmentSizes);
+    return EncodedTypedRegion{std::move(descriptor), std::move(encoded.data)};
+  }
+  CUDF_EXPECTS(options.entropyEncoding == EntropyEncoding::kNone,
+               "Invalid entropy encoding",
+               std::invalid_argument);
+  return EncodedTypedRegion{std::move(descriptor), std::move(planes)};
 }
 
 template <typename T>
@@ -788,14 +846,20 @@ void decodeTypedRegion(cudf::device_span<const uint8_t> input,
       (elementCount % kThreadsPerBlock != 0);
   const auto stream = state.stream;
 
-  auto planes = decodePlanes(
-      input, region.segmentSizes, elementCount, pending, state.ans);
-  const auto planeCount = static_cast<int>(region.segmentSizes.size());
-  const auto planeStride = detail::nvcompAlignedSize(elementCount);
+  std::optional<rmm::device_buffer> decodedPlanes;
+  const uint8_t* planeData = input.data();
+  std::size_t planeStride = elementCount;
+  if (region.encoding == RegionEncoding::kAns) {
+    decodedPlanes.emplace(decodePlanes(
+        input, region.segmentSizes, elementCount, pending, state.ans));
+    planeData = static_cast<const uint8_t*>(decodedPlanes->data());
+    planeStride = detail::nvcompAlignedSize(elementCount);
+  }
+  const auto planeCount = static_cast<int>(region.planeCount);
 
-  if (region.codec == RegionCodec::kFrameOfReference) {
+  if (region.transform == RegionTransform::kFrameOfReference) {
     recombineAndAddKernel<T><<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
-        static_cast<const uint8_t*>(planes.data()),
+        planeData,
         valueFromBits<T>(region.referenceBits),
         output,
         elementCount,
@@ -812,13 +876,12 @@ void decodeTypedRegion(cudf::device_span<const uint8_t> input,
       state.temporaryMemoryResource};
   auto* deltaValues = static_cast<uint64_t*>(deltas.data());
   recombineAndAddKernel<uint64_t>
-      <<<blocks, kThreadsPerBlock, 0, stream.value()>>>(
-          static_cast<const uint8_t*>(planes.data()),
-          uint64_t{0},
-          deltaValues,
-          elementCount,
-          planeStride,
-          planeCount);
+      <<<blocks, kThreadsPerBlock, 0, stream.value()>>>(planeData,
+                                                        uint64_t{0},
+                                                        deltaValues,
+                                                        elementCount,
+                                                        planeStride,
+                                                        planeCount);
   CUDF_CUDA_TRY(cudaGetLastError());
 
   unzigzagKernel<<<blocks, kThreadsPerBlock, 0, stream.value()>>>(deltaValues,
@@ -847,9 +910,16 @@ void decodeTypedRegion(cudf::device_span<const uint8_t> input,
 }
 
 [[nodiscard]] std::size_t encodedRegionSize(const EncodedRegion& region) {
-  if (region.codec == RegionCodec::kRaw) {
-    return region.rawSize;
+  if (region.encoding == RegionEncoding::kNone) {
+    if (region.transform == RegionTransform::kNone) {
+      return region.rawSize;
+    }
+    const auto elementWidth = cudf::size_of(region.logicalType);
+    return detail::checkedMultiplySizes(region.rawSize / elementWidth,
+                                        region.planeCount,
+                                        "Encoded region size overflow");
   }
+
   std::size_t result = 0;
   for (const auto size : region.segmentSizes) {
     result = detail::checkedAddSizes(result,
@@ -866,12 +936,16 @@ PackedColumnsDescriptor::PackedColumnsDescriptor(std::vector<int64_t> words)
 
 std::optional<PackedColumnsDescriptor> PackedColumnsDescriptor::deserialize(
     std::span<const int64_t> words) {
-  const auto parsed = parseDescriptor(words);
-  if (!parsed) {
+  if (!parseDescriptor(words)) {
     return std::nullopt;
   }
   return PackedColumnsDescriptor{
       std::vector<int64_t>{words.begin(), words.end()}};
+}
+
+std::span<const int64_t> PackedColumnsDescriptor::serializedView()
+    const noexcept {
+  return words_;
 }
 
 std::vector<int64_t> PackedColumnsDescriptor::serialize() const {
@@ -890,7 +964,18 @@ PackedColumnsCodec::PackedColumnsCodec(
 PackedColumnsCodec::~PackedColumnsCodec() = default;
 
 std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
-    const cudf::packed_columns& input) {
+    const cudf::packed_columns& input,
+    CompressionOptions options) {
+  CUDF_EXPECTS(
+      options.numericTransform == NumericTransform::kAutomatic ||
+          options.numericTransform == NumericTransform::kFrameOfReference ||
+          options.numericTransform == NumericTransform::kDeltaFrameOfReference,
+      "Invalid numeric transform",
+      std::invalid_argument);
+  CUDF_EXPECTS(options.entropyEncoding == EntropyEncoding::kAns ||
+                   options.entropyEncoding == EntropyEncoding::kNone,
+               "Invalid entropy encoding",
+               std::invalid_argument);
   CUDF_EXPECTS(input.metadata != nullptr && input.gpu_data != nullptr,
                "Cannot compress moved-from packed columns",
                std::invalid_argument);
@@ -928,15 +1013,18 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
 
     EncodedRegion region;
     region.rawSize = size;
-    auto compressed =
-        detail::compressAns({blobBase + offset, size}, state_->ans);
-    if (compressed) {
-      region.codec = RegionCodec::kByteAns;
-      region.segmentSizes = compressed->segmentSizes;
-      payloads.push_back(std::move(compressed->data));
-    } else {
-      payloads.emplace_back();
+    if (options.entropyEncoding == EntropyEncoding::kAns) {
+      auto compressed =
+          detail::compressAns({blobBase + offset, size}, state_->ans);
+      if (compressed) {
+        region.encoding = RegionEncoding::kAns;
+        region.segmentSizes = compressed->segmentSizes;
+        payloads.push_back(std::move(compressed->data));
+        regions.push_back(std::move(region));
+        return;
+      }
     }
+    payloads.emplace_back();
     regions.push_back(std::move(region));
   };
 
@@ -954,14 +1042,14 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
     EncodedTypedRegion encoded = [&] {
       if (elementWidth == 8) {
         if (usesUnsignedStorage(typed.logicalType)) {
-          return encodeTypedRegion<uint64_t>(blobBase, typed, *state_);
+          return encodeTypedRegion<uint64_t>(blobBase, typed, options, *state_);
         }
-        return encodeTypedRegion<int64_t>(blobBase, typed, *state_);
+        return encodeTypedRegion<int64_t>(blobBase, typed, options, *state_);
       }
       if (usesUnsignedStorage(typed.logicalType)) {
-        return encodeTypedRegion<uint32_t>(blobBase, typed, *state_);
+        return encodeTypedRegion<uint32_t>(blobBase, typed, options, *state_);
       }
-      return encodeTypedRegion<int32_t>(blobBase, typed, *state_);
+      return encodeTypedRegion<int32_t>(blobBase, typed, options, *state_);
     }();
     regions.push_back(std::move(encoded.descriptor));
     payloads.push_back(std::move(encoded.data));
@@ -998,7 +1086,9 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
   for (std::size_t index = 0; index < regions.size(); ++index) {
     const auto& region = regions[index];
     const auto size = encodedRegionSize(region);
-    const auto* source = region.codec == RegionCodec::kRaw
+    const auto isRaw = region.transform == RegionTransform::kNone &&
+        region.encoding == RegionEncoding::kNone;
+    const auto* source = isRaw
         ? blobBase + rawOffset
         : static_cast<const uint8_t*>(payloads[index].data());
     CUDF_CUDA_TRY(
@@ -1027,7 +1117,7 @@ rmm::device_buffer PackedColumnsCodec::decompress(
   CUDF_EXPECTS(input.data() != nullptr,
                "Compressed packed-column input is null",
                std::invalid_argument);
-  const auto parsed = parseDescriptor(descriptor.words_);
+  const auto parsed = parseDescriptor(descriptor.serializedView());
   CUDF_EXPECTS(parsed.has_value(),
                "Invalid packed-column compression descriptor",
                std::invalid_argument);
@@ -1047,15 +1137,14 @@ rmm::device_buffer PackedColumnsCodec::decompress(
     cudf::device_span<const uint8_t> regionInput{input.data() + inputOffset,
                                                  regionEncodedSize};
 
-    switch (region.codec) {
-      case RegionCodec::kRaw:
+    if (region.transform == RegionTransform::kNone) {
+      if (region.encoding == RegionEncoding::kNone) {
         CUDF_CUDA_TRY(cudaMemcpyAsync(outputBase + outputOffset,
                                       regionInput.data(),
                                       regionInput.size(),
                                       cudaMemcpyDeviceToDevice,
                                       state_->stream.value()));
-        break;
-      case RegionCodec::kByteAns: {
+      } else {
         auto decoded = detail::decompressAns(
             regionInput, region.segmentSizes, region.rawSize, state_->ans);
         CUDF_CUDA_TRY(cudaMemcpyAsync(outputBase + outputOffset,
@@ -1063,32 +1152,21 @@ rmm::device_buffer PackedColumnsCodec::decompress(
                                       region.rawSize,
                                       cudaMemcpyDeviceToDevice,
                                       state_->stream.value()));
-        break;
       }
-      case RegionCodec::kFrameOfReference:
-      case RegionCodec::kDeltaFrameOfReference:
-        if (cudf::size_of(region.logicalType) == 8) {
-          if (usesUnsignedStorage(region.logicalType)) {
-            decodeTypedRegion<uint64_t>(regionInput,
-                                        region,
-                                        outputBase + outputOffset,
-                                        pending,
-                                        *state_);
-          } else {
-            decodeTypedRegion<int64_t>(regionInput,
-                                       region,
-                                       outputBase + outputOffset,
-                                       pending,
-                                       *state_);
-          }
-        } else if (usesUnsignedStorage(region.logicalType)) {
-          decodeTypedRegion<uint32_t>(
-              regionInput, region, outputBase + outputOffset, pending, *state_);
-        } else {
-          decodeTypedRegion<int32_t>(
-              regionInput, region, outputBase + outputOffset, pending, *state_);
-        }
-        break;
+    } else if (cudf::size_of(region.logicalType) == 8) {
+      if (usesUnsignedStorage(region.logicalType)) {
+        decodeTypedRegion<uint64_t>(
+            regionInput, region, outputBase + outputOffset, pending, *state_);
+      } else {
+        decodeTypedRegion<int64_t>(
+            regionInput, region, outputBase + outputOffset, pending, *state_);
+      }
+    } else if (usesUnsignedStorage(region.logicalType)) {
+      decodeTypedRegion<uint32_t>(
+          regionInput, region, outputBase + outputOffset, pending, *state_);
+    } else {
+      decodeTypedRegion<int32_t>(
+          regionInput, region, outputBase + outputOffset, pending, *state_);
     }
     outputOffset = detail::checkedAddSizes(
         outputOffset, region.rawSize, "Packed-column output offset overflow");

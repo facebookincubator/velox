@@ -33,6 +33,32 @@ namespace detail {
 class PackedColumnsCodecState;
 }
 
+/** Numeric transform applied before optional entropy coding. */
+enum class NumericTransform {
+  /** Chooses FOR or delta-FOR independently for each eligible region. */
+  kAutomatic,
+
+  /** Produces independently addressable FOR values. */
+  kFrameOfReference,
+
+  /** Produces delta-FOR values that require a prefix sum to reconstruct. */
+  kDeltaFrameOfReference,
+};
+
+/** Optional entropy-coding stage applied after the numeric transform. */
+enum class EntropyEncoding {
+  /** Entropy-codes transformed byte planes and eligible residual regions. */
+  kAns,
+
+  /** Keeps transformed byte planes directly accessible and residuals raw. */
+  kNone,
+};
+
+struct CompressionOptions {
+  NumericTransform numericTransform{NumericTransform::kAutomatic};
+  EntropyEncoding entropyEncoding{EntropyEncoding::kAns};
+};
+
 /**
  * @brief Opaque metadata required to reconstruct compressed packed columns.
  *
@@ -41,18 +67,20 @@ class PackedColumnsCodecState;
  */
 class PackedColumnsDescriptor {
  public:
-  /** Parses and validates a serialized descriptor. */
+  /** Constructs a descriptor from trusted serialized words. */
+  explicit PackedColumnsDescriptor(std::vector<int64_t> words);
+
+  /** Parses a serialized descriptor without throwing on invalid input. */
   [[nodiscard]] static std::optional<PackedColumnsDescriptor> deserialize(
       std::span<const int64_t> words);
 
-  /** Returns a transport-neutral copy of this descriptor. */
+  /** Returns a read-only view of the serialized descriptor. */
+  [[nodiscard]] std::span<const int64_t> serializedView() const noexcept;
+
+  /** Returns a transport-neutral owning copy of this descriptor. */
   [[nodiscard]] std::vector<int64_t> serialize() const;
 
  private:
-  friend class PackedColumnsCodec;
-
-  explicit PackedColumnsDescriptor(std::vector<int64_t> words);
-
   std::vector<int64_t> words_;
 };
 
@@ -64,9 +92,10 @@ struct CompressedPackedColumns {
 /**
  * @brief Compresses the GPU allocation owned by `cudf::packed_columns`.
  *
- * The codec inspects the packed column layout and chooses transforms
- * internally. It has no transport state or link-rate policy. Each instance is
- * bound to one CUDA stream and is not safe for concurrent calls.
+ * The codec inspects the packed column layout and applies the requested
+ * transform and entropy policy. It has no transport state or link-rate policy.
+ * Each instance is bound to one CUDA stream and is not safe for concurrent
+ * calls.
  *
  * Both operations synchronize the bound stream before returning. Inputs may
  * therefore be released on return, and returned buffers are ready for use.
@@ -85,10 +114,13 @@ class PackedColumnsCodec {
 
   /**
    * Returns no value when the encoded representation fails the configured
-   * byte-reduction safeguard.
+   * byte-reduction safeguard. FOR with no entropy coding leaves numeric byte
+   * planes directly addressable. The current decompression API still
+   * reconstructs the complete packed allocation.
    */
   [[nodiscard]] std::optional<CompressedPackedColumns> compress(
-      const cudf::packed_columns& input);
+      const cudf::packed_columns& input,
+      CompressionOptions options = {});
 
   /** Reconstructs the packed GPU allocation byte-exactly. */
   [[nodiscard]] rmm::device_buffer decompress(

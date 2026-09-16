@@ -31,6 +31,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <future>
 #include <limits>
@@ -49,14 +50,19 @@ constexpr std::size_t kUncompressedSizeIndex = 2;
 constexpr std::size_t kRegionCountIndex = 3;
 constexpr std::size_t kFirstRegionIndex = 4;
 constexpr std::size_t kRegionRawSizeOffset = 0;
-constexpr std::size_t kRegionCodecOffset = 1;
-constexpr std::size_t kRegionTypeOffset = 2;
-constexpr std::size_t kRegionScaleOffset = 3;
-constexpr std::size_t kRegionReferenceOffset = 4;
-constexpr std::size_t kRegionSegmentCountOffset = 5;
-constexpr std::size_t kRegionFixedWordCount = 6;
-constexpr int64_t kRawRegionCodec = 0;
-constexpr int64_t kFrameOfReferenceRegionCodec = 2;
+constexpr std::size_t kRegionTransformOffset = 1;
+constexpr std::size_t kRegionEncodingOffset = 2;
+constexpr std::size_t kRegionTypeOffset = 3;
+constexpr std::size_t kRegionScaleOffset = 4;
+constexpr std::size_t kRegionReferenceOffset = 5;
+constexpr std::size_t kRegionPlaneCountOffset = 6;
+constexpr std::size_t kRegionSegmentCountOffset = 7;
+constexpr std::size_t kRegionFixedWordCount = 8;
+constexpr int64_t kNoTransform = 0;
+constexpr int64_t kFrameOfReferenceTransform = 1;
+constexpr int64_t kDeltaFrameOfReferenceTransform = 2;
+constexpr int64_t kNoEntropyEncoding = 0;
+constexpr int64_t kAnsEncoding = 1;
 
 template <typename T>
 std::unique_ptr<cudf::column> makeColumn(
@@ -101,7 +107,8 @@ struct RoundTripObservation {
 RoundTripObservation roundTrip(
     std::vector<std::unique_ptr<cudf::column>> columns,
     rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref memoryResource) {
+    rmm::device_async_resource_ref memoryResource,
+    CompressionOptions options = {}) {
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream, memoryResource);
   stream.synchronize();
@@ -116,7 +123,7 @@ RoundTripObservation roundTrip(
   stream.synchronize();
 
   PackedColumnsCodec codec{stream, memoryResource, memoryResource};
-  auto compressed = codec.compress(packed);
+  auto compressed = codec.compress(packed, options);
   EXPECT_TRUE(compressed.has_value());
   if (!compressed) {
     return {packed.gpu_data->size(), 0, {}};
@@ -252,6 +259,136 @@ TEST(PackedColumnsCodecTest, RoundTripsLogicalTypesAndNullMask) {
   EXPECT_LT(observation.compressedSize, observation.uncompressedSize);
 }
 
+TEST(PackedColumnsCodecTest, FrameOfReferenceWithoutAnsSupportsDirectLookup) {
+  constexpr std::size_t kRows = 1u << 18;
+  rmm::cuda_stream stream;
+  const auto memoryResource = rmm::mr::get_current_device_resource_ref();
+
+  std::vector<int64_t> values(kRows);
+  for (std::size_t index = 0; index < kRows; ++index) {
+    values[index] = 5'000'000'000LL +
+        static_cast<int64_t>((index * 7'919) & ((1u << 20) - 1));
+  }
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
+                               values,
+                               stream.view(),
+                               memoryResource));
+  cudf::table table{std::move(columns)};
+  auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
+  stream.synchronize();
+  const auto expected = copyToHost(*packed.gpu_data, stream.view());
+
+  CompressionOptions options;
+  options.numericTransform = NumericTransform::kFrameOfReference;
+  options.entropyEncoding = EntropyEncoding::kNone;
+  PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
+  auto compressed = codec.compress(packed, options);
+  ASSERT_TRUE(compressed);
+  const auto words = compressed->descriptor.serialize();
+  const auto bytes = copyToHost(compressed->data, stream.view());
+
+  bool foundTypedRegion = false;
+  std::size_t descriptorPosition = kFirstRegionIndex;
+  std::size_t encodedPosition = 0;
+  const auto regionCount = static_cast<std::size_t>(words[kRegionCountIndex]);
+  for (std::size_t region = 0; region < regionCount; ++region) {
+    ASSERT_LE(descriptorPosition + kRegionFixedWordCount, words.size());
+    const auto rawSize = static_cast<std::size_t>(
+        words[descriptorPosition + kRegionRawSizeOffset]);
+    const auto transform = words[descriptorPosition + kRegionTransformOffset];
+    const auto encoding = words[descriptorPosition + kRegionEncodingOffset];
+    const auto planeCount = static_cast<std::size_t>(
+        words[descriptorPosition + kRegionPlaneCountOffset]);
+    const auto segmentCount = static_cast<std::size_t>(
+        words[descriptorPosition + kRegionSegmentCountOffset]);
+    EXPECT_EQ(encoding, kNoEntropyEncoding);
+    EXPECT_EQ(segmentCount, 0);
+
+    std::size_t encodedSize = rawSize;
+    if (transform != kNoTransform) {
+      const auto typeId = static_cast<cudf::type_id>(
+          words[descriptorPosition + kRegionTypeOffset]);
+      const auto elementWidth = cudf::size_of(cudf::data_type{typeId});
+      const auto elementCount = rawSize / elementWidth;
+      encodedSize = elementCount * planeCount;
+
+      ASSERT_EQ(transform, kFrameOfReferenceTransform);
+      ASSERT_EQ(typeId, cudf::type_id::INT64);
+      ASSERT_EQ(elementCount, kRows);
+      ASSERT_EQ(planeCount, 3);
+      const auto referenceBits = std::bit_cast<uint64_t>(
+          words[descriptorPosition + kRegionReferenceOffset]);
+      for (const auto row : {std::size_t{0}, kRows / 3, kRows - 1}) {
+        uint64_t adjusted = 0;
+        for (std::size_t plane = 0; plane < planeCount; ++plane) {
+          adjusted |= static_cast<uint64_t>(
+                          bytes[encodedPosition + plane * elementCount + row])
+              << (8 * plane);
+        }
+        EXPECT_EQ(std::bit_cast<int64_t>(referenceBits + adjusted),
+                  values[row]);
+      }
+      foundTypedRegion = true;
+    }
+
+    encodedPosition += detail::nvcompAlignedSize(encodedSize);
+    descriptorPosition += kRegionFixedWordCount + segmentCount;
+  }
+  EXPECT_TRUE(foundTypedRegion);
+  EXPECT_EQ(descriptorPosition, words.size());
+  EXPECT_EQ(encodedPosition, bytes.size());
+
+  auto decoded =
+      codec.decompress({static_cast<const uint8_t*>(compressed->data.data()),
+                        compressed->data.size()},
+                       compressed->descriptor);
+  EXPECT_EQ(copyToHost(decoded, stream.view()), expected);
+}
+
+TEST(PackedColumnsCodecTest, DeltaFrameOfReferenceCanSkipAns) {
+  constexpr std::size_t kRows = 1u << 18;
+  rmm::cuda_stream stream;
+  const auto memoryResource = rmm::mr::get_current_device_resource_ref();
+
+  std::vector<int64_t> values(kRows);
+  for (std::size_t index = 0; index < kRows; ++index) {
+    values[index] = 1'700'000'000'000LL + static_cast<int64_t>(index) * 1'000;
+  }
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
+                               values,
+                               stream.view(),
+                               memoryResource));
+
+  CompressionOptions options;
+  options.numericTransform = NumericTransform::kDeltaFrameOfReference;
+  options.entropyEncoding = EntropyEncoding::kNone;
+  const auto observation =
+      roundTrip(std::move(columns), stream.view(), memoryResource, options);
+  ASSERT_FALSE(observation.serializedDescriptor.empty());
+
+  bool foundTypedRegion = false;
+  const auto& words = observation.serializedDescriptor;
+  std::size_t position = kFirstRegionIndex;
+  const auto regionCount = static_cast<std::size_t>(words[kRegionCountIndex]);
+  for (std::size_t region = 0; region < regionCount; ++region) {
+    ASSERT_LE(position + kRegionFixedWordCount, words.size());
+    EXPECT_EQ(words[position + kRegionEncodingOffset], kNoEntropyEncoding);
+    const auto segmentCount =
+        static_cast<std::size_t>(words[position + kRegionSegmentCountOffset]);
+    EXPECT_EQ(segmentCount, 0);
+    if (words[position + kRegionTransformOffset] != kNoTransform) {
+      EXPECT_EQ(words[position + kRegionTransformOffset],
+                kDeltaFrameOfReferenceTransform);
+      foundTypedRegion = true;
+    }
+    position += kRegionFixedWordCount + segmentCount;
+  }
+  EXPECT_TRUE(foundTypedRegion);
+  EXPECT_EQ(position, words.size());
+}
+
 TEST(PackedColumnsCodecTest, RoundTripsSignedAndUnsignedExtremes) {
   constexpr std::size_t kRows = 1u << 18;
   rmm::cuda_stream stream;
@@ -365,43 +502,68 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   trailingWord.push_back(0);
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(trailingWord));
 
-  auto emptySegment = valid;
-  emptySegment.back() = 0;
-  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(emptySegment));
-
-  std::size_t untypedRegionIndex = kFirstRegionIndex;
+  std::size_t typedRegionIndex = valid.size();
+  std::size_t untypedRegionIndex = valid.size();
+  std::size_t position = kFirstRegionIndex;
   const auto regionCount = static_cast<std::size_t>(valid[kRegionCountIndex]);
   for (std::size_t region = 0; region < regionCount; ++region) {
-    if (valid[untypedRegionIndex + kRegionCodecOffset] <
-        kFrameOfReferenceRegionCodec) {
-      break;
+    ASSERT_LE(position + kRegionFixedWordCount, valid.size());
+    const auto transform = valid[position + kRegionTransformOffset];
+    if (transform == kNoTransform && untypedRegionIndex == valid.size()) {
+      untypedRegionIndex = position;
+    } else if (transform != kNoTransform && typedRegionIndex == valid.size()) {
+      typedRegionIndex = position;
     }
-    const auto segmentCount = static_cast<std::size_t>(
-        valid[untypedRegionIndex + kRegionSegmentCountOffset]);
-    untypedRegionIndex += kRegionFixedWordCount + segmentCount;
+    const auto segmentCount =
+        static_cast<std::size_t>(valid[position + kRegionSegmentCountOffset]);
+    position += kRegionFixedWordCount + segmentCount;
   }
+  ASSERT_EQ(position, valid.size());
+  ASSERT_LT(typedRegionIndex, valid.size());
   ASSERT_LT(untypedRegionIndex, valid.size());
+  ASSERT_GT(valid[typedRegionIndex + kRegionSegmentCountOffset], 0);
 
-  auto invalidCodec = valid;
-  invalidCodec[kFirstRegionIndex + kRegionCodecOffset] = 99;
-  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidCodec));
+  auto emptySegment = valid;
+  emptySegment[typedRegionIndex + kRegionFixedWordCount] = 0;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(emptySegment));
+
+  auto invalidTransform = valid;
+  invalidTransform[kFirstRegionIndex + kRegionTransformOffset] = 99;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidTransform));
+
+  auto invalidEncoding = valid;
+  invalidEncoding[kFirstRegionIndex + kRegionEncodingOffset] = 99;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidEncoding));
 
   auto invalidUntypedReference = valid;
   invalidUntypedReference[untypedRegionIndex + kRegionReferenceOffset] = 1;
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidUntypedReference));
 
+  auto zeroPlaneCount = valid;
+  zeroPlaneCount[typedRegionIndex + kRegionPlaneCountOffset] = 0;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(zeroPlaneCount));
+
+  auto excessivePlaneCount = valid;
+  excessivePlaneCount[typedRegionIndex + kRegionPlaneCountOffset] = 9;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(excessivePlaneCount));
+
+  auto noEntropyWithSegments = valid;
+  noEntropyWithSegments[typedRegionIndex + kRegionEncodingOffset] =
+      kNoEntropyEncoding;
+  EXPECT_FALSE(PackedColumnsDescriptor::deserialize(noEntropyWithSegments));
+
   auto invalidType = valid;
-  invalidType[kFirstRegionIndex + kRegionTypeOffset] =
+  invalidType[typedRegionIndex + kRegionTypeOffset] =
       static_cast<int64_t>(cudf::type_id::NUM_TYPE_IDS);
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidType));
 
   auto invalidScale = valid;
-  invalidScale[kFirstRegionIndex + kRegionScaleOffset] =
+  invalidScale[typedRegionIndex + kRegionScaleOffset] =
       std::numeric_limits<int64_t>::max();
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(invalidScale));
 
   auto negativeSegmentCount = valid;
-  negativeSegmentCount[kFirstRegionIndex + kRegionSegmentCountOffset] = -1;
+  negativeSegmentCount[typedRegionIndex + kRegionSegmentCountOffset] = -1;
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(negativeSegmentCount));
 
   auto oversizedRawRegion = valid;
@@ -410,7 +572,8 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(oversizedRawRegion));
 
   auto oversizedSegment = valid;
-  oversizedSegment.back() = std::numeric_limits<int64_t>::max();
+  oversizedSegment[typedRegionIndex + kRegionFixedWordCount] =
+      std::numeric_limits<int64_t>::max();
   EXPECT_FALSE(PackedColumnsDescriptor::deserialize(oversizedSegment));
 }
 
@@ -487,49 +650,54 @@ TEST(PackedColumnsCodecTest, SmallInputIsNotExpanded) {
 
 TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
   constexpr std::size_t kTypedThreshold = 4096;
+  constexpr int kColumnCount = 3;
   rmm::cuda_stream stream;
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
 
-  auto selectedCodecs = [&](std::size_t rowCount, bool expectCompression) {
+  auto selectedTransforms = [&](std::size_t rowCount) {
     std::vector<std::unique_ptr<cudf::column>> columns;
-    columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                                 std::vector<int64_t>(rowCount, 7),
-                                 stream.view(),
-                                 memoryResource));
+    // Keep the residual input large enough to produce a descriptor below the
+    // typed-transform threshold, where each column remains untransformed.
+    for (int column = 0; column < kColumnCount; ++column) {
+      columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
+                                   std::vector<int64_t>(rowCount, 7),
+                                   stream.view(),
+                                   memoryResource));
+    }
     cudf::table table{std::move(columns)};
     auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
     PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
     auto compressed = codec.compress(packed);
-    EXPECT_EQ(compressed.has_value(), expectCompression);
+    EXPECT_TRUE(compressed);
     if (!compressed) {
       return std::vector<int64_t>{};
     }
 
     const auto words = compressed->descriptor.serialize();
-    std::vector<int64_t> codecs;
+    std::vector<int64_t> transforms;
     std::size_t position = kFirstRegionIndex;
     const auto regionCount = static_cast<std::size_t>(words[kRegionCountIndex]);
     for (std::size_t region = 0; region < regionCount; ++region) {
       EXPECT_LE(position + kRegionFixedWordCount, words.size());
-      codecs.push_back(words[position + kRegionCodecOffset]);
+      transforms.push_back(words[position + kRegionTransformOffset]);
       const auto segmentCount =
           static_cast<std::size_t>(words[position + kRegionSegmentCountOffset]);
       position += kRegionFixedWordCount + segmentCount;
     }
     EXPECT_EQ(position, words.size());
-    return codecs;
+    return transforms;
   };
 
-  const auto belowThreshold = selectedCodecs(kTypedThreshold - 1, false);
+  const auto belowThreshold = selectedTransforms(kTypedThreshold - 1);
   EXPECT_TRUE(std::none_of(
-      belowThreshold.begin(), belowThreshold.end(), [](int64_t codec) {
-        return codec >= kFrameOfReferenceRegionCodec;
+      belowThreshold.begin(), belowThreshold.end(), [](int64_t transform) {
+        return transform != kNoTransform;
       }));
 
-  const auto atThreshold = selectedCodecs(kTypedThreshold, true);
-  EXPECT_TRUE(
-      std::any_of(atThreshold.begin(), atThreshold.end(), [](int64_t codec) {
-        return codec >= kFrameOfReferenceRegionCodec;
+  const auto atThreshold = selectedTransforms(kTypedThreshold);
+  EXPECT_TRUE(std::any_of(
+      atThreshold.begin(), atThreshold.end(), [](int64_t transform) {
+        return transform != kNoTransform;
       }));
 }
 
@@ -595,17 +763,33 @@ TEST(PackedColumnsCodecTest, EncodedPaddingIsDeterministic) {
     for (std::size_t region = 0; region < regionCount; ++region) {
       const auto rawSize = static_cast<std::size_t>(
           descriptor[descriptorPosition + kRegionRawSizeOffset]);
-      const auto codec = descriptor[descriptorPosition + kRegionCodecOffset];
+      const auto transform =
+          descriptor[descriptorPosition + kRegionTransformOffset];
+      const auto encoding =
+          descriptor[descriptorPosition + kRegionEncodingOffset];
       const auto segmentCount = static_cast<std::size_t>(
           descriptor[descriptorPosition + kRegionSegmentCountOffset]);
       const auto segmentSizes = descriptorPosition + kRegionFixedWordCount;
-      if (codec == kRawRegionCodec) {
-        for (auto offset = rawSize; offset < detail::nvcompAlignedSize(rawSize);
+      if (encoding == kNoEntropyEncoding) {
+        std::size_t encodedSize = rawSize;
+        if (transform != kNoTransform) {
+          const auto type = cudf::data_type{
+              static_cast<cudf::type_id>(
+                  descriptor[descriptorPosition + kRegionTypeOffset]),
+              static_cast<int32_t>(
+                  descriptor[descriptorPosition + kRegionScaleOffset])};
+          const auto planeCount = static_cast<std::size_t>(
+              descriptor[descriptorPosition + kRegionPlaneCountOffset]);
+          encodedSize = rawSize / cudf::size_of(type) * planeCount;
+        }
+        for (auto offset = encodedSize;
+             offset < detail::nvcompAlignedSize(encodedSize);
              ++offset) {
           EXPECT_EQ(bytes[encodedPosition + offset], 0);
         }
-        encodedPosition += detail::nvcompAlignedSize(rawSize);
+        encodedPosition += detail::nvcompAlignedSize(encodedSize);
       } else {
+        EXPECT_EQ(encoding, kAnsEncoding);
         for (std::size_t segment = 0; segment < segmentCount; ++segment) {
           const auto size =
               static_cast<std::size_t>(descriptor[segmentSizes + segment]);
