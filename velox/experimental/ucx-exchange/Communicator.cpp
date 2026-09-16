@@ -122,20 +122,22 @@ void Communicator::run() {
 
   // create the UCXX context, worker, listener-context etc.
   if (CudfConfig::getInstance().ucxxBlockingProgress) {
-    context_ = ucxx::createContext({}, ucxx::Context::defaultFeatureFlags);
+    context_ = ucxx::contextBuilder(ucxx::Context::defaultFeatureFlags).build();
   } else {
-    context_ = ucxx::createContext({}, UCP_FEATURE_TAG | UCP_FEATURE_AM);
+    context_ = ucxx::contextBuilder(UCP_FEATURE_TAG | UCP_FEATURE_AM).build();
   }
 
-  worker_ = context_->createWorker();
+  worker_ = context_->workerBuilder().build();
 
   if (CudfConfig::getInstance().ucxxBlockingProgress) {
     // Communicator is using blocking progress mode.
     worker_->initBlockingProgressMode();
   }
 
-  listener_ = worker_->createListener(
-      port_, Communicator::cStyleListenerCallback, this);
+  listener_ =
+      worker_
+          ->listenerBuilder(port_, Communicator::cStyleListenerCallback, this)
+          .build();
 
   // Setup the active message callback that handles the
   // initial handshake and creates the senders.
@@ -302,10 +304,10 @@ std::shared_ptr<EndpointRef> Communicator::assocEndpointRef(
     return ep;
   }
   // endpoint doesn't exist. Need to connect. Enable error handling.
-  auto ep = worker_->createEndpointFromHostname(
-      hostPort.hostname,
-      hostPort.port,
-      CudfConfig::getInstance().ucxxErrorHandling);
+  auto ep =
+      worker_->endpointBuilder(hostPort.hostname, hostPort.port)
+          .endpointErrorHandling(CudfConfig::getInstance().ucxxErrorHandling)
+          .build();
   std::shared_ptr<EndpointRef> epRef = nullptr;
   if (ep != nullptr) {
     epRef = std::make_shared<EndpointRef>(ep);
@@ -402,8 +404,10 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
   // shared. This guarantees that between any two nodes, there will be at most 2
   // endpoints, one per direction. For compatibility reasons, both incoming and
   // outgoing endpoints are represented using the EndpointRef.
-  auto endpoint = listener_->createEndpointFromConnRequest(
-      conn_request, CudfConfig::getInstance().ucxxErrorHandling);
+  auto endpoint =
+      listener_->endpointBuilder(conn_request)
+          .endpointErrorHandling(CudfConfig::getInstance().ucxxErrorHandling)
+          .build();
   // Pass the peer's actual IP to EndpointRef for reliable intra-node detection.
   auto epRef = std::make_shared<EndpointRef>(endpoint, std::string(ip_str));
   if (CudfConfig::getInstance().ucxxErrorHandling) {

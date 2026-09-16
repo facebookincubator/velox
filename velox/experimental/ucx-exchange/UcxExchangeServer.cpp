@@ -353,41 +353,46 @@ void UcxExchangeServer::sendData() {
     auto metaCtx = std::make_shared<MetaSendContext>();
     metaCtx->metadata = serializedMetadata;
 
-    metaRequest_ = endpointRef_->endpoint_->tagSend(
-        metaCtx->metadata.get(),
-        serMetaSize,
-        ucxx::Tag{metadataTag},
-        false,
-        [tid = partitionKey_.toString(), metadataTag, weakMeta](
-            ucs_status_t status, std::shared_ptr<void> arg) {
-          // Release the metadata buffer from the context. The context
-          // shell stays alive with the Request; only the payload is freed.
-          auto ctx = std::static_pointer_cast<MetaSendContext>(arg);
-          auto metaHolder = std::move(ctx->metadata); // release CPU buffer
+    metaRequest_ =
+        endpointRef_->endpoint_
+            ->tagSendBuilder(
+                metaCtx->metadata.get(), serMetaSize, ucxx::Tag{metadataTag})
+            .callbackFunction([tid = partitionKey_.toString(),
+                               metadataTag,
+                               weakMeta](
+                                  ucs_status_t status,
+                                  std::shared_ptr<void> arg) {
+              // Release the metadata buffer from the context. The context
+              // shell stays alive with the Request; only the payload is freed.
+              auto ctx = std::static_pointer_cast<MetaSendContext>(arg);
+              auto metaHolder = std::move(ctx->metadata); // release CPU buffer
 
-          auto self = weakMeta.lock();
-          if (!self) {
-            return; // Object was destroyed, safe to ignore
-          }
-          // Check if close() was called
-          if (self->closed_.load(std::memory_order_acquire)) {
-            VLOG(3) << "@" << self->partitionKey_.taskId
+              auto self = weakMeta.lock();
+              if (!self) {
+                return; // Object was destroyed, safe to ignore
+              }
+              // Check if close() was called
+              if (self->closed_.load(std::memory_order_acquire)) {
+                VLOG(3)
+                    << "@" << self->partitionKey_.taskId
                     << " metadata send callback called after close, ignoring";
-            return;
-          }
-          if (status == UCS_OK) {
-            VLOG(3) << "@" << self->partitionKey_.taskId
-                    << " metadata successfully sent to " << tid
-                    << " with tag: " << std::hex << metadataTag;
-          } else {
-            VLOG(0) << "@" << self->partitionKey_.taskId
-                    << " Error in sendData, send metadata "
-                    << ucs_status_string(status) << " failed for task: " << tid;
-            self->setState(ServerState::Done);
-            self->communicator_->addToWorkQueue(self);
-          }
-        },
-        metaCtx);
+                return;
+              }
+              if (status == UCS_OK) {
+                VLOG(3) << "@" << self->partitionKey_.taskId
+                        << " metadata successfully sent to " << tid
+                        << " with tag: " << std::hex << metadataTag;
+              } else {
+                VLOG(0) << "@" << self->partitionKey_.taskId
+                        << " Error in sendData, send metadata "
+                        << ucs_status_string(status)
+                        << " failed for task: " << tid;
+                self->setState(ServerState::Done);
+                self->communicator_->addToWorkQueue(self);
+              }
+            })
+            .callbackData(metaCtx)
+            .build();
 
     // send the data chunk (if any)
     if (dataPtr_) {
@@ -418,25 +423,29 @@ void UcxExchangeServer::sendData() {
       auto dataCtx = std::make_shared<DataSendContext>();
       dataCtx->data = dataPtr_;
 
-      dataRequest_ = endpointRef_->endpoint_->tagSend(
-          dataCtx->data->gpu_data->data(),
-          dataCtx->data->gpu_data->size(),
-          ucxx::Tag{dataTag},
-          false,
-          [weakData](ucs_status_t status, std::shared_ptr<void> arg) {
-            // Release the GPU data buffer from the context. The DMA has
-            // completed by the time this callback fires, so the buffer is
-            // safe to free. The context shell stays alive with the Request.
-            auto ctx = std::static_pointer_cast<DataSendContext>(arg);
-            auto dataHolder = std::move(ctx->data);
+      dataRequest_ =
+          endpointRef_->endpoint_
+              ->tagSendBuilder(
+                  dataCtx->data->gpu_data->data(),
+                  dataCtx->data->gpu_data->size(),
+                  ucxx::Tag{dataTag})
+              .callbackFunction(
+                  [weakData](ucs_status_t status, std::shared_ptr<void> arg) {
+                    // Release the GPU data buffer from the context. The DMA has
+                    // completed by the time this callback fires, so the buffer
+                    // is safe to free. The context shell stays alive with the
+                    // Request.
+                    auto ctx = std::static_pointer_cast<DataSendContext>(arg);
+                    auto dataHolder = std::move(ctx->data);
 
-            if (auto self = weakData.lock()) {
-              self->sendComplete(status, arg);
-            }
-            // dataHolder is destroyed here, releasing the GPU buffer if
-            // sendComplete() already reset the server's dataPtr_.
-          },
-          dataCtx);
+                    if (auto self = weakData.lock()) {
+                      self->sendComplete(status, arg);
+                    }
+                    // dataHolder is destroyed here, releasing the GPU buffer if
+                    // sendComplete() already reset the server's dataPtr_.
+                  })
+              .callbackData(dataCtx)
+              .build();
     } else {
       // Data pointer is null, so no more data will be coming.
       VLOG(3) << "@" << partitionKey_.taskId

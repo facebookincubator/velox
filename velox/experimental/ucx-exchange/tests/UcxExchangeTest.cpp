@@ -1747,7 +1747,7 @@ RowVectorPtr toHost(const RowVectorPtr& batch, memory::MemoryPool* pool) {
         "",
         stream,
         cudf::get_current_device_resource_ref());
-    stream.synchronize();
+    stream.sync();
     return host;
   }
   auto copy =

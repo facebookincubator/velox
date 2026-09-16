@@ -59,13 +59,13 @@ class UcxExchangeClient
   /// creates an exchange source and immediately closes it to notify the
   /// upstream task that its data is no longer needed. Repeated calls with the
   /// same 'remoteTaskId' are ignored.
-  void addRemoteTaskId(const std::string& remoteTaskId) override;
+  void addRemoteTaskId(std::string_view remoteTaskId) override;
 
   void noMoreRemoteTasks() override;
 
   void close() override;
 
-  folly::F14FastMap<std::string, RuntimeMetric> stats() override;
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const override;
 
   std::string toString() const override;
 

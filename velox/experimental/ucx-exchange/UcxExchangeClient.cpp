@@ -34,20 +34,21 @@ UcxExchangeClient::UcxExchangeClient(
       destination, 0, "Exchange client destination must not be negative");
 }
 
-void UcxExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
+void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
   std::shared_ptr<UcxExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
-    bool duplicate = !remoteTaskIds_.insert(remoteTaskId).second;
-    if (duplicate) {
+    const auto [remoteTaskIdIt, inserted] =
+        remoteTaskIds_.emplace(remoteTaskId);
+    if (!inserted) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.
       return;
     }
 
     std::shared_ptr<UcxExchangeSource> source;
-    source = UcxExchangeSource::create(taskId_, remoteTaskId, queue_);
+    source = UcxExchangeSource::create(taskId_, *remoteTaskIdIt, queue_);
 
     if (closed_) {
       toClose = std::move(source);
@@ -89,7 +90,7 @@ void UcxExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeClient::stats() {
+folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeClient::stats() const {
   // TODO: Implement stats collection.
   folly::F14FastMap<std::string, RuntimeMetric> stats;
   return stats;
