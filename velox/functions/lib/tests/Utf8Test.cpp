@@ -17,6 +17,8 @@
 #include <gtest/gtest.h>
 #include "velox/functions/lib/Utf8Utils.h"
 
+#include <utility>
+
 namespace facebook::velox::functions {
 namespace {
 
@@ -134,6 +136,22 @@ TEST(UTF8Test, replaceInvalidUTF8Characters) {
   testReplaceInvalidUTF8Chars(
       "hello \xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd world",
       "hello ���� world");
+}
+
+TEST(Utf8Test, decodeCodePointOrReplacement) {
+  auto decode = [](std::string_view input) {
+    int32_t codePoint;
+    const auto bytesConsumed =
+        decodeUtf8CodePointOrReplacement(input.data(), input.size(), codePoint);
+    return std::pair{bytesConsumed, codePoint};
+  };
+
+  EXPECT_EQ(decode("A"), std::pair(1, static_cast<int32_t>('A')));
+  EXPECT_EQ(decode("\xC2\xA3"), std::pair(2, 0xA3));
+  EXPECT_EQ(decode(std::string_view{"\xC0\x80", 2}), std::pair(1, 0xFFFD));
+  EXPECT_EQ(decode(std::string_view{"\xED\xA0\x80", 3}), std::pair(3, 0xFFFD));
+  EXPECT_EQ(
+      decode(std::string_view{"\xF4\x90\x80\x80", 4}), std::pair(1, 0xFFFD));
 }
 
 } // namespace

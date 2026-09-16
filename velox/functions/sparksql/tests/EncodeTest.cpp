@@ -177,7 +177,11 @@ TEST_F(EncodeTest, utf16) {
   // matching Java/Spark behavior. BOM + 'A' in UTF-16BE = FE FF 00 41.
   EXPECT_THAT(encodeBytes("A", "UTF-16"), ElementsAre(0xFE, 0xFF, 0x00, 0x41));
   enableLegacyJavaCharsets();
-  EXPECT_THAT(encodeBytes("A", "UTF16"), ElementsAre(0xFE, 0xFF, 0x00, 0x41));
+  for (const auto* name : {"UTF16", "UTF_16", "Unicode"}) {
+    SCOPED_TRACE(name);
+    EXPECT_THAT(encodeBytes("A", name), ElementsAre(0xFE, 0xFF, 0x00, 0x41));
+  }
+  EXPECT_THAT(encodeBytes("A", "ISO-10646-UCS-2"), ElementsAre(0x00, 0x41));
   // Empty string short-circuits before the encoder runs, returning empty
   // bytes with no BOM (matching Spark's Encode.encode()).
   EXPECT_THAT(encodeBytes("", "UTF-16"), IsEmpty());
@@ -191,7 +195,11 @@ TEST_F(EncodeTest, utf32) {
   EXPECT_THAT(
       encodeBytes("A", "UTF-32BE"), ElementsAre(0x00, 0x00, 0x00, 0x41));
   EXPECT_THAT(
+      encodeBytes("A", "UTF_32BE"), ElementsAre(0x00, 0x00, 0x00, 0x41));
+  EXPECT_THAT(
       encodeBytes("A", "UTF-32LE"), ElementsAre(0x41, 0x00, 0x00, 0x00));
+  EXPECT_THAT(
+      encodeBytes("A", "UTF_32LE"), ElementsAre(0x41, 0x00, 0x00, 0x00));
 }
 
 TEST_F(EncodeTest, supplementaryCodepoint) {
@@ -242,13 +250,29 @@ TEST_F(EncodeTest, charsetScope) {
   EXPECT_THAT(encodeBytes("\xE2\x82\xAC", "windows-1252"), ElementsAre(0x80));
   EXPECT_THAT(
       encodeBytes("\xE3\x81\x82", "Shift_JIS"), ElementsAre(0x82, 0xA0));
+  EXPECT_THAT(
+      encodeBytes("\xE3\x80\x9C", "Shift_JIS"), ElementsAre(0x81, 0x60));
+  VELOX_ASSERT_USER_THROW(
+      encode("\xEF\xBD\x9E", "Shift_JIS"),
+      "encode: input contains a character that cannot be encoded using "
+      "'Shift_JIS'");
+  EXPECT_THAT(
+      encodeBytes("\xEF\xBD\x9E", "windows-31j"), ElementsAre(0x81, 0x60));
+  EXPECT_THAT(encodeBytes("A", "ibm-037"), ElementsAre(0xC1));
 }
 
 TEST_F(EncodeTest, icuOnlyCharsetsRejected) {
   // ICU recognizes these encodings, but the JDK's Charset.forName does not, so
   // Spark rejects them even when the legacy Java charset scope is enabled.
   enableLegacyJavaCharsets();
-  for (const auto* name : {"UTF-7", "BOCU-1", "SCSU", "IMAP-mailbox-name"}) {
+  for (const auto* name :
+       {"UTF-7",
+        "BOCU-1",
+        "SCSU",
+        "IMAP-mailbox-name",
+        "HZ-GB-2312",
+        "cp1208",
+        "x-IBM930A"}) {
     VELOX_ASSERT_USER_THROW(
         encode("hello", name),
         fmt::format("encode: unsupported charset '{}'", name));
@@ -288,7 +312,8 @@ TEST_F(EncodeTest, legacyUnicodeVariantCharset) {
 TEST_F(EncodeTest, codingErrorAction) {
   VELOX_ASSERT_USER_THROW(
       encode("\xC3\xA9", "US-ASCII"),
-      "input contains a character that cannot be encoded");
+      "encode: input contains a character that cannot be encoded using "
+      "'US-ASCII'");
   enableLegacyCodingErrorAction();
   EXPECT_EQ(encode("\xC3\xA9", "US-ASCII"), "?");
 }
@@ -297,10 +322,26 @@ TEST_F(EncodeTest, legacyCharsetCodingErrorAction) {
   enableLegacyJavaCharsets();
   VELOX_ASSERT_USER_THROW(
       encode("\xE3\x81\x82", "windows-1252"),
-      "input contains a character that cannot be encoded");
+      "encode: input contains a character that cannot be encoded using "
+      "'windows-1252'");
 
   enableLegacyCharsetsAndCodingErrorAction();
   EXPECT_EQ(encode("\xE3\x81\x82", "windows-1252"), "?");
+}
+
+TEST_F(EncodeTest, legacyCharsetSpecificReplacement) {
+  enableLegacyCharsetsAndCodingErrorAction();
+  EXPECT_THAT(
+      encodeBytes("\xF0\x9F\x98\x80", "ISO-2022-JP"),
+      ElementsAre(0x1B, 0x24, 0x42, 0x21, 0x29, 0x1B, 0x28, 0x42));
+  EXPECT_THAT(encodeBytes("\xF0\x9F\x98\x80", "x-IBM930"), ElementsAre(0x6F));
+  EXPECT_THAT(
+      encodeBytes(
+          "\xE3\x81\x82"
+          "\xF0\x9F\x98\x80"
+          "\xE3\x81\x84",
+          "x-IBM930"),
+      ElementsAre(0x0E, 0x44, 0x81, 0x6F, 0x44, 0x82, 0x0F));
 }
 
 TEST_F(EncodeTest, malformedUtf8) {
@@ -381,13 +422,11 @@ TEST_F(EncodeTest, perRowCharset) {
       toBytes(std::string_view(utf16be)), ElementsAre(0x00, 0x41, 0x00, 0x42));
 }
 
-TEST_F(EncodeTest, charsetNameLengthBoundary) {
-  // A 24-char (== kMaxCharsetLen) unsupported name must be handled without
-  // overrunning the stack buffer, and rejected as unsupported.
+TEST_F(EncodeTest, unsupportedCharsetNameLengths) {
+  // Unsupported names of different lengths are rejected consistently.
   VELOX_ASSERT_USER_THROW(
       encode("hello", "ABCDEFGHIJKLMNOPQRSTUVWX"),
       "encode: unsupported charset 'ABCDEFGHIJKLMNOPQRSTUVWX'");
-  // A 25-char (> kMaxCharsetLen) name is rejected early, also unsupported.
   VELOX_ASSERT_USER_THROW(
       encode("hello", "ABCDEFGHIJKLMNOPQRSTUVWXY"),
       "encode: unsupported charset 'ABCDEFGHIJKLMNOPQRSTUVWXY'");
