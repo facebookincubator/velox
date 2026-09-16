@@ -52,13 +52,23 @@ class ChunkStatsGroup : public std::enable_shared_from_this<ChunkStatsGroup> {
       uint32_t stripeCount,
       std::unique_ptr<MetadataBuffer> metadata);
 
+  virtual ~ChunkStatsGroup() = default;
+
   /// Creates a StreamIndex for the specified stripe and stream ID.
   /// Returns nullptr if the stream is not indexed (has ≤1 chunk).
   /// @param streamSize Total byte size of the stream in this stripe.
-  std::shared_ptr<StreamIndex> createStreamIndex(
+  virtual std::shared_ptr<StreamIndex> createStreamIndex(
       uint32_t stripe,
       uint32_t streamId,
       uint32_t streamSize) const;
+
+ protected:
+  /// Protected constructor for subclasses that supply their own data
+  /// (e.g., ChunkStatsGroupV2 with decoded vectors).
+  ChunkStatsGroup(
+      uint32_t firstStripe,
+      uint32_t stripeCount,
+      uint32_t streamCount);
 
  private:
   ChunkStatsGroup(
@@ -77,12 +87,17 @@ class ChunkStatsGroup : public std::enable_shared_from_this<ChunkStatsGroup> {
     return offset;
   }
 
+  // Declared before the protected members because the private constructor
+  // reads metadata_ to initialize streamCount_.
   const std::unique_ptr<MetadataBuffer> metadata_;
+
+ protected:
   const uint32_t firstStripe_;
   const uint32_t stripeCount_;
   // Total number of streams indexed in this stripe group.
   const uint32_t streamCount_;
 
+ private:
   friend class StreamIndex;
   friend class test::ChunkStatsTestHelper;
 };
@@ -99,21 +114,26 @@ class StreamIndex {
       uint32_t endChunkOffset,
       uint32_t streamSize);
 
+  virtual ~StreamIndex() = default;
+
   /// Lookup chunk by row ID within the stream's row range.
-  ChunkLocation lookupChunk(uint32_t rowId) const;
+  virtual ChunkLocation lookupChunk(uint32_t rowId) const;
 
   /// Returns the per-chunk null-value count for the chunk at the given absolute
   /// position (ChunkLocation::chunkIndex), or std::nullopt when per-chunk null
   /// statistics are absent (files written before chunk statistics were added).
-  std::optional<uint32_t> chunkNullCount(uint32_t chunkIndex) const;
+  virtual std::optional<uint32_t> chunkNullCount(uint32_t chunkIndex) const;
 
   /// Returns the total number of rows in this stream.
-  uint32_t rowCount() const;
+  virtual uint32_t rowCount() const;
 
   /// Returns the stream ID this index is for.
   uint32_t streamId() const {
     return streamId_;
   }
+
+ protected:
+  explicit StreamIndex(uint32_t streamId) : streamId_{streamId} {}
 
  private:
   StreamIndex(
@@ -128,11 +148,11 @@ class StreamIndex {
   const uint32_t streamId_;
   // Precomputed chunk range [startChunkOffset_, endChunkOffset_) into the
   // flattened chunk_rows/chunk_offsets arrays.
-  const uint32_t startChunkOffset_;
-  const uint32_t endChunkOffset_;
+  const uint32_t startChunkOffset_{0};
+  const uint32_t endChunkOffset_{0};
   // Total byte size of the stream in this stripe, used to compute
   // the last chunk's size.
-  const uint32_t streamSize_;
+  const uint32_t streamSize_{0};
 };
 
 } // namespace facebook::nimble::index
