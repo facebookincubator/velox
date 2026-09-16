@@ -54,10 +54,10 @@ class MergeStream {
   }
 
   /// Returns true if the element after the current one in this stream compares
-  /// equal to the current element. The default is appropriate for streams
-  /// whose elements are unique.
+  /// equal to the current element. This is required for streams with duplicate
+  /// values used by TreeOfLosers::nextWithEquals().
   virtual bool nextEquals() {
-    return false;
+    VELOX_UNSUPPORTED();
   }
 };
 
