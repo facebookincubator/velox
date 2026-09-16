@@ -130,6 +130,8 @@ class ALPEncoding final
     const char* pos = data.data() + this->dataOffset();
 
     const auto header = detail::alp::readHeader(pos);
+    NIMBLE_CHECK_LE(header.exponent, kMaxExponent, "Invalid ALP exponent.");
+    NIMBLE_CHECK_LE(header.factor, kMaxFactor, "Invalid ALP factor.");
     exponent_ = header.exponent;
     factor_ = header.factor;
     exceptionCount_ = header.hasExceptions ? varint::readVarint32(&pos) : 0;
@@ -653,6 +655,8 @@ class ALPEncoding final
   }
 
  private:
+  friend struct ALPEncodingTestAccessor;
+
   struct SlicedExceptionStreams {
     uint32_t count{0};
     std::string_view positions;
