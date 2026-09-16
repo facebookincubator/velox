@@ -968,6 +968,13 @@ TEST_F(SubfieldFilterAstTest, multiRangeParentNullPolicy) {
           common::MultiRange(std::move(filters), nullAllowed),
           nullAllowed ? 2 : 1);
     }
+    {
+      std::vector<std::unique_ptr<common::Filter>> filters;
+      filters.push_back(std::make_unique<common::IsNotNull>());
+      check(
+          common::MultiRange(std::move(filters), nullAllowed),
+          nullAllowed ? 2 : 1);
+    }
   }
 }
 
