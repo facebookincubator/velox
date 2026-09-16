@@ -371,8 +371,16 @@ uint64_t PrefixSort::maxRequiredBytes() const {
   const auto numRows = rowContainer_->numRows();
   const auto numPages =
       memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);
+  const auto prefixBufferSize = memory::AllocationTraits::pageBytes(numPages);
+
+  const int32_t numKeyWords = sortLayout_.normalizedBufferSize / kAlignment;
+  if (numKeyWords >= 1 && numKeyWords <= kMaxFixedSizeKeyWords) {
+    // Fixed size sort uses a stack array and does not allocate a swap buffer.
+    return prefixBufferSize;
+  }
+
   // Prefix data size + swap buffer size.
-  return memory::AllocationTraits::pageBytes(numPages) +
+  return prefixBufferSize +
       pool_->preferredSize(
           checkedPlus<size_t>(
               sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
