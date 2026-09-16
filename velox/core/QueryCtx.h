@@ -273,11 +273,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   }
 
   /// Returns the token provider for planNodeId, falling back to the
-  /// query-level default if no planNode-specific provider is registered.
+  /// query-level default if no planNode-specific provider is set.
   /// Pass an empty planNodeId (the default) to retrieve the query-level
   /// provider directly.  Called from driver threads, concurrently with
   /// setFsTokenProvider().
-  /// Returns nullptr if planNodeId is non-empty and no provider is registered
+  /// Returns nullptr if planNodeId is non-empty and no provider is set
   /// for it.
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider(
       const std::string& planNodeId = "") const {
@@ -295,8 +295,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
         });
   }
 
-  /// Registers a token provider for planNodeId.  No-op if one is already
-  /// registered; the TokenProvider for a given planNodeId is stable for the
+  /// Sets a token provider for planNodeId.  No-op if one is already
+  /// set; the TokenProvider for a given planNodeId is fixed for the
   /// lifetime of the query — only the credentials it vends change.
   void setFsTokenProvider(
       const std::string& planNodeId,
