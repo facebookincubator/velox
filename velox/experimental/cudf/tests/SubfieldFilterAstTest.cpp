@@ -905,19 +905,33 @@ TEST_F(SubfieldFilterAstTest, multiRangeParentNullPolicy) {
   const auto rowType = ROW(columnName, DOUBLE());
   auto vector = makeRowVector(
       {columnName},
-      {makeNullableFlatVector<double>({std::nullopt, -1, 0, 1, 2})});
+      {makeNullableFlatVector<double>(
+          {std::nullopt,
+           -1,
+           0,
+           1,
+           2,
+           std::numeric_limits<double>::quiet_NaN()})});
   const common::Subfield subfield(columnName);
-  auto check = [&](const common::Filter& filter) {
+  auto check = [&](const common::Filter& filter, size_t expectedIsNullCount) {
     SCOPED_TRACE(filter.toString());
     cudf::ast::tree tree;
     std::vector<std::unique_ptr<cudf::scalar>> scalars;
     const auto& expr =
         createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType);
+    size_t isNullCount = 0;
+    for (size_t i = 0; i < tree.size(); ++i) {
+      const auto* operation =
+          dynamic_cast<const cudf::ast::operation*>(&tree[i]);
+      isNullCount += operation != nullptr &&
+          operation->get_operator() == cudf::ast::ast_operator::IS_NULL;
+    }
+    EXPECT_EQ(isNullCount, expectedIsNullCount);
     testFilterExecution(rowType, columnName, filter, vector, expr);
   };
 
-  check(common::IsNull());
-  check(common::IsNotNull());
+  check(common::IsNull(), 1);
+  check(common::IsNotNull(), 1);
   for (const bool nullAllowed : {false, true}) {
     for (const bool childNullAllowed : {false, true}) {
       std::vector<std::unique_ptr<common::Filter>> filters;
@@ -926,27 +940,33 @@ TEST_F(SubfieldFilterAstTest, multiRangeParentNullPolicy) {
           std::make_unique<common::DoubleRange>(
               0, false, false, 1, false, false, childNullAllowed));
       common::MultiRange filter(std::move(filters), nullAllowed);
-      check(filter);
+      check(filter, nullAllowed);
 
       std::vector<std::unique_ptr<common::Filter>> outerFilters;
       outerFilters.push_back(filter.clone());
       outerFilters.push_back(
           std::make_unique<common::DoubleRange>(
               2, false, false, 3, false, false, childNullAllowed));
-      check(common::MultiRange(std::move(outerFilters), !nullAllowed));
+      check(
+          common::MultiRange(std::move(outerFilters), !nullAllowed),
+          !nullAllowed);
     }
 
     {
       std::vector<std::unique_ptr<common::Filter>> filters;
       filters.push_back(std::make_unique<common::IsNull>());
       filters.push_back(std::make_unique<common::IsNull>());
-      check(common::MultiRange(std::move(filters), nullAllowed));
+      check(
+          common::MultiRange(std::move(filters), nullAllowed),
+          nullAllowed ? 2 : 1);
     }
     {
       std::vector<std::unique_ptr<common::Filter>> filters;
       filters.push_back(std::make_unique<common::IsNull>());
       filters.push_back(std::make_unique<common::IsNotNull>());
-      check(common::MultiRange(std::move(filters), nullAllowed));
+      check(
+          common::MultiRange(std::move(filters), nullAllowed),
+          nullAllowed ? 2 : 1);
     }
   }
 }
@@ -1140,6 +1160,14 @@ TEST_F(SubfieldFilterAstTest, emptyMultiRangeThrows) {
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   EXPECT_THROW(
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType),
+      VeloxException);
+
+  std::vector<std::unique_ptr<common::Filter>> children;
+  children.push_back(std::move(filter));
+  children.push_back(std::make_unique<common::IsNull>());
+  common::MultiRange nested(std::move(children), /*nullAllowed=*/true);
+  EXPECT_THROW(
+      createAstFromSubfieldFilter(subfield, nested, tree, scalars, rowType),
       VeloxException);
 }
 

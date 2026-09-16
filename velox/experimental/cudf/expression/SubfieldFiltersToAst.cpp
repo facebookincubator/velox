@@ -334,21 +334,24 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
-// Revisit when supporting another leaf predicate that can pass null input.
-bool valuePredicateMayPassNull(const common::Filter& filter) {
+// MultiRange child null policies are ignored. Flatten nested MultiRanges and
+// omit IsNull leaves before building the non-null value predicate.
+void collectValueFilters(
+    const common::Filter& filter,
+    std::vector<const common::Filter*>& filters) {
   if (filter.kind() == common::FilterKind::kIsNull) {
-    return true;
+    return;
   }
   if (filter.kind() != common::FilterKind::kMultiRange) {
-    return false;
+    filters.push_back(&filter);
+    return;
   }
-  for (const auto& child :
-       static_cast<const common::MultiRange&>(filter).filters()) {
-    if (valuePredicateMayPassNull(*child)) {
-      return true;
-    }
+  const auto& children =
+      static_cast<const common::MultiRange&>(filter).filters();
+  VELOX_CHECK(!children.empty(), "MultiRange filter must not be empty");
+  for (const auto& child : children) {
+    collectValueFilters(*child, filters);
   }
-  return false;
 }
 
 cudf::ast::expression const& createAstFromSubfieldFilterImpl(
@@ -499,9 +502,11 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
           subFilters.push_back(range.get());
         }
       } else {
-        auto* multiRange = static_cast<const common::MultiRange*>(&filter);
-        for (const auto& f : multiRange->filters()) {
-          subFilters.push_back(f.get());
+        collectValueFilters(filter, subFilters);
+        if (subFilters.empty()) {
+          auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+          auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
+          return tree.push(Operation{Op::NULL_LOGICAL_AND, isNull, isNotNull});
         }
       }
       VELOX_CHECK(!subFilters.empty(), "MultiRange filter must not be empty");
@@ -563,25 +568,18 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const RowTypePtr& inputRowSchema) {
   auto const& expression = createAstFromSubfieldFilterImpl(
       subfield, filter, tree, scalars, inputRowSchema);
-  if (filter.kind() == common::FilterKind::kIsNull ||
-      filter.kind() == common::FilterKind::kIsNotNull) {
-    return expression;
-  }
-  if (!filter.testNull() && !valuePredicateMayPassNull(filter)) {
-    return expression;
-  }
+  if (filter.testNull() && filter.kind() != common::FilterKind::kIsNull &&
+      filter.kind() != common::FilterKind::kIsNotNull) {
+    using Op = cudf::ast::ast_operator;
+    using Operation = cudf::ast::operation;
 
-  using Op = cudf::ast::ast_operator;
-  using Operation = cudf::ast::operation;
-  auto const& columnRef = tree.push(
-      cudf::ast::column_reference(
-          inputRowSchema->getChildIdx(subfield.toString())));
-  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
-  if (filter.testNull()) {
+    auto const& columnRef = tree.push(
+        cudf::ast::column_reference(
+            inputRowSchema->getChildIdx(subfield.toString())));
+    auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
     return tree.push(Operation{Op::NULL_LOGICAL_OR, isNull, expression});
   }
-  auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
-  return tree.push(Operation{Op::NULL_LOGICAL_AND, isNotNull, expression});
+  return expression;
 }
 
 // Create a combined AST from a set of subfield filters by chaining them with
