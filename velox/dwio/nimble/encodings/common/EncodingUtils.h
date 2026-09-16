@@ -95,6 +95,9 @@ auto encodingTypeDispatchString(Encoding& encoding, F f) {
       return f(static_cast<RLEEncoding<std::string_view>&>(encoding));
     case EncodingType::Dictionary:
       return f(static_cast<DictionaryEncoding<std::string_view>&>(encoding));
+    case EncodingType::SharedDictionary:
+      return f(
+          static_cast<SharedDictionaryEncoding<std::string_view>&>(encoding));
     case EncodingType::Nullable:
       return f(static_cast<NullableEncoding<std::string_view>&>(encoding));
     case EncodingType::Constant:
