@@ -129,6 +129,24 @@ struct DecimalArithmetic {
   static constexpr int128_t kShortDecimalMax =
       detail::decimalPowerOfTen(kMaxShortPrecision) - 1;
 
+  /// Magnitude of a decimal's unscaled value, as an unsigned type wide enough
+  /// to hold it. Negating the minimum of a signed type is undefined, so the
+  /// cast happens before the negation.
+  ///
+  /// Lives here rather than on DecimalUtil because callers that only do
+  /// arithmetic on unscaled values -- sparksql/DecimalUtil.h among them --
+  /// would otherwise have to reach the runtime type system for it. DecimalUtil
+  /// derives from this, so DecimalUtil::absValue still resolves.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
+  VELOX_GPU_COMPATIBLE static uint64_t absValue(int64_t a) {
+    return a < 0 ? -static_cast<uint64_t>(a) : static_cast<uint64_t>(a);
+  }
+
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
+  VELOX_GPU_COMPATIBLE static __uint128_t absValue(int128_t a) {
+    return a < 0 ? -static_cast<__uint128_t>(a) : static_cast<__uint128_t>(a);
+  }
+
   VELOX_GPU_COMPATIBLE static void valueInRange(int128_t value) {
     VELOX_USER_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),

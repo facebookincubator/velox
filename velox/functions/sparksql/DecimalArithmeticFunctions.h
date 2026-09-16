@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
 
@@ -46,11 +48,9 @@ struct DecimalAddSubtractBase {
     // The overflow flag is set to true if an overflow occurs
     // during the addition.
     bool overflow = false;
-    if (rPrecision_ < LongDecimalType::kMaxPrecision) {
-      const int128_t aRescaled =
-          a * velox::DecimalUtil::kPowersOfTen[aRescale_];
-      const int128_t bRescaled =
-          b * velox::DecimalUtil::kPowersOfTen[bRescale_];
+    if (rPrecision_ < DecimalArithmetic::kMaxLongPrecision) {
+      const int128_t aRescaled = a * DecimalArithmetic::powerOfTen(aRescale_);
+      const int128_t bRescaled = b * DecimalArithmetic::powerOfTen(bRescale_);
       r = TResult(aRescaled + bRescaled);
     } else {
       const uint32_t minLeadingZeros =
@@ -64,8 +64,8 @@ struct DecimalAddSubtractBase {
         // '2^126 - 1 < 10^38 - 1'. If both numbers contain at least 3 leading
         // zeros, we are guaranteed that the result will have at least 2 leading
         // zeros.
-        int128_t aRescaled = a * velox::DecimalUtil::kPowersOfTen[aRescale_];
-        int128_t bRescaled = b * velox::DecimalUtil::kPowersOfTen[bRescale_];
+        int128_t aRescaled = a * DecimalArithmetic::powerOfTen(aRescale_);
+        int128_t bRescaled = b * DecimalArithmetic::powerOfTen(bRescale_);
         r = reduceScale(
             TResult(aRescaled + bRescaled),
             std::max(aScale_, bScale_) - rScale_);
@@ -76,14 +76,14 @@ struct DecimalAddSubtractBase {
       }
     }
     return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(r, rPrecision_);
+        DecimalArithmetic::valueInPrecisionRange(r, rPrecision_);
   }
 
  private:
   // Returns the whole and fraction parts of a decimal value.
   template <typename T>
   static std::pair<T, T> getWholeAndFraction(T value, uint8_t scale) {
-    const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[scale];
+    const auto scaleFactor = DecimalArithmetic::powerOfTen(scale);
     const T whole = value / scaleFactor;
     return {whole, value - whole * scaleFactor};
   }
@@ -93,7 +93,7 @@ struct DecimalAddSubtractBase {
   static int128_t increaseScale(int128_t in, int16_t delta) {
     // No need to consider overflow as 'delta == higher scale - input scale', so
     // the scaled value will not exceed the maximum of long decimal.
-    return delta <= 0 ? in : in * velox::DecimalUtil::kPowersOfTen[delta];
+    return delta <= 0 ? in : in * DecimalArithmetic::powerOfTen(delta);
   }
 
   // Scales up the whole part to result scale, and combine it with fraction part
@@ -103,17 +103,17 @@ struct DecimalAddSubtractBase {
   static T
   decimalAddResult(T whole, T fraction, uint8_t resultScale, bool& overflow) {
     T scaledWhole = sparksql::DecimalUtil::multiply<T>(
-        whole, velox::DecimalUtil::kPowersOfTen[resultScale], overflow);
+        whole, DecimalArithmetic::powerOfTen(resultScale), overflow);
     if (FOLLY_UNLIKELY(overflow)) {
       return 0;
     }
     const auto result = scaledWhole + fraction;
     if constexpr (std::is_same_v<T, int64_t>) {
-      overflow = (result > velox::DecimalUtil::kShortDecimalMax) ||
-          (result < velox::DecimalUtil::kShortDecimalMin);
+      overflow = (result > DecimalArithmetic::kShortDecimalMax) ||
+          (result < DecimalArithmetic::kShortDecimalMin);
     } else {
-      overflow = (result > velox::DecimalUtil::kLongDecimalMax) ||
-          (result < velox::DecimalUtil::kLongDecimalMin);
+      overflow = (result > DecimalArithmetic::kLongDecimalMax) ||
+          (result < DecimalArithmetic::kLongDecimalMin);
     }
     return result;
   }
@@ -127,7 +127,7 @@ struct DecimalAddSubtractBase {
     }
     T result;
     bool overflow;
-    const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[delta];
+    const auto scaleFactor = DecimalArithmetic::powerOfTen(delta);
     if constexpr (std::is_same_v<T, int64_t>) {
       VELOX_DCHECK_LE(
           scaleFactor,
@@ -168,7 +168,7 @@ struct DecimalAddSubtractBase {
 
     int128_t fraction;
     bool carryToLeft = false;
-    const auto carrier = velox::DecimalUtil::kPowersOfTen[higherScale];
+    const auto carrier = DecimalArithmetic::powerOfTen(higherScale);
     if (aFractionScaled >= carrier - bFractionScaled) {
       fraction = aFractionScaled + bFractionScaled - carrier;
       carryToLeft = true;
@@ -220,7 +220,7 @@ struct DecimalAddSubtractBase {
 
     // If the whole and fractional parts have different signs, adjust them to
     // the same sign.
-    const auto scaleFactor = velox::DecimalUtil::kPowersOfTen[higherScale];
+    const auto scaleFactor = DecimalArithmetic::powerOfTen(higherScale);
     if (whole < 0 && fraction > 0) {
       whole += 1;
       fraction -= scaleFactor;
@@ -420,8 +420,8 @@ struct DecimalMultiplyFunction {
         // It's possible that the intermediate value does not fit in 128-bits,
         // but the final value will (after scaling down).
         int32_t totalLeadingZeros =
-            bits::countLeadingZeros(velox::DecimalUtil::absValue<A>(a)) +
-            bits::countLeadingZeros(velox::DecimalUtil::absValue<B>(b));
+            bits::countLeadingZeros(DecimalArithmetic::absValue<A>(a)) +
+            bits::countLeadingZeros(DecimalArithmetic::absValue<B>(b));
         // This check is quick, but conservative. In some cases it will
         // indicate that converting to 256 bits is necessary, when it's not
         // actually the case.
@@ -444,7 +444,7 @@ struct DecimalMultiplyFunction {
             DecimalUtil::divideWithRoundUp<R, R, R>(
                 out,
                 result,
-                R(velox::DecimalUtil::kPowersOfTen[deltaScale_]),
+                R(DecimalArithmetic::powerOfTen(deltaScale_)),
                 0,
                 overflow);
             VELOX_DCHECK(!overflow);
@@ -466,7 +466,7 @@ struct DecimalMultiplyFunction {
     }
 
     return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+        DecimalArithmetic::valueInPrecisionRange(out, rPrecision_);
   }
 
  private:
@@ -529,7 +529,7 @@ struct DecimalDivideFunction {
     bool overflow = false;
     DecimalUtil::divideWithRoundUp<R, A, B>(out, a, b, aRescale_, overflow);
     return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+        DecimalArithmetic::valueInPrecisionRange(out, rPrecision_);
   }
 
  private:
@@ -562,9 +562,9 @@ struct DecimalIntegralDivideBase {
     int128_t scaledA;
     int128_t scaledB;
     if (__builtin_mul_overflow(
-            absA, velox::DecimalUtil::kPowersOfTen[aRescale_], &scaledA) ||
+            absA, DecimalArithmetic::powerOfTen(aRescale_), &scaledA) ||
         __builtin_mul_overflow(
-            absB, velox::DecimalUtil::kPowersOfTen[bRescale_], &scaledB)) {
+            absB, DecimalArithmetic::powerOfTen(bRescale_), &scaledB)) {
       return false;
     }
 
@@ -576,7 +576,7 @@ struct DecimalIntegralDivideBase {
     int128_t quotient = scaledA / scaledB;
     quotient = isNegative ? -quotient : quotient;
 
-    if (!velox::DecimalUtil::valueInPrecisionRange(quotient, rPrecision_)) {
+    if (!DecimalArithmetic::valueInPrecisionRange(quotient, rPrecision_)) {
       return false;
     }
     out = static_cast<int64_t>(quotient);
