@@ -177,6 +177,11 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   BitRangeSplit = 25,
+  /// Encodes floating-point high bits using a small dictionary and preserves
+  /// low bits in a separate integer stream. Selected through explicit layouts.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  ALPRD = 26,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.

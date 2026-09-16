@@ -29,6 +29,7 @@ endif()
 add_library(
   nimble_encodings
   ALPEncoding.cpp
+  ALPRDEncoding.cpp
   ConstantEncoding.cpp
   EncodingSliceFactory.cpp
   FsstEncoding.cpp
@@ -45,6 +46,7 @@ add_library(
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
+  common/EncodingPrefix.cpp
   common/EncodingUtils.cpp
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
@@ -119,6 +121,7 @@ add_library(
   BlockBitPackingEncoding.h
   BitRangeSplitEncoding.h
   ALPEncoding.h
+  ALPRDEncoding.h
 )
 
 # FSST is vendored at velox/external/fsst and added by velox/CMakeLists.txt
