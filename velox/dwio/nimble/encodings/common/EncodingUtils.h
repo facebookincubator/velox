@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -173,6 +174,13 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
       NIMBLE_UNREACHABLE(
           "EliasFano encoding only supports integral data types, got {}.",
+          encoding.dataType());
+    case EncodingType::ALPRD:
+      if constexpr (isFloatingPointType<T>()) {
+        return f(static_cast<ALPRDEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNSUPPORTED(
+          "ALPRD encoding only supports float and double data types, got {}.",
           encoding.dataType());
     case EncodingType::ALP:
       if constexpr (isFloatingPointType<T>()) {
