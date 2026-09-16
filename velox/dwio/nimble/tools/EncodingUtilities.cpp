@@ -68,6 +68,7 @@ void extractCompressionType(
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
     case EncodingType::ALP:
+    case EncodingType::ALPRD:
     case EncodingType::Fsst:
     case EncodingType::PFOR:
     case EncodingType::SimdForBitpack:
@@ -167,6 +168,23 @@ void traverseEncodings(
                 useVarintRowCount,
                 visitor);
           });
+      break;
+    }
+    case EncodingType::ALPRD: {
+      Encoding::Options options;
+      options.useVarintRowCount = useVarintRowCount;
+      const auto metadata = detail::alprd::readMetadata(stream, options);
+      const std::array<const char*, 4> names{
+          "Codes", "RightParts", "ExceptionPositions", "ExceptionHighParts"};
+      for (uint8_t i = 0; i < metadata.childrenCount(); ++i) {
+        traverseEncodings(
+            metadata.children[i],
+            level + 1,
+            i,
+            names[i],
+            useVarintRowCount,
+            visitor);
+      }
       break;
     }
     case EncodingType::ALP: {

@@ -19,6 +19,7 @@
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -172,6 +173,20 @@ std::unique_ptr<Encoding> EncodingFactory::create(
         default:
           NIMBLE_INCOMPATIBLE_ENCODING(
               "ALP encoding only supports float and double data types, got {}.",
+              dataType);
+      }
+    }
+    case EncodingType::ALPRD: {
+      switch (dataType) {
+        case DataType::Float:
+          return std::make_unique<ALPRDEncoding<float>>(
+              pool, data, stringBufferFactory, options);
+        case DataType::Double:
+          return std::make_unique<ALPRDEncoding<double>>(
+              pool, data, stringBufferFactory, options);
+        default:
+          NIMBLE_INCOMPATIBLE_ENCODING(
+              "ALPRD encoding only supports float and double data types, got {}.",
               dataType);
       }
     }
@@ -437,6 +452,15 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "ALP encoding should only be selected for float or double data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::ALPRD: {
+      if constexpr (isFloatingPointType<T>()) {
+        return ALPRDEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "ALPRD encoding only supports float and double data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::BlockBitPacking: {

@@ -119,6 +119,7 @@ add_library(
   BlockBitPackingEncoding.h
   BitRangeSplitEncoding.h
   ALPEncoding.h
+  ALPRDEncoding.h
 )
 
 # FSST is vendored at velox/external/fsst and added by velox/CMakeLists.txt
