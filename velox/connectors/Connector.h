@@ -268,6 +268,9 @@ class ConnectorInsertTableHandle : public ISerializable {
 
   folly::dynamic serialize() const override {
     VELOX_NYI();
+#ifdef _MSC_VER
+    return nullptr; // Unreachable; MSVC C4716 requires a return value.
+#endif
   }
 };
 
@@ -423,6 +426,9 @@ class DataSource {
   /// stay live until after the destruction of the delegate.
   virtual std::shared_ptr<wave::WaveDataSource> toWaveDataSource() {
     VELOX_UNSUPPORTED();
+#ifdef _MSC_VER
+    return nullptr; // Unreachable; MSVC C4716 requires a return value.
+#endif
   }
 
   /// Invoked by table scan close to cancel any inflight async operations
@@ -515,6 +521,9 @@ class IndexSource {
         vector_size_t size,
         velox::ContinueFuture& future) {
       VELOX_UNSUPPORTED();
+#ifdef _MSC_VER
+      return std::nullopt; // Unreachable; MSVC C4716 requires a return value.
+#endif
     }
   };
 

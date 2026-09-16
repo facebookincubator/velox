@@ -230,6 +230,9 @@ class TpchConnector final : public Connector {
       ConnectorQueryCtx* /*connectorQueryCtx*/,
       CommitStrategy /*commitStrategy*/) override final {
     VELOX_NYI("TpchConnector does not support data sink.");
+#ifdef _MSC_VER
+    return nullptr; // Unreachable, but MSVC requires a return statement.
+#endif
   }
 
   static void registerSerDe() {
