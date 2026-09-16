@@ -877,6 +877,54 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionary) {
   }
 }
 
+// Shared dictionary encoding is defined for strings as well as integers, but
+// the selective read dispatch is split by value kind and only the integer half
+// listed it. A string column therefore wrote a well-formed file that threw on
+// read. Every other shared dictionary test here uses int32 columns, which is
+// how that went unnoticed.
+TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
+  if (!this->stringDecoderZeroCopy()) {
+    GTEST_SKIP() << "Shared dictionary encoding requires non-legacy dispatch";
+  }
+
+  constexpr velox::vector_size_t kRowCount = 2'000;
+  const std::vector<std::string> alphabet{
+      "alpha", "bravo", "charlie", "delta", "echo"};
+
+  for (const bool nullableData : {false, true}) {
+    SCOPED_TRACE(fmt::format("nullableData={}", nullableData));
+    auto values = makeFlatVector<velox::StringView>(
+        kRowCount,
+        [&](auto row) {
+          return velox::StringView(alphabet[row % alphabet.size()]);
+        },
+        nullableData ? velox::test::VectorMaker::nullEvery(7) : nullptr);
+    auto input = makeRowVector({values});
+
+    WriterOptions options;
+    options.maxStreamChunkRawSize = 512;
+    options.minStreamChunkRawSize = 1;
+    test::configureSharedDictionarySelectionPolicy(options);
+    options.experimentalSharedDictionaryEncoding =
+        SharedDictionaryEncodingConfig::builder()
+            .addColumnDictionary(
+                "c0",
+                SharedDictionaryConfig{.scope = SharedDictionaryScope::Stripe})
+            .build();
+
+    const auto file = test::createNimbleFile(*rootPool(), input, options);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*input->type());
+    auto readers =
+        makeReaders(input, file, scanSpec, /*stringDecoderZeroCopy=*/true);
+    validate(
+        *input,
+        *readers.rowReader,
+        /*batchSize=*/127,
+        [](auto /*row*/) { return true; });
+  }
+}
+
 TEST_P(SelectiveNimbleReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr uint32_t kSeed{0x51A9D1C7};
