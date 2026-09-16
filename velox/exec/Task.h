@@ -41,6 +41,51 @@ class NestedLoopJoinBridge;
 class SpatialJoinBridge;
 class SplitListener;
 
+class Task;
+
+/// Runs a plan fragment some way other than a Driver/Operator pipeline.  A
+/// Task owns at most one, created by a registration matched at
+/// Task::create (see Task::registerFragmentExecutor), and delegates the entry
+/// points below to it.
+///
+/// This is for a plan node whose execution *is* a schedule of tasks rather
+/// than a step in one: it creates, runs and tears down sub-tasks, and outlives
+/// each of them.  A node whose execution fits inside one pipeline needs none
+/// of this -- it is an Operator, registered with Operator::registerOperator.
+/// An Operator cannot orchestrate, because it runs on a driver thread owned by
+/// the very task it would have to outlive, and one exists per driver, so N
+/// drivers would each run the schedule instead of it running once.
+///
+/// The orchestrator is composed into a Task rather than derived from one: the
+/// sub-tasks it schedules are ordinary Tasks, and it is not another kind of
+/// Task itself.  Task stays concrete and non-virtual.
+class FragmentExecutor {
+ public:
+  virtual ~FragmentExecutor() = default;
+
+  /// Runs the fragment in parallel mode.  Called from Task::start().
+  virtual void start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) = 0;
+
+  /// Runs the fragment in serial mode, one batch per call.  Called from
+  /// Task::next().
+  virtual RowVectorPtr next(ContinueFuture* future) = 0;
+
+  /// Routes a split to whichever sub-task consumes it, which depends on the
+  /// executor's own schedule.  Called from Task::addSplit().
+  virtual void addSplit(
+      const core::PlanNodeId& planNodeId,
+      exec::Split&& split) = 0;
+
+  virtual void noMoreSplits(const core::PlanNodeId& planNodeId) = 0;
+
+  /// The Task that owns this executor.  Never null, and always outlives it.
+  virtual Task* owner() const = 0;
+};
+
+/// Runs one plan fragment.  By default it compiles the fragment into a
+/// Driver/Operator pipeline and executes that; if a registered
+/// FragmentExecutor claims the fragment, Task delegates execution to it
+/// instead.
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Threading mode the task is executed.
@@ -53,6 +98,53 @@ class Task : public std::enable_shared_from_this<Task> {
     /// multiple driver threads and manages their lifecycle.
     kParallel,
   };
+
+  /// Base for the feature-specific options a caller passes to Task::create for
+  /// a registered fragment executor (see registerFragmentExecutor).  Core does
+  /// not interpret these: it forwards the pointer to every registration, and a
+  /// registration
+  /// dynamic_casts it to its own derived type, ignoring options belonging to
+  /// another factory.  Borrowed for the duration of the create call only; a
+  /// factory that needs them afterwards copies them.
+  struct FactoryOptions {
+    FactoryOptions() = default;
+    FactoryOptions(const FactoryOptions&) = default;
+    FactoryOptions(FactoryOptions&&) = default;
+    FactoryOptions& operator=(const FactoryOptions&) = default;
+    FactoryOptions& operator=(FactoryOptions&&) = default;
+    virtual ~FactoryOptions() = default;
+  };
+
+  /// Whether the registration's executor runs 'planFragment'.  Matching is by
+  /// predicate, not by root node, because the node calling for an executor is
+  /// not always the fragment root -- a fixed point with trailing nodes sits
+  /// below a Project.  It also sees the options, because a caller may ask for
+  /// the ordinary Driver pipeline over a plan the executor would otherwise
+  /// claim -- how an executor runs a sub-task over its own fragment without
+  /// recursing.
+  using FragmentMatcher = std::function<
+      bool(const core::PlanFragment&, const FactoryOptions* factoryOptions)>;
+
+  /// Creates the executor for a claimed fragment.  'owner' is the fully
+  /// constructed Task that will own it, so it outlives the executor.
+  using FragmentExecutorFactory = std::function<std::unique_ptr<
+      FragmentExecutor>(Task* owner, const FactoryOptions* factoryOptions)>;
+
+  /// Registers an executor under 'name', replacing any registered under that
+  /// name.  Task::create asks every registration whether it claims the
+  /// fragment; at most one may, and a fragment claimed by none runs as an
+  /// ordinary Driver pipeline.  Claiming is order independent: two claimants
+  /// is an error, not a race between registration orders.  Lets a feature
+  /// that runs a fragment its own way plug in without core depending on it.
+  /// Not thread safe: register before creating tasks.
+  static void registerFragmentExecutor(
+      std::string name,
+      FragmentMatcher matcher,
+      FragmentExecutorFactory factory);
+
+  /// Removes the executor registered under 'name'.  Returns true if there was
+  /// one.  Not thread safe: unregister after all tasks are created.
+  static bool unregisterFragmentExecutor(const std::string& name);
 
   /// Creates a task to execute a plan fragment, but doesn't start execution
   /// until Task::start() method is called.
@@ -80,6 +172,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// and callback options. Default is std::nullopt (no spilling).
   /// @param onError Optional callback to receive an exception if task
   /// execution fails.
+  /// @param factoryOptions Options for a registered task factory, or nullptr
+  /// for none.  Only meaningful for a plan whose execution needs a Task
+  /// executor; see registerFragmentExecutor and FactoryOptions.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -89,7 +184,8 @@ class Task : public std::enable_shared_from_this<Task> {
       Consumer consumer = nullptr,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      const FactoryOptions* factoryOptions = nullptr);
 
   static std::shared_ptr<Task> create(
       const std::string& taskId,
@@ -100,7 +196,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      const FactoryOptions* factoryOptions = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
   /// in debugging messages and listings.
@@ -175,6 +272,32 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
     return consumerSupplier_;
+  }
+
+  /// Sets the executor that created this task to run part of its schedule
+  /// (e.g. a fixed point's per-iteration sub-task).  Lets this task's
+  /// operators reach executor-scoped state through parentExecutor().  The
+  /// executor must outlive this task.  nullptr (the default) means this task
+  /// was not created by one.
+  void setParentExecutor(FragmentExecutor* parentExecutor) {
+    parentExecutor_ = parentExecutor;
+  }
+
+  FragmentExecutor* parentExecutor() const {
+    return parentExecutor_;
+  }
+
+  /// The executor running this fragment, or nullptr when it runs as an
+  /// ordinary Driver pipeline.  For a caller that must reach the executor's
+  /// own API -- e.g. to drive an iterative plan phase by phase rather than
+  /// through start()/next().
+  FragmentExecutor* executor() const {
+    return executor_.get();
+  }
+
+  /// The threading mode this task was created with.
+  ExecutionMode executionMode() const {
+    return mode_;
   }
 
   bool isGroupedExecution() const;
@@ -872,6 +995,16 @@ class Task : public std::enable_shared_from_this<Task> {
   // Returns the lock that protects the system-wide running task list.
   FOLLY_EXPORT static folly::SharedMutex& taskListLock();
 
+ public:
+  // Drives the task to the kFinished terminal state so taskCompletionFuture()
+  // resolves and state()/error() stay consistent with a driver-based task.
+  // For a FragmentExecutor, whose schedule -- not a last driver -- decides
+  // when the task is done.  The failure counterpart is setError().
+  void markFinished() {
+    terminate(TaskState::kFinished);
+  }
+
+ private:
   Task(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -1315,6 +1448,16 @@ class Task : public std::enable_shared_from_this<Task> {
       std::make_shared<std::atomic_int64_t>(0)};
 
   ConsumerSupplier consumerSupplier_;
+
+  // The task that created this one to run part of its work (e.g. a
+  // FixedPointTask and its sub-tasks); nullptr for a top-level task.  The
+  // parent outlives this task.
+  // Runs this fragment instead of a Driver pipeline when a registration
+  // claimed it; null for an ordinary task.
+  std::unique_ptr<FragmentExecutor> executor_;
+
+  // The executor whose schedule created this task, if any.  Outlives it.
+  FragmentExecutor* parentExecutor_{nullptr};
 
   // The function that is executed when the task encounters its first error,
   // that is, setError() is called for the first time.

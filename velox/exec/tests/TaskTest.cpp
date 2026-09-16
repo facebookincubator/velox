@@ -1092,6 +1092,192 @@ TEST_F(TaskTest, testTerminateDeadlock) {
       cursor->task()->toString().find("zombie drivers:"), std::string::npos);
 }
 
+namespace {
+// Records what Task delegated to it and answers next() with a canned batch, so
+// a test can tell delegation from the ordinary driver path.
+class RecordingFragmentExecutor : public exec::FragmentExecutor {
+ public:
+  RecordingFragmentExecutor(exec::Task* owner, RowVectorPtr result)
+      : owner_{owner}, result_{std::move(result)} {}
+
+  void start(uint32_t /*maxDrivers*/, uint32_t /*concurrentSplitGroups*/)
+      override {
+    ++numStarts_;
+  }
+
+  RowVectorPtr next(ContinueFuture* /*future*/) override {
+    if (exhausted_) {
+      return nullptr;
+    }
+    exhausted_ = true;
+    return result_;
+  }
+
+  void addSplit(const core::PlanNodeId& /*planNodeId*/, exec::Split&& /*split*/)
+      override {
+    ++numSplits_;
+  }
+
+  void noMoreSplits(const core::PlanNodeId& /*planNodeId*/) override {}
+
+  exec::Task* owner() const override {
+    return owner_;
+  }
+
+  int32_t numStarts() const {
+    return numStarts_;
+  }
+
+  int32_t numSplits() const {
+    return numSplits_;
+  }
+
+ private:
+  exec::Task* const owner_;
+  const RowVectorPtr result_;
+  bool exhausted_{false};
+  int32_t numStarts_{0};
+  int32_t numSplits_{0};
+};
+
+// Unregisters on scope exit so a failing assertion cannot leak a registration
+// into the tests that follow.
+class ScopedFragmentExecutor {
+ public:
+  ScopedFragmentExecutor(
+      std::string name,
+      exec::Task::FragmentMatcher matcher,
+      exec::Task::FragmentExecutorFactory factory)
+      : name_{std::move(name)} {
+    exec::Task::registerFragmentExecutor(
+        name_, std::move(matcher), std::move(factory));
+  }
+
+  ~ScopedFragmentExecutor() {
+    exec::Task::unregisterFragmentExecutor(name_);
+  }
+
+ private:
+  const std::string name_;
+};
+} // namespace
+
+// The composed-executor extension point: a registration claims a fragment and
+// Task runs it through the executor instead of a Driver pipeline.
+TEST_F(TaskTest, fragmentExecutorSelection) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan = PlanBuilder().values({data}).planFragment();
+
+  RecordingFragmentExecutor* executor{nullptr};
+  ScopedFragmentExecutor registration{
+      "test.recording",
+      [](const core::PlanFragment&, const exec::Task::FactoryOptions*) {
+        return true;
+      },
+      [&](exec::Task* owner, const exec::Task::FactoryOptions*) {
+        auto made = std::make_unique<RecordingFragmentExecutor>(owner, data);
+        executor = made.get();
+        return made;
+      }};
+
+  auto task = exec::Task::create(
+      "local://fragment-executor-selection",
+      plan,
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kSerial);
+  ASSERT_NE(executor, nullptr);
+  EXPECT_EQ(executor->owner(), task.get());
+
+  // next() came from the executor, and the executor is exhausted after one
+  // batch -- so it ran, not a driver pipeline over Values.
+  assertEqualResults({data}, {task->next()});
+  EXPECT_EQ(task->next(), nullptr);
+
+  task->addSplit("0", exec::Split{});
+  EXPECT_EQ(executor->numSplits(), 1);
+}
+
+// A fragment no registration claims runs as an ordinary Driver pipeline.
+TEST_F(TaskTest, fragmentExecutorFallback) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan = PlanBuilder().values({data}).planFragment();
+
+  ScopedFragmentExecutor registration{
+      "test.claims-nothing",
+      [](const core::PlanFragment&, const exec::Task::FactoryOptions*) {
+        return false;
+      },
+      [](exec::Task* owner, const exec::Task::FactoryOptions*)
+          -> std::unique_ptr<exec::FragmentExecutor> {
+        VELOX_FAIL("Must not be built for an unclaimed fragment");
+      }};
+
+  auto [task, results] = executeSerial(plan);
+  assertEqualResults({data}, results);
+}
+
+// Registering the same name twice replaces, and unregistering reports whether
+// there was anything to remove.
+TEST_F(TaskTest, fragmentExecutorReplacementAndUnregister) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto other = makeRowVector({makeFlatVector<int64_t>({4, 5, 6})});
+  auto plan = PlanBuilder().values({data}).planFragment();
+
+  auto registerReturning = [&](const RowVectorPtr& result) {
+    exec::Task::registerFragmentExecutor(
+        "test.replaceable",
+        [](const core::PlanFragment&, const exec::Task::FactoryOptions*) {
+          return true;
+        },
+        [result](exec::Task* owner, const exec::Task::FactoryOptions*) {
+          return std::make_unique<RecordingFragmentExecutor>(owner, result);
+        });
+  };
+  registerReturning(data);
+  registerReturning(other);
+
+  auto task = exec::Task::create(
+      "local://fragment-executor-replacement",
+      plan,
+      /*destination=*/0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      exec::Task::ExecutionMode::kSerial);
+  assertEqualResults({other}, {task->next()});
+
+  EXPECT_TRUE(exec::Task::unregisterFragmentExecutor("test.replaceable"));
+  EXPECT_FALSE(exec::Task::unregisterFragmentExecutor("test.replaceable"));
+}
+
+// Claiming is order independent: two claimants is an error rather than a race
+// between registration orders.
+TEST_F(TaskTest, fragmentExecutorAmbiguousClaim) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan = PlanBuilder().values({data}).planFragment();
+
+  auto claimAll = [&](const std::string& name) {
+    return std::make_unique<ScopedFragmentExecutor>(
+        name,
+        [](const core::PlanFragment&, const exec::Task::FactoryOptions*) {
+          return true;
+        },
+        [data](exec::Task* owner, const exec::Task::FactoryOptions*) {
+          return std::make_unique<RecordingFragmentExecutor>(owner, data);
+        });
+  };
+  auto first = claimAll("test.first");
+  auto second = claimAll("test.second");
+
+  VELOX_ASSERT_THROW(
+      exec::Task::create(
+          "local://fragment-executor-ambiguous",
+          plan,
+          /*destination=*/0,
+          core::QueryCtx::create(driverExecutor_.get()),
+          exec::Task::ExecutionMode::kSerial),
+      "Two fragment executors claim the same plan");
+}
+
 TEST_F(TaskTest, serialExecution) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
