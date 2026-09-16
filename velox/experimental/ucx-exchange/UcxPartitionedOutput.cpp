@@ -493,11 +493,11 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
     cudf::fill_in_place(maskView, 0, 1, trueScalar, stream);
   }
 
-  // apply_boolean_mask keeps the true rows and apply_deletion_mask keeps the
+  // apply_retention_mask keeps the true rows and apply_deletion_mask keeps the
   // false ones, so the two results are an exact partition of the input: no row
   // is both replicated and routed, and none is dropped.
   const auto replicatedRows =
-      cudf::apply_boolean_mask(tableView, replicateMask->view(), stream, mr);
+      cudf::apply_retention_mask(tableView, replicateMask->view(), stream, mr);
   const auto routedRows =
       cudf::apply_deletion_mask(tableView, replicateMask->view(), stream, mr);
 
