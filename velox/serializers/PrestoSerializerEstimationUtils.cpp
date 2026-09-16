@@ -21,6 +21,13 @@
 
 namespace facebook::velox::serializer::presto::detail {
 namespace {
+void estimateSerializedSizeByRows(
+    const BaseVector* vector,
+    const folly::Range<const vector_size_t*>& rows,
+    vector_size_t** sizes,
+    Scratch& scratch,
+    bool flatten);
+
 // Attribute each null bitmap byte to the first of its eight rows.
 void addNullBitmapSize(vector_size_t** sizes, int32_t numRows) {
   constexpr auto kBitsPerByte = 8;
@@ -136,7 +143,7 @@ void estimateFlattenedConstantSerializedSize(
     const auto* values = constantVector->wrappedVector();
     vector_size_t* sizePtr = &elementSize;
     const vector_size_t singleRow = constantVector->wrappedIndex(0);
-    estimateSerializedSizeInt(
+    estimateSerializedSizeByRows(
         values,
         folly::Range<const vector_size_t*>(&singleRow, 1),
         &sizePtr,
@@ -215,7 +222,7 @@ void estimateWrapperSerializedSize(
     return;
   }
 
-  estimateSerializedSizeInt(
+  estimateSerializedSizeByRows(
       wrapped,
       folly::Range<const vector_size_t*>(innerRows, numInner),
       innerSizes,
@@ -321,7 +328,7 @@ void estimateSerializedSizeInt(
       rows[j] = ranges[i].begin + j;
       rowSizes[j] = sizes[i];
     }
-    estimateSerializedSizeInt(
+    estimateSerializedSizeByRows(
         vector,
         folly::Range<const vector_size_t*>(rows, numRows),
         rowSizes,
@@ -332,6 +339,15 @@ void estimateSerializedSizeInt(
 }
 
 void estimateSerializedSizeInt(
+    const BaseVector* vector,
+    const folly::Range<const vector_size_t*>& rows,
+    vector_size_t** sizes,
+    Scratch& scratch) {
+  estimateSerializedSizeByRows(vector, rows, sizes, scratch, true);
+}
+
+namespace {
+void estimateSerializedSizeByRows(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
@@ -407,7 +423,7 @@ void estimateSerializedSizeInt(
       auto& children = rowVector->children();
       for (auto& child : children) {
         if (child) {
-          estimateSerializedSizeInt(
+          estimateSerializedSizeByRows(
               child.get(),
               folly::Range(innerRows, numInner),
               innerSizes,
@@ -433,14 +449,14 @@ void estimateSerializedSizeInt(
       if (numElements == 0) {
         return;
       }
-      estimateSerializedSizeInt(
+      estimateSerializedSizeByRows(
           mapVector->mapKeys().get(),
           folly::Range<const vector_size_t*>(
               elementRowsHolder.get(), numElements),
           elementSizesHolder.get(),
           scratch,
           true);
-      estimateSerializedSizeInt(
+      estimateSerializedSizeByRows(
           mapVector->mapValues().get(),
           folly::Range<const vector_size_t*>(
               elementRowsHolder.get(), numElements),
@@ -465,7 +481,7 @@ void estimateSerializedSizeInt(
       if (numElements == 0) {
         return;
       }
-      estimateSerializedSizeInt(
+      estimateSerializedSizeByRows(
           arrayVector->elements().get(),
           folly::Range<const vector_size_t*>(
               elementRowsHolder.get(), numElements),
@@ -475,11 +491,12 @@ void estimateSerializedSizeInt(
       break;
     }
     case VectorEncoding::Simple::LAZY:
-      estimateSerializedSizeInt(
+      estimateSerializedSizeByRows(
           vector->loadedVector(), rows, sizes, scratch, flatten);
       break;
     default:
       VELOX_UNSUPPORTED("Unsupported vector encoding {}", vector->encoding());
   }
 }
+} // namespace
 } // namespace facebook::velox::serializer::presto::detail

@@ -19,16 +19,17 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::serializer::presto::detail {
+/// Estimates the serialized size using encoding when present.
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes,
     Scratch& scratch);
 
+/// Estimates the serialized size after flattening encoding.
 void estimateSerializedSizeInt(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
-    Scratch& scratch,
-    bool flatten = true);
+    Scratch& scratch);
 } // namespace facebook::velox::serializer::presto::detail
