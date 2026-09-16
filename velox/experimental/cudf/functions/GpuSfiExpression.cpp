@@ -35,6 +35,8 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 using gpu_sfi::GpuArgView;
+using gpu_sfi::GpuFunctionInstance;
+using gpu_sfi::GpuFunctionInstanceSpec;
 using gpu_sfi::GpuLaunchFn;
 
 /// A null literal has no value for the kernel to read: constants are held as a
@@ -106,15 +108,56 @@ GpuArgView toArgView(const cudf::column_view& column, bool isConstant) {
       isConstant};
 }
 
+/// Runs the function's initialize() once, here at compile time, mirroring
+/// SimpleFunctionAdapter doing it in its constructor with this call site's
+/// argument types in hand.
+///
+/// The bytes are produced by the shadow-compiled side, which is where the
+/// function struct is instantiated for the kernel. Keeping both on that side
+/// means one instantiation rather than two under two include sets.
+std::vector<std::byte> makeInstance(
+    const GpuFunctionInstanceSpec& spec,
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config) {
+  if (spec.initialize == nullptr) {
+    // No initialize(), so the kernel's default-constructed instance is already
+    // correct and there is nothing to ship.
+    return {};
+  }
+
+  std::vector<TypePtr> inputTypes;
+  inputTypes.reserve(expr->inputs().size());
+  for (const auto& input : expr->inputs()) {
+    inputTypes.push_back(input->type());
+  }
+
+  // Overaligned state would need aligned storage rather than a byte vector.
+  // Nothing reaches that today -- the widest decimal state is an int128 -- and
+  // a silent under-alignment would be undefined behaviour, so it is checked.
+  VELOX_CHECK_LE(
+      spec.alignment,
+      static_cast<int32_t>(alignof(std::max_align_t)),
+      "GPU function instance for {} needs {}-byte alignment, which exceeds "
+      "what a std::vector<std::byte> guarantees",
+      expr->toString(),
+      spec.alignment);
+
+  std::vector<std::byte> instance(spec.size);
+  spec.initialize(instance.data(), inputTypes, config);
+  return instance;
+}
+
 } // namespace
 
 GpuSfiExpression::GpuSfiExpression(
     GpuLaunchFn launch,
+    std::vector<std::byte> instance,
     cudf::data_type outputType,
     std::vector<Argument> arguments,
     std::vector<std::unique_ptr<cudf::column>> constants,
     std::vector<std::shared_ptr<CudfExpression>> subexpressions)
     : launch_(launch),
+      instance_(std::move(instance)),
       outputType_(outputType),
       arguments_(std::move(arguments)),
       constants_(std::move(constants)),
@@ -127,7 +170,8 @@ bool GpuSfiExpression::canEvaluate(const core::TypedExprPtr& expr) {
 std::shared_ptr<CudfExpression> GpuSfiExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   const auto* resolved = resolve(expr);
   VELOX_CHECK_NOT_NULL(
       resolved, "No GPU simple function for {}", expr->toString());
@@ -178,7 +222,8 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
 
     // Anything this evaluator does not model itself is delegated, the way AST
     // delegates a subtree it cannot represent.
-    subexpressions.push_back(createCudfExpression(input, inputRowSchema, pool));
+    subexpressions.push_back(
+        createCudfExpression(input, inputRowSchema, pool, config));
     arguments.push_back(
         Argument{
             Argument::Source::kSubexpression,
@@ -187,6 +232,7 @@ std::shared_ptr<CudfExpression> GpuSfiExpression::create(
 
   return std::make_shared<GpuSfiExpression>(
       resolved->launch,
+      makeInstance(resolved->instanceSpec, expr, config),
       veloxToCudfDataType(expr->type()),
       std::move(arguments),
       std::move(constants),
@@ -236,7 +282,10 @@ ColumnOrView GpuSfiExpression::eval(
     numRows = inputColumnViews.front().size();
   }
 
-  return launch_(argViews, numRows, outputType_, stream, mr);
+  const GpuFunctionInstance instance{
+      instance_.empty() ? nullptr : instance_.data(),
+      static_cast<int32_t>(instance_.size())};
+  return launch_(argViews, instance, numRows, outputType_, stream, mr);
 }
 
 void GpuSfiExpression::close() {
@@ -255,8 +304,9 @@ void registerGpuSfiEvaluator(int priority) {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return GpuSfiExpression::create(expr, row, pool);
+         memory::MemoryPool* pool,
+         const core::QueryConfig& config) {
+        return GpuSfiExpression::create(expr, row, pool, config);
       },
       /*overwrite=*/false);
 }

@@ -24,6 +24,7 @@
 //
 // Compiled with the gpu_shadows/ include path ahead of the Velox source root.
 
+#include "velox/experimental/cudf/functions/GpuDecimalRegistration.cuh"
 #include "velox/experimental/cudf/functions/GpuRegistrationHelpers.cuh"
 
 // Bitwise.h calls bits::countBits but includes only Macros.h, so it relies on
@@ -37,6 +38,7 @@
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/Bitwise.h"
 #include "velox/functions/prestosql/Comparisons.h"
+#include "velox/functions/prestosql/DecimalMathFunctions.h"
 
 namespace facebook::velox::cudf_velox::gpu_sfi {
 
@@ -179,6 +181,43 @@ void registerPrestoGpuFunctions(const std::string& prefix) {
   registerGpuFunction<GpuOrFunction, bool, Variadic<bool>>({prefix + "or"});
   registerGpuFunction<GpuNotFunction, bool, bool>({prefix + "not"});
   registerGpuFunction<GpuIsNullFunction, bool, bool>({prefix + "is_null"});
+
+  // --- Decimal -------------------------------------------------------------
+  // Five type combinations each, matching registerDecimalBinary, with the
+  // result precision and scale constrained exactly as Velox constrains them.
+  // These are the first functions here with an initialize(): it derives the
+  // rescale factors from the argument types and the instance is shipped to the
+  // kernel, so a call site's scales are baked in the way they are on the CPU.
+  //
+  // TODO(gpu-sfi-checks): plus and minus raise VELOX_ARITHMETIC_ERROR on
+  // overflow, and multiply and divide reach DecimalArithmetic::valueInRange,
+  // which is a VELOX_USER_CHECK. The Exceptions.h shadow reduces both to
+  // no-ops, so an out-of-range result is returned rather than reported. In
+  // range they agree with the CPU bit for bit; out of range they differ, which
+  // is what per-row error reporting has to fix.
+  registerGpuDecimalBinary<DecimalPlusFunction>(
+      {prefix + "plus"}, plusMinusConstraints());
+  registerGpuDecimalBinary<DecimalMinusFunction>(
+      {prefix + "minus"}, plusMinusConstraints());
+  registerGpuDecimalBinary<DecimalMultiplyFunction>(
+      {prefix + "multiply"}, multiplyConstraints());
+  registerGpuDecimalBinary<DecimalDivideFunction>(
+      {prefix + "divide"}, divideConstraints());
+  registerGpuDecimalBinary<DecimalModulusFunction>(
+      {prefix + "mod"}, modulusConstraints());
+
+  registerGpuDecimalToInteger<DecimalFloorFunction>(
+      {prefix + "floor"}, roundToIntegerConstraints());
+  registerGpuDecimalToInteger<DecimalCeilFunction>(
+      {prefix + "ceil"}, roundToIntegerConstraints());
+  registerGpuDecimalToInteger<DecimalRoundFunction>(
+      {prefix + "round"}, roundToIntegerConstraints());
+  registerGpuDecimalToInteger<DecimalTruncateFunction>(
+      {prefix + "truncate"}, truncateToIntegerConstraints());
+
+  registerGpuDecimalRoundWithDigits<DecimalRoundFunction>({prefix + "round"});
+  registerGpuDecimalTruncateWithDigits<DecimalTruncateFunction>(
+      {prefix + "truncate"});
 
   // Deliberately not registered. These compile and are device-callable, but
   // their bodies use VELOX_USER_CHECK, which the Exceptions.h shadow reduces to

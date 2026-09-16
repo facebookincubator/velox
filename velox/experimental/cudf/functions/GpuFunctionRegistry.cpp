@@ -58,10 +58,20 @@ exec::FunctionSignaturePtr toVeloxSignature(
   exec::FunctionSignatureBuilder builder;
   // Declared before use, and deduplicated because the builder treats a repeat
   // as an error while a type naming the same variable twice is normal.
+  std::unordered_map<std::string, std::string> constraints;
+  for (const auto& [name, constraint] : signature.variableConstraints) {
+    constraints.emplace(name, constraint);
+  }
   std::unordered_set<std::string> declared;
   for (const auto& variable : signature.integerVariables) {
-    if (declared.insert(variable).second) {
+    if (!declared.insert(variable).second) {
+      continue;
+    }
+    auto constraint = constraints.find(variable);
+    if (constraint == constraints.end()) {
       builder.integerVariable(variable);
+    } else {
+      builder.integerVariable(variable, constraint->second);
     }
   }
   builder.returnType(signature.returnType);
@@ -80,6 +90,7 @@ bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
+    GpuFunctionInstanceSpec instanceSpec,
     bool overwrite) {
   auto veloxSignature = toVeloxSignature(signature);
 
@@ -103,10 +114,11 @@ bool registerGpuKernel(
         continue;
       }
       existing->launch = launch;
+      existing->instanceSpec = instanceSpec;
       continue;
     }
 
-    entries.push_back(GpuFunctionEntry{veloxSignature, launch});
+    entries.push_back(GpuFunctionEntry{veloxSignature, launch, instanceSpec});
   }
   return registeredAll;
 }

@@ -30,6 +30,8 @@
 // FunctionSignatureBuilder().returnType("double") -- so the host bridge can
 // rebuild a real FunctionSignature without the device side ever naming one.
 
+#include "velox/type/SimpleFunctionTags.h"
+
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
@@ -65,15 +67,42 @@ struct GpuArgView {
   bool isConstant;
 };
 
+/// An initialized function instance, as opaque bytes.
+///
+/// Velox calls initialize() once per compiled call site and the instance then
+/// holds whatever it derived from the argument types -- decimal rescale
+/// factors, a parsed date unit. The bytes cross this boundary rather than the
+/// typed instance because only the shadow-compiled side can name the type.
+/// `data` may be null for a function with no initialize(), which is the
+/// common case and the reason the launcher tolerates an empty state.
+struct GpuFunctionInstance {
+  const void* data;
+  int32_t size;
+};
+
 /// Evaluates one registered function over a row range. Instantiated behind the
 /// shadow boundary, one per (function, argument types) combination, the way
 /// SimpleFunctionAdapterFactoryImpl is instantiated per UDFHolder.
 using GpuLaunchFn = std::unique_ptr<cudf::column> (*)(
     const std::vector<GpuArgView>& arguments,
+    const GpuFunctionInstance& instance,
     cudf::size_type numRows,
     cudf::data_type outputType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
+
+/// Runs the function's own initialize() over `instance`, which the caller has
+/// sized and aligned per the registration.
+///
+/// Also compiled behind the shadow boundary, deliberately: running it there
+/// means the kernel and initialize() share one instantiation of the function
+/// struct, rather than two under two include sets. It works because
+/// initialize() only ever binds `*inputTypes[i]` to a `const Type&`, which
+/// needs no complete type, and resolves getDecimalPrecisionScale at link time.
+using GpuInitializeFn = void (*)(
+    void* instance,
+    const std::vector<TypePtr>& inputTypes,
+    const core::QueryConfig& config);
 
 /// Argument and return types as Velox type names, lowercased, e.g. "double" or
 /// "bigint". Derived at registration from SimpleTypeTrait<T>::name, the same
@@ -90,6 +119,16 @@ struct GpuFunctionSignature {
   /// in "decimal(i1,i5)". They have to be declared before the signature can be
   /// built; may contain duplicates.
   std::vector<std::string> integerVariables;
+  /// Constraints on those variables, as Velox spells them: a result precision
+  /// or scale is not free, it is computed from the argument ones, e.g.
+  /// "max(i2,i4)" for the scale of a decimal sum. Each entry names a variable
+  /// and gives the expression SignatureBinder evaluates for it. A variable
+  /// with no entry here is free, which is right for the argument variables.
+  ///
+  /// Without these a decimal registration declares its result precision and
+  /// scale as unconstrained, and binding either fails or resolves them to
+  /// something the kernel was not compiled for.
+  std::vector<std::pair<std::string, std::string>> variableConstraints;
 };
 
 /// Registers `launch` under each alias.
@@ -102,10 +141,22 @@ struct GpuFunctionSignature {
 /// The strings are parsed into an exec::FunctionSignature on the host side of
 /// the boundary; see GpuFunctionLookup.h for the resulting entry, and for why
 /// the registry is read through a separate header.
+/// How much storage the function's instance needs, and how to set it up.
+///
+/// `initialize` is null for a function that has no initialize(); the instance
+/// is then default-constructed and `size` is still meaningful, because an empty
+/// struct occupies one byte and the launcher checks the size it was handed.
+struct GpuFunctionInstanceSpec {
+  GpuInitializeFn initialize;
+  int32_t size;
+  int32_t alignment;
+};
+
 bool registerGpuKernel(
     const std::vector<std::string>& aliases,
     GpuFunctionSignature signature,
     GpuLaunchFn launch,
+    GpuFunctionInstanceSpec instanceSpec,
     bool overwrite = true);
 
 /// Registers the PrestoSQL simple functions compiled for GPU. Defined in a .cu

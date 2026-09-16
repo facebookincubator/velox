@@ -34,11 +34,34 @@
 #include "velox/common/base/Macros.h"
 
 #include <cstdint>
+#include <type_traits>
 
 namespace facebook::velox::bits {
 
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t popcount64(uint64_t value) {
   return __builtin_popcountll(value);
+}
+
+// Reproduces the real velox::bits::countLeadingZeros, which the Spark decimal
+// helpers call to decide whether a product needs more than 128 bits. Copied
+// rather than reached because it sits in the 1121 lines of BitUtil.h this
+// shadow exists to avoid; __builtin_clzll is device-callable, unlike the
+// overflow builtins.
+//
+// Zero is answered explicitly: __builtin_clzll is undefined for it.
+template <typename T = uint64_t>
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int32_t countLeadingZeros(T word) {
+  static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
+  if (word == 0) {
+    return sizeof(T) * 8;
+  }
+  if constexpr (std::is_same_v<T, uint64_t>) {
+    return __builtin_clzll(word);
+  } else {
+    uint64_t hi = word >> 64;
+    uint64_t lo = static_cast<uint64_t>(word);
+    return (hi == 0) ? 64 + __builtin_clzll(lo) : __builtin_clzll(hi);
+  }
 }
 
 // Counts the number of 1 bits in `bits` over the inclusive-exclusive

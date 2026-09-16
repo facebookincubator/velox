@@ -42,6 +42,8 @@ struct GpuFunctionEntry {
   /// Parsed once at registration from the strings the device side supplied.
   exec::FunctionSignaturePtr signature;
   GpuLaunchFn launch;
+  /// How to build this function's instance before the first launch.
+  GpuFunctionInstanceSpec instanceSpec;
 };
 
 /// Every registration made so far, keyed by lowercased function name.

@@ -23,6 +23,8 @@
 #include "velox/experimental/cudf/functions/GpuFunctionLookup.h"
 
 #include "velox/expression/SignatureBinder.h"
+#include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/functions/prestosql/DecimalFunctions.h"
 #include "velox/type/TypeCoercer.h"
 
 #include <gtest/gtest.h>
@@ -32,6 +34,7 @@ namespace {
 
 std::unique_ptr<cudf::column> launcherA(
     const std::vector<GpuArgView>&,
+    const GpuFunctionInstance&,
     cudf::size_type,
     cudf::data_type,
     cuda::stream_ref,
@@ -41,6 +44,7 @@ std::unique_ptr<cudf::column> launcherA(
 
 std::unique_ptr<cudf::column> launcherB(
     const std::vector<GpuArgView>&,
+    const GpuFunctionInstance&,
     cudf::size_type,
     cudf::data_type,
     cuda::stream_ref,
@@ -50,12 +54,58 @@ std::unique_ptr<cudf::column> launcherB(
 
 GpuFunctionSignature doubleBinary() {
   return GpuFunctionSignature{
-      "double", {"double", "double"}, /*variadicTail=*/false, {}};
+      "double",
+      {"double", "double"},
+      /*variadicTail=*/false,
+      /*integerVariables=*/{},
+      /*variableConstraints=*/{}};
 }
 
 GpuFunctionSignature bigintBinary() {
   return GpuFunctionSignature{
-      "bigint", {"bigint", "bigint"}, /*variadicTail=*/false, {}};
+      "bigint",
+      {"bigint", "bigint"},
+      /*variadicTail=*/false,
+      /*integerVariables=*/{},
+      /*variableConstraints=*/{}};
+}
+
+// Stand-in for a function with no initialize(): the instance is an empty
+// struct, so one byte with no setup, which is what most functions register.
+GpuFunctionInstanceSpec noInitialize() {
+  return GpuFunctionInstanceSpec{nullptr, 1, 1};
+}
+
+/// The return type Velox's own CPU registry resolves for this call, or null if
+/// no CPU overload accepts it.
+TypePtr resolveVeloxReturnType(
+    const std::string& name,
+    const std::vector<TypePtr>& arguments) {
+  auto resolved = exec::simpleFunctions().resolveFunction(name, arguments);
+  return resolved.has_value() ? resolved->type() : nullptr;
+}
+
+/// The same question asked of the GPU registry: the first registered overload
+/// whose signature binds, resolved through the same SignatureBinder the
+/// evaluator uses.
+TypePtr resolveGpuReturnType(
+    const std::string& name,
+    const std::vector<TypePtr>& arguments) {
+  const auto& registry = gpuFunctionRegistry();
+  auto it = registry.find(name);
+  if (it == registry.end()) {
+    return nullptr;
+  }
+  for (const auto& entry : it->second) {
+    exec::SignatureBinder binder(
+        *entry.signature, arguments, TypeCoercer::defaults());
+    if (binder.tryBind()) {
+      if (auto type = binder.tryResolveReturnType()) {
+        return type;
+      }
+    }
+  }
+  return nullptr;
 }
 
 const std::vector<GpuFunctionEntry>* lookup(const std::string& name) {
@@ -72,7 +122,8 @@ class GpuFunctionRegistryTest : public ::testing::Test {
 };
 
 TEST_F(GpuFunctionRegistryTest, registersUnderEveryAlias) {
-  ASSERT_TRUE(registerGpuKernel({"power", "pow"}, doubleBinary(), launcherA));
+  ASSERT_TRUE(registerGpuKernel(
+      {"power", "pow"}, doubleBinary(), launcherA, noInitialize()));
 
   ASSERT_NE(lookup("power"), nullptr);
   ASSERT_NE(lookup("pow"), nullptr);
@@ -81,15 +132,18 @@ TEST_F(GpuFunctionRegistryTest, registersUnderEveryAlias) {
 }
 
 TEST_F(GpuFunctionRegistryTest, lowercasesNamesLikeVelox) {
-  ASSERT_TRUE(registerGpuKernel({"MyFunc"}, doubleBinary(), launcherA));
+  ASSERT_TRUE(
+      registerGpuKernel({"MyFunc"}, doubleBinary(), launcherA, noInitialize()));
 
   EXPECT_NE(lookup("myfunc"), nullptr);
   EXPECT_EQ(lookup("MyFunc"), nullptr);
 }
 
 TEST_F(GpuFunctionRegistryTest, differentSignaturesCoexistAsOverloads) {
-  ASSERT_TRUE(registerGpuKernel({"plus"}, doubleBinary(), launcherA));
-  ASSERT_TRUE(registerGpuKernel({"plus"}, bigintBinary(), launcherB));
+  ASSERT_TRUE(
+      registerGpuKernel({"plus"}, doubleBinary(), launcherA, noInitialize()));
+  ASSERT_TRUE(
+      registerGpuKernel({"plus"}, bigintBinary(), launcherB, noInitialize()));
 
   const auto* entries = lookup("plus");
   ASSERT_NE(entries, nullptr);
@@ -100,8 +154,10 @@ TEST_F(GpuFunctionRegistryTest, differentSignaturesCoexistAsOverloads) {
 // same name and signature replaces the first, so whichever dialect registers
 // last wins, exactly as on the CPU side.
 TEST_F(GpuFunctionRegistryTest, sameSignatureOverwritesByDefault) {
-  ASSERT_TRUE(registerGpuKernel({"divide"}, doubleBinary(), launcherA));
-  ASSERT_TRUE(registerGpuKernel({"divide"}, doubleBinary(), launcherB));
+  ASSERT_TRUE(
+      registerGpuKernel({"divide"}, doubleBinary(), launcherA, noInitialize()));
+  ASSERT_TRUE(
+      registerGpuKernel({"divide"}, doubleBinary(), launcherB, noInitialize()));
 
   const auto* entries = lookup("divide");
   ASSERT_NE(entries, nullptr);
@@ -110,9 +166,14 @@ TEST_F(GpuFunctionRegistryTest, sameSignatureOverwritesByDefault) {
 }
 
 TEST_F(GpuFunctionRegistryTest, overwriteFalseKeepsTheIncumbent) {
-  ASSERT_TRUE(registerGpuKernel({"divide"}, doubleBinary(), launcherA));
+  ASSERT_TRUE(
+      registerGpuKernel({"divide"}, doubleBinary(), launcherA, noInitialize()));
   EXPECT_FALSE(registerGpuKernel(
-      {"divide"}, doubleBinary(), launcherB, /*overwrite=*/false));
+      {"divide"},
+      doubleBinary(),
+      launcherB,
+      noInitialize(),
+      /*overwrite=*/false));
 
   const auto* entries = lookup("divide");
   ASSERT_NE(entries, nullptr);
@@ -123,8 +184,10 @@ TEST_F(GpuFunctionRegistryTest, overwriteFalseKeepsTheIncumbent) {
 // Guards the naming contract between the two dialect files. Prefixing is how
 // both can be loaded into one process without colliding.
 TEST_F(GpuFunctionRegistryTest, prefixSeparatesDialects) {
-  ASSERT_TRUE(registerGpuKernel({"presto.divide"}, doubleBinary(), launcherA));
-  ASSERT_TRUE(registerGpuKernel({"spark.divide"}, doubleBinary(), launcherB));
+  ASSERT_TRUE(registerGpuKernel(
+      {"presto.divide"}, doubleBinary(), launcherA, noInitialize()));
+  ASSERT_TRUE(registerGpuKernel(
+      {"spark.divide"}, doubleBinary(), launcherB, noInitialize()));
 
   ASSERT_NE(lookup("presto.divide"), nullptr);
   ASSERT_NE(lookup("spark.divide"), nullptr);
@@ -148,14 +211,15 @@ TEST_F(GpuFunctionRegistryTest, prestoRegistrationsCarryVeloxSignatures) {
     plusSignatures.push_back(entry.signature->toString());
   }
   std::sort(plusSignatures.begin(), plusSignatures.end());
-  // Two floating-point overloads from the plain struct and four integral ones
-  // from CheckedPlusFunction, under one name. Overloads of the same name
-  // coexist rather than replacing each other, and which struct backs which type
-  // is the whole checked/unchecked distinction.
+  // Two floating-point overloads from the plain struct, four integral ones from
+  // CheckedPlusFunction, and one decimal, under one name. Overloads of the same
+  // name coexist rather than replacing each other, and which struct backs which
+  // type is the whole checked/unchecked distinction.
   EXPECT_EQ(
       plusSignatures,
       (std::vector<std::string>{
           "(bigint,bigint) -> bigint",
+          "(decimal(i1,i5),decimal(i2,i6)) -> decimal(i3,i7)",
           "(double,double) -> double",
           "(integer,integer) -> integer",
           "(real,real) -> real",
@@ -204,10 +268,18 @@ TEST_F(GpuFunctionRegistryTest, numericBreadthMatchesVeloxTypeSets) {
           "(tinyint) -> tinyint"}));
 
   // ceiling is an alias of ceil upstream, so both names carry the same set.
-  EXPECT_EQ(signaturesOf(lookup("ceil")), signaturesOf(lookup("ceiling")));
+  // ceil and ceiling agree on the numeric overloads but not on decimal:
+  // Velox registers the numeric ceil under both names and the decimal one
+  // under "ceil" alone, and this mirrors that rather than improving on it.
+  EXPECT_EQ(
+      signaturesOf(lookup("ceiling")).size(),
+      signaturesOf(lookup("ceil")).size() - 1);
 
   // Floating point only, matching registerUnaryFloatingPoint for negate.
-  EXPECT_EQ(signaturesOf(lookup("truncate")).size(), 4u); // 2 types x 2 arities
+  // 2 floating-point types x 2 arities, plus 2 decimal entries -- one per
+  // arity. Decimal contributes only two because ShortDecimal and LongDecimal
+  // render the same signature string; see decimalOverloadsCollapseBySignature.
+  EXPECT_EQ(signaturesOf(lookup("truncate")).size(), 6u);
 
   // Genuinely double-only upstream: breadth here would be a divergence, not an
   // improvement.
@@ -229,8 +301,12 @@ TEST_F(GpuFunctionRegistryTest, decimalSignaturesCarryPrecisionAndScale) {
       /*variadicTail=*/false,
       // Named once per occurrence, as the device side collects them; the
       // builder rejects a redeclaration, so the duplicates must be dropped.
-      {"i1", "i5", "i1", "i5", "i1", "i5"}};
-  ASSERT_TRUE(registerGpuKernel({"decimal_add"}, signature, launcherA));
+      /*integerVariables=*/{"i1", "i5", "i1", "i5", "i1", "i5"},
+      // Free here: the result precision and scale come from the argument
+      // ones only because this signature repeats i1 and i5 in the return.
+      /*variableConstraints=*/{}};
+  ASSERT_TRUE(
+      registerGpuKernel({"decimal_add"}, signature, launcherA, noInitialize()));
 
   const auto* entries = lookup("decimal_add");
   ASSERT_NE(entries, nullptr);
@@ -267,6 +343,166 @@ TEST_F(GpuFunctionRegistryTest, checkBearingFunctionsAreNotRegistered) {
         "bitwise_logical_shift_right"}) {
     EXPECT_EQ(lookup(name), nullptr) << name << " should be held back";
   }
+}
+
+// A decimal function's result precision and scale are computed from the
+// argument ones by a constraint expression, and this is the test that keeps
+// ours honest: resolve the same call through Velox's own CPU registration and
+// through the GPU one, and require the same answer.
+//
+// Comparing against the CPU registry rather than against expected literals is
+// deliberate. A transcription slip in a constraint -- naming i2 where i5 was
+// meant, dropping the carry digit -- produces a signature that still binds and
+// still resolves, just to a different type than the CPU would, and the kernel
+// was compiled for the CPU's answer.
+TEST_F(GpuFunctionRegistryTest, decimalResultTypesMatchTheCpuRegistry) {
+  registerPrestoGpuFunctions("");
+
+  // The CPU side, registered here so the comparison reads off one source.
+  functions::registerDecimalPlus("");
+  functions::registerDecimalMinus("");
+  functions::registerDecimalMultiply("");
+  functions::registerDecimalDivide("");
+  functions::registerDecimalModulus("");
+  functions::registerDecimalFloor("");
+  functions::registerDecimalCeil("");
+  functions::registerDecimalRound("");
+  functions::registerDecimalTruncate("");
+
+  // Short and long on both sides, equal and unequal scales, and a pair whose
+  // sum would overflow 38 digits so the min(38, ...) clamp is exercised.
+  const std::vector<std::vector<TypePtr>> calls{
+      {DECIMAL(10, 2), DECIMAL(10, 2)},
+      {DECIMAL(10, 2), DECIMAL(12, 4)},
+      {DECIMAL(38, 10), DECIMAL(38, 10)},
+      {DECIMAL(18, 0), DECIMAL(38, 20)},
+      {DECIMAL(5, 5), DECIMAL(5, 0)},
+  };
+
+  for (const auto* name : {"plus", "minus", "multiply", "divide", "mod"}) {
+    for (const auto& arguments : calls) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}({}, {})",
+              name,
+              arguments[0]->toString(),
+              arguments[1]->toString()));
+
+      const auto cpuType = resolveVeloxReturnType(name, arguments);
+      const auto gpuType = resolveGpuReturnType(name, arguments);
+
+      // Either both resolve or neither does; a GPU registration that claims a
+      // call the CPU declines is as wrong as one that declines a valid call.
+      ASSERT_EQ(cpuType != nullptr, gpuType != nullptr)
+          << "cpu=" << (cpuType ? cpuType->toString() : "none")
+          << " gpu=" << (gpuType ? gpuType->toString() : "none");
+      if (cpuType != nullptr) {
+        EXPECT_TRUE(gpuType->equivalent(*cpuType))
+            << "cpu=" << cpuType->toString() << " gpu=" << gpuType->toString();
+      }
+    }
+  }
+
+  // The unary forms, where the result scale collapses to zero.
+  for (const auto* name : {"floor", "ceil", "round", "truncate"}) {
+    for (const auto& type :
+         {DECIMAL(10, 2), DECIMAL(38, 38), DECIMAL(5, 0), DECIMAL(20, 19)}) {
+      SCOPED_TRACE(fmt::format("{}({})", name, type->toString()));
+      const std::vector<TypePtr> arguments{type};
+
+      const auto cpuType = resolveVeloxReturnType(name, arguments);
+      const auto gpuType = resolveGpuReturnType(name, arguments);
+      ASSERT_EQ(cpuType != nullptr, gpuType != nullptr)
+          << "cpu=" << (cpuType ? cpuType->toString() : "none")
+          << " gpu=" << (gpuType ? gpuType->toString() : "none");
+      if (cpuType != nullptr) {
+        EXPECT_TRUE(gpuType->equivalent(*cpuType))
+            << "cpu=" << cpuType->toString() << " gpu=" << gpuType->toString();
+      }
+    }
+  }
+}
+
+// initialize() is what makes a decimal function work at all: the rescale
+// factors come from the argument types, not the values. This checks the state
+// actually reaches the registry as a sized, initializable instance -- the
+// mechanism the launcher depends on.
+TEST_F(GpuFunctionRegistryTest, decimalFunctionsCarryAnInitializedInstance) {
+  registerPrestoGpuFunctions("");
+
+  const auto* entries = lookup("plus");
+  ASSERT_NE(entries, nullptr);
+
+  const auto decimalEntry = std::find_if(
+      entries->begin(), entries->end(), [](const GpuFunctionEntry& entry) {
+        return entry.signature->returnType().baseName() == "decimal";
+      });
+  ASSERT_NE(decimalEntry, entries->end());
+
+  // Unlike every function registered before this, a decimal plus has state.
+  ASSERT_NE(decimalEntry->instanceSpec.initialize, nullptr);
+  EXPECT_GT(decimalEntry->instanceSpec.size, 0);
+
+  // Running it must produce the rescale factors the argument scales imply:
+  // DECIMAL(20,2) + DECIMAL(20,4) rescales the first operand by 10^2 and the
+  // second not at all.
+  std::vector<std::byte> instance(decimalEntry->instanceSpec.size);
+  const std::vector<TypePtr> arguments{DECIMAL(20, 2), DECIMAL(20, 4)};
+  const core::QueryConfig config{{}};
+  decimalEntry->instanceSpec.initialize(instance.data(), arguments, config);
+  EXPECT_EQ(static_cast<int>(instance[0]), 2);
+  EXPECT_EQ(static_cast<int>(instance[1]), 0);
+
+  // Different scales must give different state, which is what distinguishes a
+  // shipped instance from a default-constructed one.
+  std::vector<std::byte> other(decimalEntry->instanceSpec.size);
+  const std::vector<TypePtr> reversed{DECIMAL(20, 6), DECIMAL(20, 1)};
+  decimalEntry->instanceSpec.initialize(other.data(), reversed, config);
+  EXPECT_EQ(static_cast<int>(other[0]), 0);
+  EXPECT_EQ(static_cast<int>(other[1]), 5);
+
+  // A function without initialize() registers no initializer at all, so the
+  // launcher's default-constructed instance stays correct.
+  const auto* doubles = lookup("power");
+  ASSERT_NE(doubles, nullptr);
+  EXPECT_EQ(doubles->front().instanceSpec.initialize, nullptr);
+}
+
+// A gap this registry has and the CPU one does not, recorded as a test so it
+// cannot be forgotten.
+//
+// Velox registers five type combinations per binary decimal function -- (short,
+// short) -> short, (long, long) -> long, and three mixed ones -- and each needs
+// its own kernel, because behind the resolver a short decimal is an int64_t and
+// a long one an __int128. But all five produce the *same* signature string,
+// since ShortDecimal<P, S> and LongDecimal<P, S> both render "decimal(i1,i5)".
+// This registry keys on the signature, so the five collapse to one entry and
+// the last kernel registered wins.
+//
+// A (short, short) -> short call therefore resolves to whichever combination
+// registered last, reading int64_t operands through an __int128 kernel. The
+// result type is still correct -- decimalResultTypesMatchTheCpuRegistry passes
+// -- which is exactly what makes this dangerous.
+//
+// TODO(gpu-sfi-decimal): key entries on the physical argument types as well as
+// the signature, so resolution can pick the kernel compiled for the resolved
+// precision rather than the one that registered last.
+TEST_F(GpuFunctionRegistryTest, decimalOverloadsCollapseBySignature) {
+  registerPrestoGpuFunctions("");
+
+  const auto* entries = lookup("plus");
+  ASSERT_NE(entries, nullptr);
+
+  const auto decimals = std::count_if(
+      entries->begin(), entries->end(), [](const GpuFunctionEntry& entry) {
+        return entry.signature->returnType().baseName() == "decimal";
+      });
+
+  // One, where Velox's five combinations would want five distinguishable
+  // kernels. Raise this the moment physical-type keying lands.
+  EXPECT_EQ(decimals, 1)
+      << "if this is no longer 1, decimal dispatch has been made "
+         "physical-type aware and the TODO above can go";
 }
 
 } // namespace

@@ -18,6 +18,9 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/functions/GpuFunctionRegistry.h"
 
+#include <cstddef>
+#include <vector>
+
 namespace facebook::velox::cudf_velox {
 
 inline constexpr const char* kGpuSfiEvaluatorName = "gpu_sfi";
@@ -59,6 +62,7 @@ class GpuSfiExpression : public CudfExpression {
 
   GpuSfiExpression(
       gpu_sfi::GpuLaunchFn launch,
+      std::vector<std::byte> instance,
       cudf::data_type outputType,
       std::vector<Argument> arguments,
       std::vector<std::unique_ptr<cudf::column>> constants,
@@ -72,7 +76,8 @@ class GpuSfiExpression : public CudfExpression {
   static std::shared_ptr<CudfExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -84,6 +89,10 @@ class GpuSfiExpression : public CudfExpression {
 
  private:
   const gpu_sfi::GpuLaunchFn launch_;
+  /// The function's initialize()-d instance, built once at compile time the
+  /// way SimpleFunctionAdapter builds it in its constructor. Opaque here
+  /// because only the shadow-compiled side can name the type.
+  const std::vector<std::byte> instance_;
   const cudf::data_type outputType_;
   const std::vector<Argument> arguments_;
   const std::vector<std::unique_ptr<cudf::column>> constants_;

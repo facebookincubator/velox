@@ -65,6 +65,38 @@
 #define FOLLY_ALWAYS_INLINE inline
 #endif
 
+// Feature-detection macros, defined exactly as real Folly defines them.
+//
+// Unlike FOLLY_ALWAYS_INLINE these carry no GPU meaning. They are here because
+// a Velox header that reaches a *real* Folly header (Traits.h, CheckedMath.h,
+// lang/Bits.h, ...) leaves that header expanding `#if FOLLY_HAS_BUILTIN(x)`
+// against this shadow. Omitting them does not disable a feature, it produces
+// "missing binary operator before token" at the use site -- which is how the
+// Spark decimal headers fail without them.
+#ifndef FOLLY_HAS_BUILTIN
+#if defined(__has_builtin)
+#define FOLLY_HAS_BUILTIN(...) __has_builtin(__VA_ARGS__)
+#else
+#define FOLLY_HAS_BUILTIN(...) 0
+#endif
+#endif
+
+#ifndef FOLLY_HAS_FEATURE
+#if defined(__has_feature)
+#define FOLLY_HAS_FEATURE(...) __has_feature(__VA_ARGS__)
+#else
+#define FOLLY_HAS_FEATURE(...) 0
+#endif
+#endif
+
+#ifndef FOLLY_HAS_WARNING
+#if defined(__has_warning)
+#define FOLLY_HAS_WARNING(...) __has_warning(__VA_ARGS__)
+#else
+#define FOLLY_HAS_WARNING(...) 0
+#endif
+#endif
+
 #ifndef FOLLY_NOINLINE
 #define FOLLY_NOINLINE
 #endif

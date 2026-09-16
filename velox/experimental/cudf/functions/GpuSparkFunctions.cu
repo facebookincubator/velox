@@ -60,6 +60,26 @@ void registerSparkGpuFunctions(const std::string& prefix) {
   // truncate, so there is nothing to alias for it.
   registerGpuUnaryNumeric<RoundFunction>({prefix + "round"});
   registerGpuNumericWithDecimals<RoundFunction>({prefix + "round"});
+
+  // --- Decimal -------------------------------------------------------------
+  // Not registered, and the blocker is not the suppressed error path.
+  //
+  // sparksql/DecimalUtil.h -- which every Spark decimal struct reaches through
+  // DecimalArithmeticFunctions.h -- includes velox/type/Type.h, the one header
+  // a device translation unit provably cannot parse and the reason #18367
+  // exists. It also includes boost/multiprecision/cpp_int.hpp for the int256
+  // slow path. Neither yields to shadowing: a shadow cannot be layered over
+  // Type.h, and there is no device int256.
+  //
+  // This wants the treatment prestosql already got: split the scalar half of
+  // sparksql/DecimalUtil.h out of Type.h's reach, the way DecimalArithmetic.h
+  // was split out of type/DecimalUtil.h. The Presto decimals are registered.
+  //
+  // Separately, the four checked_* variants return Status, which GpuUDFHolder
+  // rejects: Status carries a heap-allocated message, and mapping a non-OK
+  // Status to a null row would turn an error into a different answer rather
+  // than suppressing a diagnostic. That one belongs to per-row error
+  // reporting. TODO(gpu-sfi-checks).
 }
 
 } // namespace facebook::velox::cudf_velox::gpu_sfi
