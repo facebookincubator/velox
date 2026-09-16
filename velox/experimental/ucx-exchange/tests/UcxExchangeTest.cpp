@@ -1628,10 +1628,15 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   // 4. Wait for UCXX transfers to be actively in-flight.
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  // 5. Abort the source task while transfers are in-flight.
-  //    This triggers UcxExchangeServer::close() which cancels tagSend,
-  //    and eventually UcxExchangeSource::cleanUp() which must defer
-  //    the request (with its GPU buffer) to Communicator::deferredRequests_.
+  // 5. Stop the mock publisher, which is not owned by the task, so it cannot
+  //    enqueue into a terminated output queue.
+  sourceMock->requestStop();
+  sourceMock->joinThreads();
+
+  // Abort the source task while transfers are in-flight. This triggers
+  // UcxExchangeServer::close() which cancels tagSend, and eventually
+  // UcxExchangeSource::cleanUp() which must defer the request and its GPU
+  // buffer to Communicator::deferredRequests_.
   srcTask->requestAbort();
   queueManager_->removeTask(srcTaskId);
 
@@ -1648,10 +1653,7 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
            << " — possible hang in UCXX request cleanup";
   }
 
-  // 7. Join source mock threads.
-  sourceMock->joinThreads();
-
-  // 8. Allow Communicator's event loop to sweep deferred requests.
+  // 7. Allow Communicator's event loop to sweep deferred requests.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   // If we reach here without crashing, the deferred cleanup is working.
