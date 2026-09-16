@@ -1996,6 +1996,8 @@ Writer::Writer(
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
            .enableChunkIndex = context_->options().enableChunkIndex,
+           .enableChunkStats = context_->options().enableChunkStats,
+           .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
@@ -2033,7 +2035,8 @@ Writer::Writer(
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_USER_CHECK(
-      !context_->options().enableChunkIndex ||
+      !(context_->options().enableChunkIndex ||
+        context_->options().enableChunkStats) ||
           context_->options().enableChunking,
       "Chunk stats require chunking to be enabled.");
 

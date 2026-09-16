@@ -3527,7 +3527,8 @@ TEST_F(WriterTest, chunkNullCountsForStructNullStream) {
       std::move(writeFile),
       *rootPool_,
       {
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = nimble::ChunkStatsVersion::kV1,
           // Never skip the stripe group, so the section is always written.
           .chunkStatsMinAvgChunks = 0,
           .minStreamChunkRawSize = 0,
@@ -3598,10 +3599,10 @@ TEST_F(WriterTest, chunkNullCountsForStructNullStream) {
   EXPECT_EQ(6, totalChunkNullCount);
 }
 
-TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
+TEST_F(WriterTest, chunkStatsAbsentWhenDisabled) {
   // encodeChunk sets chunk.nullCount unconditionally; the chunk stats section
-  // (and its null counts) must still be written only when the chunk index is
-  // enabled. With the index off, no section should be produced.
+  // (and its null counts) must still be written only when chunk stats are
+  // enabled. With chunk stats off, no section should be produced.
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
   auto vec = vectorMaker.rowVector(
       {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
@@ -3613,7 +3614,7 @@ TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
       vec->type(),
       std::move(writeFile),
       *rootPool_,
-      {.enableChunkIndex = false});
+      {.enableChunkStats = false});
   writer.write(vec);
   writer.close();
 
@@ -3623,10 +3624,10 @@ TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
   ASSERT_EQ(1, tablet->stripeCount());
   auto stripeIdentifier = tablet->stripeIdentifier(0);
   EXPECT_EQ(stripeIdentifier.chunkStats(), nullptr)
-      << "no chunk stats section should be written when the index is disabled";
+      << "no chunk stats section should be written when chunk stats are disabled";
 }
 
-TEST_F(WriterTest, chunkIndexRequiresChunking) {
+TEST_F(WriterTest, chunkStatsRequireChunking) {
   auto type = velox::ROW({{"c1", velox::INTEGER()}});
   std::string file;
   auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -3635,7 +3636,9 @@ TEST_F(WriterTest, chunkIndexRequiresChunking) {
           type,
           std::move(writeFile),
           *rootPool_,
-          {.enableChunkIndex = true, .enableChunking = false}),
+          {.enableChunkStats = true,
+           .chunkStatsVersion = nimble::ChunkStatsVersion::kV1,
+           .enableChunking = false}),
       "Chunk stats require chunking to be enabled.");
 }
 
@@ -4873,7 +4876,8 @@ TEST_F(WriterTest, smallMaxChunkSizeProducesMultipleChunks) {
       velox::ROW({{"c0", velox::BIGINT()}, {"c1", velox::VARCHAR()}});
 
   nimble::WriterOptions options{
-      .enableChunkIndex = true,
+      .enableChunkStats = true,
+      .chunkStatsVersion = nimble::ChunkStatsVersion::kV1,
       .minStreamChunkRawSize = 0,
       .maxStreamChunkRawSize = 2048,
       .flushPolicyFactory = []() -> std::unique_ptr<nimble::FlushPolicy> {

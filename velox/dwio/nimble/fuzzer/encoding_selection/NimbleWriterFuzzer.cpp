@@ -282,8 +282,9 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
       : (uint64_t{1} << folly::Random::rand32(14, rng));
   options.maxStreamChunkRawSize = uint64_t{1}
       << (10 + folly::Random::rand32(12, rng));
-  options.enableChunkIndex =
+  options.enableChunkStats =
       options.enableChunking && folly::Random::oneIn(2, rng);
+  options.chunkStatsVersion = ChunkStatsVersion::kV1;
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
   options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
@@ -992,7 +993,7 @@ std::string NimbleWriterFuzzer::writeFile(
   // flushAfterWrite=false leaves stripe boundaries to the flush policy; the
   // helper's default would cut a stripe after every batch and make every flush
   // regime identical.
-  const bool chunkStatsEnabled = writerOptions.enableChunkIndex;
+  const bool chunkStatsEnabled = writerOptions.enableChunkStats;
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
   verifyChunkStatsMetadata(file, chunkStatsEnabled);

@@ -50,6 +50,14 @@ ChunkStatsGroup::ChunkStatsGroup(
                        metadata_->content())
                        ->stream_count()} {}
 
+ChunkStatsGroup::ChunkStatsGroup(
+    uint32_t firstStripe,
+    uint32_t stripeCount,
+    uint32_t streamCount)
+    : firstStripe_{firstStripe},
+      stripeCount_{stripeCount},
+      streamCount_{streamCount} {}
+
 std::shared_ptr<StreamIndex> ChunkStatsGroup::createStreamIndex(
     uint32_t stripe,
     uint32_t streamId,

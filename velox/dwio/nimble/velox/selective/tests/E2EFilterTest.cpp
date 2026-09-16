@@ -318,7 +318,8 @@ class E2EFilterTest
     WriterOptions options;
     options.skipConstantFlatMapInMapStreams = skipConstantFlatMapInMapStreams();
     options.enableChunking = true;
-    options.enableChunkIndex = param().enableChunkIndex;
+    options.enableChunkStats = param().enableChunkIndex;
+    options.chunkStatsVersion = ChunkStatsVersion::kV1;
     // Ensure the chunk flush policy is honored for small test data by removing
     // the minimum chunk size threshold. Without this, small writes get merged
     // into a single chunk regardless of the flush policy.

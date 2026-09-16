@@ -69,9 +69,12 @@ class TabletWriter {
     uint32_t metadataCompressionThreshold{kMetadataCompressionThreshold};
     ChecksumType checksumType{ChecksumType::XXH3_64};
     bool streamDeduplicationEnabled{true};
-    // When true, chunk-level position index is built for all streams,
-    // enabling O(1) chunk-level seeking within stripes.
+    // Legacy alias for enabling V1 chunk statistics.
     bool enableChunkIndex{false};
+    // When true, chunk statistics are built for all streams.
+    bool enableChunkStats{false};
+    // Selects the on-disk chunk statistics representation.
+    ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
     // Skip writing chunk stats for a stripe group if the average number
     // of chunks per stream is below this threshold. 0 disables chunk stats
     // skipping.

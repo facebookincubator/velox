@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/HashIndexConfig.h"
@@ -44,6 +45,7 @@
 #include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
@@ -71,6 +73,7 @@
 DECLARE_bool(velox_ssd_odirect);
 
 using namespace facebook;
+using nimble::ChunkStatsVersion;
 using nimble::SortOrder;
 
 namespace {
@@ -1434,6 +1437,99 @@ TEST_P(TabletTest, chunkContentSize) {
   EXPECT_EQ(chunk.contentSize(), 3);
 }
 
+TEST_P(TabletTest, chunkStatsV2WritePath) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {
+          .metadataCompressionThreshold = std::numeric_limits<uint32_t>::max(),
+          .streamDeduplicationEnabled = false,
+          .enableChunkStats = true,
+          .chunkStatsMinAvgChunks = 0,
+      });
+
+  nimble::Buffer buffer{*pool_};
+  std::vector<nimble::Stream> streams;
+  streams.push_back(
+      nimble::index::test::createStream(
+          buffer,
+          {.offset = 0,
+           .chunks = {
+               {.rowCount = 30, .size = 4, .nullCount = 1},
+               {.rowCount = 70, .size = 6, .nullCount = 2},
+           }}));
+  streams.push_back(
+      nimble::index::test::createStream(
+          buffer,
+          {.offset = 1,
+           .chunks = {{.rowCount = 100, .size = 5, .nullCount = 3}}}));
+  tabletWriter->writeStripe(100, std::move(streams));
+  tabletWriter->close();
+  writeFile.close();
+
+  nimble::TabletReader::Options readerOptions;
+  readerOptions.loadChunkStats = false;
+  auto tablet = createTabletReader(file, std::move(readerOptions));
+  EXPECT_FALSE(
+      tablet->hasOptionalSection(std::string(nimble::kChunkStatsSection)));
+  ASSERT_TRUE(
+      tablet->hasOptionalSection(std::string(nimble::kChunkStatsV2Section)));
+
+  auto rootSection =
+      tablet->loadOptionalSection(std::string(nimble::kChunkStatsV2Section));
+  ASSERT_TRUE(rootSection.has_value());
+  const auto* root = flatbuffers::GetRoot<nimble::serialization::ChunkStats>(
+      rootSection->content().data());
+  ASSERT_NE(root, nullptr);
+  ASSERT_NE(root->stripe_indexes(), nullptr);
+  ASSERT_EQ(root->stripe_indexes()->size(), 1);
+
+  const auto* groupSection = root->stripe_indexes()->Get(0);
+  ASSERT_NE(groupSection, nullptr);
+  ASSERT_EQ(
+      groupSection->compression_type(),
+      nimble::serialization::CompressionType_Uncompressed);
+  ASSERT_LE(groupSection->offset() + groupSection->size(), file.size());
+  const std::string_view groupData{
+      file.data() + groupSection->offset(), groupSection->size()};
+  const auto* group =
+      flatbuffers::GetRoot<nimble::serialization::StripeChunkStatsV2>(
+          groupData.data());
+  ASSERT_NE(group, nullptr);
+  ASSERT_NE(group->stream_chunk_counts(), nullptr);
+  const std::vector<uint32_t> streamChunkCounts{
+      group->stream_chunk_counts()->begin(),
+      group->stream_chunk_counts()->end()};
+  EXPECT_THAT(streamChunkCounts, testing::ElementsAre(2, 1));
+
+  const auto decode = [&](const auto* encodedStreams) {
+    NIMBLE_CHECK_NOT_NULL(encodedStreams);
+    NIMBLE_CHECK_EQ(encodedStreams->size(), 1);
+    const auto* encodedStream = encodedStreams->Get(0);
+    NIMBLE_CHECK_NOT_NULL(encodedStream);
+    const auto* data = encodedStream->data();
+    NIMBLE_CHECK_NOT_NULL(data);
+    auto encoding = nimble::EncodingFactory{}.create(
+        *pool_,
+        std::string_view{
+            reinterpret_cast<const char*>(data->data()), data->size()},
+        nullptr);
+    const auto rowCount = encoding->rowCount();
+    std::vector<uint32_t> values(rowCount);
+    encoding->materialize(rowCount, values.data());
+    return values;
+  };
+
+  EXPECT_THAT(
+      decode(group->stream_chunk_rows()), testing::ElementsAre(30, 100, 100));
+  EXPECT_THAT(
+      decode(group->stream_chunk_offsets()), testing::ElementsAre(0, 4, 0));
+  EXPECT_THAT(
+      decode(group->stream_chunk_null_counts()), testing::ElementsAre(1, 2, 3));
+}
+
 TEST_P(TabletTest, streamSize) {
   // Write a file with 2 stripes and verify streamSize API.
   std::string file;
@@ -1441,7 +1537,9 @@ TEST_P(TabletTest, streamSize) {
   auto tabletWriter = nimble::TabletWriter::create(
       &writeFile,
       *pool_,
-      {.streamDeduplicationEnabled = false, .enableChunkIndex = true});
+      {.streamDeduplicationEnabled = false,
+       .enableChunkStats = true,
+       .chunkStatsVersion = ChunkStatsVersion::kV1});
 
   nimble::Buffer buffer{*pool_};
 
@@ -2162,7 +2260,8 @@ TEST_P(TabletWithIndexTest, stripeIdentifier) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -2209,7 +2308,8 @@ TEST_P(TabletWithIndexTest, singleGroup) {
           // Set a large threshold to ensure all stripes stay in one group
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -2604,7 +2704,8 @@ TEST_P(TabletWithIndexTest, multipleGroups) {
           // Set threshold to 0 to force flush after every stripe
           .metadataFlushThreshold = 0,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -2968,7 +3069,8 @@ TEST_P(TabletWithIndexTest, singleGroupWithEmptyStream) {
           // Set a large threshold to ensure all stripes stay in one group
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -3390,7 +3492,8 @@ TEST_P(TabletWithIndexTest, multipleGroupsWithEmptyStream) {
           // Set threshold to 0 to force flush after every stripe
           .metadataFlushThreshold = 0,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           // Disable chunk stats skipping so all groups get chunk stats,
           // even when empty streams reduce the average chunks per stream.
           .chunkStatsMinAvgChunks = 0,
@@ -3851,7 +3954,8 @@ TEST_P(TabletWithIndexTest, streamDeduplication) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = true,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4108,7 +4212,8 @@ TEST_P(TabletWithIndexTest, keyOrderEnforcement) {
         &writeFile,
         *pool_,
         {
-            .enableChunkIndex = true,
+            .enableChunkStats = true,
+            .chunkStatsVersion = ChunkStatsVersion::kV1,
             .stripeGroupFlushCallback =
                 indexHelper.createStripeGroupFlushCallback(),
             .closeCallback = indexHelper.createCloseCallback(),
@@ -4214,7 +4319,8 @@ TEST_P(TabletWithIndexTest, loadClusterIndex) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4271,7 +4377,8 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4345,7 +4452,8 @@ TEST_P(TabletWithIndexTest, loadClusterIndexMissingIoStats) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4557,8 +4665,9 @@ TEST_F(TabletWithIndexTest, configCombinations) {
         *pool_,
         {
             .metadataFlushThreshold = 1024 * 1024 * 1024,
-            .enableChunkIndex =
+            .enableChunkStats =
                 config.enableChunkIndex || config.enableIndexConfig,
+            .chunkStatsVersion = ChunkStatsVersion::kV1,
             .stripeGroupFlushCallback = indexHelper
                 ? indexHelper->createStripeGroupFlushCallback()
                 : nimble::TabletWriter::StripeGroupFlushCallback{},
@@ -4688,7 +4797,8 @@ TEST_P(TabletWithIndexTest, emptyFileWithIndexConfig) {
       &writeFile,
       *pool_,
       {
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4726,7 +4836,8 @@ TEST_P(TabletWithIndexTest, fileLayoutWithIndex) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4777,7 +4888,8 @@ TEST_P(TabletWithIndexTest, fileLayoutOrdering) {
       {
           .metadataFlushThreshold = 1'024 * 1'024 * 1'024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -4877,7 +4989,8 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -7041,7 +7154,8 @@ TEST_P(TabletWithIndexTest, metadataSectionUncompressedSize) {
       {
           .metadataFlushThreshold = 1'024 * 1'024 * 1'024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -7169,7 +7283,8 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPathCompressedChunkIndex) {
       *pool_,
       {.metadataFlushThreshold = 1024 * 1024 * 1024,
        .streamDeduplicationEnabled = false,
-       .enableChunkIndex = true,
+       .enableChunkStats = true,
+       .chunkStatsVersion = ChunkStatsVersion::kV1,
        .stripeGroupFlushCallback = indexHelper.createStripeGroupFlushCallback(),
        .closeCallback = indexHelper.createCloseCallback()});
 
