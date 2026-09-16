@@ -18,6 +18,7 @@
 
 #include <glog/logging.h>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/expression/rpc/RPCFunctionStubs.h"
 
 namespace facebook::velox::exec::rpc {
@@ -27,38 +28,17 @@ std::mutex& AsyncRPCFunctionRegistry::mutex() {
   return instance;
 }
 
-std::unordered_map<std::string, AsyncRPCFunctionRegistry::Factory>&
-AsyncRPCFunctionRegistry::factories() {
-  static std::unordered_map<std::string, Factory> instance;
+std::unordered_map<std::string, AsyncRPCFunctionRegistry::Registration>&
+AsyncRPCFunctionRegistry::registrations() {
+  static std::unordered_map<std::string, Registration> instance;
   return instance;
-}
-
-std::unordered_map<std::string, AsyncRPCFunctionRegistry::Signatures>&
-AsyncRPCFunctionRegistry::signatureStore() {
-  static std::unordered_map<std::string, Signatures> instance;
-  return instance;
-}
-
-std::unordered_map<std::string, AsyncRPCFunctionRegistry::Metadata>&
-AsyncRPCFunctionRegistry::metadataStore() {
-  static std::unordered_map<std::string, Metadata> instance;
-  return instance;
-}
-
-bool AsyncRPCFunctionRegistry::registerFunction(
-    const std::string& name,
-    Factory factory) {
-  std::lock_guard<std::mutex> lock(mutex());
-  return registerEntryLocked(name, std::move(factory), {}, {});
 }
 
 bool AsyncRPCFunctionRegistry::registerFunction(
     const std::string& name,
     Factory factory,
     Signatures signatures) {
-  std::lock_guard<std::mutex> lock(mutex());
-  return registerEntryLocked(
-      name, std::move(factory), std::move(signatures), {});
+  return registerFunction(name, std::move(factory), std::move(signatures), {});
 }
 
 bool AsyncRPCFunctionRegistry::registerFunction(
@@ -66,78 +46,83 @@ bool AsyncRPCFunctionRegistry::registerFunction(
     Factory factory,
     Signatures signatures,
     Metadata metadata) {
+  VELOX_CHECK(
+      !signatures.empty(),
+      "RPC function must be registered with at least one signature: {}",
+      name);
   std::lock_guard<std::mutex> lock(mutex());
-  return registerEntryLocked(
-      name, std::move(factory), std::move(signatures), std::move(metadata));
-}
-
-bool AsyncRPCFunctionRegistry::registerEntryLocked(
-    const std::string& name,
-    Factory factory,
-    Signatures signatures,
-    Metadata metadata) {
-  auto& registry = factories();
-  if (registry.count(name) > 0) {
-    return false; // Already registered
-  }
-  registry[name] = std::move(factory);
-  if (!signatures.empty()) {
-    signatureStore()[name] = std::move(signatures);
-    metadataStore()[name] = std::move(metadata);
-  }
   // Note: Do NOT use LOG() here as this function is called during static
   // initialization, before glog is initialized. Using LOG() would cause
   // a SIGSEGV crash (Static Initialization Order Fiasco).
-  return true;
+  return registrations()
+      .emplace(
+          name,
+          Registration{
+              std::move(factory), std::move(signatures), std::move(metadata)})
+      .second;
 }
 
 void AsyncRPCFunctionRegistry::registerStubs(
     const std::string& namespacePrefix) {
-  std::unordered_map<std::string, Signatures> sigsCopy;
-  std::unordered_map<std::string, Metadata> metadataCopy;
-  {
-    std::lock_guard<std::mutex> lock(mutex());
-    for (const auto& [name, sigs] : signatureStore()) {
-      if (!sigs.empty()) {
-        sigsCopy[name] = sigs;
-        metadataCopy[name] = metadataStore()[name];
-      }
-    }
-  }
+  auto entries = functions();
   LOG(INFO) << "[RPC] registerStubs: namespacePrefix='" << namespacePrefix
-            << "', found " << sigsCopy.size() << " function(s) with signatures";
-  for (auto& [name, sigs] : sigsCopy) {
-    std::string stubName = namespacePrefix + name;
+            << "', found " << entries.size() << " function(s)";
+  for (auto& entry : entries) {
+    const std::string stubName = namespacePrefix + entry.name;
     LOG(INFO) << "[RPC] registerStubs: registering stub '" << stubName
-              << "' with " << sigs.size() << " signature(s)";
+              << "' with " << entry.signatures.size() << " signature(s)";
     registerRPCFunctionStub(
-        stubName, std::move(sigs), std::move(metadataCopy[name]));
+        stubName, std::move(entry.signatures), std::move(entry.metadata));
   }
-  LOG(INFO) << "[RPC] registerStubs: completed, registered " << sigsCopy.size()
+  LOG(INFO) << "[RPC] registerStubs: completed, registered " << entries.size()
             << " stub(s)";
+}
+
+std::optional<AsyncRPCFunctionRegistry::FunctionEntry>
+AsyncRPCFunctionRegistry::find(const std::string& name) {
+  std::lock_guard<std::mutex> lock(mutex());
+  const auto& all = registrations();
+  const auto it = all.find(name);
+  if (it == all.end()) {
+    return std::nullopt;
+  }
+  return FunctionEntry{name, it->second.signatures, it->second.metadata};
+}
+
+std::vector<AsyncRPCFunctionRegistry::FunctionEntry>
+AsyncRPCFunctionRegistry::functions() {
+  std::lock_guard<std::mutex> lock(mutex());
+  const auto& all = registrations();
+  std::vector<FunctionEntry> entries;
+  entries.reserve(all.size());
+  for (const auto& [name, registration] : all) {
+    entries.push_back(
+        FunctionEntry{name, registration.signatures, registration.metadata});
+  }
+  return entries;
 }
 
 std::shared_ptr<AsyncRPCFunction> AsyncRPCFunctionRegistry::create(
     const std::string& name) {
   std::lock_guard<std::mutex> lock(mutex());
-  auto& registry = factories();
-  auto it = registry.find(name);
-  if (it == registry.end()) {
+  const auto& all = registrations();
+  const auto it = all.find(name);
+  if (it == all.end()) {
     return nullptr;
   }
-  return it->second();
+  return it->second.factory();
 }
 
 bool AsyncRPCFunctionRegistry::isRegistered(const std::string& name) {
   std::lock_guard<std::mutex> lock(mutex());
-  return factories().count(name) > 0;
+  return registrations().contains(name);
 }
 
 std::unordered_set<std::string>
 AsyncRPCFunctionRegistry::registeredFunctions() {
   std::lock_guard<std::mutex> lock(mutex());
   std::unordered_set<std::string> result;
-  for (const auto& [name, _] : factories()) {
+  for (const auto& [name, _] : registrations()) {
     result.insert(name);
   }
   return result;
@@ -145,9 +130,7 @@ AsyncRPCFunctionRegistry::registeredFunctions() {
 
 void AsyncRPCFunctionRegistry::testingClear() {
   std::lock_guard<std::mutex> lock(mutex());
-  factories().clear();
-  signatureStore().clear();
-  metadataStore().clear();
+  registrations().clear();
 }
 
 } // namespace facebook::velox::exec::rpc
