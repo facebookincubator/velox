@@ -30,6 +30,7 @@ using facebook::velox::ROW;
 using facebook::velox::Type;
 using facebook::velox::TypePtr;
 using facebook::velox::VARCHAR;
+using facebook::velox::VectorPtr;
 using facebook::velox::dwio::common::ParquetFieldId;
 
 // facebook::velox::common
@@ -410,6 +411,44 @@ TEST(IcebergTableHandleTest, serdeIcebergMetadataOmittedWhenEmpty) {
   auto restored = ISerializable::deserialize<IcebergColumnHandle>(obj);
   ASSERT_TRUE(restored->icebergMetadata().empty());
   ASSERT_TRUE(restored->icebergMetadata().children.empty());
+}
+
+// writeDefaultValue is round-tripped through serialize() / create().
+TEST(IcebergTableHandleTest, serdeWriteDefaultValue) {
+  registerAll();
+
+  auto col = std::make_shared<IcebergColumnHandle>(
+      "status",
+      FileColumnHandle::ColumnType::kRegular,
+      VARCHAR(),
+      ParquetFieldId{7, {}},
+      /*requiredSubfields=*/std::vector<Subfield>{},
+      /*initialDefaultValue=*/std::nullopt,
+      /*icebergMetadata=*/IcebergFieldMetadata{},
+      /*postProcessor=*/std::function<void(VectorPtr&)>{},
+      /*writeDefaultValue=*/std::make_optional<std::string>("ACTIVE"));
+
+  auto obj = col->serialize();
+  ASSERT_EQ(obj["writeDefaultValue"].asString(), "ACTIVE");
+
+  auto restored = ISerializable::deserialize<IcebergColumnHandle>(obj);
+  ASSERT_TRUE(restored->writeDefaultValue().has_value());
+  EXPECT_EQ(*restored->writeDefaultValue(), "ACTIVE");
+  // initialDefaultValue must remain absent.
+  EXPECT_FALSE(restored->initialDefaultValue().has_value());
+}
+
+// When writeDefaultValue is absent the key must not appear in the serialized
+// form, and deserialization must yield nullopt.
+TEST(IcebergTableHandleTest, serdeWriteDefaultValueAbsentWhenUnset) {
+  registerAll();
+
+  auto col = makeIcebergCol("id", BIGINT(), /*fieldId=*/1);
+  auto obj = col->serialize();
+  ASSERT_EQ(obj.count("writeDefaultValue"), 0);
+
+  auto restored = ISerializable::deserialize<IcebergColumnHandle>(obj);
+  EXPECT_FALSE(restored->writeDefaultValue().has_value());
 }
 
 // ---------------------------------------------------------------------------
