@@ -38,6 +38,7 @@ DEFINE_int32(evolution_count, 5, "");
 // test below.
 DECLARE_int32(batches_per_file);
 DECLARE_int64(batch_target_bytes);
+DECLARE_int32(aggregation_pushdown_frequency);
 DECLARE_bool(enable_oom_injection_write_path);
 
 namespace facebook::velox::exec::test {
@@ -115,6 +116,8 @@ TEST(TableEvolutionFuzzerTest, constructorRejectsNonPositiveBatchFlags) {
 // shared flatmap-as-struct read schema end to end; the fuzzer's internal
 // pushdown-vs-FilterNode oracle is the assertion (run() throws on divergence).
 TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_aggregation_pushdown_frequency = 1;
   auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
   auto config = makeDwrfConfig(pool.get(), 1);
   int64_t numObservedQueries = 0;
@@ -126,6 +129,15 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
         EXPECT_EQ(query.reference.numQueries, 1);
         EXPECT_TRUE(query.executionSucceeded);
         EXPECT_TRUE(query.verificationPassed);
+        if (query.hasSubfieldFilters || query.hasRemainingFilter) {
+          EXPECT_FALSE(query.filterTypes.empty());
+          EXPECT_FALSE(query.filterKinds.empty());
+        }
+        if (query.aggregationRequested) {
+          EXPECT_FALSE(query.aggregateTypes.empty());
+          EXPECT_FALSE(query.aggregationFunctions.empty());
+          EXPECT_EQ(query.reference.numValuesLoadedToValueHook, 0);
+        }
         ++numObservedQueries;
       };
   TableEvolutionFuzzer fuzzer(config);
@@ -151,6 +163,14 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
   EXPECT_GT(coverage.pushdown.rawInputPositions, 0);
   EXPECT_GT(coverage.reference.rawInputPositions, 0);
   EXPECT_EQ(numObservedQueries, coverage.numQueriesCompleted);
+  EXPECT_EQ(
+      coverage.queryShapes.filters.numExecuted,
+      coverage.queryShapes.filters.numRequested);
+  EXPECT_EQ(
+      coverage.queryShapes.filters.numVerified,
+      coverage.queryShapes.filters.numRequested);
+  EXPECT_GT(coverage.queryShapes.aggregations.numExecuted, 0);
+  EXPECT_EQ(coverage.queryShapes.aggregations.numReferencePlanActivated, 0);
 }
 
 TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
@@ -172,6 +192,21 @@ TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
               .numStringDictionaryEncodingPreserved = 5,
               .numStringDictionaryEncodingAbandoned = 1,
           },
+      .hasSubfieldFilters = false,
+      .hasRemainingFilter = false,
+      .hasFilterOnlyColumns = false,
+      .aggregationRequested = false,
+      .filterTypes = {},
+      .subfieldFilterTypes = {},
+      .remainingFilterTypes = {},
+      .filterKinds = {},
+      .nullAcceptingSubfieldFilterTypes = {},
+      .groupingKeyTypes = {},
+      .aggregateTypes = {},
+      .aggregationFunctions = {},
+      .projectedTypes = {},
+      .flatmapAsStructKeyTypes = {},
+      .flatmapAsStructValueTypes = {},
       .flatmapEligibleKeyTypes = {"VARCHAR"},
       .flatmapEligibleValueTypes = {"INTEGER"},
       .bucketColumnTypes = {"VARCHAR", "BIGINT"},
@@ -182,6 +217,10 @@ TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
       .numFlatmapEligibleColumns = 1,
       .numBucketColumns = 2,
       .bucketCount = 8,
+      .numSubfieldFilters = 0,
+      .numFilterOnlyColumns = 0,
+      .rowsReducedByPushdown = 0,
+      .failurePhase = {},
       .executionSucceeded = true,
       .verificationPassed = true,
   };
@@ -243,6 +282,21 @@ TEST(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
       .referenceFiles = {},
       .pushdown = {},
       .reference = {},
+      .hasSubfieldFilters = false,
+      .hasRemainingFilter = false,
+      .hasFilterOnlyColumns = false,
+      .aggregationRequested = false,
+      .filterTypes = {},
+      .subfieldFilterTypes = {},
+      .remainingFilterTypes = {},
+      .filterKinds = {},
+      .nullAcceptingSubfieldFilterTypes = {},
+      .groupingKeyTypes = {},
+      .aggregateTypes = {},
+      .aggregationFunctions = {},
+      .projectedTypes = {},
+      .flatmapAsStructKeyTypes = {},
+      .flatmapAsStructValueTypes = {},
       .flatmapEligibleKeyTypes = {"VARCHAR"},
       .flatmapEligibleValueTypes = {"BIGINT"},
       .bucketColumnTypes = {"ARRAY", "ROW"},
@@ -253,6 +307,12 @@ TEST(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
       .numFlatmapEligibleColumns = 1,
       .numBucketColumns = 2,
       .bucketCount = 8,
+      .numSubfieldFilters = 0,
+      .numFilterOnlyColumns = 0,
+      .rowsReducedByPushdown = 0,
+      .failurePhase = {},
+      .executionSucceeded = false,
+      .verificationPassed = false,
   };
   auto repeatedShape = firstShape;
   repeatedShape.countConfigCoverage = false;
@@ -275,6 +335,152 @@ TEST(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
       coverage.configs.bucketColumnTypeSignaturesByCount.at(2).at("ARRAY+ROW"),
       1);
   EXPECT_EQ(coverage.configs.bucketSelectedByBucketCount.at(8), 1);
+}
+
+TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
+  TableEvolutionFuzzer::QueryCoverage query;
+  query.pushdown.numQueries = 1;
+  query.pushdown.skippedSplits = 1;
+  query.pushdown.numQueriesWithValueHook = 1;
+  query.pushdown.numValuesLoadedToValueHook = 42;
+  query.pushdown.numQueriesWithRemainingFilterEvaluation = 1;
+  query.reference.numQueries = 1;
+  query.hasSubfieldFilters = true;
+  query.hasRemainingFilter = true;
+  query.hasFilterOnlyColumns = true;
+  query.aggregationRequested = true;
+  query.filterTypes = {"BIGINT", "DOUBLE"};
+  query.subfieldFilterTypes = {"BIGINT"};
+  query.remainingFilterTypes = {"DOUBLE"};
+  query.filterKinds = {"BigintRange", "RemainingExpression"};
+  query.nullAcceptingSubfieldFilterTypes = {"BIGINT"};
+  query.groupingKeyTypes = {"VARCHAR"};
+  query.aggregateTypes = {"BIGINT"};
+  query.aggregationFunctions = {"min"};
+  query.projectedTypes = {"BIGINT", "VARCHAR"};
+  query.flatmapAsStructKeyTypes = {"VARCHAR"};
+  query.flatmapAsStructValueTypes = {"BIGINT"};
+  query.numSubfieldFilters = 3;
+  query.numFilterOnlyColumns = 2;
+  query.rowsReducedByPushdown = 17;
+  query.executionSucceeded = true;
+  query.verificationPassed = true;
+
+  TableEvolutionFuzzer::QueryCoverage bothAggregationPlansActivatedQuery;
+  bothAggregationPlansActivatedQuery.pushdown.numQueries = 1;
+  bothAggregationPlansActivatedQuery.pushdown.numQueriesWithValueHook = 1;
+  bothAggregationPlansActivatedQuery.pushdown.numValuesLoadedToValueHook = 30;
+  bothAggregationPlansActivatedQuery.reference.numQueries = 1;
+  bothAggregationPlansActivatedQuery.reference.numQueriesWithValueHook = 1;
+  bothAggregationPlansActivatedQuery.reference.numValuesLoadedToValueHook = 30;
+  bothAggregationPlansActivatedQuery.aggregationRequested = true;
+  bothAggregationPlansActivatedQuery.groupingKeyTypes = {"INTEGER"};
+  bothAggregationPlansActivatedQuery.aggregateTypes = {"DOUBLE"};
+  bothAggregationPlansActivatedQuery.aggregationFunctions = {"max"};
+  bothAggregationPlansActivatedQuery.projectedTypes = {"DOUBLE"};
+  bothAggregationPlansActivatedQuery.executionSucceeded = true;
+  bothAggregationPlansActivatedQuery.verificationPassed = true;
+
+  TableEvolutionFuzzer::QueryCoverage rowReductionQuery;
+  rowReductionQuery.pushdown.numQueries = 1;
+  rowReductionQuery.pushdown.numQueriesWithRemainingFilterEvaluation = 1;
+  rowReductionQuery.reference.numQueries = 1;
+  rowReductionQuery.hasRemainingFilter = true;
+  rowReductionQuery.filterTypes = {"INTEGER"};
+  rowReductionQuery.remainingFilterTypes = {"INTEGER"};
+  rowReductionQuery.filterKinds = {"RemainingExpression"};
+  rowReductionQuery.rowsReducedByPushdown = 17;
+  rowReductionQuery.executionSucceeded = true;
+  rowReductionQuery.verificationPassed = true;
+
+  TableEvolutionFuzzer::QueryCoverage failedQuery;
+  failedQuery.hasSubfieldFilters = true;
+  failedQuery.aggregationRequested = true;
+  failedQuery.filterTypes = {"BIGINT"};
+  failedQuery.subfieldFilterTypes = {"BIGINT"};
+  failedQuery.filterKinds = {"BigintRange"};
+  failedQuery.groupingKeyTypes = {"VARCHAR"};
+  failedQuery.aggregateTypes = {"BOOLEAN"};
+  failedQuery.aggregationFunctions = {"bool_and"};
+  failedQuery.failurePhase = "scanExecution";
+
+  TableEvolutionFuzzer::QueryCoverage verificationFailedQuery;
+  verificationFailedQuery.pushdown.numQueries = 1;
+  verificationFailedQuery.reference.numQueries = 1;
+  verificationFailedQuery.hasSubfieldFilters = true;
+  verificationFailedQuery.filterTypes = {"VARCHAR"};
+  verificationFailedQuery.subfieldFilterTypes = {"VARCHAR"};
+  verificationFailedQuery.filterKinds = {"BytesRange"};
+  verificationFailedQuery.projectedTypes = {"VARCHAR"};
+  verificationFailedQuery.failurePhase = "verification";
+  verificationFailedQuery.executionSucceeded = true;
+
+  TableEvolutionFuzzer::CoverageAccumulator coverage;
+  coverage.add(query);
+  coverage.add(bothAggregationPlansActivatedQuery);
+  coverage.add(rowReductionQuery);
+  coverage.add(failedQuery);
+  coverage.add(verificationFailedQuery);
+
+  EXPECT_EQ(coverage.numQueriesAttempted, 5);
+  EXPECT_EQ(coverage.numQueriesCompleted, 4);
+  EXPECT_EQ(coverage.numExecutionFailures, 1);
+  EXPECT_EQ(coverage.numVerificationsPassed, 3);
+  EXPECT_EQ(coverage.numVerificationsFailed, 1);
+
+  const auto& filters = coverage.queryShapes.filters;
+  EXPECT_EQ(filters.numRequested, 4);
+  EXPECT_EQ(filters.numExecuted, 3);
+  EXPECT_EQ(filters.numActivated, 3);
+  EXPECT_EQ(filters.numEffective, 2);
+  EXPECT_EQ(filters.numVerified, 2);
+  EXPECT_EQ(filters.numSubfieldRequested, 3);
+  EXPECT_EQ(filters.numRemainingRequested, 2);
+  EXPECT_EQ(filters.numSubfieldAndRemainingRequested, 1);
+  EXPECT_EQ(filters.numRemainingFilterEvaluated, 2);
+  EXPECT_EQ(filters.numFilterOnly, 1);
+  EXPECT_EQ(filters.numNullAcceptingSubfieldOnNullableInput, 1);
+  EXPECT_EQ(filters.numSubfieldFilters, 3);
+  EXPECT_EQ(filters.numFilterOnlyColumns, 2);
+  EXPECT_EQ(filters.numQueriesWithSplitPruning, 1);
+  EXPECT_EQ(filters.numQueriesWithStridePruning, 0);
+  EXPECT_EQ(filters.numQueriesWithRowReduction, 1);
+  EXPECT_EQ(filters.numRowsReduced, 17);
+  EXPECT_EQ(filters.byType.at("BIGINT").numRequested, 2);
+  EXPECT_EQ(filters.byType.at("DOUBLE").numExecuted, 1);
+  EXPECT_EQ(filters.byType.at("INTEGER").numVerified, 1);
+  EXPECT_EQ(filters.byType.at("VARCHAR").numVerified, 0);
+  EXPECT_EQ(filters.subfieldByType.at("BIGINT").numExecuted, 1);
+  EXPECT_EQ(filters.remainingByType.at("DOUBLE").numVerified, 1);
+  EXPECT_EQ(filters.byKind.at("RemainingExpression").numExecuted, 2);
+
+  const auto& aggregations = coverage.queryShapes.aggregations;
+  EXPECT_EQ(aggregations.numRequested, 3);
+  EXPECT_EQ(aggregations.numExecuted, 2);
+  EXPECT_EQ(aggregations.numPushdownPlanActivated, 2);
+  EXPECT_EQ(aggregations.numReferencePlanActivated, 1);
+  EXPECT_EQ(aggregations.numDifferentiallyVerified, 1);
+  EXPECT_EQ(aggregations.numPushdownValuesLoaded, 72);
+  EXPECT_EQ(aggregations.numReferenceValuesLoaded, 30);
+  EXPECT_EQ(aggregations.groupingKeyTypes.at("VARCHAR").numRequested, 2);
+  EXPECT_EQ(aggregations.groupingKeyTypes.at("VARCHAR").numExecuted, 1);
+  EXPECT_EQ(aggregations.groupingKeyTypes.at("INTEGER").numExecuted, 1);
+  EXPECT_EQ(aggregations.aggregateTypes.at("BOOLEAN").numExecuted, 0);
+  EXPECT_EQ(aggregations.functions.at("max").numExecuted, 1);
+
+  const auto& flatmap = coverage.queryShapes.flatmapAsStruct;
+  EXPECT_EQ(flatmap.numSelected, 1);
+  EXPECT_EQ(flatmap.numExecuted, 1);
+  EXPECT_EQ(flatmap.numVerified, 1);
+  EXPECT_EQ(flatmap.numColumns, 1);
+  EXPECT_EQ(flatmap.columnsByKeyType.at("VARCHAR"), 1);
+  EXPECT_EQ(flatmap.columnsByValueType.at("BIGINT"), 1);
+
+  EXPECT_EQ(coverage.queryShapes.projectedByType.at("BIGINT"), 1);
+  EXPECT_EQ(coverage.queryShapes.projectedByType.at("DOUBLE"), 1);
+  EXPECT_EQ(coverage.queryShapes.projectedByType.at("VARCHAR"), 2);
+  EXPECT_EQ(coverage.failuresByPhase.at("scanExecution"), 1);
+  EXPECT_EQ(coverage.failuresByPhase.at("verification"), 1);
 }
 
 TEST(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {
