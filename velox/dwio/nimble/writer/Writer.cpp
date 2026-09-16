@@ -453,11 +453,26 @@ void validateEncodingLayoutTree(const EncodingLayoutTree& tree) {
   }
 }
 
+void normalizeChunkStatsOptions(WriterOptions& options) {
+  // Only the legacy alias requires conversion to canonical chunk stats options.
+  if (!options.enableChunkIndex) {
+    return;
+  }
+  NIMBLE_USER_CHECK(
+      !options.enableChunkStats ||
+          options.chunkStatsVersion == ChunkStatsVersion::kV1,
+      "enableChunkIndex requests chunk stats V1, but enableChunkStats requests V2.");
+  options.enableChunkIndex = false;
+  options.enableChunkStats = true;
+  options.chunkStatsVersion = ChunkStatsVersion::kV1;
+}
+
 WriterOptions storedWriterOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
     WriterOptions options) {
+  normalizeChunkStatsOptions(options);
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
@@ -1995,7 +2010,8 @@ Writer::Writer(
                    kMetadataCompressionThreshold),
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
-           .enableChunkIndex = context_->options().enableChunkIndex,
+           .enableChunkStats = context_->options().enableChunkStats,
+           .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
@@ -2033,7 +2049,7 @@ Writer::Writer(
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_USER_CHECK(
-      !context_->options().enableChunkIndex ||
+      !context_->options().enableChunkStats ||
           context_->options().enableChunking,
       "Chunk stats require chunking to be enabled.");
 

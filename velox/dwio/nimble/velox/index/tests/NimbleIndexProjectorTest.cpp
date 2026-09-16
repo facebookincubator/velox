@@ -383,7 +383,6 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
       const NimbleIndexProjector& projector,
       const std::vector<std::string_view>& batches) {
     DeserializerOptions deserOptions;
-    deserOptions.hasHeader = true;
     Deserializer deserializer(
         projector.projectedNimbleType(), leafPool_.get(), deserOptions);
     VectorPtr output;
@@ -464,7 +463,6 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
     std::vector<std::string_view> batches{std::string_view(
         reinterpret_cast<const char*>(coalesced.data()), coalesced.length())};
     DeserializerOptions deserOptions;
-    deserOptions.hasHeader = true;
     Deserializer deserializer(
         projector.projectedNimbleType(), leafPool_.get(), deserOptions);
     VectorPtr output;
@@ -640,7 +638,6 @@ TEST_P(NimbleIndexProjectorTest, basicColumnProjection) {
       reinterpret_cast<const char*>(coalesced.data()), coalesced.length()};
 
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   // Deserialize using nimble Deserializer with nimble schema.
   auto projectedVeloxType = ROW({"col_a", "col_b"}, {INTEGER(), VARCHAR()});
   auto projectedNimbleSchema = convertToNimbleType(*projectedVeloxType);
@@ -2715,7 +2712,6 @@ TEST_P(NimbleIndexProjectorTest, deserializerMultiBatchWithRowRange) {
       reinterpret_cast<const char*>(coalesced.data()), coalesced.length());
 
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);
 
@@ -2787,7 +2783,6 @@ TEST_P(NimbleIndexProjectorTest, deserializerMultiBatchMixedRanges) {
   }
 
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);
   VectorPtr output;
@@ -2874,7 +2869,6 @@ TEST_P(NimbleIndexProjectorTest, deserializerMultiBatchMixedVersions) {
       OrderedRanges::of(0, static_cast<uint32_t>(kLegacyCompactValues.size())));
 
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);
 
@@ -3233,7 +3227,6 @@ TEST_P(NimbleIndexProjectorTest, flatMapProjection) {
   // for FlatMap key sorting (keys sorted alphabetically: "b", "d", "e").
   auto coalesced = coalesceChunkSlice(slice);
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);
 
@@ -3330,7 +3323,6 @@ TEST_P(NimbleIndexProjectorTest, flatMapProjectionWithNarrowRowRange) {
 
   auto coalesced = coalesceChunkSlice(slice);
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);
 
@@ -3607,7 +3599,6 @@ TEST_P(NimbleIndexProjectorTest, flatMapKeyProjectionSchemaComparison) {
       reinterpret_cast<const char*>(coalesced.data()), coalesced.length());
 
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(buildSchema, leafPool_.get(), deserOptions);
   VectorPtr output;
   deserializer.deserialize(data, output);
@@ -3668,7 +3659,6 @@ TEST_P(NimbleIndexProjectorTest, flatMapIntKeyProjection) {
   // Deserialize using the projector's projected nimble type.
   auto coalesced = coalesceChunkSlice(slice);
   DeserializerOptions deserOptions;
-  deserOptions.hasHeader = true;
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);
 
@@ -3783,7 +3773,6 @@ TEST_P(NimbleIndexProjectorTest, flatMapMissingKeys) {
 
     auto coalesced = coalesceChunkSlice(slice);
     DeserializerOptions deserOptions;
-    deserOptions.hasHeader = true;
     Deserializer deserializer(
         projector->projectedNimbleType(), leafPool_.get(), deserOptions);
     VectorPtr deserialized;
@@ -3881,7 +3870,6 @@ TEST_P(NimbleIndexProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
 
   auto coalesced = coalesceChunkSlice(result.responses[0].slices[0]);
   DeserializerOptions deserOptions{
-      .hasHeader = true,
       .outputType = ROW({"features"}, {ROW({"a", "x"}, {BIGINT(), BIGINT()})})};
   Deserializer deserializer(
       projector->projectedNimbleType(), leafPool_.get(), deserOptions);

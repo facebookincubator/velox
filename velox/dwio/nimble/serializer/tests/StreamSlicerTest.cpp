@@ -414,7 +414,7 @@ class StreamSlicerTest : public ::testing::Test {
   VectorPtr deserialize(
       std::string_view data,
       const std::shared_ptr<const nimble::Type>& schema) {
-    Deserializer deserializer{schema, pool_.get(), {.hasHeader = true}};
+    Deserializer deserializer{schema, pool_.get(), {}};
     VectorPtr output;
     deserializer.deserialize(data, output);
     return output;
@@ -516,7 +516,7 @@ TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
       iobufToString(slicer.slice(payload, /*offset=*/1, /*length=*/3));
   const char* pos = sliced.data();
   const auto header =
-      readSerializationHeader(pos, sliced.data() + sliced.size(), true);
+      readSerializationHeader(pos, sliced.data() + sliced.size());
   EXPECT_EQ(header.version, SerializationVersion::kProjection);
   EXPECT_EQ(header.rowCount, 3);
   EXPECT_TRUE(header.flags.streamEncodingUsesVarintRowCount);
@@ -918,7 +918,7 @@ TEST_P(StreamSlicerPayloadApiTest, slicesFlatMap) {
 
   const char* pos = sliced.data();
   const auto header =
-      readSerializationHeader(pos, sliced.data() + sliced.size(), true);
+      readSerializationHeader(pos, sliced.data() + sliced.size());
   EXPECT_TRUE(header.flags.requiresNullBarrier);
 
   auto output = deserialize(sliced, payload.schema);
@@ -1092,8 +1092,7 @@ TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
   auto [_, schema] = serialize(input, type);
   for (const auto version :
-       {SerializationVersion::kLegacy,
-        SerializationVersion::kLegacyCompact,
+       {SerializationVersion::kLegacyCompact,
         SerializationVersion::kLegacySerialization}) {
     SCOPED_TRACE(toString(version));
     StreamSlicer slicer{

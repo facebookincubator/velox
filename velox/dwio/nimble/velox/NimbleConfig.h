@@ -66,6 +66,13 @@ class Config : public velox::config::ConfigBase {
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   static Entry<bool> ENABLE_CHUNK_INDEX;
+  // EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  // without consulting the Nimble team (oncall: dwios).
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<bool> ENABLE_CHUNK_STATS;
+  // Selects the enabled chunk stats representation; defaults to "v2".
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> CHUNK_STATS_VERSION;
   static Entry<uint64_t> CHUNKING_WRITER_MEMORY_HIGH_THRESHOLD;
   static Entry<uint64_t> CHUNKING_WRITER_MEMORY_LOW_THRESHOLD;
   static Entry<uint64_t> CHUNKING_WRITER_TARGET_STRIPE_STORAGE_SIZE;
