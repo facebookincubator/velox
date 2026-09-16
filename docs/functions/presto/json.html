@@ -239,6 +239,9 @@ from the JSON text. The JSON value can be a JSON object, a JSON array, a JSON st
 <span class="n">SELECT</span> <span class="n">json_parse</span><span class="p">(</span><span class="s1">'"abc"'</span><span class="p">);</span> <span class="o">--</span> <span class="n">JSON</span> <span class="s1">'"abc"'</span>
 </pre></div>
 </div>
+<p>Object keys are sorted, and exact-duplicate keys are collapsed keeping the value of the last occurrence. Keys
+that become equal only after decoding a control-character escape (for example <code class="docutils literal notranslate"><span class="pre">\n</span></code> and its <code class="docutils literal notranslate"><span class="pre">\uXXXX</span></code> form)
+are not collapsed.</p>
 </dd></dl>
 
 <dl class="py function">
