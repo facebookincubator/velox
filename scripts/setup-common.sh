@@ -21,7 +21,6 @@ source "$SCRIPT_DIR"/setup-versions.sh
 
 VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
 VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
-VELOX_FBTHRIFT_CMAKE_PATCH=${VELOX_FBTHRIFT_CMAKE_PATCH:-""}
 VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
@@ -123,31 +122,7 @@ function install_mvfst {
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
-
-  # This patch is integrated into the latest FBOS version of folly and can be removed on upgrade.
-  if [ -z "${VELOX_FBTHRIFT_CMAKE_PATCH}" ]; then
-    # We need to set a different path when building the Dockerfile.
-    ABSOLUTE_SCRIPTDIR=$(realpath "${SCRIPT_DIR}")
-
-    VELOX_FBTHRIFT_CMAKE_PATCH="${ABSOLUTE_SCRIPTDIR}/../CMake/resolve_dependency_modules/fbthrift/compactv1-protocol-refiller.patch"
-  fi
-  (
-    cd "$DEPENDENCY_DIR"/fbthrift || exit 1
-    # Skip applying the patch if it is already applied.
-    git apply --reverse --check "${VELOX_FBTHRIFT_CMAKE_PATCH}" 2>/dev/null ||
-      git apply "${VELOX_FBTHRIFT_CMAKE_PATCH}" || exit 1
-  )
-
-  # Apple Clang's libc++ no longer defines _LIBCPP_HAS_NO_ASAN (renamed to
-  # _LIBCPP_INSTRUMENTED_WITH_ASAN), so folly's UninitializedMemoryHacks.h
-  # causing undefined symbol. This is fixed in the latest FBOS versions and
-  # can be removed on FBOS upgrade.
-  local FBTHRIFT_EXTRA_CXXFLAGS=""
-  if [[ "$(uname)" == "Darwin" ]]; then
-    FBTHRIFT_EXTRA_CXXFLAGS=" -D_LIBCPP_HAS_NO_ASAN"
-  fi
-  EXTRA_PKG_CXXFLAGS="$FBTHRIFT_EXTRA_CXXFLAGS" \
-    cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+  cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 
 function install_duckdb {
@@ -249,7 +224,10 @@ function install_re2 {
 
 function install_glog {
   wget_and_untar https://github.com/google/glog/archive/"${GLOG_VERSION}".tar.gz glog
-  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON
+  # Always Release. A Debug glog installs as libglogd.so instead of libglog.so,
+  # so a binary linked against it will not start in an image that has the
+  # Release build. We never need to debug into glog itself.
+  cmake_install_dir glog -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
 }
 
 function install_lzo {
@@ -378,22 +356,53 @@ function install_aws_deps {
   cmake_install_dir aws-sdk-cpp -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
 }
 
-function install_minio {
-  local MINIO_OS=${1:-darwin}
-  local MINIO_ARCH
+function install_silo {
+  local SILO_OS=${1:-darwin}
+  local SILO_ARCH
 
-  if [[ $MACHINE == aarch64 ]]; then
-    MINIO_ARCH="arm64"
+  # Apple Silicon reports arm64 rather than aarch64.
+  if [[ $MACHINE == aarch64 || $MACHINE == arm64 ]]; then
+    SILO_ARCH="arm64"
   elif [[ $MACHINE == x86_64 ]]; then
-    MINIO_ARCH="amd64"
+    SILO_ARCH="amd64"
   else
-    echo "Unsupported Minio platform"
+    echo "Unsupported Silo platform: $MACHINE" >&2
+    return 1
   fi
 
-  wget "${WGET_OPTS[@]}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
-  chmod +x ./"${MINIO_BINARY_NAME}"
-  mkdir -p "$INSTALL_PREFIX"/bin/
-  ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
+  # dl.min.io is gone; fetch the silo (MinIO fork) server tarball from
+  # GitHub releases instead. It is installed under SILO_BINARY_NAME so
+  # the S3 tests keep finding it; silo supports the same `server` CLI.
+  # Every fallible step below cleans up temp artifacts explicitly instead
+  # of relying on set -e, so aborted runs leave nothing behind.
+  local SILO_TARBALL="silo_${SILO_BUILD}_${SILO_OS}_${SILO_ARCH}.tar.gz"
+  local SILO_TMPDIR
+  SILO_TMPDIR=$(mktemp -d)
+  wget "${WGET_OPTS[@]}" https://github.com/pgsty/silo/releases/download/"${SILO_VERSION}"/"${SILO_TARBALL}" -O "${SILO_TARBALL}" || {
+    echo "failed to download ${SILO_TARBALL}" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  }
+  tar xzf "${SILO_TARBALL}" -C "${SILO_TMPDIR}" || {
+    echo "failed to extract ${SILO_TARBALL}" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  }
+  local SILO_BIN
+  SILO_BIN=$(find "${SILO_TMPDIR}" -maxdepth 2 -type f -name silo | head -n 1)
+  if [[ -z ${SILO_BIN} ]]; then
+    echo "silo binary not found in ${SILO_TARBALL}" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  fi
+  if ! chmod +x "${SILO_BIN}" ||
+    ! mkdir -p "$INSTALL_PREFIX"/bin/ ||
+    ! ${SUDO} mv "${SILO_BIN}" "$INSTALL_PREFIX"/bin/"${SILO_BINARY_NAME}"; then
+    echo "failed to install silo binary" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  fi
+  rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
 }
 
 function install_gcs_sdk_cpp {
@@ -471,7 +480,11 @@ function install_azure_storage_sdk_cpp {
 
 function install_hdfs_deps {
   # Dependencies for Hadoop testing
-  wget_and_untar https://dlcdn.apache.org/hadoop/common/hadoop-"${HADOOP_VERSION}"/hadoop-"${HADOOP_VERSION}".tar.gz hadoop
+  local arch
+  arch=$(uname -m)
+  local hadoop_tarball="hadoop-${HADOOP_VERSION}.tar.gz"
+  [[ ${arch} == "aarch64" ]] && hadoop_tarball="hadoop-${HADOOP_VERSION}-aarch64.tar.gz"
+  wget_and_untar "https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/${hadoop_tarball}" hadoop
   cp -a "${DEPENDENCY_DIR}"/hadoop "$INSTALL_PREFIX"
   wget "${WGET_OPTS[@]}" -P "$INSTALL_PREFIX"/hadoop/share/hadoop/common/lib/ https://repo1.maven.org/maven2/junit/junit/4.11/junit-4.11.jar
   # Needed for HADOOP 3.3.6 minicluster. Can remove after updating to 3.4.2.

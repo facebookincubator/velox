@@ -248,6 +248,9 @@ void readStructNullsColumns(
           {TypeKind::TIMESTAMP, &readStructNulls<Timestamp>},
           {TypeKind::VARCHAR, &readStructNulls<StringView>},
           {TypeKind::VARBINARY, &readStructNulls<StringView>},
+          // Opaque values are serialized as strings, so the column uses the
+          // same VARIABLE_WIDTH framing as VARCHAR and VARBINARY.
+          {TypeKind::OPAQUE, &readStructNulls<StringView>},
           {TypeKind::ARRAY, &readArrayVectorStructNulls},
           {TypeKind::MAP, &readMapVectorStructNulls},
           {TypeKind::ROW, &readRowVectorStructNulls},

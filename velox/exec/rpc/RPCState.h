@@ -183,6 +183,22 @@ class RPCState {
   /// When all rows are released, the batch columns are freed.
   void releaseRows(int32_t batchIndex, int64_t count);
 
+  /// Drop every retained input vector, regardless of activeRowCount.
+  ///
+  /// Called from RPCOperator::close() on the driver thread. In-flight RPC
+  /// callbacks hold a shared_ptr to this object, so it can outlive the
+  /// operator, the Task and the query's memory pools. The input vectors were
+  /// allocated from upstream operators' pools, so holding them past teardown
+  /// leaves a non-zero reservation on those pools; the arbitrator's
+  /// pool->reservedBytes() == 0 check then throws from ~MemoryPoolImpl() and
+  /// terminates the worker. If instead the last callback lands after the pools
+  /// are gone, ~RPCState() frees into freed memory.
+  ///
+  /// Safe to call while RPCs are outstanding: completion callbacks only
+  /// deposit RPCResponse values and never read flatColumns, which is read
+  /// solely by the driver thread when building output.
+  void releaseAllInputBatches();
+
   // ===== PER_ROW mode API =====
 
   /// Add a pending row with its RPC future and location in the input batch.
@@ -282,7 +298,7 @@ class RPCState {
 
   /// Available dispatch headroom under the per-driver congestion window:
   /// max(0, window.limit() - inFlight). Admission-controlled dispatch takes the
-  /// min of this and the process-global rate-limiter headroom to size each
+  /// min of this and the backend's rate-limiter headroom to size each
   /// drip chunk, so a whole-vector blast can no longer overrun the window.
   /// Thread-safe.
   int64_t dispatchHeadroom();
@@ -308,8 +324,8 @@ class RPCState {
   OperatorSnapshot operatorSnapshot() const;
 
  private:
-  /// Move a completed row into readyRows_ and notify waiters.
-  /// Called from the RPC completion callback (runs on executor thread).
+  // Moves a completed row into readyRows_ and notifies waiters. Called from
+  // the RPC completion callback, which runs on an executor thread.
   void completeRow(
       int64_t rowId,
       RowLocation location,
@@ -325,10 +341,10 @@ class RPCState {
   // driver thread (a potential deadlock TSAN flags).
   [[nodiscard]] std::vector<ContinuePromise> takeWaitersLocked();
 
-  /// Extract the ready batch referenced by `it`: compute its round-trip
-  /// latency, move out the responses (capturing any error), erase the entry,
-  /// and decrement inFlight_. Must be called under mutex_ with `it->future`
-  /// ready.
+  // Extracts the ready batch referenced by 'it': computes its round-trip
+  // latency, moves out the responses (capturing any error), erases the entry,
+  // and decrements inFlight_. Must be called under mutex_ with 'it->future'
+  // ready.
   ReadyBatch extractReadyBatchLocked(
       const std::deque<PendingBatch>::iterator& it);
 

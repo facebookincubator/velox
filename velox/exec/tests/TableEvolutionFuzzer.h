@@ -24,16 +24,121 @@
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
+
+namespace facebook::velox::connector::hive {
+struct HiveConnectorSplit;
+}
 
 namespace facebook::velox::exec::test {
 
 class TableEvolutionFuzzer {
  public:
+  /// An input file read by one side of a scan comparison.
+  struct InputFile {
+    std::string path;
+    dwio::common::FileFormat format;
+  };
+
+  /// Aggregated metrics observed from one side of scan comparisons.
+  struct ScanPlanCoverage {
+    int64_t numQueries{0};
+    int64_t numSplits{0};
+    uint64_t rawInputPositions{0};
+    uint64_t rawInputBytes{0};
+    uint64_t outputPositions{0};
+    uint64_t outputBytes{0};
+
+    int64_t skippedSplits{0};
+    int64_t skippedSplitBytes{0};
+    int64_t skippedStrides{0};
+    int64_t processedStrides{0};
+
+    int64_t numStripeLoads{0};
+    int64_t numIndexFilterConversions{0};
+    int64_t numStringDictionaryEncodingPreserved{0};
+    int64_t numStringDictionaryEncodingAbandoned{0};
+    int64_t numQueriesWithLazyIo{0};
+    int64_t dataSourceLazyInputBytes{0};
+    int64_t dataSourceLazyCpuNanos{0};
+    int64_t dataSourceLazyWallNanos{0};
+
+    int64_t storageReadBytes{0};
+    int64_t ramReadBytes{0};
+    int64_t metadataStorageReadBytes{0};
+    int64_t prefetchBytes{0};
+    int64_t overreadBytes{0};
+  };
+
+  /// Correlated coverage facts from one completed query comparison.
+  struct QueryCoverage {
+    std::vector<InputFile> pushdownFiles;
+    std::vector<InputFile> referenceFiles;
+    ScanPlanCoverage pushdown;
+    ScanPlanCoverage reference;
+    /// One entry per eligible flat-map writer column.
+    std::vector<std::string> flatmapEligibleKeyTypes;
+    std::vector<std::string> flatmapEligibleValueTypes;
+    /// One entry per bucket column in the generated table.
+    std::vector<std::string> bucketColumnTypes;
+    bool flatmapEligible{false};
+    /// Counts setup-invariant configuration once per generated table.
+    bool countConfigCoverage{false};
+    bool bucketed{false};
+    bool bucketSelected{false};
+    int64_t numFlatmapEligibleColumns{0};
+    int64_t numBucketColumns{0};
+    int32_t bucketCount{0};
+    bool executionSucceeded{false};
+    bool verificationPassed{false};
+  };
+
+  /// Generated table and reader configuration coverage.
+  struct ConfigCoverage {
+    int64_t numFlatmapEligible{0};
+    int64_t numFlatmapEligibleColumns{0};
+    int64_t numBucketed{0};
+    int64_t numBucketSelected{0};
+    std::map<std::string, int64_t> flatmapEligibleByKeyType;
+    std::map<std::string, int64_t> flatmapEligibleByValueType;
+    std::map<std::string, int64_t> bucketColumnsByType;
+    std::map<int64_t, int64_t> bucketedByColumnCount;
+    /// Maps bucket-column counts to setup counts keyed by ordered type
+    /// signature.
+    std::map<int64_t, std::map<std::string, int64_t>>
+        bucketColumnTypeSignaturesByCount;
+    std::map<int32_t, int64_t> bucketSelectedByBucketCount;
+    int64_t numTypeTransitions{0};
+    int64_t numAddedFields{0};
+    std::map<std::string, int64_t> schemaEvolutionByType;
+    std::map<std::string, int64_t> schemaEvolutionByPosition;
+  };
+
+  /// Aggregates correlated query coverage across run() and runOnInputFile().
+  struct CoverageAccumulator {
+    void add(const QueryCoverage& query);
+
+    /// Records recursive type changes between two generated schemas.
+    void addSchemaEvolution(
+        const RowTypePtr& previous,
+        const RowTypePtr& current);
+
+    int64_t numQueriesAttempted{0};
+    int64_t numQueriesCompleted{0};
+    int64_t numExecutionFailures{0};
+    int64_t numVerificationsPassed{0};
+    int64_t numVerificationsFailed{0};
+    ConfigCoverage configs;
+    ScanPlanCoverage pushdown;
+    ScanPlanCoverage reference;
+  };
+
   struct Config {
     int columnCount;
     int evolutionCount;
@@ -59,6 +164,15 @@ class TableEvolutionFuzzer {
         std::unordered_map<std::string, std::string>,
         std::unordered_map<std::string, std::string>>(FuzzerGenerator&)>
         extraReadSessionProperties;
+
+    /// Probability that each fuzzed element is NULL. Default 0 (no nulls).
+    /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
+    double nullRatio = 0;
+
+    /// Observes one attempted query while its correlated file, plan, feature,
+    /// execution, and verification details are available. Called before an
+    /// execution or verification failure is rethrown.
+    std::function<void(const QueryCoverage&)> queryCoverageObserver;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -121,6 +235,27 @@ class TableEvolutionFuzzer {
 
   void run();
 
+  /// Runs the same query shapes as run(), but against 'inputFile'.
+  ///
+  /// The schema comes from the file, so there is nothing to evolve and no
+  /// write. Both the pushdown plan and the reference plan read that one file,
+  /// which narrows the comparison to the plan difference alone -- run() varies
+  /// the files as well, so a mismatch there does not say which axis caused it.
+  /// The flip side is that a decode bug returning the same wrong value to both
+  /// plans cannot be caught here.
+  ///
+  /// Remaining filters are not generated: the expression fuzzer invents columns
+  /// and relies on schema evolution to add them, which a fixed file schema
+  /// cannot accommodate.
+  void runOnInputFile(const InputFile& inputFile);
+
+  const CoverageAccumulator& coverageStats() const {
+    return coverageStats_;
+  }
+
+  /// Logs the current cumulative dimension and per-plan coverage summaries.
+  void logCoverageSummary() const;
+
   virtual ~TableEvolutionFuzzer() = default;
 
  private:
@@ -144,9 +279,13 @@ class TableEvolutionFuzzer {
 
   std::string makeNewName();
 
-  TypePtr makeNewType(int maxDepth);
+  /// When 'allowTimestamp' is false, TIMESTAMP is left out of the generated
+  /// type, at any nesting depth. Used for bucket columns; see
+  /// makeInitialSchema().
+  TypePtr makeNewType(int maxDepth, bool allowTimestamp = true);
 
   RowTypePtr makeInitialSchema(
+      const std::vector<column_index_t>& bucketColumnIndices = {},
       const std::vector<std::string>& additionalColumnNames = {},
       const std::vector<TypePtr>& additionalColumnTypes = {});
 
@@ -260,14 +399,41 @@ class TableEvolutionFuzzer {
       const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
       const std::vector<int>& globallyConsistentColumnIndexVector,
+      bool countConfigCoverage,
       bool shouldGenerateRemainingFilters,
       const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
           generatedRemainingFilters,
       const std::unordered_map<std::string, std::string>& columnNameMapping,
       folly::Executor& executor);
 
+  /// Logs cumulative coverage once the configured reporting interval elapses.
+  void maybeLogCoverageSummary();
+
+  /// Opens 'inputFile' far enough to read its schema.
+  RowTypePtr readInputFileSchema(const InputFile& inputFile) const;
+
+  /// Scans up to 'maxRows' rows of 'inputFile' with no filters, for subfield
+  /// filter generation to pick bounds from. A bounded prefix is enough: the
+  /// generator narrows a reference row set as a byproduct and this consumer
+  /// discards it, so only the values that shape the filters matter.
+  RowVectorPtr readInputFileSample(
+      const InputFile& inputFile,
+      const RowTypePtr& schema,
+      int32_t maxRows) const;
+
+  /// One split over 'inputFile', honouring --input_file_max_bytes.
+  std::shared_ptr<connector::hive::HiveConnectorSplit> makeInputFileSplit(
+      const InputFile& inputFile) const;
+
+  /// Both plans read the same file, so the two split vectors are identical.
+  std::pair<std::vector<Split>, std::vector<Split>> makeInputFileSplits(
+      const InputFile& inputFile) const;
+
   const Config config_;
   VectorFuzzer vectorFuzzer_;
+  /// Set only for the duration of runOnInputFile, which makes runQueryShape
+  /// build its splits from the file rather than from write results.
+  const InputFile* inputFile_ = nullptr;
   unsigned currentSeed_;
   FuzzerGenerator rng_;
   /// Per-query-shape read-side connector session properties for the pushdown
@@ -277,6 +443,9 @@ class TableEvolutionFuzzer {
       std::unordered_map<std::string, std::string>,
       std::unordered_map<std::string, std::string>>
       readSessionProperties_;
+  CoverageAccumulator coverageStats_;
+  std::chrono::steady_clock::time_point lastCoverageLogTime_{
+      std::chrono::steady_clock::now()};
   int64_t sequenceNumber_ = 0;
 };
 

@@ -573,15 +573,32 @@ TEST_F(ArrayAggTest, clusteredInput) {
       }));
     }
     createDuckDbTable(data);
+    // A single batch cannot have a group spanning batches, so the
+    // clustered-input fast path is available and gets covered. With 13-row
+    // batches the 17-row groups straddle batch boundaries, so it must stay off
+    // and the copying fallback is covered instead.
+    const bool noGroupsSpanBatches = batchRows >= kSize;
     for (bool mask : {false, true}) {
       auto builder = PlanBuilder().values(data);
       std::string expected;
       if (mask) {
-        builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"}, {"c2"});
+        builder.streamingAggregation(
+            {"c0"},
+            {"array_agg(c1)"},
+            {"c2"},
+            core::AggregationNode::Step::kPartial,
+            /*ignoreNullKeys=*/false,
+            noGroupsSpanBatches);
         expected =
             "select c0, array_agg(c1) filter (where c2) from tmp group by 1";
       } else {
-        builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"});
+        builder.streamingAggregation(
+            {"c0"},
+            {"array_agg(c1)"},
+            {},
+            core::AggregationNode::Step::kPartial,
+            /*ignoreNullKeys=*/false,
+            noGroupsSpanBatches);
         expected = "select c0, array_agg(c1) from tmp group by 1";
       }
       auto plan = builder.finalAggregation().planNode();
@@ -601,6 +618,72 @@ TEST_F(ArrayAggTest, clusteredInput) {
       }
     }
   }
+}
+
+// The clustered-input fast path stores a reference to the whole argument
+// vector rather than copying the selected values out of it, so a group pins
+// every batch it drew from until extractValues runs. That is only bounded when
+// a group cannot span batches, because the reference is dropped once the
+// group's output is produced.
+//
+// The mask is what makes the two paths distinguishable. Without it array_agg
+// keeps every value anyway, so copying costs as much as retaining. Selecting
+// one row per batch leaves the copying accumulator holding kNumBatches
+// payloads while retention would pin all of them in full.
+//
+// The projection matters: it materializes each batch inside the query's pool,
+// so retained batches show up in peakBytes. Reading straight from values()
+// would allocate them in the test's pool and hide the retention.
+TEST_F(ArrayAggTest, clusteredInputNotRetainedWhenGroupsSpanBatches) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+        makeFlatVector<bool>(kBatchRows, [&](auto row) { return row == 0; }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1", "c2"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"array_agg(c1)"},
+                      {"c2"},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "clusteredInputNotRetainedWhenGroupsSpanBatches",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  // Retaining every batch would keep roughly the whole input resident. The
+  // copying accumulator holds only the masked rows, which is far smaller.
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_LT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests input batches are being pinned by the accumulators";
 }
 
 TEST_F(ArrayAggTest, maskedRows) {

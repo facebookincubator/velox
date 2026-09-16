@@ -46,6 +46,9 @@ class ColumnChunkMetaDataPtr {
   /// ranges) for this column chunk.
   bool hasOffsetIndex() const;
 
+  /// Check the presence of the index page offset in ColumnChunk metadata.
+  bool hasIndexPage() const;
+
   /// Return the ColumnChunk statistics. Timestamp columns require
   /// convertedType and logicalType to produce min/max statistics.
   std::unique_ptr<dwio::common::ColumnStatistics> getColumnStatistics(
@@ -94,6 +97,10 @@ class ColumnChunkMetaDataPtr {
   /// column data in this row group.
   /// This information is optional and may be 0 if omitted.
   int64_t totalUncompressedSize() const;
+
+  /// Number of bytes read for this chunk. Uncompressed chunks use their
+  /// uncompressed size; compressed chunks use their compressed size.
+  uint64_t readSize() const;
 
   /// Returns the estimated total bytes held by this column's thrift
   /// representation: sizeof(thrift::ColumnChunk) plus every dynamically

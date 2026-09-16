@@ -30,6 +30,7 @@
 #include <torch/nativert/executor/Weights.h>
 #include <torch/nativert/kernels/KernelFactory.h>
 
+#include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphPrep.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
@@ -251,6 +252,16 @@ class ExecutorTestBase : public ::testing::Test {
       std::vector<c10::IValue> inputs,
       const std::string& refFramePath);
 
+  /// Drops the reference-frame entries whose value ids the wave graph cannot
+  /// have, and returns how many were dropped. The reference run mints Values
+  /// the wave run does not (insertCpuOnlyCopies' _to_copy outputs), and they
+  /// take the ids straight after the loaded graph's last -- which is exactly
+  /// where the wave graph's own rewrites start numbering. Left in, those
+  /// entries make the intermediates check compare two unrelated tensors. No-op
+  /// until runNativertReferenceWithInputs has recorded the boundary.
+  int32_t dropUnsharedReferenceValues(
+      std::unordered_map<int32_t, c10::IValue>& refFrame) const;
+
   /// Runs 'fixture' through the wave executor with explicit 'inputs' and
   /// verifies against 'expected'. If 'refFramePath' is non-empty it is loaded
   /// as the reference frame so wave checks intermediates too.
@@ -275,6 +286,11 @@ class ExecutorTestBase : public ::testing::Test {
   /// Counters copied from WaveGraphExecutor after runWave.
   int64_t lastRefTensorsChecked_{0};
   int64_t lastRefNodesChecked_{0};
+
+  // Number of Values the reference graph and the wave graph agree on, recorded
+  // by runNativertReferenceWithInputs before the passes only the reference
+  // runs. Ids at or above it exist in one graph only. -1 until recorded.
+  int32_t numSharedReferenceValues_{-1};
 
   /// Display name for the current test, included in failure messages.
   std::string displayName_;
@@ -317,6 +333,14 @@ class ExecutorTestBase : public ::testing::Test {
   /// the multi-kernel grid contains every op; the single-block and cg grids
   /// hold only the ops that have such a variant (e.g. masked_select).
   ModePlans compilePlans(const std::string& pt2File);
+
+  /// Compiles 'pt2File' for the grid 'cg' names and returns what the
+  /// allocation-group pass makes of it, so a test can assert on the plan --
+  /// which concats are placed ahead of their operands, what the lifetime
+  /// grouping folds -- without running the graph. The mode runs on both grids,
+  /// and places fewer concat operands on the multi-kernel one, so which grid
+  /// the plan was built for is part of what a test is asserting.
+  AllocGroupStats allocGroupStats(const std::string& pt2File, bool cg = true);
 };
 
 } // namespace torch::wave

@@ -18,7 +18,6 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/hash/Hash.h>
-#include <glog/logging.h>
 
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -377,7 +376,7 @@ struct ArrayVectorBase : BaseVector {
   /// are safe to write at index i, i.ex not shared, or not large enough.
   void
   setOffsetAndSize(vector_size_t i, vector_size_t offset, vector_size_t size) {
-    DCHECK_LT(i, BaseVector::length_);
+    VELOX_DCHECK_LT(i, BaseVector::length_);
     offsets_->asMutable<vector_size_t>()[i] = offset;
     sizes_->asMutable<vector_size_t>()[i] = size;
   }

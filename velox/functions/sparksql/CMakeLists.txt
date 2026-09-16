@@ -44,7 +44,6 @@ velox_add_library(
   Hash.cpp
   In.cpp
   LeastGreatest.cpp
-  MakeTimestamp.cpp
   Map.cpp
   RegexFunctions.cpp
   Size.cpp
@@ -71,6 +70,7 @@ velox_add_library(
   CharVarcharUtils.h
   Comparisons.h
   ConcatWs.h
+  ConvertTimezone.h
   DateTimeFunctions.h
   DecimalArithmetic.h
   DecimalCeil.h
@@ -86,6 +86,7 @@ velox_add_library(
   LambdaIndexUtil.h
   LeastGreatest.h
   LuhnCheckFunction.h
+  MakeTimestamp.h
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h

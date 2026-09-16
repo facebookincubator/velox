@@ -1606,6 +1606,8 @@ class RowContainer {
 
   // Bit position of free bit.
   int32_t freeFlagOffset_ = 0;
+  // Byte offset of the flags (null, probed, free).
+  int32_t flagsByteOffset_ = 0;
   int32_t rowSizeOffset_ = 0;
 
   int32_t fixedRowSize_;

@@ -16,7 +16,12 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <memory>
 #include <unordered_set>
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
@@ -85,13 +90,36 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   int32_t pendingBatchSize() const override;
 
+  /// Test hook: a batch carrying any errored response is treated as backend
+  /// overload (kError), an empty batch as kNone, anything else as a clean
+  /// drain (kSuccess). Lets a test drive the operator's AIMD paths in BATCH
+  /// mode; inert unless the backend is configured adaptive, which is off by
+  /// default.
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override;
+
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures();
+
+  /// Holds each flush open for 'holdMs' on a background thread instead of
+  /// completing it inline, so several flushes are genuinely in flight at once
+  /// and the operator's admission gating becomes observable.
+  ///
+  /// Must be called before the query starts: the members it sets are read
+  /// without synchronization by every subsequent flush, so changing them once
+  /// flushes are running is a data race.
+  void testingHoldFlushes(int32_t holdMs = 50, int32_t threads = 16);
 
  private:
   struct PendingRow {
     std::string prompt;
     bool isNull;
   };
+
+  // Set only by testingHoldFlushes() before the query starts, then read-only
+  // for the rest of the run; see the comment there.
+  bool holdFlushes_{false};
+  int32_t holdMs_{0};
+  std::shared_ptr<folly::CPUThreadPoolExecutor> holdExecutor_;
 
   std::vector<PendingRow> pendingRows_;
   ResponseOrder responseOrder_;

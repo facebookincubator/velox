@@ -21,6 +21,7 @@
 #include <optional>
 
 #include <folly/container/F14Map.h>
+#include <folly/dynamic.h>
 
 namespace facebook::velox {
 
@@ -34,7 +35,16 @@ struct FileProperties {
   std::optional<int64_t> readRangeHint{std::nullopt};
   std::shared_ptr<std::string> extraFileInfo{nullptr};
   folly::F14FastMap<std::string, std::string> fileReadOps{};
+
+  /// Non-owning pointer to the statistics of the data source that opened the
+  /// file. Set locally by the reader at open time, so 'serialize()' skips it.
   io::IoStatistics* ioStatistics{nullptr};
+
+  folly::dynamic serialize() const;
+
+  /// Reads what 'serialize()' wrote. Absent keys fall back to the member
+  /// default.
+  static FileProperties create(const folly::dynamic& obj);
 };
 
 } // namespace facebook::velox

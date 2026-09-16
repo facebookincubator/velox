@@ -247,6 +247,13 @@ void CompileCtx::generateElementwise(
     newExprs.push_back(std::move(ee));
   }
 
+  // The leaves as they stand before the result values are appended below.
+  // These, and only these, are the values the generated expressions read from
+  // memory; everything else in the tree is a register temp. The barrier check
+  // further down needs the distinction.
+  const std::unordered_set<ValueCP> memoryLeaves(
+      leafInputs.begin(), leafInputs.end());
+
   for (size_t s = 0; s < resultSpecs.size(); ++s) {
     auto& rs = resultSpecs[s];
     if (!rs.value) {
@@ -467,9 +474,8 @@ void CompileCtx::generateElementwise(
   code_ << "  }\n"
         << "  __syncthreads();\n";
 
-  // If any node in any elementwise subgraph has a randomAccess input
-  // produced in this kernel without a prior barrier, emit one after
-  // the size setup.
+  // If anything the subgraphs read was written earlier in this same kernel
+  // without a barrier since, emit one after the size setup.
   {
     bool needsBarrier = false;
     std::function<void(ValueCP)> checkTree = [&](ValueCP value) {
@@ -485,8 +491,27 @@ void CompileCtx::generateElementwise(
         checkTree(input.value);
       }
     };
+    // A leaf is a memory read like any call operand, and callNeedsBarrier
+    // cannot see it: every argument of an elementwise op is registered
+    // isRegister, which is true of a value fused inline into the expression
+    // and false of one that reached memory. Nothing else covers a consumer
+    // that reads, at index i, an element another block wrote -- which is what
+    // a leaf that is a transposed view of a value this kernel just filled is.
+    auto leavesNeedBarrier = [&](const Subgraph& sg) {
+      const std::unordered_set<ValueCP> sgInputSet(
+          sg.inputs.begin(), sg.inputs.end());
+      std::unordered_set<ValueCP> visited;
+      std::vector<ValueCP> leaves;
+      collectSubgraphInputs(sg.root, sgInputSet, visited, leaves);
+      for (auto* leaf : leaves) {
+        if (memoryLeaves.count(leaf) && valueNeedsBarrier(leaf, sg.root)) {
+          return true;
+        }
+      }
+      return false;
+    };
     for (const auto& sg : subgraphs) {
-      if (callNeedsBarrier(sg.root)) {
+      if (callNeedsBarrier(sg.root) || leavesNeedBarrier(sg)) {
         needsBarrier = true;
         break;
       }
@@ -682,11 +707,17 @@ void CompileCtx::generateElementwise(
         auto id = it - allInputs.begin();
         if (resultSpecs[s].value->type().kind() ==
             nativert::Type::Kind::Tensor) {
-          auto bitIdx = fastPathBitIndex_[id];
-          code_ << "        " << storageRef(id) << "[complexIdx(isFastPath"
-                << bitIdx / kBitsPerWord << " & (1 << " << bitIdx % kBitsPerWord
-                << "), " << param(resultSpecs[s].value, op)
-                << ", idx)] = " << resultVar << ";\n";
+          // The output's own contiguity, read from its descriptor, not a
+          // bit of isFastPath. That bitmask is indexed by position in
+          // leafInputs, and an output sits past the end of it in allInputs --
+          // so the bit taken here belonged to some unrelated input, or to no
+          // tensor at all. A contiguous input then made a strided output be
+          // written linearly, which fills the first numEl slots of a pitched
+          // band and leaves the rest of it untouched.
+          code_ << "        " << storageRef(id) << "[complexIdx("
+                << param(resultSpecs[s].value, op) << "->contiguous, "
+                << param(resultSpecs[s].value, op) << ", idx)] = " << resultVar
+                << ";\n";
         } else {
           code_ << "        " << storageRef(id) << "[0] = " << resultVar
                 << ";\n";
@@ -723,11 +754,12 @@ void CompileCtx::generateElementwise(
         auto id = it - allInputs.begin();
         if (resultSpecs[s].value->type().kind() ==
             nativert::Type::Kind::Tensor) {
-          auto bitIdx = fastPathBitIndex_[id];
-          code_ << "      " << storageRef(id) << "[complexIdx(isFastPath"
-                << bitIdx / kBitsPerWord << " & (1 << " << bitIdx % kBitsPerWord
-                << "), " << param(resultSpecs[s].value, op)
-                << ", idx)] = " << resultVar << ";\n";
+          // See the store above: the output is not a leaf input, so it has
+          // no bit in isFastPath. Its own descriptor carries its contiguity.
+          code_ << "      " << storageRef(id) << "[complexIdx("
+                << param(resultSpecs[s].value, op) << "->contiguous, "
+                << param(resultSpecs[s].value, op) << ", idx)] = " << resultVar
+                << ";\n";
         } else {
           code_ << "      " << storageRef(id) << "[0] = " << resultVar << ";\n";
         }

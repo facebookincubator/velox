@@ -172,7 +172,7 @@ TEST_F(GetJsonObjectTest, nullResult) {
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$."), std::nullopt);
   // The first char is not '$'.
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", ".hello"), std::nullopt);
-  // Constains '$' not in the first position.
+  // Contains '$' not in the first position.
   EXPECT_EQ(getJsonObject(R"({"hello": "3.5"})", "$.$hello"), std::nullopt);
 
   // Invalid ending character.

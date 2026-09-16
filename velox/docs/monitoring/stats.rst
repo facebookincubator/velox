@@ -151,6 +151,62 @@ These stats are reported only by TableWriter operator
      - nanos
      - The walltime spent on file write data compression.
 
+Nimble Writer
+~~~~~~~~~~~~~
+These stats are reported by TableWriter when writing Nimble files. Encoding
+CPU time is summed across encoding worker threads and can exceed the
+corresponding wall time when parallel encoding is enabled.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - nimble.writtenBytes
+     - bytes
+     - Total number of bytes written to the Nimble file.
+   * - nimble.inputBytes
+     - bytes
+     - Uncompressed size of the input written to the Nimble file.
+   * - nimble.writeCpuNanos
+     - nanos
+     - CPU time spent writing encoded stripes through the tablet writer.
+   * - nimble.writeWallNanos
+     - nanos
+     - Wall time spent writing encoded stripes through the tablet writer.
+   * - nimble.ingestionCpuNanos
+     - nanos
+     - CPU time spent ingesting input vectors into field-writer buffers.
+   * - nimble.ingestionWallNanos
+     - nanos
+     - Wall time spent ingesting input vectors into field-writer buffers.
+   * - nimble.encodingCpuNanos
+     - nanos
+     - CPU time spent encoding and compressing streams, summed across all
+       encoding worker threads.
+   * - nimble.encodingWallNanos
+     - nanos
+     - Wall time spent encoding and compressing streams.
+   * - nimble.encodingSelectionCpuNanos
+     - nanos
+     - CPU time spent selecting encodings. This is a subset of
+       ``nimble.encodingCpuNanos``.
+   * - nimble.rowsPerStripe
+     -
+     - Distribution of row counts per stripe. The metric count is the number
+       of stripes written.
+   * - nimble.chunkSizeBytes
+     - bytes
+     - Distribution of encoded chunk sizes.
+   * - nimble.duplicateStreamCount
+     -
+     - Number of streams deduplicated by the tablet writer.
+   * - nimble.duplicateStreamBytes
+     - bytes
+     - Number of encoded bytes deduplicated by the tablet writer.
+
 LookupIndexJoin
 ---------------
 These stats are reported only by IndexLookupJoin operator

@@ -44,7 +44,10 @@
 #include "velox/exec/rpc/RPCState.h"
 
 #include <folly/futures/Promise.h>
+#include <folly/synchronization/CallOnce.h>
 #include <gtest/gtest.h>
+
+#include "velox/common/memory/Memory.h"
 
 #include <atomic>
 #include <chrono>
@@ -368,6 +371,42 @@ TEST_F(RPCStateTest, inputBatchStorageAndRelease) {
 
   // Release all rows from batch 2 at once.
   state_->releaseRows(batchIdx2, 2);
+}
+
+// A crashed worker's stack: an abandoned AI query tears down the Task while an
+// RPC is still in flight; the callback holds a shared_ptr<RPCState>, so the
+// retained input vectors outlive the pools that allocated them. Either the
+// arbitrator's reservedBytes() == 0 check throws from ~MemoryPoolImpl() and
+// terminates the worker, or the late callback frees into pools already gone.
+// close() must therefore drop the vectors itself, on the driver thread, and
+// not rely on the reference count reaching zero in time.
+TEST_F(RPCStateTest, releaseAllInputBatchesDropsVectorsWhileStateIsStillHeld) {
+  // This binary does not stand up a MemoryManager; do it once for this test.
+  static folly::once_flag initOnce;
+  folly::call_once(initOnce, [] { memory::MemoryManager::initialize({}); });
+  auto pool = memory::memoryManager()->addLeafPool("releaseAllInputBatches");
+  VectorPtr vector = BaseVector::create(BIGINT(), 8, pool.get());
+
+  // Two batches, one still holding "active" rows: the abandoned-query case,
+  // where releaseRows() never runs because the rows are never output.
+  state_->storeInputBatch(std::vector<VectorPtr>{vector}, /*rowCount=*/4);
+  state_->storeInputBatch(std::vector<VectorPtr>{vector}, /*rowCount=*/4);
+  EXPECT_GT(vector.use_count(), 1);
+
+  // Stand in for an in-flight callback still holding the state alive.
+  auto callbackRef = state_;
+
+  state_->releaseAllInputBatches();
+
+  // The state object survives, but owns none of the pool-backed memory: this
+  // test holds the only remaining reference to the vector.
+  EXPECT_EQ(vector.use_count(), 1);
+  EXPECT_TRUE(state_->getInputBatchColumns(0).empty());
+  EXPECT_TRUE(state_->getInputBatchColumns(1).empty());
+
+  // Idempotent — close() may run after rows were already released.
+  state_->releaseAllInputBatches();
+  EXPECT_EQ(vector.use_count(), 1);
 }
 
 TEST_F(RPCStateTest, batchRowLocationsCarriedThrough) {

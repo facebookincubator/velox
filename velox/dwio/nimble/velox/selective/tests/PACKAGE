@@ -1,0 +1,3 @@
+load("@fbsource//tools/build_defs/testinfra:network_access_utils.bzl", "network_access_utils")
+
+network_access_utils.set_package_default(network_access_utils.NetworkAccess.none)

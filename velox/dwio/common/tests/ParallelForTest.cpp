@@ -99,7 +99,7 @@ void testParallelFor(
 
 } // namespace
 
-TEST(ParallelForTest, E2E) {
+TEST(ParallelForTest, e2e) {
   auto inlineExecutor = folly::InlineExecutor::instance();
   for (size_t parallelism = 0; parallelism < 25; ++parallelism) {
     for (size_t begin = 0; begin < 25; ++begin) {
@@ -116,7 +116,7 @@ TEST(ParallelForTest, E2E) {
   }
 }
 
-TEST(ParallelForTest, E2EParallel) {
+TEST(ParallelForTest, e2eParallel) {
   for (size_t parallelism = 1; parallelism < 2; ++parallelism) {
     folly::CPUThreadPoolExecutor executor(parallelism);
     for (size_t begin = 0; begin < 25; ++begin) {
@@ -133,7 +133,7 @@ TEST(ParallelForTest, E2EParallel) {
   }
 }
 
-TEST(ParallelForTest, CanOwnExecutor) {
+TEST(ParallelForTest, canOwnExecutor) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(2);
   const size_t indexInvokedSize = 100;
   std::unordered_map<size_t, std::atomic<size_t>> indexInvoked;

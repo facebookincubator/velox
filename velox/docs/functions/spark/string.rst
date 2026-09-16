@@ -25,6 +25,15 @@ String Functions
 
         SELECT bit_length('123'); -- 24
 
+.. spark:function:: btrim(string) -> varchar
+
+    Alias for ``trim(string) -> varchar``.
+
+.. spark:function:: btrim(trimCharacters, string) -> varchar
+   :noindex:
+
+    Alias for ``trim(trimCharacters, string) -> varchar``.
+
 .. spark:function:: char_type_write_side_check(string, limit) -> varchar
 
     Ensures that input ``string`` fits within the specified length ``limit`` in characters by padding or trimming spaces as needed.

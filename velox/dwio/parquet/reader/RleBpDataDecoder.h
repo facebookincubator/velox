@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/dwio/common/DecoderUtil.h"

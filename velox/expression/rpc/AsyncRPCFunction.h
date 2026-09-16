@@ -91,6 +91,14 @@ class AsyncRPCFunction {
   /// Return the Velox type of the result column.
   virtual TypePtr resultType() const = 0;
 
+  /// The concurrency ceiling this function's own options ask for, or 0 when
+  /// unset. The operator applies it alongside the session properties in a
+  /// single configuration step, so a backend's whole policy lands at once
+  /// rather than in two writes a concurrent query could interleave with.
+  virtual int64_t configuredCeiling() const {
+    return 0;
+  }
+
   /// Return the service tier key for rate limiting.
   /// Empty string means "no tier configured — uses global default limit."
   virtual std::string tierKey() const {

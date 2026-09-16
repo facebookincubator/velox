@@ -21,6 +21,8 @@
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
+#include <fmt/format.h>
+
 #include <cmath>
 #include <limits>
 
@@ -226,6 +228,59 @@ nativert::Node* makeExclusiveSumCgVariant(NodeCP single, WaveGraph* waveGraph) {
   copyOriginalOutputs(cgNode, single, waveGraph);
   newVariantTensorValue(cgNode, waveGraph, "exsum_counts", outDtype);
   return cgNode;
+}
+
+// Expands a scan into its single-pass form tw.<prefix>_1pass, whose extra
+// output is the decoupled look-back state.
+nativert::Node* makeScanSinglePassVariant(
+    NodeCP single,
+    WaveGraph* waveGraph,
+    const std::string& prefix,
+    bool copyDim) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto [outDtype, dtypeStr] = resolveOutDtype(single, waveGraph);
+  auto* node = graph->createNode(
+      "tw." + prefix + "_1pass", {{"input", single->inputs()[0].value}});
+  node->addAttribute({"dtype", dtypeStr});
+  // Only where the target declares 'dim' as a template attribute; copying it
+  // to an op that does not would make it a constant parameter of a node the
+  // constant map has no entry for.
+  const auto* dimAttr = copyDim ? single->tryGetAttribute("dim") : nullptr;
+  if (dimAttr) {
+    node->addAttribute({dimAttr->name, std::get<int64_t>(dimAttr->value)});
+  }
+  copyOriginalOutputs(node, single, waveGraph);
+  newVariantTensorValue(
+      node, waveGraph, prefix + "_lookback", c10::ScalarType::Int);
+  return node;
+}
+
+nativert::Node* makeCumsumSinglePassVariant(
+    NodeCP single,
+    WaveGraph* waveGraph) {
+  return makeScanSinglePassVariant(
+      single, waveGraph, "cumsum", /*copyDim=*/true);
+}
+
+nativert::Node* makeExclusiveSumSinglePassVariant(
+    NodeCP single,
+    WaveGraph* waveGraph) {
+  return makeScanSinglePassVariant(
+      single, waveGraph, "exclusive_sum", /*copyDim=*/false);
+}
+
+nativert::Node* makeMaskedSelectSinglePassVariant(
+    NodeCP single,
+    WaveGraph* waveGraph) {
+  auto* graph = variantNodeGraph(waveGraph);
+  auto* node = graph->createNode(
+      "tw.masked_select_1pass",
+      {{"input", single->inputs()[0].value},
+       {"mask", single->inputs()[1].value}});
+  copyOriginalOutputs(node, single, waveGraph);
+  newVariantTensorValue(
+      node, waveGraph, "masked_select_lookback", c10::ScalarType::Int);
+  return node;
 }
 
 nativert::Node* makeMaskedSelectCgVariant(NodeCP single, WaveGraph* waveGraph) {
@@ -663,6 +718,43 @@ bool viewHasDynamicShapeArgs(NodeCP node, const ValueTypes& /*types*/) {
   return node->inputs().size() > 1;
 }
 
+// A metadata getter (sym_size / sym_numel) is worth running on the host exactly
+// when it would otherwise be an expression of its own. The host already holds
+// every tensor, so reading a size there is a field access; a kernel op has to
+// pass the tensor's metadata in, compute one scalar, and read it back out. When
+// the getter instead feeds a single fusable consumer it is a subexpression of
+// that consumer's kernel, where the value is wanted on the device anyway, so it
+// stays fused.
+//
+// Consulting the consumer's isStandalone cannot recurse back here: a getter
+// takes a tensor and yields a scalar, so a getter is never the user of a
+// getter.
+//
+// A getter left fused when it is alone costs a whole thread block that reads
+// one field and exits. That block is charged against the launch's slowest
+// block, so a handful of them drag a step's reported balance down and the
+// packer has nothing it can do about it -- there is no block count at which a
+// no-op op balances.
+bool metadataGetterIsAlone(NodeCP node, const ValueTypes& types) {
+  if (!WaveConfig::get().metadataGetterStandalone) {
+    return false;
+  }
+  if (node->outputs().empty() || node->outputs()[0] == nullptr) {
+    return false;
+  }
+  ValueCP out = node->outputs()[0];
+  if (types.graphOutput(out)) {
+    return true;
+  }
+  const auto& users = out->users();
+  if (users.size() != 1) {
+    // Unused, or shared -- either way it is materialized on its own.
+    return true;
+  }
+  const Metadata* userMeta = Registry::metadata(users[0]->target());
+  return userMeta == nullptr || userMeta->isStandalone(users[0], types);
+}
+
 std::vector<std::vector<Dim>> sizeAttrReserveShape(
     NodeCP /*node*/,
     nativert::ExecutionFrame& frame,
@@ -689,6 +781,36 @@ std::vector<std::vector<Dim>> numBlocksShape(
   auto numBlocks = std::max<Dim>(
       1, static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize));
   return {{numBlocks}};
+}
+
+// Elements a thread of a single-pass scan handles per tile. Mirrors
+// kScanItemsPerThread in Scan.cuh; the two must change together, since the
+// buffer sized here is indexed by a tile number the device computes.
+constexpr int32_t kSinglePassItemsPerThread = 8;
+
+// Shape of the decoupled look-back state of a single-pass scan: an int32 tensor
+// holding a status flag, an aggregate and a prefix per tile. Mirrors
+// LookbackState::numWords in Scan.cuh, but sized for the widest accumulator
+// rather than the op's own, because the accumulator type is not resolved here
+// and the device lays the three arrays out from its own sizeof. Over-sizing
+// just leaves a tail of the buffer unused.
+std::vector<std::vector<Dim>> lookbackStateShape(
+    NodeCP node,
+    nativert::ExecutionFrame& frame,
+    const FormalToActual& map,
+    NodeCP /*originalFormalNode*/,
+    const NodeMap& /*nodeMap*/) {
+  constexpr int64_t kWidestAccumulatorWords = 2;
+  auto tensor = paramTensor(node->inputs()[0].value, frame, map);
+  const int64_t tileSize = static_cast<int64_t>(WaveConfig::get().blockSize) *
+      kSinglePassItemsPerThread;
+  // At least one tile: an empty input processes none, but a zero-length buffer
+  // would make the reserve produce a tensor with null storage.
+  const int64_t numTiles =
+      std::max<int64_t>(1, (tensor.numel() + tileSize - 1) / tileSize);
+  const int64_t flagWords = (numTiles + 1) & ~int64_t(1);
+  return {
+      {static_cast<Dim>(flagWords + 2 * numTiles * kWidestAccumulatorWords)}};
 }
 
 std::vector<std::vector<Dim>> inputShape(
@@ -1199,6 +1321,14 @@ bool tryFuseScatter(
 } // namespace
 
 void registerBuiltins() {
+  // With WaveConfig::singlePass the two scans and the stream compaction get one
+  // implementation, the decoupled look-back form, in place of the multi-kernel
+  // and the cooperative-grid expansions. It replaces both so the choice does
+  // not also depend on whether the step happens to run a cooperative grid; the
+  // op declares a barrier either way, which is what gives it the resident grid
+  // its look-back needs.
+  const bool singlePass = WaveConfig::get().singlePass;
+
   // Binary arithmetic.
   MetadataBuilder("torch.ops.aten.add.Tensor")
       .elementwise()
@@ -1688,7 +1818,10 @@ void registerBuiltins() {
         .numArgs(1)
         .ignoreAttrs({"self", "non_blocking"})
         .argumentMeta({{}, {.isRegister = true}, {}})
-        .returnMeta({{.isRegister = true, .reserveShape = selfShape}})
+        .returnMeta(
+            {{.isRegister = true,
+              .reserveShape = selfShape,
+              .shapeFromInput = 0}})
         .normalize(resolveDtypeFromInputExact)
         .rankArgument(0)
         .outputConstraints(selfRankContiguous)
@@ -1736,7 +1869,10 @@ void registerBuiltins() {
         .hasDtypeTemplateParam()
         .ignoreAttrs({"self", "non_blocking"})
         .argumentMeta({{}, {.isRegister = true}})
-        .returnMeta({{.isRegister = false, .reserveShape = selfShape}})
+        .returnMeta(
+            {{.isRegister = false,
+              .reserveShape = selfShape,
+              .shapeFromInput = 0}})
         .normalize(resolveDtypeFromInputExact)
         .rankArgument(0)
         .outputConstraints(selfRankContiguous)
@@ -1841,7 +1977,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
       .hasDtypeTemplateParam()
@@ -1861,7 +1998,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
       .hasDtypeTemplateParam()
@@ -1961,6 +2099,8 @@ void registerBuiltins() {
           {{.isRegister = false, .wholeTensor = true}, {.isRegister = true}})
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .metadataOnly()
+      .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -1972,6 +2112,8 @@ void registerBuiltins() {
       .argumentMeta({{.isRegister = false, .wholeTensor = true}})
       .returnMeta({{.isRegister = true}})
       .metadataGetter()
+      .metadataOnly()
+      .isStandaloneFunc(metadataGetterIsAlone)
       .isScalarElementwise()
       .registerOp();
 
@@ -2128,6 +2270,14 @@ void registerBuiltins() {
           })
       .deviceFunc("__copyTensor")
       .typeTemplateParams({0})
+      // A load and a store per element, at the 10 an elementwise op counts for
+      // one memory access.
+      .cost(20.0f)
+      // __copyTensor goes through the destination's strides, so a clone can be
+      // handed a pitched band of a concat result instead of a dense buffer the
+      // concat would then have to copy in.
+      .defaultOutputMeta()
+      .mayWriteStrided()
       .maybeReplace(
           [](NodeCP node,
              ValueTypes& /*types*/,
@@ -3588,8 +3738,12 @@ void registerBuiltins() {
               return elementwiseInputShape(node, frame, map, 0);
             },
             .shapeSetOnDevice = true}})
-      .makeMultiKernelVariant(makeMaskedSelectVariant)
-      .cgVariant(makeMaskedSelectCgVariant)
+      .makeMultiKernelVariant(
+          singlePass ? makeMaskedSelectSinglePassVariant
+                     : makeMaskedSelectVariant)
+      .cgVariant(
+          singlePass ? makeMaskedSelectSinglePassVariant
+                     : makeMaskedSelectCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("masked_select")
       .sharedDecls({{"Int32X32", "warpSums"}, {"uint32_t", "counter"}})
@@ -3705,10 +3859,12 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
-      .makeMultiKernelVariant(makeCumsumVariant)
-      .cgVariant(makeCumsumCgVariant)
+      .makeMultiKernelVariant(
+          singlePass ? makeCumsumSinglePassVariant : makeCumsumVariant)
+      .cgVariant(singlePass ? makeCumsumSinglePassVariant : makeCumsumCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("cumsum")
       .sharedDecls(
@@ -3792,7 +3948,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .argumentMeta(
           {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
-      .returnMeta({{.isRegister = false, .reserveShape = inputShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_final")
@@ -3830,10 +3989,17 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .singleBlockIfFused()
-      .returnMeta({{.isRegister = false, .reserveShape = inputShapePlusOne}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
-      .makeMultiKernelVariant(makeExclusiveSumVariant)
-      .cgVariant(makeExclusiveSumCgVariant)
+      .makeMultiKernelVariant(
+          singlePass ? makeExclusiveSumSinglePassVariant
+                     : makeExclusiveSumVariant)
+      .cgVariant(
+          singlePass ? makeExclusiveSumSinglePassVariant
+                     : makeExclusiveSumCgVariant)
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum")
       .sharedDecls(
@@ -3917,7 +4083,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .argumentMeta(
           {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
-      .returnMeta({{.isRegister = false, .reserveShape = inputShapePlusOne}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum_final")
@@ -3955,7 +4124,10 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .singleBlockIfFused()
-      .returnMeta({{.isRegister = false, .reserveShape = inputShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .headerFile(kScanHeader)
       .deviceFunc("lengths_to_offsets")
@@ -4025,7 +4197,9 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShape},
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
@@ -4059,7 +4233,9 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShapePlusOne},
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
@@ -4094,6 +4270,7 @@ void registerBuiltins() {
       .returnMeta(
           {{.isRegister = false,
             .reserveShape = inputShape,
+            .shapeFromInput = 0,
             .shapeSetOnDevice = true},
            {.isRegister = false, .reserveShape = numBlocksShape}})
       .headerFile(kScanHeader)
@@ -4106,6 +4283,150 @@ void registerBuiltins() {
       .typeTemplateParams({0})
       .hasBlockSizeTemplateParam()
       .numBarriers(3)
+      .outputConstraints(rank1Constraint)
+      .cost(30.0f)
+      .registerOp();
+
+  // --- Single-pass (decoupled look-back) variants ---
+  //
+  // One launch that reads the input once, where the cg forms above read it
+  // twice with an opBarrier between. Each carries a second output, the
+  // per-tile look-back state. They are always registered; only the expansions
+  // that produce them are behind WaveConfig::singlePass. Like the cg forms they
+  // need every block of the op resident, which the declared barrier (used once,
+  // to publish the cleared descriptors) makes the launch provide.
+
+  // tw.cumsum_1pass: (Tensor) -> (Tensor, Tensor[lookback])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.cumsum_1pass",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("lookback", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .sizeShortcut(SizeShortcut::kMax)
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0},
+           {.isRegister = false, .reserveShape = lookbackStateShape}})
+      .normalize(resolveDtypeFromInput)
+      .headerFile(kScanHeader)
+      .deviceFunc("cumsum_1pass")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "numTiles"}})
+      .dynamicSharedDecls(
+          {{Metadata::kTypeFromDtype, "runTotal"},
+           {Metadata::kTypeFromDtype, "tileExclusive"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .numBarriers(2)
+      // The look-back holds kScanItemsPerThread partials per thread in
+      // registers, which under a cooperative grid would cost every op sharing
+      // the kernel a block per SM. Cap the budget at the occupancy the rest of
+      // a scan-bearing kernel runs at.
+      .minBlocksPerSm(4)
+      // Like the multi-kernel final stages, the output is read cross-block by
+      // fused consumers, so end the launch after it in multi-block mode. In
+      // cooperative-grid mode the launch does not end and the trailing
+      // opBarrier of the device function is what fences the output.
+      .scanOutputReturnBarrier()
+      .only1d()
+      .templateAttrs({"dim"})
+      .outputConstraints(rank1Constraint)
+      .cost(25.0f)
+      .registerOp();
+
+  // tw.exclusive_sum_1pass: (Tensor) -> (Tensor, Tensor[lookback])
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.exclusive_sum_1pass",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("lookback", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .sizeShortcut(SizeShortcut::kMax)
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShapePlusOne,
+            .shapeFromInput = 0},
+           {.isRegister = false, .reserveShape = lookbackStateShape}})
+      .normalize(resolveDtypeFromInput)
+      .headerFile(kScanHeader)
+      .deviceFunc("exclusive_sum_1pass")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "numTiles"}})
+      .dynamicSharedDecls(
+          {{Metadata::kTypeFromDtype, "runTotal"},
+           {Metadata::kTypeFromDtype, "tileExclusive"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .numBarriers(2)
+      // The look-back holds kScanItemsPerThread partials per thread in
+      // registers, which under a cooperative grid would cost every op sharing
+      // the kernel a block per SM. Cap the budget at the occupancy the rest of
+      // a scan-bearing kernel runs at.
+      .minBlocksPerSm(4)
+      // Like the multi-kernel final stages, the output is read cross-block by
+      // fused consumers, so end the launch after it in multi-block mode. In
+      // cooperative-grid mode the launch does not end and the trailing
+      // opBarrier of the device function is what fences the output.
+      .scanOutputReturnBarrier()
+      .only1d()
+      .outputConstraints(rank1Constraint)
+      .cost(25.0f)
+      .registerOp();
+
+  // tw.masked_select_1pass: (Tensor, Tensor) -> (Tensor, Tensor[lookback]).
+  // The selected elements of a tile are staged through a __shared__ buffer so
+  // they leave in contiguous, fully coalesced stores; the buffer is sized for
+  // the block size in force when the op is registered.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.masked_select_1pass",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get()),
+              c10::Argument("mask", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get()),
+              c10::Argument("lookback", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .hasBarrier()
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0,
+            .shapeSetOnDevice = true},
+           {.isRegister = false, .reserveShape = lookbackStateShape}})
+      .headerFile(kScanHeader)
+      .deviceFunc("masked_select_1pass")
+      .multiBlockReturnBarrier()
+      .sharedDecls(
+          {{fmt::format("SelectStaging<{}>", WaveConfig::get().blockSize),
+            "staging"},
+           {"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "numTiles"},
+           {"int32_t", "tileTotal"},
+           {"int32_t", "tileExclusive"}})
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .numBarriers(2)
       .outputConstraints(rank1Constraint)
       .cost(30.0f)
       .registerOp();
@@ -4344,7 +4665,9 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = inputShape},
+          {{.isRegister = false,
+            .reserveShape = inputShape,
+            .shapeFromInput = 0},
            {.neededOnHost = true}})
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_head")
@@ -4501,6 +4824,9 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // The gather decomposes the output index and maps it through the
+      // output's strides, so it fills a pitched concat band correctly.
+      .mayWriteStrided()
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_final")
@@ -4576,6 +4902,10 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+      // No mayWriteStrided: unlike repeat_interleave_final, this one writes the
+      // run of repeated indices as out[j] for j in [start, end), a linear walk
+      // that ignores the output's strides. A pitched concat band would land in
+      // the wrong places, silently, since a placed operand is not copied in.
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_index_final")
@@ -5702,7 +6032,8 @@ void registerBuiltins() {
                                const NodeMap& /*nodeMap*/)
                 -> std::vector<std::vector<Dim>> {
               return elementwiseInputShape(node, frame, map, 0);
-            }}})
+            },
+            .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
       .hasDtypeTemplateParam()

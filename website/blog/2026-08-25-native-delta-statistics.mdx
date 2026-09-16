@@ -1,0 +1,180 @@
+---
+slug: native-delta-statistics
+title: "Native Delta Statistics with Velox Task Barriers"
+authors: [zhztheplayer, xiaoxmeng]
+tags: [tech-blog, task, execution, spark, delta-lake]
+---
+
+Apache Gluten uses Velox to execute Spark workloads natively, including writing
+Delta Lake tables with Velox's Parquet writer. However, writing the data
+natively addressed only one part of the write path. Delta Lake also collects
+per-file statistics, and this statistics path continued to process data one
+Spark row at a time.
+
+To eliminate this overhead, Gluten now evaluates Delta statistics with a native
+Velox aggregation task. A Task Barrier marks the boundary between output files,
+allowing the same task to emit one statistics result, reset its aggregation
+state, and continue with the next file.
+
+<!-- truncate -->
+
+## The Problem: Row-Based Statistics in a Native Write Path
+
+When Delta Lake writes a data file, it collects statistics such as:
+
+- Number of records
+- Minimum values
+- Maximum values
+- Null counts
+
+These statistics are serialized into JSON and stored in the Delta transaction
+log. Query planning can later use them for optimizations such as data skipping.
+
+In Spark's write framework, the Delta writer sends every written row to a
+statistics tracker. This works naturally with Spark's row-based file writer, but
+creates a costly mismatch when Gluten uses the native Velox Parquet writer.
+
+Because Spark already controls file creation and rotation, Gluten creates each
+Parquet writer directly through JNI rather than using Velox TableWriter. This
+avoids constructing and scheduling a Velox task for every Spark-managed file.
+
+The Parquet writer operates on columnar batches, while the original statistics
+adapter expected individual Spark rows. As a result, Gluten had to convert each
+native batch back to rows and invoke the statistics tracker once per row.
+
+<figure>
+  <img src="/img/delta-statistics-before.svg" height= "100%" width="100%"/>
+  <figcaption>
+    Before: Native batches are converted back to rows for Delta statistics
+    collection.
+  </figcaption>
+</figure>
+
+For large writes or wide tables with statistics collected across many columns,
+columnar-to-row conversion and per-row statistics evaluation can become a
+significant part of the total write cost.
+
+The desired design was straightforward: send the columnar batches to Velox and
+calculate the statistics using native aggregation. The difficulty was preserving
+Delta's per-file statistics semantics.
+
+A single Spark task can create many output files. Each file must have an
+independent aggregation result:
+
+```text
+file A batches -> statistics for file A
+file B batches -> statistics for file B
+file C batches -> statistics for file C
+```
+
+Creating a new Velox task for every file would provide isolation, but repeatedly
+constructing the same plan, operators, memory pools, and execution machinery
+would introduce unnecessary overhead. Reusing one aggregation task required a
+way to flush and reset it at every file boundary.
+
+## Task Barriers for Velox Hash Aggregation
+
+Velox Task Barrier provides a synchronization point within a running task. It
+drains all data before the barrier, flushes operator output, resets operator
+state, and then allows the task to process the next set of input splits.
+
+For an introduction to the general mechanism, see
+[Task Barrier: Efficient Task Reuse and Streaming Checkpoints in Velox](/blog/task-barrier).
+
+The Delta statistics writer relies specifically on barrier support in
+`HashAggregation`.
+
+When a barrier reaches the hash aggregation operator, the operator enters its
+draining state. It stops accepting input for the current cycle and makes the
+current aggregation result available through its normal output path.
+
+After all aggregation output has been consumed, `HashAggregation::finishDrain()`
+resets the state:
+
+```cpp
+void HashAggregation::finishDrain() {
+  if (!isDraining()) {
+    return;
+  }
+  groupingSet_->resetTable(/*freeTable=*/false);
+  if (isGlobal_) {
+    groupingSet_->resetGlobalAggregation();
+  }
+  Operator::finishDrain();
+}
+```
+
+Two parts of this reset are important.
+
+First, `resetTable(/*freeTable=*/false)` clears the contents of the aggregation
+table without unnecessarily releasing its underlying allocation. The next
+cycle can therefore reuse task and operator infrastructure rather than starting
+from scratch.
+
+Second, a global aggregation has state that is not represented as ordinary
+grouping keys in the hash table. `resetGlobalAggregation()` reinitializes that
+state so values from the previous file cannot affect the next file.
+
+With the aggregation state reset, the task resumes with the next input split.
+
+## Native Statistics with Task Barriers
+
+The new tracker converts Delta's existing statistics expressions into a native
+Velox global aggregation plan, avoiding row conversion while preserving the
+same statistics semantics.
+
+The Spark Delta writer then fans each columnar batch into two logical paths:
+
+- The Velox Parquet writer writes the batch to the data file.
+- The native statistics tracker sends the batch to the reusable Velox
+  aggregation task.
+
+<figure>
+  <img src="/img/delta-statistics-after.svg" height= "100%" width="100%"/>
+  <figcaption>
+    After: Task Barriers flush and reset a reusable native statistics task at
+    each file boundary.
+  </figcaption>
+</figure>
+
+When the writer opens a file, Gluten adds an input iterator split to the Velox
+task, requests a barrier, and feeds the file's native batches into the
+aggregation.
+
+At the end of a file, Gluten signals the end of that input iterator. The Velox
+task drains the global aggregation and emits at most one result row. Gluten
+converts only this aggregate result to a Spark row and evaluates Delta's final
+statistics expression to produce the JSON value.
+
+The result is recorded by file name:
+
+```text
+part-00000-....parquet -> {"numRecords":...,"minValues":...}
+part-00001-....parquet -> {"numRecords":...,"minValues":...}
+```
+
+Once the result has been drained, the barrier resets the hash aggregation state.
+The same Velox task is then ready for the next file.
+
+## Performance
+
+We benchmarked Delta writes using the TPC-DS SF10 tables with 8 CPU cores and
+20 GiB of RAM. The typical output file size was approximately 10 MiB.
+
+<figure>
+  <img src="/img/delta-statistics-perf.png" height= "100%" width="100%"/>
+  <figcaption>
+    TPC-DS SF10 Delta table write performance. Lower execution time is better.
+  </figcaption>
+</figure>
+
+The total write time was 467.8 seconds with Vanilla Spark, 478.4 seconds with
+Gluten before the optimization, and 290.0 seconds after the optimization.
+Relative to Vanilla Spark, Gluten's Delta write speedup improved from -2.22% to
+61.31%.
+
+## References
+
+- [Task Barrier: Efficient Task Reuse and Streaming Checkpoints in Velox](/blog/task-barrier)
+- [Delta Lake Protocol: Per-file Statistics](https://github.com/delta-io/delta/blob/master/PROTOCOL.md#per-file-statistics)
+- [Using Gluten with Delta Lake](https://apache.github.io/gluten/get-started/VeloxDelta.html)

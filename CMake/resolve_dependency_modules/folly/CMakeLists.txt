@@ -17,10 +17,10 @@ cmake_minimum_required(VERSION 3.28)
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat CONFIG REQUIRED)
 
-set(VELOX_FOLLY_BUILD_VERSION v2026.01.05.00)
+set(VELOX_FOLLY_BUILD_VERSION v2026.07.13.00)
 set(
   VELOX_FOLLY_BUILD_SHA256_CHECKSUM
-  8b41494b664fcde3d02f652d6a27381ec5e938ef58cf986d8ce4958d424af101
+  b2d4bc0029d466328e807efa673ad01c1086c385ffa800f2055543c3b9640a72
 )
 set(
   VELOX_FOLLY_SOURCE_URL
@@ -56,10 +56,6 @@ set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 set(FOLLY_HAVE_INT128_T ON)
 
 FetchContent_MakeAvailable(folly)
-
-# Folly::folly is not valid for FC but we want to match FindFolly
-add_library(Folly::folly ALIAS folly)
-add_library(Folly::follybenchmark ALIAS follybenchmark)
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
   add_dependencies(folly glog::glog gflags::gflags fmt::fmt)

@@ -1111,6 +1111,39 @@ TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
       {BOOLEAN(), DECIMAL(8, 5), BOOLEAN(), DECIMAL(12, 2), INTEGER()},
       DECIMAL(15, 5),
       {nullptr, DECIMAL(15, 5), nullptr, DECIMAL(15, 5), DECIMAL(15, 5)});
+
+  // A null literal condition, which types as UNKNOWN, coerces to boolean.
+  testSpecialFormCoercions(
+      "switch",
+      {UNKNOWN(), BIGINT(), BOOLEAN(), BIGINT(), BIGINT()},
+      BIGINT(),
+      {BOOLEAN(), nullptr, nullptr, nullptr, nullptr});
+
+  // A condition of any other type does not.
+  testSpecialFormCannotResolve("switch", {INTEGER(), BIGINT(), BIGINT()});
+}
+
+TEST_F(FunctionRegistryTest, resolveConjunctWithCoercions) {
+  auto resolve = [](const std::string& name,
+                    const std::vector<TypePtr>& argTypes) {
+    std::vector<TypePtr> coercions;
+    auto type = resolveCallableSpecialFormWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    return std::make_pair(type, coercions);
+  };
+
+  // A null literal argument, which types as UNKNOWN, coerces to boolean.
+  auto [andType, andCoercions] = resolve("and", {UNKNOWN(), BOOLEAN()});
+  VELOX_EXPECT_EQ_TYPES(andType, BOOLEAN());
+  EXPECT_THAT(andCoercions, testing::ElementsAre(BOOLEAN(), nullptr));
+
+  auto [orType, orCoercions] = resolve("or", {BOOLEAN(), UNKNOWN()});
+  VELOX_EXPECT_EQ_TYPES(orType, BOOLEAN());
+  EXPECT_THAT(orCoercions, testing::ElementsAre(nullptr, BOOLEAN()));
+
+  // An argument of any other type does not.
+  testSpecialFormCannotResolve("and", {BOOLEAN(), INTEGER()});
+  testSpecialFormCannotResolve("or", {VARCHAR(), BOOLEAN()});
 }
 
 TEST_F(FunctionRegistryTest, resolveCaseWithCoercions) {

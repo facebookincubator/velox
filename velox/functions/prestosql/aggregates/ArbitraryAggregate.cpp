@@ -166,7 +166,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       : exec::Aggregate(resultType) {}
 
   int32_t accumulatorFixedWidthSize() const override {
-    return clusteredInput_ ? sizeof(ClusteredNonNumericAccumulator)
+    return canRetainInput_ ? sizeof(ClusteredNonNumericAccumulator)
                            : sizeof(SingleValueAccumulator);
   }
 
@@ -178,7 +178,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       override {
     VELOX_CHECK_NOT_NULL(result);
     (*result)->resize(numGroups);
-    if (clusteredInput_) {
+    if (canRetainInput_) {
       bool singleSource{true};
       VectorPtr* currentSource = nullptr;
       VELOX_DCHECK(copyRanges_.empty());
@@ -266,7 +266,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    VELOX_CHECK(!clusteredInput_);
+    VELOX_CHECK(!canRetainInput_);
     decoded_.decode(*args[0], rows, true);
     if (decoded_.isConstantMapping() && decoded_.isNullAt(rows.begin())) {
       // nothing to do; all values are nulls
@@ -287,7 +287,7 @@ class NonNumericArbitrary : public exec::Aggregate {
   }
 
   bool supportsAddRawClusteredInput() const override {
-    return clusteredInput_;
+    return canRetainInput_;
   }
 
   void addRawClusteredInput(
@@ -295,7 +295,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       const folly::Range<const vector_size_t*>& groupBoundaries) override {
-    VELOX_CHECK(clusteredInput_);
+    VELOX_CHECK(canRetainInput_);
     // Since we're going through the process of decoding anyway, store the base
     // so that downstream operators don't need to.
     const auto base = decoded_.decodeAndGetBase(args[0]);
@@ -343,7 +343,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*unused*/) override {
-    VELOX_CHECK(!clusteredInput_);
+    VELOX_CHECK(!canRetainInput_);
     auto* accumulator = value<SingleValueAccumulator>(group);
     if (accumulator->hasValue()) {
       return;
@@ -382,7 +382,7 @@ class NonNumericArbitrary : public exec::Aggregate {
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
     for (auto i : indices) {
-      if (clusteredInput_) {
+      if (canRetainInput_) {
         new (groups[i] + offset_) ClusteredNonNumericAccumulator();
       } else {
         new (groups[i] + offset_) SingleValueAccumulator();
@@ -393,7 +393,7 @@ class NonNumericArbitrary : public exec::Aggregate {
   void destroyInternal(folly::Range<char**> groups) override {
     for (auto group : groups) {
       if (isInitialized(group)) {
-        if (clusteredInput_) {
+        if (canRetainInput_) {
           auto* accumulator = value<ClusteredNonNumericAccumulator>(group);
           std::destroy_at(accumulator);
         } else {

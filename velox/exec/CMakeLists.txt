@@ -30,9 +30,16 @@ velox_add_library(
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
-  ExchangeClient.cpp
+  InMemoryExchangeClient.cpp
   ExchangeQueue.cpp
+  ExchangeSink.cpp
   ExchangeSource.cpp
+  FileExchangeFormat.cpp
+  FileExchangeSink.cpp
+  FileExchangeSource.cpp
+  MaterializedOutputBuffer.cpp
+  MaterializedOutputBufferManager.cpp
+  MaterializedPartitionedOutput.cpp
   SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
@@ -132,9 +139,14 @@ velox_add_library(
   EnforceSingleRow.h
   Exchange.h
   ExchangeClient.h
+  InMemoryExchangeClient.h
   ExchangeQueue.h
+  ExchangeSink.h
   ExchangeSource.h
   Expand.h
+  FileExchangeFormat.h
+  FileExchangeSink.h
+  FileExchangeSource.h
   FilterProject.h
   GroupId.h
   GroupingSet.h
@@ -155,6 +167,9 @@ velox_add_library(
   LocalPlanner.h
   MarkDistinct.h
   MarkSorted.h
+  MaterializedOutputBuffer.h
+  MaterializedOutputBufferManager.h
+  MaterializedPartitionedOutput.h
   MemoryReclaimer.h
   Merge.h
   MergeJoin.h

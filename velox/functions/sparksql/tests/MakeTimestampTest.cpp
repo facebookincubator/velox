@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
@@ -30,6 +31,67 @@ class MakeTimestampTest : public SparkFunctionBaseTest {
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
   }
+
+  // Evaluates the 6-argument (year, month, day, hour, minute, micros) form
+  // of 'functionName'.
+  std::optional<Timestamp> evalMakeTimestamp(
+      const std::string& functionName,
+      std::optional<int32_t> year,
+      std::optional<int32_t> month,
+      std::optional<int32_t> day,
+      std::optional<int32_t> hour,
+      std::optional<int32_t> minute,
+      std::optional<int64_t> micros,
+      const TypePtr& microsType) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("{}(c0, c1, c2, c3, c4, c5)", functionName),
+        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        micros);
+  }
+
+  // Evaluates the 7-argument (..., timezone) form of 'functionName'.
+  std::optional<Timestamp> evalMakeTimestampWithTimezone(
+      const std::string& functionName,
+      std::optional<int32_t> year,
+      std::optional<int32_t> month,
+      std::optional<int32_t> day,
+      std::optional<int32_t> hour,
+      std::optional<int32_t> minute,
+      std::optional<int64_t> micros,
+      std::optional<std::string> timezone,
+      const TypePtr& microsType) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("{}(c0, c1, c2, c3, c4, c5, c6)", functionName),
+        {INTEGER(),
+         INTEGER(),
+         INTEGER(),
+         INTEGER(),
+         INTEGER(),
+         microsType,
+         VARCHAR()},
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        micros,
+        std::move(timezone));
+  }
+
+  // Evaluates 'functionCall' against 'data' and asserts the result matches
+  // 'expected'.
+  void assertMakeTimestamp(
+      const std::string& functionCall,
+      const RowVectorPtr& data,
+      const VectorPtr& expected) {
+    auto result = evaluate(functionCall, data);
+    facebook::velox::test::assertEqualVectors(expected, result);
+  }
 };
 
 TEST_F(MakeTimestampTest, basic) {
@@ -37,18 +99,19 @@ TEST_F(MakeTimestampTest, basic) {
   const auto testMakeTimestamp = [&](const RowVectorPtr& data,
                                      const VectorPtr& expected,
                                      bool hasTimeZone) {
-    auto result = hasTimeZone
-        ? evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", data)
-        : evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data);
-    facebook::velox::test::assertEqualVectors(expected, result);
+    assertMakeTimestamp(
+        hasTimeZone ? "make_timestamp(c0, c1, c2, c3, c4, c5, c6)"
+                    : "make_timestamp(c0, c1, c2, c3, c4, c5)",
+        data,
+        expected);
   };
   const auto testConstantTimezone = [&](const RowVectorPtr& data,
                                         const std::string& timezone,
                                         const VectorPtr& expected) {
-    auto result = evaluate(
+    assertMakeTimestamp(
         fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timezone),
-        data);
-    facebook::velox::test::assertEqualVectors(expected, result);
+        data,
+        expected);
   };
 
   // Valid cases w/o time zone argument.
@@ -114,33 +177,19 @@ TEST_F(MakeTimestampTest, errors) {
     std::vector<std::optional<Timestamp>> nullResults(
         data->size(), std::nullopt);
     auto expected = makeNullableFlatVector<Timestamp>(nullResults);
-    auto result = evaluate("make_timestamp(c0, c1, c2, c3, c4, c5)", data);
-    facebook::velox::test::assertEqualVectors(expected, result);
+    assertMakeTimestamp(
+        "make_timestamp(c0, c1, c2, c3, c4, c5)", data, expected);
   };
   std::optional<int32_t> one = 1;
   const auto testInvalidSeconds = [&](std::optional<int64_t> microsec) {
-    auto result = evaluateOnce<Timestamp>(
-        "make_timestamp(c0, c1, c2, c3, c4, c5)",
-        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
-        one,
-        one,
-        one,
-        one,
-        one,
-        microsec);
+    auto result = evalMakeTimestamp(
+        "make_timestamp", one, one, one, one, one, microsec, microsType);
     EXPECT_EQ(result, std::nullopt);
   };
   const auto testInvalidArguments = [&](std::optional<int64_t> microsec,
                                         const TypePtr& microsType) {
-    return evaluateOnce<Timestamp>(
-        "make_timestamp(c0, c1, c2, c3, c4, c5)",
-        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
-        one,
-        one,
-        one,
-        one,
-        one,
-        microsec);
+    return evalMakeTimestamp(
+        "make_timestamp", one, one, one, one, one, microsec, microsType);
   };
 
   // Throw if no session time zone.
@@ -177,10 +226,14 @@ TEST_F(MakeTimestampTest, errors) {
   testInvalidSeconds(999999999);
   testInvalidSeconds(60007000);
 
-  // Throw if data type for microseconds is invalid.
+  // Throw if data type for microseconds is invalid. Seconds must be a short
+  // decimal (precision <= 18) with scale 6; both a too-large precision and a
+  // wrong scale fail signature resolution rather than a runtime check.
   VELOX_ASSERT_THROW(
       testInvalidArguments(1e6, DECIMAL(20, 6)),
-      "Seconds must be short decimal type but got DECIMAL(20, 6)");
+      "Scalar function signature is not supported: "
+      "make_timestamp(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
+      "DECIMAL(20, 6)).");
   VELOX_ASSERT_THROW(
       testInvalidArguments(1e6, DECIMAL(16, 8)),
       "Scalar function signature is not supported: "
@@ -204,15 +257,15 @@ TEST_F(MakeTimestampTest, ansiErrors) {
                         int32_t hour,
                         int32_t minute,
                         int64_t micros) {
-    return evaluateOnce<Timestamp>(
-        "make_timestamp(c0, c1, c2, c3, c4, c5)",
-        {INTEGER(), INTEGER(), INTEGER(), INTEGER(), INTEGER(), microsType},
+    return evalMakeTimestamp(
+        "make_timestamp",
         std::optional<int32_t>(year),
         std::optional<int32_t>(month),
         std::optional<int32_t>(day),
         std::optional<int32_t>(hour),
         std::optional<int32_t>(minute),
-        std::optional<int64_t>(micros));
+        std::optional<int64_t>(micros),
+        microsType);
   };
 
   // Hour out of range.
@@ -291,14 +344,13 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
   setQueryTimeZone("GMT");
   for (auto timeZone : {"Invalid", ""}) {
     SCOPED_TRACE(fmt::format("timezone: {}", timeZone));
-    auto result = evaluate(
+    assertMakeTimestamp(
         fmt::format("make_timestamp(c0, c1, c2, c3, c4, c5, '{}')", timeZone),
-        data);
-    facebook::velox::test::assertEqualVectors(allNull, result);
+        data,
+        allNull);
   }
-  auto result =
-      evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones);
-  facebook::velox::test::assertEqualVectors(allNull, result);
+  assertMakeTimestamp(
+      "make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones, allNull);
 
   // ANSI on: invalid timezone throws.
   queryCtx_->testingOverrideConfigUnsafe({
@@ -318,6 +370,207 @@ TEST_F(MakeTimestampTest, invalidTimezone) {
   VELOX_ASSERT_USER_THROW(
       evaluate("make_timestamp(c0, c1, c2, c3, c4, c5, c6)", dataWithTimeZones),
       "Unknown time zone: 'Invalid'");
+}
+
+TEST_F(MakeTimestampTest, makeTimestampNtz) {
+  const auto microsType = DECIMAL(16, 6);
+  const auto year = makeFlatVector<int32_t>({2021, 2021, 2021, 2021});
+  const auto month = makeFlatVector<int32_t>({7, 7, 7, 7});
+  const auto day = makeFlatVector<int32_t>({11, 11, 11, 11});
+  const auto hour = makeFlatVector<int32_t>({6, 6, 6, 6});
+  const auto minute = makeFlatVector<int32_t>({30, 30, 30, 30});
+  const auto micros = makeFlatVector<int64_t>(
+      {45'678'000, 1'000'000, 60'000'000, 59'999'999}, microsType);
+  auto data = makeRowVector({year, month, day, hour, minute, micros});
+  auto expected = makeNullableFlatVector<Timestamp>(
+      {parseTimestamp("2021-07-11 06:30:45.678"),
+       parseTimestamp("2021-07-11 06:30:01"),
+       parseTimestamp("2021-07-11 06:31:00"),
+       parseTimestamp("2021-07-11 06:30:59.999999")},
+      TIMESTAMP_UTC());
+
+  assertMakeTimestamp(
+      "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data, expected);
+
+  SCOPE_EXIT {
+    setQueryTimeZone("");
+  };
+  setQueryTimeZone("America/Los_Angeles");
+  assertMakeTimestamp(
+      "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data, expected);
+
+  setQueryTimeZone("Asia/Riyadh");
+  assertMakeTimestamp(
+      "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data, expected);
+}
+
+TEST_F(MakeTimestampTest, makeTimestampNtzErrors) {
+  const auto microsType = DECIMAL(16, 6);
+  std::optional<int32_t> one = 1;
+
+  EXPECT_NO_THROW(evalMakeTimestamp(
+      "make_timestamp_ntz",
+      one,
+      one,
+      one,
+      one,
+      one,
+      std::optional<int64_t>(45'678'000),
+      microsType));
+
+  const auto testInvalidSeconds = [&](std::optional<int64_t> microsec) {
+    auto result = evalMakeTimestamp(
+        "make_timestamp_ntz", one, one, one, one, one, microsec, microsType);
+    EXPECT_EQ(result, std::nullopt);
+  };
+  testInvalidSeconds(61'000'000);
+  testInvalidSeconds(60'007'000);
+
+  // Throw if data type for microseconds is invalid, same as make_timestamp.
+  VELOX_ASSERT_THROW(
+      evalMakeTimestamp(
+          "make_timestamp_ntz",
+          one,
+          one,
+          one,
+          one,
+          one,
+          std::optional<int64_t>(1'000'000),
+          DECIMAL(20, 6)),
+      "Scalar function signature is not supported: "
+      "make_timestamp_ntz(INTEGER, INTEGER, INTEGER, INTEGER, INTEGER, "
+      "DECIMAL(20, 6)).");
+}
+
+TEST_F(MakeTimestampTest, tryMakeTimestampNtz) {
+  const auto microsType = DECIMAL(16, 6);
+  std::optional<int32_t> one = 1;
+
+  // try_make_timestamp_ntz returns NULL under ANSI mode.
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  };
+  queryCtx_->testingOverrideConfigUnsafe({
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
+
+  VELOX_ASSERT_USER_THROW(
+      evalMakeTimestamp(
+          "make_timestamp_ntz",
+          one,
+          one,
+          one,
+          one,
+          one,
+          std::optional<int64_t>(61'000'000),
+          microsType),
+      "Invalid value for second");
+
+  auto result = evalMakeTimestamp(
+      "try_make_timestamp_ntz",
+      one,
+      one,
+      one,
+      one,
+      one,
+      std::optional<int64_t>(61'000'000),
+      microsType);
+  EXPECT_EQ(result, std::nullopt);
+
+  result = evalMakeTimestamp(
+      "try_make_timestamp_ntz",
+      std::optional<int32_t>(2021),
+      std::optional<int32_t>(7),
+      std::optional<int32_t>(11),
+      std::optional<int32_t>(6),
+      std::optional<int32_t>(30),
+      std::optional<int64_t>(45'678'000),
+      microsType);
+  EXPECT_EQ(result, parseTimestamp("2021-07-11 06:30:45.678"));
+}
+
+TEST_F(MakeTimestampTest, tryMakeTimestamp) {
+  const auto microsType = DECIMAL(16, 6);
+  std::optional<int32_t> one = 1;
+
+  // Missing session timezone still throws for the 6-arg form -- this is a
+  // Velox configuration guard, not a data-validation error, so it isn't
+  // suppressed by try semantics.
+  VELOX_ASSERT_USER_THROW(
+      evalMakeTimestamp(
+          "try_make_timestamp",
+          one,
+          one,
+          one,
+          one,
+          one,
+          std::optional<int64_t>(45'678'000),
+          microsType),
+      "make_timestamp requires session time zone to be set.");
+
+  setQueryTimeZone("GMT");
+
+  // Valid inputs match make_timestamp exactly, 6-arg and 7-arg.
+  auto result = evalMakeTimestamp(
+      "try_make_timestamp",
+      std::optional<int32_t>(2021),
+      std::optional<int32_t>(7),
+      std::optional<int32_t>(11),
+      std::optional<int32_t>(6),
+      std::optional<int32_t>(30),
+      std::optional<int64_t>(45'678'000),
+      microsType);
+  EXPECT_EQ(result, parseTimestamp("2021-07-11 06:30:45.678"));
+
+  result = evalMakeTimestampWithTimezone(
+      "try_make_timestamp",
+      std::optional<int32_t>(2021),
+      std::optional<int32_t>(7),
+      std::optional<int32_t>(11),
+      std::optional<int32_t>(6),
+      std::optional<int32_t>(30),
+      std::optional<int64_t>(45'678'000),
+      std::optional<std::string>("CET"),
+      microsType);
+  // Same (year, month, day, hour, minute, micros, "CET") row as the 'CET'
+  // case in the `basic` test above.
+  EXPECT_EQ(result, parseTimestamp("2021-07-11 04:30:45.678"));
+
+  // try_make_timestamp returns NULL under ANSI mode, unlike make_timestamp
+  // (already covered by ansiErrors/invalidTimezone).
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"}});
+  };
+  queryCtx_->testingOverrideConfigUnsafe({
+      {core::QueryConfig::kSessionTimezone, "GMT"},
+      {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"},
+  });
+
+  result = evalMakeTimestamp(
+      "try_make_timestamp",
+      one,
+      one,
+      one,
+      one,
+      one,
+      std::optional<int64_t>(61'000'000),
+      microsType);
+  EXPECT_EQ(result, std::nullopt);
+
+  result = evalMakeTimestampWithTimezone(
+      "try_make_timestamp",
+      one,
+      one,
+      one,
+      one,
+      one,
+      std::optional<int64_t>(45'678'000),
+      std::optional<std::string>("Invalid"),
+      microsType);
+  EXPECT_EQ(result, std::nullopt);
 }
 
 } // namespace

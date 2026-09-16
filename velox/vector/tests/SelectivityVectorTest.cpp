@@ -100,11 +100,11 @@ void setValid_normal(bool setToValue) {
 
 } // namespace
 
-TEST(SelectivityVectorTest, setValid_true_normal) {
+TEST(SelectivityVectorTest, setValidTrueNormal) {
   setValid_normal(true);
 }
 
-TEST(SelectivityVectorTest, setValid_false_normal) {
+TEST(SelectivityVectorTest, setValidFalseNormal) {
   setValid_normal(false);
 }
 
@@ -271,11 +271,11 @@ void testEquals(
 
 } // namespace
 
-TEST(SelectivityVectorTest, operatorEquals_allEqual) {
+TEST(SelectivityVectorTest, operatorEqualsAllEqual) {
   testEquals(true /*expectEqual*/);
 }
 
-TEST(SelectivityVectorTest, operatorEquals_dataNotEqual) {
+TEST(SelectivityVectorTest, operatorEqualsDataNotEqual) {
   testEquals(
       false /*expectEqual*/, [](auto& vector) { vector.setValid(10, false); });
 }

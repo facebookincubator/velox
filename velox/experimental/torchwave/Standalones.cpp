@@ -413,6 +413,19 @@ void runStandaloneShortcut(
       setOutput(c10::IValue(std::move(list)));
       break;
     }
+    case StandaloneShortcut::kSymSize: {
+      // (Tensor self, int dim) -> SymInt. The frame already holds the tensor,
+      // so this is a field read. The D2H path writes a plain Int IValue for a
+      // SymInt-typed kernel return, so produce the same thing here.
+      auto self = tensorAt(0);
+      const auto dim = c10::maybe_wrap_dim(intAt(1), self.dim());
+      setOutput(c10::IValue(self.size(dim)));
+      break;
+    }
+    case StandaloneShortcut::kSymNumel: {
+      setOutput(c10::IValue(tensorAt(0).numel()));
+      break;
+    }
     case StandaloneShortcut::kNone:
       break;
   }
