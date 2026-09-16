@@ -420,9 +420,11 @@ void CudfHashJoinBuild::doNoMoreInput() {
     auto normalized = normalizeKeyColumns(
         buildKeyView, buildKeyIsTswtz, stream, get_temp_mr());
     if (normalized.normalizedAny()) {
-      auto owned = std::make_shared<cudf::table>(std::move(normalized.owned));
-      // Rebuild the view over the owned copy: normalized.view referenced the
-      // vector we just moved out of.
+      // normalized.view contains all join keys, while normalized.owned
+      // contains only newly allocated TIMESTAMP WITH TIME ZONE columns. Copy
+      // the full view so unchanged keys in a composite join are retained.
+      auto owned =
+          std::make_shared<cudf::table>(normalized.view, stream, get_temp_mr());
       normalizedBuildKeys.push_back(owned);
       buildKeyView = owned->view();
     } else {

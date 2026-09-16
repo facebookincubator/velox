@@ -34,7 +34,9 @@ namespace facebook::velox::cudf_velox {
 ///
 /// `owned` holds only the columns this normalization created; every other
 /// column in `view` still refers to the caller's input. So `owned` must outlive
-/// `view`, and `view` must not outlive the table it was built from.
+/// `view`, and `view` must not outlive the table it was built from. In
+/// particular, `owned` is not a complete key table when only some columns need
+/// normalization.
 struct NormalizedKeys {
   cudf::table_view view;
   std::vector<std::unique_ptr<cudf::column>> owned;

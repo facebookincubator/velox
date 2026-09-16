@@ -9739,6 +9739,50 @@ TEST_F(HashJoinTest, innerJoinTimestampWithTimeZoneMatchesOnInstant) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(HashJoinTest, innerJoinTimestampWithTimeZoneCompositeKeys) {
+  const int64_t a = 1'623'758'400'000;
+  const int64_t b = -14'182'940'000;
+  auto probe = makeRowVector(
+      {"k", "id", "probe_value"},
+      {makeFlatVector<int64_t>(
+           {packJoinKey(a, "Pacific/Kiritimati"),
+            packJoinKey(a, "Pacific/Kiritimati"),
+            packJoinKey(b, "Pacific/Kiritimati")},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<int64_t>({10, 20, 30}),
+       makeFlatVector<int64_t>({100, 200, 300})});
+  auto build = makeRowVector(
+      {"u_k", "u_id", "build_value"},
+      {makeFlatVector<int64_t>(
+           {packJoinKey(a, "Pacific/Midway"),
+            packJoinKey(a, "Asia/Kolkata"),
+            packJoinKey(a + 1, "Pacific/Midway"),
+            packJoinKey(b, "Asia/Kolkata")},
+           TIMESTAMP_WITH_TIME_ZONE()),
+       makeFlatVector<int64_t>({10, 99, 20, 30}),
+       makeFlatVector<int64_t>({1'000, 9'900, 2'000, 3'000})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .hashJoin(
+              {"k", "id"},
+              {"u_k", "u_id"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "",
+              {"id", "probe_value", "u_id", "build_value"},
+              core::JoinType::kInner)
+          .planNode();
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({10, 30}),
+       makeFlatVector<int64_t>({100, 300}),
+       makeFlatVector<int64_t>({10, 30}),
+       makeFlatVector<int64_t>({1'000, 3'000})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 // A left join is the shape where the defect is quietest: instead of an empty
 // result it produces the right ROW COUNT with every build column null, which
 // looks like "no matches" rather than a bug.
