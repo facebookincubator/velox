@@ -97,7 +97,8 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr =
       optimizeTypedExpr("a + c", rowType_, queryCtx_.get(), execCtx_.get());
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -107,7 +108,8 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto expr = optimizeTypedExpr(
       "lower(name)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -121,7 +123,8 @@ TEST_F(CudfExpressionSelectionTest, gpuSfiClaimsWhatOtherEvaluatorsCannot) {
   auto expr = optimizeTypedExpr(
       "bitwise_and(a, b)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   EXPECT_NE(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
 }
 
@@ -146,7 +149,10 @@ TEST_F(CudfExpressionSelectionTest, nonCallRootsAreStillCovered) {
     auto expr =
         optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
     EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-    EXPECT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+    EXPECT_NE(
+        createCudfExpression(
+            expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+        nullptr);
   }
 }
 
@@ -304,7 +310,10 @@ TEST_F(CudfExpressionSelectionTest, nullLiteralFallsThroughToAnotherEvaluator) {
       "a + cast(null as bigint)", rowType_, queryCtx_.get(), execCtx_.get());
   EXPECT_FALSE(GpuSfiExpression::canEvaluate(expr));
   EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  EXPECT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  EXPECT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 // AST outranks GPU SFI, so a call both can handle must still go to AST. This
@@ -312,7 +321,8 @@ TEST_F(CudfExpressionSelectionTest, nullLiteralFallsThroughToAnotherEvaluator) {
 TEST_F(CudfExpressionSelectionTest, astStillOutranksGpuSfi) {
   auto expr =
       optimizeTypedExpr("a + c", rowType_, queryCtx_.get(), execCtx_.get());
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   EXPECT_EQ(dynamic_cast<GpuSfiExpression*>(cudfExpr.get()), nullptr);
 }
 
@@ -331,7 +341,8 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
       queryCtx_.get(),
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -341,7 +352,8 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   auto expr = optimizeTypedExpr(
       "lower(substr(name, 1, 5))", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
 
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
@@ -394,7 +406,8 @@ TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
 
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -415,7 +428,10 @@ TEST_F(
       1);
 
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  ASSERT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 TEST_F(
@@ -434,7 +450,10 @@ TEST_F(
       "right");
 
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  ASSERT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 // Disabled because this test segfaults in CI while building the typed
@@ -446,7 +465,8 @@ TEST_F(CudfExpressionSelectionTest, DISABLED_functionTopLevelWithNestedAst) {
       queryCtx_.get(),
       execCtx_.get(),
       {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -827,7 +847,8 @@ TEST_F(CudfExpressionSelectionTest, compilerPureAstNoBoundaries) {
   // A simple arithmetic expression handled entirely by AST should compile
   // successfully.
   auto expr = parseAndInferTypedExpr("a + b", rowType_, execCtx_.get());
-  auto result = createCudfExpression(expr, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 
@@ -843,7 +864,8 @@ TEST_F(CudfExpressionSelectionTest, compilerFunctionBoundaryInAst) {
 
   auto expr = parseAndInferTypedExpr(
       "a + b > cardinality(names)", arrayType, execCtx_.get());
-  auto result = createCudfExpression(expr, arrayType, pool_.get());
+  auto result = createCudfExpression(
+      expr, arrayType, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 
@@ -856,7 +878,8 @@ TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
       expression::optimize(expr, queryCtx_.get(), pool_.get());
   ASSERT_NE(optimized, nullptr);
 
-  auto result = createCudfExpression(optimized, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      optimized, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 
   // The optimized tree should have a constant child for the folded value.
@@ -873,7 +896,8 @@ TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
 
 TEST_F(CudfExpressionSelectionTest, compilerSimpleExpressionCompiles) {
   auto expr = parseAndInferTypedExpr("a + b", rowType_, execCtx_.get());
-  auto result = createCudfExpression(expr, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 

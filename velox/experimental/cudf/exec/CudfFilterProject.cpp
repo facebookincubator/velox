@@ -190,7 +190,10 @@ void CudfFilterProject::initialize() {
   const auto optimizeAndCompile =
       [inputType, queryCtx, pool](const core::TypedExprPtr& expr) {
         return createCudfExpression(
-            expression::optimize(expr, queryCtx, pool), inputType, pool);
+            expression::optimize(expr, queryCtx, pool),
+            inputType,
+            pool,
+            queryCtx->queryConfig());
       };
   if (hasFilter_) {
     // First expr is Filter, rest are Project.

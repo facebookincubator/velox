@@ -24,6 +24,12 @@
 #include <string>
 #include <unordered_map>
 
+namespace facebook::velox::core {
+// Named only by reference in the create signature below, so a declaration is
+// enough and QueryConfig.h stays out of every evaluator's include graph.
+class QueryConfig;
+} // namespace facebook::velox::core
+
 namespace facebook::velox::cudf_velox {
 
 class CudfExpression;
@@ -34,7 +40,8 @@ using CudfExpressionEvaluatorCreate =
     std::function<std::shared_ptr<CudfExpression>(
         const core::TypedExprPtr& expr,
         const RowTypePtr& inputRowSchema,
-        memory::MemoryPool* pool)>;
+        memory::MemoryPool* pool,
+        const core::QueryConfig& config)>;
 
 struct CudfExpressionEvaluatorEntry {
   int priority;
