@@ -100,12 +100,12 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
     STATUS
     "UCX exchange enabled with ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched"
   )
-  # ucxx commit 22d9c90 from 2026-09-09 (release/0.52 branch)
-  set(VELOX_ucxx_VERSION 0.52)
-  set(VELOX_ucxx_COMMIT 22d9c90a40055d439c3ec58f2606f2af620c5d71)
+  # ucxx v0.51.01, released 2026-08-12
+  set(VELOX_ucxx_VERSION 0.51)
+  set(VELOX_ucxx_COMMIT 2c309cab417a6f12d5891a423211d7cd993ab3ef)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    cfb042ede89913744033aadacbe6768700a8ee8fe357cb80cbf47f14c9d4df5c
+    76c4a59dd3f47d3062040279a90ce42fc82e955094453a0a15baec627b579afb
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
