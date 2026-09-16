@@ -46,10 +46,10 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
 
 class Exchange : public SourceOperator {
  public:
-  /// 'exchangeClient' is of type InMemoryExchangeClient rather than the abstract
-  /// ExchangeClient, because this operator reads pages off the in-memory
-  /// exchange queue, which belongs to that client's data plane and not to the
-  /// abstract control plane.
+  /// 'exchangeClient' is of type InMemoryExchangeClient rather than the
+  /// abstract ExchangeClient, because this operator reads pages off the
+  /// in-memory exchange queue, which belongs to that client's data plane and
+  /// not to the abstract control plane.
   Exchange(
       int32_t operatorId,
       DriverCtx* driverCtx,
