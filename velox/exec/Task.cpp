@@ -18,6 +18,7 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <exception>
 #include <string>
 
 #include "velox/common/base/Counters.h"
@@ -2929,7 +2930,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     for (auto& split : splits.first) {
       try {
         addRemoteSplit(planNodeId, split);
-      } catch (VeloxRuntimeError& ex) {
+      } catch (const std::exception& ex) {
         LOG(WARNING)
             << "Failed to add remaining remote splits during task termination: "
             << ex.what();
