@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/tests/utils/CudfTpcdsQueryBuilder.h"
@@ -36,6 +37,7 @@ CudfTpcdsQueryBuilder::CudfTpcdsQueryBuilder(
     : TpcdsQueryBuilder(format), ioExecutor_(ioExecutor) {}
 
 void CudfTpcdsQueryBuilder::enableCudf() {
+  CudfConfig::getInstance().allowCpuFallback = false;
   cudf_velox::registerCudf();
   cudfEnabled_ = true;
 }
