@@ -204,9 +204,9 @@ inline SelectorResult selectSplitsImpl(
     for (int r = l; r <= hi; ++r) {
       extractor.extend(r);
       const std::vector<uint64_t>& segValues = extractor.values();
-      const SegmentMetrics metrics =
-          collector.compute(segValues, requiredFlags);
       const int bitWidth = r - l + 1;
+      const SegmentMetrics metrics =
+          collector.compute(segValues, requiredFlags, bitWidth);
 
       EncodingType bestEnc = EncodingType::Trivial;
       const double perSampleCost =
