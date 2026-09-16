@@ -106,15 +106,22 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
-  // TODO: ConnectorQueryCtx does not expose the session QueryCtx, only an
-  // ExpressionEvaluator, so constant folding here runs against a transient
-  // QueryCtx with default query config rather than the session's. Passing the
-  // real session QueryCtx (e.g. by exposing it on ConnectorQueryCtx) should be
-  // figured out later. A local QueryCtx is required because
-  // expression::optimize constant-folds through exec::ExprSet, whose
-  // constructor dereferences the QueryCtx unconditionally; a null QueryCtx
-  // would crash.
-  auto optimizeQueryCtx = core::QueryCtx::create();
+  // ConnectorQueryCtx exposes no session QueryCtx, so the remaining filter is
+  // optimized and compiled against a local one carrying the session settings
+  // expressions read: the time zone and whether to apply it. A local QueryCtx
+  // is needed at all because expression::optimize constant-folds through
+  // exec::ExprSet, which dereferences it.
+  std::unordered_map<std::string, std::string> sessionSettings{
+      {core::QueryConfig::kAdjustTimestampToTimezone,
+       connectorQueryCtx->adjustTimestampToTimezone() ? "true" : "false"}};
+  // An empty time zone is not a valid setting; leaving it unset means UTC.
+  if (!connectorQueryCtx->sessionTimezone().empty()) {
+    sessionSettings.emplace(
+        core::QueryConfig::kSessionTimezone,
+        connectorQueryCtx->sessionTimezone());
+  }
+  auto optimizeQueryCtx = core::QueryCtx::create(
+      nullptr, core::QueryConfig{std::move(sessionSettings)});
   optimizedRemainingFilter_ = remainingFilter
       ? expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool_)
       : nullptr;
@@ -138,7 +145,10 @@ CudfHiveDataSource::CudfHiveDataSource(
     // directly.
     auto const remainingFilterType = getTableRowType();
     cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_, remainingFilterType, pool_);
+        optimizedRemainingFilter_,
+        remainingFilterType,
+        pool_,
+        optimizeQueryCtx->queryConfig());
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant
