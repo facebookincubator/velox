@@ -32,6 +32,14 @@ std::unique_ptr<TabletWriter> TabletWriter::create(
     velox::WriteFile* file,
     velox::memory::MemoryPool& pool,
     TabletWriter::Options options) {
+  if (options.enableChunkIndex) {
+    NIMBLE_USER_CHECK(
+        !options.enableChunkStats ||
+            options.chunkStatsVersion == ChunkStatsVersion::kV1,
+        "Chunk stats versions cannot both be enabled.");
+    options.enableChunkStats = true;
+    options.chunkStatsVersion = ChunkStatsVersion::kV1;
+  }
   return std::unique_ptr<TabletWriter>(
       new TabletWriter(file, pool, std::move(options)));
 }
@@ -44,10 +52,9 @@ TabletWriter::TabletWriter(
       pool_(&pool),
       options_(std::move(options)),
       checksum_{ChecksumFactory::create(options_.checksumType)},
-      // TODO: keeps the chunkIndex name for now; rename to the chunkStats
-      // naming once per-chunk null/min/max stats are fully rolled out.
       chunkStatsWriter_{
-          options_.enableChunkIndex ? std::make_unique<ChunkStatsWriter>(
+          options_.enableChunkStats ? ChunkStatsWriter::create(
+                                          options_.chunkStatsVersion,
                                           pool,
                                           options_.chunkStatsMinAvgChunks)
                                     : nullptr} {}

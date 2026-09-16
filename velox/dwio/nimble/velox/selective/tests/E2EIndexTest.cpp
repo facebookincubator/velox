@@ -280,7 +280,8 @@ class E2EIndexTestBase : public ::testing::Test {
 
     WriterOptions options;
     options.enableChunking = true;
-    options.enableChunkIndex = enableChunkIndex;
+    options.enableChunkStats = enableChunkIndex;
+    options.chunkStatsVersion = ChunkStatsVersion::kV1;
     auto clusterIndexConfig =
         ClusterIndexConfigBuilder{}
             .withKeyColumns(indexColumns)

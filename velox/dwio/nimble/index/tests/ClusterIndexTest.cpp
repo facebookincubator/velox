@@ -1520,7 +1520,8 @@ TEST_F(ClusterIndexTest, indexDataReuseWithSameReader) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -1649,7 +1650,8 @@ TEST_F(ClusterIndexTest, indexDataReuseCrossReaders) {
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
@@ -1797,7 +1799,8 @@ std::shared_ptr<velox::ReadFile> writeThreeChunkPartitionFile(
       {
           .metadataFlushThreshold = 1024 * 1024 * 1024,
           .streamDeduplicationEnabled = false,
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV1,
           .stripeGroupFlushCallback =
               indexHelper.createStripeGroupFlushCallback(),
           .closeCallback = indexHelper.createCloseCallback(),
