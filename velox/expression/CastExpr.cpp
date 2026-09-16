@@ -17,6 +17,7 @@
 #include "velox/expression/CastExpr.h"
 
 #include <fmt/format.h>
+#include <folly/Likely.h>
 #include <stdexcept>
 #include <type_traits>
 
@@ -168,14 +169,30 @@ VectorPtr CastExpr::castFromDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
-      VELOX_DCHECK(toType->equivalent(*TIMESTAMP()));
-      static const int64_t kMillisPerDay{86'400'000};
+      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
+      if (toType->equivalent(*TIMESTAMP_UTC())) {
+        // Use applyToSelected to retain the exception even when isTryCast_ is
+        // enabled.
+        rows.applyToSelected([&](vector_size_t row) {
+          const auto date = inputFlatVector->valueAt(row);
+          if (FOLLY_UNLIKELY(hooks_->isDateOverflowForTimestampUtc(date))) {
+            if (hooks_->truncate()) {
+              VELOX_USER_FAIL(
+                  makeErrorMessage(input, row, toType) +
+                  " Date value is out of range for TIMESTAMP_UTC.");
+            }
+            resultFlatVector->setNull(row, true);
+            return;
+          }
+          resultFlatVector->set(row, Timestamp::fromDate(date));
+        });
+        return castResult;
+      }
+
       const auto* timeZone =
           getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
-      auto* resultFlatVector = castResult->as<FlatVector<Timestamp>>();
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
-        auto timestamp = Timestamp::fromMillis(
-            inputFlatVector->valueAt(row) * kMillisPerDay);
+        auto timestamp = Timestamp::fromDate(inputFlatVector->valueAt(row));
         if (timeZone) {
           hooks_->castDateTimestampToGMT(timestamp, *timeZone);
         }
@@ -231,8 +248,27 @@ VectorPtr CastExpr::castToDate(
       return castResult;
     }
     case TypeKind::TIMESTAMP: {
-      VELOX_DCHECK(fromType->equivalent(*TIMESTAMP()));
       auto* inputVector = input.as<SimpleVector<Timestamp>>();
+      if (fromType->equivalent(*TIMESTAMP_UTC())) {
+        // See castFromDate: use applyToSelected to retain the exception even
+        // when isTryCast_ is enabled.
+        rows.applyToSelected([&](vector_size_t row) {
+          const auto& timestamp = inputVector->valueAt(row);
+          const auto days = timestamp.getSeconds() / 86'400;
+          if (FOLLY_UNLIKELY(hooks_->isDateOverflowForTimestampUtc(days))) {
+            if (hooks_->truncate()) {
+              VELOX_USER_FAIL(
+                  makeErrorMessage(input, row, DATE()) +
+                  " Date value is out of range for TIMESTAMP_UTC.");
+            }
+            resultFlatVector->setNull(row, true);
+            return;
+          }
+          resultFlatVector->set(row, util::toDate(timestamp, nullptr));
+        });
+        return castResult;
+      }
+
       const auto* timeZone =
           getTimeZoneFromConfig(context.execCtx()->queryCtx()->queryConfig());
       applyToSelectedNoThrowLocal(context, rows, castResult, [&](int row) {
@@ -245,6 +281,61 @@ VectorPtr CastExpr::castToDate(
       VELOX_UNSUPPORTED(
           "Cast from {} to DATE is not supported", fromType->toString());
   }
+}
+
+VectorPtr CastExpr::castToTimestampUTC(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType) {
+  VELOX_USER_CHECK(
+      hooks_->supportsTimestampUtc(),
+      "Cast from {} to {} is not supported",
+      fromType->toString(),
+      TIMESTAMP_UTC()->toString());
+  if (fromType->equivalent(*TIMESTAMP())) {
+    return applyTimestampTimestampUtcCast<true>(rows, context, input);
+  }
+  if (fromType->isDate()) {
+    return castFromDate(rows, input, context, TIMESTAMP_UTC());
+  }
+  if (fromType->kind() == TypeKind::VARCHAR) {
+    VectorPtr result;
+    applyCastPrimitivesDispatch<TypeKind::TIMESTAMP>(
+        fromType, TIMESTAMP_UTC(), rows, context, input, result);
+    return result;
+  }
+  VELOX_UNSUPPORTED(
+      "Cast from {} to {} is not supported",
+      fromType->toString(),
+      TIMESTAMP_UTC()->toString());
+}
+
+VectorPtr CastExpr::castFromTimestampUTC(
+    const SelectivityVector& rows,
+    const BaseVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& toType) {
+  VELOX_USER_CHECK(
+      hooks_->supportsTimestampUtc(),
+      "Cast from {} to {} is not supported",
+      TIMESTAMP_UTC()->toString(),
+      toType->toString());
+  if (toType->equivalent(*TIMESTAMP())) {
+    return applyTimestampTimestampUtcCast<false>(rows, context, input);
+  }
+  if (toType->isDate()) {
+    return castToDate(rows, input, context, TIMESTAMP_UTC());
+  }
+  if (toType->kind() == TypeKind::VARCHAR ||
+      toType->kind() == TypeKind::VARBINARY) {
+    return applyTimestampToVarcharCast(
+        toType, rows, context, input, hooks_->timestampUtcToStringOptions());
+  }
+  VELOX_UNSUPPORTED(
+      "Cast from {} to {} is not supported",
+      TIMESTAMP_UTC()->toString(),
+      toType->toString());
 }
 
 VectorPtr CastExpr::castFromIntervalDayTime(
@@ -927,6 +1018,10 @@ void CastExpr::applyPeeled(
     } else {
       applyCustomCast();
     }
+  } else if (toType->equivalent(*TIMESTAMP_UTC())) {
+    result = castToTimestampUTC(rows, input, context, fromType);
+  } else if (fromType->equivalent(*TIMESTAMP_UTC())) {
+    result = castFromTimestampUTC(rows, input, context, toType);
   } else if (fromType->isDate()) {
     result = castFromDate(rows, input, context, toType);
   } else if (toType->isDate()) {
@@ -967,47 +1062,6 @@ void CastExpr::applyPeeled(
             context,
             fromType,
             toType);
-    }
-  } else if (toType->equivalent(*TIMESTAMP_UTC())) {
-    if (fromType->equivalent(*TIMESTAMP())) {
-      VELOX_USER_CHECK(
-          hooks_->supportsTimestampUtc(),
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-      result = applyTimestampTimestampUtcCast<true>(rows, context, input);
-    } else if (fromType->kind() == TypeKind::VARCHAR) {
-      applyCastPrimitivesDispatch<TypeKind::TIMESTAMP>(
-          fromType, toType, rows, context, input, result);
-    } else {
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-    }
-  } else if (fromType->equivalent(*TIMESTAMP_UTC())) {
-    if (toType->equivalent(*TIMESTAMP())) {
-      VELOX_USER_CHECK(
-          hooks_->supportsTimestampUtc(),
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-      result = applyTimestampTimestampUtcCast<false>(rows, context, input);
-    } else if (
-        toType->kind() == TypeKind::VARCHAR ||
-        toType->kind() == TypeKind::VARBINARY) {
-      VELOX_USER_CHECK(
-          hooks_->supportsTimestampUtc(),
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
-      result = applyTimestampToVarcharCast(
-          toType, rows, context, input, hooks_->timestampUtcToStringOptions());
-    } else {
-      VELOX_UNSUPPORTED(
-          "Cast from {} to {} is not supported",
-          fromType->toString(),
-          toType->toString());
     }
   } else if (
       fromType->kind() == TypeKind::TIMESTAMP &&

@@ -37,7 +37,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
-#include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/StreamData.h"
 

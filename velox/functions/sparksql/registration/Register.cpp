@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/expression/SpecialFormRegistry.h"
+#include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -29,6 +30,7 @@ extern void registerMapFunctions(const std::string& prefix);
 extern void registerMathFunctions(const std::string& prefix);
 extern void registerMiscFunctions(const std::string& prefix);
 extern void registerRegexpFunctions(const std::string& prefix);
+extern void registerSize(const std::string& prefix);
 extern void registerSpecialFormGeneralFunctions(const std::string& prefix);
 extern void registerStringFunctions(const std::string& prefix);
 extern void registerUrlFunctions(const std::string& prefix);
@@ -44,6 +46,7 @@ void registerFunctions(const std::string& prefix) {
   registerMathFunctions(prefix);
   registerMiscFunctions(prefix);
   registerRegexpFunctions(prefix);
+  registerSize(prefix);
   registerSpecialFormGeneralFunctions(prefix);
   registerStringFunctions(prefix);
   registerUrlFunctions(prefix);

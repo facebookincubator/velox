@@ -300,7 +300,7 @@ if(${VELOX_ENABLE_DUCKDB})
   velox_resolve_dependency(DuckDB)
 endif()
 
-if(VELOX_ENABLE_FAISS)
+if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
   velox_set_source(faiss)
   velox_resolve_dependency(faiss)
   if(NOT TARGET FAISS::faiss)

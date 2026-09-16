@@ -46,6 +46,8 @@ add_executable(
   ClusterIndexTest.cpp
   KeyChunkDecoderTest.cpp
   ClusterIndexTestBase.cpp
+  VectorIndexTest.cpp
+  VectorIndexUtilityTest.cpp
   SortedIndexTestUtils.h
   HashIndexTestUtils.h
 )
@@ -55,10 +57,11 @@ add_test(nimble_index_tests nimble_index_tests)
 target_link_libraries(
   nimble_index_tests
   nimble_index
+  nimble_vector_index
   nimble_index_test_utils
   nimble_tablet_reader
   nimble_tablet_writer
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   velox_core
   velox_file

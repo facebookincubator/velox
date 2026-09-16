@@ -161,6 +161,22 @@ enum class EncodingType {
   // external provider. The alphabet is resolved independently from the
   // encoded index stream.
   SharedDictionary = 22,
+  // A slice of another encoding: carries the source encoding verbatim plus
+  // the row offset at which the slice begins, deferring the slice work to
+  // decode time. Produced only by EncodingSliceFactory, never by encoding
+  // selection.
+  Slice = 23,
+  // Stores non-decreasing integer streams using Elias-Fano coding. This is
+  // suited to sparse sorted identifiers and offsets that need compact storage,
+  // positional access, and lower-bound search.
+  // EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  // without consulting the Nimble team (oncall: dwios).
+  EliasFano = 24,
+  /// Splits 32- or 64-bit integers into configured, independently encoded
+  /// bit-range child streams inside one self-describing encoded chunk.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  BitRangeSplit = 25,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
@@ -399,11 +415,19 @@ constexpr bool isStringType() {
   return std::is_same_v<T, std::string_view> || std::is_same_v<T, std::string>;
 }
 
+/// Reports whether the physical type T can be stored in a shared dictionary.
+/// This is the compile-time form, for `if constexpr` branches and
+/// `static_assert`s inside the templated encoding and writer code. The
+/// `DataType` overload below answers the same question at run time, for call
+/// sites that only have a `DataType` value; the two are deliberate
+/// counterparts, not duplicates.
 template <typename T>
 constexpr bool isSharedDictionaryType() {
   return isIntegralType<T>() || std::is_same_v<T, std::string_view>;
 }
 
+/// Run-time counterpart of the templated overload above. Kept in sync with it:
+/// integral types plus strings.
 constexpr bool isSharedDictionaryType(DataType dataType) {
   switch (dataType) {
     case DataType::Int8:

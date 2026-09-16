@@ -78,7 +78,7 @@ inline std::vector<cudf::column_view> tableViewToColumnViews(
 void checkAllTrue(
     cudf::column_view cond,
     std::string_view userMessage,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Carries query-scoped evaluation settings that individual GPU functions need
@@ -114,7 +114,7 @@ class CudfFunction {
   virtual ~CudfFunction() = default;
   virtual ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const = 0;
 
   /// Attaches the query-scoped evaluation context. Called once after the
@@ -182,7 +182,7 @@ class CudfExpression {
 
   virtual ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
       bool finalize = false) = 0;
 };
@@ -199,7 +199,7 @@ class FunctionExpression : public CudfExpression {
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
       bool finalize = false) override;
 
@@ -213,7 +213,7 @@ class FunctionExpression : public CudfExpression {
   static std::unique_ptr<cudf::column> makeStructChildColumn(
       ColumnOrView& structColumn,
       cudf::size_type childIndex,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   core::TypedExprPtr expr_;

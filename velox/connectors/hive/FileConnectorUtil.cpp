@@ -232,6 +232,8 @@ void configureRowReaderOptions(
         fileConfig->nimbleStringDecoderZeroCopy(sessionProperties));
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
         fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
+    rowReaderOptions.setNimbleIntegerDictionaryAwareFiltering(
+        fileConfig->nimbleIntegerDictionaryAwareFiltering(sessionProperties));
   }
 }
 

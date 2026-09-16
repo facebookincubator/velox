@@ -193,7 +193,7 @@ RowContainer::RowContainer(
   // Make offset at least sizeof pointer so that there is space for a
   // free list next pointer below the bit at 'freeFlagOffset_'.
   offset = std::max<int32_t>(offset, sizeof(void*));
-  const int32_t firstAggregateOffset = offset;
+  flagsByteOffset_ = offset;
   if (!accumulators.empty()) {
     // This moves flagOffset to the start of the next byte.
     // This is to guarantee the null and initialized bits for an aggregate
@@ -217,17 +217,17 @@ RowContainer::RowContainer(
     isVariableWidth |= !type->isFixedWidth();
   }
   if (hasProbedFlag) {
-    probedFlagOffset_ = flagOffset + firstAggregateOffset * 8;
+    probedFlagOffset_ = flagOffset + flagsByteOffset_ * 8;
     ++flagOffset;
   }
   // Free flag.
-  freeFlagOffset_ = flagOffset + firstAggregateOffset * 8;
+  freeFlagOffset_ = flagOffset + flagsByteOffset_ * 8;
   ++flagOffset;
   // Add 1 to the last null offset to get the number of bits.
   flagBytes_ = bits::nbytes(flagOffset);
   // Fixup 'nullOffsets_' to be the bit number from the start of the row.
   for (int32_t i = 0; i < nullOffsets_.size(); ++i) {
-    nullOffsets_[i] += firstAggregateOffset * 8;
+    nullOffsets_[i] += flagsByteOffset_ * 8;
   }
   offset += flagBytes_;
   for (const auto& accumulator : accumulators) {
@@ -319,7 +319,7 @@ char* RowContainer::initializeRow(char* row, bool reuse) {
   if (!nullOffsets_.empty()) {
     // Sets all null and initialized bits to 0 (for each accumulator,
     // initialized bit follows the null bit).
-    ::memset(row + nullByte(nullOffsets_[0]), 0x0, flagBytes_);
+    ::memset(row + flagsByteOffset_, 0x0, flagBytes_);
   }
   if (rowSizeOffset_) {
     variableRowSize(row) = 0;
@@ -735,7 +735,7 @@ void RowContainer::extractSerializedRows(
     size_t offset = 0;
 
     // Copy nulls and other flags.
-    ::memcpy(rawBuffer + offset, row + rowColumns_[0].nullByte(), flagBytes_);
+    ::memcpy(rawBuffer + offset, row + flagsByteOffset_, flagBytes_);
     offset += flagBytes_;
 
     // Copy values.
@@ -767,7 +767,7 @@ void RowContainer::storeSerializedRow(
   const auto serialized = vector.valueAt(index);
   size_t offset = 0;
 
-  ::memcpy(row + rowColumns_[0].nullByte(), serialized.data(), flagBytes_);
+  ::memcpy(row + flagsByteOffset_, serialized.data(), flagBytes_);
   offset += flagBytes_;
 
   RowSizeTracker tracker(row[rowSizeOffset_], *stringAllocator_);

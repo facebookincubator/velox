@@ -34,7 +34,7 @@
 
 #include "velox/common/file/File.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -127,7 +127,7 @@ TEST_F(NimbleWriterPassthroughFlatmapRaceTest, passthroughNewKeysRoundTrip) {
       auto readerRoot = velox::memory::memoryManager()->addRootPool("");
       auto readerLeaf = readerRoot->addLeafChild("reader");
       auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-      nimble::VeloxReader reader(readFile.get(), *readerLeaf);
+      nimble::BatchReader reader(readFile.get(), *readerLeaf);
       uint64_t rows = 0;
       velox::VectorPtr result;
       while (reader.next(1'000, result)) {

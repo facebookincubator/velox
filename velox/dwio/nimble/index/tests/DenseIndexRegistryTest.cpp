@@ -31,7 +31,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/FlatVector.h"
 

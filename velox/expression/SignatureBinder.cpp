@@ -115,6 +115,23 @@ bool checkNamedRowField(
   return true;
 }
 
+// The coercion that takes 'actualType' to 'boundType', the type a variable
+// resolved to across every argument sharing it.
+//
+// Two DECIMALs of different precision or scale are different types that share
+// a name, which the coercer reports as interchangeable at no cost. Reaching
+// the bound type still means rescaling the value, so say so here.
+std::optional<Coercion> coerceToBoundType(
+    const TypeCoercer& coercer,
+    const TypePtr& actualType,
+    const TypePtr& boundType) {
+  if (actualType->isDecimal() && boundType->isDecimal() &&
+      !actualType->equivalent(*boundType)) {
+    return Coercion{.type = boundType, .cost = 1};
+  }
+  return coercer.coerce(actualType, boundType);
+}
+
 } // namespace
 
 bool SignatureBinder::tryBindWithCoercions(std::vector<Coercion>& coercions) {
@@ -189,7 +206,8 @@ bool SignatureBinder::tryBind(
           }
 
           for (auto i = numFormalArgs; i < numActualTypes; i++) {
-            if (auto coercion = coercer_.coerce(actualTypes_[i], firstType)) {
+            if (auto coercion =
+                    coerceToBoundType(coercer_, actualTypes_[i], firstType)) {
               if (coercion->cost > 0) {
                 coercions[i] = Coercion{firstType, coercion->cost};
               }
@@ -287,7 +305,8 @@ std::optional<bool> SignatureBinderBase::checkSetTypeVariable(
     VELOX_CHECK(bindingIt != typeVariablesBindings_.end());
 
     const auto& boundType = bindingIt->second;
-    const auto availableCoercion = coercer_.coerce(actualType, boundType);
+    const auto availableCoercion =
+        coerceToBoundType(coercer_, actualType, boundType);
     VELOX_CHECK(availableCoercion.has_value());
 
     if (availableCoercion->cost > 0) {

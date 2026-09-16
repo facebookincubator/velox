@@ -21,6 +21,8 @@
 #include "velox/exec/ColumnStatsCollector.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
 
@@ -151,6 +153,13 @@ class TableWriter : public Operator {
   // `mappedOutputType_`.
   void setTypeMappings(const core::TableWriteNodePtr& tableWriteNode);
 
+  // Fills 'notNullChannels_'. Must run after setTypeMappings(), which fills
+  // 'inputMapping_'.
+  void setNotNullChannels(const core::TableWriteNodePtr& tableWriteNode);
+
+  // Throws a user error if 'input' has a null in a NOT NULL column.
+  void checkNotNullConstraints(const RowVectorPtr& input);
+
   std::string createTableCommitContext(bool lastOutput);
 
   void setConnectorMemoryReclaimer();
@@ -171,6 +180,14 @@ class TableWriter : public Operator {
 
   // Contains the mappings between input and output columns.
   std::vector<column_index_t> inputMapping_;
+
+  // Input channels of the NOT NULL columns, each with the target column name
+  // to report in the error.
+  std::vector<std::pair<column_index_t, std::string>> notNullChannels_;
+
+  // Reused across addInput() calls to avoid reallocating per batch.
+  SelectivityVector notNullRows_;
+  DecodedVector notNullDecodedVector_;
 
   // Stores the mapped input and output types. Note that input types must have
   // the same types as the types receing in addInput(), but they may be in a

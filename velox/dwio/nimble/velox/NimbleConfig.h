@@ -15,9 +15,15 @@
  */
 #pragma once
 
+#include <gflags/gflags.h>
+
 #include "velox/common/config/Config.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+
+// Read by WriterOptions::buildEncodingOptions(), which is header-inline, so the
+// flag has to be visible outside NimbleConfig.cpp.
+DECLARE_bool(nimble_subintsplit_delta_pretransform);
 
 namespace facebook::nimble {
 
@@ -60,6 +66,13 @@ class Config : public velox::config::ConfigBase {
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   static Entry<bool> ENABLE_CHUNK_INDEX;
+  // EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  // without consulting the Nimble team (oncall: dwios).
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<bool> ENABLE_CHUNK_STATS;
+  // Selects the enabled chunk stats representation; defaults to "v2".
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> CHUNK_STATS_VERSION;
   static Entry<uint64_t> CHUNKING_WRITER_MEMORY_HIGH_THRESHOLD;
   static Entry<uint64_t> CHUNKING_WRITER_MEMORY_LOW_THRESHOLD;
   static Entry<uint64_t> CHUNKING_WRITER_TARGET_STRIPE_STORAGE_SIZE;
@@ -180,6 +193,55 @@ class Config : public velox::config::ConfigBase {
   /// Enable the encoding selection cache: capture the encoding layout from the
   /// first encoding of each stream and replay it on subsequent chunks/stripes.
   static Entry<bool> ENABLE_ENCODING_SELECTION_CACHE;
+
+  /// Groups and orders FlatMap features on disk so features read together are
+  /// physically adjacent. Base64 of a compact-serialized
+  /// Apache::Hadoop::Hive::FeatureOrdering, whose column ids are top-level
+  /// ordinals in the write input schema.
+  ///
+  /// Overrides WriterOptions::featureReordering when set; leaves it alone when
+  /// unset, so a caller that resolved an order elsewhere keeps it.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> FEATURE_ORDERING_OVERRIDE;
+
+  /// Compresses stripe-group metadata only when it exceeds this many bytes.
+  /// Unset leaves the writer's own threshold; UINT32_MAX disables metadata
+  /// compression outright.
+  static Entry<uint32_t> METADATA_COMPRESSION_THRESHOLD;
+
+  /// Selects how per-stripe-group stream offsets/sizes are serialized:
+  /// "raw" (default, readable by all readers) or "stream_major".
+  /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupEncodingLayout.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> STRIPE_GROUP_ENCODING_LAYOUT;
+
+  /// Minimum average chunks per stripe before chunk stats are written.
+  /// Only consulted when nimble.chunk.index.enabled is true.
+  static Entry<double> CHUNK_STATS_MIN_AVG_CHUNKS;
+
+  /// Caps concurrent stream-encoding tasks. 0 (default) encodes serially.
+  /// Requires an encoding executor to be installed on the writer.
+  static Entry<uint32_t> MAX_ENCODE_PARALLELISM;
+
+  /// Minimum streams batched into one parallel encoding task, so that small
+  /// streams do not each pay task-dispatch cost.
+  static Entry<uint32_t> MIN_STREAMS_PER_ENCODING_TASK;
+
+  /// Caps encoding scratch buffers retained between stripes. 0 (default)
+  /// retains none, trading allocation churn for peak memory.
+  static Entry<uint32_t> MAX_CACHED_ENCODING_SCRATCH_BUFFERS;
+
+  /// Caps retained nested-encoding buffers; see
+  /// MAX_CACHED_ENCODING_SCRATCH_BUFFERS.
+  static Entry<uint32_t> MAX_CACHED_NESTED_ENCODING_BUFFERS;
+
+  /// Sizes FixedBitWidth encodings to the exact bits the values need rather
+  /// than rounding up to a byte-aligned width.
+  static Entry<bool> FIXED_BIT_WIDTH_USE_EXACT_BITS;
+
+  /// Omits in-map streams for FlatMap features whose in-map flag is constant,
+  /// which is the common case for dense feature sets.
+  static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;
 
   static constexpr const char* kNimbleWriteTargetRawStripeSize =
       "nimble_write_target_raw_stripe_size";

@@ -30,10 +30,14 @@
 #include "folly/Random.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/ColumnVisitors.h"
+#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -96,8 +100,6 @@ class IntegerColumnReaderTestAccessor : public IntegerColumnReader {
 // Test-only accessor for FloatingPointColumnReader: exposes protected
 // prepareRead so tests can call readWithVisitor explicitly with a hand-built
 // ColumnVisitor.
-// No new data members — static_cast from the real FloatingPointColumnReader*
-// is layout-safe.
 // ---------------------------------------------------------------------------
 template <typename T>
 class FloatingPointColumnReaderTestAccessor
@@ -108,6 +110,14 @@ class FloatingPointColumnReaderTestAccessor
   void
   doPrepareRead(int64_t offset, const RowSet& rows, const uint64_t* nulls) {
     this->template prepareRead<T>(offset, rows, nulls);
+  }
+
+  const BufferPtr& resultNullsForTest() const {
+    return this->resultNulls();
+  }
+
+  void advanceReadOffset(const RowSet& rows) {
+    this->readOffset_ += rows.back() + 1;
   }
 };
 
@@ -211,8 +221,9 @@ EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
   const auto encodedValuesLayout = [&] {
     switch (encodedValuesEncodingType) {
       case EncodingType::Trivial:
+      case EncodingType::FixedBitWidth:
         return EncodingLayout{
-            EncodingType::Trivial, {}, CompressionType::Uncompressed};
+            encodedValuesEncodingType, {}, CompressionType::Uncompressed};
       case EncodingType::Dictionary:
         return EncodingLayout{
             EncodingType::Dictionary,
@@ -230,7 +241,22 @@ EncodingLayout makeAlpEncodingLayout(EncodingType encodedValuesEncodingType) {
       EncodingType::ALP,
       {},
       CompressionType::Uncompressed,
-      {encodedValuesLayout}};
+      {encodedValuesLayout, TrivialEnc{}, TrivialEnc{}}};
+}
+
+EncodingLayout makeBitRangeSplitEncodingLayout() {
+  const auto sectionLayout = [] {
+    return EncodingLayout{
+        EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed};
+  };
+  return EncodingLayout{
+      EncodingType::BitRangeSplit,
+      EncodingLayout::Config{{
+          {std::string(BitRangeSplitEncoding<int64_t>::kRangesConfigKey),
+           "0-15;16-58;59-63"},
+      }},
+      CompressionType::Uncompressed,
+      {sectionLayout(), sectionLayout(), sectionLayout()}};
 }
 
 WriterOptions makeSingleColumnWriterOptions(
@@ -252,13 +278,40 @@ WriterOptions makeSingleColumnWriterOptions(
 }
 
 template <typename T>
-std::vector<T> makeAlpFloatingPointValues() {
-  constexpr int kRows = 120;
-  std::vector<T> data(kRows);
-  for (int i = 0; i < kRows; ++i) {
-    data[i] = static_cast<T>((i % 21) - 10) / static_cast<T>(4);
+std::vector<T> makeAlpFloatingPointValues(vector_size_t rowCount = 120) {
+  std::vector<T> data(rowCount);
+  for (vector_size_t row = 0; row < rowCount; ++row) {
+    data[row] = static_cast<T>((row % 21) - 10) / static_cast<T>(4);
   }
   return data;
+}
+
+template <typename FloatType>
+std::string_view encodeNullableAlp(
+    std::span<const FloatType> data,
+    std::span<const bool> notNulls,
+    EncodingType encodedValuesEncodingType,
+    Buffer& buffer) {
+  std::vector<FloatType> nonNullValues;
+  for (size_t row = 0; row < data.size(); ++row) {
+    if (notNulls[row]) {
+      nonNullValues.push_back(data[row]);
+    }
+  }
+  auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<FloatType>>(
+      makeAlpEncodingLayout(encodedValuesEncodingType),
+      CompressionOptions{},
+      [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);
+      });
+  auto serializedValues = EncodingFactory::encode<FloatType>(
+      std::move(policy),
+      std::span<const FloatType>(nonNullValues.data(), nonNullValues.size()),
+      buffer);
+  auto serializedNulls = EncodingFactory::encode<bool>(
+      std::make_unique<TrivialNestedPolicy<bool>>(), notNulls, buffer);
+  return NullableEncoding<FloatType>::encodeNullable(
+      data.size(), serializedValues, serializedNulls, buffer);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +323,7 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
                             public velox::test::VectorTestBase {
  protected:
   static void SetUpTestCase() {
-    memory::initializeMemoryManager(memory::MemoryManager::Options{});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
   bool useNonLegacy() const {
@@ -330,12 +383,16 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
 
   template <typename T>
   void testColumnReaderAlpFloatingPointRange(
-      EncodingType encodedValuesEncodingType) {
+      EncodingType encodedValuesEncodingType,
+      vector_size_t rowCount = 120) {
     SCOPED_TRACE(fmt::format("dataType={}", toString(TypeTraits<T>::dataType)));
     constexpr T kLower = static_cast<T>(-1.25);
     constexpr T kUpper = static_cast<T>(1.25);
 
-    const auto data = makeAlpFloatingPointValues<T>();
+    auto data = makeAlpFloatingPointValues<T>(rowCount);
+    data[17] = -T{0};
+    data[31] = std::numeric_limits<T>::infinity();
+    data[63] = std::numeric_limits<T>::quiet_NaN();
     auto input = makeRowVector(
         {makeFlatVector<T>(data.size(), [&](auto row) { return data[row]; })});
     auto rowType = asRowType(input->type());
@@ -392,7 +449,258 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     ASSERT_EQ(actualValues.size(), expectedValues.size());
     for (int i = 0; i < static_cast<int>(expectedValues.size()); ++i) {
       SCOPED_TRACE(fmt::format("valueIndex={}", i));
-      EXPECT_EQ(actualValues[i], expectedValues[i]);
+      EXPECT_EQ(
+          detail::alp::toPhysical<T>(actualValues[i]),
+          detail::alp::toPhysical<T>(expectedValues[i]));
+    }
+  }
+
+  template <typename FloatType>
+  void testEncodingLevelAlpNullableBatches(
+      EncodingType encodedValuesEncodingType,
+      vector_size_t batchSize,
+      bool filtered,
+      bool nullAllowed) {
+    constexpr vector_size_t kRows = 1025;
+    constexpr FloatType kLower = -1.25;
+    constexpr FloatType kUpper = 1.25;
+    auto data = makeAlpFloatingPointValues<FloatType>(kRows);
+    data[253] = -FloatType{0};
+    data[254] = std::numeric_limits<FloatType>::infinity();
+    data[255] = std::numeric_limits<FloatType>::quiet_NaN();
+    const auto isNull = [](vector_size_t row) {
+      return row < 129 || (row >= 513 && row < 641) || row % 7 == 0;
+    };
+    Vector<bool> notNulls(pool());
+    notNulls.resize(kRows);
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      notNulls[row] = !isNull(row);
+    }
+    Buffer buffer(*pool());
+    auto serialized = encodeNullableAlp<FloatType>(
+        data,
+        std::span<const bool>(notNulls.data(), notNulls.size()),
+        encodedValuesEncodingType,
+        buffer);
+    auto encoding = EncodingFactory().create(*pool(), serialized, nullptr);
+    auto captured = EncodingLayoutCapture::capture(serialized, {});
+    ASSERT_EQ(encoding->encodingType(), EncodingType::Nullable);
+    ASSERT_EQ(captured.encodingType(), EncodingType::ALP);
+    const auto& childLayout =
+        captured.child(EncodingIdentifiers::ALP::EncodedValues);
+    ASSERT_TRUE(childLayout.has_value());
+    ASSERT_EQ(childLayout->encodingType(), encodedValuesEncodingType);
+    auto input = makeRowVector({makeFlatVector<FloatType>(
+        kRows, [&](auto row) { return data[row]; })});
+    auto rowType = asRowType(input->type());
+    auto ctx = makeFileContext(input);
+
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    if (filtered) {
+      scanSpec->childByName("c0")->setFilter(
+          std::make_unique<common::FloatingPointRange<FloatType>>(
+              kLower, false, false, kUpper, false, false, nullAllowed));
+    }
+    auto ownedReader =
+        buildFloatingPointReader<FloatType>(*ctx, rowType, *scanSpec);
+    auto* reader = ownedReader.get();
+    for (vector_size_t offset = 0; offset < kRows; offset += batchSize) {
+      SCOPED_TRACE(fmt::format("offset={}", offset));
+      const auto count = std::min(batchSize, kRows - offset);
+      std::vector<vector_size_t> rows(count);
+      std::iota(rows.begin(), rows.end(), 0);
+      const RowSet selectedRows(rows.data(), rows.size());
+      reader->doPrepareRead(offset, selectedRows, nullptr);
+      const auto read = [&](auto& filter) {
+        using FilterType = std::remove_reference_t<decltype(filter)>;
+        dwio::common::ExtractToReader extractValues(reader);
+        DecoderVisitor<
+            FloatType,
+            FilterType,
+            dwio::common::ExtractToReader,
+            true>
+            visitor(filter, reader, selectedRows, extractValues);
+        auto params = makeReadWithVisitorParams(visitor, selectedRows, pool());
+        dispatchCallReadWithVisitor(*encoding, visitor, params);
+      };
+      if (filtered) {
+        common::FloatingPointRange<FloatType> filter(
+            kLower, false, false, kUpper, false, false, nullAllowed);
+        read(filter);
+      } else {
+        common::AlwaysTrue filter;
+        read(filter);
+      }
+      reader->advanceReadOffset(selectedRows);
+      std::vector<vector_size_t> expectedRows;
+      for (vector_size_t row = 0; row < count; ++row) {
+        const auto sourceRow = offset + row;
+        const bool selected = !filtered ||
+            (isNull(sourceRow)
+                 ? nullAllowed
+                 : data[sourceRow] >= kLower && data[sourceRow] <= kUpper);
+        if (selected) {
+          expectedRows.push_back(row);
+        }
+      }
+      ASSERT_EQ(reader->numValues(), expectedRows.size());
+      const auto actualValues = getValues<FloatType>(reader);
+      const auto& resultNulls = reader->resultNullsForTest();
+      for (size_t index = 0; index < expectedRows.size(); ++index) {
+        const auto sourceRow = offset + expectedRows[index];
+        SCOPED_TRACE(fmt::format("sourceRow={}", sourceRow));
+        if (filtered) {
+          ASSERT_EQ(reader->outputRows().size(), expectedRows.size());
+          EXPECT_EQ(reader->outputRows()[index], expectedRows[index]);
+        }
+        const bool actualNull = resultNulls &&
+            velox::bits::isBitNull(resultNulls->template as<uint64_t>(), index);
+        EXPECT_EQ(actualNull, isNull(sourceRow));
+        if (!isNull(sourceRow)) {
+          EXPECT_EQ(
+              detail::alp::toPhysical<FloatType>(actualValues[index]),
+              detail::alp::toPhysical<FloatType>(data[sourceRow]));
+        }
+      }
+    }
+  }
+
+  template <typename FloatType>
+  void testEncodingLevelAlpNullableChunks(
+      EncodingType encodedValuesEncodingType,
+      vector_size_t firstChunkRows,
+      bool filtered,
+      bool useChunkedDecoder) {
+    constexpr vector_size_t kSecondChunkRows = 257;
+    constexpr FloatType kLower = -1.25;
+    constexpr FloatType kUpper = 1.25;
+    const auto rowCount = firstChunkRows + kSecondChunkRows;
+    auto data = makeAlpFloatingPointValues<FloatType>(rowCount);
+    Vector<bool> notNulls(pool());
+    notNulls.resize(rowCount);
+    for (vector_size_t row = 0; row < rowCount; ++row) {
+      notNulls[row] = row % 7 != 0;
+    }
+    for (const auto row : {firstChunkRows - 1, firstChunkRows, rowCount - 1}) {
+      data[row] = -FloatType{0};
+      notNulls[row] = true;
+    }
+    data[firstChunkRows + 1] = std::numeric_limits<FloatType>::infinity();
+    data[firstChunkRows + 2] = std::numeric_limits<FloatType>::quiet_NaN();
+    notNulls[firstChunkRows + 1] = true;
+    notNulls[firstChunkRows + 2] = true;
+
+    Buffer buffer(*pool());
+    std::vector<std::unique_ptr<Encoding>> chunks;
+    std::string streamData;
+    for (const auto offset : {vector_size_t{0}, firstChunkRows}) {
+      const auto count = offset == 0 ? firstChunkRows : kSecondChunkRows;
+      const auto serialized = encodeNullableAlp<FloatType>(
+          std::span<const FloatType>(data.data() + offset, count),
+          std::span<const bool>(notNulls.data() + offset, count),
+          encodedValuesEncodingType,
+          buffer);
+      chunks.push_back(EncodingFactory().create(*pool(), serialized, nullptr));
+      ASSERT_EQ(chunks.back()->encodingType(), EncodingType::Nullable);
+      const auto captured = EncodingLayoutCapture::capture(serialized, {});
+      ASSERT_EQ(captured.encodingType(), EncodingType::ALP);
+      const auto chunkOffset = streamData.size();
+      streamData.resize(chunkOffset + kChunkHeaderSize + serialized.size());
+      auto* position = streamData.data() + chunkOffset;
+      writeChunkHeader(
+          serialized.size(), CompressionType::Uncompressed, position);
+      encoding::writeBytes(serialized, position);
+    }
+
+    auto input = makeRowVector({makeFlatVector<FloatType>(
+        rowCount, [&](auto row) { return data[row]; })});
+    const auto rowType = asRowType(input->type());
+    auto ctx = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    if (filtered) {
+      scanSpec->childByName("c0")->setFilter(
+          std::make_unique<common::FloatingPointRange<FloatType>>(
+              kLower, false, false, kUpper, false, false, false));
+    }
+    auto ownedReader =
+        buildFloatingPointReader<FloatType>(*ctx, rowType, *scanSpec);
+    auto* reader = ownedReader.get();
+    std::vector<vector_size_t> rows(rowCount);
+    std::iota(rows.begin(), rows.end(), 0);
+    const RowSet selectedRows(rows.data(), rows.size());
+    reader->doPrepareRead(0, selectedRows, nullptr);
+
+    const auto read = [&](auto& filter) {
+      using FilterType = std::remove_reference_t<decltype(filter)>;
+      dwio::common::ExtractToReader extractValues(reader);
+      DecoderVisitor<FloatType, FilterType, dwio::common::ExtractToReader, true>
+          visitor(filter, reader, selectedRows, extractValues);
+      if (useChunkedDecoder) {
+        ChunkedDecoder decoder(
+            std::make_unique<dwio::common::SeekableArrayInputStream>(
+                streamData.data(), streamData.size()),
+            nullptr,
+            false,
+            &ctx->encodingFactory,
+            pool(),
+            true);
+        decoder.readWithVisitor(visitor);
+      } else {
+        auto params = makeReadWithVisitorParams(visitor, selectedRows, pool());
+        visitor.setRows(RowSet(rows.data(), firstChunkRows));
+        dispatchCallReadWithVisitor(*chunks[0], visitor, params);
+        ASSERT_EQ(visitor.rowIndex(), firstChunkRows);
+        ASSERT_GT(reader->numValues(), 0);
+        if (filtered) {
+          ASSERT_LT(reader->numValues(), firstChunkRows);
+        }
+
+        params.numScanned = firstChunkRows;
+        visitor.setRows(selectedRows);
+        ASSERT_EQ(visitor.numRows() - visitor.rowIndex(), kSecondChunkRows);
+        ASSERT_TRUE(dwio::common::useFastPath(visitor, true));
+        dispatchCallReadWithVisitor(*chunks[1], visitor, params);
+      }
+      ASSERT_EQ(visitor.rowIndex(), rowCount);
+    };
+    if (filtered) {
+      common::FloatingPointRange<FloatType> filter(
+          kLower, false, false, kUpper, false, false, false);
+      read(filter);
+    } else {
+      common::AlwaysTrue filter;
+      read(filter);
+    }
+
+    std::vector<vector_size_t> expectedRows;
+    for (vector_size_t row = 0; row < rowCount; ++row) {
+      if (!filtered ||
+          (notNulls[row] && data[row] >= kLower && data[row] <= kUpper)) {
+        expectedRows.push_back(row);
+      }
+    }
+    ASSERT_EQ(reader->numValues(), expectedRows.size());
+    if (filtered) {
+      ASSERT_EQ(reader->outputRows().size(), expectedRows.size());
+    }
+    const auto actualValues = getValues<FloatType>(reader);
+    const auto& resultNulls = reader->resultNullsForTest();
+    for (size_t index = 0; index < expectedRows.size(); ++index) {
+      const auto sourceRow = expectedRows[index];
+      SCOPED_TRACE(fmt::format("sourceRow={}", sourceRow));
+      if (filtered) {
+        EXPECT_EQ(reader->outputRows()[index], sourceRow);
+      }
+      const bool actualNull = resultNulls &&
+          bits::isBitNull(resultNulls->template as<uint64_t>(), index);
+      EXPECT_EQ(actualNull, !notNulls[sourceRow]);
+      if (notNulls[sourceRow]) {
+        EXPECT_EQ(
+            detail::alp::toPhysical<FloatType>(actualValues[index]),
+            detail::alp::toPhysical<FloatType>(data[sourceRow]));
+      }
     }
   }
 
@@ -417,6 +725,11 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     for (int i = 0; i < kRows; ++i) {
       data[i] = static_cast<T>(valueDistribution(rng)) / static_cast<T>(100);
     }
+    for (int row = 0; row < kRows; row += 7) {
+      data[row] = -T{0};
+    }
+    data[31] = std::numeric_limits<T>::infinity();
+    data[127] = std::numeric_limits<T>::quiet_NaN();
 
     std::vector<vector_size_t> rowVec;
     for (int i = 0; i < kRows; ++i) {
@@ -435,15 +748,8 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     scanSpec->childByName("c0")->setFilter(
         std::make_unique<common::FloatingPointRange<T>>(
             kLower, false, false, kUpper, false, false, false));
-    auto root = buildReader(*ctx, rowType, *scanSpec);
-
-    auto* structReader =
-        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
-            root.get());
-    auto* reader = static_cast<FloatingPointColumnReaderTestAccessor<T>*>(
-        dynamic_cast<FloatingPointColumnReader<T, T>*>(
-            structReader->children()[0]));
-    ASSERT_NE(reader, nullptr);
+    auto ownedReader = buildFloatingPointReader<T>(*ctx, rowType, *scanSpec);
+    auto* reader = ownedReader.get();
 
     RowSet rows(rowVec.data(), rowVec.size());
     reader->doPrepareRead(0, rows, nullptr);
@@ -484,6 +790,30 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       SCOPED_TRACE(fmt::format("valueIndex={}", i));
       EXPECT_EQ(actualValues[i], expectedValues[i]);
     }
+  }
+
+  template <typename FloatType>
+  std::unique_ptr<FloatingPointColumnReaderTestAccessor<FloatType>>
+  buildFloatingPointReader(
+      FileContext& ctx,
+      const RowTypePtr& rowType,
+      common::ScanSpec& scanSpec) {
+    NimbleParams params(
+        *pool(),
+        ctx.stats,
+        ctx.readerBase->nimbleSchema()->asRow().childAt(0),
+        *ctx.streams,
+        ctx.rowSizeTracker.get(),
+        ctx.encodingFactory,
+        useNonLegacy());
+    auto reader =
+        std::make_unique<FloatingPointColumnReaderTestAccessor<FloatType>>(
+            rowType->childAt(0),
+            ctx.readerBase->fileSchemaWithId()->childAt(0),
+            params,
+            *scanSpec.childByName("c0"));
+    ctx.streams->load();
+    return reader;
   }
 
   std::unique_ptr<dwio::common::SelectiveColumnReader> buildReader(
@@ -1323,6 +1653,167 @@ TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpFloatAndDouble) {
   }
 }
 
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpDenseNullable) {
+  testEncodingLevelAlpNullableBatches<float>(
+      EncodingType::Trivial, 256, false, false);
+  testEncodingLevelAlpNullableBatches<double>(
+      EncodingType::Trivial, 256, false, false);
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpDenseBulkBoundaries) {
+  for (const auto rowCount : {127, 128, 129, 257, 4097}) {
+    SCOPED_TRACE(fmt::format("rowCount={}", rowCount));
+    for (const auto nestedType :
+         {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+      testColumnReaderAlpFloatingPointRange<float>(nestedType, rowCount);
+      testColumnReaderAlpFloatingPointRange<double>(nestedType, rowCount);
+    }
+  }
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpNullableBatchBoundaries) {
+  for (const auto batchSize : {127, 128, 129, 257}) {
+    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    for (const auto nestedType :
+         {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+      SCOPED_TRACE(fmt::format("nestedType={}", toString(nestedType)));
+      for (const bool filtered : {false, true}) {
+        for (const bool nullAllowed : {false, true}) {
+          SCOPED_TRACE(
+              fmt::format("filtered={} nullAllowed={}", filtered, nullAllowed));
+          testEncodingLevelAlpNullableBatches<float>(
+              nestedType, batchSize, filtered, nullAllowed);
+          testEncodingLevelAlpNullableBatches<double>(
+              nestedType, batchSize, filtered, nullAllowed);
+        }
+      }
+    }
+  }
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpNullableAcrossChunks) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "ALP bulk decoding requires SIMD support";
+  }
+  for (const auto firstChunkRows : {63, 129}) {
+    SCOPED_TRACE(fmt::format("firstChunkRows={}", firstChunkRows));
+    for (const auto nestedType :
+         {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+      SCOPED_TRACE(fmt::format("nestedType={}", toString(nestedType)));
+      for (const bool filtered : {false, true}) {
+        SCOPED_TRACE(fmt::format("filtered={}", filtered));
+        for (const bool useChunkedDecoder : {false, true}) {
+          SCOPED_TRACE(fmt::format("useChunkedDecoder={}", useChunkedDecoder));
+          testEncodingLevelAlpNullableChunks<float>(
+              nestedType, firstChunkRows, filtered, useChunkedDecoder);
+          testEncodingLevelAlpNullableChunks<double>(
+              nestedType, firstChunkRows, filtered, useChunkedDecoder);
+        }
+      }
+    }
+  }
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpDenseHook) {
+  class CapturingHook final : public ValueHook {
+   public:
+    void addValue(vector_size_t row, double value) final {
+      rows.push_back(row);
+      values.push_back(value);
+    }
+
+    std::vector<vector_size_t> rows;
+    std::vector<double> values;
+  };
+
+  constexpr vector_size_t kRows = 256;
+  std::vector<double> data(kRows);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    data[row] = static_cast<double>((row % 101) - 50) / 4;
+  }
+  data[17] = -0.0;
+  data[129] = std::numeric_limits<double>::infinity();
+  data[191] = detail::alp::toLogical<double>(0x7ff8000000000042ULL);
+
+  auto input = makeRowVector(
+      {makeFlatVector<double>(kRows, [&](auto row) { return data[row]; })});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(
+      input,
+      makeSingleColumnWriterOptions(
+          makeAlpEncodingLayout(EncodingType::Trivial)));
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  CapturingHook hook;
+  auto* childSpec = scanSpec->childByName("c0");
+  childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+  childSpec->setValueHook(&hook);
+  auto root = buildReader(*ctx, rowType, *scanSpec, true);
+  readColumn(root.get(), kRows);
+
+  ASSERT_EQ(hook.rows.size(), kRows);
+  ASSERT_EQ(hook.values.size(), kRows);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    SCOPED_TRACE(fmt::format("row={}", row));
+    EXPECT_EQ(hook.rows[row], row);
+    EXPECT_EQ(
+        detail::alp::toPhysical<double>(hook.values[row]),
+        detail::alp::toPhysical<double>(data[row]));
+  }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderBitRangeSplitBigintRangeFilter) {
+  constexpr vector_size_t kRows{512};
+  const auto valueAt = [](vector_size_t row) {
+    return static_cast<int64_t>(
+        (uint64_t{5} << 59) | ((uint64_t{1'760'000'000'000} + row) << 16) |
+        (static_cast<uint64_t>(row) % 4 + 1));
+  };
+  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, valueAt)});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(
+      input, makeSingleColumnWriterOptions(makeBitRangeSplitEncodingLayout()));
+
+  const auto captured = captureFirstColumnEncoding(*ctx);
+  ASSERT_TRUE(captured.has_value());
+  ASSERT_EQ(captured->encodingType(), EncodingType::BitRangeSplit);
+  ASSERT_EQ(captured->childrenCount(), 3);
+  for (NestedEncodingIdentifier sectionIndex{0}; sectionIndex < 3;
+       ++sectionIndex) {
+    SCOPED_TRACE(fmt::format("sectionIndex={}", sectionIndex));
+    ASSERT_TRUE(captured->child(sectionIndex).has_value());
+    EXPECT_EQ(
+        captured->child(sectionIndex)->encodingType(),
+        EncodingType::FixedBitWidth);
+  }
+
+  constexpr vector_size_t kFirstMatch{100};
+  constexpr vector_size_t kLastMatch{200};
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(
+          valueAt(kFirstMatch), valueAt(kLastMatch), false));
+
+  auto root =
+      buildReader(*ctx, rowType, *scanSpec, /*stringDecoderZeroCopy=*/true);
+  auto* child = readColumn(root.get(), kRows);
+  ASSERT_EQ(child->numValues(), kLastMatch - kFirstMatch + 1);
+
+  const auto outputRows = child->outputRows();
+  const auto values = getValues<int64_t>(child);
+  ASSERT_EQ(outputRows.size(), values.size());
+  for (vector_size_t index{0}; index < values.size(); ++index) {
+    SCOPED_TRACE(fmt::format("index={}", index));
+    const auto expectedRow = kFirstMatch + index;
+    EXPECT_EQ(outputRows[index], expectedRow);
+    EXPECT_EQ(values[index], valueAt(expectedRow));
+  }
+}
+
 TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpRandomizedSparse) {
   for (const auto encodedValuesEncodingType :
        {EncodingType::Trivial, EncodingType::Dictionary}) {
@@ -1577,14 +2068,8 @@ TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpFloatingPointRangeSparse) {
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::FloatingPointRange<double>>(
           kLower, false, false, kUpper, false, false, false));
-  auto root = buildReader(*ctx, rowType, *scanSpec);
-
-  auto* structReader =
-      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
-  auto* reader = static_cast<FloatingPointColumnReaderTestAccessor<double>*>(
-      dynamic_cast<FloatingPointColumnReader<double, double>*>(
-          structReader->children()[0]));
-  ASSERT_NE(reader, nullptr);
+  auto ownedReader = buildFloatingPointReader<double>(*ctx, rowType, *scanSpec);
+  auto* reader = ownedReader.get();
 
   std::vector<vector_size_t> rowVec;
   for (int i = 0; i < kRows; i += 3) {
@@ -3198,7 +3683,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorInteger) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-    encoding->readIndicesWithVisitor(visitor, params);
+    callReadIndicesWithVisitor<T>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), kRows);
     const auto* indices = reader->rawIndices();
@@ -3298,7 +3783,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorInteger) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, this->pool());
 
-    encoding->readIndicesWithVisitor(visitor, params);
+    callReadIndicesWithVisitor<T>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -3420,7 +3905,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readIndicesWithVisitorNullable) {
       visitor(filter, reader, rows, extractValues);
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   ASSERT_EQ(reader->numValues(), kRows);
   const auto* indices = reader->rawIndices();
@@ -3547,7 +4032,7 @@ TEST_P(
       visitor(filter, reader, rows, extractValues);
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   ASSERT_EQ(reader->numValues(), kRows);
   const auto* indices = reader->rawIndices();
@@ -3688,7 +4173,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, fuzzReadIndicesWithVisitorNullable) {
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, this->pool());
 
-    callReadIndicesWithVisitor(*encoding, visitor, params);
+    callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -3995,7 +4480,7 @@ TEST_P(
         visitor(filter, reader, rows, extractValues);
     auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
-    callReadIndicesWithVisitor(*encoding, visitor, params);
+    callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
     ASSERT_EQ(reader->numValues(), numRows);
     const auto* indices = reader->rawIndices();
@@ -4065,7 +4550,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, numValuesAfterMainlyConstantReadIndices) {
   auto params = makeReadWithVisitorParams(visitor, rows, pool());
 
   ASSERT_EQ(reader->numValues(), 0);
-  callReadIndicesWithVisitor(*encoding, visitor, params);
+  callReadIndicesWithVisitor<std::string_view>(*encoding, visitor, params);
 
   // numValues must equal kRows (all rows), not just numNonCommon
   // (what the inner Dict encoding's bulkScan wrote via addNumValues).
@@ -4137,7 +4622,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesNoNulls) {
   ASSERT_EQ(reader->numValues(), 0);
 
   // Call the helper with no nulls.
-  ReadWithVisitorParams params{.numScanned = 0};
+  ReadWithVisitorParams params{};
   params.prepareResultNulls = [] {};
   detail::readDenseMaterializedIndices(
       *encoding,
@@ -4244,7 +4729,7 @@ TEST_P(ReadWithVisitorNonLegacyTest, readDenseMaterializedIndicesWithNulls) {
   // output-indexed result-nulls buffer to copy them into whenever
   // returnReaderNulls_ is false -- as it is here, the scan spec carries a
   // filter.
-  ReadWithVisitorParams params{.numScanned = 0};
+  ReadWithVisitorParams params{};
   params.prepareResultNulls = [&] {
     reader->prepareNulls(rows, /*hasNulls=*/true, /*extraRows=*/8);
   };

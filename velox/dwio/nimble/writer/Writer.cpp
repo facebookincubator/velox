@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
@@ -37,6 +38,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -47,6 +49,7 @@
 #include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
@@ -81,6 +84,9 @@ class WriterContext : public FieldWriterContext {
       : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
         options_{std::move(options)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
+        stripeStatsWriteEnabled_{featureGate()->enabled(
+            FeatureGate::FeatureSet::kStripeStatsWrite,
+            /*defaultValue=*/false)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -94,6 +100,12 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
+  // is enabled. Resolved once at construction so it cannot flip mid-file.
+  bool stripeStatsWriteEnabled() const {
+    return stripeStatsWriteEnabled_;
   }
 
   bool hasStripeDictionaryConfig() const {
@@ -242,6 +254,7 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions options_;
   const bool hasStripeDictionaryConfig_;
+  const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -440,11 +453,26 @@ void validateEncodingLayoutTree(const EncodingLayoutTree& tree) {
   }
 }
 
+void normalizeChunkStatsOptions(WriterOptions& options) {
+  // Only the legacy alias requires conversion to canonical chunk stats options.
+  if (!options.enableChunkIndex) {
+    return;
+  }
+  NIMBLE_USER_CHECK(
+      !options.enableChunkStats ||
+          options.chunkStatsVersion == ChunkStatsVersion::kV1,
+      "enableChunkIndex requests chunk stats V1, but enableChunkStats requests V2.");
+  options.enableChunkIndex = false;
+  options.enableChunkStats = true;
+  options.chunkStatsVersion = ChunkStatsVersion::kV1;
+}
+
 WriterOptions storedWriterOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
     WriterOptions options) {
+  normalizeChunkStatsOptions(options);
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
@@ -705,7 +733,9 @@ bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
       scalarKind == ScalarKind::Binary;
 }
 
-bool isSharedDictionaryVeloxType(const velox::Type& type) {
+bool isSharedDictionaryLogicalType(const velox::Type& type) {
+  // Enumerated exhaustively rather than defaulted, so adding a TypeKind is a
+  // compile-time decision about shared-dictionary eligibility.
   switch (type.kind()) {
     case velox::TypeKind::TINYINT:
     case velox::TypeKind::SMALLINT:
@@ -714,9 +744,23 @@ bool isSharedDictionaryVeloxType(const velox::Type& type) {
     case velox::TypeKind::VARCHAR:
     case velox::TypeKind::VARBINARY:
       return true;
-    default:
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ARRAY:
+    case velox::TypeKind::MAP:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
       return false;
   }
+  NIMBLE_UNREACHABLE(
+      fmt::format(
+          "Unknown Velox type kind: {}.", static_cast<int>(type.kind())));
 }
 
 template <typename T>
@@ -1402,7 +1446,7 @@ DictionaryConfigs collectDictionaryConfigs(
         "node {}.",
         valueNodeId);
     NIMBLE_USER_CHECK(
-        isSharedDictionaryVeloxType(*valueType.type()),
+        isSharedDictionaryLogicalType(*valueType.type()),
         "Shared dictionary column '{}' must resolve to an integer or string "
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
@@ -1460,6 +1504,36 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   return *descriptor.context<WriterStreamContext>();
 }
 
+void initializeEncodingLayouts(
+    const TypeBuilder& typeBuilder,
+    const EncodingLayoutTree& encodingLayoutTree);
+
+// Keeps per-key layout replay and shared-dictionary setup on the same path so
+// predefined and dynamically discovered FlatMap keys cannot diverge.
+void configureFlatMapValueStreams(
+    detail::WriterContext& context,
+    const FlatmapEncodingLayoutContext& flatMapContext,
+    std::string_view fieldKey,
+    const TypeBuilder& fieldType) {
+  if (context.options().encodingLayoutTree.has_value()) {
+    auto it = flatMapContext.keyEncodings.find(fieldKey);
+    if (it != flatMapContext.keyEncodings.end()) {
+      initializeEncodingLayouts(fieldType, *it->second);
+    }
+  }
+
+  auto it = flatMapContext.valueDictionaries.find(std::string{fieldKey});
+  if (it == flatMapContext.valueDictionaries.end()) {
+    return;
+  }
+  for (const auto& valueDictionary : it->second) {
+    configureDictionary(
+        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
+        valueDictionary.dictionary,
+        context.schemaBuilder());
+  }
+}
+
 // Applies writer context that depends on the TypeBuilder node just created.
 // FlatMap value configs live on the parent FlatMap node so the key-add handler
 // can apply them when each keyed value stream is materialized.
@@ -1485,10 +1559,37 @@ void configureAddedType(
     if (dictionaryIt != dictionaryConfigs.flatMaps.end()) {
       valueDictionaries = dictionaryIt->second;
     }
-    if (!keyEncodings.empty() || !valueDictionaries.empty()) {
+    const bool hasFlatMapValueEncoding =
+        !keyEncodings.empty() || !valueDictionaries.empty();
+    if (hasFlatMapValueEncoding) {
       type.setContext(
           std::make_unique<FlatmapEncodingLayoutContext>(
               std::move(keyEncodings), std::move(valueDictionaries)));
+    }
+    const auto* predefinedKeys = context.getFlatMapNodeKeys(nodeId);
+    if (predefinedKeys != nullptr && hasFlatMapValueEncoding) {
+      // Apply value encodings now because predefined keys are materialized
+      // before this parent context is installed. Dynamic keys use the key-add
+      // callback.
+      const auto* flatMapContext = type.context<FlatmapEncodingLayoutContext>();
+      NIMBLE_CHECK_NOT_NULL(flatMapContext);
+      const auto& flatMapBuilder = type.asFlatMap();
+      NIMBLE_CHECK_EQ(
+          flatMapBuilder.childrenCount(),
+          predefinedKeys->size(),
+          "Predefined FlatMap key count does not match materialized children.");
+      auto keyIt = predefinedKeys->begin();
+      for (size_t index = 0; index < flatMapBuilder.childrenCount(); ++index) {
+        const auto& fieldKey = flatMapBuilder.nameAt(index);
+        const auto& predefinedKey = *keyIt;
+        NIMBLE_CHECK_EQ(
+            fieldKey,
+            predefinedKey,
+            "Materialized FlatMap child does not match its predefined key.");
+        ++keyIt;
+        configureFlatMapValueStreams(
+            context, *flatMapContext, fieldKey, flatMapBuilder.childAt(index));
+      }
     }
   }
 
@@ -1745,24 +1846,29 @@ void configureAddedFlatMapField(
   if (flatMapContext == nullptr) {
     return;
   }
+  configureFlatMapValueStreams(context, *flatMapContext, fieldKey, fieldType);
+}
 
-  if (context.options().encodingLayoutTree.has_value()) {
-    auto it = flatMapContext->keyEncodings.find(fieldKey);
-    if (it != flatMapContext->keyEncodings.end()) {
-      initializeEncodingLayouts(fieldType, *it->second);
-    }
+// Returns nullptr when no vector index is configured. The implementation comes
+// from the caller so that this target links no similarity-search library.
+std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
+    const WriterOptions& options,
+    const velox::TypePtr& type,
+    velox::memory::MemoryPool* pool) {
+  if (options.vectorIndexConfigs.empty()) {
+    return nullptr;
   }
-
-  auto it = flatMapContext->valueDictionaries.find(std::string{fieldKey});
-  if (it == flatMapContext->valueDictionaries.end()) {
-    return;
-  }
-  for (const auto& valueDictionary : it->second) {
-    configureDictionary(
-        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
-        valueDictionary.dictionary,
-        context.schemaBuilder());
-  }
+  NIMBLE_USER_CHECK(
+      options.vectorIndexWriterFactory != nullptr,
+      "WriterOptions::vectorIndexWriterFactory must be set when "
+      "vectorIndexConfigs is not empty. Depend on "
+      "//velox/dwio/nimble/index:vector_index and use "
+      "index::VectorIndexWriter::create.");
+  auto writer = options.vectorIndexWriterFactory(
+      options.vectorIndexConfigs, velox::asRowType(type), pool);
+  NIMBLE_CHECK_NOT_NULL(
+      writer, "Vector index writer factory returned a null writer");
+  return writer;
 }
 } // namespace
 
@@ -1889,6 +1995,10 @@ Writer::Writer(
           context_->options(),
           type,
           &(*context_->bufferMemoryPool()))},
+      vectorIndexWriter_{createVectorIndexWriter(
+          context_->options(),
+          type,
+          &(*context_->bufferMemoryPool()))},
       tabletWriter_{TabletWriter::create(
           file_.get(),
           *encodingMemoryPool_,
@@ -1900,7 +2010,8 @@ Writer::Writer(
                    kMetadataCompressionThreshold),
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
-           .enableChunkIndex = context_->options().enableChunkIndex,
+           .enableChunkStats = context_->options().enableChunkStats,
+           .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
@@ -1938,7 +2049,7 @@ Writer::Writer(
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_USER_CHECK(
-      !context_->options().enableChunkIndex ||
+      !context_->options().enableChunkStats ||
           context_->options().enableChunking,
       "Chunk stats require chunking to be enabled.");
 
@@ -2093,24 +2204,37 @@ velox::VectorPtr Writer::storedDataInput(const velox::VectorPtr& input) const {
 }
 
 void Writer::writeMetadata() {
-  if (context_->options().metadata.empty()) {
+  const auto& optionsMetadata = context_->options().metadata;
+  const auto& metadataProvider = context_->options().metadataProvider;
+  // Called here rather than at open so it observes the finished file.
+  const auto providedMetadata = metadataProvider
+      ? metadataProvider()
+      : std::unordered_map<std::string, std::string>{};
+  if (optionsMetadata.empty() && providedMetadata.empty()) {
     return;
   }
-  auto& metadata = context_->options().metadata;
-  auto it = metadata.cbegin();
-  flatbuffers::FlatBufferBuilder builder(kInitialSchemaSectionSize);
-  auto entries =
-      builder.CreateVector<flatbuffers::Offset<serialization::MetadataEntry>>(
-          metadata.size(), [&builder, &it](size_t /* i */) {
-            auto entry = serialization::CreateMetadataEntry(
-                builder,
-                builder.CreateString(it->first),
-                builder.CreateString(it->second));
-            ++it;
-            return entry;
-          });
 
-  builder.Finish(serialization::CreateMetadata(builder, entries));
+  flatbuffers::FlatBufferBuilder builder(kInitialSchemaSectionSize);
+  std::vector<flatbuffers::Offset<serialization::MetadataEntry>> entries;
+  entries.reserve(optionsMetadata.size() + providedMetadata.size());
+  const auto appendEntry = [&builder, &entries](
+                               const auto& key, const auto& value) {
+    entries.push_back(
+        serialization::CreateMetadataEntry(
+            builder, builder.CreateString(key), builder.CreateString(value)));
+  };
+  for (const auto& [key, value] : optionsMetadata) {
+    // Skip the keys the provider overrode, so each key appears once.
+    if (!providedMetadata.contains(key)) {
+      appendEntry(key, value);
+    }
+  }
+  for (const auto& [key, value] : providedMetadata) {
+    appendEntry(key, value);
+  }
+
+  builder.Finish(
+      serialization::CreateMetadata(builder, builder.CreateVector(entries)));
   tabletWriter_->writeOptionalSection(
       std::string(kMetadataSection),
       {reinterpret_cast<const char*>(builder.GetBufferPointer()),
@@ -2118,6 +2242,7 @@ void Writer::writeMetadata() {
 }
 
 void Writer::writeColumnStats() {
+  context_->finalizeFileStatsFromStripes();
   // When enableStatsConsistencyCheck is true, verify that fileRawSize
   // (accumulated via RawSizeUtils) matches the root column statistics.
   if (context_->options().enableStatsConsistencyCheck) {
@@ -2133,6 +2258,14 @@ void Writer::writeColumnStats() {
     Buffer buffer{*encodingMemoryPool_};
     tabletWriter_->writeOptionalSection(
         std::string(kVectorizedStatsSection), fileStats.serialize(buffer));
+    if (context_->stripeStatsWriteEnabled()) {
+      VectorizedStripeStats stripeStats{
+          context_->stripeStats(), encodingMemoryPool_.get()};
+      Buffer stripeStatsBuffer{*encodingMemoryPool_};
+      tabletWriter_->writeOptionalSection(
+          std::string(kStripeStatsSection),
+          stripeStats.serialize(stripeStatsBuffer));
+    }
   } else {
     flatbuffers::FlatBufferBuilder builder;
     builder.Finish(
@@ -2268,6 +2401,9 @@ void Writer::addIndexKey(const velox::VectorPtr& input) {
   for (const auto& denseIndex : denseIndexWriters_) {
     denseIndex.writer->write(input);
   }
+  if (vectorIndexWriter_ != nullptr) {
+    vectorIndexWriter_->write(input);
+  }
 }
 
 void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
@@ -2333,6 +2469,9 @@ void Writer::writeIndexes(
     }
   }
   writeIndexSection(descriptors, writeMetadataFn);
+  if (vectorIndexWriter_ != nullptr) {
+    vectorIndexWriter_->close(createMetadataFn, writeMetadataFn);
+  }
 }
 
 bool Writer::shouldFlush(FlushPolicy* policy) const {
@@ -2370,9 +2509,6 @@ std::unique_ptr<velox::dwio::common::FileMetadata> Writer::close() {
     }
     writeStripe();
     rootWriter_->close();
-    if (context_->options().enableStatsCollection) {
-      context_->finalizeStatsCollectors();
-    }
 
     writeMetadata();
     if (context_->options().enableStatsCollection) {
@@ -2651,6 +2787,42 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   return std::min({streamCount, options.maxEncodeParallelism, maxByStreams});
 }
 
+namespace {
+
+// Encode tasks are dispatched in fixed-size batches that each wait on their
+// slowest member, so a batch mixing one large stream with small ones leaves
+// most of it idle. Grouping comparable sizes into the same batch keeps the
+// batch maximum close to its mean. Sizes are read before materialize(), so
+// this is the buffered size rather than the encoded one -- good enough to
+// rank by, and it costs no extra pass over the data.
+void sortByBufferedSizeDescending(
+    std::vector<uint32_t>& indices,
+    const std::vector<std::pair<uint32_t, std::unique_ptr<StreamData>>>&
+        streams) {
+  std::stable_sort(
+      indices.begin(), indices.end(), [&streams](uint32_t lhs, uint32_t rhs) {
+        return streams[lhs].second->memoryUsed() >
+            streams[rhs].second->memoryUsed();
+      });
+}
+
+} // namespace
+
+std::vector<uint32_t> Writer::encodeOrder(uint32_t streamCount) const {
+  std::vector<uint32_t> orderedIndices(streamCount);
+  std::iota(orderedIndices.begin(), orderedIndices.end(), 0u);
+  sortByBufferedSizeDescending(orderedIndices, context_->streams());
+  return orderedIndices;
+}
+
+std::vector<uint32_t> Writer::encodeOrder(
+    std::span<const uint32_t> streamIndices) const {
+  std::vector<uint32_t> orderedIndices{
+      streamIndices.begin(), streamIndices.end()};
+  sortByBufferedSizeDescending(orderedIndices, context_->streams());
+  return orderedIndices;
+}
+
 void Writer::ensureEncodingScratchBufferPools(uint32_t poolCount) {
   if (context_->options().maxCachedEncodingScratchBuffers == 0) {
     NIMBLE_CHECK(
@@ -2739,6 +2911,7 @@ void Writer::writeStreams() {
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
+      const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
@@ -2752,11 +2925,12 @@ void Writer::writeStreams() {
                   const_cast<uint32_t*>(&taskId));
               const auto startCpuNanos = velox::process::threadCpuNanos();
               while (true) {
-                const auto streamIndex =
+                const auto fetchIndex =
                     nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (streamIndex >= streamCount) {
+                if (fetchIndex >= streamCount) {
                   break;
                 }
+                const auto streamIndex = orderedIndices[fetchIndex];
                 auto& [nodeId, streamData] = streams[streamIndex];
                 uint64_t streamSize{0};
                 processStream(
@@ -2978,6 +3152,7 @@ bool Writer::writeChunks(
       NIMBLE_CHECK(
           encodingExecutor,
           "Encoding executor is required for parallel encoding.");
+      const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
@@ -2995,7 +3170,7 @@ bool Writer::writeChunks(
             if (inputIndex >= streamCount) {
               break;
             }
-            const auto streamIndex = streamIndices[inputIndex];
+            const auto streamIndex = orderedIndices[inputIndex];
             auto& [nodeId, streamData] = streams[streamIndex];
             const auto offset = streamData->descriptor().offset();
             uint64_t streamSize{0};
@@ -3109,8 +3284,15 @@ bool Writer::writeStripe() {
   } else {
     writeStreams();
   }
-
   writeStripeDictionaryStreams();
+
+  // Must run after writeStripeDictionaryStreams(), which still charges the
+  // stripe's alphabet bytes to the stats collectors: snapshotting first would
+  // shift those bytes into the next stripe and drop them for the last one.
+  if (context_->options().enableStatsCollection &&
+      context_->stripeStatsWriteEnabled()) {
+    context_->finalizeStripeStatsCollectors();
+  }
 
   uint64_t stripeSize{0};
   {

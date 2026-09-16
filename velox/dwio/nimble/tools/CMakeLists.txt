@@ -39,7 +39,7 @@ target_link_libraries(
   nimble_encodings
   nimble_tablet_common
   nimble_tablet_reader
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_writer
   nimble_velox_stats_fb
   velox_file
@@ -63,7 +63,7 @@ target_link_libraries(
   nimble_tools_common
   nimble_common
   nimble_tablet_reader
-  nimble_velox_reader
+  nimble_batch_reader
   nimble_velox_schema_reader
   nimble_column_stats
   velox_file

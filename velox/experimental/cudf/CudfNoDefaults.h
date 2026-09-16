@@ -21,7 +21,7 @@
 // for stream and mr parameters at compile time.
 //
 // cudf public APIs declare defaults like:
-//   rmm::cuda_stream_view stream = cudf::get_default_stream(),
+//   cuda::stream_ref stream = cudf::get_default_stream(),
 //   rmm::device_async_resource_ref mr = cudf::get_current_device_resource_ref()
 //
 // When a call site omits stream or mr, the compiler generates a call to these
@@ -45,7 +45,7 @@ namespace cudf {
 
 __attribute__((
     error("cudf default stream argument used. Pass stream explicitly."),
-    noinline)) rmm::cuda_stream_view const get_default_stream();
+    noinline)) cuda::stream_ref const get_default_stream();
 
 __attribute__((
     error("cudf default memory resource argument used. Pass mr explicitly."),

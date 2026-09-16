@@ -30,8 +30,9 @@
 /// MockRPCClient::ErrorBurst), and PER_ROW dispatch preserves row order, so the
 /// burst lands on a known, timing-independent slice of rows. The whole
 /// trajectory is captured in a single close()-time stats snapshot: numShrinks>0
-/// proves the window dipped; rpcRateLimiterMinCap (only emitted once the cap
-/// shrank) proves the limiter backed off; the final cap sitting above that
+/// proves the window dipped; rpcRateLimiterMinCap lands on every query, so it
+/// is the value, not its presence, that proves the limiter backed off -- a
+/// low-water mark below the ceiling; the final cap sitting above that
 /// low-water mark proves recovery.
 
 #include <gtest/gtest.h>
@@ -163,6 +164,112 @@ class BurstRPCFunction : public AsyncRPCFunction {
   std::shared_ptr<MockRPCClient> client_;
 };
 
+// The BATCH counterpart of BurstRPCFunction. BATCH reserves one rate-limiter
+// slot per flushBatch() and drains one batch at a time, so the recovery it
+// drives is per batch, not per row -- the reason this needs its own harness
+// rather than reusing the PER_ROW burst above.
+//
+// MockRPCClient::setErrorBurst fails a contiguous run of request ordinals, and
+// callBatch() consumes one ordinal per row, so the burst still lands on a
+// deterministic row range.
+class BurstBatchRPCFunction : public AsyncRPCFunction {
+ public:
+  using Config = BurstRPCFunction::Config;
+
+  explicit BurstBatchRPCFunction(Config config) : config_{std::move(config)} {}
+
+  void initialize(
+      const core::QueryConfig& /*queryConfig*/,
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const std::vector<VectorPtr>& /*constantInputs*/) override {
+    VELOX_CHECK_NULL(client_, "initialize() must be called at most once");
+    client_ =
+        std::make_shared<MockRPCClient>(config_.latency, /*errorRate=*/0.0);
+    client_->setErrorBurst(
+        {config_.burstFirstCall, config_.burstLastCall, config_.burstKind});
+  }
+
+  std::string name() const override {
+    return "burst_batch_rpc";
+  }
+
+  TypePtr resultType() const override {
+    return VARCHAR();
+  }
+
+  std::string tierKey() const override {
+    return config_.tier;
+  }
+
+  // Pure virtual on the base. BATCH never routes here; failing loudly beats
+  // returning nothing, which would strand rows and surface far downstream.
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/) override {
+    VELOX_FAIL("burst_batch_rpc is BATCH-only; dispatchPerRow is unreachable");
+  }
+
+  std::vector<vector_size_t> accumulateBatch(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    std::vector<vector_size_t> indices;
+    VELOX_CHECK(!args.empty(), "burst_batch_rpc expects one argument");
+    auto* promptVector = args[0]->as<SimpleVector<StringView>>();
+    VELOX_CHECK_NOT_NULL(
+        promptVector, "burst_batch_rpc expects a VARCHAR prompt argument");
+    rows.applyToSelected([&](vector_size_t row) {
+      indices.push_back(row);
+      pending_.push_back(
+          promptVector->isNullAt(row) ? "" : promptVector->valueAt(row).str());
+    });
+    return indices;
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    const auto count = maxRows > 0
+        ? std::min<int32_t>(maxRows, static_cast<int32_t>(pending_.size()))
+        : static_cast<int32_t>(pending_.size());
+    std::vector<RPCRequest> requests;
+    requests.reserve(count);
+    for (int32_t i = 0; i < count; ++i) {
+      RPCRequest request;
+      // Batch-position rowId: the operator scatters responses back by it.
+      request.rowId = i;
+      request.originalRowIndex = i;
+      request.payload = pending_[i];
+      requests.push_back(std::move(request));
+    }
+    pending_.erase(pending_.begin(), pending_.begin() + count);
+    return client_->callBatch(requests);
+  }
+
+  int32_t pendingBatchSize() const override {
+    return static_cast<int32_t>(pending_.size());
+  }
+
+  // Same classification as the PER_ROW burst: rate-limit / timeout is backend
+  // overload, a clean drain drives recovery.
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    for (const auto& response : responses) {
+      if (response.hasError() &&
+          (response.errorKind == RPCErrorKind::kRateLimited ||
+           response.errorKind == RPCErrorKind::kTimeout)) {
+        return CongestionSignal::kError;
+      }
+    }
+    return responses.empty() ? CongestionSignal::kNone
+                             : CongestionSignal::kSuccess;
+  }
+
+ private:
+  Config config_;
+  std::shared_ptr<MockRPCClient> client_;
+  std::vector<std::string> pending_;
+};
+
 class RPCAimdUnderLoadTest : public OperatorTestBase {
  protected:
   // Phase sizes (rows). PER_ROW issues one call per row in row order, so call
@@ -191,6 +298,14 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
                                    /*burstLastCall=*/kWarmupRows + kBurstRows,
                                    /*burstKind=*/RPCErrorKind::kRateLimited});
     });
+    AsyncRPCFunctionRegistry::registerFunction("burst_batch_rpc", [] {
+      return std::make_shared<BurstBatchRPCFunction>(
+          BurstRPCFunction::Config{/*burstFirstCall=*/kWarmupRows,
+                                   /*burstLastCall=*/kWarmupRows + kBurstRows,
+                                   /*burstKind=*/RPCErrorKind::kRateLimited,
+                                   /*latency=*/std::chrono::milliseconds(1),
+                                   /*tier=*/"layer2.test.batch.tier"});
+    });
   }
 
   static void TearDownTestCase() {
@@ -203,7 +318,7 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   void TearDown() override {
     // The rate limiter is process-global; reset it so its adaptive state does
     // not leak into other tests.
-    RPCRateLimiter::testingResetAllState();
+    RPCRateLimiterRegistry::global().testingReset();
     OperatorTestBase::TearDown();
   }
 
@@ -227,6 +342,33 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
     // Default streaming mode is PER_ROW.
     return std::make_shared<core::RPCNode>(
         "rpc-0", source, std::move(call), "__rpc_result", outputType);
+  }
+
+  core::PlanNodePtr makeBatchRPCNode(
+      const core::PlanNodePtr& source,
+      int32_t dispatchBatchSize) {
+    const auto& sourceType = source->outputType();
+    std::vector<core::TypedExprPtr> callInputs;
+    callInputs.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            sourceType->findChild("prompt"), "prompt"));
+    auto call = std::make_shared<core::CallTypedExpr>(
+        VARCHAR(), std::move(callInputs), "burst_batch_rpc");
+
+    auto outputNames = sourceType->names();
+    auto outputTypes = sourceType->children();
+    outputNames.emplace_back("__rpc_result");
+    outputTypes.push_back(VARCHAR());
+    auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
+
+    return std::make_shared<core::RPCNode>(
+        "rpc-0",
+        source,
+        std::move(call),
+        "__rpc_result",
+        outputType,
+        RPCStreamingMode::kBatch,
+        dispatchBatchSize);
   }
 };
 
@@ -292,14 +434,80 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   //     (this stat is only emitted when numShrinks > 0).
   EXPECT_GT(statSum(RPCOperator::kRpcCongestionShrinks), 0);
 
-  // (3) Overload -> the process-global rate-limiter cap backed off below its
-  //     ceiling. rpcRateLimiterMinCap is only emitted once the cap shrank.
+  // (3) Overload -> this backend's rate-limiter cap backed off below its
+  //     ceiling. rpcRateLimiterMinCap lands on every query, so presence alone
+  //     says nothing about backoff; the value below the ceiling is the claim.
   const int64_t minCap = statSum(RPCOperator::kRpcRateLimiterMinCap);
-  EXPECT_GT(minCap, 0);
+  ASSERT_NE(minCap, -1) << "the low-water stat must be emitted on every query";
   EXPECT_LT(minCap, kMaxLimit) << "cap should have dipped below its ceiling";
 
   // (4) After the burst, the clean success stream drove AIMD additive recovery:
   //     the final cap climbed back above the low-water mark.
+  const int64_t finalCap = statSum(RPCOperator::kRpcRateLimiterCap);
+  EXPECT_GT(finalCap, minCap) << "cap should recover above its low-water mark";
+}
+
+// The BATCH arm of the same closed loop: overload burst -> the backend's cap
+// backs off through the real classifier -> a clean batch stream recovers it.
+//
+// This is the end-to-end complement to
+// RPCOperatorTest.batchAimdRecoversPerBatchNotPerRow, which forces the shrink
+// by calling onOutcome(kOverload) directly and pins the step size. Here the
+// shrink arrives the way production produces one -- rate-limited responses
+// classified by the function -- so classify -> onOverload -> onSuccess is
+// exercised as a loop rather than as three separate calls.
+TEST_F(RPCAimdUnderLoadTest, batchRateLimiterBacksOffThenRecovers) {
+  std::vector<std::string> storage;
+  storage.reserve(kTotalRows);
+  for (int32_t i = 0; i < kTotalRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts;
+  prompts.reserve(kTotalRows);
+  for (const auto& prompt : storage) {
+    prompts.emplace_back(prompt);
+  }
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  // Chunks small enough that the burst window spans several flushes, so the
+  // cap shrinks more than once, and small enough that many clean batches
+  // follow it -- recovery is one step per batch, so it needs batches to count.
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), /*dispatchBatchSize=*/16);
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .config("rpc.ratelimiter.adaptive_enabled", "true")
+                    .config("rpc.ratelimiter.max_limit", kMaxLimit)
+                    .config("rpc.ratelimiter.min_limit", kMinLimit)
+                    .config("rpc.ratelimiter.decrease_factor", "0.5")
+                    .config("rpc.congestion.max_window", kMaxWindow)
+                    .config("rpc.congestion.min_window", 1)
+                    .copyResults(pool(), task);
+
+  ASSERT_EQ(result->size(), kTotalRows);
+
+  auto planStats = toPlanStats(task->taskStats());
+  ASSERT_EQ(planStats.count("rpc-0"), 1);
+  const auto& customStats = planStats.at("rpc-0").customStats;
+  auto statSum = [&](const std::string& key) -> int64_t {
+    auto it = customStats.find(key);
+    return it == customStats.end() ? -1 : it->second.sum;
+  };
+
+  // The burst actually landed and was classified by typed cause.
+  EXPECT_GT(statSum(RPCOperator::kRpcErrorKindRateLimited), 0)
+      << "the burst must reach the operator as rate-limit errors";
+
+  // Overload drove the backend's cap below its ceiling.
+  const int64_t minCap = statSum(RPCOperator::kRpcRateLimiterMinCap);
+  ASSERT_NE(minCap, -1) << "the low-water stat must be emitted on every query";
+  EXPECT_LT(minCap, kMaxLimit) << "cap should have dipped below its ceiling";
+
+  // And the clean batches after the burst recovered it. This is the assertion
+  // the unit-level test cannot make: recovery here is credited by the operator
+  // through the real congestion classifier, one unit per drained batch.
   const int64_t finalCap = statSum(RPCOperator::kRpcRateLimiterCap);
   EXPECT_GT(finalCap, minCap) << "cap should recover above its low-water mark";
 }

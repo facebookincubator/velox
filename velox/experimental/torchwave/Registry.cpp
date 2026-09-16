@@ -305,6 +305,11 @@ MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::gridSizeSumsInputs(bool val) {
+  md_.gridSizeSumsInputs = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::metadataGetter(bool val) {
   md_.isMetadataGetter = val;
   return *this;
@@ -319,6 +324,12 @@ MetadataBuilder& MetadataBuilder::makeMultiKernelVariant(
 MetadataBuilder& MetadataBuilder::cgVariant(
     std::function<nativert::Node*(NodeCP, WaveGraph*)> func) {
   md_.cgVariant = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::decompose(
+    std::function<bool(NodeCP, WaveGraph&)> func) {
+  md_.decompose = std::move(func);
   return *this;
 }
 
@@ -468,6 +479,12 @@ MetadataBuilder& MetadataBuilder::specialForm(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::generateTemplateArg(
+    std::function<std::string(NodeCP, CompileCtx*)> func) {
+  md_.generateTemplateArg = std::move(func);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::headerFile(std::string file) {
   md_.headerFile = std::move(file);
   return *this;
@@ -487,6 +504,17 @@ MetadataBuilder& MetadataBuilder::sharedDecls(
 MetadataBuilder& MetadataBuilder::dynamicSharedDecls(
     std::vector<std::pair<int32_t, std::string>> decls) {
   md_.dynamicSharedDecls = std::move(decls);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::dynamicSharedMemory(
+    std::function<int64_t(NodeCP)> func) {
+  md_.dynamicSharedMemory = std::move(func);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
+  md_.minBlocksPerSm = blocks;
   return *this;
 }
 

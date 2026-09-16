@@ -111,9 +111,10 @@ TEST(OptionsTest, serializerOptionsWithFlatMapColumns) {
 TEST(OptionsTest, deserializerOptionsDefaults) {
   DeserializerOptions options{};
 
-  EXPECT_FALSE(options.hasHeader);
+  EXPECT_TRUE(options.hasHeader);
   EXPECT_EQ(options.decodeExecutor, nullptr);
   EXPECT_EQ(options.maxDecodeParallelism, 0u);
+  EXPECT_TRUE(options.decodePools.empty());
 }
 
 TEST(OptionsTest, deserializerOptionsWithVersion) {
