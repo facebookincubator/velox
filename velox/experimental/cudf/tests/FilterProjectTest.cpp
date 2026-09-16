@@ -2216,9 +2216,13 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
 TEST_F(CudfFilterProjectTest, switchWithoutElse) {
   // The fixture disables CPU fallback, so these projections must run on GPU.
   auto data = makeRowVector(
-      {"flag", "value"},
+      {"flag", "value", "string_value", "decimal_value"},
       {makeNullableFlatVector<bool>({true, false, std::nullopt, true}),
-       makeNullableFlatVector<int64_t>({10, 20, 30, std::nullopt})});
+       makeNullableFlatVector<int64_t>({10, 20, 30, std::nullopt}),
+       makeNullableFlatVector<std::string>(
+           {"one", "two", "three", std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {123, 456, 789, std::nullopt}, DECIMAL(7, 2))});
   auto assertWithoutElse =
       [&](const std::string& thenSql,
           const core::TypedExprPtr& thenExpr,
@@ -2267,6 +2271,21 @@ TEST_F(CudfFilterProjectTest, switchWithoutElse) {
       std::make_shared<core::ConstantTypedExpr>(
           BIGINT(), variant::null(TypeKind::BIGINT)),
       {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  auto typedPlan = PlanBuilder()
+                       .values({data})
+                       .project({
+                           "CASE WHEN flag THEN string_value END",
+                           "CASE WHEN flag THEN decimal_value END",
+                       })
+                       .planNode();
+  auto typedExpected = makeRowVector({
+      makeNullableFlatVector<std::string>(
+          {"one", std::nullopt, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {123, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(7, 2)),
+  });
+  AssertQueryBuilder(typedPlan).assertResults(typedExpected);
 
   auto plan =
       PlanBuilder()

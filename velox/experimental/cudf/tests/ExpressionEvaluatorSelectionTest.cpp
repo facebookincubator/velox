@@ -587,7 +587,9 @@ TEST_F(CudfExpressionSelectionTest, switchWithoutElseResultTypes) {
       ROW("x", BIGINT()),
       MAP(BIGINT(), BIGINT()),
       UNKNOWN(),
-      HUGEINT()};
+      HUGEINT(),
+      INTERVAL_DAY_TIME(),
+      INTERVAL_YEAR_MONTH()};
   for (const auto& name : {"switch", "if"}) {
     for (const bool expected : {false, true}) {
       for (const auto& type : expected ? supported : unsupported) {

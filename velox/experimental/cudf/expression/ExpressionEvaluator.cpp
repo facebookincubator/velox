@@ -1186,31 +1186,6 @@ class GreatestLeastFunction : public CudfFunction {
   std::vector<size_t> order_;
 };
 
-// The implicit ELSE requires a null scalar. Only admit Velox types mapped to
-// cuDF fixed-width or string types; list and struct scalars are unsupported.
-bool canMakeNullScalar(const TypePtr& type) {
-  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
-    return false;
-  }
-  switch (type->kind()) {
-    case TypeKind::BOOLEAN:
-    case TypeKind::TINYINT:
-    case TypeKind::SMALLINT:
-    case TypeKind::INTEGER:
-    case TypeKind::BIGINT:
-    case TypeKind::REAL:
-    case TypeKind::DOUBLE:
-    case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY:
-    case TypeKind::TIMESTAMP:
-      return true;
-    case TypeKind::HUGEINT:
-      return type->isDecimal();
-    default:
-      return false;
-  }
-}
-
 class SwitchFunction : public CudfFunction {
  public:
   SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
@@ -2535,7 +2510,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       /*overwrite=*/true,
       [](const core::TypedExprPtr& expr) {
         return !expr->inputs()[0]->isConstantKind() &&
-            canMakeNullScalar(expr->type());
+            canMakeCudfDefaultScalar(expr->type());
       });
   registerCudfFunctions(
       {"switch", "if"},
