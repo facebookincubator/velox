@@ -473,6 +473,12 @@ TEST_F(TableScanTest, abandonPreloadedSplits) {
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
                     .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "8")
+                    // Enable column chunk fetch during preload
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kPreloadColumnChunksSession,
+                        "true")
                     .splits(makeCudfHiveConnectorSplits(filePaths))
                     .copyResults(pool_.get(), task);
   EXPECT_EQ(result->size(), kLimit);
