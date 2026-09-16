@@ -250,12 +250,7 @@ class ALPEncoding final
     const auto sourceStart =
         pos_ + static_cast<uint32_t>(selectedRows[0] - currentRow);
     const auto* encodedValues = encodedBuffer_.data() + sourceStart;
-    const auto exponent = exponent_;
-    const auto factor = factor_;
-    for (vector_size_t row = 0; row < numSelected; ++row) {
-      physicalValues[row] = detail::alp::toPhysical<cppDataType>(decodeValue(
-          velox::ZigZag::decode(encodedValues[row]), exponent, factor));
-    }
+    decodeBulkValues(encodedValues, numSelected, exponent_, factor_, values);
     patchExceptions(sourceStart, numSelected, physicalValues);
 
     if constexpr (!Visitor::kHasHook) {
@@ -1021,6 +1016,13 @@ class ALPEncoding final
     const double scaled = value * kPow10Double[exponent];
     return static_cast<int64_t>(std::llround(scaled / kPow10Double[factor]));
   }
+
+  static void decodeBulkValues(
+      const uint64_t* encodedValues,
+      vector_size_t numValues,
+      int exponent,
+      int factor,
+      cppDataType* output);
 
   // Reconstructs a floating-point value from an ALP integer.
   static cppDataType decodeValue(int64_t encoded, int exponent, int factor) {
