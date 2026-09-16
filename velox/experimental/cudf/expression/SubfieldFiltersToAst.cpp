@@ -334,6 +334,23 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
+// Revisit when supporting another leaf predicate that can pass null input.
+bool valuePredicateMayPassNull(const common::Filter& filter) {
+  if (filter.kind() == common::FilterKind::kIsNull) {
+    return true;
+  }
+  if (filter.kind() != common::FilterKind::kMultiRange) {
+    return false;
+  }
+  for (const auto& child :
+       static_cast<const common::MultiRange&>(filter).filters()) {
+    if (valuePredicateMayPassNull(*child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     const common::Subfield& subfield,
     const common::Filter& filter,
@@ -502,13 +519,6 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
         result =
             &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
       }
-      if (filter.kind() == common::FilterKind::kMultiRange) {
-        // IsNull children must not override the outer filter's null policy.
-        // The public wrapper applies that policy after building the predicate.
-        auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
-        auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
-        return tree.push(Operation{Op::NULL_LOGICAL_AND, isNotNull, *result});
-      }
       return *result;
     }
 
@@ -553,18 +563,25 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
     const RowTypePtr& inputRowSchema) {
   auto const& expression = createAstFromSubfieldFilterImpl(
       subfield, filter, tree, scalars, inputRowSchema);
-  if (filter.testNull() && filter.kind() != common::FilterKind::kIsNull &&
-      filter.kind() != common::FilterKind::kIsNotNull) {
-    using Op = cudf::ast::ast_operator;
-    using Operation = cudf::ast::operation;
+  if (filter.kind() == common::FilterKind::kIsNull ||
+      filter.kind() == common::FilterKind::kIsNotNull) {
+    return expression;
+  }
+  if (!filter.testNull() && !valuePredicateMayPassNull(filter)) {
+    return expression;
+  }
 
-    auto const& columnRef = tree.push(
-        cudf::ast::column_reference(
-            inputRowSchema->getChildIdx(subfield.toString())));
-    auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+  auto const& columnRef = tree.push(
+      cudf::ast::column_reference(
+          inputRowSchema->getChildIdx(subfield.toString())));
+  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+  if (filter.testNull()) {
     return tree.push(Operation{Op::NULL_LOGICAL_OR, isNull, expression});
   }
-  return expression;
+  auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
+  return tree.push(Operation{Op::NULL_LOGICAL_AND, isNotNull, expression});
 }
 
 // Create a combined AST from a set of subfield filters by chaining them with

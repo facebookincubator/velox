@@ -159,7 +159,7 @@ class SubfieldFilterAstTest : public OperatorTestBase {
           default:
             veloxExpected = true;
         }
-        bool cudfGot = boolVector->valueAt(i);
+        bool cudfGot = !boolVector->isNullAt(i) && boolVector->valueAt(i);
         EXPECT_EQ(veloxExpected, cudfGot)
             << "Mismatch at row " << i << " for " << columnName;
       }
@@ -930,7 +930,9 @@ TEST_F(SubfieldFilterAstTest, multiRangeParentNullPolicy) {
 
       std::vector<std::unique_ptr<common::Filter>> outerFilters;
       outerFilters.push_back(filter.clone());
-      outerFilters.push_back(std::make_unique<common::IsNull>());
+      outerFilters.push_back(
+          std::make_unique<common::DoubleRange>(
+              2, false, false, 3, false, false, childNullAllowed));
       check(common::MultiRange(std::move(outerFilters), !nullAllowed));
     }
 
@@ -985,6 +987,9 @@ TEST_F(SubfieldFilterAstTest, multiRangeDoubleNotEqual) {
       createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
 
   ASSERT_GT(tree.size(), 0UL) << "No expressions created for MultiRange";
+  const auto* root = dynamic_cast<const cudf::ast::operation*>(&expr);
+  ASSERT_NE(root, nullptr);
+  EXPECT_EQ(root->get_operator(), cudf::ast::ast_operator::NULL_LOGICAL_OR);
   // Each range has one bounded side, so 2 scalars total
   EXPECT_EQ(scalars.size(), 2UL)
       << "Expected 2 scalars for double != filter (< 5.0 OR > 5.0)";
