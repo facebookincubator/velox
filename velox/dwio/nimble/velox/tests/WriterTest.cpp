@@ -601,6 +601,13 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
     EXPECT_FALSE(encodingOptions.allowNestedAlpSelection);
+
+    // The delta pre-transform ships disabled. Assert the flag's own default
+    // too, so lowering the bar to enabling it fails here rather than silently
+    // turning on an encoding whose streams reject skip() and
+    // readWithVisitor().
+    EXPECT_FALSE(FLAGS_nimble_subintsplit_delta_pretransform);
+    EXPECT_FALSE(encodingOptions.subIntSplitDeltaPreTransform);
   }
 
   for (const auto useExactBits : {false, true}) {
@@ -620,6 +627,22 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
       EXPECT_EQ(
           encodingOptions.allowNestedAlpSelection, allowNestedAlpSelection);
     }
+  }
+}
+
+TEST_F(WriterTest, subIntSplitDeltaPreTransformFollowsItsFlag) {
+  // The SubIntSplit delta pre-transform has no WriterOptions field: the gflag
+  // is its only enablement channel, so the flag value is what must reach
+  // Encoding::Options.
+  for (const auto enabled : {false, true}) {
+    SCOPED_TRACE(fmt::format("enabled={}", enabled));
+    gflags::FlagSaver flagSaver;
+    FLAGS_nimble_subintsplit_delta_pretransform = enabled;
+
+    const nimble::WriterOptions options;
+
+    EXPECT_EQ(
+        options.buildEncodingOptions().subIntSplitDeltaPreTransform, enabled);
   }
 }
 
@@ -2429,6 +2452,55 @@ TEST_F(WriterTest, encodingLayout) {
         EXPECT_EQ(nimble::EncodingType::Constant, capture.encodingType());
       }
     }
+  }
+}
+
+TEST_F(WriterTest, encodingLayoutAppliesToPredefinedFlatMapKeys) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"flatmap"},
+      {vectorMaker.mapVector<int32_t, int32_t>(
+          64,
+          [](auto) { return 1; },
+          [](auto, auto) { return 1; },
+          [](auto row, auto) { return row; },
+          [](auto) { return false; })});
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      {
+          .flatMapColumns = {{"flatmap", {"1"}}},
+          .encodingLayoutTree =
+              nimble::EncodingLayoutTree{
+                  nimble::Kind::Row,
+                  {},
+                  "",
+                  {{nimble::Kind::FlatMap,
+                    {},
+                    "flatmap",
+                    {{nimble::Kind::Scalar,
+                      {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::
+                            ScalarStream,
+                        nimble::EncodingLayout{
+                            nimble::EncodingType::Trivial,
+                            {},
+                            nimble::CompressionType::Uncompressed}}},
+                      "1"}}}}},
+      });
+  writer.write(vector);
+  writer.close();
+
+  const auto layouts = captureFlatMapKeyChunkLayouts(
+      std::make_shared<velox::InMemoryReadFile>(file),
+      /*columnIndex=*/0,
+      /*key=*/"1",
+      /*expectedStripeCount=*/1);
+  ASSERT_FALSE(layouts.empty());
+  for (const auto& layout : layouts) {
+    EXPECT_EQ(layout.encodingType(), nimble::EncodingType::Trivial);
   }
 }
 
