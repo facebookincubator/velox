@@ -296,6 +296,120 @@ class ApproxPercentileTest : public AggregationTestBase {
   std::unordered_map<std::string, std::string> queryConfig_;
 };
 
+TEST_F(ApproxPercentileTest, distinctGlobal) {
+  // Exercise native DISTINCT directly, without partial aggregation or a
+  // separate input deduplication step.
+  auto input = std::vector<RowVectorPtr>{
+      makeRowVector({makeFlatVector<int64_t>({1, 2})}),
+      makeRowVector({makeFlatVector<int64_t>({2, 3})})};
+  auto plan = PlanBuilder(pool())
+                  .values(input)
+                  .singleAggregation(
+                      {},
+                      {"count(DISTINCT c0)",
+                       "approx_percentile(DISTINCT c0, 0.5)",
+                       "approx_percentile(DISTINCT c0, ARRAY[0.0, 0.5, 1.0])",
+                       "sum(c0)",
+                       "array_agg(c0 ORDER BY c0)"})
+                  .planNode();
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({3}),
+       makeFlatVector<int64_t>({2}),
+       makeArrayVector<int64_t>({{1, 2, 3}}),
+       makeFlatVector<int64_t>({8}),
+       makeArrayVector<int64_t>({{1, 2, 2, 3}})});
+  AssertQueryBuilder(plan)
+      .maxDrivers(1)
+      .config(
+          core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+          0)
+      .assertResults(expected);
+}
+
+TEST_F(ApproxPercentileTest, distinctGrouped) {
+  auto input = std::vector<RowVectorPtr>{
+      makeRowVector(
+          {makeFlatVector<int64_t>({0, 0, 1, 1, 2}),
+           makeNullableFlatVector<int64_t>({1, 2, 10, 20, std::nullopt})}),
+      makeRowVector(
+          {makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2}),
+           makeNullableFlatVector<int64_t>(
+               {2, 3, std::nullopt, 20, 30, std::nullopt})})};
+  auto plan = PlanBuilder(pool())
+                  .values(input)
+                  .singleAggregation(
+                      {"c0"},
+                      {"count(DISTINCT c1)",
+                       "approx_percentile(DISTINCT c1, 0.5)",
+                       "approx_percentile(DISTINCT c1, ARRAY[0.0, 0.5, 1.0])"})
+                  .planNode();
+  auto expected = makeRowVector(
+      {makeFlatVector<int64_t>({0, 1, 2}),
+       makeFlatVector<int64_t>({3, 3, 0}),
+       makeNullableFlatVector<int64_t>({2, 20, std::nullopt}),
+       makeArrayVectorFromJson<int64_t>(
+           {"[1, 2, 3]", "[10, 20, 30]", "null"})});
+  for (const auto batchRows : {1, 1024}) {
+    SCOPED_TRACE(batchRows);
+    AssertQueryBuilder(plan)
+        .maxDrivers(1)
+        .config(core::QueryConfig::kMaxOutputBatchRows, batchRows)
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            0)
+        .assertResults(expected);
+  }
+}
+
+TEST_F(ApproxPercentileTest, distinctEmptyAndNullInput) {
+  for (const auto& values :
+       {makeNullableFlatVector<int64_t>({}),
+        makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})}) {
+    SCOPED_TRACE(values->size());
+    auto plan =
+        PlanBuilder(pool())
+            .values({makeRowVector({values})})
+            .singleAggregation(
+                {},
+                {"count(DISTINCT c0)",
+                 "approx_percentile(DISTINCT c0, 0.5)",
+                 "approx_percentile(DISTINCT c0, ARRAY[0.0, 0.5, 1.0])"})
+            .planNode();
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({0}),
+         makeNullableFlatVector<int64_t>({std::nullopt}),
+         makeArrayVectorFromJson<int64_t>({"null"})});
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+TEST_F(ApproxPercentileTest, distinctWithMask) {
+  for (const auto allMasked : {false, true}) {
+    SCOPED_TRACE(allMasked);
+    auto input = makeRowVector(
+        {makeFlatVector<int64_t>({1, 2, 2, 3, 100}),
+         makeFlatVector<bool>(
+             5, [allMasked](auto row) { return !allMasked && row < 4; })});
+    auto plan =
+        PlanBuilder(pool())
+            .values({input})
+            .singleAggregation(
+                {},
+                {"count(DISTINCT c0)", "approx_percentile(DISTINCT c0, 0.5)"},
+                {"c1", "c1"})
+            .planNode();
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>({allMasked ? 0 : 3}),
+         makeNullableFlatVector<int64_t>(
+             {allMasked ? std::nullopt : std::optional<int64_t>(2)})});
+    AssertQueryBuilder(plan)
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            0)
+        .assertResults(expected);
+  }
+}
+
 TEST_F(ApproxPercentileTest, globalAgg) {
   vector_size_t size = 1'000;
   auto values =
