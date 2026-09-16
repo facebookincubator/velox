@@ -543,9 +543,10 @@ class CastFunction : public CudfFunction {
             cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
             stream,
             mr);
-        return cudf::strings::from_timestamps(
+        return formatTimestamp(
             millisTs->view(),
             "%Y-%m-%d %H:%M:%S.%3f",
+            std::nullopt,
             cudf::strings_column_view{},
             stream,
             mr);

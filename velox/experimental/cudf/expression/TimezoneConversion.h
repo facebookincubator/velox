@@ -18,11 +18,13 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream_ref>
 
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace facebook::velox::cudf_velox {
@@ -45,7 +47,7 @@ namespace facebook::velox::cudf_velox {
 std::unique_ptr<cudf::column> toLocalTimestamp(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Converts a column of wall-clock local timestamps in `timezoneName` to the
@@ -66,7 +68,7 @@ std::unique_ptr<cudf::column> toLocalTimestamp(
 std::unique_ptr<cudf::column> toUtcTimestamp(
     const cudf::column_view& localTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Returns the per-row UT offset (DURATION_SECONDS), DST-aware, for the given
@@ -78,7 +80,19 @@ std::unique_ptr<cudf::column> toUtcTimestamp(
 std::unique_ptr<cudf::column> utcOffsetSeconds(
     const cudf::column_view& utcTimestamps,
     std::string_view timezoneName,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+/// Renders a timestamp column with a cuDF strftime pattern, optionally after
+/// converting UTC instants to one session zone. Pass nullopt when the input is
+/// already in the wall-clock frame to render. The optional names column is
+/// forwarded for textual weekday, month and AM/PM fields.
+std::unique_ptr<cudf::column> formatTimestamp(
+    const cudf::column_view& timestamps,
+    std::string_view strftime,
+    std::optional<std::string_view> timezoneName,
+    const cudf::strings_column_view& names,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

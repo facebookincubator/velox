@@ -279,7 +279,7 @@ ColumnOrView DateTruncFunction::eval(
     // session zone. Matches CPU DateTruncFunction::call(TSWTZ).
     auto packed = asView(inputColumns[0]);
     auto zoneKey = tswtzZoneKey(packed, stream, mr);
-    auto distinct = tswtzDistinctZoneKeys(zoneKey->view(), stream, mr);
+    auto distinct = tswtzDistinctZoneKeys(zoneKey->view(), stream);
     auto local = tswtzLocalWallClock(packed, stream, mr);
 
     std::unique_ptr<cudf::column> truncatedUtcMillis;

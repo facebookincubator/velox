@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/TimestampWithTimeZoneColumn.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
@@ -26,6 +27,7 @@
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/tz/TimeZoneMap.h"
+#include "velox/vector/SimpleVector.h"
 
 #include <cudf/binaryop.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -34,7 +36,6 @@
 #include <cudf/datetime.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
-#include <cudf/round.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/stream_compaction.hpp>
@@ -175,8 +176,8 @@ cudf::column_view bitcastColumn(
 
 cudf::numeric_scalar<int64_t> int64Scalar(
     int64_t value,
-    rmm::cuda_stream_view stream) {
-  return cudf::numeric_scalar<int64_t>(value, true, stream);
+    cuda::stream_ref stream) {
+  return cudf::numeric_scalar<int64_t>(value, true, stream, get_temp_mr());
 }
 
 std::unique_ptr<cudf::column> binaryOp(
@@ -184,7 +185,7 @@ std::unique_ptr<cudf::column> binaryOp(
     const cudf::scalar& rhs,
     cudf::binary_operator op,
     cudf::data_type outType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::binary_operation(lhs, rhs, op, outType, stream, mr);
 }
@@ -193,7 +194,7 @@ std::unique_ptr<cudf::column> binaryOp(
 // ZONE column.
 std::unique_ptr<cudf::column> unpackMillis(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return binaryOp(
       packed,
@@ -219,10 +220,10 @@ struct DistinctZones {
 // host so each zone's name/transition lookup runs once. One device->host sync.
 DistinctZones distinctZones(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto perRowKey = tswtzZoneKey(packed, stream, mr);
-  auto keys = tswtzDistinctZoneKeys(perRowKey->view(), stream, mr);
+  auto keys = tswtzDistinctZoneKeys(perRowKey->view(), stream);
   return {std::move(perRowKey), std::move(keys)};
 }
 
@@ -233,7 +234,7 @@ DistinctZones distinctZones(
 // O(#distinct zones) device passes.
 std::unique_ptr<cudf::column> perRowOffsetSeconds(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return tswtzOffsetSeconds(packed, stream, mr);
 }
@@ -244,7 +245,7 @@ std::unique_ptr<cudf::column> perRowOffsetSeconds(
 // copy_if_else. Null rows stay null. O(#distinct zones) device passes.
 std::unique_ptr<cudf::column> perRowZoneName(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto zones = distinctZones(packed, stream, mr);
 
@@ -252,7 +253,10 @@ std::unique_ptr<cudf::column> perRowZoneName(
   // string_scalar builds an all-null strings column; a null key's rows are
   // never selected, so they keep that null (CPU propagates null).
   auto result = cudf::make_column_from_scalar(
-      cudf::string_scalar("", false, stream), packed.size(), stream, mr);
+      cudf::string_scalar("", false, stream, get_temp_mr()),
+      packed.size(),
+      stream,
+      mr);
   for (const auto zoneKey : zones.keys) {
     auto isThisZone = binaryOp(
         zones.perRowKey->view(),
@@ -264,7 +268,8 @@ std::unique_ptr<cudf::column> perRowZoneName(
     // string_scalar-lhs / column-rhs overload: true -> the zone-name scalar,
     // false or null-mask -> the accumulated result.
     result = cudf::copy_if_else(
-        cudf::string_scalar(tz::getTimeZoneName(zoneKey), true, stream),
+        cudf::string_scalar(
+            tz::getTimeZoneName(zoneKey), true, stream, get_temp_mr()),
         result->view(),
         isThisZone->view(),
         stream,
@@ -281,7 +286,7 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
     const cudf::column_view& offsetSeconds,
     bool includeColon,
     const std::optional<std::string>& zeroOffsetText,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto isNegative = binaryOp(
       offsetSeconds,
@@ -330,8 +335,8 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
       cudf::strings_column_view(minutesStr->view()), 2, stream, mr);
 
   auto sign = cudf::copy_if_else(
-      cudf::string_scalar("-", true, stream),
-      cudf::string_scalar("+", true, stream),
+      cudf::string_scalar("-", true, stream, get_temp_mr()),
+      cudf::string_scalar("+", true, stream, get_temp_mr()),
       isNegative->view(),
       stream,
       mr);
@@ -339,15 +344,15 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
   // "+/-" + "HH", then join with ":" before "MM".
   auto signHour = cudf::strings::concatenate(
       cudf::table_view{{sign->view(), hoursPadded->view()}},
-      cudf::string_scalar("", true, stream),
-      cudf::string_scalar("", false, stream),
+      cudf::string_scalar("", true, stream, get_temp_mr()),
+      cudf::string_scalar("", false, stream, get_temp_mr()),
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
   auto offsetStr = cudf::strings::concatenate(
       cudf::table_view{{signHour->view(), minutesPadded->view()}},
-      cudf::string_scalar(includeColon ? ":" : "", true, stream),
-      cudf::string_scalar("", false, stream),
+      cudf::string_scalar(includeColon ? ":" : "", true, stream, get_temp_mr()),
+      cudf::string_scalar("", false, stream, get_temp_mr()),
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
@@ -377,24 +382,27 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
   auto secondsPadded = cudf::strings::zfill(
       cudf::strings_column_view(secondsStr->view()), 2, stream, mr);
   auto colons = cudf::make_column_from_scalar(
-      cudf::string_scalar(":", true, stream), absolute->size(), stream, mr);
+      cudf::string_scalar(":", true, stream, get_temp_mr()),
+      absolute->size(),
+      stream,
+      mr);
   auto colonSeconds = cudf::strings::concatenate(
       cudf::table_view{{colons->view(), secondsPadded->view()}},
-      cudf::string_scalar("", true, stream),
-      cudf::string_scalar("", false, stream),
+      cudf::string_scalar("", true, stream, get_temp_mr()),
+      cudf::string_scalar("", false, stream, get_temp_mr()),
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
   auto secondsSuffix = cudf::copy_if_else(
       colonSeconds->view(),
-      cudf::string_scalar("", true, stream),
+      cudf::string_scalar("", true, stream, get_temp_mr()),
       hasSeconds->view(),
       stream,
       mr);
   offsetStr = cudf::strings::concatenate(
       cudf::table_view{{offsetStr->view(), secondsSuffix->view()}},
-      cudf::string_scalar("", true, stream),
-      cudf::string_scalar("", false, stream),
+      cudf::string_scalar("", true, stream, get_temp_mr()),
+      cudf::string_scalar("", false, stream, get_temp_mr()),
       cudf::strings::separator_on_nulls::YES,
       stream,
       mr);
@@ -411,7 +419,7 @@ std::unique_ptr<cudf::column> formatOffsetStrings(
       stream,
       mr);
   return cudf::copy_if_else(
-      cudf::string_scalar(*zeroOffsetText, true, stream),
+      cudf::string_scalar(*zeroOffsetText, true, stream, get_temp_mr()),
       offsetStr->view(),
       isZero->view(),
       stream,
@@ -428,7 +436,7 @@ struct LocalAndOffset {
 
 LocalAndOffset localAndOffset(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return {
       tswtzLocalWallClock(packed, stream, mr),
@@ -705,13 +713,14 @@ class ToUnixtimeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto millis = unpackMillis(packed, stream, mr);
     auto millisDouble = cudf::cast(
         millis->view(), cudf::data_type{cudf::type_id::FLOAT64}, stream, mr);
-    auto thousand = cudf::numeric_scalar<double>(1000.0, true, stream);
+    auto thousand =
+        cudf::numeric_scalar<double>(1000.0, true, stream, get_temp_mr());
     return cudf::binary_operation(
         millisDouble->view(),
         thousand,
@@ -736,17 +745,48 @@ class ToUnixtimeFunction : public CudfFunction {
 // which is what Presto returns and what e_mixed_zone_with_null asserts.
 class AtTimezoneColumnZoneFunction : public CudfFunction {
  public:
-  explicit AtTimezoneColumnZoneFunction(const core::TypedExprPtr& expr) {
+  AtTimezoneColumnZoneFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool) {
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "at_timezone expects exactly 2 inputs");
+    timestampIsConstant_ = expr->inputs()[0]->isConstantKind();
+    if (timestampIsConstant_) {
+      const auto* constant =
+          expr->inputs()[0]->asUnchecked<core::ConstantTypedExpr>();
+      const auto vector = constant->hasValueVector()
+          ? constant->valueVector()
+          : constant->toConstantVector(pool);
+      timestampIsNull_ = vector->isNullAt(0);
+      if (!timestampIsNull_) {
+        timestamp_ = vector->as<SimpleVector<int64_t>>()->valueAt(0);
+      }
+    }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
-    auto packed = asView(inputColumns[0]);
-    auto names = asView(inputColumns[1]);
+    const auto expectedInputs = timestampIsConstant_ ? 1 : 2;
+    VELOX_CHECK_EQ(inputColumns.size(), expectedInputs);
+
+    std::unique_ptr<cudf::column> packedHolder;
+    cudf::column_view packed;
+    cudf::column_view names;
+    if (timestampIsConstant_) {
+      names = asView(inputColumns[0]);
+      packedHolder = cudf::make_column_from_scalar(
+          cudf::numeric_scalar<int64_t>(
+              timestamp_, !timestampIsNull_, stream, get_temp_mr()),
+          names.size(),
+          stream,
+          get_temp_mr());
+      packed = packedHolder->view();
+    } else {
+      packed = asView(inputColumns[0]);
+      names = asView(inputColumns[1]);
+    }
 
     // Distinct zone names present, brought to the host one small element at a
     // time. Nulls are skipped: a null name must stay null, not map to a zone.
@@ -757,14 +797,18 @@ class AtTimezoneColumnZoneFunction : public CudfFunction {
         cudf::null_equality::EQUAL,
         cudf::nan_equality::ALL_EQUAL,
         stream,
-        mr);
+        get_temp_mr());
     auto uniqueNames = unique->view().column(0);
 
     // Start all-null; every row whose name matches a known zone is overwritten.
     auto keys = cudf::make_fixed_width_column(
-        int64Type(), names.size(), cudf::mask_state::ALL_NULL, stream, mr);
+        int64Type(),
+        names.size(),
+        cudf::mask_state::ALL_NULL,
+        stream,
+        get_temp_mr());
     for (cudf::size_type i = 0; i < uniqueNames.size(); ++i) {
-      auto element = cudf::get_element(uniqueNames, i, stream, mr);
+      auto element = cudf::get_element(uniqueNames, i, stream, get_temp_mr());
       if (!element->is_valid(stream)) {
         continue;
       }
@@ -773,28 +817,23 @@ class AtTimezoneColumnZoneFunction : public CudfFunction {
       const int16_t zoneId = tz::getTimeZoneID(name);
       auto matches = cudf::binary_operation(
           names,
-          cudf::string_scalar(name, true, stream),
+          cudf::string_scalar(name, true, stream, get_temp_mr()),
           cudf::binary_operator::EQUAL,
           cudf::data_type{cudf::type_id::BOOL8},
           stream,
-          mr);
+          get_temp_mr());
       keys = cudf::copy_if_else(
-          int64Scalar(zoneId & kTimezoneMask, stream),
+          cudf::numeric_scalar<int64_t>(
+              zoneId & kTimezoneMask, true, stream, get_temp_mr()),
           keys->view(),
           matches->view(),
           stream,
-          mr);
+          get_temp_mr());
     }
 
     // Keep the UTC millis bits, replace the low 12 zone bits with the per-row
     // key.
-    auto cleared = binaryOp(
-        packed,
-        int64Scalar(~static_cast<int64_t>(kTimezoneMask), stream),
-        cudf::binary_operator::BITWISE_AND,
-        int64Type(),
-        stream,
-        mr);
+    auto cleared = tswtzClearZoneKey(packed, stream, get_temp_mr());
     return cudf::binary_operation(
         cleared->view(),
         keys->view(),
@@ -803,6 +842,11 @@ class AtTimezoneColumnZoneFunction : public CudfFunction {
         stream,
         mr);
   }
+
+ private:
+  bool timestampIsConstant_{false};
+  bool timestampIsNull_{false};
+  int64_t timestamp_{0};
 };
 
 class AtTimezoneFunction : public CudfFunction {
@@ -815,17 +859,11 @@ class AtTimezoneFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     // Keep the UTC millis bits, replace the low 12 zone bits with the new key.
-    auto cleared = binaryOp(
-        packed,
-        int64Scalar(~static_cast<int64_t>(kTimezoneMask), stream),
-        cudf::binary_operator::BITWISE_AND,
-        int64Type(),
-        stream,
-        mr);
+    auto cleared = tswtzClearZoneKey(packed, stream, get_temp_mr());
     return binaryOp(
         cleared->view(),
         int64Scalar(targetZoneId_ & kTimezoneMask, stream),
@@ -852,7 +890,7 @@ class TimezoneFieldFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto offsetSeconds = perRowOffsetSeconds(packed, stream, mr);
@@ -895,13 +933,14 @@ class ToIso8601Function : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto parts = localAndOffset(packed, stream, mr);
-    auto dateStr = cudf::strings::from_timestamps(
+    auto dateStr = formatTimestamp(
         parts.localMillis->view(),
         "%Y-%m-%dT%H:%M:%S.%3f",
+        std::nullopt,
         cudf::strings_column_view{},
         stream,
         mr);
@@ -914,8 +953,8 @@ class ToIso8601Function : public CudfFunction {
         mr);
     return cudf::strings::concatenate(
         cudf::table_view{{dateStr->view(), offsetStr->view()}},
-        cudf::string_scalar("", true, stream),
-        cudf::string_scalar("", false, stream),
+        cudf::string_scalar("", true, stream, get_temp_mr()),
+        cudf::string_scalar("", false, stream, get_temp_mr()),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -950,7 +989,7 @@ constexpr std::array<std::string_view, 40> kFormatNames{
 // cached, because a cache would have to be keyed by device and outlive the
 // stream it was built on; this runs only for a format that renders a name.
 std::unique_ptr<cudf::column> formatNamesColumn(
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::column>> owned;
   std::vector<cudf::column_view> views;
@@ -959,7 +998,7 @@ std::unique_ptr<cudf::column> formatNamesColumn(
   for (const auto name : kFormatNames) {
     owned.push_back(
         cudf::make_column_from_scalar(
-            cudf::string_scalar(std::string{name}, true, stream),
+            cudf::string_scalar(std::string{name}, true, stream, get_temp_mr()),
             1,
             stream,
             mr));
@@ -984,7 +1023,7 @@ class FormatDatetimeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto packed = asView(inputColumns[0]);
     auto parts = localAndOffset(packed, stream, mr);
@@ -994,9 +1033,10 @@ class FormatDatetimeFunction : public CudfFunction {
     if (usesTextNames_) {
       names = formatNamesColumn(stream, mr);
     }
-    auto dateStr = cudf::strings::from_timestamps(
+    auto dateStr = formatTimestamp(
         parts.localMillis->view(),
         strftime_,
+        std::nullopt,
         names ? cudf::strings_column_view(names->view())
               : cudf::strings_column_view{},
         stream,
@@ -1038,8 +1078,8 @@ class FormatDatetimeFunction : public CudfFunction {
     }
     return cudf::strings::concatenate(
         cudf::table_view{{dateStr->view(), zoneStr->view()}},
-        cudf::string_scalar("", true, stream),
-        cudf::string_scalar("", false, stream),
+        cudf::string_scalar("", true, stream, get_temp_mr()),
+        cudf::string_scalar("", false, stream, get_temp_mr()),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -1059,7 +1099,7 @@ class FormatDatetimeFunction : public CudfFunction {
 // packed value instead of rejecting it as CPU does.
 void checkMillisInRange(
     const cudf::column_view& millis,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (millis.size() == 0 || millis.null_count() == millis.size()) {
     return;
@@ -1095,7 +1135,7 @@ void checkMillisInRange(
 // zone field and corrupts the packed millis.
 void checkOffsetMagnitudeInRange(
     const cudf::column_view& magnitudeMinutes,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (magnitudeMinutes.size() == 0 ||
       magnitudeMinutes.null_count() == magnitudeMinutes.size()) {
@@ -1117,7 +1157,7 @@ void checkOffsetMagnitudeInRange(
 // false (so a batch of only SQL-NULL rows raises no error).
 bool anyRowTrue(
     const cudf::column_view& mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (mask.size() == 0) {
     return false;
@@ -1143,7 +1183,7 @@ std::unique_ptr<cudf::column> signedOffsetMinutes(
     const cudf::column_view& signChar,
     const cudf::column_view& hoursDigits,
     const cudf::column_view& minutesDigits,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto offsetHours = cudf::replace_nulls(
       cudf::strings::to_integers(
@@ -1160,10 +1200,13 @@ std::unique_ptr<cudf::column> signedOffsetMinutes(
       stream,
       mr);
   auto signStr = cudf::replace_nulls(
-      signChar, cudf::string_scalar("+", true, stream), stream, mr);
+      signChar,
+      cudf::string_scalar("+", true, stream, get_temp_mr()),
+      stream,
+      mr);
   auto isNegativeSign = cudf::strings::starts_with(
       cudf::strings_column_view(signStr->view()),
-      cudf::string_scalar("-", true, stream),
+      cudf::string_scalar("-", true, stream, get_temp_mr()),
       stream,
       mr);
   auto hourMinutes = binaryOp(
@@ -1203,7 +1246,7 @@ std::unique_ptr<cudf::column> signedOffsetMinutes(
 // >0 -> offset+840.
 std::unique_ptr<cudf::column> zoneKeyFromOffsetMinutes(
     const cudf::column_view& offsetMinutes,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto idPositive = binaryOp(
       offsetMinutes,
@@ -1247,16 +1290,98 @@ std::unique_ptr<cudf::column> zoneKeyFromOffsetMinutes(
       mr);
 }
 
-// Selects the millisecond rounding for from_unixtime, which differs between the
-// two CPU overloads. from_unixtime(double, varchar) rounds the whole value with
-// llround(x*1000); from_unixtime(double, hours, minutes) floors the seconds and
-// rounds the fractional millisecond separately. The two agree except on
-// negative-fractional input, where they can differ by 1 ms (e.g. -0.0005 s ->
-// -1 ms for kWhole, 0 ms for kFloorThenFraction).
+// Selects the millisecond rounding for from_unixtime. The named-zone overload
+// rounds the whole value with llround(x * 1000); the one-argument and numeric-
+// offset overloads floor the seconds and round the remaining non-negative
+// fractional milliseconds. They differ at negative ties: -0.0005 seconds is
+// -1 ms for kWhole and 0 ms for kFloorThenFraction.
 enum class FromUnixtimeRounding {
   kWhole,
   kFloorThenFraction,
 };
+
+// Emulates std::llround on a FLOAT64 column: add +/-0.5, then truncate toward
+// zero via the FLOAT64-to-INT64 cast.
+std::unique_ptr<cudf::column> roundToInt64(
+    const cudf::column_view& values,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  const auto doubleType = cudf::data_type{cudf::type_id::FLOAT64};
+  auto isNegative = cudf::binary_operation(
+      values,
+      cudf::numeric_scalar<double>(0.0, true, stream, get_temp_mr()),
+      cudf::binary_operator::LESS,
+      cudf::data_type{kBool8},
+      stream,
+      get_temp_mr());
+  auto half = cudf::copy_if_else(
+      cudf::numeric_scalar<double>(-0.5, true, stream, get_temp_mr()),
+      cudf::numeric_scalar<double>(0.5, true, stream, get_temp_mr()),
+      isNegative->view(),
+      stream,
+      get_temp_mr());
+  auto adjusted = cudf::binary_operation(
+      values,
+      half->view(),
+      cudf::binary_operator::ADD,
+      doubleType,
+      stream,
+      get_temp_mr());
+  return cudf::cast(adjusted->view(), int64Type(), stream, mr);
+}
+
+std::unique_ptr<cudf::column> fromUnixtimeMillis(
+    const cudf::column_view& seconds,
+    FromUnixtimeRounding rounding,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  const auto doubleType = cudf::data_type{cudf::type_id::FLOAT64};
+  if (rounding == FromUnixtimeRounding::kWhole) {
+    auto millisDouble = cudf::binary_operation(
+        seconds,
+        cudf::numeric_scalar<double>(1000.0, true, stream, get_temp_mr()),
+        cudf::binary_operator::MUL,
+        doubleType,
+        stream,
+        get_temp_mr());
+    return roundToInt64(millisDouble->view(), stream, mr);
+  }
+
+  auto secondsFloor = cudf::unary_operation(
+      seconds, cudf::unary_operator::FLOOR, stream, get_temp_mr());
+  auto fraction = cudf::binary_operation(
+      seconds,
+      secondsFloor->view(),
+      cudf::binary_operator::SUB,
+      doubleType,
+      stream,
+      get_temp_mr());
+  auto fractionMillisDouble = cudf::binary_operation(
+      fraction->view(),
+      cudf::numeric_scalar<double>(1000.0, true, stream, get_temp_mr()),
+      cudf::binary_operator::MUL,
+      doubleType,
+      stream,
+      get_temp_mr());
+  auto fractionMillis =
+      roundToInt64(fractionMillisDouble->view(), stream, get_temp_mr());
+  auto secondsInt =
+      cudf::cast(secondsFloor->view(), int64Type(), stream, get_temp_mr());
+  auto secondsMillis = binaryOp(
+      secondsInt->view(),
+      int64Scalar(1'000, stream),
+      cudf::binary_operator::MUL,
+      int64Type(),
+      stream,
+      get_temp_mr());
+  return cudf::binary_operation(
+      secondsMillis->view(),
+      fractionMillis->view(),
+      cudf::binary_operator::ADD,
+      int64Type(),
+      stream,
+      mr);
+}
 
 // from_unixtime(double, ...) -> timestamp with time zone. The zone id is fixed
 // at construction (from a zone name or an hour/minute offset).
@@ -1267,86 +1392,10 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto seconds = asView(inputColumns[0]);
-    const auto doubleType = cudf::data_type{cudf::type_id::FLOAT64};
-
-    // Emulate std::llround on a FLOAT64 column: add +/-0.5 then truncate toward
-    // zero via the FLOAT64->INT64 cast.
-    auto llroundEmu = [&](const cudf::column_view& value) {
-      auto isNegative = cudf::binary_operation(
-          value,
-          cudf::numeric_scalar<double>(0.0, true, stream),
-          cudf::binary_operator::LESS,
-          cudf::data_type{kBool8},
-          stream,
-          mr);
-      auto half = cudf::copy_if_else(
-          cudf::numeric_scalar<double>(-0.5, true, stream),
-          cudf::numeric_scalar<double>(0.5, true, stream),
-          isNegative->view(),
-          stream,
-          mr);
-      auto adjusted = cudf::binary_operation(
-          value,
-          half->view(),
-          cudf::binary_operator::ADD,
-          doubleType,
-          stream,
-          mr);
-      return cudf::cast(adjusted->view(), int64Type(), stream, mr);
-    };
-
-    std::unique_ptr<cudf::column> millis;
-    if (rounding_ == FromUnixtimeRounding::kWhole) {
-      auto millisDouble = cudf::binary_operation(
-          seconds,
-          cudf::numeric_scalar<double>(1000.0, true, stream),
-          cudf::binary_operator::MUL,
-          doubleType,
-          stream,
-          mr);
-      millis = llroundEmu(millisDouble->view());
-    } else {
-      // floor(x) whole seconds, plus the fractional second rounded on its own
-      // (matching CPU's no-zone fromUnixtime). The fraction is in [0, 1), so
-      // its round is the non-negative case; a fraction that rounds up to 1000
-      // ms carries naturally through the addition.
-      auto secondsFloor = cudf::unary_operation(
-          seconds, cudf::unary_operator::FLOOR, stream, mr);
-      auto fraction = cudf::binary_operation(
-          seconds,
-          secondsFloor->view(),
-          cudf::binary_operator::SUB,
-          doubleType,
-          stream,
-          mr);
-      auto fractionMillisDouble = cudf::binary_operation(
-          fraction->view(),
-          cudf::numeric_scalar<double>(1000.0, true, stream),
-          cudf::binary_operator::MUL,
-          doubleType,
-          stream,
-          mr);
-      auto fractionMillis = llroundEmu(fractionMillisDouble->view());
-      auto secondsInt =
-          cudf::cast(secondsFloor->view(), int64Type(), stream, mr);
-      auto secondsMillis = binaryOp(
-          secondsInt->view(),
-          int64Scalar(1000, stream),
-          cudf::binary_operator::MUL,
-          int64Type(),
-          stream,
-          mr);
-      millis = cudf::binary_operation(
-          secondsMillis->view(),
-          fractionMillis->view(),
-          cudf::binary_operator::ADD,
-          int64Type(),
-          stream,
-          mr);
-    }
+    auto millis = fromUnixtimeMillis(seconds, rounding_, stream, get_temp_mr());
 
     // Match CPU's non-finite handling, which a FLOAT64->INT64 cast does not
     // give on its own: NaN maps to pack(0), and +/-Inf saturates out of range
@@ -1363,14 +1412,14 @@ class FromUnixtimeWithZoneFunction : public CudfFunction {
         mr);
     auto isPositiveInf = cudf::binary_operation(
         seconds,
-        cudf::numeric_scalar<double>(infinity, true, stream),
+        cudf::numeric_scalar<double>(infinity, true, stream, get_temp_mr()),
         cudf::binary_operator::EQUAL,
         cudf::data_type{kBool8},
         stream,
         mr);
     auto isNegativeInf = cudf::binary_operation(
         seconds,
-        cudf::numeric_scalar<double>(-infinity, true, stream),
+        cudf::numeric_scalar<double>(-infinity, true, stream, get_temp_mr()),
         cudf::binary_operator::EQUAL,
         cudf::data_type{kBool8},
         stream,
@@ -1465,7 +1514,7 @@ class ParseDatetimeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
     // to_timestamps is documented as undefined for input that does not match
@@ -1656,7 +1705,7 @@ class FromIso8601Function : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto input = asView(inputColumns[0]);
     // Time-only inputs carry no date; CPU defaults them to 1970-01-01. Prefix
@@ -1666,18 +1715,18 @@ class FromIso8601Function : public CudfFunction {
         cudf::strings::matches_re(
             cudf::strings_column_view(input), *timeOnlyProgram_, stream, mr)
             ->view(),
-        cudf::numeric_scalar<bool>(false, true, stream),
+        cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr()),
         stream,
         mr);
     auto epochDate = cudf::make_column_from_scalar(
-        cudf::string_scalar("1970-01-01", true, stream),
+        cudf::string_scalar("1970-01-01", true, stream, get_temp_mr()),
         input.size(),
         stream,
         mr);
     auto prefixed = cudf::strings::concatenate(
         cudf::table_view{{epochDate->view(), input}},
-        cudf::string_scalar("", true, stream),
-        cudf::string_scalar("", false, stream),
+        cudf::string_scalar("", true, stream, get_temp_mr()),
+        cudf::string_scalar("", false, stream, get_temp_mr()),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -1694,7 +1743,7 @@ class FromIso8601Function : public CudfFunction {
     auto orDefault = [&](int index, const char* value) {
       return cudf::replace_nulls(
           g.column(index),
-          cudf::string_scalar(value, true, stream),
+          cudf::string_scalar(value, true, stream, get_temp_mr()),
           stream,
           mr);
     };
@@ -1708,18 +1757,21 @@ class FromIso8601Function : public CudfFunction {
     // replace_nulls.
     auto orFirstOfPeriod = [&](int index) {
       auto filled = cudf::replace_nulls(
-          g.column(index), cudf::string_scalar("01", true, stream), stream, mr);
+          g.column(index),
+          cudf::string_scalar("01", true, stream, get_temp_mr()),
+          stream,
+          mr);
       auto length = cudf::strings::count_characters(
           cudf::strings_column_view(filled->view()), stream, mr);
       auto isEmpty = cudf::binary_operation(
           length->view(),
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream),
+          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
           cudf::binary_operator::EQUAL,
           cudf::data_type{kBool8},
           stream,
           mr);
       return cudf::copy_if_else(
-          cudf::string_scalar("01", true, stream),
+          cudf::string_scalar("01", true, stream, get_temp_mr()),
           filled->view(),
           isEmpty->view(),
           stream,
@@ -1736,8 +1788,8 @@ class FromIso8601Function : public CudfFunction {
     // so separator_on_nulls yields a null that parses to null.
     auto ymd = cudf::strings::concatenate(
         cudf::table_view{{g.column(0), month->view(), day->view()}},
-        cudf::string_scalar("-", true, stream),
-        cudf::string_scalar("", false, stream),
+        cudf::string_scalar("-", true, stream, get_temp_mr()),
+        cudf::string_scalar("", false, stream, get_temp_mr()),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -1756,8 +1808,10 @@ class FromIso8601Function : public CudfFunction {
     // Malformed is checked first so a batch mixing malformed + extreme rows
     // reports the parse error, as CPU would.
     {
-      const auto falseScalar = cudf::numeric_scalar<bool>(false, true, stream);
-      const auto trueScalar = cudf::numeric_scalar<bool>(true, true, stream);
+      const auto falseScalar =
+          cudf::numeric_scalar<bool>(false, true, stream, get_temp_mr());
+      const auto trueScalar =
+          cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
       auto nonNull = cudf::is_valid(input, stream, mr);
       auto tier1 = cudf::replace_nulls(
           cudf::strings::matches_re(workView, *isoProgram_, stream, mr)->view(),
@@ -1880,15 +1934,15 @@ class FromIso8601Function : public CudfFunction {
 
     auto hms = cudf::strings::concatenate(
         cudf::table_view{{hour->view(), minute->view(), second->view()}},
-        cudf::string_scalar(":", true, stream),
-        cudf::string_scalar("", false, stream),
+        cudf::string_scalar(":", true, stream, get_temp_mr()),
+        cudf::string_scalar("", false, stream, get_temp_mr()),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
     auto canonical = cudf::strings::concatenate(
         cudf::table_view{{ymd->view(), hms->view()}},
-        cudf::string_scalar("T", true, stream),
-        cudf::string_scalar("", false, stream),
+        cudf::string_scalar("T", true, stream, get_temp_mr()),
+        cudf::string_scalar("", false, stream, get_temp_mr()),
         cudf::strings::separator_on_nulls::YES,
         stream,
         mr);
@@ -1970,19 +2024,22 @@ class FromIso8601Function : public CudfFunction {
     cudf::column_view finalZone = zoneId->view();
     if (!context_.sessionTimezone.empty()) {
       auto zoneSuffix = cudf::replace_nulls(
-          g.column(7), cudf::string_scalar("", true, stream), stream, mr);
+          g.column(7),
+          cudf::string_scalar("", true, stream, get_temp_mr()),
+          stream,
+          mr);
       auto suffixLength = cudf::strings::count_characters(
           cudf::strings_column_view(zoneSuffix->view()), stream, mr);
       auto hasExplicitZone = cudf::binary_operation(
           suffixLength->view(),
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream),
+          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
           cudf::binary_operator::GREATER,
           cudf::data_type{kBool8},
           stream,
           mr);
       auto offsetless = cudf::binary_operation(
           suffixLength->view(),
-          cudf::numeric_scalar<cudf::size_type>(0, true, stream),
+          cudf::numeric_scalar<cudf::size_type>(0, true, stream, get_temp_mr()),
           cudf::binary_operator::EQUAL,
           cudf::data_type{kBool8},
           stream,
@@ -2119,13 +2176,16 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
     ColumnOrView eval(
         std::vector<ColumnOrView>& inputColumns,
-        rmm::cuda_stream_view stream,
+        cuda::stream_ref stream,
         rmm::device_async_resource_ref mr) const override {
       const auto size =
           inputColumns.empty() ? 0 : asView(inputColumns[0]).size();
       if (type_.id() == cudf::type_id::STRING) {
         return cudf::make_column_from_scalar(
-            cudf::string_scalar("", false, stream), size, stream, mr);
+            cudf::string_scalar("", false, stream, get_temp_mr()),
+            size,
+            stream,
+            mr);
       }
       return cudf::make_fixed_width_column(
           type_, size, cudf::mask_state::ALL_NULL, stream, mr);
@@ -2163,7 +2223,7 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
     ColumnOrView eval(
         std::vector<ColumnOrView>& inputColumns,
-        rmm::cuda_stream_view stream,
+        cuda::stream_ref stream,
         rmm::device_async_resource_ref mr) const override {
       // Truncating to milliseconds here is CORRECT, unlike the superficially
       // identical cast to_unixtime used to do. CPU renders through the fixed
@@ -2188,9 +2248,10 @@ void registerTimezoneFunctions(const std::string& prefix) {
             mr);
         auto packed = tswtzPack(millisTs->view(), zoneKeys->view(), stream, mr);
         auto parts = localAndOffset(packed->view(), stream, mr);
-        auto dateStr = cudf::strings::from_timestamps(
+        auto dateStr = formatTimestamp(
             parts.localMillis->view(),
             "%Y-%m-%dT%H:%M:%S.%3f",
+            std::nullopt,
             cudf::strings_column_view{},
             stream,
             mr);
@@ -2202,15 +2263,16 @@ void registerTimezoneFunctions(const std::string& prefix) {
             mr);
         return cudf::strings::concatenate(
             cudf::table_view{{dateStr->view(), offsetStr->view()}},
-            cudf::string_scalar("", true, stream),
-            cudf::string_scalar("", false, stream),
+            cudf::string_scalar("", true, stream, get_temp_mr()),
+            cudf::string_scalar("", false, stream, get_temp_mr()),
             cudf::strings::separator_on_nulls::YES,
             stream,
             mr);
       }
-      return cudf::strings::from_timestamps(
+      return formatTimestamp(
           millisTs->view(),
           "%Y-%m-%dT%H:%M:%S.%3fZ",
+          std::nullopt,
           cudf::strings_column_view{},
           stream,
           mr);
@@ -2226,7 +2288,7 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
     ColumnOrView eval(
         std::vector<ColumnOrView>& inputColumns,
-        rmm::cuda_stream_view stream,
+        cuda::stream_ref stream,
         rmm::device_async_resource_ref mr) const override {
       // NO session-timezone shift, deliberately, and this was measured rather
       // than assumed: on CPU under session Asia/Kolkata, `to_unixtime(ts)`
@@ -2313,7 +2375,7 @@ void registerTimezoneFunctions(const std::string& prefix) {
       auto fraction = cudf::binary_operation(
           subSecondDouble->view(),
           cudf::numeric_scalar<double>(
-              static_cast<double>(ticksPerSecond), true, stream),
+              static_cast<double>(ticksPerSecond), true, stream, get_temp_mr()),
           cudf::binary_operator::DIV,
           doubleType,
           stream,
@@ -2342,37 +2404,20 @@ void registerTimezoneFunctions(const std::string& prefix) {
 
     ColumnOrView eval(
         std::vector<ColumnOrView>& inputColumns,
-        rmm::cuda_stream_view stream,
+        cuda::stream_ref stream,
         rmm::device_async_resource_ref mr) const override {
-      auto millisDouble = cudf::binary_operation(
+      auto millisInt = fromUnixtimeMillis(
           asView(inputColumns[0]),
-          cudf::numeric_scalar<double>(1000.0, true, stream),
-          cudf::binary_operator::MUL,
-          cudf::data_type{cudf::type_id::FLOAT64},
+          FromUnixtimeRounding::kFloorThenFraction,
           stream,
-          mr);
-      // Round to nearest before narrowing, NOT truncate. cudf::cast(double ->
-      // int64) truncates toward zero, and CPU rounds: measured on the two
-      // sub-second fixture rows added 2026-08-22, CPU renders
-      // 1623758400.1236 -> .124 (truncation gives .123) and
-      // -14182939.87654321 -> .123 (truncation toward zero gives .124, since
-      // the millis value is negative). Truncating disagreed with CPU in BOTH
-      // directions, which is why rounding is required rather than a floor.
-      //
-      // Not covered: an input landing exactly on .5, where HALF_UP and Java's
-      // Math.round differ for negative values. No fixture row does.
-      auto rounded = cudf::round(
-          millisDouble->view(),
-          /*decimal_places=*/0,
-          cudf::rounding_method::HALF_UP,
-          stream,
-          mr);
-      auto millisInt = cudf::cast(rounded->view(), int64Type(), stream, mr);
-      // Own the reinterpreted timestamp: bitcastColumn yields a non-owning
-      // view.
+          get_temp_mr());
+      // Own the reinterpreted timestamp. The shared rounding path matches
+      // CPU's floor-seconds plus non-negative fractional-millisecond rounding,
+      // including -0.0005 -> 0.
       auto utcTs = std::make_unique<cudf::column>(
-          bitcastColumn(
-              millisInt->view(), cudf::type_id::TIMESTAMP_MILLISECONDS),
+          cudf::bit_cast(
+              millisInt->view(),
+              cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS}),
           stream,
           mr);
       // No session shift: measured on CPU, `from_unixtime(epoch)` renders the
@@ -2415,7 +2460,7 @@ void registerTimezoneFunctions(const std::string& prefix) {
         // declined -- not for want of a kernel (the operation is bit
         // manipulation) but for want of a way to resolve a key per row.
         if (expr->inputs()[1]->kind() != core::ExprKind::kConstant) {
-          return std::make_shared<AtTimezoneColumnZoneFunction>(expr);
+          return std::make_shared<AtTimezoneColumnZoneFunction>(expr, pool);
         }
         if (constantArgIsNull(expr, 1)) {
           return std::make_shared<AllNullFunction>(int64Type());

@@ -200,10 +200,16 @@ class TimezoneFunctionTest : public cudf_velox::CudfFunctionBaseTest {
   void assertPackedTimestampWithTimeZoneMatchesCpu(
       const std::string& expr,
       const RowVectorPtr& input) {
-    auto exprSet = compileExpression(expr, asRowType(input->type()));
-    auto expected =
-        functions::test::FunctionBaseTest::evaluate(*exprSet, input);
-    auto actual = evaluate(*exprSet, input);
+    assertPackedTimestampWithTimeZoneMatchesCpu(
+        makeTypedExpr(expr, asRowType(input->type())), input);
+  }
+
+  void assertPackedTimestampWithTimeZoneMatchesCpu(
+      const core::TypedExprPtr& expr,
+      const RowVectorPtr& input) {
+    exec::ExprSet exprSet({expr}, &execCtx_);
+    auto expected = functions::test::FunctionBaseTest::evaluate(exprSet, input);
+    auto actual = evaluate(expr, input);
     ASSERT_TRUE(isTimestampWithTimeZoneType(actual->type()))
         << "expected TIMESTAMP WITH TIME ZONE, got "
         << actual->type()->toString();
@@ -1937,16 +1943,19 @@ TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgument) {
 }
 
 TEST_F(TimezoneFunctionTest, fromUnixtimeSingleArgumentRoundsLikeCpu) {
-  // The regression this exists for: cudf::cast(double -> int64) TRUNCATES
-  // toward zero and CPU ROUNDS to nearest, so these disagreed in both
-  // directions until a cudf::round was added. .1236 rounds up; the negative
-  // case rounds away from zero, which truncation would move the other way.
+  // A direct double-to-int64 cast truncates toward zero, while CPU floors the
+  // seconds and rounds the remaining non-negative fraction to milliseconds.
+  // These inputs exercise both signs, excess precision and the negative-tie
+  // case where rounding the entire millisecond value gives the wrong result.
   assertMatchesCpu(
       "to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.1236));
   assertMatchesCpu(
       "to_iso8601(from_unixtime(c0))", doubleInput(-14'182'939.87654321));
   assertMatchesCpu(
       "to_iso8601(from_unixtime(c0))", doubleInput(1'623'758'400.123456789));
+  // CPU floors the seconds before rounding the non-negative fraction, so a
+  // negative half-millisecond rounds to the Unix epoch rather than -1 ms.
+  assertMatchesCpu("to_iso8601(from_unixtime(c0))", doubleInput(-0.0005));
 }
 
 TEST_F(
@@ -2047,6 +2056,20 @@ TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZone) {
            TIMESTAMP_WITH_TIME_ZONE()),
        makeFlatVector<std::string>({"Asia/Kolkata", "America/Los_Angeles"})});
   assertPackedTimestampWithTimeZoneMatchesCpu("at_timezone(c0, c1)", input);
+}
+
+TEST_F(TimezoneFunctionTest, atTimezoneWithConstantTimestampAndColumnZone) {
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({"Asia/Kolkata", "America/Los_Angeles"})});
+  auto timestamp = std::make_shared<core::ConstantTypedExpr>(
+      TIMESTAMP_WITH_TIME_ZONE(),
+      variant(pack(1'623'758'400'000, tz::getTimeZoneID("UTC"))));
+  auto zone = std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0");
+  auto atTimezone = std::make_shared<core::CallTypedExpr>(
+      TIMESTAMP_WITH_TIME_ZONE(),
+      std::vector<core::TypedExprPtr>{timestamp, zone},
+      "at_timezone");
+  assertPackedTimestampWithTimeZoneMatchesCpu(atTimezone, input);
 }
 
 TEST_F(TimezoneFunctionTest, atTimezoneWithColumnZoneSubMinuteOffset) {

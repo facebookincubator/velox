@@ -19,8 +19,9 @@
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream_ref>
 
 #include <cstdint>
 #include <memory>
@@ -38,21 +39,28 @@ namespace facebook::velox::cudf_velox {
 /// packed & kTimezoneMask. A null packed row yields a null key.
 std::unique_ptr<cudf::column> tswtzZoneKey(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Returns the distinct non-null zone keys present in a per-row zone-key column
 /// (as produced by tswtzZoneKey). Performs one device-to-host synchronization.
 std::vector<int16_t> tswtzDistinctZoneKeys(
     const cudf::column_view& perRowZoneKey,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream);
+
+/// Returns the packed instant bits with the zone key cleared (INT64, nulls
+/// preserved). This is the canonical normalization for instant-only TSWTZ
+/// comparisons and for replacing a value's zone key.
+std::unique_ptr<cudf::column> tswtzClearZoneKey(
+    const cudf::column_view& packed,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Returns the UTC instant (TIMESTAMP_MILLISECONDS) of a packed column:
 /// arithmetic (packed >> 12) bit-cast to a timestamp column.
 std::unique_ptr<cudf::column> tswtzUtcInstant(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Returns the per-row UT offset in whole seconds (INT64) for a packed column
@@ -60,14 +68,14 @@ std::unique_ptr<cudf::column> tswtzUtcInstant(
 /// device passes.
 std::unique_ptr<cudf::column> tswtzOffsetSeconds(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Returns the per-row local wall clock (TIMESTAMP_MILLISECONDS) of a packed
 /// column, applying each row's own zone offset (multi-zone).
 std::unique_ptr<cudf::column> tswtzLocalWallClock(
     const cudf::column_view& packed,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Converts a per-row local wall-clock column back to UTC instants
@@ -83,7 +91,7 @@ std::unique_ptr<cudf::column> tswtzLocalToUtc(
     const cudf::column_view& perRowZoneKey,
     const std::vector<int16_t>& distinctKeys,
     bool correctForward,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Repacks a UTC-instant column (any timestamp resolution; cast to millis) plus
@@ -92,7 +100,7 @@ std::unique_ptr<cudf::column> tswtzLocalToUtc(
 std::unique_ptr<cudf::column> tswtzPack(
     const cudf::column_view& utcInstant,
     const cudf::column_view& perRowZoneKey,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox
