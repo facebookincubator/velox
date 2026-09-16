@@ -80,10 +80,18 @@ class MetricCollector {
  public:
   static constexpr size_t kUniqueCountCap = 1
       << 14; // 16K cap (lighter than full HLL)
+  // Segments this narrow are counted with a direct-indexed table instead of a
+  // hash map. 16 bits keeps the table at 256KB and needs no cap, since a
+  // 16-bit segment cannot exceed 65536 distinct values.
+  static constexpr int kDirectIndexBits = 16;
 
+  // `bitWidth` is the segment's width in bits. When it is small enough that
+  // every value fits a direct-indexed table, frequency metrics skip hashing
+  // entirely (see kDirectIndexBits). Pass 0 if unknown to force the hash path.
   SegmentMetrics compute(
       const std::vector<uint64_t>& values,
-      MetricFlags flags = static_cast<MetricFlags>(MetricFlag::All)) {
+      MetricFlags flags = static_cast<MetricFlags>(MetricFlag::All),
+      int bitWidth = 0) {
     const bool doMin = hasFlag(flags, MetricFlag::MinMax);
     const bool doRun = hasFlag(flags, MetricFlag::RunStats);
     const bool doUniq = hasFlag(flags, MetricFlag::UniqueCount);
@@ -108,7 +116,30 @@ class MetricCollector {
 
     bool capped = false;
     uint32_t maxCount = 0;
-    if (doFreq) {
+
+    // Direct-indexed frequency counting for narrow segments. The DP evaluates
+    // every [l, r] pair, so most candidate segments are narrow even when the
+    // stream's active range is wide, and on a production ctr_mbl stream the
+    // hash map this replaces was 41% of encode (33.8% find_or_prepare_insert
+    // plus 7.3% PrepareInsertLarge).
+    //
+    // Only the touched slots are reset, so the 64K table is never cleared in
+    // bulk -- at most `n` entries are dirty after a call.
+    const bool useDirect =
+        doFreq && bitWidth > 0 && bitWidth <= kDirectIndexBits;
+    if (useDirect) {
+      if (directCounts_.empty()) {
+        directCounts_.assign(size_t{1} << kDirectIndexBits, 0u);
+      }
+      touched_.clear();
+      if (touched_.capacity() < n) {
+        touched_.reserve(n);
+      }
+      const uint32_t slot0 = static_cast<uint32_t>(v0);
+      directCounts_[slot0] = 1;
+      touched_.push_back(slot0);
+      maxCount = 1;
+    } else if (doFreq) {
       freqMap_.clear();
       freqMap_.reserve(std::min(n, kUniqueCountCap));
       freqMap_.emplace(v0, 1u);
@@ -129,7 +160,16 @@ class MetricCollector {
       if (doRun && v != prev) {
         ++out.runCount;
       }
-      if (doFreq && !capped) {
+      if (useDirect) {
+        const uint32_t slot = static_cast<uint32_t>(v);
+        const uint32_t count = ++directCounts_[slot];
+        if (count == 1) {
+          touched_.push_back(slot);
+        }
+        if (count > maxCount) {
+          maxCount = count;
+        }
+      } else if (doFreq && !capped) {
         auto [it, inserted] = freqMap_.try_emplace(v, 0u);
         const uint32_t count = ++it->second;
         if (count > maxCount) {
@@ -142,6 +182,19 @@ class MetricCollector {
       prev = v;
     }
 
+    size_t directUnique = 0;
+    if (useDirect) {
+      directUnique = touched_.size();
+      // Reset only what was dirtied, keeping the table reusable across the
+      // grid's thousands of segment evaluations.
+      for (const uint32_t slot : touched_) {
+        directCounts_[slot] = 0;
+      }
+      if (directUnique > kUniqueCountCap) {
+        capped = true;
+      }
+    }
+
     if (doMin) {
       out.range = out.max - out.min;
     }
@@ -150,7 +203,8 @@ class MetricCollector {
           static_cast<double>(n) / static_cast<double>(out.runCount);
     }
     if (doUniq) {
-      out.uniqueCount = capped ? (kUniqueCountCap + 1) : freqMap_.size();
+      out.uniqueCount = capped ? (kUniqueCountCap + 1)
+                               : (useDirect ? directUnique : freqMap_.size());
       out.uniqueCountCapped = capped;
     }
     if (doDominant) {
@@ -164,6 +218,10 @@ class MetricCollector {
  private:
   // frequency map for unique/dominant counting.
   absl::flat_hash_map<uint64_t, uint32_t> freqMap_;
+  // Direct-indexed counts for narrow segments, with the list of dirtied slots
+  // so resetting is O(values) rather than O(table).
+  std::vector<uint32_t> directCounts_;
+  std::vector<uint32_t> touched_;
 };
 
 } // namespace facebook::nimble::detail::subintsplit
