@@ -367,6 +367,71 @@ bool unregisterSplitListenerFactory(
   });
 }
 
+namespace {
+struct FragmentExecutorRegistration {
+  std::string name;
+  Task::FragmentMatcher matcher;
+  Task::FragmentExecutorFactory factory;
+};
+
+std::vector<FragmentExecutorRegistration>& fragmentExecutors() {
+  static std::vector<FragmentExecutorRegistration> registrations;
+  return registrations;
+}
+
+// The single registration claiming 'planFragment', or nullptr.  Every
+// registration is asked, so the answer does not depend on registration order;
+// two claimants is a configuration error rather than a silent first-wins.
+const FragmentExecutorRegistration* claimingRegistration(
+    const core::PlanFragment& planFragment,
+    const Task::FactoryOptions* factoryOptions) {
+  const FragmentExecutorRegistration* claimed{nullptr};
+  for (const auto& registration : fragmentExecutors()) {
+    if (!registration.matcher(planFragment, factoryOptions)) {
+      continue;
+    }
+    VELOX_CHECK_NULL(
+        claimed,
+        "Two fragment executors claim the same plan: {} and {}",
+        claimed != nullptr ? claimed->name : "",
+        registration.name);
+    claimed = &registration;
+  }
+  return claimed;
+}
+} // namespace
+
+// static
+void Task::registerFragmentExecutor(
+    std::string name,
+    FragmentMatcher matcher,
+    FragmentExecutorFactory factory) {
+  VELOX_CHECK_NOT_NULL(matcher, "Fragment executor matcher must not be null");
+  VELOX_CHECK_NOT_NULL(factory, "Fragment executor factory must not be null");
+  auto& registrations = fragmentExecutors();
+  for (auto& registration : registrations) {
+    if (registration.name == name) {
+      registration.matcher = std::move(matcher);
+      registration.factory = std::move(factory);
+      return;
+    }
+  }
+  registrations.push_back(
+      {std::move(name), std::move(matcher), std::move(factory)});
+}
+
+// static
+bool Task::unregisterFragmentExecutor(const std::string& name) {
+  auto& registrations = fragmentExecutors();
+  for (auto it = registrations.begin(); it != registrations.end(); ++it) {
+    if (it->name == name) {
+      registrations.erase(it);
+      return true;
+    }
+  }
+  return false;
+}
+
 // static
 std::shared_ptr<Task> Task::create(
     const std::string& taskId,
@@ -377,7 +442,8 @@ std::shared_ptr<Task> Task::create(
     Consumer consumer,
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
-    std::function<void(std::exception_ptr)> onError) {
+    std::function<void(std::exception_ptr)> onError,
+    const FactoryOptions* factoryOptions) {
   return Task::create(
       taskId,
       std::move(planFragment),
@@ -388,7 +454,8 @@ std::shared_ptr<Task> Task::create(
                 : ConsumerSupplier{}),
       memoryArbitrationPriority,
       std::move(spillDiskOpts),
-      std::move(onError));
+      std::move(onError),
+      factoryOptions);
 }
 
 // static
@@ -401,8 +468,15 @@ std::shared_ptr<Task> Task::create(
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
-    std::function<void(std::exception_ptr)> onError) {
+    std::function<void(std::exception_ptr)> onError,
+    const FactoryOptions* factoryOptions) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
+  // A plan whose execution is a schedule of tasks -- one containing a
+  // FixedPointNode, say -- is claimed by a registered executor and runs
+  // through that instead of a Driver pipeline.  The executor is built after
+  // the task, so its owner is fully constructed and outlives it, and before
+  // init(), which skips compiling drivers when there is one.
+  const auto* claimed = claimingRegistration(planFragment, factoryOptions);
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -412,6 +486,13 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       memoryArbitrationPriority,
       std::move(onError)));
+  if (claimed != nullptr) {
+    task->executor_ = claimed->factory(task.get(), factoryOptions);
+    VELOX_CHECK_NOT_NULL(
+        task->executor_,
+        "Fragment executor factory claimed the plan but built nothing: {}",
+        claimed->name);
+  }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();
   return task;
@@ -531,6 +612,13 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
   setSpillDiskConfig(std::move(spillDiskOpts));
 
   if (mode_ != Task::ExecutionMode::kSerial) {
+    return;
+  }
+
+  if (executor_ != nullptr) {
+    // A FragmentExecutor runs this plan itself (e.g. an orchestrator that
+    // schedules sub-tasks for an iterative plan); do not compile it into a
+    // Driver pipeline.
     return;
   }
 
@@ -994,6 +1082,9 @@ bool Task::supportSerialExecutionMode() const {
 }
 
 RowVectorPtr Task::next(ContinueFuture* future) {
+  if (executor_ != nullptr) {
+    return executor_->next(future);
+  }
   recordBatchStartTime();
 
   checkExecutionMode(ExecutionMode::kSerial);
@@ -1116,6 +1207,10 @@ void Task::recordBatchEndTime() {
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
+  if (executor_ != nullptr) {
+    executor_->start(maxDrivers, concurrentSplitGroups);
+    return;
+  }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -1749,6 +1844,12 @@ bool Task::addSplitWithSequence(
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
+  if (executor_ != nullptr) {
+    // The executor routes the split to whichever sub-task consumes it; there
+    // is no driver source operator to deliver it to.
+    executor_->addSplit(planNodeId, std::move(split));
+    return;
+  }
   bool isTaskRunning;
   bool shouldLogSplit = false;
   std::vector<ContinuePromise> promises;
@@ -1873,6 +1974,10 @@ void Task::noMoreSplitsForGroup(
 }
 
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
+  if (executor_ != nullptr) {
+    executor_->noMoreSplits(planNodeId);
+    return;
+  }
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
   std::shared_ptr<InMemoryExchangeClient> exchangeClient;
