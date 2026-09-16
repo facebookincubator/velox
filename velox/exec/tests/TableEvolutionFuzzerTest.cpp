@@ -15,6 +15,7 @@
  */
 
 #include "velox/exec/tests/TableEvolutionFuzzer.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/dwio/common/FileSink.h"
@@ -37,6 +38,7 @@ DEFINE_int32(evolution_count, 5, "");
 // test below.
 DECLARE_int32(batches_per_file);
 DECLARE_int64(batch_target_bytes);
+DECLARE_bool(enable_oom_injection_write_path);
 
 namespace facebook::velox::exec::test {
 
@@ -114,7 +116,19 @@ TEST(TableEvolutionFuzzerTest, constructorRejectsNonPositiveBatchFlags) {
 // pushdown-vs-FilterNode oracle is the assertion (run() throws on divergence).
 TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
   auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
-  TableEvolutionFuzzer fuzzer(makeDwrfConfig(pool.get(), 1));
+  auto config = makeDwrfConfig(pool.get(), 1);
+  int64_t numObservedQueries = 0;
+  config.queryCoverageObserver =
+      [&](const TableEvolutionFuzzer::QueryCoverage& query) {
+        EXPECT_FALSE(query.pushdownFiles.empty());
+        EXPECT_FALSE(query.referenceFiles.empty());
+        EXPECT_EQ(query.pushdown.numQueries, 1);
+        EXPECT_EQ(query.reference.numQueries, 1);
+        EXPECT_TRUE(query.executionSucceeded);
+        EXPECT_TRUE(query.verificationPassed);
+        ++numObservedQueries;
+      };
+  TableEvolutionFuzzer fuzzer(config);
   fuzzer.setSeed(20260629);
   constexpr int kIterations = 4;
   for (int i = 0; i < kIterations; ++i) {
@@ -123,6 +137,179 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
     EXPECT_NO_THROW(fuzzer.run());
     fuzzer.reSeed();
   }
+
+  const auto& coverage = fuzzer.coverageStats();
+  EXPECT_GT(coverage.numQueriesCompleted, 0);
+  EXPECT_EQ(coverage.numQueriesAttempted, coverage.numQueriesCompleted);
+  EXPECT_EQ(coverage.numExecutionFailures, 0);
+  EXPECT_EQ(coverage.numVerificationsPassed, coverage.numQueriesCompleted);
+  EXPECT_EQ(coverage.numVerificationsFailed, 0);
+  EXPECT_EQ(coverage.pushdown.numQueries, coverage.numQueriesCompleted);
+  EXPECT_EQ(coverage.reference.numQueries, coverage.numQueriesCompleted);
+  EXPECT_GT(coverage.pushdown.numSplits, 0);
+  EXPECT_GT(coverage.reference.numSplits, 0);
+  EXPECT_GT(coverage.pushdown.rawInputPositions, 0);
+  EXPECT_GT(coverage.reference.rawInputPositions, 0);
+  EXPECT_EQ(numObservedQueries, coverage.numQueriesCompleted);
+}
+
+TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
+  TableEvolutionFuzzer::QueryCoverage query{
+      .pushdownFiles = {},
+      .referenceFiles = {},
+      .pushdown =
+          TableEvolutionFuzzer::ScanPlanCoverage{
+              .numQueries = 1,
+              .numSplits = 2,
+              .skippedSplits = 1,
+              .numStringDictionaryEncodingPreserved = 3,
+              .numStringDictionaryEncodingAbandoned = 1,
+          },
+      .reference =
+          TableEvolutionFuzzer::ScanPlanCoverage{
+              .numQueries = 1,
+              .numSplits = 2,
+              .numStringDictionaryEncodingPreserved = 5,
+              .numStringDictionaryEncodingAbandoned = 1,
+          },
+      .flatmapEligibleKeyTypes = {"VARCHAR"},
+      .flatmapEligibleValueTypes = {"INTEGER"},
+      .bucketColumnTypes = {"VARCHAR", "BIGINT"},
+      .flatmapEligible = true,
+      .countConfigCoverage = true,
+      .bucketed = true,
+      .bucketSelected = true,
+      .numFlatmapEligibleColumns = 1,
+      .numBucketColumns = 2,
+      .bucketCount = 8,
+      .executionSucceeded = true,
+      .verificationPassed = true,
+  };
+  TableEvolutionFuzzer::QueryCoverage failedQuery;
+
+  TableEvolutionFuzzer::CoverageAccumulator coverage;
+  coverage.add(query);
+  coverage.add(failedQuery);
+  coverage.addSchemaEvolution(
+      ROW({
+          {"a", ARRAY(SMALLINT())},
+          {"m", MAP(SMALLINT(), INTEGER())},
+      }),
+      ROW({
+          {"a", ARRAY(INTEGER())},
+          {"m", MAP(INTEGER(), BIGINT())},
+          {"added", VARCHAR()},
+      }));
+
+  EXPECT_EQ(coverage.numQueriesAttempted, 2);
+  EXPECT_EQ(coverage.numQueriesCompleted, 1);
+  EXPECT_EQ(coverage.numExecutionFailures, 1);
+  EXPECT_EQ(coverage.numVerificationsPassed, 1);
+  EXPECT_EQ(coverage.numVerificationsFailed, 0);
+  EXPECT_EQ(coverage.configs.numFlatmapEligible, 1);
+  EXPECT_EQ(coverage.configs.numFlatmapEligibleColumns, 1);
+  EXPECT_EQ(coverage.configs.numBucketed, 1);
+  EXPECT_EQ(coverage.configs.numBucketSelected, 1);
+  EXPECT_EQ(coverage.configs.flatmapEligibleByKeyType.at("VARCHAR"), 1);
+  EXPECT_EQ(coverage.configs.flatmapEligibleByValueType.at("INTEGER"), 1);
+  EXPECT_EQ(coverage.configs.bucketColumnsByType.at("BIGINT"), 1);
+  EXPECT_EQ(coverage.configs.bucketColumnsByType.at("VARCHAR"), 1);
+  EXPECT_EQ(coverage.configs.bucketedByColumnCount.at(2), 1);
+  EXPECT_EQ(
+      coverage.configs.bucketColumnTypeSignaturesByCount.at(2).at(
+          "BIGINT+VARCHAR"),
+      1);
+  EXPECT_EQ(coverage.configs.bucketSelectedByBucketCount.at(8), 1);
+  EXPECT_EQ(coverage.configs.numTypeTransitions, 3);
+  EXPECT_EQ(coverage.configs.numAddedFields, 1);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByType.at("SMALLINT->INTEGER"), 2);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByType.at("INTEGER->BIGINT"), 1);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByType.at("ADDED->VARCHAR"), 1);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByPosition.at("arrayElement"), 1);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByPosition.at("mapKey"), 1);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByPosition.at("mapValue"), 1);
+  EXPECT_EQ(coverage.configs.schemaEvolutionByPosition.at("rowField"), 1);
+  EXPECT_EQ(coverage.pushdown.numQueries, 1);
+  EXPECT_EQ(coverage.reference.numQueries, 1);
+  EXPECT_EQ(coverage.pushdown.numStringDictionaryEncodingPreserved, 3);
+  EXPECT_EQ(coverage.pushdown.numStringDictionaryEncodingAbandoned, 1);
+  EXPECT_EQ(coverage.reference.numStringDictionaryEncodingPreserved, 5);
+  EXPECT_EQ(coverage.reference.numStringDictionaryEncodingAbandoned, 1);
+}
+
+TEST(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
+  TableEvolutionFuzzer::QueryCoverage firstShape{
+      .pushdownFiles = {},
+      .referenceFiles = {},
+      .pushdown = {},
+      .reference = {},
+      .flatmapEligibleKeyTypes = {"VARCHAR"},
+      .flatmapEligibleValueTypes = {"BIGINT"},
+      .bucketColumnTypes = {"ARRAY", "ROW"},
+      .flatmapEligible = true,
+      .countConfigCoverage = true,
+      .bucketed = true,
+      .bucketSelected = true,
+      .numFlatmapEligibleColumns = 1,
+      .numBucketColumns = 2,
+      .bucketCount = 8,
+  };
+  auto repeatedShape = firstShape;
+  repeatedShape.countConfigCoverage = false;
+
+  TableEvolutionFuzzer::CoverageAccumulator coverage;
+  coverage.add(firstShape);
+  coverage.add(repeatedShape);
+
+  EXPECT_EQ(coverage.numQueriesAttempted, 2);
+  EXPECT_EQ(coverage.configs.numFlatmapEligible, 1);
+  EXPECT_EQ(coverage.configs.numFlatmapEligibleColumns, 1);
+  EXPECT_EQ(coverage.configs.flatmapEligibleByKeyType.at("VARCHAR"), 1);
+  EXPECT_EQ(coverage.configs.flatmapEligibleByValueType.at("BIGINT"), 1);
+  EXPECT_EQ(coverage.configs.numBucketed, 1);
+  EXPECT_EQ(coverage.configs.numBucketSelected, 1);
+  EXPECT_EQ(coverage.configs.bucketColumnsByType.at("ARRAY"), 1);
+  EXPECT_EQ(coverage.configs.bucketColumnsByType.at("ROW"), 1);
+  EXPECT_EQ(coverage.configs.bucketedByColumnCount.at(2), 1);
+  EXPECT_EQ(
+      coverage.configs.bucketColumnTypeSignaturesByCount.at(2).at("ARRAY+ROW"),
+      1);
+  EXPECT_EQ(coverage.configs.bucketSelectedByBucketCount.at(8), 1);
+}
+
+TEST(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  auto config = makeDwrfConfig(pool.get(), 1);
+  config.queryCoverageObserver = [](const auto&) {
+    throw std::runtime_error("observer failure");
+  };
+
+  TableEvolutionFuzzer fuzzer(config);
+  fuzzer.setSeed(20260629);
+  EXPECT_NO_THROW(fuzzer.run());
+}
+
+TEST(TableEvolutionFuzzerTest, skipsCoverageDuringWriteOomInjection) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_enable_oom_injection_write_path = true;
+
+  auto pool = memory::memoryManager()->addLeafPool("TableEvolutionFuzzer");
+  auto config = makeDwrfConfig(pool.get(), 1);
+  bool observerCalled = false;
+  config.queryCoverageObserver =
+      [&](const TableEvolutionFuzzer::QueryCoverage&) {
+        observerCalled = true;
+      };
+
+  TableEvolutionFuzzer fuzzer(config);
+  fuzzer.setSeed(20260827);
+#ifdef NDEBUG
+  VELOX_ASSERT_RUNTIME_THROW(
+      fuzzer.run(), "OOM injection can only be used in debug builds");
+#else
+  EXPECT_NO_THROW(fuzzer.run());
+#endif
+  EXPECT_FALSE(observerCalled);
 }
 
 // A column is "used by aggregation" if it is a grouping key or appears in an
