@@ -11,9 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(bloom)
+
 add_library(
   nimble_index
-  BloomFilter.cpp
   ChunkStats.cpp
   ChunkStatsGroup.cpp
   ClusterIndex.cpp
@@ -62,12 +63,12 @@ add_library(
   ClusterIndex.h
   ChunkStatsGroup.h
   ChunkStats.h
-  BloomFilter.h
 )
 
 target_link_libraries(
   nimble_index
   nimble_common
+  nimble_index_bloom
   nimble_compression
   nimble_encodings
   nimble_tablet_common

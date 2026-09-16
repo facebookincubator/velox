@@ -38,7 +38,6 @@ target_link_libraries(
 
 add_executable(
   nimble_index_tests
-  BloomFilterTest.cpp
   IndexConstantsTest.cpp
   IndexConfigTest.cpp
   IndexFilterTest.cpp
