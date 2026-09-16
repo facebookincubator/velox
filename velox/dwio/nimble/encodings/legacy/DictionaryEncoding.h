@@ -105,7 +105,7 @@ DictionaryEncoding<T>::DictionaryEncoding(
   pos += alphabetSize;
   indicesEncoding_ = factory.create(
       *this->pool_,
-      {pos, static_cast<size_t>(data.end() - pos)},
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
       stringBufferFactory,
       Encoding::Options{});
 }

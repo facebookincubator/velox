@@ -3312,7 +3312,8 @@ TEST_F(SerializationTest, serializerDefaultWritesNoHeaderLegacy) {
 
   Deserializer deserializer{
       SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
-      pool_.get()};
+      pool_.get(),
+      DeserializerOptions{.hasHeader = false}};
   velox::VectorPtr output;
   deserializer.deserialize(blob, output);
   ASSERT_EQ(output->size(), row->size());

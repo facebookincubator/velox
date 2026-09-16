@@ -163,7 +163,7 @@ struct PlanNodeStats {
   const PlanNodeStats& operatorStatsFor(std::string_view operatorType) const;
 
  private:
-  void addTotals(const OperatorStats& stats);
+  void addTotals(const OperatorStats& stats, bool gateByBoundary);
 };
 
 std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(
