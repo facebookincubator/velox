@@ -366,18 +366,19 @@ void UcxExchangeSource::sendHandshake() {
   // Pass handshakeReq as the callback arg to keep the send buffer alive until
   // the async amSend completes. UCXX stores it as shared_ptr<void> but the
   // type-erased deleter still calls ~HandshakeMsg correctly.
-  request_ = endpointRef_->endpoint_->amSend(
-      handshakeReq.get(),
-      sizeof(*handshakeReq),
-      UCS_MEMORY_TYPE_HOST,
-      info,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onHandshake(status, arg);
-        }
-      },
-      handshakeReq);
+  request_ =
+      endpointRef_->endpoint_
+          ->amSendBuilder(
+              handshakeReq.get(), sizeof(*handshakeReq), UCS_MEMORY_TYPE_HOST)
+          .receiverCallbackInfo(info)
+          .callbackFunction(
+              [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                if (auto self = weak.lock()) {
+                  self->onHandshake(status, arg);
+                }
+              })
+          .callbackData(handshakeReq)
+          .build();
 }
 
 void UcxExchangeSource::onHandshake(
@@ -437,18 +438,20 @@ void UcxExchangeSource::getMetadata() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_->tagRecv(
-      reinterpret_cast<void*>(metadataReq->data()),
-      kMaxMetaBufSize,
-      ucxx::Tag{metadataTag},
-      ucxx::TagMaskFull,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onMetadata(status, arg);
-        }
-      },
-      metadataReq);
+  request_ = endpointRef_->endpoint_
+                 ->tagRecvBuilder(
+                     reinterpret_cast<void*>(metadataReq->data()),
+                     kMaxMetaBufSize,
+                     ucxx::Tag{metadataTag},
+                     ucxx::TagMaskFull)
+                 .callbackFunction(
+                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                       if (auto self = weak.lock()) {
+                         self->onMetadata(status, arg);
+                       }
+                     })
+                 .callbackData(metadataReq)
+                 .build();
 }
 
 void UcxExchangeSource::onMetadata(
@@ -551,19 +554,20 @@ void UcxExchangeSource::onMetadata(
     if (request_) {
       completedRequests_.push_back(std::move(request_));
     }
-    request_ = endpointRef_->endpoint_->tagRecv(
-        ptr->dataBuf->data(),
-        ptr->metadata.dataSizeBytes,
-        ucxx::Tag{dataTag},
-        ucxx::TagMaskFull,
-        false,
-        [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-          if (auto self = weak.lock()) {
-            self->onData(status, arg);
-          }
-        },
-        ptr // DataAndMetadata
-    );
+    request_ = endpointRef_->endpoint_
+                   ->tagRecvBuilder(
+                       ptr->dataBuf->data(),
+                       ptr->metadata.dataSizeBytes,
+                       ucxx::Tag{dataTag},
+                       ucxx::TagMaskFull)
+                   .callbackFunction(
+                       [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                         if (auto self = weak.lock()) {
+                           self->onData(status, arg);
+                         }
+                       })
+                   .callbackData(ptr)
+                   .build();
   }
 }
 
@@ -639,18 +643,20 @@ void UcxExchangeSource::receiveHandshakeResponse() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_->tagRecv(
-      responseBuffer.get(),
-      sizeof(*responseBuffer),
-      ucxx::Tag{responseTag},
-      ucxx::TagMaskFull,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onHandshakeResponse(status, arg);
-        }
-      },
-      responseBuffer);
+  request_ = endpointRef_->endpoint_
+                 ->tagRecvBuilder(
+                     responseBuffer.get(),
+                     sizeof(*responseBuffer),
+                     ucxx::Tag{responseTag},
+                     ucxx::TagMaskFull)
+                 .callbackFunction(
+                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                       if (auto self = weak.lock()) {
+                         self->onHandshakeResponse(status, arg);
+                       }
+                     })
+                 .callbackData(responseBuffer)
+                 .build();
 }
 
 void UcxExchangeSource::onHandshakeResponse(
