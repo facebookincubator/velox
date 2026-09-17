@@ -319,7 +319,8 @@ ConstantEncoding<T>::ConstantEncoding(
     : ConstantEncodingBase<T>(pool, data, options) {
   const char* pos = data.data() + this->dataOffset();
   this->value_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK_EQ(pos, data.end(), "Unexpected constant encoding end");
+  NIMBLE_CHECK_EQ(
+      pos, data.data() + data.size(), "Unexpected constant encoding end");
 }
 
 // Specialization for bool to override materializeBoolsAsBits
@@ -337,7 +338,8 @@ class ConstantEncoding<bool> final : public ConstantEncodingBase<bool> {
       : ConstantEncodingBase<bool>(pool, data, options) {
     const char* pos = data.data() + this->dataOffset();
     this->value_ = encoding::read<physicalType>(pos);
-    NIMBLE_CHECK_EQ(pos, data.end(), "Unexpected constant encoding end");
+    NIMBLE_CHECK_EQ(
+        pos, data.data() + data.size(), "Unexpected constant encoding end");
   }
 
   void materializeBoolsAsBits(uint32_t rowCount, uint64_t* buffer, int begin)

@@ -28,7 +28,7 @@ struct Chunk {
   uint32_t rowCount{0};
 
   /// Number of null values in this chunk. Only populated when chunk statistics
-  /// are enabled (WriterOptions::enableChunkIndex); left at 0 otherwise.
+  /// are enabled; left at 0 otherwise.
   uint32_t nullCount{0};
 
   /// The encoded and compressed data content of this chunk, stored as a vector
