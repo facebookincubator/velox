@@ -49,8 +49,9 @@ inline constexpr std::size_t kAnsSizeStagingCapacity = 8;
  */
 class AnsCodecContext {
  public:
-  AnsCodecContext(rmm::cuda_stream_view stream,
-                  rmm::device_async_resource_ref temporaryMemoryResource);
+  AnsCodecContext(
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref temporaryMemoryResource);
   ~AnsCodecContext();
 
   AnsCodecContext(const AnsCodecContext&) = delete;

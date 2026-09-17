@@ -76,18 +76,19 @@ std::unique_ptr<cudf::column> makeColumn(
   rmm::device_buffer nullMask;
   cudf::size_type nullCount = 0;
   if (nullable) {
-    nullMask =
-        cudf::create_null_mask(static_cast<cudf::size_type>(values.size()),
-                               cudf::mask_state::ALL_VALID,
-                               stream,
-                               memoryResource);
+    nullMask = cudf::create_null_mask(
+        static_cast<cudf::size_type>(values.size()),
+        cudf::mask_state::ALL_VALID,
+        stream,
+        memoryResource);
     const auto firstNull = static_cast<cudf::size_type>(values.size() / 3);
     const auto lastNull = static_cast<cudf::size_type>(values.size() / 2);
-    cudf::set_null_mask(static_cast<cudf::bitmask_type*>(nullMask.data()),
-                        firstNull,
-                        lastNull,
-                        false,
-                        stream);
+    cudf::set_null_mask(
+        static_cast<cudf::bitmask_type*>(nullMask.data()),
+        firstNull,
+        lastNull,
+        false,
+        stream);
     nullCount = lastNull - firstNull;
   }
   return std::make_unique<cudf::column>(
@@ -114,12 +115,14 @@ RoundTripObservation roundTrip(
   stream.synchronize();
 
   std::vector<uint8_t> expected(packed.gpu_data->size());
-  EXPECT_EQ(cudaMemcpyAsync(expected.data(),
-                            packed.gpu_data->data(),
-                            expected.size(),
-                            cudaMemcpyDeviceToHost,
-                            stream.value()),
-            cudaSuccess);
+  EXPECT_EQ(
+      cudaMemcpyAsync(
+          expected.data(),
+          packed.gpu_data->data(),
+          expected.size(),
+          cudaMemcpyDeviceToHost,
+          stream.value()),
+      cudaSuccess);
   stream.synchronize();
 
   PackedColumnsCodec codec{stream, memoryResource, memoryResource};
@@ -137,17 +140,19 @@ RoundTripObservation roundTrip(
   }
   EXPECT_EQ(descriptor->serialize(), words);
 
-  auto decoded =
-      codec.decompress({static_cast<const uint8_t*>(compressed->data.data()),
-                        compressed->data.size()},
-                       *descriptor);
+  auto decoded = codec.decompress(
+      {static_cast<const uint8_t*>(compressed->data.data()),
+       compressed->data.size()},
+      *descriptor);
   std::vector<uint8_t> actual(decoded.size());
-  EXPECT_EQ(cudaMemcpyAsync(actual.data(),
-                            decoded.data(),
-                            actual.size(),
-                            cudaMemcpyDeviceToHost,
-                            stream.value()),
-            cudaSuccess);
+  EXPECT_EQ(
+      cudaMemcpyAsync(
+          actual.data(),
+          decoded.data(),
+          actual.size(),
+          cudaMemcpyDeviceToHost,
+          stream.value()),
+      cudaSuccess);
   stream.synchronize();
   EXPECT_EQ(actual, expected);
 
@@ -162,15 +167,18 @@ std::vector<int64_t> lowCardinalityInt64(std::size_t size) {
   return values;
 }
 
-std::vector<uint8_t> copyToHost(const rmm::device_buffer& input,
-                                rmm::cuda_stream_view stream) {
+std::vector<uint8_t> copyToHost(
+    const rmm::device_buffer& input,
+    rmm::cuda_stream_view stream) {
   std::vector<uint8_t> output(input.size());
-  EXPECT_EQ(cudaMemcpyAsync(output.data(),
-                            input.data(),
-                            input.size(),
-                            cudaMemcpyDeviceToHost,
-                            stream.value()),
-            cudaSuccess);
+  EXPECT_EQ(
+      cudaMemcpyAsync(
+          output.data(),
+          input.data(),
+          input.size(),
+          cudaMemcpyDeviceToHost,
+          stream.value()),
+      cudaSuccess);
   stream.synchronize();
   return output;
 }
@@ -182,10 +190,12 @@ TEST(SizeUtilsTest, RejectsOverflowAndAlignsSafely) {
   EXPECT_TRUE(detail::tryAddSizes(7, 9, result));
   EXPECT_EQ(result, 16);
   EXPECT_FALSE(detail::tryAddSizes(maximum, 1, result));
-  EXPECT_THROW(detail::checkedAddSizes(maximum, 1, "test overflow"),
-               std::overflow_error);
-  EXPECT_THROW(detail::checkedMultiplySizes(maximum, 2, "test overflow"),
-               std::overflow_error);
+  EXPECT_THROW(
+      detail::checkedAddSizes(maximum, 1, "test overflow"),
+      std::overflow_error);
+  EXPECT_THROW(
+      detail::checkedMultiplySizes(maximum, 2, "test overflow"),
+      std::overflow_error);
 
   EXPECT_TRUE(detail::tryNvcompAlignedSize(17, result));
   EXPECT_EQ(result, 32);
@@ -219,40 +229,47 @@ TEST(PackedColumnsCodecTest, RoundTripsLogicalTypesAndNullMask) {
   }
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT32},
-                               signed32,
-                               stream.view(),
-                               memoryResource,
-                               true));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::UINT32},
-                               unsigned32,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::UINT64},
-                               unsigned64,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::FLOAT32},
-                               floating32,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::FLOAT64},
-                               floating64,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::DECIMAL32, -2},
-                               decimal32,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::DECIMAL64, -2},
-                               decimal64,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(
-      makeColumn(cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
-                 timestampMillis,
-                 stream.view(),
-                 memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT32},
+      signed32,
+      stream.view(),
+      memoryResource,
+      true));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::UINT32},
+      unsigned32,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::UINT64},
+      unsigned64,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::FLOAT32},
+      floating32,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::FLOAT64},
+      floating64,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::DECIMAL32, -2},
+      decimal32,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::DECIMAL64, -2},
+      decimal64,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::TIMESTAMP_MILLISECONDS},
+      timestampMillis,
+      stream.view(),
+      memoryResource));
 
   const auto observation =
       roundTrip(std::move(columns), stream.view(), memoryResource);
@@ -270,10 +287,11 @@ TEST(PackedColumnsCodecTest, FrameOfReferenceWithoutAnsSupportsDirectLookup) {
         static_cast<int64_t>((index * 7'919) & ((1u << 20) - 1));
   }
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               values,
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      values,
+      stream.view(),
+      memoryResource));
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   stream.synchronize();
@@ -326,8 +344,8 @@ TEST(PackedColumnsCodecTest, FrameOfReferenceWithoutAnsSupportsDirectLookup) {
                           bytes[encodedPosition + plane * elementCount + row])
               << (8 * plane);
         }
-        EXPECT_EQ(std::bit_cast<int64_t>(referenceBits + adjusted),
-                  values[row]);
+        EXPECT_EQ(
+            std::bit_cast<int64_t>(referenceBits + adjusted), values[row]);
       }
       foundTypedRegion = true;
     }
@@ -339,10 +357,10 @@ TEST(PackedColumnsCodecTest, FrameOfReferenceWithoutAnsSupportsDirectLookup) {
   EXPECT_EQ(descriptorPosition, words.size());
   EXPECT_EQ(encodedPosition, bytes.size());
 
-  auto decoded =
-      codec.decompress({static_cast<const uint8_t*>(compressed->data.data()),
-                        compressed->data.size()},
-                       compressed->descriptor);
+  auto decoded = codec.decompress(
+      {static_cast<const uint8_t*>(compressed->data.data()),
+       compressed->data.size()},
+      compressed->descriptor);
   EXPECT_EQ(copyToHost(decoded, stream.view()), expected);
 }
 
@@ -356,10 +374,11 @@ TEST(PackedColumnsCodecTest, DeltaFrameOfReferenceCanSkipAns) {
     values[index] = 1'700'000'000'000LL + static_cast<int64_t>(index) * 1'000;
   }
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               values,
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      values,
+      stream.view(),
+      memoryResource));
 
   CompressionOptions options;
   options.numericTransform = NumericTransform::kDeltaFrameOfReference;
@@ -379,8 +398,9 @@ TEST(PackedColumnsCodecTest, DeltaFrameOfReferenceCanSkipAns) {
         static_cast<std::size_t>(words[position + kRegionSegmentCountOffset]);
     EXPECT_EQ(segmentCount, 0);
     if (words[position + kRegionTransformOffset] != kNoTransform) {
-      EXPECT_EQ(words[position + kRegionTransformOffset],
-                kDeltaFrameOfReferenceTransform);
+      EXPECT_EQ(
+          words[position + kRegionTransformOffset],
+          kDeltaFrameOfReferenceTransform);
       foundTypedRegion = true;
     }
     position += kRegionFixedWordCount + segmentCount;
@@ -417,14 +437,16 @@ TEST(PackedColumnsCodecTest, RoundTripsSignedAndUnsignedExtremes) {
   }
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               signedValues,
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::UINT64},
-                               unsignedValues,
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      signedValues,
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::UINT64},
+      unsignedValues,
+      stream.view(),
+      memoryResource));
   roundTrip(std::move(columns), stream.view(), memoryResource);
 }
 
@@ -443,24 +465,27 @@ TEST(PackedColumnsCodecTest, RoundTripsStringsAndNestedBuffers) {
   }
   offsets.back() = static_cast<int32_t>(characters.size());
 
-  auto offsetsColumn = makeColumn(cudf::data_type{cudf::type_id::INT32},
-                                  offsets,
-                                  stream.view(),
-                                  memoryResource);
+  auto offsetsColumn = makeColumn(
+      cudf::data_type{cudf::type_id::INT32},
+      offsets,
+      stream.view(),
+      memoryResource);
   rmm::device_buffer characterBuffer{
       characters.data(), characters.size(), stream.view(), memoryResource};
-  auto strings = cudf::make_strings_column(static_cast<cudf::size_type>(kRows),
-                                           std::move(offsetsColumn),
-                                           std::move(characterBuffer),
-                                           0,
-                                           rmm::device_buffer{});
+  auto strings = cudf::make_strings_column(
+      static_cast<cudf::size_type>(kRows),
+      std::move(offsetsColumn),
+      std::move(characterBuffer),
+      0,
+      rmm::device_buffer{});
 
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.push_back(std::move(strings));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               lowCardinalityInt64(kRows),
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      lowCardinalityInt64(kRows),
+      stream.view(),
+      memoryResource));
   roundTrip(std::move(columns), stream.view(), memoryResource);
 }
 
@@ -470,19 +495,21 @@ TEST(PackedColumnsCodecTest, DescriptorRejectsMalformedInput) {
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               lowCardinalityInt64(kRows),
-                               stream.view(),
-                               memoryResource,
-                               true));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      lowCardinalityInt64(kRows),
+      stream.view(),
+      memoryResource,
+      true));
   const auto observation =
       roundTrip(std::move(columns), stream.view(), memoryResource);
   ASSERT_FALSE(observation.serializedDescriptor.empty());
   const auto& valid = observation.serializedDescriptor;
 
   for (std::size_t size = 0; size < valid.size(); ++size) {
-    EXPECT_FALSE(PackedColumnsDescriptor::deserialize(
-        std::span<const int64_t>{valid.data(), size}))
+    EXPECT_FALSE(
+        PackedColumnsDescriptor::deserialize(
+            std::span<const int64_t>{valid.data(), size}))
         << "truncated descriptor size " << size;
   }
 
@@ -583,30 +610,34 @@ TEST(PackedColumnsCodecTest, DecompressRejectsWrongInputExtent) {
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               lowCardinalityInt64(kRows),
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      lowCardinalityInt64(kRows),
+      stream.view(),
+      memoryResource));
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
   auto compressed = codec.compress(packed);
   ASSERT_TRUE(compressed);
   ASSERT_GT(compressed->data.size(), 1);
-  EXPECT_THROW(codec.decompress({static_cast<const uint8_t*>(nullptr),
-                                 compressed->data.size()},
-                                compressed->descriptor),
-               std::invalid_argument);
+  EXPECT_THROW(
+      codec.decompress(
+          {static_cast<const uint8_t*>(nullptr), compressed->data.size()},
+          compressed->descriptor),
+      std::invalid_argument);
 
   EXPECT_THROW(
-      codec.decompress({static_cast<const uint8_t*>(compressed->data.data()),
-                        compressed->data.size() - 1},
-                       compressed->descriptor),
+      codec.decompress(
+          {static_cast<const uint8_t*>(compressed->data.data()),
+           compressed->data.size() - 1},
+          compressed->descriptor),
       std::invalid_argument);
   EXPECT_THROW(
-      codec.decompress({static_cast<const uint8_t*>(compressed->data.data()),
-                        compressed->data.size() + 1},
-                       compressed->descriptor),
+      codec.decompress(
+          {static_cast<const uint8_t*>(compressed->data.data()),
+           compressed->data.size() + 1},
+          compressed->descriptor),
       std::invalid_argument);
 }
 
@@ -621,10 +652,11 @@ TEST(PackedColumnsCodecTest, RejectsInsufficientReduction) {
   });
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               values,
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      values,
+      stream.view(),
+      memoryResource));
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
@@ -638,10 +670,11 @@ TEST(PackedColumnsCodecTest, SmallInputIsNotExpanded) {
   const std::vector<int64_t> values{1, 2, 3, 4};
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               values,
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      values,
+      stream.view(),
+      memoryResource));
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
@@ -659,10 +692,11 @@ TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
     // Keep the residual input large enough to produce a descriptor below the
     // typed-transform threshold, where each column remains untransformed.
     for (int column = 0; column < kColumnCount; ++column) {
-      columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                                   std::vector<int64_t>(rowCount, 7),
-                                   stream.view(),
-                                   memoryResource));
+      columns.push_back(makeColumn(
+          cudf::data_type{cudf::type_id::INT64},
+          std::vector<int64_t>(rowCount, 7),
+          stream.view(),
+          memoryResource));
     }
     cudf::table table{std::move(columns)};
     auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
@@ -689,16 +723,18 @@ TEST(PackedColumnsCodecTest, HonorsTypedTransformThreshold) {
   };
 
   const auto belowThreshold = selectedTransforms(kTypedThreshold - 1);
-  EXPECT_TRUE(std::none_of(
-      belowThreshold.begin(), belowThreshold.end(), [](int64_t transform) {
-        return transform != kNoTransform;
-      }));
+  EXPECT_TRUE(
+      std::none_of(
+          belowThreshold.begin(), belowThreshold.end(), [](int64_t transform) {
+            return transform != kNoTransform;
+          }));
 
   const auto atThreshold = selectedTransforms(kTypedThreshold);
-  EXPECT_TRUE(std::any_of(
-      atThreshold.begin(), atThreshold.end(), [](int64_t transform) {
-        return transform != kNoTransform;
-      }));
+  EXPECT_TRUE(
+      std::any_of(
+          atThreshold.begin(), atThreshold.end(), [](int64_t transform) {
+            return transform != kNoTransform;
+          }));
 }
 
 TEST(PackedColumnsCodecTest, HonorsResidualAnsThreshold) {
@@ -706,13 +742,15 @@ TEST(PackedColumnsCodecTest, HonorsResidualAnsThreshold) {
   rmm::cuda_stream stream;
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
   rmm::device_buffer input{kResidualThreshold, stream.view(), memoryResource};
-  ASSERT_EQ(cudaMemsetAsync(input.data(), 0, input.size(), stream.value()),
-            cudaSuccess);
+  ASSERT_EQ(
+      cudaMemsetAsync(input.data(), 0, input.size(), stream.value()),
+      cudaSuccess);
 
   detail::AnsCodecContext context{stream.view(), memoryResource};
-  EXPECT_FALSE(detail::compressAns(
-      {static_cast<const uint8_t*>(input.data()), kResidualThreshold - 1},
-      context));
+  EXPECT_FALSE(
+      detail::compressAns(
+          {static_cast<const uint8_t*>(input.data()), kResidualThreshold - 1},
+          context));
 
   auto compressed = detail::compressAns(
       {static_cast<const uint8_t*>(input.data()), kResidualThreshold}, context);
@@ -724,9 +762,10 @@ TEST(PackedColumnsCodecTest, HonorsResidualAnsThreshold) {
       kResidualThreshold,
       context);
   const auto decodedBytes = copyToHost(decoded, stream.view());
-  EXPECT_TRUE(std::all_of(decodedBytes.begin(),
-                          decodedBytes.end(),
-                          [](uint8_t value) { return value == 0; }));
+  EXPECT_TRUE(
+      std::all_of(decodedBytes.begin(), decodedBytes.end(), [](uint8_t value) {
+        return value == 0;
+      }));
 }
 
 TEST(PackedColumnsCodecTest, EncodedPaddingIsDeterministic) {
@@ -734,14 +773,16 @@ TEST(PackedColumnsCodecTest, EncodedPaddingIsDeterministic) {
   rmm::cuda_stream stream;
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               lowCardinalityInt64(kRows),
-                               stream.view(),
-                               memoryResource));
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::UINT8},
-                               std::vector<uint8_t>(kRows, 3),
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      lowCardinalityInt64(kRows),
+      stream.view(),
+      memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::UINT8},
+      std::vector<uint8_t>(kRows, 3),
+      stream.view(),
+      memoryResource));
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   PackedColumnsCodec codec{stream.view(), memoryResource, memoryResource};
@@ -816,10 +857,11 @@ TEST(PackedColumnsCodecTest, SupportsIndependentStreams) {
   const auto memoryResource = rmm::mr::get_current_device_resource_ref();
 
   std::vector<std::unique_ptr<cudf::column>> firstColumns;
-  firstColumns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                                    lowCardinalityInt64(kRows),
-                                    firstStream.view(),
-                                    memoryResource));
+  firstColumns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      lowCardinalityInt64(kRows),
+      firstStream.view(),
+      memoryResource));
   std::vector<std::unique_ptr<cudf::column>> secondColumns;
   secondColumns.push_back(makeColumn(
       cudf::data_type{cudf::type_id::UINT64},
@@ -844,10 +886,11 @@ TEST(PackedColumnsCodecTest, SupportsConcurrentCodecInstances) {
       value += offset;
     }
     std::vector<std::unique_ptr<cudf::column>> columns;
-    columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                                 values,
-                                 stream.view(),
-                                 memoryResource));
+    columns.push_back(makeColumn(
+        cudf::data_type{cudf::type_id::INT64},
+        values,
+        stream.view(),
+        memoryResource));
     const auto result =
         roundTrip(std::move(columns), stream.view(), memoryResource);
     return result.compressedSize < result.uncompressedSize;
@@ -879,10 +922,11 @@ TEST(PackedColumnsCodecTest, SupportsIndependentDevices) {
     rmm::cuda_stream stream;
     const auto memoryResource = rmm::mr::get_current_device_resource_ref();
     std::vector<std::unique_ptr<cudf::column>> columns;
-    columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT32},
-                                 std::vector<int32_t>(1u << 16, device + 1),
-                                 stream.view(),
-                                 memoryResource));
+    columns.push_back(makeColumn(
+        cudf::data_type{cudf::type_id::INT32},
+        std::vector<int32_t>(1u << 16, device + 1),
+        stream.view(),
+        memoryResource));
     const auto result =
         roundTrip(std::move(columns), stream.view(), memoryResource);
     EXPECT_LT(result.compressedSize, result.uncompressedSize);
@@ -899,10 +943,11 @@ TEST(PackedColumnsCodecTest, RejectsMovedFromInputAndEmptyAllocation) {
   EXPECT_FALSE(codec.compress(empty));
 
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.push_back(makeColumn(cudf::data_type{cudf::type_id::INT64},
-                               lowCardinalityInt64(1u << 16),
-                               stream.view(),
-                               memoryResource));
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      lowCardinalityInt64(1u << 16),
+      stream.view(),
+      memoryResource));
   cudf::table table{std::move(columns)};
   auto packed = cudf::pack(table.view(), stream.view(), memoryResource);
   auto owner = std::move(packed);

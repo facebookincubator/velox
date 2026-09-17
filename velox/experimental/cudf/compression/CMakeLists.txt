@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(
-  GPU_COMPRESSION_SOURCES
-  detail/AnsCodec.cu
-  PackedColumnsCodec.cu
-)
+set(GPU_COMPRESSION_SOURCES detail/AnsCodec.cu PackedColumnsCodec.cu)
 
 add_library(velox_cudf_compression STATIC ${GPU_COMPRESSION_SOURCES})
 

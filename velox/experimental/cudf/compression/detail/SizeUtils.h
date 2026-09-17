@@ -23,9 +23,8 @@
 
 namespace facebook::velox::cudf_velox::compression::detail {
 
-[[nodiscard]] inline bool tryAddSizes(std::size_t left,
-                                      std::size_t right,
-                                      std::size_t& result) noexcept {
+[[nodiscard]] inline bool
+tryAddSizes(std::size_t left, std::size_t right, std::size_t& result) noexcept {
   if (right > std::numeric_limits<std::size_t>::max() - left) {
     return false;
   }
@@ -33,17 +32,15 @@ namespace facebook::velox::cudf_velox::compression::detail {
   return true;
 }
 
-[[nodiscard]] inline std::size_t checkedAddSizes(std::size_t left,
-                                                 std::size_t right,
-                                                 const char* message) {
+[[nodiscard]] inline std::size_t
+checkedAddSizes(std::size_t left, std::size_t right, const char* message) {
   std::size_t result = 0;
   CUDF_EXPECTS(tryAddSizes(left, right, result), message, std::overflow_error);
   return result;
 }
 
-[[nodiscard]] inline std::size_t checkedMultiplySizes(std::size_t left,
-                                                      std::size_t right,
-                                                      const char* message) {
+[[nodiscard]] inline std::size_t
+checkedMultiplySizes(std::size_t left, std::size_t right, const char* message) {
   CUDF_EXPECTS(
       left == 0 || right <= std::numeric_limits<std::size_t>::max() / left,
       message,
@@ -72,9 +69,10 @@ inline constexpr std::size_t kNvcompFrameAlignment = 16;
 
 [[nodiscard]] inline std::size_t nvcompAlignedSize(std::size_t size) {
   std::size_t alignedSize = 0;
-  CUDF_EXPECTS(tryNvcompAlignedSize(size, alignedSize),
-               "nvCOMP aligned size overflow",
-               std::overflow_error);
+  CUDF_EXPECTS(
+      tryNvcompAlignedSize(size, alignedSize),
+      "nvCOMP aligned size overflow",
+      std::overflow_error);
   return alignedSize;
 }
 
