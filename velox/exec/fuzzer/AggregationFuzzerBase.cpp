@@ -402,7 +402,7 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
     }
 
     for (auto i = children.size(); i < types.size() - 1; ++i) {
-      if (partitionKeySet.find(names[i]) != partitionKeySet.end()) {
+      if (partitionKeySet.contains(names[i])) {
         // The partition keys are built with a dictionary over a smaller set of
         // values. This is done to introduce some repetition of key values for
         // windowing.
@@ -410,11 +410,10 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputDataWithRowNumber(
         children.push_back(
             BaseVector::wrapInDictionary(
                 partitionNulls, partitionIndices, size, baseVector));
-      } else if (
-          windowFrameBoundsSet.find(names[i]) != windowFrameBoundsSet.end()) {
+      } else if (windowFrameBoundsSet.contains(names[i])) {
         // Frame bound columns cannot have NULLs.
         children.push_back(vectorFuzzer_.fuzzNotNull(types[i], size));
-      } else if (sortingKeySet.find(names[i]) != sortingKeySet.end()) {
+      } else if (sortingKeySet.contains(names[i])) {
         auto baseVector = vectorFuzzer_.fuzz(types[i], numPeerGroups);
         children.push_back(
             BaseVector::wrapInDictionary(
