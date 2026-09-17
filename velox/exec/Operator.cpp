@@ -309,10 +309,14 @@ RowVectorPtr Operator::fillOutput(
 }
 
 OperatorStats Operator::stats(bool clear) {
-  OperatorStats stats;
   if (!clear) {
-    stats = *stats_.rlock();
-  } else {
+    OperatorStats stats = *stats_.rlock();
+    stats.memoryStats = MemoryStats::memStatsFromPool(pool());
+    return stats;
+  }
+
+  OperatorStats stats;
+  {
     auto lockedStats = stats_.wlock();
     stats = *lockedStats;
     lockedStats->clear();
