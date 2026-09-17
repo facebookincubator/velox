@@ -36,9 +36,8 @@ class JoinTableBuilderTest : public testing::Test,
   }
 
   // Options for a build side of 'k BIGINT, v VARCHAR' joined on 'k'.
-  JoinTableBuilder::Options makeOptions(core::JoinType joinType) const {
+  JoinTableBuilder::Options makeOptions() const {
     JoinTableBuilder::Options options;
-    options.joinType = joinType;
     options.inputType = ROW({"k", "v"}, {BIGINT(), VARCHAR()});
     options.joinKeys = {
         std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k"),
@@ -54,7 +53,7 @@ class JoinTableBuilderTest : public testing::Test,
 };
 
 TEST_F(JoinTableBuilderTest, addInput) {
-  JoinTableBuilder builder(makeOptions(core::JoinType::kInner));
+  JoinTableBuilder builder(core::JoinType::kInner, makeOptions());
   builder.initialize(pool(), pool());
 
   EXPECT_THAT(builder.keyChannels(), testing::ElementsAre(0));
@@ -78,7 +77,7 @@ TEST_F(JoinTableBuilderTest, addInput) {
 }
 
 TEST_F(JoinTableBuilderTest, phasesMustRunInOrder) {
-  JoinTableBuilder builder(makeOptions(core::JoinType::kInner));
+  JoinTableBuilder builder(core::JoinType::kInner, makeOptions());
   builder.initialize(pool(), pool());
   const auto input = makeInput();
 
@@ -107,9 +106,9 @@ TEST_F(JoinTableBuilderTest, phasesMustRunInOrder) {
 }
 
 TEST_F(JoinTableBuilderTest, nullAwareAntiJoinStopsOnNullKey) {
-  auto options = makeOptions(core::JoinType::kAnti);
+  auto options = makeOptions();
   options.nullAware = true;
-  JoinTableBuilder builder(std::move(options));
+  JoinTableBuilder builder(core::JoinType::kAnti, std::move(options));
   builder.initialize(pool(), pool());
 
   const auto input = makeRowVector(

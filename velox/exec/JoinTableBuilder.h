@@ -36,9 +36,11 @@ namespace facebook::velox::exec {
 /// 'BaseHashTable::prepareJoinTable()'.
 class JoinTableBuilder {
  public:
+  /// Describes the build side and tunes the build. Every field here is either
+  /// optional or checked by the constructor. The join type is a constructor
+  /// parameter instead as it is required and an unset enum field can not be
+  /// told apart from a valid one.
   struct Options {
-    core::JoinType joinType;
-
     bool nullAware{false};
 
     bool nullAsValue{false};
@@ -81,7 +83,10 @@ class JoinTableBuilder {
     std::vector<column_index_t> inputChannels;
   };
 
-  explicit JoinTableBuilder(Options options);
+  /// 'joinType' is the type of the join this build side belongs to. It is a
+  /// separate parameter rather than an 'Options' field as it is required and
+  /// has no meaningful default, see 'Options'.
+  JoinTableBuilder(core::JoinType joinType, Options options);
 
   /// Creates the hash table. Must be called once before 'addInput()'. This is
   /// separate from the constructor as neither the pools nor the compiled filter
@@ -204,7 +209,7 @@ class JoinTableBuilder {
   }
 
   core::JoinType joinType() const {
-    return options_.joinType;
+    return joinType_;
   }
 
   uint32_t vectorHasherMaxNumDistinct() const {
@@ -249,6 +254,7 @@ class JoinTableBuilder {
   // Invoked to abandon the build of the deduped hash table.
   void abandonHashBuildDedup();
 
+  const core::JoinType joinType_;
   const Options options_;
 
   // Indicates whether to drop duplicate rows. Rows containing duplicate keys

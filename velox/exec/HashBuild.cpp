@@ -84,7 +84,6 @@ void HashBuild::setupTableBuilder() {
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
 
   JoinTableBuilder::Options options;
-  options.joinType = joinType_;
   options.nullAware = nullAware_;
   options.nullAsValue = nullAsValue_;
   options.withFilter = joinNode_->filter() != nullptr;
@@ -108,7 +107,8 @@ void HashBuild::setupTableBuilder() {
         std::string(HashBuild::kAbandonBuildNoDupHash), RuntimeCounter(1));
   };
 
-  tableBuilder_ = std::make_unique<JoinTableBuilder>(std::move(options));
+  tableBuilder_ =
+      std::make_unique<JoinTableBuilder>(joinType_, std::move(options));
 }
 
 void HashBuild::initialize() {

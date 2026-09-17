@@ -25,10 +25,10 @@
 
 namespace facebook::velox::exec {
 
-JoinTableBuilder::JoinTableBuilder(Options options)
-    : options_(std::move(options)),
-      dropDuplicates_(
-          core::canDropDuplicates(options_.joinType, options_.withFilter)),
+JoinTableBuilder::JoinTableBuilder(core::JoinType joinType, Options options)
+    : joinType_(joinType),
+      options_(std::move(options)),
+      dropDuplicates_(core::canDropDuplicates(joinType_, options_.withFilter)),
       keyChannelMap_(options_.joinKeys.size()) {
   VELOX_CHECK_NOT_NULL(options_.inputType);
 
@@ -79,8 +79,7 @@ void JoinTableBuilder::initialize(
 
   setupTable();
 
-  if (isAntiJoin(options_.joinType) && options_.withFilter &&
-      filterPropagatesNulls_) {
+  if (isAntiJoin(joinType_) && options_.withFilter && filterPropagatesNulls_) {
     setupFilterChannels(filterInfo);
   }
 }
@@ -104,9 +103,8 @@ void JoinTableBuilder::setupTable() {
     dependentTypes.emplace_back(tableType_->childAt(i));
   }
 
-  const auto joinType = options_.joinType;
-  if (isRightJoin(joinType) || isFullJoin(joinType) ||
-      isRightSemiProjectJoin(joinType) || isRightAntiJoin(joinType)) {
+  if (isRightJoin(joinType_) || isFullJoin(joinType_) ||
+      isRightSemiProjectJoin(joinType_) || isRightAntiJoin(joinType_)) {
     // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
     // build row never matches and is always returned.
     table_ = HashTable<false>::createForJoin(
@@ -119,11 +117,11 @@ void JoinTableBuilder::setupTable() {
         tablePool_);
   } else {
     // Right semi join needs to tag build rows that were probed.
-    const bool needProbedFlag = isRightSemiFilterJoin(joinType);
-    const bool hasCountFlag = core::isCountingJoin(joinType);
+    const bool needProbedFlag = isRightSemiFilterJoin(joinType_);
+    const bool hasCountFlag = core::isCountingJoin(joinType_);
     if (options_.nullAsValue ||
         isLeftNullAwareJoinWithFilter(
-            joinType, options_.nullAware, options_.withFilter)) {
+            joinType_, options_.nullAware, options_.withFilter)) {
       // We need to check null key rows in build side in case of null-aware anti
       // or left semi project join with filter set.
       table_ = HashTable<false>::createForJoin(
@@ -150,7 +148,7 @@ void JoinTableBuilder::setupTable() {
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
 
   if (options_.abandonHashBuildDedupMinPct == 0 &&
-      !core::isCountingJoin(joinType)) {
+      !core::isCountingJoin(joinType_)) {
     // Building a HashTable without duplicates is disabled if
     // abandonHashBuildDedupMinPct is 0. Counting joins always require dedup.
     abandonHashBuildDedup_ = true;
@@ -298,14 +296,13 @@ void JoinTableBuilder::decodeKeys(const RowVectorPtr& input) {
 bool JoinTableBuilder::processNullKeys() {
   advancePhase(Phase::kKeysDecoded, Phase::kNullKeysProcessed);
 
-  const auto joinType = options_.joinType;
   auto& hashers = table_->hashers();
 
-  if (!isRightJoin(joinType) && !isFullJoin(joinType) &&
-      !isRightSemiProjectJoin(joinType) && !isRightAntiJoin(joinType) &&
+  if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
+      !isRightSemiProjectJoin(joinType_) && !isRightAntiJoin(joinType_) &&
       !options_.nullAsValue &&
       !isLeftNullAwareJoinWithFilter(
-          joinType, options_.nullAware, options_.withFilter)) {
+          joinType_, options_.nullAware, options_.withFilter)) {
     const auto numInput = activeRows_.size();
     deselectRowsWithNulls(hashers, activeRows_);
     if (options_.nullAware && !joinHasNullKeys_ &&
@@ -328,7 +325,7 @@ bool JoinTableBuilder::processNullKeys() {
   // Null-aware anti join with no extra filter returns no rows if build side
   // has nulls in join keys. Hence, we can stop processing on first null.
   return !(
-      isAntiJoin(joinType) && options_.nullAware && joinHasNullKeys_ &&
+      isAntiJoin(joinType_) && options_.nullAware && joinHasNullKeys_ &&
       !options_.withFilter);
 }
 
@@ -340,8 +337,7 @@ void JoinTableBuilder::decodeDependents(const RowVectorPtr& input) {
         *input->childAt(dependentChannels_[i])->loadedVector(), activeRows_);
   }
 
-  if (isAntiJoin(options_.joinType) && options_.withFilter &&
-      filterPropagatesNulls_) {
+  if (isAntiJoin(joinType_) && options_.withFilter && filterPropagatesNulls_) {
     removeInputRowsForAntiJoinFilter();
   }
 }
@@ -358,7 +354,7 @@ void JoinTableBuilder::insertRows(
   if (dropDuplicates_ && !abandonHashBuildDedup_) {
     // Counting joins must not abandon dedup - accurate counts are required.
     VELOX_CHECK_NOT_NULL(lookup_);
-    const bool abandonEarly = !core::isCountingJoin(options_.joinType) &&
+    const bool abandonEarly = !core::isCountingJoin(joinType_) &&
         abandonHashBuildDedupEarly(table_->numDistinct());
     if (!abandonEarly) {
       numHashInputRows_ += activeRows_.countSelected();
@@ -377,7 +373,7 @@ void JoinTableBuilder::insertRows(
       // New rows are initialized with count = 1 by initializeRow.
       // Increment count for all rows, then decrement for new rows to
       // correct the over-counting.
-      if (core::isCountingJoin(options_.joinType)) {
+      if (core::isCountingJoin(joinType_)) {
         auto* rows = table_->rows();
         for (const auto row : lookup_->rows) {
           rows->incrementCount(lookup_->hits[row]);
