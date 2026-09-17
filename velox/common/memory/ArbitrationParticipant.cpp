@@ -233,7 +233,95 @@ void ArbitrationParticipant::startArbitration(ArbitrationOperation* op) {
   }
 
   if (waitPromise.valid()) {
-    waitPromise.wait();
+    if (!op->canBeCancelled()) {
+      waitPromise.wait();
+    } else {
+      try {
+        TestValue::adjust(
+            "facebook::velox::memory::ArbitrationParticipant::registerAllocationCancellationCallbacks",
+            op);
+        std::atomic_bool cancelledWhileWaiting{false};
+        auto cancel = [&]() {
+          if (cancelWaitingArbitration(op)) {
+            cancelledWhileWaiting = true;
+          }
+        };
+        std::unique_ptr<folly::CancellationCallback> taskCallback;
+        std::unique_ptr<folly::CancellationCallback> operationCallback;
+        if (op->taskCancellationToken().canBeCancelled()) {
+          taskCallback = std::make_unique<folly::CancellationCallback>(
+              op->taskCancellationToken(), cancel);
+        }
+        if (op->operationCancellationToken().canBeCancelled()) {
+          operationCallback = std::make_unique<folly::CancellationCallback>(
+              op->operationCancellationToken(), cancel);
+        }
+        waitPromise.wait();
+        taskCallback.reset();
+        operationCallback.reset();
+        if (cancelledWhileWaiting) {
+          VELOX_FAIL(
+              "Memory allocation cancelled while waiting for arbitration on {}",
+              op->participant()->name());
+        }
+      } catch (...) {
+        cleanupFailedArbitrationStart(op);
+        throw;
+      }
+    }
+  }
+}
+
+bool ArbitrationParticipant::cancelWaitingArbitration(
+    ArbitrationOperation* op) {
+  ContinuePromise resume = ContinuePromise::makeEmpty();
+  {
+    std::lock_guard<std::mutex> l(stateLock_);
+    if (runningOp_ == op) {
+      return false;
+    }
+    auto it = std::find_if(
+        waitOps_.begin(), waitOps_.end(), [op](const WaitOp& waitOp) {
+          return waitOp.op == op;
+        });
+    if (it == waitOps_.end()) {
+      return false;
+    }
+    resume = std::move(it->waitPromise);
+    waitOps_.erase(it);
+  }
+  if (resume.valid()) {
+    resume.setValue();
+  }
+  return true;
+}
+
+void ArbitrationParticipant::cleanupFailedArbitrationStart(
+    ArbitrationOperation* op) {
+  ContinuePromise resume = ContinuePromise::makeEmpty();
+  {
+    std::lock_guard<std::mutex> l(stateLock_);
+    if (runningOp_ == op) {
+      if (waitOps_.empty()) {
+        runningOp_ = nullptr;
+      } else {
+        resume = std::move(waitOps_.front().waitPromise);
+        runningOp_ = waitOps_.front().op;
+        waitOps_.pop_front();
+      }
+    } else {
+      auto it = std::find_if(
+          waitOps_.begin(), waitOps_.end(), [op](const WaitOp& waitOp) {
+            return waitOp.op == op;
+          });
+      if (it != waitOps_.end()) {
+        resume = std::move(it->waitPromise);
+        waitOps_.erase(it);
+      }
+    }
+  }
+  if (resume.valid()) {
+    resume.setValue();
   }
 }
 
