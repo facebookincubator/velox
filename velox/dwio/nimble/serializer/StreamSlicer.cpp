@@ -110,10 +110,10 @@ std::string_view nullableNullsStream(
   const auto valuesSize = encoding::readUint32(pos);
   NIMBLE_CHECK_LE(
       valuesSize,
-      static_cast<size_t>(encoded.end() - pos),
+      static_cast<size_t>(encoded.data() + encoded.size() - pos),
       "Nullable values child exceeds encoding size");
   pos += valuesSize;
-  return {pos, encoded.end()};
+  return {pos, encoded.data() + encoded.size()};
 }
 
 uint32_t maxStreamOffset(const StreamDescriptor& descriptor) {
