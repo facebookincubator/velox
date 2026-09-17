@@ -471,6 +471,11 @@ These functions support TIMESTAMP and DATE input types.
 
     Alias for ``unix_timestamp(timestamp) -> bigint``.
 
+.. spark:function:: to_unix_timestamp(timestamp_utc) -> bigint
+   :noindex:
+
+    Alias for ``unix_timestamp(timestamp_utc) -> bigint``.
+
 .. spark:function:: to_utc_timestamp(timestamp, string) -> timestamp
 
     Returns the timestamp value from the given timezone to UTC timezone. ::
@@ -584,6 +589,19 @@ These functions support TIMESTAMP and DATE input types.
         SELECT unix_timestamp(CAST(0 AS TIMESTAMP)); -- 0
         SELECT unix_timestamp(CAST(1739933174 AS TIMESTAMP)); -- 1739933174
         SELECT unix_timestamp(CAST(-1739933174 AS TIMESTAMP)); -- -1739933174
+
+.. spark:function:: unix_timestamp(timestamp_utc) -> bigint
+
+    Returns the UNIX timestamp of the given ``timestamp_utc`` in seconds, not
+    subject to the session timezone.
+
+    Under session timezone UTC: ::
+
+        SELECT unix_timestamp(TIMESTAMP_NTZ '2025-02-19 02:46:14'); -- 1739933174
+
+    Under session timezone ``America/Los_Angeles`` (UTC-8): ::
+
+        SELECT unix_timestamp(TIMESTAMP_NTZ '2025-02-19 02:46:14'); -- 1739933174
 
 .. function:: week_of_year(x) -> integer
    :noindex:
