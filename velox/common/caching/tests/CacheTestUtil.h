@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/caching/EvictionPolicy.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/caching/SsdFile.h"
 #include "velox/common/process/TraceContext.h"
@@ -143,6 +144,15 @@ class AsyncDataCacheEntryTestHelper {
     return asyncDataCacheEntry_->accessStats_;
   }
 
+  void setAccessStats(AccessTime lastUse, int32_t numUses) {
+    asyncDataCacheEntry_->accessStats_.lastUse = lastUse;
+    asyncDataCacheEntry_->accessStats_.numUses = numUses;
+  }
+
+  void clearKey() {
+    asyncDataCacheEntry_->key_.fileNum.clear();
+  }
+
   bool firstUse() const {
     return asyncDataCacheEntry_->isFirstUse_;
   }
@@ -174,6 +184,14 @@ class CacheShardTestHelper {
     return entries;
   }
 
+  const EvictionPolicyShardState* policyState() const {
+    return cacheShard_->policyState_.get();
+  }
+
+  const std::deque<std::unique_ptr<AsyncDataCacheEntry>>& entries() const {
+    return cacheShard_->entries_;
+  }
+
  private:
   CacheShard* const cacheShard_;
 };
@@ -202,6 +220,10 @@ class AsyncDataCacheTestHelper {
 
   int32_t numShards() const {
     return asyncDataCache_->shards_.size();
+  }
+
+  CacheShard* shard(int32_t index) const {
+    return asyncDataCache_->shards_[index].get();
   }
 
  private:

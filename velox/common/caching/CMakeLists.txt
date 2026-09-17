@@ -14,8 +14,10 @@
 
 velox_add_library(
   velox_caching
+  ApproxLrfuEvictionPolicy.cpp
   AsyncDataCache.cpp
   CacheTTLController.cpp
+  EvictionPolicy.cpp
   FileHandle.cpp
   FileIds.cpp
   FileProperties.cpp
@@ -25,8 +27,10 @@ velox_add_library(
   SsdFileTracker.cpp
   StringIdMap.cpp
   HEADERS
+  ApproxLrfuEvictionPolicy.h
   AsyncDataCache.h
   CacheTTLController.h
+  EvictionPolicy.h
   FileGroupStats.h
   FileHandle.h
   FileIds.h
