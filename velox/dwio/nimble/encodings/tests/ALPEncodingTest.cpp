@@ -31,6 +31,7 @@
 #include <cmath>
 #include <limits>
 #include <random>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
@@ -712,6 +713,46 @@ TYPED_TEST(ALPEncodingTest, headerMetadataUsesVarints) {
     SCOPED_TRACE(i);
     EXPECT_TRUE(nimble::NimbleCompare<D>::equals(result[i], values[i]));
   }
+}
+
+TYPED_TEST(ALPEncodingTest, rejectsOutOfRangeScaleParameters) {
+  using D = typename TypeParam::data_type;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  const auto values = this->template toVector<D>({1, 2, 3});
+  const auto encoded = encodeWithLayout<D>(
+      *this->buffer_, values, alpWithFixedBitWidthPayloadLayout(), options);
+  const auto prefixSize =
+      nimble::EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+  const char* headerPosition = encoded.data() + prefixSize;
+  const auto originalHeader = nimble::detail::alp::readHeader(headerPosition);
+
+  const auto check = [&](uint8_t exponent,
+                         uint8_t factor,
+                         std::string_view expectedError) {
+    std::string serialized{encoded};
+    auto* control = serialized.data() + prefixSize;
+    nimble::detail::alp::writeHeader(
+        {
+            .exponent = exponent,
+            .factor = factor,
+            .hasExceptions = originalHeader.hasExceptions,
+        },
+        control);
+    std::vector<velox::BufferPtr> stringBuffers;
+    NIMBLE_ASSERT_THROW(
+        createEncoding(this->pool_.get(), serialized, options, stringBuffers),
+        expectedError);
+  };
+
+  check(
+      static_cast<uint8_t>(nimble::ALPEncoding<D>::kPow10Double.size()),
+      /*factor=*/0,
+      "Invalid ALP exponent.");
+  check(
+      /*exponent=*/0,
+      static_cast<uint8_t>(nimble::ALPEncoding<D>::kPow10Double.size()),
+      "Invalid ALP factor.");
 }
 
 TYPED_TEST(ALPEncodingTest, traverseEncodingsVisitsExceptionStreams) {

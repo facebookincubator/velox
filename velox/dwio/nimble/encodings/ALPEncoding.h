@@ -1021,6 +1021,8 @@ class ALPEncoding final
     return static_cast<int64_t>(std::llround(scaled / kPow10Double[factor]));
   }
 
+  // Restores a contiguous run with SIMD and a scalar tail. The caller patches
+  // exception values after decoding.
   static void decodeBulkValues(
       const uint64_t* encodedValues,
       vector_size_t numValues,
