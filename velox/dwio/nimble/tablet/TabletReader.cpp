@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
+#include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
@@ -185,18 +186,6 @@ MetadataSection toMetadataSection(const T* section) {
                            : std::nullopt};
 }
 
-size_t copyTo(const folly::IOBuf& source, void* target, size_t size) {
-  NIMBLE_DCHECK_LE(
-      source.computeChainDataLength(), size, "Target buffer too small.");
-  size_t offset = 0;
-  for (const auto& chunk : source) {
-    std::copy(chunk.begin(), chunk.end(), static_cast<char*>(target) + offset);
-    offset += chunk.size();
-  }
-
-  return offset;
-}
-
 } // namespace
 
 TabletReader::TabletReader(
@@ -254,6 +243,11 @@ TabletReader::TabletReader(
             return loadStripeGroup(stripeGroupIndex);
           },
           options.pinMetadata},
+      vectorIndexCache_{
+          [this](const std::string& columnName) {
+            return loadVectorIndex(columnName);
+          },
+          /*pinEntries=*/true},
       chunkStatsCache_{
           [this](uint32_t stripeGroupIndex) {
             return loadChunkStatsGroup(stripeGroupIndex);
@@ -341,6 +335,7 @@ void TabletReader::init(const Options& options) {
   initClusterIndex();
   initChunkStats(footerView, footerOffset);
   initDenseIndexes();
+  initVectorIndexes();
 
   cacheMetadata(footerView, footerOffset);
 }
@@ -468,6 +463,7 @@ bool TabletReader::initFromCache(const Options& options) {
   initClusterIndex();
   initChunkStats();
   initDenseIndexes();
+  initVectorIndexes();
   return true;
 }
 
@@ -775,7 +771,7 @@ void TabletReader::initSharedDictionaries(const Options& options) {
 std::vector<std::string> TabletReader::preloadSectionNames(
     const Options& options) const {
   std::vector<std::string> names;
-  names.reserve(options.preloadOptionalSections.size() + 3);
+  names.reserve(options.preloadOptionalSections.size() + 4);
   auto addName = [&names](std::string name) {
     if (std::find(names.begin(), names.end(), name) == names.end()) {
       names.emplace_back(std::move(name));
@@ -789,6 +785,7 @@ std::vector<std::string> TabletReader::preloadSectionNames(
   }
   addName(std::string{kPropertiesSection});
   addName(std::string{kDictionarySection});
+  addName(std::string{kVectorIndexSection});
   return names;
 }
 
@@ -850,17 +847,21 @@ struct LoadTask {
   std::vector<StreamTask> streamTasks;
 };
 
-class PreloadedStreamLoader : public StreamLoader {
+class IOBufStreamLoader : public StreamLoader {
  public:
-  explicit PreloadedStreamLoader(Vector<char>&& stream)
-      : stream_{std::move(stream)} {}
+  explicit IOBufStreamLoader(folly::IOBuf&& stream)
+      : stream_{std::move(stream)} {
+    // getStream() returns a single contiguous view (no-op for single-buffer
+    // reads).
+    stream_.coalesce();
+  }
 
   const std::string_view getStream() const override {
-    return {stream_.data(), stream_.size()};
+    return {reinterpret_cast<const char*>(stream_.data()), stream_.length()};
   }
 
  private:
-  const Vector<char> stream_;
+  folly::IOBuf stream_;
 };
 
 struct RegionHash {
@@ -1073,14 +1074,16 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
         iobufs.size(), uniqueRegions.size(), "Buffer size mismatch.");
     for (uint32_t i = 0; i < uniqueRegions.size(); ++i) {
       // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-      const auto size = iobufs[i].computeChainDataLength();
+      auto& iobuf = iobufs[i];
       const auto& streamIndices = regionToStreamIndices[uniqueRegions[i]];
-      for (uint32_t streamIndex : streamIndices) {
-        Vector<char> vector{pool_, size};
-        copyTo(iobufs[i], vector.data(), vector.size());
-        streams[streamIndex] =
-            std::make_unique<PreloadedStreamLoader>(std::move(vector));
+      // The last stream mapped to a region takes ownership of the IOBuf;
+      // any others share it via a reference-counted clone.
+      for (size_t j = 0; j + 1 < streamIndices.size(); ++j) {
+        streams[streamIndices[j]] =
+            std::make_unique<IOBufStreamLoader>(iobuf.cloneAsValue());
       }
+      streams[streamIndices.back()] =
+          std::make_unique<IOBufStreamLoader>(std::move(iobuf));
     }
   }
 
@@ -1262,6 +1265,39 @@ const index::IndexLookup* TabletReader::denseIndex(
     return nullptr;
   }
   return denseIndexRegistry_->findIndex(name, columns);
+}
+
+void TabletReader::initVectorIndexes() {
+  auto section = loadOptionalSection(std::string{kVectorIndexSection});
+  if (!section.has_value()) {
+    return;
+  }
+  NIMBLE_CHECK_NULL(
+      vectorIndexDirectory_, "Vector indexes already initialized");
+  vectorIndexDirectory_ = std::make_unique<index::VectorIndexDirectory>(
+      index::VectorIndexDirectory::create(
+          std::move(section.value()), indexOptions_));
+}
+
+bool TabletReader::hasVectorIndex(std::string_view columnName) const {
+  return vectorIndexDirectory_ != nullptr &&
+      vectorIndexDirectory_->contains(columnName);
+}
+
+std::shared_ptr<const index::VectorIndex> TabletReader::vectorIndex(
+    std::string_view columnName) const {
+  if (vectorIndexDirectory_ == nullptr ||
+      !vectorIndexDirectory_->contains(columnName)) {
+    return nullptr;
+  }
+
+  return vectorIndexCache_.getOrCreate(std::string{columnName});
+}
+
+std::shared_ptr<const index::VectorIndex> TabletReader::loadVectorIndex(
+    const std::string& columnName) const {
+  NIMBLE_CHECK_NOT_NULL(vectorIndexDirectory_);
+  return vectorIndexDirectory_->load(columnName);
 }
 
 void TabletReader::initDenseIndexes() {

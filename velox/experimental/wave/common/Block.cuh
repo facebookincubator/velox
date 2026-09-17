@@ -20,6 +20,7 @@
 #include <cub/block/block_reduce.cuh>
 #include <cub/block/block_scan.cuh>
 #include <cub/block/block_store.cuh>
+#include <cuda/std/functional>
 #include "velox/experimental/wave/common/CudaUtil.cuh"
 
 /// Utilities for  booleans and indices and thread blocks.
@@ -123,7 +124,7 @@ __device__ inline void blockSum(Getter getter, void* shmem, T* result) {
   auto* temp = reinterpret_cast<typename BlockReduceT::TempStorage*>(shmem);
   T data[1];
   data[0] = getter();
-  T aggregate = BlockReduceT(*temp).Reduce(data, cub::Sum());
+  T aggregate = BlockReduceT(*temp).Reduce(data, cuda::std::plus<>{});
 
   if (threadIdx.x == 0) {
     result[blockIdx.x] = aggregate;
@@ -222,7 +223,7 @@ void __device__ partitionRows(
   using Scan = cub::BlockScan<int32_t, kBlockSize>;
   constexpr int32_t kWarpThreads = 1 << CUB_LOG_WARP_THREADS(0);
   auto warp = threadIdx.x / kWarpThreads;
-  auto lane = cub::LaneId();
+  auto lane = LaneId();
   extern __shared__ __align__(16) char smem[];
   auto* counters = reinterpret_cast<uint32_t*>(
       numPartitions <= kBlockSize ? smem

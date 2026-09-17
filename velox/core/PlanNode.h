@@ -37,10 +37,16 @@ class PlanNodeVisitorContext;
 using PlanNodeId = std::string;
 
 /// Well-known transport identifiers for exchange between workers. A
-/// PartitionedOutputNode names the transport it sends its results over, and the
-/// runtime resolves the matching output buffer manager and operator from the
-/// registry. In-memory buffering is the default. Other applications may define
-/// additional identifiers without modifying this header.
+/// PartitionedOutputNode names the transport type it uses for sending. An
+/// ExchangeNode the transport type that it uses for receiving.
+/// BufferManager, ExchangeClient, PartitionedOutput operator and Exchange
+/// operator are transport dependent. They are instantiated at runtime, using
+/// the transport types from the plan nodes.
+/// Both ends of an exchange edge must name the same transport. Only the
+/// coordinator building the plan sees both fragments, it is responsible for
+/// generating consistent plan fragments across tasks and workers.
+/// In-memory buffering is the default. Other applications may define additional
+/// identifiers without modifying this header.
 struct TransportKind {
   /// In-memory output buffering (the default). How the buffered bytes are
   /// delivered is decided by the layer above -- read locally, fetched over
@@ -64,16 +70,6 @@ struct InsertTableHandle {
       const connector::ConnectorInsertTableHandlePtr&
           connectorInsertTableHandle,
       folly::F14FastSet<std::string> notNullColumns);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor. Prefer the overload above, which takes the NOT NULL
-  /// columns. Removed once all callers have migrated.
-  InsertTableHandle(
-      const std::string& connectorId,
-      const connector::ConnectorInsertTableHandlePtr&
-          connectorInsertTableHandle)
-      : InsertTableHandle(connectorId, connectorInsertTableHandle, {}) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   const std::string& connectorId() const {
     return connectorId_;
@@ -259,6 +255,13 @@ class PlanNode : public ISerializable {
   virtual bool supportsBarrier() const {
     return false;
   }
+
+  /// Classifies how an operator contributes to this plan node's input and
+  /// output totals when the node maps to multiple operators:
+  /// kBoth - counts for both input and output (default).
+  /// kInput - counts for the node's input only.
+  /// kOutput - counts for the node's output only.
+  enum class Boundary { kBoth, kInput, kOutput };
 
   /// Returns a set of leaf plan node IDs.
   std::unordered_set<core::PlanNodeId> leafPlanNodeIds() const;
@@ -2200,8 +2203,27 @@ using GroupIdNodePtr = std::shared_ptr<const GroupIdNode>;
 
 class ExchangeNode : public PlanNode {
  public:
+  ExchangeNode(
+      const PlanNodeId& id,
+      RowTypePtr type,
+      std::string serdeKind,
+      std::string transportKind)
+      : PlanNode(id),
+        outputType_(std::move(type)),
+        serdeKind_(std::move(serdeKind)),
+        transportKind_(std::move(transportKind)) {}
+
+  /// Backward-compatible constructor without an explicit transport; defaults
+  /// to the in-memory transport. Prefer the constructor with an explicit
+  /// transport. This default does not extend to Builder: Builder::build()
+  /// requires transportKind to be set explicitly, the same as it requires id,
+  /// outputType and serdeKind.
   ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind)
-      : PlanNode(id), outputType_(type), serdeKind_(std::move(serdeKind)) {}
+      : ExchangeNode(
+            id,
+            std::move(type),
+            std::move(serdeKind),
+            std::string{TransportKind::kInMemory}) {}
 
   class Builder {
    public:
@@ -2211,6 +2233,7 @@ class ExchangeNode : public PlanNode {
       id_ = other.id();
       outputType_ = other.outputType();
       serdeKind_ = other.serdeKind();
+      transportKind_ = other.transportKind();
     }
 
     Builder& id(PlanNodeId id) {
@@ -2228,21 +2251,32 @@ class ExchangeNode : public PlanNode {
       return *this;
     }
 
+    Builder& transportKind(std::string transportKind) {
+      transportKind_ = std::move(transportKind);
+      return *this;
+    }
+
     std::shared_ptr<ExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "ExchangeNode id is not set");
       VELOX_USER_CHECK(
           outputType_.has_value(), "ExchangeNode outputType is not set");
       VELOX_USER_CHECK(
           serdeKind_.has_value(), "ExchangeNode serdeKind is not set");
+      VELOX_USER_CHECK(
+          transportKind_.has_value(), "ExchangeNode transportKind is not set");
 
       return std::make_shared<ExchangeNode>(
-          id_.value(), outputType_.value(), serdeKind_.value());
+          id_.value(),
+          outputType_.value(),
+          serdeKind_.value(),
+          transportKind_.value());
     }
 
    private:
     std::optional<PlanNodeId> id_;
     std::optional<RowTypePtr> outputType_;
     std::optional<std::string> serdeKind_;
+    std::optional<std::string> transportKind_;
   };
 
   const RowTypePtr& outputType() const override {
@@ -2270,6 +2304,13 @@ class ExchangeNode : public PlanNode {
     return serdeKind_;
   }
 
+  /// Transport this node's input is received over; see TransportKind. The
+  /// runtime resolves the matching exchange client and exchange operator from
+  /// ExchangeTransportRegistry.
+  const std::string& transportKind() const {
+    return transportKind_;
+  }
+
   folly::dynamic serialize() const override;
 
   static PlanNodePtr create(const folly::dynamic& obj, void* context);
@@ -2279,6 +2320,7 @@ class ExchangeNode : public PlanNode {
 
   const RowTypePtr outputType_;
   const std::string serdeKind_;
+  const std::string transportKind_;
 };
 
 using ExchangeNodePtr = std::shared_ptr<const ExchangeNode>;
@@ -2290,7 +2332,27 @@ class MergeExchangeNode : public ExchangeNode {
       const RowTypePtr& type,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      std::string serdeKind);
+      std::string serdeKind,
+      std::string transportKind);
+
+  /// Backward-compatible constructor without an explicit transport; defaults
+  /// to the in-memory transport. Prefer the constructor above. This default
+  /// does not extend to Builder: Builder::build() requires transportKind to
+  /// be set explicitly, the same as it requires id, outputType and
+  /// serdeKind.
+  MergeExchangeNode(
+      const PlanNodeId& id,
+      const RowTypePtr& type,
+      const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
+      const std::vector<SortOrder>& sortingOrders,
+      std::string serdeKind)
+      : MergeExchangeNode(
+            id,
+            type,
+            sortingKeys,
+            sortingOrders,
+            std::move(serdeKind),
+            std::string{TransportKind::kInMemory}) {}
 
   class Builder {
    public:
@@ -2302,6 +2364,7 @@ class MergeExchangeNode : public ExchangeNode {
       sortingKeys_ = other.sortingKeys();
       sortingOrders_ = other.sortingOrders();
       serdeKind_ = other.serdeKind();
+      transportKind_ = other.transportKind();
     }
 
     Builder& id(PlanNodeId id) {
@@ -2329,6 +2392,11 @@ class MergeExchangeNode : public ExchangeNode {
       return *this;
     }
 
+    Builder& transportKind(std::string transportKind) {
+      transportKind_ = std::move(transportKind);
+      return *this;
+    }
+
     std::shared_ptr<MergeExchangeNode> build() const {
       VELOX_USER_CHECK(id_.has_value(), "MergeExchangeNode id is not set");
       VELOX_USER_CHECK(
@@ -2340,13 +2408,17 @@ class MergeExchangeNode : public ExchangeNode {
           "MergeExchangeNode sortingOrders is not set");
       VELOX_USER_CHECK(
           serdeKind_.has_value(), "MergeExchangeNode serdeKind is not set");
+      VELOX_USER_CHECK(
+          transportKind_.has_value(),
+          "MergeExchangeNode transportKind is not set");
 
       return std::make_shared<MergeExchangeNode>(
           id_.value(),
           outputType_.value(),
           sortingKeys_.value(),
           sortingOrders_.value(),
-          serdeKind_.value());
+          serdeKind_.value(),
+          transportKind_.value());
     }
 
    private:
@@ -2355,6 +2427,7 @@ class MergeExchangeNode : public ExchangeNode {
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
     std::optional<std::string> serdeKind_;
+    std::optional<std::string> transportKind_;
   };
 
   const std::vector<FieldAccessTypedExprPtr>& sortingKeys() const {
@@ -4883,7 +4956,9 @@ class UnnestNode : public PlanNode {
   /// or MAP.
   /// @param unnestNames Names to use for unnested outputs: one name for each
   /// array (element); two names for each map (key and value). The output
-  /// names must appear in the same order as unnestVariables.
+  /// names must appear in the same order as unnestVariables. A std::nullopt
+  /// entry prunes the corresponding output column (not emitted, not
+  /// materialized).
   /// @param ordinalityName Optional name for the ordinality columns. If not
   /// present, ordinality column is not produced.
   /// @param markerName Optional name for column which indicates whether an
@@ -4914,29 +4989,6 @@ class UnnestNode : public PlanNode {
       std::optional<std::string> markerName,
       std::optional<bool> splitOutput,
       const PlanNodePtr& source);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Deprecated. Use the std::vector<std::optional<std::string>> overload.
-  UnnestNode(
-      const PlanNodeId& id,
-      std::vector<FieldAccessTypedExprPtr> replicateVariables,
-      std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
-      std::optional<std::string> ordinalityName,
-      std::optional<std::string> markerName,
-      const PlanNodePtr& source)
-      : UnnestNode(
-            id,
-            std::move(replicateVariables),
-            std::move(unnestVariables),
-            std::vector<std::optional<std::string>>(
-                unnestNames.begin(),
-                unnestNames.end()),
-            std::move(ordinalityName),
-            std::move(markerName),
-            std::nullopt,
-            source) {}
-#endif
 
   class Builder {
    public:

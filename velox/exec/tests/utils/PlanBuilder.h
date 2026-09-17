@@ -737,8 +737,13 @@ class PlanBuilder {
   /// splits.
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
-  /// @param serdekind The kind of seralized data format.
-  PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
+  /// @param serdeKind The kind of seralized data format.
+  /// @param transportKind The transport the data is received over; see
+  /// core::TransportKind.
+  PlanBuilder& exchange(
+      const RowTypePtr& outputType,
+      std::string serdeKind,
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
@@ -751,7 +756,8 @@ class PlanBuilder {
   PlanBuilder& mergeExchange(
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
-      std::string serdekind);
+      std::string serdeKind,
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Add a ProjectNode using specified SQL expressions.
   ///
@@ -1547,6 +1553,16 @@ class PlanBuilder {
   PlanBuilder& unnest(
       const std::vector<std::string>& replicateColumns,
       const std::vector<std::string>& unnestColumns,
+      const std::optional<std::string>& ordinalColumn = std::nullopt,
+      const std::optional<std::string>& markerName = std::nullopt);
+
+  /// Same as above, but with caller-provided unnest output names: one per array
+  /// column, two per map column (key then value), in the same order as
+  /// 'unnestColumns'. A std::nullopt name prunes that output column.
+  PlanBuilder& unnest(
+      const std::vector<std::string>& replicateColumns,
+      const std::vector<std::string>& unnestColumns,
+      const std::vector<std::optional<std::string>>& unnestNames,
       const std::optional<std::string>& ordinalColumn = std::nullopt,
       const std::optional<std::string>& markerName = std::nullopt);
 

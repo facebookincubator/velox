@@ -23,7 +23,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/tablet/FileLayout.h"
+#include "velox/dwio/nimble/tablet/Postscript.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
 namespace facebook::nimble {
@@ -44,10 +44,9 @@ TabletWriter::TabletWriter(
       pool_(&pool),
       options_(std::move(options)),
       checksum_{ChecksumFactory::create(options_.checksumType)},
-      // TODO: keeps the chunkIndex name for now; rename to the chunkStats
-      // naming once per-chunk null/min/max stats are fully rolled out.
       chunkStatsWriter_{
-          options_.enableChunkIndex ? std::make_unique<ChunkStatsWriter>(
+          options_.enableChunkStats ? ChunkStatsWriter::create(
+                                          options_.chunkStatsVersion,
                                           pool,
                                           options_.chunkStatsMinAvgChunks)
                                     : nullptr} {}

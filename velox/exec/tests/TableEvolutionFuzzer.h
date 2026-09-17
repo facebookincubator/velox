@@ -24,8 +24,10 @@
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
@@ -38,6 +40,198 @@ namespace facebook::velox::exec::test {
 
 class TableEvolutionFuzzer {
  public:
+  /// An input file read by one side of a scan comparison.
+  struct InputFile {
+    std::string path;
+    dwio::common::FileFormat format;
+  };
+
+  /// Aggregated metrics observed from one side of scan comparisons.
+  struct ScanPlanCoverage {
+    int64_t numQueries{0};
+    int64_t numSplits{0};
+    uint64_t rawInputPositions{0};
+    uint64_t rawInputBytes{0};
+    uint64_t outputPositions{0};
+    uint64_t outputBytes{0};
+
+    int64_t skippedSplits{0};
+    int64_t skippedSplitBytes{0};
+    int64_t skippedStrides{0};
+    int64_t processedStrides{0};
+
+    int64_t numStripeLoads{0};
+    int64_t numIndexFilterConversions{0};
+    int64_t numStringDictionaryEncodingPreserved{0};
+    int64_t numStringDictionaryEncodingAbandoned{0};
+    int64_t numQueriesWithValueHook{0};
+    uint64_t numValuesLoadedToValueHook{0};
+    int64_t numQueriesWithRemainingFilterEvaluation{0};
+    int64_t totalRemainingFilterCpuNanos{0};
+    int64_t totalRemainingFilterWallNanos{0};
+    int64_t numQueriesWithLazyIo{0};
+    int64_t dataSourceLazyInputBytes{0};
+    int64_t dataSourceLazyCpuNanos{0};
+    int64_t dataSourceLazyWallNanos{0};
+
+    int64_t storageReadBytes{0};
+    int64_t ramReadBytes{0};
+    int64_t metadataStorageReadBytes{0};
+    int64_t prefetchBytes{0};
+    int64_t overreadBytes{0};
+  };
+
+  /// Correlated coverage facts from one completed query comparison.
+  struct QueryCoverage {
+    std::vector<InputFile> pushdownFiles;
+    std::vector<InputFile> referenceFiles;
+    ScanPlanCoverage pushdown;
+    ScanPlanCoverage reference;
+    bool hasSubfieldFilters{false};
+    bool hasRemainingFilter{false};
+    bool hasFilterOnlyColumns{false};
+    bool aggregationRequested{false};
+    std::vector<std::string> filterTypes;
+    std::vector<std::string> subfieldFilterTypes;
+    std::vector<std::string> remainingFilterTypes;
+    std::vector<std::string> filterKinds;
+    /// Lists types for null-accepting filters whose input contains nulls.
+    std::vector<std::string> nullAcceptingSubfieldFilterTypes;
+    std::vector<std::string> groupingKeyTypes;
+    std::vector<std::string> aggregateTypes;
+    std::vector<std::string> aggregationFunctions;
+    std::vector<std::string> projectedTypes;
+    /// One entry per selected flat-map-as-struct column.
+    std::vector<std::string> flatmapAsStructKeyTypes;
+    std::vector<std::string> flatmapAsStructValueTypes;
+    /// One entry per eligible flat-map writer column.
+    std::vector<std::string> flatmapEligibleKeyTypes;
+    std::vector<std::string> flatmapEligibleValueTypes;
+    /// One entry per bucket column in the generated table.
+    std::vector<std::string> bucketColumnTypes;
+    bool flatmapEligible{false};
+    /// Counts setup-invariant configuration once per generated table.
+    bool countConfigCoverage{false};
+    bool bucketed{false};
+    bool bucketSelected{false};
+    int64_t numFlatmapEligibleColumns{0};
+    int64_t numBucketColumns{0};
+    int32_t bucketCount{0};
+    int64_t numSubfieldFilters{0};
+    int64_t numFilterOnlyColumns{0};
+    uint64_t rowsReducedByPushdown{0};
+    /// Identifies the failed phase; empty for successful queries.
+    std::string failurePhase;
+    bool executionSucceeded{false};
+    bool verificationPassed{false};
+  };
+
+  /// Generated table and reader configuration coverage.
+  struct ConfigCoverage {
+    int64_t numFlatmapEligible{0};
+    int64_t numFlatmapEligibleColumns{0};
+    int64_t numBucketed{0};
+    int64_t numBucketSelected{0};
+    std::map<std::string, int64_t> flatmapEligibleByKeyType;
+    std::map<std::string, int64_t> flatmapEligibleByValueType;
+    std::map<std::string, int64_t> bucketColumnsByType;
+    std::map<int64_t, int64_t> bucketedByColumnCount;
+    /// Maps bucket-column counts to setup counts keyed by ordered type
+    /// signature.
+    std::map<int64_t, std::map<std::string, int64_t>>
+        bucketColumnTypeSignaturesByCount;
+    std::map<int32_t, int64_t> bucketSelectedByBucketCount;
+    int64_t numTypeTransitions{0};
+    int64_t numAddedFields{0};
+    std::map<std::string, int64_t> schemaEvolutionByType;
+    std::map<std::string, int64_t> schemaEvolutionByPosition;
+  };
+
+  /// Tracks query counts for one generated type, filter kind, or function.
+  struct QueryDimensionCoverage {
+    int64_t numRequested{0};
+    int64_t numExecuted{0};
+    int64_t numVerified{0};
+  };
+
+  /// Tracks filter query shapes and query-level runtime effects.
+  struct FilterCoverage {
+    int64_t numRequested{0};
+    int64_t numExecuted{0};
+    int64_t numVerified{0};
+    int64_t numActivated{0};
+    int64_t numEffective{0};
+    int64_t numSubfieldRequested{0};
+    int64_t numRemainingRequested{0};
+    int64_t numSubfieldAndRemainingRequested{0};
+    int64_t numRemainingFilterEvaluated{0};
+    int64_t numFilterOnly{0};
+    int64_t numNullAcceptingSubfieldOnNullableInput{0};
+    int64_t numSubfieldFilters{0};
+    int64_t numFilterOnlyColumns{0};
+    int64_t numQueriesWithSplitPruning{0};
+    int64_t numQueriesWithStridePruning{0};
+    int64_t numQueriesWithRowReduction{0};
+    uint64_t numRowsReduced{0};
+    std::map<std::string, QueryDimensionCoverage> byType;
+    std::map<std::string, QueryDimensionCoverage> subfieldByType;
+    std::map<std::string, QueryDimensionCoverage> remainingByType;
+    std::map<std::string, QueryDimensionCoverage> byKind;
+  };
+
+  /// Tracks aggregation requests and query-level ValueHook activation.
+  struct AggregationCoverage {
+    int64_t numRequested{0};
+    int64_t numExecuted{0};
+    int64_t numPushdownPlanActivated{0};
+    int64_t numReferencePlanActivated{0};
+    int64_t numDifferentiallyVerified{0};
+    uint64_t numPushdownValuesLoaded{0};
+    uint64_t numReferenceValuesLoaded{0};
+    std::map<std::string, QueryDimensionCoverage> groupingKeyTypes;
+    std::map<std::string, QueryDimensionCoverage> aggregateTypes;
+    std::map<std::string, QueryDimensionCoverage> functions;
+  };
+
+  /// Tracks selected flat-map-as-struct read shapes.
+  struct FlatMapAsStructCoverage {
+    int64_t numSelected{0};
+    int64_t numExecuted{0};
+    int64_t numVerified{0};
+    int64_t numColumns{0};
+    std::map<std::string, int64_t> columnsByKeyType;
+    std::map<std::string, int64_t> columnsByValueType;
+  };
+
+  /// Tracks generated query semantics separately from file configuration.
+  struct QueryShapeCoverage {
+    FilterCoverage filters;
+    AggregationCoverage aggregations;
+    FlatMapAsStructCoverage flatmapAsStruct;
+    std::map<std::string, int64_t> projectedByType;
+  };
+
+  /// Aggregates correlated query coverage across run() and runOnInputFile().
+  struct CoverageAccumulator {
+    void add(const QueryCoverage& query);
+
+    /// Records recursive type changes between two generated schemas.
+    void addSchemaEvolution(
+        const RowTypePtr& previous,
+        const RowTypePtr& current);
+
+    int64_t numQueriesAttempted{0};
+    int64_t numQueriesCompleted{0};
+    int64_t numExecutionFailures{0};
+    int64_t numVerificationsPassed{0};
+    int64_t numVerificationsFailed{0};
+    ConfigCoverage configs;
+    QueryShapeCoverage queryShapes;
+    std::map<std::string, int64_t> failuresByPhase;
+    ScanPlanCoverage pushdown;
+    ScanPlanCoverage reference;
+  };
+
   struct Config {
     int columnCount;
     int evolutionCount;
@@ -67,6 +261,11 @@ class TableEvolutionFuzzer {
     /// Probability that each fuzzed element is NULL. Default 0 (no nulls).
     /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
     double nullRatio = 0;
+
+    /// Observes one attempted query while its correlated file, plan, feature,
+    /// execution, and verification details are available. Called before an
+    /// execution or verification failure is rethrown.
+    std::function<void(const QueryCoverage&)> queryCoverageObserver;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -129,13 +328,6 @@ class TableEvolutionFuzzer {
 
   void run();
 
-  /// An already written file to run query shapes against, in place of one this
-  /// fuzzer generates and writes.
-  struct InputFile {
-    std::string path;
-    dwio::common::FileFormat format;
-  };
-
   /// Runs the same query shapes as run(), but against 'inputFile'.
   ///
   /// The schema comes from the file, so there is nothing to evolve and no
@@ -149,6 +341,13 @@ class TableEvolutionFuzzer {
   /// and relies on schema evolution to add them, which a fixed file schema
   /// cannot accommodate.
   void runOnInputFile(const InputFile& inputFile);
+
+  const CoverageAccumulator& coverageStats() const {
+    return coverageStats_;
+  }
+
+  /// Logs the current cumulative dimension and per-plan coverage summaries.
+  void logCoverageSummary() const;
 
   virtual ~TableEvolutionFuzzer() = default;
 
@@ -173,9 +372,13 @@ class TableEvolutionFuzzer {
 
   std::string makeNewName();
 
-  TypePtr makeNewType(int maxDepth);
+  /// When 'allowTimestamp' is false, TIMESTAMP is left out of the generated
+  /// type, at any nesting depth. Used for bucket columns; see
+  /// makeInitialSchema().
+  TypePtr makeNewType(int maxDepth, bool allowTimestamp = true);
 
   RowTypePtr makeInitialSchema(
+      const std::vector<column_index_t>& bucketColumnIndices = {},
       const std::vector<std::string>& additionalColumnNames = {},
       const std::vector<TypePtr>& additionalColumnTypes = {});
 
@@ -289,11 +492,15 @@ class TableEvolutionFuzzer {
       const folly::F14FastMap<int, folly::F14FastSet<std::string>>&
           globalMapColumnKeys,
       const std::vector<int>& globallyConsistentColumnIndexVector,
+      bool countConfigCoverage,
       bool shouldGenerateRemainingFilters,
       const fuzzer::ExpressionFuzzer::FuzzedExpressionData&
           generatedRemainingFilters,
       const std::unordered_map<std::string, std::string>& columnNameMapping,
       folly::Executor& executor);
+
+  /// Logs cumulative coverage once the configured reporting interval elapses.
+  void maybeLogCoverageSummary();
 
   /// Opens 'inputFile' far enough to read its schema.
   RowTypePtr readInputFileSchema(const InputFile& inputFile) const;
@@ -329,6 +536,9 @@ class TableEvolutionFuzzer {
       std::unordered_map<std::string, std::string>,
       std::unordered_map<std::string, std::string>>
       readSessionProperties_;
+  CoverageAccumulator coverageStats_;
+  std::chrono::steady_clock::time_point lastCoverageLogTime_{
+      std::chrono::steady_clock::now()};
   int64_t sequenceNumber_ = 0;
 };
 

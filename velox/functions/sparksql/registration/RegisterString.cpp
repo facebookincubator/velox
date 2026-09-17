@@ -95,8 +95,10 @@ void registerStringFunctions(const std::string& prefix) {
       {prefix + "contains"});
   registerFunction<LocateFunction, int32_t, Varchar, Varchar, int32_t>(
       {prefix + "locate"});
-  registerFunction<TrimSpaceFunction, Varchar, Varchar>({prefix + "trim"});
-  registerFunction<TrimFunction, Varchar, Varchar, Varchar>({prefix + "trim"});
+  registerFunction<TrimSpaceFunction, Varchar, Varchar>(
+      {prefix + "trim", prefix + "btrim"});
+  registerFunction<TrimFunction, Varchar, Varchar, Varchar>(
+      {prefix + "trim", prefix + "btrim"});
   registerFunction<LTrimSpaceFunction, Varchar, Varchar>({prefix + "ltrim"});
   registerFunction<LTrimFunction, Varchar, Varchar, Varchar>(
       {prefix + "ltrim"});

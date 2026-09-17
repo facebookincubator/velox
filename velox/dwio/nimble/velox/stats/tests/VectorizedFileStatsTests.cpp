@@ -508,6 +508,44 @@ TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripFlatRow) {
   expectStringStatisticsEqual(stringStat, *actualStringStat);
 }
 
+TEST_F(VectorizedFileStatsTests, stripeStatsRoundTripFlatRow) {
+  auto schema = velox::ROW({{"id", velox::BIGINT()}});
+  auto nimbleType = convertToNimbleType(*schema);
+
+  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> stripeStats;
+  auto& firstStripe = stripeStats.emplace_back();
+  firstStripe.push_back(std::make_unique<ColumnStatistics>(4, 0, 32, 16));
+  firstStripe.push_back(
+      std::make_unique<IntegralStatistics>(4, 0, 32, 16, 0, 3));
+  auto& secondStripe = stripeStats.emplace_back();
+  secondStripe.push_back(std::make_unique<ColumnStatistics>(4, 0, 32, 16));
+  secondStripe.push_back(
+      std::make_unique<IntegralStatistics>(4, 0, 32, 16, 100, 103));
+
+  VectorizedStripeStats vectorizedStripeStats(stripeStats, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto serialized = vectorizedStripeStats.serialize(buffer);
+  ASSERT_FALSE(serialized.empty());
+
+  auto deserialized =
+      VectorizedStripeStats::deserialize(serialized, *leafPool_);
+  const auto& roundTrippedStats =
+      deserialized->toStripeColumnStatistics(schema, nimbleType);
+  ASSERT_EQ(roundTrippedStats.size(), 2);
+  ASSERT_EQ(roundTrippedStats[0].size(), 2);
+  ASSERT_EQ(roundTrippedStats[1].size(), 2);
+
+  auto* firstStripeIdStats = roundTrippedStats[0][1]->as<IntegralStatistics>();
+  ASSERT_NE(firstStripeIdStats, nullptr);
+  EXPECT_EQ(firstStripeIdStats->getMin(), 0);
+  EXPECT_EQ(firstStripeIdStats->getMax(), 3);
+
+  auto* secondStripeIdStats = roundTrippedStats[1][1]->as<IntegralStatistics>();
+  ASSERT_NE(secondStripeIdStats, nullptr);
+  EXPECT_EQ(secondStripeIdStats->getMin(), 100);
+  EXPECT_EQ(secondStripeIdStats->getMax(), 103);
+}
+
 TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripNestedRow) {
   // Create a nested row schema
   auto schema = velox::ROW(

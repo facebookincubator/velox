@@ -15,9 +15,31 @@
  */
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/ConvertTimezone.h"
 #include "velox/functions/sparksql/DateTimeFunctions.h"
+#include "velox/functions/sparksql/MakeTimestamp.h"
 
 namespace facebook::velox::functions::sparksql {
+
+namespace {
+
+template <typename T>
+using MakeTimestampWithTimestamp =
+    MakeTimestampFunction<T, Timestamp, /*kTry=*/false>;
+
+template <typename T>
+using TryMakeTimestampWithTimestamp =
+    MakeTimestampFunction<T, Timestamp, /*kTry=*/true>;
+
+template <typename T>
+using MakeTimestampWithTimestampUtc =
+    MakeTimestampFunction<T, TimestampUtc, /*kTry=*/false>;
+
+template <typename T>
+using TryMakeTimestampWithTimestampUtc =
+    MakeTimestampFunction<T, TimestampUtc, /*kTry=*/true>;
+
+} // namespace
 
 void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<YearFunction, int32_t, Timestamp>({prefix + "year"});
@@ -29,6 +51,17 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "to_utc_timestamp"});
   registerFunction<FromUtcTimestampFunction, Timestamp, Timestamp, Varchar>(
       {prefix + "from_utc_timestamp"});
+  registerFunction<
+      ConvertTimezoneFunction,
+      TimestampUtc,
+      Varchar,
+      TimestampUtc>({prefix + "convert_timezone"});
+  registerFunction<
+      ConvertTimezoneFunction,
+      TimestampUtc,
+      Varchar,
+      Varchar,
+      TimestampUtc>({prefix + "convert_timezone"});
   registerFunction<UnixDateFunction, int32_t, Date>({prefix + "unix_date"});
   registerFunction<UnixSecondsFunction, int64_t, Timestamp>(
       {prefix + "unix_seconds"});
@@ -105,7 +138,73 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t, int32_t>(
       {prefix + "make_ym_interval"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_make_timestamp, prefix + "make_timestamp");
+  {
+    // Seconds argument is decimal(precision, 6); precision is left free
+    // (any short-decimal precision is accepted), scale is pinned to 6.
+    std::vector<exec::SignatureVariable> secondsConstraints = {
+        exec::SignatureVariable(
+            S1::name(), "6", exec::ParameterType::kIntegerParameter),
+    };
+    registerFunction<
+        MakeTimestampWithTimestamp,
+        Timestamp,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>({prefix + "make_timestamp"}, secondsConstraints);
+    registerFunction<
+        MakeTimestampWithTimestamp,
+        Timestamp,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>,
+        Varchar>({prefix + "make_timestamp"}, secondsConstraints);
+    registerFunction<
+        TryMakeTimestampWithTimestamp,
+        Timestamp,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>(
+        {prefix + "try_make_timestamp"}, secondsConstraints);
+    registerFunction<
+        TryMakeTimestampWithTimestamp,
+        Timestamp,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>,
+        Varchar>({prefix + "try_make_timestamp"}, secondsConstraints);
+    registerFunction<
+        MakeTimestampWithTimestampUtc,
+        TimestampUtc,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>(
+        {prefix + "make_timestamp_ntz"}, secondsConstraints);
+    registerFunction<
+        TryMakeTimestampWithTimestampUtc,
+        TimestampUtc,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        int32_t,
+        ShortDecimal<P1, S1>>(
+        {prefix + "try_make_timestamp_ntz"}, secondsConstraints);
+  }
   registerFunction<TimestampToMicrosFunction, int64_t, Timestamp>(
       {prefix + "unix_micros"});
   registerUnaryIntegralWithTReturn<MicrosToTimestampFunction, Timestamp>(

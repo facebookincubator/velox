@@ -23,25 +23,27 @@ using namespace ::testing;
 
 namespace facebook::velox::common {
 
-TEST(RangeTests, Add) {
+TEST(RangeTests, add) {
   Ranges ranges;
   VELOX_ASSERT_THROW(ranges.add(2, 1), "");
   ranges.add(2, 2);
   ranges.add(1, 3);
-  ASSERT_THAT(ranges.ranges_, ElementsAre(std::tuple<size_t, size_t>{1, 3}));
+  ASSERT_THAT(
+      ranges.getRanges(), ElementsAre(std::tuple<size_t, size_t>{1, 3}));
   ASSERT_EQ(ranges.size(), 2);
   ranges.add(3, 5);
-  ASSERT_THAT(ranges.ranges_, ElementsAre(std::tuple<size_t, size_t>{1, 5}));
+  ASSERT_THAT(
+      ranges.getRanges(), ElementsAre(std::tuple<size_t, size_t>{1, 5}));
   ASSERT_EQ(ranges.size(), 4);
   ranges.add(6, 9);
   ASSERT_THAT(
-      ranges.ranges_,
+      ranges.getRanges(),
       ElementsAre(
           std::tuple<size_t, size_t>{1, 5}, std::tuple<size_t, size_t>{6, 9}));
   ASSERT_EQ(ranges.size(), 7);
   ranges.add(8, 10);
   ASSERT_THAT(
-      ranges.ranges_,
+      ranges.getRanges(),
       ElementsAre(
           std::tuple<size_t, size_t>{1, 5},
           std::tuple<size_t, size_t>{6, 9},
@@ -62,16 +64,16 @@ TEST(RangeTests, forEach) {
   ASSERT_EQ(total, 24);
 }
 
-TEST(RangeTests, Filter) {
+TEST(RangeTests, filter) {
   auto r = Ranges::of(1, 10);
   auto r2 = r.filter([](auto /* unused */) { return true; });
   ASSERT_EQ(r2.size(), 9);
-  ASSERT_THAT(r2.ranges_, ElementsAre(std::tuple<size_t, size_t>{1, 10}));
+  ASSERT_THAT(r2.getRanges(), ElementsAre(std::tuple<size_t, size_t>{1, 10}));
 
   auto r3 = r.filter([](auto i) { return i % 3 != 0; });
   ASSERT_EQ(r3.size(), 6);
   ASSERT_THAT(
-      r3.ranges_,
+      r3.getRanges(),
       ElementsAre(
           std::tuple<size_t, size_t>{1, 3},
           std::tuple<size_t, size_t>{4, 6},
@@ -83,7 +85,7 @@ TEST(RangeTests, Filter) {
   auto r5 = r4.filter([](auto i) { return i != 3 && i != 8 && i != 25; });
   ASSERT_EQ(r5.size(), 16);
   ASSERT_THAT(
-      r5.ranges_,
+      r5.getRanges(),
       ElementsAre(
           std::tuple<size_t, size_t>{1, 3},
           std::tuple<size_t, size_t>{4, 8},

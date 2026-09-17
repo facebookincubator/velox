@@ -109,6 +109,15 @@ target "centos9" {
   cache-from = cache-from-arch("centos9", "${arch}")
 }
 
+# Debug-dependency twin of centos9, for jobs that build Velox Debug. It gets
+# its own cache keys because DEPS_BUILD_TYPE invalidates the base-build stage,
+# so it shares no layers with centos9.
+target "centos9-debug-amd64" {
+  inherits   = ["base","centos-cpp-debug"]
+  cache-to   = cache-to-arch("centos9-debug", "amd64")
+  cache-from = cache-from-arch("centos9-debug", "amd64")
+}
+
 target "ubuntu-amd64" {
   inherits   = ["base","ubuntu-cpp"]
   cache-to   = cache-to-arch("ubuntu", "amd64")

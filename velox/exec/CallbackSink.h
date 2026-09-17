@@ -35,20 +35,29 @@ class CallbackSink : public Operator {
   /// plan node of its own. When the sink belongs to a node (e.g. it feeds that
   /// node's merge source), pass the node's id so the sink's runtime stats
   /// aggregate into that node and query tracing can associate it.
+  /// @param planNodeBoundary The sink's contribution to its plan node's
+  /// input/output totals. A merge- or join-source sink is kInput.
   CallbackSink(
       int32_t operatorId,
       DriverCtx* driverCtx,
       Consumer consumeCb,
       std::function<BlockingReason(ContinueFuture*)> startedCb = nullptr,
-      const std::string& planNodeId = "N/A")
+      const std::string& planNodeId = "N/A",
+      core::PlanNode::Boundary planNodeBoundary =
+          core::PlanNode::Boundary::kBoth)
       : Operator(
             driverCtx,
             nullptr,
             operatorId,
             planNodeId,
             OperatorType::kCallbackSink),
+        planNodeBoundary_{planNodeBoundary},
         startedCb_{std::move(startedCb)},
         consumeCb_{std::move(consumeCb)} {}
+
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return planNodeBoundary_;
+  }
 
   void addInput(RowVectorPtr input) override;
 
@@ -75,6 +84,7 @@ class CallbackSink : public Operator {
 
   ContinueFuture future_;
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
+  const core::PlanNode::Boundary planNodeBoundary_;
   std::function<BlockingReason(ContinueFuture*)> startedCb_;
   Consumer consumeCb_;
 };

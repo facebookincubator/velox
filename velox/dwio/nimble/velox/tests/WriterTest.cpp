@@ -18,8 +18,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <condition_variable>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -599,6 +601,13 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
     EXPECT_FALSE(encodingOptions.allowNestedAlpSelection);
+
+    // The delta pre-transform ships disabled. Assert the flag's own default
+    // too, so lowering the bar to enabling it fails here rather than silently
+    // turning on an encoding whose streams reject skip() and
+    // readWithVisitor().
+    EXPECT_FALSE(FLAGS_nimble_subintsplit_delta_pretransform);
+    EXPECT_FALSE(encodingOptions.subIntSplitDeltaPreTransform);
   }
 
   for (const auto useExactBits : {false, true}) {
@@ -618,6 +627,22 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
       EXPECT_EQ(
           encodingOptions.allowNestedAlpSelection, allowNestedAlpSelection);
     }
+  }
+}
+
+TEST_F(WriterTest, subIntSplitDeltaPreTransformFollowsItsFlag) {
+  // The SubIntSplit delta pre-transform has no WriterOptions field: the gflag
+  // is its only enablement channel, so the flag value is what must reach
+  // Encoding::Options.
+  for (const auto enabled : {false, true}) {
+    SCOPED_TRACE(fmt::format("enabled={}", enabled));
+    gflags::FlagSaver flagSaver;
+    FLAGS_nimble_subintsplit_delta_pretransform = enabled;
+
+    const nimble::WriterOptions options;
+
+    EXPECT_EQ(
+        options.buildEncodingOptions().subIntSplitDeltaPreTransform, enabled);
   }
 }
 
@@ -780,10 +805,14 @@ DEBUG_ONLY_TEST_F(WriterTest, encodingPoolsPassedToEncodeOptions) {
     uint32_t pooledEncodingBufferCount{0};
     std::set<const void*> observedScratchPools;
     std::set<const void*> observedEncodingBufferPools;
+    // Parallel encoding can invoke the callback concurrently.
+    std::mutex statsMutex;
+    std::condition_variable poolsObserved;
     SCOPED_TESTVALUE_SET(
         "facebook::nimble::Writer::encode",
         std::function<void(nimble::Encoding::Options*)>(
             [&](nimble::Encoding::Options* encodingOptions) {
+              std::unique_lock lock{statsMutex};
               ++encodeCount;
               if (encodingOptions->bufferPool != nullptr) {
                 ++pooledScratchEncodeCount;
@@ -794,6 +823,16 @@ DEBUG_ONLY_TEST_F(WriterTest, encodingPoolsPassedToEncodeOptions) {
                 observedEncodingBufferPools.insert(
                     encodingOptions->encodingBufferPool);
               }
+              poolsObserved.notify_all();
+              // Make the pool-count check deterministic. Without this wait,
+              // one encoding task may consume every stream before the other
+              // task is scheduled, especially on a single CPU.
+              poolsObserved.wait(lock, [&] {
+                return observedScratchPools.size() >=
+                    testCase.expectedScratchPoolCount &&
+                    observedEncodingBufferPools.size() >=
+                    testCase.expectedEncodingPoolCount;
+              });
             }));
 
     std::shared_ptr<folly::CPUThreadPoolExecutor> executor;
@@ -1045,6 +1084,99 @@ TEST_F(WriterTest, exceptionOnClose) {
   } catch (const std::runtime_error& e) {
     EXPECT_EQ(error, e.what());
   }
+}
+
+TEST_F(WriterTest, metadataProviderWrittenAtClose) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"col0"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  nimble::WriterOptions options;
+  // Drop the seeded defaults so this also covers a file whose only metadata
+  // arrives late, which the writer used to skip serializing altogether.
+  options.metadata.clear();
+  options.metadataProvider = [] {
+    return std::unordered_map<std::string, std::string>{{"key 1", "value 1"}};
+  };
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const std::map<std::string, std::string> expected{{"key 1", "value 1"}};
+  EXPECT_EQ(reader.metadata(), expected);
+}
+
+TEST_F(WriterTest, metadataProviderOverridesOptionsMetadata) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"col0"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  nimble::WriterOptions options;
+  options.metadata = {{"key 1", "value 1"}, {"key 2", "value 2"}};
+  options.metadataProvider = [] {
+    return std::unordered_map<std::string, std::string>{
+        {"key 2", "late value 2"}, {"key 3", "value 3"}};
+  };
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const std::map<std::string, std::string> expected{
+      {"key 1", "value 1"}, {"key 2", "late value 2"}, {"key 3", "value 3"}};
+  EXPECT_EQ(reader.metadata(), expected);
+}
+
+TEST_F(WriterTest, metadataProviderObservesEveryWrittenRow) {
+  // The whole point of the hook: the provider runs late enough to report a
+  // value that is only final once the caller has written its last row.
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"col0"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  uint32_t rowsWritten = 0;
+  uint32_t providerCalls = 0;
+
+  nimble::WriterOptions options;
+  options.metadata.clear();
+  options.metadataProvider = [&] {
+    ++providerCalls;
+    return std::unordered_map<std::string, std::string>{
+        {"rows", folly::to<std::string>(rowsWritten)}};
+  };
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(options));
+  for (int batch = 0; batch < 2; ++batch) {
+    writer.write(vector);
+    rowsWritten += vector->size();
+  }
+  writer.close();
+
+  EXPECT_EQ(providerCalls, 1);
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const std::map<std::string, std::string> expected{{"rows", "6"}};
+  EXPECT_EQ(reader.metadata(), expected);
 }
 
 TEST_F(WriterTest, emptyFileNoSchema) {
@@ -2323,6 +2455,55 @@ TEST_F(WriterTest, encodingLayout) {
   }
 }
 
+TEST_F(WriterTest, encodingLayoutAppliesToPredefinedFlatMapKeys) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"flatmap"},
+      {vectorMaker.mapVector<int32_t, int32_t>(
+          64,
+          [](auto) { return 1; },
+          [](auto, auto) { return 1; },
+          [](auto row, auto) { return row; },
+          [](auto) { return false; })});
+
+  std::string file;
+  nimble::Writer writer(
+      vector->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      {
+          .flatMapColumns = {{"flatmap", {"1"}}},
+          .encodingLayoutTree =
+              nimble::EncodingLayoutTree{
+                  nimble::Kind::Row,
+                  {},
+                  "",
+                  {{nimble::Kind::FlatMap,
+                    {},
+                    "flatmap",
+                    {{nimble::Kind::Scalar,
+                      {{nimble::EncodingLayoutTree::StreamIdentifiers::Scalar::
+                            ScalarStream,
+                        nimble::EncodingLayout{
+                            nimble::EncodingType::Trivial,
+                            {},
+                            nimble::CompressionType::Uncompressed}}},
+                      "1"}}}}},
+      });
+  writer.write(vector);
+  writer.close();
+
+  const auto layouts = captureFlatMapKeyChunkLayouts(
+      std::make_shared<velox::InMemoryReadFile>(file),
+      /*columnIndex=*/0,
+      /*key=*/"1",
+      /*expectedStripeCount=*/1);
+  ASSERT_FALSE(layouts.empty());
+  for (const auto& layout : layouts) {
+    EXPECT_EQ(layout.encodingType(), nimble::EncodingType::Trivial);
+  }
+}
+
 TEST_F(WriterTest, openZLCompressionNumericRoundTrip) {
   // E2E: force the OpenZL codec, write compressible numeric columns, and assert
   // (a) at least one numeric stream is actually OpenZL-compressed and (b) the
@@ -3468,6 +3649,50 @@ TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
       << "no chunk stats section should be written when the index is disabled";
 }
 
+TEST_F(WriterTest, canonicalChunkStatsWritesV2Section) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      vector->type(),
+      std::move(writeFile),
+      *rootPool_,
+      {
+          .enableChunkStats = true,
+          .chunkStatsVersion = nimble::ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+          .enableChunking = true,
+      });
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  EXPECT_FALSE(
+      tablet->hasOptionalSection(std::string(nimble::kChunkStatsSection)));
+  EXPECT_TRUE(
+      tablet->hasOptionalSection(std::string(nimble::kChunkStatsV2Section)));
+}
+
+TEST_F(WriterTest, conflictingChunkStatsVersionsFail) {
+  auto type = velox::ROW({{"c1", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          type,
+          std::move(writeFile),
+          *rootPool_,
+          {.enableChunkIndex = true,
+           .enableChunkStats = true,
+           .chunkStatsVersion = nimble::ChunkStatsVersion::kV2}),
+      "enableChunkIndex requests chunk stats V1, but enableChunkStats requests V2.");
+}
+
 TEST_F(WriterTest, chunkIndexRequiresChunking) {
   auto type = velox::ROW({{"c1", velox::INTEGER()}});
   std::string file;
@@ -3478,6 +3703,19 @@ TEST_F(WriterTest, chunkIndexRequiresChunking) {
           std::move(writeFile),
           *rootPool_,
           {.enableChunkIndex = true, .enableChunking = false}),
+      "Chunk stats require chunking to be enabled.");
+}
+
+TEST_F(WriterTest, chunkStatsRequiresChunking) {
+  auto type = velox::ROW({{"c1", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          type,
+          std::move(writeFile),
+          *rootPool_,
+          {.enableChunkStats = true, .enableChunking = false}),
       "Chunk stats require chunking to be enabled.");
 }
 
@@ -4852,6 +5090,73 @@ TEST_F(WriterTest, runtimeStatsPublishesEveryCounter) {
   // Column statistics have no RuntimeMetric form, so they are collected by
   // default but read through their own accessor rather than the map.
   EXPECT_FALSE(writer.columnStats().empty());
+}
+
+TEST_F(WriterTest, parallelEncodeOutputIndependentOfEncodeOrder) {
+  // Parallel encoding dispatches streams in size-ordered batches, so the order
+  // in which streams are encoded differs from their schema order and changes
+  // with the concurrency setting. Encoded output is keyed by each stream's own
+  // descriptor offset rather than by encode order, so every one of these must
+  // produce a byte-identical file. This is the invariant that makes reordering
+  // safe; if it ever stops holding, the reorder silently changes file layout
+  // rather than failing.
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  constexpr velox::vector_size_t kRows = 256;
+  // Deliberately uneven per-column sizes, so size order differs from schema
+  // order and the batches group differently at each concurrency.
+  auto vector = vectorMaker.rowVector(
+      {"wide", "seq", "lowCard", "constant", "dbl", "nullable"},
+      {vectorMaker.flatVector<velox::StringView>(
+           kRows,
+           [](auto row) {
+             thread_local std::string value;
+             value.assign(200 + (row % 50), static_cast<char>('a' + row % 26));
+             return velox::StringView(value);
+           }),
+       vectorMaker.flatVector<int64_t>(
+           kRows, [](auto row) { return static_cast<int64_t>(row); }),
+       vectorMaker.flatVector<int32_t>(
+           kRows, [](auto row) { return static_cast<int32_t>(row % 5); }),
+       vectorMaker.flatVector<int64_t>(kRows, [](auto) { return int64_t{7}; }),
+       vectorMaker.flatVector<double>(
+           kRows, [](auto row) { return static_cast<double>(row) * 1.5; }),
+       vectorMaker.flatVector<int64_t>(
+           kRows,
+           [](auto row) { return static_cast<int64_t>(row % 13); },
+           [](auto row) { return row % 3 == 0; })});
+  const auto type = velox::asRowType(vector->type());
+
+  auto writeWith = [&](uint32_t parallelism) {
+    std::shared_ptr<folly::CPUThreadPoolExecutor> executor;
+    nimble::WriterOptions options;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = []() {
+      return std::make_unique<nimble::LambdaFlushPolicy>(
+          /*flushLambda=*/[](auto&) { return false; },
+          /*chunkLambda=*/[](auto&) { return true; });
+    };
+    if (parallelism > 0) {
+      executor = std::make_shared<folly::CPUThreadPoolExecutor>(parallelism);
+      options.encodingExecutor = folly::getKeepAliveToken(*executor);
+      options.maxEncodeParallelism = parallelism;
+      options.minStreamsPerEncodingTask = 1;
+    }
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        type, std::move(writeFile), *rootPool_, std::move(options));
+    for (int batch = 0; batch < 4; ++batch) {
+      writer.write(vector);
+    }
+    writer.close();
+    return file;
+  };
+
+  const auto serial = writeWith(/*parallelism=*/0);
+  ASSERT_FALSE(serial.empty());
+  EXPECT_EQ(writeWith(/*parallelism=*/2), serial);
+  EXPECT_EQ(writeWith(/*parallelism=*/8), serial);
 }
 
 TEST_F(WriterTest, cachedEncodingLayoutAcrossChunks) {
