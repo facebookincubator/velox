@@ -58,7 +58,6 @@
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
-#include "velox/dwio/nimble/velox/RawSizeUtils.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
@@ -453,11 +452,26 @@ void validateEncodingLayoutTree(const EncodingLayoutTree& tree) {
   }
 }
 
+void normalizeChunkStatsOptions(WriterOptions& options) {
+  // Only the legacy alias requires conversion to canonical chunk stats options.
+  if (!options.enableChunkIndex) {
+    return;
+  }
+  NIMBLE_USER_CHECK(
+      !options.enableChunkStats ||
+          options.chunkStatsVersion == ChunkStatsVersion::kV1,
+      "enableChunkIndex requests chunk stats V1, but enableChunkStats requests V2.");
+  options.enableChunkIndex = false;
+  options.enableChunkStats = true;
+  options.chunkStatsVersion = ChunkStatsVersion::kV1;
+}
+
 WriterOptions storedWriterOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
     WriterOptions options) {
+  normalizeChunkStatsOptions(options);
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
@@ -1995,7 +2009,8 @@ Writer::Writer(
                    kMetadataCompressionThreshold),
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
-           .enableChunkIndex = context_->options().enableChunkIndex,
+           .enableChunkStats = context_->options().enableChunkStats,
+           .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
@@ -2033,7 +2048,7 @@ Writer::Writer(
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_USER_CHECK(
-      !context_->options().enableChunkIndex ||
+      !context_->options().enableChunkStats ||
           context_->options().enableChunking,
       "Chunk stats require chunking to be enabled.");
 
@@ -2128,27 +2143,6 @@ bool Writer::flushInputBuffers(bool finalize) {
 void Writer::writeBatch(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   const auto storedData = storedDataInput(input);
-  // When enableStatsConsistencyCheck is true, compute raw size using
-  // RawSizeUtils to verify consistency with column statistics.
-  // Otherwise, skip this computation as column statistics will provide
-  // the raw size.
-  // Skip entirely when stats collection is disabled — there is no
-  // writeColumnStats() call to consume this value.
-  if (context_->options().enableStatsCollection &&
-      context_->options().enableStatsConsistencyCheck) {
-    // Calculate raw size using schema information to correctly handle
-    // passthrough flatmaps.
-    RawSizeContext context;
-    const auto rawSize = nimble::getRawSizeFromVector(
-        storedData,
-        velox::common::Ranges::of(0, numRows),
-        context,
-        schema_.get(),
-        context_->flatMapNodeIds(),
-        context_->ignoreTopLevelNulls());
-    context_->updateFileRawSize(rawSize);
-  }
-
   {
     velox::CpuWallTimer ingestionTimer{context_->ingestionTiming()};
     rootWriter_->write(storedData, OrderedRanges::of(0, numRows));
@@ -2227,13 +2221,13 @@ void Writer::writeMetadata() {
 
 void Writer::writeColumnStats() {
   context_->finalizeFileStatsFromStripes();
-  // When enableStatsConsistencyCheck is true, verify that fileRawSize
-  // (accumulated via RawSizeUtils) matches the root column statistics.
-  if (context_->options().enableStatsConsistencyCheck) {
-    NIMBLE_CHECK_EQ(
-        context_->fileRawSize(),
-        context_->columnStats().front()->getLogicalSize(),
-        "Mismatched raw sizes!");
+  // Raw size now comes from the column statistics rather than a second pass
+  // over the input with RawSizeUtils. The consistency check that validated the
+  // two against each other has served its purpose and is gone, along with the
+  // duplicate computation it existed to justify.
+  if (!context_->columnStats().empty()) {
+    context_->updateFileRawSize(
+        context_->columnStats().front()->getLogicalSize());
   }
 
   if (context_->options().enableVectorizedStats) {

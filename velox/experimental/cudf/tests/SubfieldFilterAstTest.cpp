@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
@@ -45,6 +46,7 @@ class SubfieldFilterAstTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     facebook::velox::filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
