@@ -877,6 +877,75 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionary) {
   }
 }
 
+// Shared dictionary encoding is defined for strings as well as integers, but
+// the selective read dispatch is split by value kind and only the integer half
+// listed it. A string column therefore wrote a well-formed file that threw on
+// read. Every other shared dictionary test here uses int32 columns, and the
+// string cases in SharedDictionaryE2ETest read back through BatchReader rather
+// than the selective path, so neither side covered this on its own.
+//
+// Both string kinds are covered because the writer accepts VARCHAR and
+// VARBINARY alike, and file scope alongside stripe scope because they reach the
+// alphabet through different paths: a stripe auxiliary stream versus the file
+// dictionary catalog.
+TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
+  if (!this->stringDecoderZeroCopy()) {
+    GTEST_SKIP() << "Shared dictionary encoding requires non-legacy dispatch";
+  }
+
+  constexpr velox::vector_size_t kRowCount = 2'000;
+  const std::vector<std::string> alphabet{
+      "alpha", "bravo", "charlie", "delta", "echo"};
+
+  const std::vector<velox::TypePtr> valueTypes{
+      velox::VARCHAR(), velox::VARBINARY()};
+  for (const auto& valueType : valueTypes) {
+    for (const auto scope :
+         {SharedDictionaryScope::Stripe, SharedDictionaryScope::File}) {
+      for (const bool nullableData : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "type={}, scope={}, nullableData={}",
+                valueType->toString(),
+                scope,
+                nullableData));
+
+        velox::test::VectorMaker maker{pool()};
+        auto values = maker.flatVector<std::string>(
+            kRowCount,
+            [&](auto row) { return alphabet[row % alphabet.size()]; },
+            nullableData ? velox::test::VectorMaker::nullEvery(7) : nullptr,
+            valueType);
+        auto input = maker.rowVector({"c0"}, {values});
+
+        WriterOptions options;
+        options.maxStreamChunkRawSize = 512;
+        options.minStreamChunkRawSize = 1;
+        test::configureSharedDictionarySelectionPolicy(options);
+        SharedDictionaryConfig dictionary{.scope = scope};
+        if (scope != SharedDictionaryScope::Stripe) {
+          dictionary.dictionaryId = 17;
+        }
+        options.experimentalSharedDictionaryEncoding =
+            SharedDictionaryEncodingConfig::builder()
+                .addColumnDictionary("c0", std::move(dictionary))
+                .build();
+
+        const auto file = test::createNimbleFile(*rootPool(), input, options);
+        auto scanSpec = std::make_shared<common::ScanSpec>("root");
+        scanSpec->addAllChildFields(*input->type());
+        auto readers =
+            makeReaders(input, file, scanSpec, /*stringDecoderZeroCopy=*/true);
+        validate(
+            *input,
+            *readers.rowReader,
+            /*batchSize=*/127,
+            [](auto /*row*/) { return true; });
+      }
+    }
+  }
+}
+
 TEST_P(SelectiveNimbleReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
   const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr uint32_t kSeed{0x51A9D1C7};

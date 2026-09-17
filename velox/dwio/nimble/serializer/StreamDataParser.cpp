@@ -335,12 +335,8 @@ readTrailerStreamMetadata(const folly::IOBuf& input) {
 
 } // namespace detail
 
-StreamDataParser::StreamDataParser(
-    velox::memory::MemoryPool* pool,
-    const DeserializerOptions& options)
-    : options_{options},
-      pool_{pool},
-      strippedStreamBufferPool_{pool, /*maxCachedBuffers=*/1} {
+StreamDataParser::StreamDataParser(velox::memory::MemoryPool* pool)
+    : pool_{pool}, strippedStreamBufferPool_{pool, /*maxCachedBuffers=*/1} {
   NIMBLE_CHECK_NOT_NULL(pool_);
 }
 
@@ -355,7 +351,7 @@ Buffer& StreamDataParser::ensureStrippedStreamBuffer() {
 uint32_t StreamDataParser::initialize(std::string_view data) {
   pos_ = data.data();
   end_ = data.end();
-  auto header = readSerializationHeader(pos_, end_, options_.hasHeader);
+  auto header = readSerializationHeader(pos_, end_);
   version_ = header.version;
   requiresNullBarrier_ = header.flags.requiresNullBarrier;
   streamEncodingUsesVarintRowCount_ =

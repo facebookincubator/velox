@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
+#include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
@@ -91,15 +92,17 @@ struct WriterOptions {
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
 
-  /// When true, chunk-level position index is built for all streams,
-  /// enabling O(1) chunk-level seeking within stripes. Independent of
-  /// the cluster index (clusterIndexConfig). When clusterIndexConfig is set,
-  /// chunk index is always enabled regardless of this flag.
+  /// Legacy alias for enabling V1 chunk statistics. The writer consumes this
+  /// alias before passing the canonical chunk stats options to TabletWriter.
+  bool enableChunkIndex{false};
+
+  /// When true, chunk statistics are built for all streams.
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
-  // TODO: keeps the chunkIndex name for now; rename to the chunkStats naming
-  // once per-chunk null/min/max stats are fully rolled out.
-  bool enableChunkIndex{false};
+  bool enableChunkStats{false};
+
+  /// Selects the on-disk chunk statistics representation.
+  ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
 
   /// Skip writing chunk stats for a stripe group if the average number
   /// of chunks per stream is below this threshold. 0 disables chunk stats
@@ -414,13 +417,6 @@ struct WriterOptions {
   /// When true, string fields use per-field buffers instead of a shared buffer.
   /// This enables incremental memory reclamation during chunking.
   bool disableSharedStringBuffers{false};
-
-  /// When true, enables consistency check between fileRawSize (accumulated via
-  /// RawSizeUtils) and the root column statistics during file close.
-  /// This is used to validate that column statistics accurately track raw
-  /// sizes, with the goal of eventually replacing RawSizeUtils accumulation
-  /// with column statistics for non-deduplicated columns.
-  bool enableStatsConsistencyCheck{true};
 
   // Cache the encoding layout from the first encoding of each stream and
   // replay it on subsequent chunks/stripes, skipping the full encoding

@@ -24,12 +24,14 @@ namespace facebook::nimble {
 inline constexpr uint64_t kMaxVectorIndexSizeBytes{1ULL << 30};
 
 /// Distance metric for vector similarity search.
+/// For unit-normalized vectors, all metrics produce equivalent rankings:
+/// cosine equals dot product, and squared L2 equals 2 - 2 * cosine.
 enum class VectorDistanceMetric : uint8_t {
-  /// Squared Euclidean distance.
+  /// Ranks by squared Euclidean distance, including vector magnitude.
   kL2,
-  /// Cosine similarity over normalized vectors.
+  /// Ranks by direction after normalization, ignoring vector magnitude.
   kCosine,
-  /// Inner-product similarity over unnormalized vectors.
+  /// Ranks by inner product without normalization, including vector magnitude.
   kDotProduct,
 };
 

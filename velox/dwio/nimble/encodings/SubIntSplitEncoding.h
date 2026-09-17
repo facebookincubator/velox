@@ -133,6 +133,27 @@ class SubIntSplitEncoding
 
   std::vector<SectionInfo> sections_;
 
+  // Indices into sections_ that have to be decoded per chunk.
+  //
+  // A Constant section contributes the same bits to every value, so decoding it
+  // means materializing thousands of copies of one number and OR-ing them in a
+  // value at a time. Those sections are resolved once at construction into
+  // constantOr_ and dropped from the per-chunk loop. This is the common case
+  // rather than a corner one: the selector emits a Constant section for every
+  // constant high prefix or low suffix it trims.
+  std::vector<uint32_t> dynamicSections_;
+
+  // Combined contribution of every Constant section, pre-masked and
+  // pre-shifted, OR-ed into each output value by the first dynamic section.
+  physicalType constantOr_{0};
+
+  // Whether one dynamic section reproduces the value verbatim -- it spans the
+  // full width, starts at bit 0, and no constant section contributes. Then the
+  // mask, the shift and the OR are all identities, so materialize() can hand
+  // the caller's buffer straight to the section and skip the scratch round-trip
+  // and the combine pass.
+  bool directDecode_{false};
+
   // Persistent scratch buffer reused across materialize() calls. Sized to
   // kMaterializeChunkSize * sizeof(physicalType) bytes on first use.
   Vector<uint8_t> scratchBuf_;
@@ -154,6 +175,35 @@ class SubIntSplitEncoding
   // physical values before they are gathered/widened into the reader output.
   Vector<physicalType> decodeBuf_;
 
+  // Values the readWithVisitor slow path decoded ahead of the read cursor.
+  //
+  // That path asks for one value at a time, which otherwise costs a virtual
+  // materialize(1, ...) per section per value. Decoding a block at a time
+  // amortises the dispatch and lets the section kernels vectorise, at the cost
+  // of running the section cursors ahead of row_. The section cursors therefore
+  // sit at row_ + pendingAvailable(), and skip() and materialize() both consume
+  // this buffer before touching the sections.
+  Vector<physicalType> pendingBuf_;
+  uint32_t pendingOffset_{0};
+  uint32_t pendingCount_{0};
+
+  // Values decoded per refill by the slow path. Small enough that a visitor
+  // skipping most rows wastes little, large enough to amortise the dispatch.
+  static constexpr uint32_t kSlowPathBlock = 256;
+
+  uint32_t pendingAvailable() const noexcept {
+    return pendingCount_ - pendingOffset_;
+  }
+
+  // Decode the next block of values into pendingBuf_, clamped to the values the
+  // stream has left.
+  void refillPending();
+
+  // Combine every section for `count` values, starting at the current section
+  // cursors, into `output`. Does not touch row_, the pending buffer or the
+  // delta accumulator; `count` must not exceed kMaterializeChunkSize.
+  void decodeSections(uint32_t count, physicalType* output);
+
   // Return the storage byte width for a section of the given bit width.
   static constexpr uint8_t sectionStorageBytes(int bitWidth) noexcept {
     if (bitWidth <= 8)
@@ -174,7 +224,8 @@ class SubIntSplitEncoding
   static constexpr uint32_t kMaterializeChunkSize = 4096;
 
   // Accumulate one section's decoded values into the output buffer.
-  // IsFirst=true: pure write (initialises the output element).
+  // IsFirst=true: pure write (initialises the output element), OR-ing in
+  // `orConstant`, which carries the bits of every constant section.
   // IsFirst=false: read-modify-write OR into the existing output element.
   // __restrict__ informs the compiler that src and dst do not alias, enabling
   // auto-vectorisation for same-width cases and providing correct alias
@@ -185,7 +236,8 @@ class SubIntSplitEncoding
       physicalType* __restrict__ dst,
       uint32_t count,
       uint64_t mask,
-      int shift) noexcept;
+      int shift,
+      physicalType orConstant) noexcept;
 };
 
 //
@@ -236,7 +288,8 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
     : TypedEncoding<T, physicalType>{pool, data, options},
       sections_{},
       scratchBuf_{&pool},
-      decodeBuf_{&pool} {
+      decodeBuf_{&pool},
+      pendingBuf_{&pool} {
   const auto* pos = data.data() + this->dataOffset();
 
   const uint8_t splitCount = encoding::read<uint8_t>(pos);
@@ -266,6 +319,54 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
     sec.encoding = EncodingFactory().create(
         *this->pool_, {pos, meta[s].encodedSize}, stringBufferFactory, options);
     pos += meta[s].encodedSize;
+
+    // ConstantEncoding is stateless -- its reset() and skip() are no-ops and
+    // materialize() ignores the read position -- so reading its value here does
+    // not disturb the cursor the decode path relies on, and the section can be
+    // left out of the chunk loop entirely.
+    if (sec.encoding->encodingType() == EncodingType::Constant) {
+      uint64_t value = 0;
+      switch (sec.storageBytes) {
+        case 1: {
+          uint8_t narrow = 0;
+          sec.encoding->materialize(1, &narrow);
+          value = narrow;
+          break;
+        }
+        case 2: {
+          uint16_t narrow = 0;
+          sec.encoding->materialize(1, &narrow);
+          value = narrow;
+          break;
+        }
+        case 4: {
+          uint32_t narrow = 0;
+          sec.encoding->materialize(1, &narrow);
+          value = narrow;
+          break;
+        }
+        case 8: {
+          sec.encoding->materialize(1, &value);
+          break;
+        }
+        default:
+          NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
+      }
+      constantOr_ |= static_cast<physicalType>(value & sec.mask)
+          << sec.bitStart;
+    } else {
+      dynamicSections_.push_back(s);
+    }
+  }
+
+  // Delta streams still need the prefix-sum pass, so they never take the direct
+  // route.
+  if (!deltaEncoded_ && dynamicSections_.size() == 1 && constantOr_ == 0) {
+    const auto& only = sections_[dynamicSections_.front()];
+    constexpr uint64_t fullMask =
+        ~uint64_t{0} >> (64 - sizeof(physicalType) * 8);
+    directDecode_ = only.bitStart == 0 &&
+        only.storageBytes == sizeof(physicalType) && only.mask == fullMask;
   }
 }
 
@@ -276,6 +377,8 @@ void SubIntSplitEncoding<T>::reset() {
   }
   row_ = 0;
   deltaAccumulator_ = 0;
+  pendingOffset_ = 0;
+  pendingCount_ = 0;
 }
 
 template <typename T>
@@ -284,10 +387,32 @@ void SubIntSplitEncoding<T>::skip(uint32_t rowCount) {
       !deltaEncoded_,
       "SubIntSplitEncoding: skip() is not supported on delta-encoded streams; "
       "reconstructing a value requires every preceding delta.");
-  for (auto& sec : sections_) {
-    sec.encoding->skip(rowCount);
+
+  // The sections already sit past anything still buffered, so those rows are
+  // skipped by dropping them rather than by moving the section cursors.
+  const uint32_t fromPending = std::min(rowCount, pendingAvailable());
+  pendingOffset_ += fromPending;
+  const uint32_t remaining = rowCount - fromPending;
+  if (remaining > 0) {
+    for (auto& sec : sections_) {
+      sec.encoding->skip(remaining);
+    }
   }
   row_ += rowCount;
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::refillPending() {
+  if (pendingBuf_.size() < kSlowPathBlock) [[unlikely]] {
+    pendingBuf_.resize(kSlowPathBlock);
+  }
+  const uint32_t total = this->rowCount();
+  NIMBLE_CHECK(
+      row_ < total, "SubIntSplitEncoding: read past the end of the stream.");
+  const uint32_t block = std::min(kSlowPathBlock, total - row_);
+  decodeSections(block, pendingBuf_.data());
+  pendingOffset_ = 0;
+  pendingCount_ = block;
 }
 
 // accumulateSection: widen narrow section values into the physicalType output.
@@ -306,7 +431,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
     physicalType* __restrict__ dst,
     uint32_t count,
     uint64_t mask,
-    int shift) noexcept {
+    int shift,
+    physicalType orConstant) noexcept {
   const SectionT narrowMask = static_cast<SectionT>(mask);
 
 #ifdef __AVX2__
@@ -317,6 +443,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
       // ----------------------------------------------------------------
       const __m128i vshift = _mm_cvtsi64_si128(static_cast<int64_t>(shift));
       const __m256i vmask = _mm256_set1_epi64x(static_cast<int64_t>(mask));
+      const __m256i vconst =
+          _mm256_set1_epi64x(static_cast<int64_t>(orConstant));
 
       if constexpr (sizeof(SectionT) == 1) {
         // uint8 → uint64: _mm256_cvtepu8_epi64 processes 4 elements.
@@ -333,7 +461,9 @@ void SubIntSplitEncoding<T>::accumulateSection(
           if (shift)
             vs = _mm256_sll_epi64(vs, vshift);
           if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
           } else {
             __m256i vd =
                 _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
@@ -343,7 +473,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
         }
         for (; i < count; ++i) {
           if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
           else
             dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
         }
@@ -363,7 +494,9 @@ void SubIntSplitEncoding<T>::accumulateSection(
           if (shift)
             vs = _mm256_sll_epi64(vs, vshift);
           if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
           } else {
             __m256i vd =
                 _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
@@ -373,7 +506,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
         }
         for (; i < count; ++i) {
           if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
           else
             dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
         }
@@ -393,7 +527,9 @@ void SubIntSplitEncoding<T>::accumulateSection(
           if (shift)
             vs = _mm256_sll_epi64(vs, vshift);
           if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
           } else {
             __m256i vd =
                 _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
@@ -403,7 +539,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
         }
         for (; i < count; ++i) {
           if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
           else
             dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
         }
@@ -416,6 +553,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
       // ----------------------------------------------------------------
       const __m128i vshift = _mm_cvtsi32_si128(static_cast<int32_t>(shift));
       const __m256i vmask = _mm256_set1_epi32(static_cast<int32_t>(mask));
+      const __m256i vconst =
+          _mm256_set1_epi32(static_cast<int32_t>(orConstant));
 
       if constexpr (sizeof(SectionT) == 1) {
         // uint8 → uint32: _mm256_cvtepu8_epi32 processes 8 elements.
@@ -432,7 +571,9 @@ void SubIntSplitEncoding<T>::accumulateSection(
           if (shift)
             vs = _mm256_sll_epi32(vs, vshift);
           if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
           } else {
             __m256i vd =
                 _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
@@ -442,7 +583,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
         }
         for (; i < count; ++i) {
           if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
           else
             dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
         }
@@ -462,7 +604,9 @@ void SubIntSplitEncoding<T>::accumulateSection(
           if (shift)
             vs = _mm256_sll_epi32(vs, vshift);
           if constexpr (IsFirst) {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), vs);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
           } else {
             __m256i vd =
                 _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
@@ -472,7 +616,8 @@ void SubIntSplitEncoding<T>::accumulateSection(
         }
         for (; i < count; ++i) {
           if constexpr (IsFirst)
-            dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
           else
             dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
         }
@@ -488,11 +633,96 @@ void SubIntSplitEncoding<T>::accumulateSection(
   // __restrict__ on the parameters allows the compiler to auto-vectorise this
   // loop for same-width cases (e.g. uint32_t → uint32_t, uint64_t → uint64_t).
   if constexpr (IsFirst) {
-    for (uint32_t i = 0; i < count; ++i)
-      dst[i] = static_cast<physicalType>(src[i] & narrowMask) << shift;
+    for (uint32_t i = 0; i < count; ++i) {
+      dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+          orConstant;
+    }
   } else {
-    for (uint32_t i = 0; i < count; ++i)
+    for (uint32_t i = 0; i < count; ++i) {
       dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+    }
+  }
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::decodeSections(
+    uint32_t count,
+    physicalType* output) {
+  // Lazily size the scratch buffer on the first call. The scratch must hold one
+  // chunk's worth of section values at the widest possible storage type.
+  constexpr uint32_t kScratchBytes =
+      kMaterializeChunkSize * static_cast<uint32_t>(sizeof(physicalType));
+  if (scratchBuf_.size() < kScratchBytes) [[unlikely]] {
+    scratchBuf_.resize(kScratchBytes);
+  }
+
+  for (size_t d = 0; d < dynamicSections_.size(); ++d) {
+    const auto& sec = sections_[dynamicSections_[d]];
+    const int shift = sec.bitStart;
+    const uint64_t mask = sec.mask;
+    // The first dynamic section initialises each output element (pure write,
+    // OR-ing in the constant sections' bits); the rest OR their bits in. This
+    // avoids a separate std::fill pass.
+    const bool isFirst = (d == 0);
+
+    switch (sec.storageBytes) {
+      case 1: {
+        auto* scratch = reinterpret_cast<uint8_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint8_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint8_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      case 2: {
+        auto* scratch = reinterpret_cast<uint16_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint16_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint16_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      case 4: {
+        auto* scratch = reinterpret_cast<uint32_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint32_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint32_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      case 8: {
+        auto* scratch = reinterpret_cast<uint64_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint64_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint64_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      default:
+        NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
+    }
+  }
+
+  // Every section was constant, so there is nothing to decode and each value is
+  // just the folded constant.
+  if (dynamicSections_.empty()) [[unlikely]] {
+    std::fill_n(output, count, constantOr_);
   }
 }
 
@@ -500,12 +730,24 @@ template <typename T>
 void SubIntSplitEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   physicalType* output = static_cast<physicalType*>(buffer);
 
-  // Lazily size the scratch buffer on the first call. The scratch must hold one
-  // chunk's worth of section values at the widest possible storage type.
-  constexpr uint32_t kScratchBytes =
-      kMaterializeChunkSize * static_cast<uint32_t>(sizeof(physicalType));
-  if (scratchBuf_.size() < kScratchBytes) [[unlikely]] {
-    scratchBuf_.resize(kScratchBytes);
+  // Hand back anything the slow path decoded ahead of the cursor before asking
+  // the sections for more.
+  if (pendingAvailable() > 0) [[unlikely]] {
+    const uint32_t fromPending = std::min(rowCount, pendingAvailable());
+    std::copy_n(pendingBuf_.data() + pendingOffset_, fromPending, output);
+    pendingOffset_ += fromPending;
+    row_ += fromPending;
+    rowCount -= fromPending;
+    if (rowCount == 0) {
+      return;
+    }
+    output += fromPending;
+  }
+
+  if (directDecode_) {
+    sections_[dynamicSections_.front()].encoding->materialize(rowCount, output);
+    row_ += rowCount;
+    return;
   }
 
   // Outer loop: advance through the output in kMaterializeChunkSize-element
@@ -518,63 +760,7 @@ void SubIntSplitEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
         std::min(kMaterializeChunkSize, rowCount - chunkStart);
     physicalType* chunkOutput = output + chunkStart;
 
-    for (size_t s = 0; s < sections_.size(); ++s) {
-      const auto& sec = sections_[s];
-      const int shift = sec.bitStart;
-      const uint64_t mask = sec.mask;
-      // Section 0 initialises each output element (pure write); subsequent
-      // sections OR their bits in.  This avoids a separate std::fill pass.
-      const bool isFirst = (s == 0);
-
-      switch (sec.storageBytes) {
-        case 1: {
-          auto* scratch = reinterpret_cast<uint8_t*>(scratchBuf_.data());
-          sec.encoding->materialize(chunkCount, scratch);
-          if (isFirst)
-            accumulateSection<uint8_t, true>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          else
-            accumulateSection<uint8_t, false>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          break;
-        }
-        case 2: {
-          auto* scratch = reinterpret_cast<uint16_t*>(scratchBuf_.data());
-          sec.encoding->materialize(chunkCount, scratch);
-          if (isFirst)
-            accumulateSection<uint16_t, true>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          else
-            accumulateSection<uint16_t, false>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          break;
-        }
-        case 4: {
-          auto* scratch = reinterpret_cast<uint32_t*>(scratchBuf_.data());
-          sec.encoding->materialize(chunkCount, scratch);
-          if (isFirst)
-            accumulateSection<uint32_t, true>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          else
-            accumulateSection<uint32_t, false>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          break;
-        }
-        case 8: {
-          auto* scratch = reinterpret_cast<uint64_t*>(scratchBuf_.data());
-          sec.encoding->materialize(chunkCount, scratch);
-          if (isFirst)
-            accumulateSection<uint64_t, true>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          else
-            accumulateSection<uint64_t, false>(
-                scratch, chunkOutput, chunkCount, mask, shift);
-          break;
-        }
-        default:
-          NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
-      }
-    }
+    decodeSections(chunkCount, chunkOutput);
 
     // Delta streams store zigzag steps, so turn them back into values. The
     // accumulator carries across chunks and across successive materialize()
@@ -636,46 +822,15 @@ void SubIntSplitEncoding<T>::readWithVisitor(
       params,
       [&](auto toSkip) { skip(toSkip); },
       [&] {
-        physicalType value = 0;
-        for (const auto& sec : sections_) {
-          switch (sec.storageBytes) {
-            case 1: {
-              uint8_t sectionValue = 0;
-              sec.encoding->materialize(1, &sectionValue);
-              value |= static_cast<physicalType>(sectionValue & sec.mask)
-                  << sec.bitStart;
-              break;
-            }
-            case 2: {
-              uint16_t sectionValue = 0;
-              sec.encoding->materialize(1, &sectionValue);
-              value |= static_cast<physicalType>(sectionValue & sec.mask)
-                  << sec.bitStart;
-              break;
-            }
-            case 4: {
-              uint32_t sectionValue = 0;
-              sec.encoding->materialize(1, &sectionValue);
-              value |= static_cast<physicalType>(sectionValue & sec.mask)
-                  << sec.bitStart;
-              break;
-            }
-            case 8: {
-              uint64_t sectionValue = 0;
-              sec.encoding->materialize(1, &sectionValue);
-              value |= static_cast<physicalType>(sectionValue & sec.mask)
-                  << sec.bitStart;
-              break;
-            }
-            default: {
-              NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
-            }
-          }
+        // Decoding a block at a time turns a virtual call per section per value
+        // into one per section per block.
+        if (pendingAvailable() == 0) {
+          refillPending();
         }
         // Keep row_ in sync so a subsequent fast-path chunk maps rows
         // correctly.
         ++row_;
-        return value;
+        return pendingBuf_[pendingOffset_++];
       });
 }
 
