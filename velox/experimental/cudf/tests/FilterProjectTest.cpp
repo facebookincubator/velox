@@ -1643,8 +1643,9 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
   functionEntry.create = [create = previousEntry.create, &betweenCreations](
                              const core::TypedExprPtr& expr,
                              const RowTypePtr& rowType,
-                             memory::MemoryPool* pool) {
-    auto evaluator = create(expr, rowType, pool);
+                             memory::MemoryPool* pool,
+                             const cudf_velox::CudfDateTimeContext& context) {
+    auto evaluator = create(expr, rowType, pool, context);
     if (expr->isCallKind() &&
         expr->asUnchecked<core::CallTypedExpr>()->name() == "between") {
       ++betweenCreations;
