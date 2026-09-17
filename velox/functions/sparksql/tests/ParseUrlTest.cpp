@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/UriParser.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -510,12 +511,13 @@ TEST_F(ParseUrlTest, lazyKeyCompilation) {
       evaluateOnce<std::string>(
           "parse_url(c0, 'QUERY', 'a[')", std::optional<std::string>("#a#b")));
   // A URL with an empty query still extracts, so the key is compiled and
-  // an invalid one fails the query, as in Spark.
+  // an invalid one fails the query, as in Spark. The message matches the
+  // non-constant key path: both shapes go through the same regex cache.
   VELOX_ASSERT_THROW(
       evaluateOnce<std::string>(
           "parse_url(c0, 'QUERY', 'a[')",
           std::optional<std::string>("http://h/p?#")),
-      "invalid key");
+      "invalid regular expression");
 }
 
 // Pins the non-constant key path: a per-row key column bypasses
@@ -603,6 +605,34 @@ TEST_F(ParseUrlTest, ansiMode) {
       evaluateOnce<std::string>(
           "parse_url(c0, 'QUERY', 'a')",
           std::optional<std::string>("http://h/p")));
+}
+
+// Pins that an empty URL, which a non-null column value represents as a
+// StringView with data() == nullptr, still yields its components: the
+// empty string is a valid relative reference with a present-but-empty
+// path. A nullptr data pointer must not be mistaken for absence.
+TEST_F(ParseUrlTest, emptyUrlNullData) {
+  sparksql::ParsedUrl parsed;
+  ASSERT_TRUE(sparksql::parseUrl(std::string_view(nullptr, 0), parsed));
+  EXPECT_TRUE(parsed.path.has_value());
+  EXPECT_EQ(0, parsed.path->size());
+
+  // Through the SQL path with a real empty StringView in the column.
+  const auto run = [&](const std::string& part) {
+    return evaluate<SimpleVector<StringView>>(
+        fmt::format("parse_url(c0, '{}')", part),
+        makeRowVector({makeNullableFlatVector<StringView>(
+            std::vector<std::optional<StringView>>{StringView()})}));
+  };
+  const auto pathResult = run("PATH");
+  EXPECT_FALSE(pathResult->isNullAt(0));
+  EXPECT_EQ(0, pathResult->valueAt(0).size());
+  const auto fileResult = run("FILE");
+  EXPECT_FALSE(fileResult->isNullAt(0));
+  EXPECT_EQ(0, fileResult->valueAt(0).size());
+  // Components absent from the empty URL stay null.
+  const auto hostResult = run("HOST");
+  EXPECT_TRUE(hostResult->isNullAt(0));
 }
 
 // Pins null propagation: any null argument yields a null result, including
