@@ -163,6 +163,15 @@ class PrefixSort {
   /// The number of prefix sort keys.
   static constexpr std::string_view kNumPrefixSortKeys{"numPrefixSortKeys"};
 
+  // For alignment, 8 is faster than 4.
+  static constexpr int32_t kAlignment = 8;
+
+  // The largest normalized key size, in 8 byte words, that gets a compile time
+  // sized sort. Larger prefixes fall back to the runtime sized sort. Covers up
+  // to 8 nullable 64 bit keys or a 64 byte string prefix, well beyond what
+  // sorts use in practice.
+  static constexpr int32_t kMaxFixedSizeKeyWords = 9;
+
  private:
   /// Fallback to stdSort when prefix sort conditions such as config and memory
   /// are not satisfied. stdSort provides >2X performance win than std::sort for
@@ -220,6 +229,18 @@ class PrefixSort {
   bool needsTieBreak() const {
     return sortLayout_.hasNonNormalizedKey ||
         sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys;
+  }
+
+  // Returns the normalized key size in 8-byte words.
+  FOLLY_ALWAYS_INLINE int32_t numKeyWords() const {
+    return sortLayout_.normalizedBufferSize / kAlignment;
+  }
+
+  // Returns true if the prefix buffer can be sorted using compile-time fixed
+  // size sort.
+  FOLLY_ALWAYS_INLINE bool isFixedSizeSort() const {
+    const auto words = numKeyWords();
+    return words >= 1 && words <= kMaxFixedSizeKeyWords;
   }
 
   int compareAllNormalizedKeys(char* left, char* right);

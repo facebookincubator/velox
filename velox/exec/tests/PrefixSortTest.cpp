@@ -266,6 +266,20 @@ TEST_F(PrefixSortTest, multipleKeys) {
     testPrefixSort({kAsc, kAsc}, data);
     testPrefixSort({kDesc, kDesc}, data);
   }
+
+  // Test 10 keys to stress the runtime fallback sort path (> 9 fixed size key
+  // words).
+  {
+    std::vector<VectorPtr> columns;
+    std::vector<CompareFlags> flags;
+    for (int32_t i = 0; i < 10; ++i) {
+      columns.push_back(
+          makeFlatVector<int64_t>({10 - i, i, 5, 2, 8, 1, 9, 3, 7, 4}));
+      flags.push_back(kAsc);
+    }
+    const auto data = makeRowVector(columns);
+    testPrefixSort(flags, data);
+  }
 }
 
 TEST_F(PrefixSortTest, fuzz) {

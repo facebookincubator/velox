@@ -150,12 +150,6 @@ FOLLY_ALWAYS_INLINE int compareKeyWords(const char* left, const char* right) {
   return 0;
 }
 
-// The largest normalized key size, in 8 byte words, that gets a compile time
-// sized sort. Larger prefixes fall back to the runtime sized sort. Covers up
-// to 8 nullable 64 bit keys or a 64 byte string prefix, well beyond what sorts
-// use in practice.
-static constexpr int32_t kMaxFixedSizeKeyWords = 9;
-
 } // namespace
 
 // static.
@@ -373,8 +367,7 @@ uint64_t PrefixSort::maxRequiredBytes() const {
       memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);
   const auto prefixBufferSize = memory::AllocationTraits::pageBytes(numPages);
 
-  const int32_t numKeyWords = sortLayout_.normalizedBufferSize / kAlignment;
-  if (numKeyWords >= 1 && numKeyWords <= kMaxFixedSizeKeyWords) {
+  if (isFixedSizeSort()) {
     // Fixed size sort uses a stack array and does not allocate a swap buffer.
     return prefixBufferSize;
   }
@@ -411,14 +404,13 @@ void PrefixSort::sortFixedSizeEntries(char* prefixBuffer, uint64_t numRows) {
 }
 
 void PrefixSort::sortPrefixBuffer(char* prefixBuffer, uint64_t numRows) {
-  const int32_t numKeyWords = sortLayout_.normalizedBufferSize / kAlignment;
-  if (numKeyWords >= 1 && numKeyWords <= kMaxFixedSizeKeyWords) {
+  if (isFixedSizeSort()) {
 #define VELOX_FIXED_SIZE_SORT_CASE(numWords)               \
   case numWords:                                           \
     sortFixedSizeEntries<numWords>(prefixBuffer, numRows); \
     return;
 
-    switch (numKeyWords) {
+    switch (numKeyWords()) {
       VELOX_FIXED_SIZE_SORT_CASE(1)
       VELOX_FIXED_SIZE_SORT_CASE(2)
       VELOX_FIXED_SIZE_SORT_CASE(3)
