@@ -42,7 +42,8 @@ class SubscriptFunction : public SubscriptImpl<
 
 void registerSubscriptFunction(
     const std::string& name,
-    bool enableCaching = true) {
+    bool enableCaching = true,
+    std::string_view defaultOwner = {}) {
   exec::registerStatefulVectorFunction(
       name,
       SubscriptFunction::signatures(),
@@ -58,7 +59,8 @@ void registerSubscriptFunction(
           return std::make_shared<SubscriptFunction>(
               enableCaching && config.isExpressionEvaluationCacheEnabled());
         }
-      });
+      },
+      exec::VectorFunctionMetadataBuilder().owner(defaultOwner).build());
 }
 
 } // namespace facebook::velox::functions

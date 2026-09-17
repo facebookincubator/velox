@@ -235,6 +235,8 @@ struct MapSubsetFunction {
       searchKeys_;
 };
 
-void registerMapSubset(const std::string& name);
+void registerMapSubset(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions
