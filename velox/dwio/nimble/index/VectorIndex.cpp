@@ -31,7 +31,7 @@
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
 #include <faiss/IndexScalarQuantizer.h>
-#include <faiss/impl/io.h>
+#include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
 #include <folly/Synchronized.h>
@@ -47,53 +47,14 @@ namespace facebook::nimble::index {
 
 namespace {
 
-// Adapts an in-memory metadata section to the FAISS streaming reader API.
-struct VectorIndexReader : public faiss::IOReader {
-  // Points into a MetadataBuffer retained by the caller during deserialization.
-  const uint8_t* const serializedData;
-
-  // Bounds all reads requested by FAISS.
-  const size_t dataBytes;
-
-  // Tracks the next unread byte.
-  size_t position{0};
-
-  VectorIndexReader(const uint8_t* serializedData, size_t dataBytes)
-      : serializedData{serializedData}, dataBytes{dataBytes} {
-    NIMBLE_CHECK_NOT_NULL(serializedData);
-    NIMBLE_CHECK_GT(dataBytes, 0);
-  }
-
-  size_t operator()(void* destination, size_t itemSize, size_t numItems)
-      override {
-    // FAISS reads zero items for absent optional data such as direct maps.
-    if (numItems == 0) {
-      return 0;
-    }
-
-    NIMBLE_CHECK_GT(itemSize, 0, "FAISS read item size must be positive");
-    NIMBLE_CHECK_NOT_NULL(destination);
-    NIMBLE_CHECK_LE(position, dataBytes);
-    const auto numItemsToRead =
-        std::min(numItems, (dataBytes - position) / itemSize);
-    const auto numBytesToRead = numItemsToRead * itemSize;
-    if (numBytesToRead == 0) {
-      // Returning zero reports EOF so FAISS rejects a truncated index.
-      return 0;
-    }
-    std::memcpy(destination, serializedData + position, numBytesToRead);
-    position += numBytesToRead;
-    return numItemsToRead;
-  }
-};
-
-// Deserializes one FAISS index while its metadata buffer remains alive.
+// Deserializes one FAISS index from caller-owned zero-copy storage.
 std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
   NIMBLE_CHECK_FILE(
       !serializedIndex.empty(), "FAISS index data must not be empty");
-  VectorIndexReader reader(
-      reinterpret_cast<const uint8_t*>(serializedIndex.data()),
-      serializedIndex.size());
+  // Upstream FAISS takes a mutable pointer but does not modify the input.
+  auto* serializedData = const_cast<uint8_t*>(
+      reinterpret_cast<const uint8_t*>(serializedIndex.data()));
+  faiss::ZeroCopyIOReader reader(serializedData, serializedIndex.size());
   try {
     return std::unique_ptr<faiss::Index>(faiss::read_index(&reader));
   } catch (const std::exception& error) {
@@ -435,24 +396,31 @@ std::shared_ptr<const VectorIndex> VectorIndexDirectory::load(
       inputState_->input()->load({&entry->second.indexSection, 1});
   NIMBLE_CHECK_EQ(indexData.size(), 1);
   NIMBLE_CHECK_NOT_NULL(indexData.front().get());
+  const auto serializedIndex = indexData.front()->content();
   return VectorIndex::create(
-      entry->second.metadata, indexData.front()->content());
+      entry->second.metadata, serializedIndex, indexData.front());
 }
 
 std::shared_ptr<const VectorIndex> VectorIndex::create(
     Metadata metadata,
-    std::string_view serializedIndex) {
+    std::string_view serializedIndex,
+    std::shared_ptr<const void> indexData) {
   validateVectorIndexMetadata(metadata);
-  return std::shared_ptr<const VectorIndex>(
-      new VectorIndex(std::move(metadata), serializedIndex));
+  NIMBLE_CHECK_NOT_NULL(indexData);
+  return std::shared_ptr<const VectorIndex>(new VectorIndex(
+      std::move(metadata), serializedIndex, std::move(indexData)));
 }
 
-VectorIndex::VectorIndex(Metadata metadata, std::string_view serializedIndex)
+VectorIndex::VectorIndex(
+    Metadata metadata,
+    std::string_view serializedIndex,
+    std::shared_ptr<const void> indexData)
     : columnName_{std::move(metadata.columnName)},
       dimensions_{metadata.dimensions},
       metric_{metadata.metric},
       indexType_{metadata.indexType},
       numVectors_{metadata.numVectors},
+      indexData_{std::move(indexData)},
       faissIndex_{readFaissIndex(serializedIndex)} {
   NIMBLE_CHECK_FILE_EQ(
       faissIndex_->d,
