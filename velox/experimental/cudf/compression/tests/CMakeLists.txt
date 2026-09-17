@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(
-  cudf_compression_test
-  CompressionTest.cpp
-)
+add_executable(cudf_compression_test CompressionTest.cpp)
 
 add_test(
   NAME cudf_compression_test
@@ -25,9 +22,4 @@ add_test(
 
 set_tests_properties(cudf_compression_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
 
-target_link_libraries(
-  cudf_compression_test
-  velox_cudf_compression
-  gtest
-  gtest_main
-)
+target_link_libraries(cudf_compression_test velox_cudf_compression gtest gtest_main)

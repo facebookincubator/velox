@@ -102,9 +102,10 @@ struct CompressedPackedColumns {
  */
 class PackedColumnsCodec {
  public:
-  PackedColumnsCodec(rmm::cuda_stream_view stream,
-                     rmm::device_async_resource_ref temporaryMemoryResource,
-                     rmm::device_async_resource_ref outputMemoryResource);
+  PackedColumnsCodec(
+      rmm::cuda_stream_view stream,
+      rmm::device_async_resource_ref temporaryMemoryResource,
+      rmm::device_async_resource_ref outputMemoryResource);
   ~PackedColumnsCodec();
 
   PackedColumnsCodec(const PackedColumnsCodec&) = delete;

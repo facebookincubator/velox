@@ -50,9 +50,10 @@ static_assert(kNvcompFrameAlignment >= nvcompANSRequiredDecompressionAlignment);
     cudf::device_span<const uint8_t> input) {
   const auto count =
       (input.size() / kAnsSegmentSize) + (input.size() % kAnsSegmentSize != 0);
-  CUDF_EXPECTS(count <= std::numeric_limits<uint32_t>::max(),
-               "Too many nvCOMP ANS segments",
-               std::overflow_error);
+  CUDF_EXPECTS(
+      count <= std::numeric_limits<uint32_t>::max(),
+      "Too many nvCOMP ANS segments",
+      std::overflow_error);
 
   std::vector<cudf::device_span<const uint8_t>> segments;
   segments.reserve(count);
@@ -98,25 +99,28 @@ nvcomp::ANSManager& AnsCodecContext::manager() {
 }
 
 std::span<std::size_t> AnsCodecContext::sizeStaging(std::size_t count) {
-  CUDF_EXPECTS(count <= sizeStaging_.size(),
-               "nvCOMP size staging capacity exceeded",
-               std::invalid_argument);
+  CUDF_EXPECTS(
+      count <= sizeStaging_.size(),
+      "nvCOMP size staging capacity exceeded",
+      std::invalid_argument);
   return {sizeStaging_.data(), count};
 }
 
 AnsCompressedData compressAnsBatch(
     std::span<const cudf::device_span<const uint8_t>> inputs,
     AnsCodecContext& context) {
-  CUDF_EXPECTS(!inputs.empty() && inputs.size() <= kAnsSizeStagingCapacity,
-               "Invalid nvCOMP ANS batch size",
-               std::invalid_argument);
+  CUDF_EXPECTS(
+      !inputs.empty() && inputs.size() <= kAnsSizeStagingCapacity,
+      "Invalid nvCOMP ANS batch size",
+      std::invalid_argument);
 
   std::vector<std::size_t> inputSizes(inputs.size());
   std::vector<const uint8_t*> inputPointers(inputs.size());
   for (std::size_t index = 0; index < inputs.size(); ++index) {
-    CUDF_EXPECTS(!inputs[index].empty(),
-                 "nvCOMP ANS input segment is empty",
-                 std::invalid_argument);
+    CUDF_EXPECTS(
+        !inputs[index].empty(),
+        "nvCOMP ANS input segment is empty",
+        std::invalid_argument);
     inputSizes[index] = inputs[index].size();
     inputPointers[index] = inputs[index].data();
   }
@@ -125,10 +129,10 @@ AnsCompressedData compressAnsBatch(
   std::vector<uint8_t*> outputPointers(inputs.size());
   std::size_t maximumOutputSize = 0;
   for (const auto& config : configs) {
-    maximumOutputSize =
-        checkedAddSizes(maximumOutputSize,
-                        nvcompAlignedSize(config.max_compressed_buffer_size),
-                        "nvCOMP ANS scratch size overflow");
+    maximumOutputSize = checkedAddSizes(
+        maximumOutputSize,
+        nvcompAlignedSize(config.max_compressed_buffer_size),
+        "nvCOMP ANS scratch size overflow");
   }
 
   const auto stream = context.stream();
@@ -155,25 +159,28 @@ AnsCompressedData compressAnsBatch(
       static_cast<std::size_t*>(outputSizesDevice.data()));
 
   auto stagedSizes = context.sizeStaging(inputs.size());
-  CUDF_CUDA_TRY(cudaMemcpyAsync(stagedSizes.data(),
-                                outputSizesDevice.data(),
-                                inputs.size() * sizeof(std::size_t),
-                                cudaMemcpyDeviceToHost,
-                                stream.value()));
+  CUDF_CUDA_TRY(cudaMemcpyAsync(
+      stagedSizes.data(),
+      outputSizesDevice.data(),
+      inputs.size() * sizeof(std::size_t),
+      cudaMemcpyDeviceToHost,
+      stream.value()));
   stream.synchronize();
 
   std::vector<uint32_t> segmentSizes(inputs.size());
   std::size_t compressedSize = 0;
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto size = stagedSizes[index];
-    CUDF_EXPECTS(*configs[index].get_status() == nvcompSuccess && size != 0 &&
-                     size <= configs[index].max_compressed_buffer_size &&
-                     size <= std::numeric_limits<uint32_t>::max(),
-                 "nvCOMP ANS compression failed");
+    CUDF_EXPECTS(
+        *configs[index].get_status() == nvcompSuccess && size != 0 &&
+            size <= configs[index].max_compressed_buffer_size &&
+            size <= std::numeric_limits<uint32_t>::max(),
+        "nvCOMP ANS compression failed");
     segmentSizes[index] = static_cast<uint32_t>(size);
-    compressedSize = checkedAddSizes(compressedSize,
-                                     nvcompAlignedSize(size),
-                                     "nvCOMP ANS result size overflow");
+    compressedSize = checkedAddSizes(
+        compressedSize,
+        nvcompAlignedSize(size),
+        "nvCOMP ANS result size overflow");
   }
 
   rmm::device_buffer output{compressedSize, stream, memoryResource};
@@ -182,12 +189,12 @@ AnsCompressedData compressAnsBatch(
   outputOffset = 0;
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto size = segmentSizes[index];
-    CUDF_CUDA_TRY(
-        cudaMemcpyAsync(static_cast<uint8_t*>(output.data()) + outputOffset,
-                        outputPointers[index],
-                        size,
-                        cudaMemcpyDeviceToDevice,
-                        stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        static_cast<uint8_t*>(output.data()) + outputOffset,
+        outputPointers[index],
+        size,
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
     outputOffset = checkedAddSizes(
         outputOffset, nvcompAlignedSize(size), "nvCOMP ANS offset overflow");
   }
@@ -208,8 +215,9 @@ std::optional<AnsCompressedData> compressAns(
 
   std::size_t compressedTotal = 0;
   std::vector<rmm::device_buffer> batches;
-  batches.reserve((inputSegments.size() / kMaximumSegmentsPerBatch) +
-                  (inputSegments.size() % kMaximumSegmentsPerBatch != 0));
+  batches.reserve(
+      (inputSegments.size() / kMaximumSegmentsPerBatch) +
+      (inputSegments.size() % kMaximumSegmentsPerBatch != 0));
 
   for (std::size_t first = 0; first < inputSegments.size();
        first += kMaximumSegmentsPerBatch) {
@@ -217,9 +225,10 @@ std::optional<AnsCompressedData> compressAns(
         std::min(kMaximumSegmentsPerBatch, inputSegments.size() - first);
     auto batch = compressAnsBatch(
         std::span{inputSegments}.subspan(first, count), context);
-    std::copy(batch.segmentSizes.begin(),
-              batch.segmentSizes.end(),
-              segmentSizes.begin() + first);
+    std::copy(
+        batch.segmentSizes.begin(),
+        batch.segmentSizes.end(),
+        segmentSizes.begin() + first);
     compressedTotal = checkedAddSizes(
         compressedTotal, batch.data.size(), "nvCOMP ANS result size overflow");
     batches.push_back(std::move(batch.data));
@@ -235,12 +244,12 @@ std::optional<AnsCompressedData> compressAns(
   rmm::device_buffer output{compressedTotal, stream, temporaryMemoryResource};
   std::size_t outputOffset = 0;
   for (const auto& batch : batches) {
-    CUDF_CUDA_TRY(
-        cudaMemcpyAsync(static_cast<uint8_t*>(output.data()) + outputOffset,
-                        batch.data(),
-                        batch.size(),
-                        cudaMemcpyDeviceToDevice,
-                        stream.value()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        static_cast<uint8_t*>(output.data()) + outputOffset,
+        batch.data(),
+        batch.size(),
+        cudaMemcpyDeviceToDevice,
+        stream.value()));
     outputOffset = checkedAddSizes(
         outputOffset, batch.size(), "nvCOMP ANS output offset overflow");
   }
@@ -248,13 +257,15 @@ std::optional<AnsCompressedData> compressAns(
   return AnsCompressedData{std::move(output), std::move(segmentSizes)};
 }
 
-rmm::device_buffer decompressAns(cudf::device_span<const uint8_t> input,
-                                 std::span<const uint32_t> segmentSizes,
-                                 std::size_t uncompressedSize,
-                                 AnsCodecContext& context) {
-  CUDF_EXPECTS(!segmentSizes.empty(),
-               "nvCOMP ANS descriptor has no segments",
-               std::invalid_argument);
+rmm::device_buffer decompressAns(
+    cudf::device_span<const uint8_t> input,
+    std::span<const uint32_t> segmentSizes,
+    std::size_t uncompressedSize,
+    AnsCodecContext& context) {
+  CUDF_EXPECTS(
+      !segmentSizes.empty(),
+      "nvCOMP ANS descriptor has no segments",
+      std::invalid_argument);
 
   std::size_t encodedSize = 0;
   for (const auto size : segmentSizes) {
@@ -262,15 +273,17 @@ rmm::device_buffer decompressAns(cudf::device_span<const uint8_t> input,
     encodedSize = checkedAddSizes(
         encodedSize, nvcompAlignedSize(size), "nvCOMP ANS input size overflow");
   }
-  CUDF_EXPECTS(encodedSize == input.size(),
-               "nvCOMP ANS segment sizes do not match the input span",
-               std::invalid_argument);
+  CUDF_EXPECTS(
+      encodedSize == input.size(),
+      "nvCOMP ANS segment sizes do not match the input span",
+      std::invalid_argument);
 
   const auto expectedSegmentCount = (uncompressedSize / kAnsSegmentSize) +
       (uncompressedSize % kAnsSegmentSize != 0);
-  CUDF_EXPECTS(expectedSegmentCount == segmentSizes.size(),
-               "nvCOMP ANS segment count does not match the output size",
-               std::invalid_argument);
+  CUDF_EXPECTS(
+      expectedSegmentCount == segmentSizes.size(),
+      "nvCOMP ANS segment count does not match the output size",
+      std::invalid_argument);
 
   const auto stream = context.stream();
   rmm::device_buffer output{
@@ -289,38 +302,43 @@ rmm::device_buffer decompressAns(cudf::device_span<const uint8_t> input,
     for (std::size_t local = 0; local < count; ++local) {
       const auto index = first + local;
       inputPointers[local] = input.data() + inputOffset;
-      inputOffset = checkedAddSizes(inputOffset,
-                                    nvcompAlignedSize(segmentSizes[index]),
-                                    "nvCOMP ANS input offset overflow");
+      inputOffset = checkedAddSizes(
+          inputOffset,
+          nvcompAlignedSize(segmentSizes[index]),
+          "nvCOMP ANS input offset overflow");
       outputPointers[local] =
           static_cast<uint8_t*>(output.data()) + outputOffset;
       expectedSizes[local] =
           std::min(kAnsSegmentSize, uncompressedSize - outputOffset);
-      outputOffset = checkedAddSizes(outputOffset,
-                                     expectedSizes[local],
-                                     "nvCOMP ANS output offset overflow");
+      outputOffset = checkedAddSizes(
+          outputOffset,
+          expectedSizes[local],
+          "nvCOMP ANS output offset overflow");
     }
 
     auto configs =
         context.manager().configure_decompression(inputPointers.data(), count);
     for (std::size_t local = 0; local < count; ++local) {
-      CUDF_EXPECTS(*configs[local].get_status() == nvcompSuccess &&
-                       configs[local].decomp_data_size == expectedSizes[local],
-                   "Invalid nvCOMP ANS frame");
+      CUDF_EXPECTS(
+          *configs[local].get_status() == nvcompSuccess &&
+              configs[local].decomp_data_size == expectedSizes[local],
+          "Invalid nvCOMP ANS frame");
     }
 
     context.manager().decompress(
         outputPointers.data(), inputPointers.data(), configs);
     stream.synchronize();
     for (const auto& config : configs) {
-      CUDF_EXPECTS(*config.get_status() == nvcompSuccess,
-                   "nvCOMP ANS decompression failed");
+      CUDF_EXPECTS(
+          *config.get_status() == nvcompSuccess,
+          "nvCOMP ANS decompression failed");
     }
   }
 
-  CUDF_EXPECTS(inputOffset == input.size() && outputOffset == uncompressedSize,
-               "nvCOMP ANS descriptor does not cover its buffers",
-               std::invalid_argument);
+  CUDF_EXPECTS(
+      inputOffset == input.size() && outputOffset == uncompressedSize,
+      "nvCOMP ANS descriptor does not cover its buffers",
+      std::invalid_argument);
   return output;
 }
 
