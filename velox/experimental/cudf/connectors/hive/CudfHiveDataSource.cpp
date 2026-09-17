@@ -259,8 +259,8 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     auto cudfTableColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
     inputViews.reserve(cudfTableColumns.size());
-    for (auto& col : cudfTableColumns) {
-      inputViews.push_back(col->view());
+    for (auto& column : cudfTableColumns) {
+      inputViews.push_back(column->view());
     }
     auto filterResult =
         cudfRemainingFilterExpression_->eval(inputViews, stream, get_temp_mr());

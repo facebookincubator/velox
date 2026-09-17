@@ -29,6 +29,10 @@ namespace facebook::velox::cudf_velox::connector::hive {
 using namespace facebook::velox::connector;
 using namespace facebook::velox::config;
 
+/// Returns true when a table scan can use a cuDF data source without falling
+/// back to CPU expression evaluation.
+bool isCudfTableScanSupported(const ConnectorTableHandlePtr& tableHandle);
+
 class CudfHiveConnector final
     : public ::facebook::velox::connector::hive::HiveConnector {
  public:
