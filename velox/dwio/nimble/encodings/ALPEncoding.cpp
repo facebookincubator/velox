@@ -34,6 +34,9 @@ void ALPEncoding<T>::decodeBulkValues(
   const DoubleBatch factorMultiplier(kPow10Double[factor]);
   vector_size_t row = 0;
   for (; row <= numValues - kDecodeBatchSize; row += kDecodeBatchSize) {
+    // ALP stores transformed values as ZigZag-encoded uint64_t lanes for both
+    // float and double inputs. Shifting removes the sign bit; XOR with the
+    // zero or all-ones sign mask restores each signed integer.
     const auto zigZag = UnsignedBatch::load_unaligned(encodedValues + row);
     const auto signedBits =
         (zigZag >> 1) ^ (UnsignedBatch(0) - (zigZag & UnsignedBatch(1)));

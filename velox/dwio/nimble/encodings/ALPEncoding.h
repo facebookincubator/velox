@@ -130,6 +130,8 @@ class ALPEncoding final
     const char* pos = data.data() + this->dataOffset();
 
     const auto header = detail::alp::readHeader(pos);
+    NIMBLE_CHECK_LE(header.exponent, kMaxExponent, "Invalid ALP exponent.");
+    NIMBLE_CHECK_LE(header.factor, kMaxFactor, "Invalid ALP factor.");
     exponent_ = header.exponent;
     factor_ = header.factor;
     exceptionCount_ = header.hasExceptions ? varint::readVarint32(&pos) : 0;
@@ -1017,6 +1019,8 @@ class ALPEncoding final
     return static_cast<int64_t>(std::llround(scaled / kPow10Double[factor]));
   }
 
+  // Restores a contiguous run with SIMD and a scalar tail. The caller patches
+  // exception values after decoding.
   static void decodeBulkValues(
       const uint64_t* encodedValues,
       vector_size_t numValues,
