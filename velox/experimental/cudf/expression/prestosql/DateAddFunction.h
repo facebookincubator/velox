@@ -77,4 +77,31 @@ class DateAddFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> literalDate_;
 };
 
+/// date_add(unit, value, timestamp) -> TIMESTAMP.
+/// Sub-day units are fixed-duration additions. Calendar units are applied in
+/// the session-local wall clock when adjust_timestamp_to_session_timezone is
+/// enabled, matching the Presto CPU implementation across DST transitions.
+/// The input's cuDF timestamp resolution is preserved.
+class DateAddTimestampFunction : public CudfFunction {
+ public:
+  static bool canEvaluate(const core::TypedExprPtr& expr);
+
+  DateAddTimestampFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool);
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const override;
+
+ private:
+  functions::DateTimeUnit unit_{};
+  bool valueIsLiteral_{};
+  bool timestampIsLiteral_{};
+  bool literalValueIsValid_{};
+  int64_t literalValue_{};
+  std::unique_ptr<cudf::scalar> literalTimestamp_;
+};
+
 } // namespace facebook::velox::cudf_velox::prestosql

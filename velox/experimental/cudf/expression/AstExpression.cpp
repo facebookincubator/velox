@@ -33,10 +33,17 @@ cudf::ast::expression const& createAstTree(
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
     std::vector<PrecomputeInstruction>& precomputeInstructions,
-    memory::MemoryPool* pool) {
-  AstContext context{
-      tree, scalars, {inputRowSchema}, {precomputeInstructions}, pool, expr};
-  return context.pushExprToTree(expr);
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context) {
+  AstContext astContext{
+      tree,
+      scalars,
+      {inputRowSchema},
+      {precomputeInstructions},
+      pool,
+      expr,
+      context};
+  return astContext.pushExprToTree(expr);
 }
 
 cudf::ast::expression const& createAstTree(
@@ -47,21 +54,24 @@ cudf::ast::expression const& createAstTree(
     const RowTypePtr& rightRowSchema,
     std::vector<PrecomputeInstruction>& leftPrecomputeInstructions,
     std::vector<PrecomputeInstruction>& rightPrecomputeInstructions,
-    memory::MemoryPool* pool) {
-  AstContext context{
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context) {
+  AstContext astContext{
       tree,
       scalars,
       {leftRowSchema, rightRowSchema},
       {leftPrecomputeInstructions, rightPrecomputeInstructions},
       pool,
-      expr};
-  return context.pushExprToTree(expr);
+      expr,
+      context};
+  return astContext.pushExprToTree(expr);
 }
 
 ASTExpression::ASTExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    const CudfDateTimeContext& context)
     : expr_(expr), inputRowSchema_(inputRowSchema), pool_(pool) {
   createAstTree(
       expr,
@@ -69,7 +79,8 @@ ASTExpression::ASTExpression(
       scalars_,
       inputRowSchema,
       precomputeInstructions_,
-      pool_);
+      pool_,
+      context);
 }
 
 void ASTExpression::close() {
@@ -144,8 +155,9 @@ void registerAstEvaluator(int priority) {
       },
       [](const core::TypedExprPtr& expr,
          const RowTypePtr& row,
-         memory::MemoryPool* pool) {
-        return std::make_shared<ASTExpression>(expr, row, pool);
+         memory::MemoryPool* pool,
+         const CudfDateTimeContext& context) {
+        return std::make_shared<ASTExpression>(expr, row, pool, context);
       },
       /*overwrite=*/false);
 }
