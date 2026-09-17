@@ -15,6 +15,18 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
+
+// Half of what the qualification in DecimalMathFunctions.h protects against:
+// with a velox::functions::detail in scope, an unqualified detail::mulOverflow
+// inside those structs resolves to that namespace and fails to find a member.
+// Real headers declare one -- prestosql/WordStem.h among them -- so this
+// reproduces the condition without depending on an unrelated include staying
+// where it is. The other half needs the bodies instantiated; see the test at
+// the bottom of this file.
+namespace facebook::velox::functions::detail {}
+
+#include "velox/functions/prestosql/DecimalMathFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -921,4 +933,32 @@ TEST_F(DecimalArithmeticTest, negate) {
            DecimalUtil::kLongDecimalMax,
            DecimalUtil::kLongDecimalMin},
           DECIMAL(38, 19))});
+}
+
+// Instantiating the structs is the only way to notice that their calls to
+// velox::checkedMultiply and velox::detail::mulOverflow are qualified.
+// Unqualified they bind elsewhere the moment a translation unit also sees
+// functions/lib/CheckedArithmetic.h -- a two-argument
+// velox::functions::checkedMultiply exists, and the three-argument call in
+// DecimalModulusFunction then has no overload -- and registration alone does
+// not instantiate the bodies. This is the only unit that includes both
+// headers, so it is the only place the requalification can be caught.
+TEST_F(DecimalArithmeticTest, structsInstantiateAlongsideCheckedArithmetic) {
+  const core::QueryConfig config{
+      std::unordered_map<std::string, std::string>{}};
+  const std::vector<TypePtr> inputTypes{DECIMAL(20, 2), DECIMAL(20, 2)};
+  int128_t out = 0;
+
+  functions::DecimalModulusFunction<exec::VectorExec> modulus;
+  modulus.initialize(
+      inputTypes,
+      config,
+      static_cast<const int128_t*>(nullptr),
+      static_cast<const int128_t*>(nullptr));
+  modulus.call<int128_t, int128_t, int128_t>(out, 700, 300);
+  EXPECT_EQ(out, 100); // 7.00 % 3.00
+
+  functions::DecimalMultiplyFunction<exec::VectorExec> multiply;
+  multiply.call<int128_t, int128_t, int128_t>(out, 700, 300);
+  EXPECT_EQ(out, 210000); // 7.00 * 3.00, at the result scale of 4
 }

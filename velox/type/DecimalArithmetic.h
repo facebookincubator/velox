@@ -23,6 +23,7 @@
 
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/type/TypeKind.h"
 
 /// The scalar half of DecimalUtil: rescaling, range checks, and division.
@@ -30,7 +31,8 @@
 /// Split out of DecimalUtil.h so that code which only does decimal arithmetic
 /// does not also pull in the runtime type system. DecimalUtil.h itself needs
 /// Type.h, Status.h, <string> and <charconv> for its string and cast helpers;
-/// none of those are needed to add two decimals.
+/// none of those are reachable from a CUDA translation unit, and none of them
+/// are needed to add two decimals.
 ///
 /// DecimalUtil inherits from this, so every existing DecimalUtil::kPowersOfTen
 /// and DecimalUtil::valueInRange call site keeps working unchanged.
@@ -52,7 +54,21 @@ inline constexpr uint8_t kMaxShortDecimalPrecision = 18;
 inline constexpr uint8_t kMaxLongDecimalPrecision = 38;
 
 /// 10^exponent. exponent must be <= kMaxLongDecimalPrecision.
-constexpr int128_t decimalPowerOfTen(uint8_t exponent) {
+///
+/// Computed rather than tabulated because device code cannot read a table.
+/// A table cannot be a static member or a static local there: nvcc
+/// reports "identifier is undefined in device code" for a runtime index into
+/// static storage, --expt-relaxed-constexpr does not lift it, and a static
+/// local is ill-formed inside a constexpr function before C++23. That leaves a
+/// function-local table, which every calling kernel then pays for -- 39 int128
+/// stores and a local-memory load, 624 bytes of stack frame per thread
+/// measured with -Xptxas -v on sm_80. Squaring costs at most six multiplies
+/// and no memory at all.
+///
+/// It sits outside the class because a class's own static members cannot call
+/// one of its constexpr member functions while the class is still incomplete;
+/// DecimalArithmetic::kPowersOfTen is derived from this at compile time.
+VELOX_GPU_COMPATIBLE constexpr int128_t decimalPowerOfTen(uint8_t exponent) {
   int128_t result = 1;
   int128_t base = 10;
   while (exponent > 0) {
@@ -87,12 +103,22 @@ struct DecimalArithmetic {
   static constexpr uint8_t kMaxLongPrecision = detail::kMaxLongDecimalPrecision;
 
   /// 10^exponent. exponent must be <= kMaxLongPrecision.
-  static constexpr int128_t powerOfTen(uint8_t exponent) {
+  ///
+  /// Indexes the table on the host and computes on the device, where the
+  /// table is not addressable. The two agree by construction: kPowersOfTen is
+  /// filled by the same function the device branch calls. Carrying the split
+  /// here is what lets one call() body compile for both.
+  VELOX_GPU_COMPATIBLE static constexpr int128_t powerOfTen(uint8_t exponent) {
+#ifdef __CUDA_ARCH__
+    return detail::decimalPowerOfTen(exponent);
+#else
     return kPowersOfTen[exponent];
+#endif
   }
 
   /// kPowersOfTen[i] == 10^i, derived from detail::decimalPowerOfTen() so the
-  /// literals are written once.
+  /// literals are written once. Host-only; device code goes through
+  /// powerOfTen().
   static constexpr std::array<int128_t, kMaxLongPrecision + 1> kPowersOfTen =
       [] {
         std::array<int128_t, kMaxLongPrecision + 1> table{};
@@ -111,7 +137,25 @@ struct DecimalArithmetic {
   static constexpr int128_t kShortDecimalMax =
       detail::decimalPowerOfTen(kMaxShortPrecision) - 1;
 
-  FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
+  /// Magnitude of a decimal's unscaled value, as an unsigned type wide enough
+  /// to hold it. Negating the minimum of a signed type is undefined, so the
+  /// cast happens before the negation.
+  ///
+  /// Lives here rather than on DecimalUtil because callers that only do
+  /// arithmetic on unscaled values -- sparksql/DecimalUtil.h among them --
+  /// would otherwise have to reach the runtime type system for it. DecimalUtil
+  /// derives from this, so DecimalUtil::absValue still resolves.
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
+  VELOX_GPU_COMPATIBLE static uint64_t absValue(int64_t a) {
+    return a < 0 ? -static_cast<uint64_t>(a) : static_cast<uint64_t>(a);
+  }
+
+  template <class T, typename = std::enable_if_t<std::is_same_v<T, int128_t>>>
+  VELOX_GPU_COMPATIBLE static __uint128_t absValue(int128_t a) {
+    return a < 0 ? -static_cast<__uint128_t>(a) : static_cast<__uint128_t>(a);
+  }
+
+  VELOX_GPU_COMPATIBLE static void valueInRange(int128_t value) {
     VELOX_USER_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
         "Decimal overflow. Value '{}' is not in the range of Decimal Type",
@@ -120,14 +164,14 @@ struct DecimalArithmetic {
 
   /// Returns true if the precision can represent the value.
   template <typename T>
-  FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
+  VELOX_GPU_COMPATIBLE static bool valueInPrecisionRange(
       T value,
       uint8_t precision) {
     return value < powerOfTen(precision) && value > -powerOfTen(precision);
   }
 
   template <typename R, typename A, typename B>
-  inline static R divideWithRoundUp(
+  VELOX_GPU_COMPATIBLE static R divideWithRoundUp(
       R& r,
       A a,
       B b,
