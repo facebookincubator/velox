@@ -30,7 +30,9 @@ add_library(
   CudfLocalMerge.cpp
   CudfLocalPartition.cpp
   CudfMarkDistinct.cpp
+  CudfMemoryResource.cpp
   CudfNestedLoopJoin.cpp
+  CudfOperator.cpp
   CudfOrderBy.cpp
   CudfReduce.cpp
   CudfTopN.cpp
@@ -62,6 +64,7 @@ target_link_libraries(
     velox_cudf_vector
     velox_exception
     velox_exec
+    velox_memory
     velox_test_util
 )
 
