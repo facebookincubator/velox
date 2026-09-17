@@ -140,6 +140,10 @@ struct StreamStats {
   std::vector<uint32_t> chunkNullCounts;
 };
 
+/// Returns raw V1 metadata for serialization-focused tests.
+const MetadataBuffer& chunkStatsGroupV1MetadataForTest(
+    const ChunkStatsGroup& chunkStats);
+
 /// Specification for a single chunk in a stream (for test data creation).
 struct ChunkSpec {
   uint32_t rowCount{};
@@ -254,15 +258,15 @@ class ChunkStatsTestHelper {
       : chunkStats_(chunkIndex) {}
 
   uint32_t firstStripe() const {
-    return chunkStats_->firstStripe_;
+    return chunkStats_->firstStripe();
   }
 
   uint32_t stripeCount() const {
-    return chunkStats_->stripeCount_;
+    return chunkStats_->numStripes();
   }
 
   uint32_t streamCount() const {
-    return chunkStats_->streamCount_;
+    return chunkStats_->numStreams();
   }
 
   /// Returns stream position index statistics for the specified stream.
