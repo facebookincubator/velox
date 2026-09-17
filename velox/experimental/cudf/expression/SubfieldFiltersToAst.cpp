@@ -669,12 +669,7 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
         return createAlwaysFalseExpr(columnRef, tree);
       }
       return createAstFromFiltersOr(
-          subfield,
-          valueFilters,
-          tree,
-          scalars,
-          inputRowSchema,
-          decimalTypes);
+          subfield, valueFilters, tree, scalars, inputRowSchema, decimalTypes);
     }
 
     case common::FilterKind::kNegatedBigintRange: {
