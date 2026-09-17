@@ -71,16 +71,6 @@ struct InsertTableHandle {
           connectorInsertTableHandle,
       folly::F14FastSet<std::string> notNullColumns);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor. Prefer the overload above, which takes the NOT NULL
-  /// columns. Removed once all callers have migrated.
-  InsertTableHandle(
-      const std::string& connectorId,
-      const connector::ConnectorInsertTableHandlePtr&
-          connectorInsertTableHandle)
-      : InsertTableHandle(connectorId, connectorInsertTableHandle, {}) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   const std::string& connectorId() const {
     return connectorId_;
   }
@@ -4999,29 +4989,6 @@ class UnnestNode : public PlanNode {
       std::optional<std::string> markerName,
       std::optional<bool> splitOutput,
       const PlanNodePtr& source);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Deprecated. Use the std::vector<std::optional<std::string>> overload.
-  UnnestNode(
-      const PlanNodeId& id,
-      std::vector<FieldAccessTypedExprPtr> replicateVariables,
-      std::vector<FieldAccessTypedExprPtr> unnestVariables,
-      std::vector<std::string> unnestNames,
-      std::optional<std::string> ordinalityName,
-      std::optional<std::string> markerName,
-      const PlanNodePtr& source)
-      : UnnestNode(
-            id,
-            std::move(replicateVariables),
-            std::move(unnestVariables),
-            std::vector<std::optional<std::string>>(
-                unnestNames.begin(),
-                unnestNames.end()),
-            std::move(ordinalityName),
-            std::move(markerName),
-            std::nullopt,
-            source) {}
-#endif
 
   class Builder {
    public:

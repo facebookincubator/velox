@@ -153,14 +153,14 @@ StreamStats ChunkStatsTestHelper::streamStats(uint32_t streamId) const {
   StreamStats stats;
 
   const auto* root = flatbuffers::GetRoot<serialization::StripeChunkStats>(
-      chunkStats_->metadata_->content().data());
+      chunkStatsGroupV1MetadataForTest(*chunkStats_).content().data());
 
   const auto* streamChunkCounts = root->stream_chunk_counts();
   if (streamChunkCounts == nullptr) {
     return stats;
   }
 
-  const uint32_t streamCount = chunkStats_->streamCount_;
+  const uint32_t streamCount = chunkStats_->numStreams();
   if (streamId >= streamCount) {
     return stats;
   }
@@ -171,7 +171,7 @@ StreamStats ChunkStatsTestHelper::streamStats(uint32_t streamId) const {
   NIMBLE_CHECK_NOT_NULL(chunkOffsets);
   const auto* chunkNullCounts = root->stream_chunk_null_counts();
 
-  const uint32_t stripeCount = chunkStats_->stripeCount_;
+  const uint32_t stripeCount = chunkStats_->numStripes();
   NIMBLE_CHECK_EQ(
       streamChunkCounts->size(),
       static_cast<size_t>(stripeCount) * streamCount);
