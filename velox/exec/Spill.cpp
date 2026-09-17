@@ -107,6 +107,9 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
 
 bool SpillMergeStream::nextEquals() {
   VELOX_CHECK(!closed_);
+  if (sortingKeys().empty()) {
+    return false;
+  }
   if (index_ + 1 < size_) {
     return compareRows(*rowVector_, index_, *rowVector_, index_ + 1) == 0;
   }
@@ -126,6 +129,9 @@ int32_t SpillMergeStream::compareRows(
     vector_size_t leftIndex,
     const RowVector& right,
     vector_size_t rightIndex) const {
+  VELOX_CHECK(
+      !sortingKeys().empty(),
+      "Cannot compare rows from an unsorted spill stream.");
   const auto& children = left.children();
   const auto& otherChildren = right.children();
   for (const auto& [key, compareFlags] : sortingKeys()) {
