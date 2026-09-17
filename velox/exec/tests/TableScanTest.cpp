@@ -109,6 +109,58 @@ TEST_F(TableScanTest, allColumns) {
   ASSERT_TRUE(it->second.dynamicFilterStats.empty());
 }
 
+// Test scalar filter pushdown with data chosen to exercise SIMD bulk paths.
+TEST_F(TableScanTest, filterScalarTypes) {
+  constexpr vector_size_t kSize = 60'000;
+
+  // Use distinct BIGINT, INTEGER and SMALLINT values to select direct encoding
+  // and exercise their SIMD bulk paths when SIMD is enabled. REAL and DOUBLE
+  // also support SIMD bulk filtering. Repeated VARCHAR values target the
+  // dictionary path, which uses SIMD on indices and cached filter results.
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(kSize, [](vector_size_t row) { return row; }),
+       makeFlatVector<int32_t>(kSize, [](vector_size_t row) { return row; }),
+       makeFlatVector<int16_t>(
+           kSize, [](vector_size_t row) { return row - 30'000; }),
+       makeFlatVector<float>(
+           kSize, [](vector_size_t row) { return row + 0.5; }),
+       makeFlatVector<double>(
+           kSize, [](vector_size_t row) { return row + 0.25; }),
+       makeFlatVector<StringView>(
+           kSize,
+           [](vector_size_t row) {
+             return row % 2 == 0 ? "even"_sv : "odd"_sv;
+           }),
+       // TINYINT covers the scalar byte-RLE path.
+       makeFlatVector<int8_t>(
+           kSize, [](vector_size_t row) { return row % 127; })});
+  ASSERT_TRUE(rowType_->equivalent(*rowVector->type()));
+
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {rowVector});
+  createDuckDbTable({rowVector});
+
+  // Match numeric literal types to their columns to keep filters pushed down.
+  const std::vector<std::string> filters = {
+      "c0 >= 10000::BIGINT",
+      "c1 >= 10000::INTEGER",
+      "c2 >= (-20000)::SMALLINT",
+      "c3 >= cast(10000.5 as REAL)",
+      "c4 >= 10000.25",
+      "c5 = 'even'",
+      "c6 >= 63::TINYINT"};
+
+  // Filter each column in turn and compare all output columns with DuckDB
+  // to check filtering and row alignment.
+  for (const auto& filter : filters) {
+    SCOPED_TRACE(filter);
+    assertQuery(
+        PlanBuilder(pool_.get()).tableScan(rowType_, {filter}).planNode(),
+        {filePath},
+        fmt::format("SELECT * FROM tmp WHERE {}", filter));
+  }
+}
+
 TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   constexpr int kSize = 10;
   auto vector = makeRowVector({
