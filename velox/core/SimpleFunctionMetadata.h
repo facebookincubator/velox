@@ -390,8 +390,7 @@ struct TypeAnalysis<Row<T...>> {
   using child_types = std::tuple<T...>;
 
   template <size_t N>
-  using child_type_at =
-      FieldType<typename std::tuple_element<N, child_types>::type>;
+  using child_type_at = typename std::tuple_element<N, child_types>::type;
 
   void run(TypeAnalysisResults& results) {
     results.stats.concreteCount++;
@@ -405,23 +404,12 @@ struct TypeAnalysis<Row<T...>> {
             results.out << ", ";
           }
           first = false;
-          if constexpr (FieldTraits<T>::hasName) {
-            results.out << '"';
-            for (const auto character : FieldTraits<T>::name) {
-              if (character == '"') {
-                results.out << '"';
-              }
-              results.out << character;
-            }
-            results.out << "\" ";
-          }
-          TypeAnalysis<FieldType<T>>().run(results);
+          TypeAnalysis<T>().run(results);
           fieldTypes.push_back(results.physicalType);
         }(),
         ...);
     results.out << ")";
-    results.physicalType =
-        ROW({std::string(FieldTraits<T>::name)...}, std::move(fieldTypes));
+    results.physicalType = ROW(std::move(fieldTypes));
   }
 };
 

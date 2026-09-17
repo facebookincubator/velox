@@ -69,8 +69,8 @@ struct CastTypeChecker<Row<T...>> {
   static bool check(const TypePtr& vectorType) {
     int index = 0;
     return TypeKind::ROW == vectorType->kind() &&
-        (CastTypeChecker<FieldType<T>>::check(vectorType->childAt(index++)) &&
-         ... && true);
+        (CastTypeChecker<T>::check(vectorType->childAt(index++)) && ... &&
+         true);
   }
 };
 

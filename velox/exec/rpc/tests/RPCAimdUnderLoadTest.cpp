@@ -58,6 +58,16 @@ using velox::rpc::RPCErrorKind;
 using velox::rpc::RPCRequest;
 using velox::rpc::RPCResponse;
 
+// The registry requires every function to declare a signature. These
+// functions are reached through a hand-built plan rather than by name
+// resolution, so one varchar overload is all they need.
+AsyncRPCFunctionRegistry::Signatures varcharSignature() {
+  return {exec::FunctionSignatureBuilder()
+              .returnType("varchar")
+              .argumentType("varchar")
+              .build()};
+}
+
 // A PER_ROW RPC function backed by a MockRPCClient that rejects a
 // deterministic window of requests with rate-limit errors. It classifies
 // rate-limit/timeout failures as backend overload (kError -> both controllers
@@ -292,20 +302,27 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   static void SetUpTestCase() {
     OperatorTestBase::SetUpTestCase();
     registerRPCPlanNodeTranslator();
-    AsyncRPCFunctionRegistry::registerFunction("burst_rpc", [] {
-      return std::make_shared<BurstRPCFunction>(
-          BurstRPCFunction::Config{/*burstFirstCall=*/kWarmupRows,
-                                   /*burstLastCall=*/kWarmupRows + kBurstRows,
-                                   /*burstKind=*/RPCErrorKind::kRateLimited});
-    });
-    AsyncRPCFunctionRegistry::registerFunction("burst_batch_rpc", [] {
-      return std::make_shared<BurstBatchRPCFunction>(
-          BurstRPCFunction::Config{/*burstFirstCall=*/kWarmupRows,
-                                   /*burstLastCall=*/kWarmupRows + kBurstRows,
-                                   /*burstKind=*/RPCErrorKind::kRateLimited,
-                                   /*latency=*/std::chrono::milliseconds(1),
-                                   /*tier=*/"layer2.test.batch.tier"});
-    });
+    AsyncRPCFunctionRegistry::registerFunction(
+        "burst_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "burst_batch_rpc",
+        [] {
+          return std::make_shared<BurstBatchRPCFunction>(
+              BurstRPCFunction::Config{
+                  /*burstFirstCall=*/kWarmupRows,
+                  /*burstLastCall=*/kWarmupRows + kBurstRows,
+                  /*burstKind=*/RPCErrorKind::kRateLimited,
+                  /*latency=*/std::chrono::milliseconds(1),
+                  /*tier=*/"layer2.test.batch.tier"});
+        },
+        varcharSignature());
   }
 
   static void TearDownTestCase() {

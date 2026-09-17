@@ -601,6 +601,13 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
     EXPECT_FALSE(encodingOptions.allowNestedAlpSelection);
+
+    // The delta pre-transform ships disabled. Assert the flag's own default
+    // too, so lowering the bar to enabling it fails here rather than silently
+    // turning on an encoding whose streams reject skip() and
+    // readWithVisitor().
+    EXPECT_FALSE(FLAGS_nimble_subintsplit_delta_pretransform);
+    EXPECT_FALSE(encodingOptions.subIntSplitDeltaPreTransform);
   }
 
   for (const auto useExactBits : {false, true}) {
@@ -620,6 +627,22 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
       EXPECT_EQ(
           encodingOptions.allowNestedAlpSelection, allowNestedAlpSelection);
     }
+  }
+}
+
+TEST_F(WriterTest, subIntSplitDeltaPreTransformFollowsItsFlag) {
+  // The SubIntSplit delta pre-transform has no WriterOptions field: the gflag
+  // is its only enablement channel, so the flag value is what must reach
+  // Encoding::Options.
+  for (const auto enabled : {false, true}) {
+    SCOPED_TRACE(fmt::format("enabled={}", enabled));
+    gflags::FlagSaver flagSaver;
+    FLAGS_nimble_subintsplit_delta_pretransform = enabled;
+
+    const nimble::WriterOptions options;
+
+    EXPECT_EQ(
+        options.buildEncodingOptions().subIntSplitDeltaPreTransform, enabled);
   }
 }
 
@@ -3626,6 +3649,50 @@ TEST_F(WriterTest, chunkStatsAbsentWhenChunkIndexDisabled) {
       << "no chunk stats section should be written when the index is disabled";
 }
 
+TEST_F(WriterTest, canonicalChunkStatsWritesV2Section) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      vector->type(),
+      std::move(writeFile),
+      *rootPool_,
+      {
+          .enableChunkStats = true,
+          .chunkStatsVersion = nimble::ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+          .enableChunking = true,
+      });
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  EXPECT_FALSE(
+      tablet->hasOptionalSection(std::string(nimble::kChunkStatsSection)));
+  EXPECT_TRUE(
+      tablet->hasOptionalSection(std::string(nimble::kChunkStatsV2Section)));
+}
+
+TEST_F(WriterTest, conflictingChunkStatsVersionsFail) {
+  auto type = velox::ROW({{"c1", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          type,
+          std::move(writeFile),
+          *rootPool_,
+          {.enableChunkIndex = true,
+           .enableChunkStats = true,
+           .chunkStatsVersion = nimble::ChunkStatsVersion::kV2}),
+      "enableChunkIndex requests chunk stats V1, but enableChunkStats requests V2.");
+}
+
 TEST_F(WriterTest, chunkIndexRequiresChunking) {
   auto type = velox::ROW({{"c1", velox::INTEGER()}});
   std::string file;
@@ -3636,6 +3703,19 @@ TEST_F(WriterTest, chunkIndexRequiresChunking) {
           std::move(writeFile),
           *rootPool_,
           {.enableChunkIndex = true, .enableChunking = false}),
+      "Chunk stats require chunking to be enabled.");
+}
+
+TEST_F(WriterTest, chunkStatsRequiresChunking) {
+  auto type = velox::ROW({{"c1", velox::INTEGER()}});
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  NIMBLE_ASSERT_USER_THROW(
+      nimble::Writer(
+          type,
+          std::move(writeFile),
+          *rootPool_,
+          {.enableChunkStats = true, .enableChunking = false}),
       "Chunk stats require chunking to be enabled.");
 }
 
