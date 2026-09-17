@@ -30,13 +30,13 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// parse_url(url, part) -> varchar
-/// parse_url(url, 'QUERY', key) -> varchar
-/// Extracts a part of a URL, reproducing the semantics of Spark's ParseUrl
-/// expression: the URL is parsed with java.net.URI rules (see detail::
-/// parseUrl) and every part is returned in its raw, still percent-encoded
-/// form. The three-argument form extracts a query parameter with the same
-/// (&|^)key=([^&]*) regex Spark compiles.
+// parse_url(url, part) -> varchar
+// parse_url(url, 'QUERY', key) -> varchar
+// Extracts a part of a URL, reproducing the semantics of Spark's ParseUrl
+// expression: the URL is parsed with java.net.URI rules (see parseUrl)
+// and every part is returned in its raw, still percent-encoded form. The
+// three-argument form extracts a query parameter with the same
+// (&|^)key=([^&]*) regex Spark compiles.
 template <typename T>
 struct ParseUrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -110,8 +110,8 @@ struct ParseUrlFunction {
     // A constant URL is parsed once here; the parsed views point into the
     // constant vector's string buffer, which outlives every call.
     if (urlStr) {
-      constUrl_ = detail::ParsedUrl{};
-      if (!detail::parseUrl(
+      constUrl_ = ParsedUrl{};
+      if (!parseUrl(
               std::string_view(urlStr->data(), urlStr->size()), *constUrl_)) {
         constUrl_.reset();
         constUrlInvalid_ = true;
@@ -121,9 +121,9 @@ struct ParseUrlFunction {
     if (part) {
       constPart_ = parsePart(std::string_view(part->data(), part->size()));
     }
-    // A constant key is only remembered here; its regex is compiled
-    // lazily on the first call that extracts a query parameter, so an
-    // invalid key does not fail rows that never use it.
+    // A constant key is compiled into a dedicated pattern, outside the
+    // regex cache, on the first call that extracts a query parameter, so
+    // an invalid key does not fail rows that never use it.
     if (key) {
       constKey_ = std::string(key->data(), key->size());
     }
@@ -132,7 +132,7 @@ struct ParseUrlFunction {
   // Returns the parsed URL, using the cached parse for a constant URL.
   // Returns nullptr for an invalid URL; in ANSI mode an invalid URL fails
   // the query instead, matching Spark's ParseUrl failOnError behavior.
-  detail::ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
+  ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
     if (constUrl_.has_value()) {
       return &*constUrl_;
     }
@@ -145,7 +145,7 @@ struct ParseUrlFunction {
       return nullptr;
     }
     // parseUrl resets the scratch state itself.
-    if (!detail::parseUrl(
+    if (!parseUrl(
             std::string_view(urlStr.data(), urlStr.size()), parsedScratch_)) {
       if (ansiEnabled_) {
         VELOX_USER_FAIL(
@@ -198,19 +198,21 @@ struct ParseUrlFunction {
     if (isPlainKey(keyValue)) {
       return extractPlainKey(output, query, keyValue);
     }
+    // A constant key compiles into a dedicated pattern once, outside the
+    // regex cache; a non-constant key goes through the cache so each
+    // distinct key compiles at most once. An invalid key fails the query
+    // with the same message in both shapes.
     const re2::RE2* pattern = nullptr;
     if (constKey_.has_value()) {
-      // A constant key compiles its regex once, on the first call that uses
-      // it; an invalid key fails the query here.
       if (constPattern_ == nullptr) {
         constPattern_ = std::make_unique<re2::RE2>(buildQueryPattern(keyValue));
-        VELOX_USER_CHECK(constPattern_->ok(), "invalid key: {}", keyValue);
+        VELOX_USER_CHECK(
+            constPattern_->ok(),
+            "invalid regular expression:{}",
+            constPattern_->error());
       }
       pattern = constPattern_.get();
     } else {
-      // A non-constant key is looked up in the regex cache so each distinct
-      // key compiles at most once instead of once per row. An invalid key or
-      // a full cache fails the query, like the regexp functions.
       const std::string queryPattern = buildQueryPattern(keyValue);
       pattern = cache_.findOrCompile(StringView(queryPattern));
     }
@@ -288,28 +290,26 @@ struct ParseUrlFunction {
 
   // Returns the requested part, or false for null. A view field with
   // data() == nullptr means the component is absent.
-  static bool extractPart(
-      out_type<Varchar>& output,
-      const detail::ParsedUrl& parsed,
-      Part part) {
+  static bool
+  extractPart(out_type<Varchar>& output, const ParsedUrl& parsed, Part part) {
     switch (part) {
       case Part::kProtocol:
-        if (parsed.protocol.data() == nullptr) {
+        if (!parsed.protocol.has_value()) {
           return false;
         }
-        assignOutput(output, parsed.protocol);
+        assignOutput(output, *parsed.protocol);
         return true;
       case Part::kHost:
-        if (parsed.host.data() == nullptr) {
+        if (!parsed.host.has_value()) {
           return false;
         }
-        assignOutput(output, parsed.host);
+        assignOutput(output, *parsed.host);
         return true;
       case Part::kPath:
-        if (parsed.path.data() == nullptr) {
+        if (!parsed.path.has_value()) {
           return false;
         }
-        assignOutput(output, parsed.path);
+        assignOutput(output, *parsed.path);
         return true;
       case Part::kQuery:
         if (!parsed.query.has_value()) {
@@ -324,12 +324,12 @@ struct ParseUrlFunction {
         assignOutput(output, *parsed.ref);
         return true;
       case Part::kFile: {
-        if (parsed.path.data() == nullptr) {
+        if (!parsed.path.has_value()) {
           return false;
         }
         // FILE synthesizes a new string that is not a slice of the URL
         // argument, so it must be copied into the result.
-        std::string outputStr(parsed.path);
+        std::string outputStr(*parsed.path);
         if (parsed.query.has_value()) {
           outputStr += '?';
           outputStr += *parsed.query;
@@ -357,24 +357,26 @@ struct ParseUrlFunction {
 
   // The parse of a constant URL, or an empty optional after initialize()
   // when the constant URL is invalid. Unset when the URL is not constant.
-  std::optional<detail::ParsedUrl> constUrl_;
+  std::optional<ParsedUrl> constUrl_;
   bool constUrlInvalid_ = false;
 
   // Scratch space for parsing a non-constant URL, reused across calls;
   // parseUrl resets it at entry.
-  detail::ParsedUrl parsedScratch_;
+  ParsedUrl parsedScratch_;
 
   // A constant part, keyed once in initialize() instead of per row.
   std::optional<Part> constPart_;
 
-  // When true, an invalid URL fails the query instead of yielding null,
-  // matching Spark's ANSI mode.
-  bool ansiEnabled_ = false;
-
   // A constant query key, remembered in initialize(). Its compiled regex
   // is built lazily on first use in call().
   std::optional<std::string> constKey_;
+
+  // The compiled regex of a constant query key, outside the regex cache.
   std::unique_ptr<re2::RE2> constPattern_;
+
+  // When true, an invalid URL fails the query instead of yielding null,
+  // matching Spark's ANSI mode.
+  bool ansiEnabled_ = false;
 
   // Cache of compiled regexes for non-constant query keys, bounded by
   // 'expression.max_compiled_regexes'.
