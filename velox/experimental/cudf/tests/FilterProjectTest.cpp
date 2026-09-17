@@ -2655,6 +2655,75 @@ TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampTimezoneParity) {
   }
 }
 
+// The common kPrestoCast forms are canonicalized and parsed on device. Each
+// must still equal what CPU produces rather than the rolled-over value an
+// unvalidated cuDF parse returns.
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampAcceptedForms) {
+  auto input =
+      makeRowVector({makeFlatVector<std::string>(std::vector<std::string>{
+          "2024-03-14 12:30:00",
+          "2024-03-14",
+          "2024-03-14 12:30",
+          "2024-03-14 12:30:00.5",
+          "2024-03-14 12:30:00.123456",
+          "2024-03-14 12:30:00.123456789",
+          "2024-03-14 12:30:00.1234567890",
+      })});
+  assertExpressionMatchesCpu("cast(c0 as timestamp)", input, input->rowType());
+}
+
+// Values outside the device parser's common fixed-width shape use Velox's
+// kPrestoCast parser. These are copied from CastExprTest's reference corpus and
+// cover single-digit fields, explicit offsets, named zones and whitespace.
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampPrestoGrammar) {
+  setTimezone("America/Los_Angeles");
+  auto input = makeRowVector({makeNullableFlatVector<std::string>({
+      " 2024-3-4 1:02",
+      "1970-01-01 00:00 America/Sao_Paulo",
+      "2000-01-01 12:21:56Z",
+      "1970-01-02 00:00:00 +01:01:01.001",
+      "1970-01-01 00:00:00 -010101001",
+      "1970-01-02 00:00:00 +01:01:01.001   ",
+      std::nullopt,
+  })});
+  assertExpressionMatchesCpu("cast(c0 as timestamp)", input, input->rowType());
+}
+
+// to_timestamps is undefined for input that does not match its format, so
+// without validation a malformed string yields whatever digits sat at each
+// field position. CPU raises instead.
+TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampInvalidThrows) {
+  for (const auto* text : {"garbage", "2024-13-14 12:30:00", "not a date"}) {
+    SCOPED_TRACE(text);
+    VELOX_ASSERT_THROW(
+        (evaluateOnce<Timestamp, std::string>("cast(c0 as timestamp)", text)),
+        "Unable to parse timestamp value");
+  }
+}
+
+// try_cast answers null for malformed input and for a local timestamp in a DST
+// gap, as CPU does, and leaves the castable rows of the same column alone.
+TEST_F(CudfSimpleFilterProjectTest, tryCastVarcharToTimestampInvalidIsNull) {
+  setTimezone("America/Los_Angeles");
+  for (const auto& input :
+       {makeRowVector({makeNullableFlatVector<std::string>({
+            "2024-03-14 12:30:00",
+            "garbage",
+            std::nullopt,
+            "2024-03-14",
+            "1970-01-01 00:00 America/Sao_Paulo",
+        })}),
+        makeRowVector({makeFlatVector<std::string>({
+            "2023-03-12 01:59:59",
+            "2023-03-12 02:30:00",
+            "2023-03-12 03:00:00",
+            "2023-11-05 01:30:00",
+        })})}) {
+    assertExpressionMatchesCpu(
+        "try_cast(c0 as timestamp)", input, input->rowType());
+  }
+}
+
 TEST_F(CudfSimpleFilterProjectTest, castVarcharToTimestampNull) {
   auto result = evaluateOnce<Timestamp, std::string>(
       "cast(c0 as timestamp)", std::optional<std::string>(std::nullopt));

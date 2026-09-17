@@ -29,6 +29,7 @@
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/scalar/scalar.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/search.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
 #include <cudf/table/table_view.hpp>
@@ -402,6 +403,7 @@ class OffsetTable {
   // earliest instant. Null rows are never treated as gaps.
   std::unique_ptr<cudf::column> toUtc(
       const cudf::column_view& localTimestamps,
+      bool nullOnGap,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
@@ -579,6 +581,7 @@ std::unique_ptr<cudf::column> OffsetTable::toLocal(
 
 std::unique_ptr<cudf::column> OffsetTable::toUtc(
     const cudf::column_view& localTimestamps,
+    bool nullOnGap,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto indices = activeIntervalIndices(
@@ -621,17 +624,23 @@ std::unique_ptr<cudf::column> OffsetTable::toUtc(
         mr);
     gap = maskedGap->view();
   }
-  auto anyGap = cudf::reduce(
-      gap,
-      *cudf::make_any_aggregation<cudf::reduce_aggregation>(),
-      cudf::data_type{cudf::type_id::BOOL8},
-      stream,
-      mr);
-  auto& anyGapScalar = static_cast<cudf::numeric_scalar<bool>&>(*anyGap);
-  if (anyGapScalar.is_valid(stream) && anyGapScalar.value(stream)) {
-    VELOX_USER_FAIL(
-        "Cannot convert local time to UTC: the time does not exist in the "
-        "time zone (daylight savings gap)");
+  if (nullOnGap) {
+    auto nullTimestamp = cudf::make_default_constructed_scalar(
+        localTimestamps.type(), stream, mr);
+    return cudf::copy_if_else(*nullTimestamp, result->view(), gap, stream, mr);
+  } else {
+    auto anyGap = cudf::reduce(
+        gap,
+        *cudf::make_any_aggregation<cudf::reduce_aggregation>(),
+        cudf::data_type{cudf::type_id::BOOL8},
+        stream,
+        mr);
+    auto& anyGapScalar = static_cast<cudf::numeric_scalar<bool>&>(*anyGap);
+    if (anyGapScalar.is_valid(stream) && anyGapScalar.value(stream)) {
+      VELOX_USER_FAIL(
+          "Cannot convert local time to UTC: the time does not exist in the "
+          "time zone (daylight savings gap)");
+    }
   }
   return result;
 }
@@ -662,7 +671,16 @@ std::unique_ptr<cudf::column> toUtcTimestamp(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return OffsetTable::get(tz::locateZone(timezoneName))
-      ->toUtc(localTimestamps, stream, mr);
+      ->toUtc(localTimestamps, false, stream, mr);
+}
+
+std::unique_ptr<cudf::column> tryToUtcTimestamp(
+    const cudf::column_view& localTimestamps,
+    std::string_view timezoneName,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  return OffsetTable::get(tz::locateZone(timezoneName))
+      ->toUtc(localTimestamps, true, stream, mr);
 }
 
 std::unique_ptr<cudf::column> formatTimestamp(

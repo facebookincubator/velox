@@ -71,6 +71,15 @@ std::unique_ptr<cudf::column> toUtcTimestamp(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
+/// Converts local timestamps to UTC like toUtcTimestamp, but replaces local
+/// times in a daylight-saving gap with null instead of raising. This matches
+/// try_cast semantics while preserving valid and already-null rows.
+std::unique_ptr<cudf::column> tryToUtcTimestamp(
+    const cudf::column_view& localTimestamps,
+    std::string_view timezoneName,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
 /// Returns the per-row UT offset (DURATION_SECONDS), DST-aware, for the given
 /// timezone at each UTC instant -- i.e. local = utc + offset. This is the
 /// primitive behind toLocalTimestamp; it is also used directly to render

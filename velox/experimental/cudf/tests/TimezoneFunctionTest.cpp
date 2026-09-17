@@ -1760,6 +1760,17 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampGapRaises) {
       "does not exist in the time zone");
 }
 
+TEST_F(TimezoneFunctionTest, tryToUtcTimestampGapIsNull) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto local = millisColumn({kLocalInGap}, stream, mr);
+
+  auto utc = tryToUtcTimestamp(local->view(), kLosAngelesZone, stream, mr);
+
+  EXPECT_EQ(utc->size(), 1);
+  EXPECT_EQ(utc->null_count(), 1);
+}
+
 TEST_F(TimezoneFunctionTest, toUtcTimestampOverlapPicksEarliest) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
