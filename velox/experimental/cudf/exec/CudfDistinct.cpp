@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfDistinct.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/KeyNormalization.h"
+#include "velox/experimental/cudf/exec/TimestampWithTimeZoneKeys.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
 #include "velox/exec/Aggregate.h"

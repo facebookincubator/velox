@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/KeyNormalization.h"
+#include "velox/experimental/cudf/exec/TimestampWithTimeZoneKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -45,7 +45,7 @@ namespace {
 constexpr const char* kKiritimati = "Pacific/Kiritimati";
 constexpr const char* kMidway = "Pacific/Midway";
 
-class KeyNormalizationTest : public testing::Test {
+class TimestampWithTimeZoneKeysTest : public testing::Test {
  protected:
   rmm::cuda_stream_view stream() const {
     return cudf::get_default_stream();
@@ -125,7 +125,9 @@ class KeyNormalizationTest : public testing::Test {
 // different zone keys are DIFFERENT packed values and become IDENTICAL after
 // normalization, which is what makes every downstream hash, equality and sort
 // agree with Velox.
-TEST_F(KeyNormalizationTest, sameInstantDifferentZonesBecomeIdentical) {
+TEST_F(
+    TimestampWithTimeZoneKeysTest,
+    sameInstantDifferentZonesBecomeIdentical) {
   const int64_t millis = 1'623'758'400'000;
   auto column = int64Column(
       {packed(millis, kKiritimati),
@@ -151,7 +153,7 @@ TEST_F(KeyNormalizationTest, sameInstantDifferentZonesBecomeIdentical) {
 // toward zero and lands a millisecond late, where the AND floors. Asserted
 // against unpackMillisUtc rather than a hand-computed constant, so the test
 // tracks the definition rather than restating it.
-TEST_F(KeyNormalizationTest, preEpochInstantsFloorRatherThanTruncate) {
+TEST_F(TimestampWithTimeZoneKeysTest, preEpochInstantsFloorRatherThanTruncate) {
   const int64_t millis = -14'182'940'000;
   auto column = int64Column(
       {packed(millis, kKiritimati),
@@ -172,7 +174,7 @@ TEST_F(KeyNormalizationTest, preEpochInstantsFloorRatherThanTruncate) {
 // Normalization must not over-collapse: instants one millisecond apart stay
 // distinct. This is what fails if the mask ever clears more than kMillisShift
 // bits.
-TEST_F(KeyNormalizationTest, adjacentMillisStayDistinct) {
+TEST_F(TimestampWithTimeZoneKeysTest, adjacentMillisStayDistinct) {
   auto column = int64Column(
       {packed(1'623'758'400'000, kKiritimati),
        packed(1'623'758'400'001, "UTC"),
@@ -187,7 +189,7 @@ TEST_F(KeyNormalizationTest, adjacentMillisStayDistinct) {
 
 // Ordering is preserved, which is what makes the same helper usable for sort
 // and TopN keys and not only for hashing.
-TEST_F(KeyNormalizationTest, orderingIsPreserved) {
+TEST_F(TimestampWithTimeZoneKeysTest, orderingIsPreserved) {
   auto column = int64Column(
       {packed(-14'182'940'000, kMidway),
        packed(0, kKiritimati),
@@ -202,7 +204,7 @@ TEST_F(KeyNormalizationTest, orderingIsPreserved) {
 // A null key must stay null rather than masking to a value: under
 // cudf::null_equality::UNEQUAL a null key is distinct from every real one, and
 // turning it into 0 would silently make it equal to the epoch in UTC.
-TEST_F(KeyNormalizationTest, nullsArePreserved) {
+TEST_F(TimestampWithTimeZoneKeysTest, nullsArePreserved) {
   const int64_t millis = 1'623'758'400'000;
   auto column = int64Column(
       {packed(millis, kKiritimati), std::nullopt, packed(millis, kMidway)});
@@ -219,7 +221,9 @@ TEST_F(KeyNormalizationTest, nullsArePreserved) {
 
 // Columns not flagged as TIMESTAMP WITH TIME ZONE must be passed through
 // untouched, and by reference rather than copied.
-TEST_F(KeyNormalizationTest, nonTswtzColumnsArePassedThroughUnchanged) {
+TEST_F(
+    TimestampWithTimeZoneKeysTest,
+    nonTswtzColumnsArePassedThroughUnchanged) {
   auto tswtz = int64Column({packed(1'623'758'400'000, kKiritimati)});
   auto plain = int64Column({1'623'758'400'123});
   auto keys = cudf::table_view{{tswtz->view(), plain->view()}};
@@ -236,7 +240,7 @@ TEST_F(KeyNormalizationTest, nonTswtzColumnsArePassedThroughUnchanged) {
 
 // With no TSWTZ key at all the helper is a no-op and must not allocate: this is
 // the common case for every operator, so it has to stay free.
-TEST_F(KeyNormalizationTest, noTswtzKeyIsANoOp) {
+TEST_F(TimestampWithTimeZoneKeysTest, noTswtzKeyIsANoOp) {
   auto a = int64Column({1, 2, 3});
   auto b = int64Column({4, 5, 6});
   auto keys = cudf::table_view{{a->view(), b->view()}};
@@ -252,7 +256,7 @@ TEST_F(KeyNormalizationTest, noTswtzKeyIsANoOp) {
 
 // The row-type overload must derive the same flags the explicit one takes, so
 // an operator can pass its channels rather than precomputing.
-TEST_F(KeyNormalizationTest, rowTypeOverloadDerivesTheFlags) {
+TEST_F(TimestampWithTimeZoneKeysTest, rowTypeOverloadDerivesTheFlags) {
   const int64_t millis = 1'623'758'400'000;
   auto tswtz =
       int64Column({packed(millis, kKiritimati), packed(millis, kMidway)});
@@ -274,12 +278,14 @@ TEST_F(KeyNormalizationTest, rowTypeOverloadDerivesTheFlags) {
   EXPECT_EQ(toHost(normalized.view.column(1))[0], 7);
 }
 
-TEST_F(KeyNormalizationTest, anyKeyNeedsNormalizationIsFalseWithoutTswtz) {
+TEST_F(
+    TimestampWithTimeZoneKeysTest,
+    anyKeyNeedsNormalizationIsFalseWithoutTswtz) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
   EXPECT_FALSE(anyKeyNeedsNormalization(rowType, {0, 1}));
 }
 
-TEST_F(KeyNormalizationTest, flagCountMustMatchColumnCount) {
+TEST_F(TimestampWithTimeZoneKeysTest, flagCountMustMatchColumnCount) {
   auto column = int64Column({1});
   auto keys = cudf::table_view{{column->view()}};
   VELOX_ASSERT_THROW(

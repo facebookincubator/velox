@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/KeyNormalization.h"
+#include "velox/experimental/cudf/exec/TimestampWithTimeZoneKeys.h"
 
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
@@ -29,13 +29,10 @@ cudf::data_type int64Type() {
   return cudf::data_type{cudf::type_id::INT64};
 }
 
-// Clears the zone key of one packed column. Mirrors tswtzZoneKey in
-// expression/TimestampWithTimeZoneColumn.cpp, which ANDs with kTimezoneMask to
-// extract the zone; this ANDs with its complement to drop it.
-//
-// binary_operation propagates the input's null mask, so a null row stays null
-// rather than masking to a value -- which matters because a null key must
-// remain distinct from a real one under cudf::null_equality::UNEQUAL.
+// Clear the packed zone-key bits so equal instants compare equal across zones.
+// Bitwise masking matches the arithmetic-shift semantics of packed pre-epoch
+// values, where division would truncate toward zero. binary_operation also
+// preserves the input's null mask, keeping null keys distinct from real keys.
 std::unique_ptr<cudf::column> clearZoneKey(
     const cudf::column_view& packed,
     rmm::cuda_stream_view stream,

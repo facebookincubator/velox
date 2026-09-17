@@ -40,7 +40,7 @@ add_library(
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
   GpuResources.cpp
-  KeyNormalization.cpp
+  TimestampWithTimeZoneKeys.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
   SparkAggregateFunctions.cpp

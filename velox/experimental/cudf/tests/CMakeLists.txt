@@ -214,7 +214,7 @@ velox_add_cudf_test(
 
 velox_add_cudf_test(
   NAME velox_cudf_key_normalization_test
-  SOURCES Main.cpp KeyNormalizationTest.cpp
+  SOURCES Main.cpp TimestampWithTimeZoneKeysTest.cpp
   LIBS velox_cudf_exec cudf::cudf
 )
 

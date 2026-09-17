@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/KeyNormalization.h"
+#include "velox/experimental/cudf/exec/TimestampWithTimeZoneKeys.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -237,18 +237,10 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
               get_temp_mr());
         }
 
-        // A TIMESTAMP WITH TIME ZONE partition key must be hashed on its
-        // instant alone: it is physically (millis << 12) | zone_key, Velox's
-        // hash for the type reads unpackMillisUtc only, and murmur3 over the
-        // raw int64 sends two values for the same moment in different zones to
-        // DIFFERENT partitions. A partitioned aggregation or join then never
-        // brings them together, so the rows are silently lost to each other --
-        // with numPartitions_ counting consumer drivers, this happens on a
-        // single worker.
-        //
-        // The keys-table overload is what keeps this a pure key change: `input`
-        // stays the untouched payload, so every emitted row keeps its real zone
-        // key, and there is no shadow column to strip or index to remap.
+        // Hash TIMESTAMP WITH TIME ZONE keys by instant so equal instants in
+        // different zones reach the same consumer. Otherwise a partitioned
+        // aggregation or join cannot reunite them. The keys-table overload
+        // leaves the output's original packed values and zone keys unchanged.
         normalizedKeys = normalizeKeyColumns(
             tableView.select(partitionKeyIndices),
             partitionKeyIsTswtz_,
