@@ -1252,7 +1252,7 @@ TEST_F(PlanNodeToStringTest, fixedPointSequence) {
 
   ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, convergencePlan: none] -> x:BIGINT\n",
+      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, stopWhenDeltaEmpty: false, convergencePlans: 0] -> x:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1283,7 +1283,7 @@ TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
 
   ASSERT_EQ("-- FixedPoint[5]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, convergencePlan: present] -> a:BIGINT, b:BIGINT\n",
+      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, stopWhenDeltaEmpty: false, convergencePlans: 1] -> a:BIGINT, b:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1333,7 +1333,7 @@ TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
 
   ASSERT_EQ("-- FixedPoint[8]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, convergencePlan: present] -> id:BIGINT, depth:BIGINT\n",
+      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, stopWhenDeltaEmpty: false, convergencePlans: 1] -> id:BIGINT, depth:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1370,7 +1370,7 @@ TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
 
   ASSERT_EQ("-- FixedPoint[6]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, convergencePlan: none] -> key:BIGINT, val:BIGINT\n",
+      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, stopWhenDeltaEmpty: false, convergencePlans: 0] -> key:BIGINT, val:BIGINT\n",
       plan->toString(true, false));
 }
 

@@ -24,6 +24,7 @@
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
 #include "velox/dwio/nimble/velox/selective/NimbleData.h"
+#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/vector/DictionaryVector.h"
 
 namespace facebook::nimble {
@@ -430,6 +431,7 @@ bool StringColumnReader::readWithDictionary(
   // in this case — that would advance the null/in-map decoders a second time
   // and corrupt flatmap reads.
   if (!decoder_.dictionaryConvertible()) {
+    fuzzer::updateStringDictionaryEncodingAbandoned();
     abandonDictionaryEncoding(endReadRow);
     return false;
   }
@@ -517,6 +519,7 @@ bool StringColumnReader::readWithDictionary(
   }
 
   if (!abandonDictionary) {
+    fuzzer::updateStringDictionaryEncodingPreserved();
     readOffset_ += endReadRow;
     return true;
   }
@@ -526,6 +529,7 @@ bool StringColumnReader::readWithDictionary(
   // (filterDictionaryIndices above ran for this path too). readOffset_ already
   // points at the chunk boundary (set by readDictionaryIndices), so read()
   // resumes the flat read there and slices the remaining rows past it.
+  fuzzer::updateStringDictionaryEncodingAbandoned();
   abandonDictionaryEncoding(endReadRow);
   return false;
 }

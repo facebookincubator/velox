@@ -25,6 +25,15 @@ namespace facebook::nimble::index::test {
 
 class ChunkStatsTest : public ClusterIndexTestBase {};
 
+TEST_F(ChunkStatsTest, createRejectsNullMetadata) {
+  NIMBLE_ASSERT_THROW(
+      ChunkStatsGroup::create(
+          /*firstStripe=*/0,
+          /*stripeCount=*/1,
+          std::unique_ptr<MetadataBuffer>{}),
+      "Chunk stats metadata must not be null.");
+}
+
 TEST_F(ChunkStatsTest, lookupChunkWithRowId) {
   std::vector<std::string> indexColumns = {"col1"};
   std::string minKey = "aaa";
@@ -165,6 +174,35 @@ TEST_F(ChunkStatsTest, lookupChunkWithRowId) {
 
   auto s11 = chunkStats->createStreamIndex(1, 1, /*streamSize=*/1000);
   NIMBLE_ASSERT_THROW(s11->lookupChunk(650), "beyond the last chunk");
+}
+
+TEST_F(ChunkStatsTest, streamIndexRetainsBackingMetadata) {
+  const std::vector<std::string> indexColumns = {"col1"};
+  const std::vector<Stripe> stripes = {
+      {.streams =
+           {{.numChunks = 2, .chunkRows = {40, 60}, .chunkOffsets = {0, 15}}},
+       .keyStream = {
+           .streamOffset = 0,
+           .streamSize = 35,
+           .stream = {.numChunks = 1, .chunkRows = {100}, .chunkOffsets = {0}},
+           .chunkKeys = {"bbb"}}}};
+  const std::vector<int> stripeGroups = {1};
+
+  const auto indexBuffers =
+      createTestClusterIndex(indexColumns, "aaa", stripes, stripeGroups);
+  auto chunkStats = createChunkStats(indexBuffers, 0);
+  auto streamIndex = chunkStats->createStreamIndex(0, 0, /*streamSize=*/35);
+  ASSERT_NE(streamIndex, nullptr);
+
+  chunkStats.reset();
+
+  const auto location = streamIndex->lookupChunk(40);
+  EXPECT_EQ(location.chunkIndex, 1);
+  EXPECT_EQ(location.chunkOffset, 15);
+  EXPECT_EQ(location.chunkSize, 20);
+  EXPECT_EQ(location.rowOffset, 40);
+  EXPECT_EQ(streamIndex->rowCount(), 100);
+  EXPECT_EQ(streamIndex->chunkNullCount(location.chunkIndex), std::nullopt);
 }
 
 TEST_F(ChunkStatsTest, lookupChunkPopulatesChunkIndex) {

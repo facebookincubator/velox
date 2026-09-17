@@ -12,6 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_executable(duck_query_runner_test DuckQueryRunnerTest.cpp)
+add_test(duck_query_runner_test duck_query_runner_test)
+
+target_link_libraries(
+  duck_query_runner_test
+  velox_fuzzer_util
+  velox_exec_test_lib
+  velox_aggregates
+  velox_functions_prestosql
+  velox_window
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+)
+
 add_executable(presto_sql_test PrestoSqlTest.cpp)
 add_test(presto_sql_test presto_sql_test)
 

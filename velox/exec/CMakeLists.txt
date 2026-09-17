@@ -138,7 +138,6 @@ velox_add_library(
   EnforceDistinct.h
   EnforceSingleRow.h
   Exchange.h
-  ExchangeClient.h
   InMemoryExchangeClient.h
   ExchangeQueue.h
   ExchangeSink.h

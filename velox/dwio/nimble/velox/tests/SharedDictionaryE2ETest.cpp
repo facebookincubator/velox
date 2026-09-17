@@ -1406,6 +1406,35 @@ TEST_P(SharedDictionaryE2EInputTypeTest, stripeScopeRoundTrip) {
   verifyRoundTrip(file, inputType);
 }
 
+TEST_F(SharedDictionaryE2ETest, predefinedFlatMapKeyUsesSharedDictionary) {
+  const std::vector<StripeValueType> stripeValueTypes{
+      StripeValueType::Dictionary, StripeValueType::Direct};
+  auto options = makeSharedDictionaryWriterOptions();
+  options.flatMapColumns.emplace("features", std::set<std::string>{"10"});
+  addFlatmapDictionary(
+      options,
+      sharedDictionaryConfig(SharedDictionaryScope::File, /*dictionaryId=*/7));
+
+  std::vector<velox::RowVectorPtr> stripeInputs;
+  stripeInputs.reserve(stripeValueTypes.size());
+  for (const auto stripeValueType : stripeValueTypes) {
+    stripeInputs.push_back(
+        makeStripe(InputType::FlatMapScalar, stripeValueType));
+  }
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto tablet = openTablet(file);
+  const auto valueStreamIds =
+      sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
+  ASSERT_EQ(valueStreamIds.size(), 1);
+  expectDictionaryValueEncodingTypes(
+      *tablet,
+      valueStreamIds.front(),
+      SharedDictionaryScope::File,
+      stripeValueTypes);
+  verifyRoundTrip(file, InputType::FlatMapScalar, stripeValueTypes);
+}
+
 TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   const auto inputType = GetParam();
   const std::vector<StripeValueType> stripeValueTypes{

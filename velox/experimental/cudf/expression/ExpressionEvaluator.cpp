@@ -1078,7 +1078,7 @@ class BetweenFunction : public CudfFunction {
     } else {
       leResultColumn = cudf::binary_operation(
           asView(inputColumns[0]),
-          asView(inputColumns[2]),
+          asView(inputColumns[minLiteral_ ? 1 : 2]),
           cudf::binary_operator::LESS_EQUAL,
           kBoolType,
           stream,
@@ -1188,19 +1188,23 @@ class GreatestLeastFunction : public CudfFunction {
 
 class SwitchFunction : public CudfFunction {
  public:
-  SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
-    VELOX_CHECK_EQ(
-        expr->inputs().size(), 3, "case when expects exactly 3 inputs");
+  SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
+      : resultType_(veloxToCudfDataType(expr->type())),
+        hasElseClause_(expr->inputs().size() == 3) {
+    VELOX_CHECK(
+        expr->inputs().size() == 2 || expr->inputs().size() == 3,
+        "Single-branch CASE expects 2 or 3 inputs");
     VELOX_CHECK_EQ(
         expr->inputs()[0]->type()->kind(),
         TypeKind::BOOLEAN,
         "The switch condition result type should be boolean");
     VELOX_CHECK(
-        !expr->isConstantKind(), "The condition should not be constant");
+        !expr->inputs()[0]->isConstantKind(),
+        "The condition should not be constant");
     if (expr->inputs()[1]->isConstantKind()) {
       left_ = makeScalarFromConstantExpr(expr->inputs()[1], pool);
     }
-    if (expr->inputs()[2]->isConstantKind()) {
+    if (hasElseClause_ && expr->inputs()[2]->isConstantKind()) {
       right_ = makeScalarFromConstantExpr(expr->inputs()[2], pool);
     }
   }
@@ -1209,7 +1213,13 @@ class SwitchFunction : public CudfFunction {
       std::vector<ColumnOrView>& inputColumns,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
-    if (left_ == nullptr && right_ == nullptr) {
+    std::unique_ptr<cudf::scalar> nullElse;
+    const auto* right = right_.get();
+    if (!hasElseClause_) {
+      nullElse = cudf::make_default_constructed_scalar(resultType_, stream, mr);
+      right = nullElse.get();
+    }
+    if (left_ == nullptr && right == nullptr) {
       return cudf::copy_if_else(
           asView(inputColumns[1]),
           asView(inputColumns[2]),
@@ -1218,21 +1228,19 @@ class SwitchFunction : public CudfFunction {
           mr);
     } else if (left_ == nullptr) {
       return cudf::copy_if_else(
-          asView(inputColumns[1]),
-          *right_,
-          asView(inputColumns[0]),
-          stream,
-          mr);
-    } else if (right_ == nullptr) {
+          asView(inputColumns[1]), *right, asView(inputColumns[0]), stream, mr);
+    } else if (right == nullptr) {
       return cudf::copy_if_else(
           *left_, asView(inputColumns[1]), asView(inputColumns[0]), stream, mr);
     }
     // right != null and left != null
     return cudf::copy_if_else(
-        *left_, *right_, asView(inputColumns[0]), stream, mr);
+        *left_, *right, asView(inputColumns[0]), stream, mr);
   }
 
  private:
+  const cudf::data_type resultType_;
+  const bool hasElseClause_;
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
 };
@@ -2483,21 +2491,41 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("varchar")
            .build()});
 
-  // No prefix because switch and if are special form
+  // No prefix because switch and if are special forms. Only the two-argument
+  // form needs a scalar for the implicit null ELSE.
+  auto switchFactory = [](const std::string&,
+                          const core::TypedExprPtr& expr,
+                          memory::MemoryPool* pool) {
+    return std::make_shared<SwitchFunction>(expr, pool);
+  };
   registerCudfFunctions(
       {"switch", "if"},
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        return std::make_shared<SwitchFunction>(expr, pool);
-      },
+      switchFactory,
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("boolean")
+           .argumentType("T")
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[0]->isConstantKind() &&
+            canMakeCudfDefaultScalar(expr->type());
+      });
+  registerCudfFunctions(
+      {"switch", "if"},
+      switchFactory,
       {FunctionSignatureBuilder()
            .typeVariable("T")
            .returnType("T")
            .argumentType("boolean")
            .argumentType("T")
            .argumentType("T")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[0]->isConstantKind();
+      });
 
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.
