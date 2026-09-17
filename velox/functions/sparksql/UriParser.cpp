@@ -491,7 +491,7 @@ bool splitQuery(
 // Splits the path off the front of remainder, up to '?' or '#', and
 // validates it with the path grammar. An empty path is valid and stored
 // as such: parse_url returns '' (not null) for it.
-bool splitPath(std::string_view& remainder, detail::ParsedUrl& parsed) {
+bool splitPath(std::string_view& remainder, ParsedUrl& parsed) {
   const auto pathEnd = remainder.find_first_of("?#");
   const auto path = remainder.substr(
       0, pathEnd == std::string_view::npos ? remainder.size() : pathEnd);
@@ -571,7 +571,7 @@ bool scanIpv4Address(
 // with a letter - the rule that leaves "1.2.3" without a host, since its
 // last label starts with a digit. Consumes the hostname and stores it in
 // parsed.
-bool parseHostname(std::string_view& input, detail::ParsedUrl& parsed) {
+bool parseHostname(std::string_view& input, ParsedUrl& parsed) {
   const auto host = input;
   std::string_view lastLabel;
   while (true) {
@@ -736,7 +736,7 @@ bool parseIpv6Reference(std::string_view literal) {
 // and including the closing bracket; the port check stays in
 // parseServer, where the IPv6, IPv4 and hostname branches all rejoin.
 // Returns false when the authority is not server-based.
-bool parseIpv6Host(std::string_view& hostAndPort, detail::ParsedUrl& parsed) {
+bool parseIpv6Host(std::string_view& hostAndPort, ParsedUrl& parsed) {
   const auto closingBracket = hostAndPort.find(']');
   if (closingBracket == std::string_view::npos) {
     return false;
@@ -762,7 +762,7 @@ bool parseIpv6Host(std::string_view& hostAndPort, detail::ParsedUrl& parsed) {
 // Parses "[userinfo@]host[:port]" within authority. Returns false when
 // the authority is not server-based (the caller falls back to registry
 // form).
-bool parseServer(std::string_view authority, detail::ParsedUrl& parsed) {
+bool parseServer(std::string_view authority, ParsedUrl& parsed) {
   auto hostAndPort = authority;
   // The userinfo ends at the first '@'.
   const auto userInfoEnd = authority.find('@');
@@ -787,7 +787,7 @@ bool parseServer(std::string_view authority, detail::ParsedUrl& parsed) {
         hostAndPort.remove_prefix(address.size());
       }
     }
-    if (parsed.host.empty()) {
+    if (!parsed.host.has_value()) {
       if (!parseHostname(hostAndPort, parsed)) {
         return false;
       }
@@ -816,7 +816,7 @@ bool parseServer(std::string_view authority, detail::ParsedUrl& parsed) {
 // registry form, in which HOST and USERINFO are null but AUTHORITY is
 // still returned. A malformed escape pair fails the whole URL before
 // the server attempt is even made.
-bool parseAuthority(std::string_view authority, detail::ParsedUrl& parsed) {
+bool parseAuthority(std::string_view authority, ParsedUrl& parsed) {
   // An authority scans with the '%'-permitting server set unless it
   // starts with ']' - counter-intuitively, an authority with no ']' at
   // all still gets the permissive set; only a leading ']' falls back to
@@ -841,7 +841,7 @@ bool parseAuthority(std::string_view authority, detail::ParsedUrl& parsed) {
   }
   // Registry-based fallback: drop whatever a failed server attempt
   // stored, but keep the raw authority.
-  parsed.host = std::string_view{};
+  parsed.host = std::nullopt;
   parsed.userInfo = std::nullopt;
   if (regChars == ScanResult::kValid) {
     parsed.authority = authority;
@@ -852,7 +852,7 @@ bool parseAuthority(std::string_view authority, detail::ParsedUrl& parsed) {
 
 // Parses the "//authority" prefix, the path, and the query of a
 // hierarchical URL, consuming remainder in place.
-bool parseHierarchical(std::string_view& remainder, detail::ParsedUrl& parsed) {
+bool parseHierarchical(std::string_view& remainder, ParsedUrl& parsed) {
   if (remainder.substr(0, 2) == "//") {
     remainder.remove_prefix(2);
     // The authority ends at the first '/', '?' or '#'.
@@ -876,8 +876,6 @@ bool parseHierarchical(std::string_view& remainder, detail::ParsedUrl& parsed) {
 }
 
 } // namespace
-
-namespace detail {
 
 bool parseUrl(std::string_view url, ParsedUrl& parsed) {
   // Reset the output so a reused ParsedUrl never carries stale values from
@@ -929,5 +927,4 @@ bool parseUrl(std::string_view url, ParsedUrl& parsed) {
   return remainder.empty();
 }
 
-} // namespace detail
 } // namespace facebook::velox::functions::sparksql
