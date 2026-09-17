@@ -21,8 +21,11 @@
 #include <type_traits>
 #include <utility>
 
+#include "folly/CPortability.h"
+
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/type/TypeKind.h"
 
 /// The scalar half of DecimalUtil: rescaling, range checks, and division.
@@ -79,6 +82,30 @@ static_assert(
     1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
         (int128_t)100);
 
+/// 10^0 through 10^kMaxLongDecimalPrecision. A struct, so that the device copy
+/// below can be initialized from it.
+struct DecimalPowersOfTen {
+  int128_t values[kMaxLongDecimalPrecision + 1];
+};
+
+inline constexpr DecimalPowersOfTen kDecimalPowersOfTen = [] {
+  DecimalPowersOfTen table{};
+  for (uint8_t i = 0; i <= kMaxLongDecimalPrecision; ++i) {
+    table.values[i] = decimalPowerOfTen(i);
+  }
+  return table;
+}();
+
+#ifdef __CUDACC__
+/// The device's copy of kDecimalPowersOfTen, in global memory. The driver loads
+/// it once with its module, not on each launch. `static` gives every CUDA
+/// translation unit its own 624-byte copy, and is the one form that links
+/// correctly both with and without -rdc: a static __constant__ table reads
+/// zeros under -rdc, and an inline or extern one only links with it.
+static __device__ const DecimalPowersOfTen kDeviceDecimalPowersOfTen =
+    kDecimalPowersOfTen;
+#endif
+
 } // namespace detail
 
 struct DecimalArithmetic {
@@ -87,20 +114,20 @@ struct DecimalArithmetic {
   static constexpr uint8_t kMaxLongPrecision = detail::kMaxLongDecimalPrecision;
 
   /// 10^exponent. exponent must be <= kMaxLongPrecision.
-  static constexpr int128_t powerOfTen(uint8_t exponent) {
+  ///
+  /// Device code reads detail::kDeviceDecimalPowersOfTen, its own copy of the
+  /// table, because nvcc cannot index kPowersOfTen with a runtime value.
+  VELOX_GPU_COMPATIBLE static constexpr int128_t powerOfTen(uint8_t exponent) {
+#ifdef __CUDA_ARCH__
+    return detail::kDeviceDecimalPowersOfTen.values[exponent];
+#else
     return kPowersOfTen[exponent];
+#endif
   }
 
-  /// kPowersOfTen[i] == 10^i, derived from detail::decimalPowerOfTen() so the
-  /// literals are written once.
+  /// kPowersOfTen[i] == 10^i. Host-only: device code uses powerOfTen().
   static constexpr std::array<int128_t, kMaxLongPrecision + 1> kPowersOfTen =
-      [] {
-        std::array<int128_t, kMaxLongPrecision + 1> table{};
-        for (uint8_t i = 0; i <= kMaxLongPrecision; ++i) {
-          table[i] = detail::decimalPowerOfTen(i);
-        }
-        return table;
-      }();
+      std::to_array(detail::kDecimalPowersOfTen.values);
 
   static constexpr int128_t kLongDecimalMin =
       -detail::decimalPowerOfTen(kMaxLongPrecision) + 1;
@@ -111,7 +138,8 @@ struct DecimalArithmetic {
   static constexpr int128_t kShortDecimalMax =
       detail::decimalPowerOfTen(kMaxShortPrecision) - 1;
 
-  FOLLY_ALWAYS_INLINE static void valueInRange(int128_t value) {
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static void valueInRange(
+      int128_t value) {
     VELOX_USER_CHECK(
         (value >= kLongDecimalMin && value <= kLongDecimalMax),
         "Decimal overflow. Value '{}' is not in the range of Decimal Type",
@@ -120,14 +148,14 @@ struct DecimalArithmetic {
 
   /// Returns true if the precision can represent the value.
   template <typename T>
-  FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static bool valueInPrecisionRange(
       T value,
       uint8_t precision) {
     return value < powerOfTen(precision) && value > -powerOfTen(precision);
   }
 
   template <typename R, typename A, typename B>
-  inline static R divideWithRoundUp(
+  VELOX_GPU_COMPATIBLE inline static R divideWithRoundUp(
       R& r,
       A a,
       B b,
