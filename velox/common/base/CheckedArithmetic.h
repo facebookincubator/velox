@@ -17,16 +17,68 @@
 #pragma once
 
 #include <functional>
-#include <string>
+#include <limits>
 #include "folly/Likely.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
+
+#ifdef __CUDACC__
+// __builtin_{add,sub,mul}_overflow are host-only, so under nvcc the seam below
+// uses CCCL's __host__ __device__ cuda::*_overflow. That needs CCCL 3.4 or
+// newer, which not every CUDA toolkit bundles, so the swap is conditional:
+// without it, a device instantiation fails on nvcc diagnostic 20011 rather than
+// silently computing something else. The seam makes the checks evaluable on
+// device but not reportable, since GPU SFI turns VELOX_ARITHMETIC_ERROR into a
+// no-op; see TODO(gpu-sfi-checks).
+#if __has_include(<cuda/std/version>)
+#include <cuda/std/version> // CCCL_VERSION
+#endif
+#if defined(CCCL_VERSION) && CCCL_VERSION >= 3004000 && __has_include(<cuda/numeric>)
+#include <cuda/numeric>
+#define VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS 1
+#endif
+#endif
 
 namespace facebook::velox {
 
+namespace detail {
+
+// Thin seam over the overflow primitive so the checked* bodies below read the
+// same on both compilers. Each returns true on overflow and always stores the
+// wrapped result, matching __builtin_*_overflow exactly.
+template <typename R, typename A, typename B>
+VELOX_GPU_COMPATIBLE bool addOverflow(A a, B b, R* result) {
+#ifdef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
+  return cuda::add_overflow(*result, a, b);
+#else
+  return __builtin_add_overflow(a, b, result);
+#endif
+}
+
+template <typename R, typename A, typename B>
+VELOX_GPU_COMPATIBLE bool subOverflow(A a, B b, R* result) {
+#ifdef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
+  return cuda::sub_overflow(*result, a, b);
+#else
+  return __builtin_sub_overflow(a, b, result);
+#endif
+}
+
+template <typename R, typename A, typename B>
+VELOX_GPU_COMPATIBLE bool mulOverflow(A a, B b, R* result) {
+#ifdef VELOX_HAS_DEVICE_OVERFLOW_INTRINSICS
+  return cuda::mul_overflow(*result, a, b);
+#else
+  return __builtin_mul_overflow(a, b, result);
+#endif
+}
+
+} // namespace detail
+
 template <typename T>
-T checkedPlus(T a, T b, const char* typeName = "integer") {
+VELOX_GPU_COMPATIBLE T checkedPlus(T a, T b, const char* typeName = "integer") {
   T result;
-  bool overflow = __builtin_add_overflow(a, b, &result);
+  bool overflow = detail::addOverflow(a, b, &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} + {}", typeName, a, b);
   }
@@ -34,9 +86,10 @@ T checkedPlus(T a, T b, const char* typeName = "integer") {
 }
 
 template <typename T>
-T checkedMinus(T a, T b, const char* typeName = "integer") {
+VELOX_GPU_COMPATIBLE T
+checkedMinus(T a, T b, const char* typeName = "integer") {
   T result;
-  bool overflow = __builtin_sub_overflow(a, b, &result);
+  bool overflow = detail::subOverflow(a, b, &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} - {}", typeName, a, b);
   }
@@ -44,9 +97,10 @@ T checkedMinus(T a, T b, const char* typeName = "integer") {
 }
 
 template <typename T>
-T checkedMultiply(T a, T b, const char* typeName = "integer") {
+VELOX_GPU_COMPATIBLE T
+checkedMultiply(T a, T b, const char* typeName = "integer") {
   T result;
-  bool overflow = __builtin_mul_overflow(a, b, &result);
+  bool overflow = detail::mulOverflow(a, b, &result);
   if (UNLIKELY(overflow)) {
     VELOX_ARITHMETIC_ERROR("{} overflow: {} * {}", typeName, a, b);
   }
@@ -54,7 +108,7 @@ T checkedMultiply(T a, T b, const char* typeName = "integer") {
 }
 
 template <typename T>
-T checkedDivide(T a, T b) {
+VELOX_GPU_COMPATIBLE T checkedDivide(T a, T b) {
   if (b == 0) {
     VELOX_ARITHMETIC_ERROR("division by zero");
   }
@@ -69,7 +123,7 @@ T checkedDivide(T a, T b) {
 }
 
 template <typename T>
-T checkedModulus(T a, T b) {
+VELOX_GPU_COMPATIBLE T checkedModulus(T a, T b) {
   if (UNLIKELY(b == 0)) {
     VELOX_ARITHMETIC_ERROR("Cannot divide by 0");
   }
@@ -83,7 +137,7 @@ T checkedModulus(T a, T b) {
 }
 
 template <typename T>
-T checkedNegate(T a) {
+VELOX_GPU_COMPATIBLE T checkedNegate(T a) {
   if (UNLIKELY(a == std::numeric_limits<T>::min())) {
     VELOX_ARITHMETIC_ERROR("Cannot negate minimum value");
   }
