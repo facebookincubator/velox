@@ -167,7 +167,11 @@ void registerPrestoFunctions(const std::string& prefix) {
       prefix + "date_add",
       [](const std::string&,
          const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
+         memory::MemoryPool* pool) -> std::shared_ptr<CudfFunction> {
+        if (expr->inputs()[2]->type()->isTimestamp()) {
+          return std::make_shared<prestosql::DateAddTimestampFunction>(
+              expr, pool);
+        }
         return std::make_shared<prestosql::DateAddFunction>(expr, pool);
       },
       {FunctionSignatureBuilder()
@@ -175,9 +179,18 @@ void registerPrestoFunctions(const std::string& prefix) {
            .constantArgumentType("varchar")
            .argumentType("bigint")
            .argumentType("date")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .constantArgumentType("varchar")
+           .argumentType("bigint")
+           .argumentType("timestamp")
            .build()},
       true,
-      prestosql::DateAddFunction::canEvaluate);
+      [](const core::TypedExprPtr& expr) {
+        return prestosql::DateAddFunction::canEvaluate(expr) ||
+            prestosql::DateAddTimestampFunction::canEvaluate(expr);
+      });
 
   registerCudfFunction(
       prefix + "date_trunc",

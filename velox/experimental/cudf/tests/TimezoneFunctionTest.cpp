@@ -1760,6 +1760,20 @@ TEST_F(TimezoneFunctionTest, toUtcTimestampGapRaises) {
       "does not exist in the time zone");
 }
 
+TEST_F(TimezoneFunctionTest, toUtcTimestampCorrectingMovesGapForward) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  auto local = millisColumn({kLocalInGap}, stream, mr);
+
+  auto utc =
+      toUtcTimestampCorrecting(local->view(), kLosAngelesZone, stream, mr);
+
+  // 2021-03-14 02:30 is corrected to 03:30 PDT == 10:30 UTC.
+  EXPECT_THAT(
+      millisToHost(utc->view(), stream),
+      testing::ElementsAre(1'615'717'800'000));
+}
+
 TEST_F(TimezoneFunctionTest, toUtcTimestampOverlapPicksEarliest) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();

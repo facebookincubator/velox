@@ -397,11 +397,13 @@ class OffsetTable {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
-  // local - offset; raises a user error on a nonexistent (spring-forward gap)
-  // local time and resolves an ambiguous (fall-back overlap) one to the
-  // earliest instant. Null rows are never treated as gaps.
+  // local - offset; when correctForward is false, raises a user error on a
+  // nonexistent (spring-forward gap) local time. When true, the inverse
+  // table's pre-transition offset shifts the result forward by the gap.
+  // Ambiguous (fall-back overlap) times resolve to the earliest instant.
   std::unique_ptr<cudf::column> toUtc(
       const cudf::column_view& localTimestamps,
+      bool correctForward,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
@@ -579,6 +581,7 @@ std::unique_ptr<cudf::column> OffsetTable::toLocal(
 
 std::unique_ptr<cudf::column> OffsetTable::toUtc(
     const cudf::column_view& localTimestamps,
+    bool correctForward,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto indices = activeIntervalIndices(
@@ -605,6 +608,10 @@ std::unique_ptr<cudf::column> OffsetTable::toUtc(
       localTimestamps.type(),
       stream,
       mr);
+
+  if (correctForward) {
+    return result;
+  }
 
   // A nonexistent local time (spring-forward gap) has no UTC instant; match
   // CPU's toGMT and fail. Null rows are not gaps, so mask them out first.
@@ -662,7 +669,16 @@ std::unique_ptr<cudf::column> toUtcTimestamp(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return OffsetTable::get(tz::locateZone(timezoneName))
-      ->toUtc(localTimestamps, stream, mr);
+      ->toUtc(localTimestamps, false, stream, mr);
+}
+
+std::unique_ptr<cudf::column> toUtcTimestampCorrecting(
+    const cudf::column_view& localTimestamps,
+    std::string_view timezoneName,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  return OffsetTable::get(tz::locateZone(timezoneName))
+      ->toUtc(localTimestamps, true, stream, mr);
 }
 
 std::unique_ptr<cudf::column> formatTimestamp(

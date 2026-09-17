@@ -71,6 +71,17 @@ std::unique_ptr<cudf::column> toUtcTimestamp(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
+/// Converts local timestamps to UTC like toUtcTimestamp, except nonexistent
+/// times in a spring-forward gap are shifted forward by the size of the gap.
+/// This matches date_add's calendar-unit behavior on a plain TIMESTAMP.
+/// Ambiguous times still resolve to the earliest instant, and the input's
+/// timestamp resolution and null mask are preserved.
+std::unique_ptr<cudf::column> toUtcTimestampCorrecting(
+    const cudf::column_view& localTimestamps,
+    std::string_view timezoneName,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
 /// Returns the per-row UT offset (DURATION_SECONDS), DST-aware, for the given
 /// timezone at each UTC instant -- i.e. local = utc + offset. This is the
 /// primitive behind toLocalTimestamp; it is also used directly to render

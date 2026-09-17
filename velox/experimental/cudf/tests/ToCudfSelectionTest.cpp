@@ -252,7 +252,7 @@ TEST_F(ToCudfSelectionTest, prestoDateAddVariableUnitFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
-TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
+TEST_F(ToCudfSelectionTest, prestoDateAddTimestampUsesCudf) {
   auto input = makeRowVector(
       {"amount", "event_ts"},
       {makeFlatVector<int64_t>({1, 2, -1, 13}),
@@ -271,8 +271,18 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
 
-  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
-  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+
+  std::shared_ptr<Task> timezoneTask;
+  AssertQueryBuilder(plan)
+      .config("cudf.enabled", true)
+      .config(QueryConfig::kSessionTimezone, "America/Los_Angeles")
+      .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+      .countResults(timezoneTask);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(timezoneTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(timezoneTask));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneUsesCudf) {

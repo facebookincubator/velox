@@ -20,6 +20,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -630,6 +631,25 @@ class CudfFilterProjectTest : public OperatorTestBase {
       const std::vector<std::string>& projections) {
     auto plan = PlanBuilder().values(input).project(projections).planNode();
     assertPlanMatchesVelox(plan);
+  }
+
+  void assertProjectMatchesVeloxWithTimezone(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& projections,
+      const std::string& sessionTimezone) {
+    auto plan = PlanBuilder().values(input).project(projections).planNode();
+    auto run = [&]() {
+      return AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSessionTimezone, sessionTimezone)
+          .config(core::QueryConfig::kAdjustTimestampToTimezone, "true")
+          .copyResults(pool());
+    };
+
+    auto cudfResult = run();
+    cudf_velox::unregisterCudf();
+    auto veloxResult = run();
+    cudf_velox::registerCudf();
+    facebook::velox::test::assertEqualVectors(veloxResult, cudfResult);
   }
 
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
@@ -1346,6 +1366,124 @@ TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
       "date_add('week', 306783379, event_date) AS positive_literal",
       "date_add('week', -306783379, event_date) AS negative_literal"};
   assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, dateAddTimestampUnits) {
+  auto input = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(1'551'348'000, 500'999'999),
+       Timestamp(1'709'251'200, 0),
+       std::nullopt},
+      TIMESTAMP())});
+  const std::vector<std::string> projections{
+      "date_add('millisecond', 60500, c0) AS add_millisecond",
+      "date_add('second', -5, c0) AS add_second",
+      "date_add('minute', 3, c0) AS add_minute",
+      "date_add('hour', -5, c0) AS add_hour",
+      "date_add('day', 3, c0) AS add_day",
+      "date_add('week', -5, c0) AS add_week",
+      "date_add('month', 3, c0) AS add_month",
+      "date_add('quarter', -5, c0) AS add_quarter",
+      "date_add('year', 3, c0) AS add_year"};
+
+  assertProjectMatchesVelox({input}, projections);
+  assertProjectMatchesVeloxWithTimezone(
+      {input}, projections, "America/Los_Angeles");
+}
+
+// The operator must preserve every configured cuDF timestamp resolution. This
+// guards against hard-coding microseconds or nanoseconds and skipping millis.
+TEST_F(CudfFilterProjectTest, dateAddTimestampAcrossCudfUnits) {
+  auto input = makeRowVector({makeFlatVector<Timestamp>(
+      {Timestamp(1'736'971'261, 0), Timestamp(0, 0)}, TIMESTAMP())});
+  const std::vector<std::string> projections{
+      "date_add('hour', 5, c0) AS h",
+      "date_add('day', -2, c0) AS d",
+      "date_add('month', 1, c0) AS mo"};
+  const std::vector<cudf::type_id> units{
+      cudf::type_id::TIMESTAMP_SECONDS,
+      cudf::type_id::TIMESTAMP_MILLISECONDS,
+      cudf::type_id::TIMESTAMP_MICROSECONDS,
+      cudf::type_id::TIMESTAMP_NANOSECONDS};
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  for (const auto unit : units) {
+    SCOPED_TRACE(static_cast<int32_t>(unit));
+    config.timestampUnit = unit;
+    assertProjectMatchesVeloxWithTimezone({input}, projections, "Asia/Kolkata");
+  }
+}
+
+TEST_F(CudfFilterProjectTest, dateAddTimestampColumnAndLiteralInputs) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<int64_t>({1, -2, std::nullopt}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1'736'971'261, 0),
+            Timestamp(0, 0),
+            Timestamp(1'709'251'200, 0)},
+           TIMESTAMP())});
+  assertProjectMatchesVeloxWithTimezone(
+      {input},
+      {"date_add('month', c0, c1) AS column_value",
+       "date_add('day', c0, TIMESTAMP '2020-01-31 12:00:00') AS literal_ts"},
+      "Asia/Kolkata");
+}
+
+// 2025-03-15 12:00 UTC minus 30 local calendar days crosses the Los Angeles
+// spring-forward transition and therefore differs from subtracting 30 fixed
+// 24-hour durations. This is the regression case retained from PR #17434.
+TEST_F(CudfFilterProjectTest, dateAddTimestampAcrossDstTransition) {
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'742'040'000, 0)}, TIMESTAMP())});
+  assertProjectMatchesVeloxWithTimezone(
+      {input}, {"date_add('day', -30, c0) AS result"}, "America/Los_Angeles");
+}
+
+// Sub-day units are fixed durations. Adding one hour at 01:30 immediately
+// before the spring-forward transition produces 03:30, not a nonexistent
+// 02:30 wall clock.
+TEST_F(CudfFilterProjectTest, dateAddTimestampSubDayAcrossDstGap) {
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'710'063'000, 0)}, TIMESTAMP())});
+  assertProjectMatchesVeloxWithTimezone(
+      {input}, {"date_add('hour', 1, c0) AS result"}, "America/Los_Angeles");
+}
+
+// These are the CPU suite's two calendar adds that land at the nonexistent
+// 2023-03-12 02:30 wall clock. Both are corrected forward to 03:30.
+TEST_F(CudfFilterProjectTest, dateAddTimestampCorrectsDstGap) {
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({45, -45}),
+      makeFlatVector<Timestamp>(
+          {Timestamp(1'674'729'000, 0), Timestamp(1'682'501'400, 0)},
+          TIMESTAMP()),
+  });
+  assertProjectMatchesVeloxWithTimezone(
+      {input}, {"date_add('day', c0, c1) AS result"}, "America/Los_Angeles");
+}
+
+// A calendar add landing in the fall-back overlap resolves 01:30 to its first
+// occurrence, matching Timestamp::toGMT's earliest-instant policy.
+TEST_F(CudfFilterProjectTest, dateAddTimestampDstOverlapPicksEarliest) {
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(1'730'536'200, 0)}, TIMESTAMP())});
+  assertProjectMatchesVeloxWithTimezone(
+      {input}, {"date_add('day', 1, c0) AS result"}, "America/Los_Angeles");
+}
+
+TEST_F(CudfFilterProjectTest, dateAddTimestampValueOutOfRange) {
+  auto input = makeRowVector(
+      {makeFlatVector<Timestamp>({Timestamp(0, 0)}, TIMESTAMP())});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"date_add('day', 3000000000, c0) AS result"})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "date_add value is out of range");
 }
 
 TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
