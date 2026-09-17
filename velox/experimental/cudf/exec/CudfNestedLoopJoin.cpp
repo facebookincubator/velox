@@ -25,6 +25,7 @@
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 
+#include "velox/exec/Driver.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/type/TypeUtil.h"
@@ -246,13 +247,19 @@ void CudfNestedLoopJoinProbe::initialize() {
       joinNode_->joinCondition(), operatorCtx_->execCtx()->queryCtx(), pool);
   VELOX_CHECK_NOT_NULL(optimizedCondition);
 
+  // Resolve the session timezone once so timezone-sensitive CudfFunctions built
+  // on the precompute path receive it at construction.
+  const auto context =
+      contextFromConfig(operatorCtx_->driverCtx()->queryConfig());
+
   if (hasNonAstSubexprSpanningBothSides(
           optimizedCondition, probeType_, buildType_)) {
     useAstFilter_ = false;
     filterEvaluator_ = createCudfExpression(
         optimizedCondition,
         facebook::velox::type::concatRowTypes({probeType_, buildType_}),
-        pool);
+        pool,
+        context);
     hasFilter_ = true;
     return;
   }
@@ -268,7 +275,8 @@ void CudfNestedLoopJoinProbe::initialize() {
       buildType_,
       leftPrecomputeInstructions_,
       rightPrecomputeInstructions_,
-      pool);
+      pool,
+      context);
 
   // Set hasFilter_ only after the AST has been fully built so that a throw
   // from createAstTree() does not leave the operator marked as having a filter
