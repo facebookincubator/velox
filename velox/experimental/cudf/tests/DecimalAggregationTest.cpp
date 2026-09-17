@@ -1286,15 +1286,22 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateArrowCompactedSlice) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
-  // Round-trip through Arrow first so the null row has a 0-byte payload, then
-  // slice [1, 4) so deserialization must shift both offsets and validity bits.
-  std::vector<int64_t> sums = {10, 20, 0, 40, 50};
-  std::vector<int64_t> counts = {1, 2, 0, 4, 5};
-  std::vector<bool> sumValid = {true, true, false, true, true};
-  auto sumCol = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
-  auto countCol = makeInt64Column(counts, nullptr, stream);
-  auto stateCol =
-      serializeDecimalSumState(sumCol->view(), countCol->view(), stream, mr);
+  // Slice the sum/count inputs first to pin serialization offset handling.
+  // Round-trip through Arrow so the null row has a 0-byte payload, then slice
+  // the state so deserialization must shift both offsets and validity bits.
+  std::vector<int64_t> sums = {-999, 10, 20, 0, 40, 50, 999};
+  std::vector<int64_t> counts = {9, 1, 2, 0, 4, 5, 9};
+  std::vector<bool> sumValid = {true, true, true, false, true, true, true};
+  auto sumParent = makeDecimalColumn<int64_t>(sums, 2, &sumValid, stream);
+  auto countParent = makeInt64Column(counts, nullptr, stream);
+  auto sumSlices = cudf::slice(sumParent->view(), {1, 6});
+  auto countSlices = cudf::slice(countParent->view(), {1, 6});
+  ASSERT_EQ(sumSlices.size(), 1);
+  ASSERT_EQ(countSlices.size(), 1);
+  ASSERT_EQ(sumSlices.front().offset(), 1);
+  ASSERT_EQ(countSlices.front().offset(), 1);
+  auto stateCol = serializeDecimalSumState(
+      sumSlices.front(), countSlices.front(), stream, mr);
 
   auto expectedType = ROW({{"s", VARBINARY()}});
   auto veloxRow = with_arrow::toVeloxColumn(
@@ -1308,7 +1315,8 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateArrowCompactedSlice) {
   auto compactStateView = compactTable->view().column(0);
   cudf::strings_column_view strings(compactStateView);
   EXPECT_LT(
-      strings.chars_size(stream), static_cast<int64_t>(sums.size()) * 32);
+      strings.chars_size(stream),
+      static_cast<int64_t>(stateCol->size()) * 32);
 
   auto slices = cudf::slice(compactStateView, {1, 4});
   ASSERT_EQ(slices.size(), 1);
@@ -1565,6 +1573,51 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64) {
 
   for (size_t i = 0; i < sums.size(); ++i) {
     bool expectedValid = sumValid[i] && countValid[i] && counts[i] != 0;
+    EXPECT_EQ(isValidAt(avgMask, i), expectedValid);
+    if (expectedValid) {
+      EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64Slice) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  std::vector<int64_t> parentSums = {999, 100, 105, 250, -125, -999};
+  std::vector<int64_t> parentCounts = {9, 4, 2, 0, 2, 9};
+  std::vector<bool> parentSumValid = {true, true, true, true, true, true};
+  std::vector<bool> parentCountValid = {true, true, false, true, true, true};
+
+  auto sumParent =
+      makeDecimalColumn<int64_t>(parentSums, 2, &parentSumValid, stream);
+  auto countParent =
+      makeInt64Column(parentCounts, &parentCountValid, stream);
+  auto sumSlices = cudf::slice(sumParent->view(), {1, 5});
+  auto countSlices = cudf::slice(countParent->view(), {1, 5});
+  ASSERT_EQ(sumSlices.size(), 1);
+  ASSERT_EQ(countSlices.size(), 1);
+  ASSERT_EQ(sumSlices.front().offset(), 1);
+  ASSERT_EQ(countSlices.front().offset(), 1);
+
+  auto avgCol = computeDecimalAverage(
+      sumSlices.front(), countSlices.front(), stream, mr);
+  auto avgMask = copyNullMask(avgCol->view(), stream);
+  auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
+
+  std::vector<int64_t> sums = {100, 105, 250, -125};
+  std::vector<int64_t> counts = {4, 2, 0, 2};
+  std::vector<bool> countValid = {true, false, true, true};
+  auto avgUnscaled = [](int128_t sum, int64_t count) {
+    __int128_t out = 0;
+    facebook::velox::DecimalUtil::
+        divideWithRoundUp<__int128_t, __int128_t, int64_t>(
+            out, sum, count, false, 0, 0);
+    return static_cast<int64_t>(out);
+  };
+
+  ASSERT_EQ(outAvg.size(), sums.size());
+  for (size_t i = 0; i < sums.size(); ++i) {
+    bool expectedValid = countValid[i] && counts[i] != 0;
     EXPECT_EQ(isValidAt(avgMask, i), expectedValid);
     if (expectedValid) {
       EXPECT_EQ(outAvg[i], avgUnscaled(sums[i], counts[i]));

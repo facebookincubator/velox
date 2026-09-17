@@ -80,6 +80,12 @@ DecimalSumStateColumns deserializeDecimalSumState(
   }
 
   cudf::strings_column_view strings(stateCol);
+  auto const offsetsView = strings.offsets();
+  VELOX_CHECK_LE(
+      static_cast<size_t>(stateCol.offset()) +
+          static_cast<size_t>(numRows) + 1,
+      static_cast<size_t>(offsetsView.size()),
+      "Decimal sum state offsets do not include every selected row");
 
   auto const nullCount = stateCol.nullable() ? stateCol.null_count() : 0;
   auto const [payloadBegin, payloadEnd] =
@@ -98,9 +104,6 @@ DecimalSumStateColumns deserializeDecimalSumState(
       compactPayloadSize,
       payloadSize);
 
-  auto offsetsView = strings.offsets();
-  auto charsPtr = reinterpret_cast<const uint8_t*>(strings.chars_begin(stream));
-
   auto sumCol = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::DECIMAL128, -scale},
       numRows,
@@ -117,24 +120,8 @@ DecimalSumStateColumns deserializeDecimalSumState(
   auto sumView = sumCol->mutable_view();
   auto countView = countCol->mutable_view();
 
-  // numRows is guaranteed positive here
-  auto const offsetsType = offsetsView.type().id();
   VELOX_CHECK(
-      offsetsType == cudf::type_id::INT32 ||
-          offsetsType == cudf::type_id::INT64,
-      "Decimal sum state requires INT32 or INT64 offsets (offset type is {})",
-      cudf::type_to_name(offsetsView.type()));
-  VELOX_CHECK(
-      detail::unpackDecimalSumState(
-          offsetsType,
-          offsetsView,
-          charsPtr,
-          sumView,
-          countView,
-          numRows,
-          stateCol.offset(),
-          stateCol.null_mask(),
-          stream),
+      detail::unpackDecimalSumState(stateCol, sumView, countView, stream),
       "Decimal sum state requires every non-null row to be {} bytes",
       detail::kDecimalSumStateSize);
 

@@ -16,10 +16,9 @@
 
 #include "velox/experimental/cudf/exec/DecimalAggregationDevice.h"
 
-#include "velox/common/base/Exceptions.h"
-
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/strings/string_view.cuh>
 #include <cudf/transform.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
@@ -95,30 +94,27 @@ struct PackStateFunctor {
   }
 };
 
-template <typename OffsetT>
 struct UnpackStateFunctor {
-  cuda::std::span<const OffsetT> offsets;
-  const uint8_t* chars;
+  cudf::column_device_view state;
   cuda::std::span<__int128_t> sums;
   cuda::std::span<int64_t> counts;
-  cudf::size_type rowOffset;
-  cudf::bitmask_type const* nullMask;
   int32_t* invalidState;
 
   __device__ void operator()(cudf::size_type idx) const {
-    auto const inputIdx = idx + rowOffset;
-    if (nullMask && !cudf::bit_is_set(nullMask, inputIdx)) {
+    if (state.is_null(idx)) {
       return;
     }
-    if (offsets[inputIdx + 1] - offsets[inputIdx] !=
-        static_cast<OffsetT>(detail::kDecimalSumStateSize)) {
+    auto const serialized = state.element<cudf::string_view>(idx);
+    if (serialized.size_bytes() !=
+        static_cast<cudf::size_type>(detail::kDecimalSumStateSize)) {
       atomicOr(invalidState, 1);
       return;
     }
-    int64_t offset = static_cast<int64_t>(offsets[inputIdx]);
-    auto* state = reinterpret_cast<const DecimalSumState*>(chars + offset);
-    counts[idx] = state->count;
-    sums[idx] = (static_cast<__int128_t>(state->upper) << 64) | state->lower;
+    auto const* packed =
+        reinterpret_cast<const DecimalSumState*>(serialized.data());
+    counts[idx] = packed->count;
+    sums[idx] =
+        (static_cast<__int128_t>(packed->upper) << 64) | packed->lower;
   }
 };
 
@@ -241,47 +237,6 @@ struct fillOffsetsForDecimalSumStateKernel {
   }
 };
 
-struct unpackDecimalSumStateKernel {
-  cudf::column_view offsetsView;
-  const uint8_t* chars;
-  cudf::mutable_column_view sumView;
-  cudf::mutable_column_view countView;
-  cudf::size_type numRows;
-  cudf::size_type rowOffset;
-  cudf::bitmask_type const* nullMask;
-  rmm::cuda_stream_view stream;
-
-  template <typename OffsetT>
-    requires OffsetStorageType<OffsetT>
-  bool operator()() const {
-    auto const n = static_cast<size_t>(numRows);
-    auto const inputSize = static_cast<size_t>(rowOffset) + n;
-    rmm::device_scalar<int32_t> invalidState{0, stream};
-    launchDeviceFor(
-        numRows,
-        [&] {
-          return UnpackStateFunctor<OffsetT>{
-              cuda::std::span<const OffsetT>{
-                  offsetsView.data<OffsetT>(), inputSize + 1},
-              chars,
-              cuda::std::span<__int128_t>{sumView.data<__int128_t>(), n},
-              cuda::std::span<int64_t>{countView.data<int64_t>(), n},
-              rowOffset,
-              nullMask,
-              invalidState.data()};
-        },
-        stream);
-    return invalidState.value(stream) == 0;
-  }
-
-  template <typename OffsetT>
-    requires(!OffsetStorageType<OffsetT>)
-  bool operator()() const {
-    CUDF_FAIL("Invalid offset type for decimal sum state");
-    return false;
-  }
-};
-
 struct averageRoundDecimalSumKernel {
   cudf::column_view sumCol;
   const int64_t* counts;
@@ -354,30 +309,27 @@ void fillOffsetsForDecimalSumState(
 }
 
 bool unpackDecimalSumState(
-    cudf::type_id offsetType,
-    cudf::column_view offsetsView,
-    const uint8_t* chars,
+    cudf::column_view stateCol,
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
-    cudf::size_type numRows,
-    cudf::size_type rowOffset,
-    cudf::bitmask_type const* nullMask,
     rmm::cuda_stream_view stream) {
-  VELOX_CHECK_LE(
-      static_cast<size_t>(rowOffset) + static_cast<size_t>(numRows) + 1,
-      static_cast<size_t>(offsetsView.size()),
-      "Decimal sum state offsets do not include every selected row");
-  return cudf::type_dispatcher(
-      cudf::data_type{offsetType},
-      unpackDecimalSumStateKernel{
-          offsetsView,
-          chars,
-          sumView,
-          countView,
-          numRows,
-          rowOffset,
-          nullMask,
-          stream});
+  auto const numRows = stateCol.size();
+  auto const n = static_cast<size_t>(numRows);
+  auto stateDeviceView = cudf::column_device_view::create(stateCol, stream);
+  rmm::device_scalar<int32_t> invalidState{0, stream};
+  launchDeviceFor(
+      numRows,
+      [&] {
+        return UnpackStateFunctor{
+            .state = *stateDeviceView,
+            .sums = cuda::std::span<__int128_t>{
+                sumView.data<__int128_t>(), n},
+            .counts =
+                cuda::std::span<int64_t>{countView.data<int64_t>(), n},
+            .invalidState = invalidState.data()};
+      },
+      stream);
+  return invalidState.value(stream) == 0;
 }
 
 void averageRoundDecimalSum(
