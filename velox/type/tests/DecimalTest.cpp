@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/DecimalUtil.h"
 
@@ -330,6 +332,32 @@ TEST(DecimalTest, valueInPrecisionRange) {
   ASSERT_FALSE(
       DecimalUtil::valueInPrecisionRange<int128_t>(
           DecimalUtil::kLongDecimalMin - 1, LongDecimalType::kMaxPrecision));
+}
+
+TEST(DecimalTest, absValue) {
+  EXPECT_EQ(DecimalUtil::absValue<int64_t>(0), 0u);
+  EXPECT_EQ(DecimalUtil::absValue<int64_t>(7), 7u);
+  EXPECT_EQ(DecimalUtil::absValue<int64_t>(-7), 7u);
+  EXPECT_EQ(DecimalUtil::absValue<int128_t>(-7), 7u);
+
+  // The magnitude of the most negative value is one past the positive range,
+  // so the cast to unsigned has to happen before the negation.
+  EXPECT_EQ(
+      DecimalUtil::absValue<int64_t>(std::numeric_limits<int64_t>::min()),
+      static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) + 1);
+
+  constexpr int128_t kInt128Min = std::numeric_limits<int128_t>::min();
+  EXPECT_EQ(
+      DecimalUtil::absValue<int128_t>(kInt128Min),
+      static_cast<__uint128_t>(std::numeric_limits<int128_t>::max()) + 1);
+
+  // The decimal bounds are the values that actually reach here.
+  EXPECT_EQ(
+      DecimalUtil::absValue<int128_t>(DecimalUtil::kLongDecimalMin),
+      static_cast<__uint128_t>(DecimalUtil::kLongDecimalMax));
+  EXPECT_EQ(
+      DecimalUtil::absValue<int64_t>(DecimalUtil::kShortDecimalMin),
+      static_cast<uint64_t>(DecimalUtil::kShortDecimalMax));
 }
 
 TEST(DecimalTest, computeAverage) {
