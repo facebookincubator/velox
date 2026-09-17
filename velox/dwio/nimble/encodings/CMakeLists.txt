@@ -28,6 +28,7 @@ endif()
 
 add_library(
   nimble_encodings
+  ALPEncoding.cpp
   ConstantEncoding.cpp
   EncodingSliceFactory.cpp
   FsstEncoding.cpp

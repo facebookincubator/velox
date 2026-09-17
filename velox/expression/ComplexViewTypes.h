@@ -1034,7 +1034,7 @@ struct HasGeneric<Array<V>> {
 template <typename... T>
 struct HasGeneric<Row<T...>> {
   static constexpr bool value() {
-    return (HasGeneric<FieldType<T>>::value() || ...);
+    return (HasGeneric<T>::value() || ...);
   }
 };
 
@@ -1063,7 +1063,7 @@ struct AllGenericExceptTop<Map<K, V>> {
 template <typename... T>
 struct AllGenericExceptTop<Row<T...>> {
   static constexpr bool value() {
-    return (isGenericType<FieldType<T>>::value && ...);
+    return (isGenericType<T>::value && ...);
   }
 };
 
