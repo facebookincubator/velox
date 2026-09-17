@@ -799,6 +799,35 @@ TEST_F(QuantileDigestTest, mergeWithEmpty) {
   testMergeEmpty<float>(false);
 }
 
+TEST_F(QuantileDigestTest, mergeSerializedFullRangeReal) {
+  constexpr double kAccuracy = 0.01;
+  QuantileDigest<float> first{StlAllocator<float>(allocator()), kAccuracy};
+  QuantileDigest<float> second{StlAllocator<float>(allocator()), kAccuracy};
+  first.add(-2.0f, 1.0);
+  first.add(1.0f, 1.0);
+  second.add(-1.0f, 1.0);
+  second.add(2.0f, 1.0);
+  first.compress();
+  second.compress();
+
+  auto serializeDigest = [](QuantileDigest<float>& digest) {
+    std::string buf(digest.serializedByteSize(), '\0');
+    digest.serialize(buf.data());
+    return buf;
+  };
+  const std::string buf1 = serializeDigest(first);
+  const std::string buf2 = serializeDigest(second);
+
+  QuantileDigest<float> result{StlAllocator<float>(allocator()), kAccuracy};
+  result.mergeSerialized(buf1.data());
+  result.mergeSerialized(buf2.data());
+
+  EXPECT_EQ(result.getCount(), 4.0);
+  EXPECT_EQ(result.getMin(), -2.0f);
+  EXPECT_EQ(result.getMax(), 2.0f);
+  EXPECT_EQ(result.estimateQuantile(0.5), 1.0f);
+}
+
 TEST_F(QuantileDigestTest, infinity) {
   const double kInf = std::numeric_limits<double>::infinity();
   const float kFInf = std::numeric_limits<float>::infinity();
