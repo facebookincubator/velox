@@ -1,0 +1,82 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+include "Footer.fbs";
+
+namespace facebook.nimble.serialization;
+
+/// Physical run of blob payload bytes. Carries no store id: a segment is nested
+/// under the BlobGroup that owns it. Its position in that group's segment list
+/// is its id, which is what BlobEntry.segment_id refers to.
+table BlobSegment {
+  first_row:uint64;
+  row_count:uint32;
+  file_offset:uint64;
+  compressed_size:uint32;
+  uncompressed_size:uint32;
+  compression_type:CompressionType;
+  checksum_type:uint8 = 0;
+  checksum:uint64;
+}
+
+/// Per-blob lookup entry. Resolves one blob id to a byte range inside one of
+/// the segments of the enclosing group. Carries no store id: every entry in an
+/// entry list belongs to that list's group.
+table BlobEntry {
+  blob_id:uint64;
+  checksum:uint64;
+  segment_id:uint32;
+  offset_in_segment:uint32;
+  compressed_size:uint32;
+  uncompressed_size:uint32;
+}
+
+/// One entry list. Written as its own section elsewhere in the file, never
+/// inlined into the root manifest, because entry counts are proportional to the
+/// number of blobs. This table exists only to give the vector a FlatBuffers
+/// root; it has no counterpart type in C++, where an entry list is a plain
+/// std::vector<BlobEntry>.
+table BlobEntries {
+  entries:[BlobEntry];
+}
+
+/// Everything the reader needs for one blob store: where its payload bytes are,
+/// and where the entry list that addresses them is. A group is identified by
+/// (blob_store_id, stripe_id): one blob store within one stripe. Both the
+/// segments and the entry list it holds cover only that stripe, which is what
+/// lets a reader load blob metadata for the stripes it touches and no others.
+///
+/// Segments are nested because there are only a handful per group, so inlining
+/// them costs nothing and lets them drop their store id. Entries are not: their
+/// count is proportional to the number of blobs, and a nested table would place
+/// every one of them inside the manifest. 'entries' is therefore a
+/// MetadataSection, a file offset, because FlatBuffers offsets are relative to
+/// the buffer being parsed and cannot refer to another region of the file.
+table BlobGroup {
+  blob_store_id:uint32;
+  stripe_id:uint32;
+  segments:[BlobSegment];
+  entry_count:uint32;
+  entries:MetadataSection;
+}
+
+/// Root table for the blob metadata optional section ("blob.metadata").
+table BlobMetadata {
+  version:uint32 = 1;
+  groups:[BlobGroup];
+}
+
+root_type BlobMetadata;
