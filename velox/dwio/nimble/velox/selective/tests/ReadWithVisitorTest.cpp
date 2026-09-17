@@ -36,10 +36,12 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
+#include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
@@ -456,11 +458,131 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
   }
 
   template <typename FloatType>
+  void testAlpBulkSimdGrid(bool useVarint) {
+    using Alp = ALPEncoding<FloatType>;
+    using PhysicalType = typename Alp::physicalType;
+    constexpr vector_size_t kRows = 4103;
+    const std::vector<int64_t> boundaries{
+        std::numeric_limits<int64_t>::min(),
+        std::numeric_limits<int64_t>::min() + 1,
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::max() - 1,
+        -(int64_t{1} << 53) - 1,
+        -(int64_t{1} << 53),
+        -(int64_t{1} << 32) - 1,
+        -1,
+        0,
+        1,
+        (int64_t{1} << 32) - 1,
+        (int64_t{1} << 53) - 1,
+        (int64_t{1} << 53) + 1,
+        (int64_t{1} << 53) + 3};
+    std::vector<uint64_t> integers{0};
+    for (const auto value : boundaries) {
+      integers.push_back(velox::ZigZag::encode(value));
+    }
+    std::mt19937_64 random(0xDEC0DE);
+    while (integers.size() < kRows) {
+      integers.push_back(random());
+    }
+    const Encoding::Options options{.useVarintRowCount = useVarint};
+    Buffer buffer(*pool());
+    const auto encodedIntegers = EncodingFactory::encode<uint64_t>(
+        std::make_unique<TrivialNestedPolicy<uint64_t>>(),
+        std::span<const uint64_t>(integers),
+        buffer,
+        options);
+    const auto prefixSize = EncodingPrefix::serializedSize(kRows, useVarint);
+    std::string serialized(
+        prefixSize + 3 + varint::varintSize(encodedIntegers.size()) +
+            encodedIntegers.size(),
+        '\0');
+    auto* position = serialized.data();
+    EncodingPrefix::serialize(
+        EncodingType::ALP,
+        TypeTraits<FloatType>::dataType,
+        kRows,
+        useVarint,
+        position);
+    position += 3;
+    varint::writeVarint(encodedIntegers.size(), &position);
+    encoding::writeBytes(encodedIntegers, position);
+    auto input = makeRowVector(
+        {makeFlatVector<FloatType>(kRows, [](auto) { return FloatType{0}; })});
+    const auto rowType = asRowType(input->type());
+    auto context = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    const auto check = [&](uint8_t exponent,
+                           uint8_t factor,
+                           vector_size_t start,
+                           vector_size_t count) {
+      SCOPED_TRACE(
+          fmt::format(
+              "e={} f={} start={} count={} varint={}",
+              exponent,
+              factor,
+              start,
+              count,
+              useVarint));
+      auto* control = serialized.data() + prefixSize;
+      detail::alp::writeHeader(
+          {.exponent = exponent, .factor = factor, .hasExceptions = false},
+          control);
+      auto encoding =
+          EncodingFactory().create(*pool(), serialized, nullptr, options);
+      std::vector<PhysicalType> expected(kRows);
+      encoding->materialize(kRows, expected.data());
+      encoding->reset();
+      encoding->skip(start);
+      auto reader =
+          buildFloatingPointReader<FloatType>(*context, rowType, *scanSpec);
+      std::vector<vector_size_t> rowNumbers(count);
+      std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+      const RowSet rows(rowNumbers.data(), rowNumbers.size());
+      reader->doPrepareRead(0, rows, nullptr);
+      common::AlwaysTrue filter;
+      dwio::common::ExtractToReader extract(reader.get());
+      DecoderVisitor<
+          FloatType,
+          common::AlwaysTrue,
+          dwio::common::ExtractToReader,
+          true>
+          visitor(filter, reader.get(), rows, extract);
+      auto params = makeReadWithVisitorParams(visitor, rows, pool());
+      dispatchCallReadWithVisitor(*encoding, visitor, params);
+      ASSERT_EQ(reader->numValues(), count);
+      const auto actual = getValues<FloatType>(reader.get());
+      for (vector_size_t row = 0; row < count; ++row) {
+        ASSERT_EQ(
+            detail::alp::toPhysical<FloatType>(actual[row]),
+            expected[start + row])
+            << "row=" << row;
+      }
+      PhysicalType following;
+      encoding->materialize(1, &following);
+      EXPECT_EQ(following, expected[start + count]);
+    };
+    for (uint8_t exponent = 0; exponent < Alp::kPow10Double.size();
+         ++exponent) {
+      for (uint8_t factor = 0; factor < Alp::kPow10Double.size(); ++factor) {
+        check(exponent, factor, 1, 4099);
+      }
+    }
+    for (vector_size_t start = 0; start < 4; ++start) {
+      for (vector_size_t count = 1; count <= 135; ++count) {
+        check(4, 2, start, count);
+      }
+    }
+  }
+
+  template <typename FloatType>
   void testEncodingLevelAlpNullableBatches(
       EncodingType encodedValuesEncodingType,
       vector_size_t batchSize,
       bool filtered,
-      bool nullAllowed) {
+      bool nullAllowed,
+      vector_size_t nonNullsPerBatch = 0) {
     constexpr vector_size_t kRows = 1025;
     constexpr FloatType kLower = -1.25;
     constexpr FloatType kUpper = 1.25;
@@ -468,7 +590,16 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     data[253] = -FloatType{0};
     data[254] = std::numeric_limits<FloatType>::infinity();
     data[255] = std::numeric_limits<FloatType>::quiet_NaN();
-    const auto isNull = [](vector_size_t row) {
+    if (nonNullsPerBatch > 0) {
+      data[0] = -FloatType{0};
+      data[batchSize + 1] = std::numeric_limits<FloatType>::infinity();
+      data[2 * batchSize + 2] = std::numeric_limits<FloatType>::quiet_NaN();
+      data[3 * batchSize + 3] = -FloatType{0};
+    }
+    const auto isNull = [batchSize, nonNullsPerBatch](vector_size_t row) {
+      if (nonNullsPerBatch > 0) {
+        return row % batchSize >= nonNullsPerBatch;
+      }
       return row < 129 || (row >= 513 && row < 641) || row % 7 == 0;
     };
     Vector<bool> notNulls(pool());
@@ -1660,6 +1791,16 @@ TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpDenseNullable) {
       EncodingType::Trivial, 256, false, false);
 }
 
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpBulkSimdGrid) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "ALP bulk decoding requires SIMD support";
+  }
+  for (const bool useVarint : {false, true}) {
+    testAlpBulkSimdGrid<float>(useVarint);
+    testAlpBulkSimdGrid<double>(useVarint);
+  }
+}
+
 TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpDenseBulkBoundaries) {
   for (const auto rowCount : {127, 128, 129, 257, 4097}) {
     SCOPED_TRACE(fmt::format("rowCount={}", rowCount));
@@ -1667,6 +1808,24 @@ TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpDenseBulkBoundaries) {
          {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
       testColumnReaderAlpFloatingPointRange<float>(nestedType, rowCount);
       testColumnReaderAlpFloatingPointRange<double>(nestedType, rowCount);
+    }
+  }
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpBulkSimdNullableTails) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "ALP bulk decoding requires SIMD support";
+  }
+  for (vector_size_t nonNulls = 1; nonNulls <= 7; ++nonNulls) {
+    SCOPED_TRACE(fmt::format("nonNulls={}", nonNulls));
+    for (const auto nestedType :
+         {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+      for (const bool filtered : {false, true}) {
+        testEncodingLevelAlpNullableBatches<float>(
+            nestedType, 128, filtered, false, nonNulls);
+        testEncodingLevelAlpNullableBatches<double>(
+            nestedType, 128, filtered, false, nonNulls);
+      }
     }
   }
 }
