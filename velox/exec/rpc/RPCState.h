@@ -117,8 +117,10 @@ class RPCState {
     int64_t rttNs{0};
   };
 
-  /// Snapshot of all operator-visible state at close() time, captured under a
-  /// single lock acquisition for consistency.
+  /// Snapshot of all operator-visible state, captured under a single lock
+  /// acquisition for consistency. Taken at close() for the final runtime
+  /// stats, and while the operator is running (from an arbitrary thread) so
+  /// RPC progress is observable before the operator finishes.
   struct OperatorSnapshot {
     // Congestion controller.
     int64_t windowLimit{0};
@@ -131,6 +133,14 @@ class RPCState {
     int64_t numRttSamples{0};
     // Streaming mode.
     RPCStreamingMode streamingMode{RPCStreamingMode::kPerRow};
+    // Units dispatched but not yet completed.
+    int64_t inFlight{0};
+    // Monotonic count of completions signaled by the RPC transport, bumped
+    // from the completion callbacks (executor threads) rather than from the
+    // driver. A driver parked on kWaitForRPC cannot advance any operator
+    // counter, so this is the only value that moves while a backend is
+    // trickling responses back.
+    int64_t numCompletionsSignaled{0};
   };
 
   RPCState() = default;
@@ -373,6 +383,12 @@ class RPCState {
 
   // High-water mark of inFlight_ across the lifetime of this RPCState.
   int64_t peakInFlight_{0};
+
+  // Monotonic count of completions signaled by the RPC transport. Bumped from
+  // the completion callbacks, which run on the client's executor threads, so
+  // it keeps advancing while the driver is parked on kWaitForRPC and no
+  // operator counter can move.
+  int64_t numCompletionsSignaled_{0};
 
   // Accumulated RTT measurements across all completed units.
   int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};
