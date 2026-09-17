@@ -181,4 +181,12 @@ target_link_libraries(
   GTest::gmock_main
 )
 
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  target_link_libraries(velox_functions_test velox_functions_spark)
+  set_source_files_properties(
+    TrimFunctionsTest.cpp
+    PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_SPARK_FUNCTIONS
+  )
+endif()
+
 velox_add_library(velox_cast_base_test_helper INTERFACE HEADERS CastBaseTest.h)
