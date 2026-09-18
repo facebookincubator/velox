@@ -910,6 +910,53 @@ TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
   }
 }
 
+TEST_F(TableScanTest, decimalFilterUsesSplitScale) {
+  auto rowType = ROW({{"c0", DECIMAL(12, 4)}, {"c1", BIGINT()}});
+  auto fileVector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({30000000, 123}, DECIMAL(9, 2)),
+       makeFlatVector<int64_t>({1, 2})});
+  auto filePath = TempFilePath::create();
+  writeCompactDecimalParquet(filePath, fileVector);
+  createDuckDbTable({makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({3000000000, 12300}, DECIMAL(12, 4)),
+       makeFlatVector<int64_t>({1, 2})})});
+
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add(
+                         "c0",
+                         std::make_unique<common::BigintRange>(
+                             int64_t{3000000000},
+                             int64_t{3000000000},
+                             /*nullAllowed*/ false))
+                     .build();
+  auto tableHandle =
+      makeTableHandle("parquet_table", rowType, std::move(filters), nullptr);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  for (const bool useExperimentalReader : {false, true}) {
+    auto config = std::unordered_map<std::string, std::string>{
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseExperimentalCudfReader,
+         useExperimentalReader ? "true" : "false"}};
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(std::move(config)));
+    assertQuery(
+        plan,
+        {filePath},
+        "SELECT * FROM tmp WHERE c0 = CAST('300000.0000' AS DECIMAL(12, 4))");
+  }
+}
+
 TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
   // The file retains precision 5; the table schema widens it to precision 12.
   auto rowType = ROW({{"c0", DECIMAL(12, 2)}, {"c1", BIGINT()}});

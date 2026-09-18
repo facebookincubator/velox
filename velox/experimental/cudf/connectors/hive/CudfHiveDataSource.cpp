@@ -47,56 +47,70 @@ using namespace facebook::velox::connector::hive;
 
 namespace {
 
-cudf::type_id parquetDecimalType(
+std::optional<SubfieldFilterDecimalType> parquetDecimalType(
     const cudf::io::parquet::SchemaElement& schema) {
   using ParquetType = cudf::io::parquet::Type;
 
-  switch (schema.type) {
-    case ParquetType::INT32:
-      return cudf::type_id::DECIMAL32;
-    case ParquetType::INT64:
-      return cudf::type_id::DECIMAL64;
-    case ParquetType::FIXED_LEN_BYTE_ARRAY:
-      VELOX_CHECK_GT(
-          schema.type_length, 0, "Invalid fixed-length Parquet decimal width");
-      if (schema.type_length <= sizeof(int32_t)) {
+  const bool hasLogicalDecimal = schema.logical_type.has_value() &&
+      schema.logical_type->type == cudf::io::parquet::LogicalType::DECIMAL;
+  const bool hasConvertedDecimal =
+      schema.converted_type == cudf::io::parquet::ConvertedType::DECIMAL;
+  if (!hasLogicalDecimal && !hasConvertedDecimal) {
+    return std::nullopt;
+  }
+  const auto scale =
+      hasLogicalDecimal ? schema.logical_type->scale() : schema.decimal_scale;
+  auto decimalType = [&]() -> cudf::type_id {
+    switch (schema.type) {
+      case ParquetType::INT32:
         return cudf::type_id::DECIMAL32;
-      }
-      if (schema.type_length <= sizeof(int64_t)) {
+      case ParquetType::INT64:
         return cudf::type_id::DECIMAL64;
-      }
-      if (schema.type_length <= sizeof(int128_t)) {
+      case ParquetType::FIXED_LEN_BYTE_ARRAY:
+        VELOX_CHECK_GT(
+            schema.type_length,
+            0,
+            "Invalid fixed-length Parquet decimal width");
+        if (schema.type_length <= sizeof(int32_t)) {
+          return cudf::type_id::DECIMAL32;
+        }
+        if (schema.type_length <= sizeof(int64_t)) {
+          return cudf::type_id::DECIMAL64;
+        }
+        if (schema.type_length <= sizeof(int128_t)) {
+          return cudf::type_id::DECIMAL128;
+        }
+        VELOX_FAIL(
+            "Unsupported fixed-length Parquet decimal width: {}",
+            schema.type_length);
+      case ParquetType::BYTE_ARRAY: {
+        auto precision = schema.decimal_precision;
+        if (schema.logical_type.has_value() &&
+            schema.logical_type->type ==
+                cudf::io::parquet::LogicalType::DECIMAL) {
+          precision = schema.logical_type->precision();
+        }
+        VELOX_CHECK_GT(
+            precision, 0, "Parquet decimal is missing a valid precision");
+        VELOX_CHECK_LE(
+            precision,
+            LongDecimalType::kMaxPrecision,
+            "Parquet decimal precision exceeds the maximum supported precision");
+        if (precision <= std::numeric_limits<int32_t>::digits10) {
+          return cudf::type_id::DECIMAL32;
+        }
+        if (precision <= std::numeric_limits<int64_t>::digits10) {
+          return cudf::type_id::DECIMAL64;
+        }
         return cudf::type_id::DECIMAL128;
       }
-      VELOX_FAIL(
-          "Unsupported fixed-length Parquet decimal width: {}",
-          schema.type_length);
-    case ParquetType::BYTE_ARRAY: {
-      auto precision = schema.decimal_precision;
-      if (schema.logical_type.has_value() &&
-          schema.logical_type->type ==
-              cudf::io::parquet::LogicalType::DECIMAL) {
-        precision = schema.logical_type->precision();
-      }
-      VELOX_CHECK_GT(
-          precision, 0, "Parquet decimal is missing a valid precision");
-      VELOX_CHECK_LE(
-          precision,
-          LongDecimalType::kMaxPrecision,
-          "Parquet decimal precision exceeds the maximum supported precision");
-      if (precision <= std::numeric_limits<int32_t>::digits10) {
-        return cudf::type_id::DECIMAL32;
-      }
-      if (precision <= std::numeric_limits<int64_t>::digits10) {
-        return cudf::type_id::DECIMAL64;
-      }
-      return cudf::type_id::DECIMAL128;
+      default:
+        VELOX_FAIL(
+            "Unsupported physical Parquet type for decimal column: {}",
+            static_cast<int32_t>(schema.type));
     }
-    default:
-      VELOX_FAIL(
-          "Unsupported physical Parquet type for decimal column: {}",
-          static_cast<int32_t>(schema.type));
-  }
+  }();
+  return SubfieldFilterDecimalType{decimalType, scale};
 }
 
 SubfieldFilterDecimalTypes parquetDecimalTypes(
@@ -117,7 +131,9 @@ SubfieldFilterDecimalTypes parquetDecimalTypes(
     }
     const auto& logicalType = readerSchema->findChild(child.name);
     if (logicalType->isDecimal()) {
-      decimalTypes.emplace(child.name, parquetDecimalType(child));
+      if (auto decimalType = parquetDecimalType(child)) {
+        decimalTypes.emplace(child.name, *decimalType);
+      }
     }
   }
   return decimalTypes;

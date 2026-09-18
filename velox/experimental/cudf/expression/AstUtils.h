@@ -105,6 +105,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     T value,
     bool isNull,
     std::optional<cudf::type_id> toType = std::nullopt,
+    std::optional<int32_t> toScale = std::nullopt,
     cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   auto mr = get_temp_mr();
 
@@ -167,6 +168,9 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
             "Invalid Decimal Type (bad TypeKind: {})", type->kind());
       }
 
+      if (toScale.has_value()) {
+        cudfScale = numeric::scale_type{-*toScale};
+      }
       std::unique_ptr<cudf::scalar> scalar;
       const auto targetType = toType.value_or(defaultType);
       switch (targetType) {
@@ -249,7 +253,12 @@ static std::unique_ptr<cudf::scalar> createCudfScalar(
       : value.toConstantVector(pool);
   auto vector = valueVector->as<velox::ConstantVector<T>>();
   return makeScalarFromValue<T>(
-      vector->type(), vector->value(), vector->isNullAt(0), toType, stream);
+      vector->type(),
+      vector->value(),
+      vector->isNullAt(0),
+      toType,
+      std::nullopt,
+      stream);
 }
 
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
@@ -300,16 +309,17 @@ cudf::ast::literal makeScalarAndLiteral(
     const variant& var,
     bool isNull,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    std::optional<cudf::type_id> toType = std::nullopt) {
+    std::optional<cudf::type_id> toType = std::nullopt,
+    std::optional<int32_t> toScale = std::nullopt) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR) {
     if (isNull) {
-      auto scalar = makeScalarFromValue<T>(type, T{}, true, toType);
+      auto scalar = makeScalarFromValue<T>(type, T{}, true, toType, toScale);
       scalars.emplace_back(std::move(scalar));
       return makeLiteralFromScalar<T>(*(scalars.back()), type);
     }
     auto value = var.value<T>();
-    auto scalar = makeScalarFromValue(type, value, false, toType);
+    auto scalar = makeScalarFromValue(type, value, false, toType, toScale);
     scalars.emplace_back(std::move(scalar));
     return makeLiteralFromScalar<T>(*(scalars.back()), type);
   }
@@ -321,8 +331,9 @@ cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
-    std::optional<cudf::type_id> toType = std::nullopt) {
-  return makeScalarAndLiteral<kind>(type, var, false, scalars, toType);
+    std::optional<cudf::type_id> toType = std::nullopt,
+    std::optional<int32_t> toScale = std::nullopt) {
+  return makeScalarAndLiteral<kind>(type, var, false, scalars, toType, toScale);
 }
 
 /// Returns true if expr is non-null and its output type is one the AST/JIT

@@ -81,11 +81,11 @@ class SubfieldFilterAstTest : public OperatorTestBase {
 
       if (decimalTypes != nullptr) {
         auto columns = cudfTable->release();
-        for (const auto& [name, type] : *decimalTypes) {
+        for (const auto& [name, decimalType] : *decimalTypes) {
           const auto index = rowType->getChildIdx(name);
           columns[index] = cudf::cast(
               columns[index]->view(),
-              cudf::data_type{type, columns[index]->type().scale()},
+              cudf::data_type{decimalType.type, -decimalType.scale},
               stream,
               mr);
         }
@@ -190,22 +190,24 @@ class SubfieldFilterAstTest : public OperatorTestBase {
   void assertPhysicalFilter(
       const RowVectorPtr& vector,
       const common::Filter& filter,
-      cudf::type_id physicalType) {
+      cudf::type_id physicalType,
+      std::optional<int32_t> fileScale = std::nullopt) {
     SCOPED_TRACE(filter.toString());
     const auto& rowType = vector->rowType();
     const auto& name = rowType->nameOf(0);
     const common::Subfield subfield(name);
-    const SubfieldFilterDecimalTypes decimalTypes{{name, physicalType}};
+    const auto [_, logicalScale] =
+        getDecimalPrecisionScale(*rowType->childAt(0));
+    const auto physicalScale = fileScale.value_or(logicalScale);
+    const SubfieldFilterDecimalTypes decimalTypes{
+        {name, {physicalType, physicalScale}}};
     cudf::ast::tree tree;
     std::vector<std::unique_ptr<cudf::scalar>> scalars;
     const auto& expr = createAstFromSubfieldFilter(
         subfield, filter, tree, scalars, rowType, &decimalTypes);
     for (const auto& scalar : scalars) {
       EXPECT_EQ(scalar->type().id(), physicalType);
-      EXPECT_EQ(
-          scalar->type().scale(),
-          numeric::scale_type{
-              -getDecimalPrecisionScale(*rowType->childAt(0)).second});
+      EXPECT_EQ(scalar->type().scale(), numeric::scale_type{-physicalScale});
     }
     testFilterExecution(rowType, name, filter, vector, expr, &decimalTypes);
   }
@@ -686,7 +688,7 @@ TEST_F(SubfieldFilterAstTest, physicalPushdownAndLogicalDeferredDecimals) {
   const common::BigintRange negative(-500, -500, false);
   const common::BigintRange positive(100, 100, false);
   const SubfieldFilterDecimalTypes decimalTypes{
-      {"price", cudf::type_id::DECIMAL32}};
+      {"price", {cudf::type_id::DECIMAL32, 2}}};
   cudf::ast::tree physicalTree;
   cudf::ast::tree logicalTree;
   std::vector<std::unique_ptr<cudf::scalar>> physicalScalars;
@@ -738,6 +740,46 @@ TEST_F(SubfieldFilterAstTest, physicalPushdownAndLogicalDeferredDecimals) {
   // With the injected predicate false, only price = 100 survives.
   testFilterExecution(
       rowType, "price", positive, assembled, *deferred.deferredExpr);
+}
+
+TEST_F(SubfieldFilterAstTest, decimalFileScale) {
+  const auto vector = makeRowVector({makeFlatVector<int64_t>(
+      {-12400, -12300, 12300, 12400, 3000000000}, DECIMAL(12, 4))});
+  auto check = [&](const common::Filter& filter) {
+    assertPhysicalFilter(vector, filter, cudf::type_id::DECIMAL32, 2);
+  };
+
+  check(common::BigintRange(3000000000, 3000000000, false));
+  check(common::BigintRange(12300, 12300, false));
+  check(common::BigintRange(12345, 12345, false));
+  check(common::BigintRange(12345, 3000000000, false));
+  check(common::BigintRange(-12345, 12345, false));
+  check(common::BigintRange(-3000000000, -12345, false));
+  check(common::NegatedBigintRange(-12345, 12345, false));
+  check(
+      common::BigintValuesUsingHashTable(12300, 12345, {12300, 12345}, false));
+}
+
+TEST_F(SubfieldFilterAstTest, decimalFileScaleExpansion) {
+  const auto vector = makeRowVector(
+      {makeFlatVector<int64_t>({-30000000, 123, 30000000}, DECIMAL(9, 2))});
+  auto check = [&](const common::Filter& filter) {
+    assertPhysicalFilter(vector, filter, cudf::type_id::DECIMAL64, 4);
+  };
+
+  check(common::BigintRange(30000000, 30000000, false));
+  check(common::BigintRange(-30000000, 30000000, false));
+  check(
+      common::BigintValuesUsingHashTable(
+          123, 30000000, {123, 30000000}, false));
+
+  const auto decimal32Vector =
+      makeRowVector({makeFlatVector<int64_t>({-123, 0, 123}, DECIMAL(9, 2))});
+  assertPhysicalFilter(
+      decimal32Vector,
+      common::BigintRange(30000000, 30000000, false),
+      cudf::type_id::DECIMAL32,
+      4);
 }
 
 TEST_F(SubfieldFilterAstTest, decimalPhysicalWidths) {
