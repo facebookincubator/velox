@@ -268,6 +268,9 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
+    /// Unit completed cleanly, but its latency is not a congestion sample.
+    /// Recover shared admission without updating the gradient window.
+    kSuccessNoLatency,
     /// Backend shed load (rate limited, or timed out under pressure) — shrink
     /// the window. Only this signal backs off.
     kOverloaded,
@@ -283,10 +286,12 @@ class AsyncRPCFunction {
   };
 
   /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
-  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient;
-  /// kOverloaded applies a multiplicative decrease to both controllers; kError
-  /// reports a non-overload failure without moving either controller; and
-  /// kNone skips evaluation. Defaults to kNone (no congestion control).
+  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient
+  /// and recovers shared admission; kSuccessNoLatency only recovers shared
+  /// admission; kOverloaded applies a multiplicative decrease to both
+  /// controllers; kError reports a non-overload failure without moving either
+  /// controller; and kNone skips evaluation. Defaults to kNone (no congestion
+  /// control).
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;
