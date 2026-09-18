@@ -27,7 +27,6 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/common/tests/utils/MapBuilder.h"
 #include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/dwrf/reader/ColumnReader.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 #include "velox/dwio/dwrf/test/utils/E2EWriterTestUtil.h"
@@ -187,6 +186,17 @@ class E2EWriterTest : public testing::Test {
     bool preload = true;
 
     auto typeWithId = TypeWithId::create(type);
+    auto projectedNodes = std::make_shared<BitSet>(0);
+    std::function<void(const TypeWithId&)> addProjectedNodes =
+        [&projectedNodes, &addProjectedNodes](const TypeWithId& node) {
+          projectedNodes->insert(node.id());
+          for (const auto& child : node.getChildren()) {
+            if (child) {
+              addProjectedNodes(*child);
+            }
+          }
+        };
+    addProjectedNodes(*typeWithId);
     for (auto mapColumn : mapColumnIds) {
       folly::F14FastMap<KeyInfo, uint64_t, folly::transparent<KeyInfoHash>>
           featureStreamSizes;
@@ -198,8 +208,7 @@ class E2EWriterTest : public testing::Test {
         dwrf::StripeStreamsImpl stripeStreams(
             std::make_shared<dwrf::StripeReadState>(
                 dwrfRowReader->readerBaseShared(), std::move(stripeMetadata)),
-            &dwrfRowReader->getColumnSelector(),
-            nullptr,
+            projectedNodes,
             rowReaderOpts,
             currentStripeInfo.offset(),
             currentStripeInfo.numberOfRows(),
@@ -486,9 +495,9 @@ TEST_F(E2EWriterTest, e2e) {
       "binary_val:binary,"
       "timestamp_val:timestamp,"
       "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>," /* this is column 12 */
+      "map_nested:map<bigint,map<string, int>>," /* this is column 13 */
       "struct_val:struct<a:float,b:double>"
       ">");
 
@@ -608,11 +617,11 @@ TEST_F(E2EWriterTest, flatMapDictionaryEncoding) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>,"
-      "map_val:map<bigint,map<string, int>>,"
-      "map_val:map<int, string>,"
-      "map_val:map<bigint,map<int, string>>"
+      "map_int_double:map<int,double>,"
+      "map_bigint_double:map<bigint,double>,"
+      "map_bigint_nested_string_int:map<bigint,map<string, int>>,"
+      "map_int_string:map<int, string>,"
+      "map_bigint_nested_int_string:map<bigint,map<int, string>>"
       ">");
 
   auto config = std::make_shared<dwrf::Config>();
@@ -987,12 +996,12 @@ TEST_F(E2EWriterTest, mapStatsSingleStride) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<bigint,int>,"
-      "map_val:map<bigint,double>,"
-      "map_val:map<bigint,map<bigint,bigint>>,"
-      "map_val:map<bigint,map<bigint,double>>,"
-      "map_val:map<bigint,array<bigint>>,"
-      "map_val:map<bigint,map<string,float>>,"
+      "map_bigint_int:map<bigint,int>,"
+      "map_bigint_double:map<bigint,double>,"
+      "map_bigint_nested_bigint:map<bigint,map<bigint,bigint>>,"
+      "map_bigint_nested_double:map<bigint,map<bigint,double>>,"
+      "map_bigint_array:map<bigint,array<bigint>>,"
+      "map_bigint_nested_string_float:map<bigint,map<string,float>>,"
       ">");
 
   // Single column
@@ -1007,12 +1016,12 @@ TEST_F(E2EWriterTest, mapStatsMultiStrides) {
   HiveTypeParser parser;
   auto type = parser.parse(
       "struct<"
-      "map_val:map<bigint,int>,"
-      "map_val:map<bigint,double>,"
-      "map_val:map<bigint,map<bigint,bigint>>,"
-      "map_val:map<bigint,map<bigint,double>>,"
-      "map_val:map<bigint,array<bigint>>,"
-      "map_val:map<bigint,map<string,float>>,"
+      "map_bigint_int:map<bigint,int>,"
+      "map_bigint_double:map<bigint,double>,"
+      "map_bigint_nested_bigint:map<bigint,map<bigint,bigint>>,"
+      "map_bigint_nested_double:map<bigint,map<bigint,double>>,"
+      "map_bigint_array:map<bigint,array<bigint>>,"
+      "map_bigint_nested_string_float:map<bigint,map<string,float>>,"
       ">");
 
   // Single column
@@ -1495,8 +1504,10 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
   // reading unencrypted column should not fail
   {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{0}));
+    auto scanSpec =
+        std::make_shared<facebook::velox::common::ScanSpec>("<root>");
+    scanSpec->addFieldRecursively("a", *type->childAt(0), 0);
+    rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     VectorPtr batch;
     ASSERT_TRUE(rowReader->next(1, batch));
@@ -1505,8 +1516,10 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
   // fail when reading encrypted column
   {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
+    auto scanSpec =
+        std::make_shared<facebook::velox::common::ScanSpec>("<root>");
+    scanSpec->addFieldRecursively("b", *type->childAt(1), 1);
+    rowReaderOpts.setScanSpec(scanSpec);
     VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
   }
 }
