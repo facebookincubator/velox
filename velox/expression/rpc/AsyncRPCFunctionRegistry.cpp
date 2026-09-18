@@ -16,10 +16,7 @@
 
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 
-#include <glog/logging.h>
-
 #include "velox/common/base/Exceptions.h"
-#include "velox/expression/rpc/RPCFunctionStubs.h"
 
 namespace facebook::velox::exec::rpc {
 
@@ -60,22 +57,6 @@ bool AsyncRPCFunctionRegistry::registerFunction(
           Registration{
               std::move(factory), std::move(signatures), std::move(metadata)})
       .second;
-}
-
-void AsyncRPCFunctionRegistry::registerStubs(
-    const std::string& namespacePrefix) {
-  auto entries = functions();
-  LOG(INFO) << "[RPC] registerStubs: namespacePrefix='" << namespacePrefix
-            << "', found " << entries.size() << " function(s)";
-  for (auto& entry : entries) {
-    const std::string stubName = namespacePrefix + entry.name;
-    LOG(INFO) << "[RPC] registerStubs: registering stub '" << stubName
-              << "' with " << entry.signatures.size() << " signature(s)";
-    registerRPCFunctionStub(
-        stubName, std::move(entry.signatures), std::move(entry.metadata));
-  }
-  LOG(INFO) << "[RPC] registerStubs: completed, registered " << entries.size()
-            << " stub(s)";
 }
 
 std::optional<AsyncRPCFunctionRegistry::FunctionEntry>
