@@ -1238,8 +1238,7 @@ TEST_F(CudfIcebergReadTest, normalizeDecimalsWithInjectedColumn) {
           prices.push_back(-700);
         }
         std::vector<VectorPtr> columns{
-            makeFlatVector<std::string>(
-                ids.size(), [](auto) { return "US"; }),
+            makeFlatVector<std::string>(ids.size(), [](auto) { return "US"; }),
             makeFlatVector<int64_t>(ids)};
         if (projectPrice) {
           columns.push_back(makeFlatVector<int64_t>(prices, DECIMAL(5, 2)));
