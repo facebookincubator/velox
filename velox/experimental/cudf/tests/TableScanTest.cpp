@@ -446,8 +446,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
 }
 
 // A query that stops early leaves the splits the preloader has already prepared
-// unread, so their readers are destroyed with the fetch of their first row
-// group pass outstanding.
+// unread, so their readers are destroyed with a payload fetch outstanding.
 TEST_F(TableScanTest, abandonPreloadedSplits) {
   auto filePaths = makeFilePaths(10);
   auto vectors = makeVectors(10, 1'000);
@@ -455,6 +454,21 @@ TEST_F(TableScanTest, abandonPreloadedSplits) {
     writeToFile(filePaths[i]->getPath(), vectors[i]);
   }
   createDuckDbTable(vectors);
+
+  // Consume all but one IO threads so the preloader can post column chunk fetch
+  // tasks queuing behind the blockers and stay pending. Driver reads complete
+  // inline via work-stealing.
+  auto* ioExecutor = ioExecutor_.get();
+  const auto numBlocked = ioExecutor->numThreads() - 1;
+  ASSERT_GE(numBlocked, 1);
+  folly::Latch latch(numBlocked);
+  std::vector<folly::Baton<>> batons(numBlocked);
+  for (auto& baton : batons) {
+    ioExecutor->add([&]() {
+      baton.wait();
+      latch.count_down();
+    });
+  }
 
   // The limit is reached partway into the second split, so the splits the
   // preloader prepared behind it are never read. Which rows are returned is
@@ -492,8 +506,15 @@ TEST_F(TableScanTest, abandonPreloadedSplits) {
   ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
   EXPECT_GE(customStats.at(std::string(TableScan::kPreloadedSplits)).sum, 1);
 
+  // Tear down while abandoned splits' payload fetches are still queued.
   task.reset();
   ASSERT_EQ(Task::numRunningTasks(), 0);
+
+  // Unblock the IO thread pool.
+  for (auto& baton : batons) {
+    baton.post();
+  }
+  latch.wait();
 }
 
 // A filter that no row group can satisfy prunes every row group of the split,
