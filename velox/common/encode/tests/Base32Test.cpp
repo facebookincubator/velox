@@ -31,6 +31,26 @@ TEST(Base32Test, encode) {
   EXPECT_EQ(Base32::encode("foobar"), "MZXW6YTBOI======");
 }
 
+TEST(Base32Test, encodeToBuffer) {
+  // Verifies the buffer-writing overload matches the std::string-returning
+  // overload used by Base32Test.encode.
+  auto verify = [](std::string_view value) {
+    auto expected = Base32::encode(value);
+
+    auto encodedSize = Base32::calculateEncodedSize(value.size());
+    EXPECT_EQ(encodedSize, expected.size());
+
+    std::string actual(encodedSize, '\0');
+    Base32::encode(value.data(), value.size(), actual.data());
+    EXPECT_EQ(actual, expected);
+  };
+
+  for (const auto& value :
+       {"", "f", "fo", "foo", "foob", "fooba", "foobar", "hello world"}) {
+    verify(value);
+  }
+}
+
 TEST(Base32Test, roundTrip) {
   // Encodes 'value', decodes the result, and verifies it matches the original.
   auto verify = [](std::string_view value) {

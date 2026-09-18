@@ -72,31 +72,46 @@ constexpr int kBitsPerSymbol = 5;
 constexpr uint32_t kSymbolMask = (1U << kBitsPerSymbol) - 1;
 
 // static
-std::string Base32::encode(std::string_view input) {
-  std::string encoded;
+size_t Base32::calculateEncodedSize(size_t inputSize) {
+  if (inputSize == 0) {
+    return 0;
+  }
   // Each binary block encodes to one encoded block; round up.
-  encoded.reserve(
-      (input.size() + kBinaryBlockByteSize - 1) / kBinaryBlockByteSize *
-      kEncodedBlockByteSize);
+  return (inputSize + kBinaryBlockByteSize - 1) / kBinaryBlockByteSize *
+      kEncodedBlockByteSize;
+}
+
+// static
+void Base32::encode(const char* input, size_t inputSize, char* outputBuffer) {
+  size_t outputPos = 0;
   uint32_t buffer{0};
   int bitsLeft{0};
-  for (unsigned char byte : input) {
-    buffer = (buffer << kBitsPerByte) | byte;
+  for (size_t i = 0; i < inputSize; ++i) {
+    buffer = (buffer << kBitsPerByte) | static_cast<unsigned char>(input[i]);
     bitsLeft += kBitsPerByte;
     while (bitsLeft >= kBitsPerSymbol) {
       bitsLeft -= kBitsPerSymbol;
-      encoded.push_back(kBase32Charset[(buffer >> bitsLeft) & kSymbolMask]);
+      outputBuffer[outputPos++] =
+          kBase32Charset[(buffer >> bitsLeft) & kSymbolMask];
     }
   }
   // Encode the remaining bits, padding with zero bits on the right.
   if (bitsLeft > 0) {
-    encoded.push_back(
-        kBase32Charset[(buffer << (kBitsPerSymbol - bitsLeft)) & kSymbolMask]);
+    outputBuffer[outputPos++] =
+        kBase32Charset[(buffer << (kBitsPerSymbol - bitsLeft)) & kSymbolMask];
   }
   // Pad to a multiple of the encoded block size.
-  while (encoded.size() % kEncodedBlockByteSize != 0) {
-    encoded.push_back(kPadding);
+  const size_t encodedSize = calculateEncodedSize(inputSize);
+  while (outputPos < encodedSize) {
+    outputBuffer[outputPos++] = kPadding;
   }
+}
+
+// static
+std::string Base32::encode(std::string_view input) {
+  std::string encoded;
+  encoded.resize(calculateEncodedSize(input.size()));
+  encode(input.data(), input.size(), encoded.data());
   return encoded;
 }
 

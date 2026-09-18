@@ -43,6 +43,11 @@ class Base32 {
   /// matching Google Guava's BaseEncoding.base32().
   static std::string encode(std::string_view input);
 
+  /// Encodes the specified number of characters from the 'input' and writes
+  /// the result to the 'outputBuffer'. The output must have enough space as
+  /// returned by calculateEncodedSize().
+  static void encode(const char* input, size_t inputSize, char* outputBuffer);
+
   /// Decodes the specified number of characters from the 'input' and writes the
   /// result to the 'outputBuffer'.
   static Status decode(
@@ -50,6 +55,9 @@ class Base32 {
       size_t inputSize,
       char* outputBuffer,
       size_t outputSize);
+
+  /// Calculates the encoded size (including padding) based on 'inputSize'.
+  static size_t calculateEncodedSize(size_t inputSize);
 
   /// Calculates the decoded size based on encoded input.
   static folly::Expected<size_t, Status> calculateDecodedSize(
