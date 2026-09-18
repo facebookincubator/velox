@@ -308,12 +308,6 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
   }
 
   auto tableWithMetadata = splitReader_->materialize_all_columns_chunk();
-  return castDecimalColumnsToVeloxTypes(
-      std::move(tableWithMetadata.tbl),
-      readColumnTypes_,
-      prependRowIndex_ ? 1 : 0,
-      stream_,
-      output_mr);
 
   // This was the last chunk of the pass. Drop its fetch buffers and begin
   // I/O for the next pass while the caller consumes this table.
@@ -328,7 +322,12 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     }
   }
 
-  return table;
+  return castDecimalColumnsToVeloxTypes(
+      std::move(tableWithMetadata.tbl),
+      readColumnTypes_,
+      prependRowIndex_ ? 1 : 0,
+      stream_,
+      outputMr);
 }
 
 void CudfSplitReader::startColumnChunkFetch() {
