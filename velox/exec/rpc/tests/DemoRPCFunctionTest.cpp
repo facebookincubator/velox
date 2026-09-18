@@ -151,5 +151,16 @@ TEST_F(DemoRPCFunctionTest, metadata) {
   EXPECT_EQ(function_->admissionKey(), "");
 }
 
+TEST_F(DemoRPCFunctionTest, overloadSignal) {
+  std::vector<RPCResponse> responses;
+  RPCResponse response;
+  response.setPayload(makeTextPayload("demo: OVERLOAD"));
+  responses.push_back(std::move(response));
+
+  EXPECT_EQ(
+      function_->evaluateCongestion(responses),
+      AsyncRPCFunction::CongestionSignal::kOverloaded);
+}
+
 } // namespace
 } // namespace facebook::velox::exec::rpc

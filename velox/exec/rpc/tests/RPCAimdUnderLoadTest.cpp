@@ -76,10 +76,10 @@ AsyncRPCFunctionRegistry::Signatures varcharSignature() {
 // subclasses -- a contract change on AsyncRPCFunction is then absorbed here
 // once instead of in both.
 //
-// The classifier treats rate-limit/timeout as backend overload (kError -> both
-// controllers back off) and a clean drain as kSuccess (feeds the RTT gradient
-// and drives rate-limiter recovery), exactly as a production congestion policy
-// would.
+// The classifier treats rate-limit/timeout as backend overload (kOverloaded ->
+// both controllers back off) and a clean drain as kSuccess (feeds the RTT
+// gradient and drives rate-limiter recovery), exactly as a production
+// congestion policy would.
 class BurstFunctionBase : public AsyncRPCFunction {
  public:
   struct Config {
@@ -118,16 +118,17 @@ class BurstFunctionBase : public AsyncRPCFunction {
   }
 
   // Overload classifier: rate-limit / timeout failures are backend overload
-  // (kError). A null-input error is a user error and must NOT move the window
-  // (folded into kSuccess/kNone below since it is not rate-limit/timeout). A
-  // clean drain feeds its RTT to the gradient and drives rate-limiter recovery.
+  // (kOverloaded). A null-input error is a user error and must NOT move the
+  // window (folded into kSuccess/kNone below since it is not
+  // rate-limit/timeout). A clean drain feeds its RTT to the gradient and drives
+  // rate-limiter recovery.
   CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& responses) const override {
     for (const auto& response : responses) {
       if (response.hasError() &&
           (response.errorKind() == RPCErrorKind::kRateLimited ||
            response.errorKind() == RPCErrorKind::kTimeout)) {
-        return CongestionSignal::kError;
+        return CongestionSignal::kOverloaded;
       }
     }
     return responses.empty() ? CongestionSignal::kNone

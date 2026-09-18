@@ -253,20 +253,25 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed for reasons the backend is not responsible for, such as a
+    /// malformed request or a bad key. Retrying more slowly does not help, so
+    /// neither controller reacts. Today that makes kError observationally
+    /// identical to kNone at the operator; it is kept separate because "failed,
+    /// but not the backend's fault" and "nothing to evaluate" are different
+    /// facts, and only the former should ever gain an error counter.
     kError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
   };
 
-  /// Evaluate congestion from completed responses. Called by RPCOperator after
-  /// a unit (a drained set of PER_ROW rows, or one BATCH) completes. The
-  /// function inspects responses and returns a signal the operator maps to the
-  /// latency-gradient window: kSuccess feeds the unit's round-trip latency as a
-  /// gradient sample, kError applies a multiplicative decrease. User-data
-  /// errors (bad handle, null input) must classify as kNone so they never move
-  /// the window — only true backend overload should back off. Default: kNone
-  /// (no congestion control).
+  /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
+  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient;
+  /// kOverloaded applies a multiplicative decrease to both controllers; kError
+  /// reports a non-overload failure without moving either controller; and
+  /// kNone skips evaluation. Defaults to kNone (no congestion control).
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;
