@@ -19,6 +19,7 @@ velox_add_library(
   RegisterS3FileSystem.cpp
   HEADERS
   RegisterS3FileSystem.h
+  S3AccessToken.h
   S3Config.h
   S3Counters.h
   S3FileSystem.h

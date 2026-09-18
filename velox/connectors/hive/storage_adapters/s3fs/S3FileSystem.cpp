@@ -18,6 +18,7 @@
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3AccessToken.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Counters.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3ReadFile.h"
@@ -227,14 +228,25 @@ void registerCredentialsProvider(
   });
 }
 
+namespace {
+Aws::Client::ClientConfigurationInitValues clientConfigInitValues(
+    const S3Config& s3Config) {
+  Aws::Client::ClientConfigurationInitValues initValues;
+  initValues.shouldDisableIMDS = !s3Config.useIMDS();
+  return initValues;
+}
+} // namespace
+
 class S3FileSystem::Impl {
  public:
   explicit Impl(std::shared_ptr<S3Config> s3Config)
-      : s3Config_(std::move(s3Config)) {
+      : s3Config_(std::move(s3Config)),
+        clientConfig_(clientConfigInitValues(*s3Config_)) {
     VELOX_CHECK(getAwsInstance()->isInitialized(), "S3 is not initialized");
-    Aws::Client::ClientConfigurationInitValues initValues;
-    initValues.shouldDisableIMDS = !s3Config_->useIMDS();
-    Aws::S3::S3ClientConfiguration clientConfig(initValues);
+    // Held as a member so that clients built for TokenProvider-supplied
+    // credentials share the default client's endpoint, proxy, retry and
+    // addressing setup. See clientForToken.
+    Aws::S3::S3ClientConfiguration& clientConfig = clientConfig_;
     clientConfig.checksumConfig.requestChecksumCalculation =
         Aws::Client::RequestChecksumCalculation::WHEN_REQUIRED;
     clientConfig.checksumConfig.responseChecksumValidation =
@@ -440,6 +452,24 @@ class S3FileSystem::Impl {
     return client_.get();
   }
 
+  // Returns the client that should serve a file open: the default client,
+  // unless the caller's TokenProvider resolves credentials for this path.
+  // 'path' is scheme-stripped, matching getPath().
+  Aws::S3::S3Client* clientForFileOptions(
+      std::string_view path,
+      const FileOptions& options) {
+    if (options.tokenProvider == nullptr) {
+      return s3Client();
+    }
+    const S3AccessTokenKey key{std::string(path)};
+    const auto token = std::dynamic_pointer_cast<S3AccessToken>(
+        options.tokenProvider->getToken(key));
+    if (token == nullptr) {
+      return s3Client();
+    }
+    return clientForToken(*token);
+  }
+
   std::string getLogLevelName() const {
     return getAwsInstance()->getLogLevelName();
   }
@@ -453,8 +483,40 @@ class S3FileSystem::Impl {
   }
 
  private:
+  // One client per credential set, built lazily with the same configuration as
+  // the default client and owned by this file system, so the raw pointers
+  // handed to S3ReadFile/S3WriteFile stay valid for the lifetime of the open
+  // file. The number of entries is bounded by the number of distinct
+  // credential sets the file system is asked to use.
+  Aws::S3::S3Client* clientForToken(const S3AccessToken& token) {
+    const auto fingerprint = token.fingerprint();
+    return tokenClients_.withWLock([&](auto& clients) {
+      auto it = clients.find(fingerprint);
+      if (it == clients.end()) {
+        auto credentialsProvider =
+            std::make_shared<Aws::Auth::SimpleAWSCredentialsProvider>(
+                awsString(token.accessKeyId()),
+                awsString(token.secretAccessKey()),
+                awsString(token.sessionToken()));
+        it = clients
+                 .emplace(
+                     fingerprint,
+                     std::make_shared<Aws::S3::S3Client>(
+                         credentialsProvider,
+                         nullptr /* endpointProvider */,
+                         clientConfig_))
+                 .first;
+      }
+      return it->second.get();
+    });
+  }
+
   std::shared_ptr<Aws::S3::S3Client> client_;
   std::shared_ptr<S3Config> s3Config_;
+  Aws::S3::S3ClientConfiguration clientConfig_;
+  folly::Synchronized<
+      std::unordered_map<std::string, std::shared_ptr<Aws::S3::S3Client>>>
+      tokenClients_;
 };
 
 S3FileSystem::S3FileSystem(
@@ -477,7 +539,8 @@ std::unique_ptr<ReadFile> S3FileSystem::openFileForRead(
     std::string_view s3Path,
     const FileOptions& options) {
   const auto path = getPath(s3Path);
-  auto s3file = std::make_unique<S3ReadFile>(path, impl_->s3Client());
+  auto s3file = std::make_unique<S3ReadFile>(
+      path, impl_->clientForFileOptions(path, options));
   s3file->initialize(options);
   return s3file;
 }
@@ -487,7 +550,10 @@ std::unique_ptr<WriteFile> S3FileSystem::openFileForWrite(
     const FileOptions& options) {
   const auto path = getPath(s3Path);
   auto s3file = std::make_unique<S3WriteFile>(
-      path, impl_->s3Client(), options.pool, impl_->getS3Config());
+      path,
+      impl_->clientForFileOptions(path, options),
+      options.pool,
+      impl_->getS3Config());
   return s3file;
 }
 
