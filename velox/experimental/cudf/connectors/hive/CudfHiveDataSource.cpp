@@ -137,7 +137,10 @@ CudfHiveDataSource::CudfHiveDataSource(
     // directly.
     auto const remainingFilterType = getTableRowType();
     cudfRemainingFilterExpression_ = createCudfExpression(
-        optimizedRemainingFilter_, remainingFilterType, pool_);
+        optimizedRemainingFilter_,
+        remainingFilterType,
+        pool_,
+        optimizeQueryCtx->queryConfig());
   }
 
   // Build a combined AST for all subfield filters once. This is query-constant
