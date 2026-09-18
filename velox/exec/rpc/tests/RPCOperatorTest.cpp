@@ -20,6 +20,7 @@
 /// Verifies that RPCPlanNodeTranslator, RPCOperator, RPCState, and
 /// AsyncRPCFunction wire together correctly through the execution engine.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -144,6 +145,49 @@ class UnsetPerRowRPCFunction : public DemoAsyncRPCFunction {
     });
     return futures;
   }
+};
+
+// Declares a per-request byte budget and reports a fixed number of rows that
+// fit it, so the operator must chunk a large backlog to keep each request
+// under the cap. Records every flush's row count so the test can assert no
+// flush exceeds the budget-derived limit and no rows are lost.
+class ByteBudgetedBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  using DemoBatchRPCFunction::DemoBatchRPCFunction;
+
+  static constexpr int32_t kRowsPerBudget = 3;
+
+  // Flush chunk sizes observed across a query. Cleared at the start of the
+  // test.
+  static std::vector<int32_t>& flushChunks() {
+    static std::vector<int32_t> chunks;
+    return chunks;
+  }
+
+  // Report a fixed cap (>= 1), independent of any byte math — this test
+  // exercises the operator's clamp, not a function's estimator.
+  int32_t maxRowsPerFlush(int32_t desired) const override {
+    return std::min(desired, kRowsPerBudget);
+  }
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    flushChunks().push_back(maxRows);
+    return DemoBatchRPCFunction::flushBatch(maxRows);
+  }
+};
+
+class InvalidMaxRowsBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  explicit InvalidMaxRowsBatchRPCFunction(bool returnZero)
+      : returnZero_(returnZero) {}
+
+  int32_t maxRowsPerFlush(int32_t desired) const override {
+    return returnZero_ ? 0 : desired + 1;
+  }
+
+ private:
+  const bool returnZero_;
 };
 
 class RPCOperatorTest : public OperatorTestBase {
@@ -310,6 +354,22 @@ class RPCOperatorTest : public OperatorTestBase {
           return function;
         },
         DemoAsyncRPCFunction::signatures());
+    // Declares maxBatchBytes so the operator clamps each flush by the byte
+    // budget (see batchClampedByByteBudget).
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_byte_budgeted",
+        []() { return std::make_shared<ByteBudgetedBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_zero_flush_limit",
+        []() { return std::make_shared<InvalidMaxRowsBatchRPCFunction>(true); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_excessive_flush_limit",
+        []() {
+          return std::make_shared<InvalidMaxRowsBatchRPCFunction>(false);
+        },
+        DemoBatchRPCFunction::signatures());
   }
 
   static void TearDownTestCase() {
@@ -1543,6 +1603,58 @@ TEST_F(RPCOperatorTest, demoBatchErrorSignalsOverload) {
   EXPECT_EQ(
       function.evaluateCongestion(responses),
       AsyncRPCFunction::CongestionSignal::kOverloaded);
+}
+
+// Per-flush row cap: the operator asks the function how many rows it will take
+// and chunks a backlog accordingly, so no single request exceeds what the
+// backend accepts while every row is still emitted. Uses the flush-all path
+// (dispatchBatchSize=0), which noMoreInput() must also chunk.
+TEST_F(RPCOperatorTest, batchClampedByByteBudget) {
+  ByteBudgetedBatchRPCFunction::flushChunks().clear();
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>(
+          {"r0", "r1", "r2", "r3", "r4", "r5", "r6"})}); // 7 rows
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "demo_batch_rpc_byte_budgeted",
+      /*dispatchBatchSize=*/0);
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  // No rows lost.
+  ASSERT_EQ(result->size(), 7);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_FALSE(results->isNullAt(i));
+  }
+
+  EXPECT_THAT(
+      ByteBudgetedBatchRPCFunction::flushChunks(),
+      testing::ElementsAre(3, 3, 1));
+}
+
+TEST_F(RPCOperatorTest, rejectsInvalidMaxRowsPerFlush) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"r0", "r1"})});
+
+  for (const auto& functionName : {
+           "demo_batch_rpc_zero_flush_limit",
+           "demo_batch_rpc_excessive_flush_limit",
+       }) {
+    auto plan = makeBatchRPCNode(
+        PlanBuilder().values({input}).planNode(),
+        {"prompt"},
+        functionName,
+        /*dispatchBatchSize=*/2);
+
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool()),
+        "expected a value in [1, 2]");
+  }
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
