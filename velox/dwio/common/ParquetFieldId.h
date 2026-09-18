@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace facebook::velox::dwio::common {
@@ -29,6 +30,7 @@ namespace facebook::velox::dwio::common {
 struct ParquetFieldId {
   int32_t fieldId;
   std::vector<ParquetFieldId> children;
+  std::vector<std::string> fallbackNames{};
 };
 
 } // namespace facebook::velox::dwio::common

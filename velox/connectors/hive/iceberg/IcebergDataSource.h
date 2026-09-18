@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/connectors/hive/HiveDataSource.h"
+#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -48,6 +49,8 @@ class IcebergDataSource : public HiveDataSource {
  private:
   /// Column handles map for accessing column metadata.
   std::shared_ptr<ColumnHandleMap> columnHandles_;
+  std::shared_ptr<const IcebergNameMapping> nameMapping_;
+  bool nameMappingParsed_{false};
 };
 
 } // namespace facebook::velox::connector::hive::iceberg
