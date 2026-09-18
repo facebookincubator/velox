@@ -209,6 +209,20 @@ class SubfieldFilterAstTest : public OperatorTestBase {
     }
     testFilterExecution(rowType, name, filter, vector, expr, &decimalTypes);
   }
+
+  void assertFilterMatchesVelox(
+      const RowVectorPtr& vector,
+      const common::Filter& filter) {
+    SCOPED_TRACE(filter.toString());
+    const auto& rowType = vector->rowType();
+    const auto& name = rowType->nameOf(0);
+    cudf::ast::tree tree;
+    std::vector<std::unique_ptr<cudf::scalar>> scalars;
+    const common::Subfield subfield(name);
+    const auto& expr =
+        createAstFromSubfieldFilter(subfield, filter, tree, scalars, rowType);
+    testFilterExecution(rowType, name, filter, vector, expr);
+  }
 };
 
 // Basic AST generation tests
@@ -266,6 +280,39 @@ TEST_F(SubfieldFilterAstTest, nullAllowed) {
         createAstFromSubfieldFilter(subfield, *filter, tree, scalars, rowType);
     testFilterExecution(rowType, columnName, *filter, vector, expr);
   }
+}
+
+TEST_F(SubfieldFilterAstTest, nonDecimalFiltersPreserveNulls) {
+  auto integers = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, -1, 0, 1})});
+  auto booleans = makeRowVector(
+      {makeNullableFlatVector<bool>({std::nullopt, true, false})});
+  auto strings = makeRowVector(
+      {makeNullableFlatVector<std::string>({std::nullopt, "a", "b", "c"})});
+  auto doubles =
+      makeRowVector({makeNullableFlatVector<double>({std::nullopt, -1, 0, 1})});
+  for (const bool nullAllowed : {false, true}) {
+    assertFilterMatchesVelox(integers, common::BigintRange(0, 1, nullAllowed));
+    assertFilterMatchesVelox(booleans, common::BoolValue(true, nullAllowed));
+    assertFilterMatchesVelox(
+        strings, common::BytesValues({"a", "c"}, nullAllowed));
+    assertFilterMatchesVelox(
+        strings, common::NegatedBytesValues({"a", "c"}, nullAllowed));
+    assertFilterMatchesVelox(
+        strings,
+        common::BytesRange("b", false, false, "c", false, false, nullAllowed));
+    std::vector<std::unique_ptr<common::Filter>> ranges;
+    ranges.push_back(
+        std::make_unique<common::DoubleRange>(
+            -1, false, false, -1, false, false, !nullAllowed));
+    ranges.push_back(
+        std::make_unique<common::DoubleRange>(
+            1, false, false, 1, false, false, !nullAllowed));
+    assertFilterMatchesVelox(
+        doubles, common::MultiRange(std::move(ranges), nullAllowed));
+  }
+  assertFilterMatchesVelox(integers, common::IsNull());
+  assertFilterMatchesVelox(integers, common::IsNotNull());
 }
 
 TEST_F(SubfieldFilterAstTest, doubleRange) {
