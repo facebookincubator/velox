@@ -138,8 +138,6 @@ AnsCompressedData compressAnsBatch(
   const auto stream = context.stream();
   const auto memoryResource = context.temporaryMemoryResource();
   rmm::device_buffer scratch{maximumOutputSize, stream, memoryResource};
-  CUDF_CUDA_TRY(
-      cudaMemsetAsync(scratch.data(), 0, scratch.size(), stream.value()));
   std::size_t outputOffset = 0;
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     outputPointers[index] =
@@ -184,8 +182,6 @@ AnsCompressedData compressAnsBatch(
   }
 
   rmm::device_buffer output{compressedSize, stream, memoryResource};
-  CUDF_CUDA_TRY(
-      cudaMemsetAsync(output.data(), 0, output.size(), stream.value()));
   outputOffset = 0;
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto size = segmentSizes[index];
@@ -195,8 +191,16 @@ AnsCompressedData compressAnsBatch(
         size,
         cudaMemcpyDeviceToDevice,
         stream.value()));
+    const auto alignedSize = nvcompAlignedSize(size);
+    if (alignedSize != size) {
+      CUDF_CUDA_TRY(cudaMemsetAsync(
+          static_cast<uint8_t*>(output.data()) + outputOffset + size,
+          0,
+          alignedSize - size,
+          stream.value()));
+    }
     outputOffset = checkedAddSizes(
-        outputOffset, nvcompAlignedSize(size), "nvCOMP ANS offset overflow");
+        outputOffset, alignedSize, "nvCOMP ANS offset overflow");
   }
   return AnsCompressedData{std::move(output), std::move(segmentSizes)};
 }

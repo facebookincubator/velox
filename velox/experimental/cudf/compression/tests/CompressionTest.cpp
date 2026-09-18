@@ -409,6 +409,49 @@ TEST(PackedColumnsCodecTest, DeltaFrameOfReferenceCanSkipAns) {
   EXPECT_EQ(position, words.size());
 }
 
+TEST(PackedColumnsCodecTest, AutomaticSelectionUsesExactDeltaMaximum) {
+  constexpr std::size_t kRows = 1u << 18;
+  constexpr std::size_t kSampleRows = 256;
+  rmm::cuda_stream stream;
+  const auto memoryResource = rmm::mr::get_current_device_resource_ref();
+
+  std::vector<int64_t> values(kRows);
+  for (std::size_t index = 0; index < kSampleRows; ++index) {
+    values[index] = static_cast<int64_t>(index);
+  }
+  for (std::size_t index = kSampleRows; index < kRows; ++index) {
+    values[index] = index % 2 == 0 ? int64_t{0} : int64_t{1} << 40;
+  }
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(makeColumn(
+      cudf::data_type{cudf::type_id::INT64},
+      values,
+      stream.view(),
+      memoryResource));
+  const auto observation =
+      roundTrip(std::move(columns), stream.view(), memoryResource);
+  ASSERT_FALSE(observation.serializedDescriptor.empty());
+
+  bool foundTypedRegion = false;
+  const auto& words = observation.serializedDescriptor;
+  std::size_t position = kFirstRegionIndex;
+  const auto regionCount = static_cast<std::size_t>(words[kRegionCountIndex]);
+  for (std::size_t region = 0; region < regionCount; ++region) {
+    ASSERT_LE(position + kRegionFixedWordCount, words.size());
+    const auto segmentCount =
+        static_cast<std::size_t>(words[position + kRegionSegmentCountOffset]);
+    if (words[position + kRegionTransformOffset] != kNoTransform) {
+      EXPECT_EQ(
+          words[position + kRegionTransformOffset], kFrameOfReferenceTransform);
+      foundTypedRegion = true;
+    }
+    position += kRegionFixedWordCount + segmentCount;
+  }
+  EXPECT_TRUE(foundTypedRegion);
+  EXPECT_EQ(position, words.size());
+}
+
 TEST(PackedColumnsCodecTest, RoundTripsSignedAndUnsignedExtremes) {
   constexpr std::size_t kRows = 1u << 18;
   rmm::cuda_stream stream;

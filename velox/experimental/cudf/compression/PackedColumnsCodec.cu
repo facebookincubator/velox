@@ -62,7 +62,10 @@ constexpr std::size_t kMinimumStagingIndex = 0;
 constexpr std::size_t kMaximumStagingIndex = 1;
 constexpr std::size_t kDeltaMaximumStagingIndex = 2;
 constexpr std::size_t kFirstValueStagingIndex = 3;
-constexpr std::size_t kNumericStagingValueCount = 4;
+constexpr std::size_t kDeltaSampleStagingIndex = 4;
+constexpr std::size_t kDeltaSampleElementCapacity = 256;
+constexpr std::size_t kNumericStagingValueCount =
+    kDeltaSampleStagingIndex + kDeltaSampleElementCapacity;
 
 enum class RegionTransform : int64_t {
   kNone = 0,
@@ -358,6 +361,24 @@ template <typename T>
 [[nodiscard]] T valueFromBits(uint64_t bits) noexcept {
   using Unsigned = std::make_unsigned_t<T>;
   return std::bit_cast<T>(static_cast<Unsigned>(bits));
+}
+
+template <typename T>
+[[nodiscard]] uint64_t maximumSampledZigzagDelta(
+    const T* values,
+    std::size_t size) noexcept {
+  using Unsigned = std::make_unsigned_t<T>;
+  constexpr auto kBits = sizeof(Unsigned) * 8;
+  uint64_t maximum = 0;
+  for (std::size_t index = 1; index < size; ++index) {
+    const auto current = static_cast<Unsigned>(values[index]);
+    const auto previous = static_cast<Unsigned>(values[index - 1]);
+    const auto delta = current - previous;
+    const auto signMask = Unsigned{0} - (delta >> (kBits - 1));
+    const auto zigzag = static_cast<Unsigned>((delta << 1) ^ signMask);
+    maximum = std::max(maximum, static_cast<uint64_t>(zigzag));
+  }
+  return maximum;
 }
 
 [[nodiscard]] bool usesUnsignedStorage(cudf::data_type type) noexcept {
@@ -661,6 +682,7 @@ EncodedTypedRegion encodeTypedRegion(
 
   T minimum{};
   int framePlaneCount = 0;
+  std::size_t deltaSampleCount = 0;
   if (options.numericTransform != NumericTransform::kDeltaFrameOfReference) {
     rmm::device_buffer minMaxOutput{
         2 * sizeof(T), stream, temporaryMemoryResource};
@@ -717,13 +739,26 @@ EncodedTypedRegion encodeTypedRegion(
         sizeof(T),
         cudaMemcpyDeviceToHost,
         stream.value()));
+    if (options.numericTransform == NumericTransform::kAutomatic) {
+      deltaSampleCount =
+          std::min<std::size_t>(elementCount, kDeltaSampleElementCapacity);
+      CUDF_CUDA_TRY(cudaMemcpyAsync(
+          staged + kDeltaSampleStagingIndex,
+          values,
+          deltaSampleCount * sizeof(T),
+          cudaMemcpyDeviceToHost,
+          stream.value()));
+    }
   }
 
   std::optional<rmm::device_buffer> deltas;
+  std::optional<rmm::device_buffer> deltaMaximum;
+  std::optional<rmm::device_buffer> deltaTemporary;
   uint64_t* deltaValues = nullptr;
   uint64_t firstBits = 0;
-  int deltaPlaneCount = 0;
-  if (options.numericTransform != NumericTransform::kFrameOfReference) {
+  int deltaPlaneCount = static_cast<int>(kMaximumBytePlaneCount) + 1;
+
+  auto queueDeltaAnalysis = [&] {
     deltas.emplace(
         detail::checkedMultiplySizes(
             elementCount, sizeof(uint64_t), "Delta buffer size overflow"),
@@ -734,30 +769,28 @@ EncodedTypedRegion encodeTypedRegion(
         values, deltaValues, elementCount);
     CUDF_CUDA_TRY(cudaGetLastError());
 
-    rmm::device_buffer deltaMaximum{
-        sizeof(uint64_t), stream, temporaryMemoryResource};
+    deltaMaximum.emplace(sizeof(uint64_t), stream, temporaryMemoryResource);
     std::size_t deltaTempSize = 0;
     CUDF_CUDA_TRY(
         cub::DeviceReduce::Max(
             nullptr,
             deltaTempSize,
             deltaValues,
-            static_cast<uint64_t*>(deltaMaximum.data()),
+            static_cast<uint64_t*>(deltaMaximum->data()),
             elementCount,
             stream.value()));
-    rmm::device_buffer deltaTemporary{
-        deltaTempSize, stream, temporaryMemoryResource};
+    deltaTemporary.emplace(deltaTempSize, stream, temporaryMemoryResource);
     CUDF_CUDA_TRY(
         cub::DeviceReduce::Max(
-            deltaTemporary.data(),
+            deltaTemporary->data(),
             deltaTempSize,
             deltaValues,
-            static_cast<uint64_t*>(deltaMaximum.data()),
+            static_cast<uint64_t*>(deltaMaximum->data()),
             elementCount,
             stream.value()));
     CUDF_CUDA_TRY(cudaMemcpyAsync(
         staged + kDeltaMaximumStagingIndex,
-        deltaMaximum.data(),
+        deltaMaximum->data(),
         sizeof(uint64_t),
         cudaMemcpyDeviceToHost,
         stream.value()));
@@ -767,13 +800,10 @@ EncodedTypedRegion encodeTypedRegion(
         sizeof(T),
         cudaMemcpyDeviceToHost,
         stream.value()));
-  }
-
-  // Automatic mode evaluates both candidates. Queue all decision readbacks
-  // before one barrier so it retains the original automatic-path schedule.
-  stream.synchronize();
+  };
 
   if (options.numericTransform != NumericTransform::kDeltaFrameOfReference) {
+    stream.synchronize();
     minimum = valueFromBits<T>(staged[kMinimumStagingIndex]);
     const auto maximum = valueFromBits<T>(staged[kMaximumStagingIndex]);
     using Unsigned = std::make_unsigned_t<T>;
@@ -781,7 +811,22 @@ EncodedTypedRegion encodeTypedRegion(
         static_cast<Unsigned>(maximum) - static_cast<Unsigned>(minimum));
     framePlaneCount = bytePlaneCount(frameRange);
   }
-  if (options.numericTransform != NumericTransform::kFrameOfReference) {
+
+  bool analyzeDelta =
+      options.numericTransform == NumericTransform::kDeltaFrameOfReference;
+  if (options.numericTransform == NumericTransform::kAutomatic) {
+    const auto* sample =
+        reinterpret_cast<const T*>(staged + kDeltaSampleStagingIndex);
+    const auto sampledMaximum =
+        maximumSampledZigzagDelta(sample, deltaSampleCount);
+    // This sample is a subset of the exact adjacent deltas. If its width is
+    // already no smaller than FOR, the full delta maximum cannot win.
+    analyzeDelta = bytePlaneCount(sampledMaximum) < framePlaneCount;
+  }
+
+  if (analyzeDelta) {
+    queueDeltaAnalysis();
+    stream.synchronize();
     deltaPlaneCount = bytePlaneCount(staged[kDeltaMaximumStagingIndex]);
     firstBits = valueBits(valueFromBits<T>(staged[kFirstValueStagingIndex]));
   }
@@ -1120,8 +1165,6 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
 
   rmm::device_buffer output{
       compressedSize, state_->stream, state_->outputMemoryResource};
-  CUDF_CUDA_TRY(
-      cudaMemsetAsync(output.data(), 0, output.size(), state_->stream.value()));
   std::size_t outputOffset = 0;
   std::size_t rawOffset = 0;
   for (std::size_t index = 0; index < regions.size(); ++index) {
@@ -1138,12 +1181,18 @@ std::optional<CompressedPackedColumns> PackedColumnsCodec::compress(
         size,
         cudaMemcpyDeviceToDevice,
         state_->stream.value()));
+    const auto alignedSize = detail::nvcompAlignedSize(size);
+    if (alignedSize != size) {
+      CUDF_CUDA_TRY(cudaMemsetAsync(
+          static_cast<uint8_t*>(output.data()) + outputOffset + size,
+          0,
+          alignedSize - size,
+          state_->stream.value()));
+    }
     rawOffset = detail::checkedAddSizes(
         rawOffset, region.rawSize, "Packed-column input offset overflow");
     outputOffset = detail::checkedAddSizes(
-        outputOffset,
-        detail::nvcompAlignedSize(size),
-        "Packed-column output offset overflow");
+        outputOffset, alignedSize, "Packed-column output offset overflow");
   }
   state_->stream.synchronize();
 
