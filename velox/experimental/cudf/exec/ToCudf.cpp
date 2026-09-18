@@ -92,6 +92,7 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Cached operator properties including adapter pointer.
   struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
+    core::PlanNodePtr planNode;
   };
 
   auto getOperatorProperties =
@@ -99,10 +100,10 @@ bool CompileState::compile(bool allowCpuFallback) {
         OperatorProperties props;
         auto adapter = registry.findAdapter(op);
         props.adapter = adapter;
-        auto planNode = resolveOperatorPlanNode(op);
-        if (adapter && planNode) {
+        props.planNode = resolveOperatorPlanNode(op);
+        if (adapter && props.planNode) {
           static_cast<OperatorAdapter::Properties&>(props) =
-              adapter->properties(op, planNode, ctx);
+              adapter->properties(op, props.planNode, ctx);
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
@@ -112,7 +113,8 @@ bool CompileState::compile(bool allowCpuFallback) {
           props.producesGpuOutput = true;
         }
         // Reject operators whose output types cannot be represented in cuDF.
-        if (planNode && !isTypeSupportedByCudf(planNode->outputType())) {
+        if (props.planNode &&
+            !isTypeSupportedByCudf(props.planNode->outputType())) {
           props.canRunOnGPU = false;
           props.acceptsGpuInput = false;
           props.producesGpuOutput = false;
@@ -154,14 +156,13 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     auto id = oper->operatorId();
 
-    auto planNode = resolveOperatorPlanNode(oper);
+    const auto& planNode = thisOpProps.planNode;
 
     if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
       // Check that the previous operator's output types can be converted to
       // cuDF.  If not, skip both the CudfFromVelox insertion and the current
       // operator's GPU replacement so the whole pipeline stays on CPU.
-      auto prevPlanNode =
-          getPlanNode(operators[operatorIndex - 1]->planNodeId());
+      const auto& prevPlanNode = opProps[operatorIndex - 1].planNode;
       if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
         replaceOp.push_back(
             std::make_unique<CudfFromVelox>(
