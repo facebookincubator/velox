@@ -541,10 +541,13 @@ class MergeJoin : public Operator {
       }
     }
 
-    // Returns whether `row` corresponds to the same left key as the last
-    // left match evaluated.
-    bool isCurrentLeftMatch(vector_size_t row) {
-      return currentLeftRowNumber_ == rawLeftRowNumbers_[row];
+    // Returns true if the given (vector, index) pair identifies the same
+    // input row as the last output row recorded via addMatch. Used to decide
+    // whether the last block of output rows continues into the next output
+    // batch.
+    bool isLastAddedRow(const VectorPtr& vector, vector_size_t index) const {
+      return lastVector_ != nullptr && lastVector_ == vector &&
+          lastIndex_ == index;
     }
 
     // Called when all rows from the current output batch are processed and the
