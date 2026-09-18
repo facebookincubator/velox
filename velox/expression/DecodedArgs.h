@@ -43,7 +43,7 @@ class DecodedArgs {
   }
 
   DecodedVector* at(int i) const {
-    return const_cast<exec::LocalDecodedVector*>(&holders_[i])->get();
+    return holders_[i].get();
   }
 
   size_t size() const {
@@ -51,6 +51,6 @@ class DecodedArgs {
   }
 
  private:
-  std::vector<exec::LocalDecodedVector> holders_;
+  mutable std::vector<exec::LocalDecodedVector> holders_;
 };
 } // namespace facebook::velox::exec
