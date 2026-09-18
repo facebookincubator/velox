@@ -35,10 +35,7 @@ target_link_libraries(
   Folly::folly
 )
 
-add_executable(
-  nimble_stripe_stats_pruning_fuzzer_test
-  StripeStatsPruningFuzzerTest.cpp
-)
+add_executable(nimble_stripe_stats_pruning_fuzzer_test StripeStatsPruningFuzzerTest.cpp)
 
 target_link_libraries(
   nimble_stripe_stats_pruning_fuzzer_test
