@@ -353,20 +353,34 @@ InMemoryExchangeClient::~InMemoryExchangeClient() {
 }
 
 std::string InMemoryExchangeClient::toString() const {
+  std::vector<std::shared_ptr<ExchangeSource>> sources;
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    sources = sources_;
+  }
+
   std::stringstream out;
-  for (auto& source : sources_) {
+  for (auto& source : sources) {
     out << source->toString() << std::endl;
   }
   return out.str();
 }
 
 folly::dynamic InMemoryExchangeClient::toJson() const {
+  bool closed;
+  std::vector<std::shared_ptr<ExchangeSource>> sources;
+  {
+    std::lock_guard<std::mutex> l(queue_->mutex());
+    closed = closed_;
+    sources = sources_;
+  }
+
   folly::dynamic obj = folly::dynamic::object;
   obj["taskId"] = taskId_;
-  obj["closed"] = closed_;
+  obj["closed"] = closed;
   folly::dynamic clientsObj = folly::dynamic::object;
   int index = 0;
-  for (auto& source : sources_) {
+  for (auto& source : sources) {
     clientsObj[std::to_string(index++)] = source->toJson();
   }
   obj["clients"] = clientsObj;
