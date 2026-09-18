@@ -86,6 +86,7 @@ velox_add_library(
   StringEncodingUtils.h
   SubscriptUtil.h
   TimeUtils.h
+  TimeUtilsCore.h
   ToHex.h
   UpperLower.h
   Utf8Utils.h
