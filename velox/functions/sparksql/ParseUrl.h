@@ -26,17 +26,17 @@
 #include "velox/functions/Udf.h"
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
-#include "velox/functions/sparksql/UriParser.h"
+#include "velox/functions/sparksql/UrlParser.h"
 
 namespace facebook::velox::functions::sparksql {
 
-// parse_url(url, part) -> varchar
-// parse_url(url, 'QUERY', key) -> varchar
-// Extracts a part of a URL, reproducing the semantics of Spark's ParseUrl
-// expression: the URL is parsed with java.net.URI rules (see parseUrl)
-// and every part is returned in its raw, still percent-encoded form. The
-// three-argument form extracts a query parameter with the same
-// (&|^)key=([^&]*) regex Spark compiles.
+/// parse_url(url, part) -> varchar
+/// parse_url(url, 'QUERY', key) -> varchar
+/// Extracts a part of a URL, reproducing the semantics of Spark's ParseUrl
+/// expression: the URL is parsed with java.net.URI rules (see parseUrl)
+/// and every part is returned in its raw, still percent-encoded form. The
+/// three-argument form extracts a query parameter with the same
+/// (&|^)key=([^&]*) regex Spark compiles.
 template <typename T>
 struct ParseUrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
