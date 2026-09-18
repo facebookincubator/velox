@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
@@ -240,6 +241,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// Continues any possibly waiting producers. Called when the producer task
   /// has an error or is cancelled.
   void terminate();
+
+  /// Fails the task without holding the output queue lock during callbacks.
+  void setError(std::string_view message);
 
   std::string toString();
 
