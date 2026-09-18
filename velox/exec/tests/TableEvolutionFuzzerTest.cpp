@@ -129,6 +129,7 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
         EXPECT_EQ(query.reference.numQueries, 1);
         EXPECT_TRUE(query.executionSucceeded);
         EXPECT_TRUE(query.verificationPassed);
+        EXPECT_TRUE(query.originalVerificationPassed);
         if (query.hasSubfieldFilters || query.hasRemainingFilter) {
           EXPECT_FALSE(query.filterTypes.empty());
           EXPECT_FALSE(query.filterKinds.empty());
@@ -156,6 +157,8 @@ TEST(TableEvolutionFuzzerTest, noEvolutionBoundedRun) {
   EXPECT_EQ(coverage.numExecutionFailures, 0);
   EXPECT_EQ(coverage.numVerificationsPassed, coverage.numQueriesCompleted);
   EXPECT_EQ(coverage.numVerificationsFailed, 0);
+  EXPECT_EQ(
+      coverage.numOriginalVerificationsPassed, coverage.numQueriesCompleted);
   EXPECT_EQ(coverage.pushdown.numQueries, coverage.numQueriesCompleted);
   EXPECT_EQ(coverage.reference.numQueries, coverage.numQueriesCompleted);
   EXPECT_GT(coverage.pushdown.numSplits, 0);
@@ -220,6 +223,7 @@ TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
       .numSubfieldFilters = 0,
       .numFilterOnlyColumns = 0,
       .rowsReducedByPushdown = 0,
+      .originalVerificationPassed = true,
       .failurePhase = {},
       .executionSucceeded = true,
       .verificationPassed = true,
@@ -245,6 +249,7 @@ TEST(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
   EXPECT_EQ(coverage.numExecutionFailures, 1);
   EXPECT_EQ(coverage.numVerificationsPassed, 1);
   EXPECT_EQ(coverage.numVerificationsFailed, 0);
+  EXPECT_EQ(coverage.numOriginalVerificationsPassed, 1);
   EXPECT_EQ(coverage.configs.numFlatmapEligible, 1);
   EXPECT_EQ(coverage.configs.numFlatmapEligibleColumns, 1);
   EXPECT_EQ(coverage.configs.numBucketed, 1);
@@ -363,6 +368,7 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   query.numSubfieldFilters = 3;
   query.numFilterOnlyColumns = 2;
   query.rowsReducedByPushdown = 17;
+  query.originalVerificationPassed = true;
   query.executionSucceeded = true;
   query.verificationPassed = true;
 
@@ -427,6 +433,7 @@ TEST(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   EXPECT_EQ(coverage.numExecutionFailures, 1);
   EXPECT_EQ(coverage.numVerificationsPassed, 3);
   EXPECT_EQ(coverage.numVerificationsFailed, 1);
+  EXPECT_EQ(coverage.numOriginalVerificationsPassed, 1);
 
   const auto& filters = coverage.queryShapes.filters;
   EXPECT_EQ(filters.numRequested, 4);
