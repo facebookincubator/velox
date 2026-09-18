@@ -80,7 +80,8 @@ class BufferedInput {
                 stats,
                 ioStats,
                 std::move(fileReadOps),
-                cacheable),
+                cacheable,
+                &pool),
             pool,
             maxMergeDistance,
             wsVRLoad) {}
