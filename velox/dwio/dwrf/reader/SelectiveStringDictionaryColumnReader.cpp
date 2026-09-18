@@ -15,8 +15,10 @@
  */
 
 #include "velox/dwio/dwrf/reader/SelectiveStringDictionaryColumnReader.h"
+
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/dwrf/common/DecoderUtil.h"
+#include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
 
 namespace facebook::velox::dwrf {
 
@@ -29,7 +31,8 @@ SelectiveStringDictionaryColumnReader::SelectiveStringDictionaryColumnReader(
     : SelectiveColumnReader(fileType->type(), fileType, params, scanSpec),
       lastStrideIndex_(-1),
       provider_(params.stripeStreams().getStrideIndexProvider()),
-      statistics_(params.runtimeStatistics()) {
+      statistics_(
+          params.columnStats(fileType->id(), fileType->type()->kind())) {
   auto& stripe = params.stripeStreams();
   EncodingKey encodingKey{fileType_->id(), params.flatMapContext().sequence};
   version_ = convertRleVersion(stripe, encodingKey);
@@ -284,7 +287,8 @@ void SelectiveStringDictionaryColumnReader::makeFlat(VectorPtr* result) {
       numValues_,
       std::move(values),
       std::move(stringBuffers));
-  statistics_.flattenStringDictionaryValues += numValues_;
+  statistics_.accumulateStat(
+      DwrfRuntimeStats::kFlattenStringDictionaryValuesMetric, numValues_);
 }
 
 void SelectiveStringDictionaryColumnReader::getValues(

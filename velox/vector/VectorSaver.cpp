@@ -324,9 +324,94 @@ bool isVarcharOrVarbinary(const BaseVector& vector) {
       vector.typeKind() == TypeKind::VARBINARY;
 }
 
+std::shared_ptr<const OpaqueType> asOpaqueType(const TypePtr& type) {
+  auto opaqueType = std::dynamic_pointer_cast<const OpaqueType>(type);
+  VELOX_CHECK_NOT_NULL(opaqueType, "Not an opaque type: {}", type->toString());
+  return opaqueType;
+}
+
+// An opaque value is a shared_ptr<void>, so its in-memory representation is a
+// pointer that means nothing once the process exits. Write the bytes produced
+// by the serializer registered for the type via
+// OpaqueType::registerSerialization instead, length-prefixed.
+void writeOpaqueValue(
+    const std::shared_ptr<void>& value,
+    const OpaqueType& type,
+    std::ostream& out) {
+  // Throws with a message naming the type when no serializer is registered.
+  const auto serialized = type.getSerializeFunc()(value);
+  write<int64_t>(static_cast<int64_t>(serialized.size()), out);
+  out.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
+}
+
+std::shared_ptr<void> readOpaqueValue(
+    const OpaqueType& type,
+    std::istream& in) {
+  const auto length = read<int64_t>(in);
+  VELOX_CHECK_GE(length, 0, "Invalid serialized opaque value size: {}", length);
+
+  std::string serialized(length, '\0');
+  in.read(serialized.data(), length);
+  // The deserializer is caller-supplied and may do anything with these bytes,
+  // so refuse truncated input rather than handing it a partial value.
+  VELOX_CHECK_EQ(
+      in.gcount(),
+      length,
+      "Truncated stream reading a serialized opaque value");
+
+  return type.getDeserializeFunc()(serialized);
+}
+
+// Null rows are recoverable from the nulls buffer written by writeFlatVector,
+// so they contribute no bytes here.
+void writeOpaqueValues(const BaseVector& vector, std::ostream& out) {
+  const auto opaqueType = asOpaqueType(vector.type());
+
+  // saveVector() dispatches on encoding, so a vector reaching writeFlatVector()
+  // is flat.
+  const auto* flat = vector.as<FlatVector<std::shared_ptr<void>>>();
+  VELOX_CHECK_NOT_NULL(flat);
+
+  for (vector_size_t i = 0; i < vector.size(); ++i) {
+    if (!vector.isNullAt(i)) {
+      writeOpaqueValue(flat->valueAt(i), *opaqueType, out);
+    }
+  }
+}
+
+VectorPtr readOpaqueVector(
+    const TypePtr& type,
+    vector_size_t size,
+    std::istream& in,
+    memory::MemoryPool* pool,
+    BufferPtr nulls) {
+  const auto opaqueType = asOpaqueType(type);
+
+  auto vector = std::make_shared<FlatVector<std::shared_ptr<void>>>(
+      pool,
+      type,
+      std::move(nulls),
+      size,
+      AlignedBuffer::allocate<std::shared_ptr<void>>(size, pool),
+      std::vector<BufferPtr>{});
+
+  const auto* rawNulls = vector->rawNulls();
+  for (vector_size_t i = 0; i < size; ++i) {
+    if (rawNulls == nullptr || !bits::isBitNull(rawNulls, i)) {
+      vector->set(i, readOpaqueValue(*opaqueType, in));
+    }
+  }
+  return vector;
+}
+
 void writeFlatVector(const BaseVector& vector, std::ostream& out) {
   // Nulls buffer.
   writeOptionalBuffer(vector.nulls(), out);
+
+  if (vector.typeKind() == TypeKind::OPAQUE) {
+    writeOpaqueValues(vector, out);
+    return;
+  }
 
   // Values buffer.
   if (isVarcharOrVarbinary(vector)) {
@@ -363,6 +448,10 @@ VectorPtr readFlatVector(
     memory::MemoryPool* pool) {
   // Nulls buffer.
   BufferPtr nulls = readOptionalBuffer(in, pool);
+
+  if (type->kind() == TypeKind::OPAQUE) {
+    return readOpaqueVector(type, size, in, pool, std::move(nulls));
+  }
 
   // Values buffer.
   BufferPtr values = readOptionalBuffer(in, pool);
@@ -414,6 +503,12 @@ void writeConstantVector(const BaseVector& vector, std::ostream& out) {
   if (baseVector) {
     saveVector(*baseVector, out);
     write<int32_t>(vector.as<ConstantVector<ComplexType>>()->index(), out);
+  } else if (vector.typeKind() == TypeKind::OPAQUE) {
+    // writeScalarConstant() would write the shared_ptr itself.
+    writeOpaqueValue(
+        vector.as<ConstantVector<std::shared_ptr<void>>>()->valueAt(0),
+        *asOpaqueType(vector.type()),
+        out);
   } else {
     VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         writeScalarConstant, vector.typeKind(), vector, out);
@@ -463,6 +558,10 @@ VectorPtr readConstantVector(
 
   bool scalar = read<bool>(in);
   if (scalar) {
+    if (type->kind() == TypeKind::OPAQUE) {
+      return std::make_shared<ConstantVector<std::shared_ptr<void>>>(
+          pool, size, false, type, readOpaqueValue(*asOpaqueType(type), in));
+    }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
         readConstant, type->kind(), type, size, pool, in);
   }

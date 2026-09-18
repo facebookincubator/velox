@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
 #include "velox/functions/lib/TimeUtils.h"
 
 #include <cudf/binaryop.hpp>
@@ -29,12 +29,11 @@ namespace facebook::velox::cudf_velox {
 
 using functions::DateTimeUnit;
 
-bool DateTruncFunction::canEvaluate(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+bool DateTruncFunction::canEvaluate(const core::TypedExprPtr& expr) {
   if (expr->inputs().size() != 2) {
     return false;
   }
-  if (std::dynamic_pointer_cast<velox::exec::ConstantExpr>(expr->inputs()[1])) {
+  if (expr->inputs()[1]->isConstantKind()) {
     return false;
   }
   auto unitString = constantVarcharValue(expr->inputs()[0]);
@@ -63,8 +62,7 @@ bool DateTruncFunction::canEvaluate(
   return false;
 }
 
-bool DateTruncFunction::isTimezoneSensitive(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+bool DateTruncFunction::isTimezoneSensitive(const core::TypedExprPtr& expr) {
   if (!canEvaluate(expr) || !expr->inputs()[1]->type()->isTimestamp()) {
     return false;
   }
@@ -77,7 +75,8 @@ bool DateTruncFunction::isTimezoneSensitive(
 }
 
 DateTruncFunction::DateTruncFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* /*pool*/) {
   VELOX_CHECK_EQ(
       expr->inputs().size(), 2, "date_trunc expects exactly 2 inputs");
   auto unitString = constantVarcharValue(expr->inputs()[0]);
@@ -100,7 +99,7 @@ DateTruncFunction::DateTruncFunction(
         isTimestamp, "date_trunc {} requires timestamp input", *unitString);
   }
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
   oneScalar_ =
       std::make_unique<cudf::numeric_scalar<int32_t>>(1, true, stream, mr);
@@ -108,12 +107,12 @@ DateTruncFunction::DateTruncFunction(
       std::make_unique<cudf::numeric_scalar<int32_t>>(3, true, stream, mr);
   negOneScalar_ =
       std::make_unique<cudf::numeric_scalar<int32_t>>(-1, true, stream, mr);
-  stream.synchronize();
+  stream.sync();
 }
 
 ColumnOrView DateTruncFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK_EQ(inputColumns.size(), 1, "date_trunc expects one column input");
   auto inputCol = asView(inputColumns[0]);

@@ -70,7 +70,8 @@ void writeToFile(
   VELOX_CHECK_GT(data.size(), 0);
 
   std::shared_ptr<dwio::common::WriterOptions> options =
-      std::make_shared<dwrf::WriterOptions>();
+      std::make_shared<dwio::common::WriterOptions>();
+  options->formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options->schema = data[0]->type();
   options->memoryPool = pool;
 

@@ -463,7 +463,7 @@ auto materializeElement(const T& element) {
     return element.materialize();
   } else {
     using unwrapped_type = typename UnwrapCustomType<VeloxType>::type;
-    if constexpr (util::is_shared_ptr<unwrapped_type>::value) {
+    if constexpr (is_shared_ptr<unwrapped_type>::value) {
       return *element;
     } else {
       return element;

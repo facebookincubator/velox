@@ -19,7 +19,6 @@
 #include <fmt/format.h>
 #include <folly/Varint.h>
 #include "velox/common/base/BitUtil.h"
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/common/encode/Coding.h"
 #include "velox/dwio/common/IntCodecCommon.h"
@@ -28,6 +27,52 @@
 #include "velox/dwio/dwrf/common/Common.h"
 
 namespace facebook::velox::dwrf {
+
+namespace detail {
+
+template <int32_t size>
+FOLLY_ALWAYS_INLINE int32_t writeVarint(uint64_t value, char* buffer) {
+  for (int32_t i = 1; i < size; i++) {
+    *buffer = static_cast<char>(0x80 | (value & dwio::common::BASE_128_MASK));
+    value >>= 7;
+    ++buffer;
+  }
+  DCHECK(value < 128);
+  *buffer = static_cast<char>(value);
+  return size;
+}
+
+FOLLY_ALWAYS_INLINE int32_t write64Varint(uint64_t value, char* buffer) {
+  const int32_t leadingZeros = __builtin_clzll(value | 1);
+  DCHECK(leadingZeros <= 63);
+  switch (leadingZeros) {
+    case 0:
+      return writeVarint<10>(value, buffer);
+    case 1 ... 7:
+      return writeVarint<9>(value, buffer);
+    case 8 ... 14:
+      return writeVarint<8>(value, buffer);
+    case 15 ... 21:
+      return writeVarint<7>(value, buffer);
+    case 22 ... 28:
+      return writeVarint<6>(value, buffer);
+    case 29 ... 35:
+      return writeVarint<5>(value, buffer);
+    case 36 ... 42:
+      return writeVarint<4>(value, buffer);
+    case 43 ... 49:
+      return writeVarint<3>(value, buffer);
+    case 50 ... 56:
+      return writeVarint<2>(value, buffer);
+    case 57 ... 63:
+      return writeVarint<1>(value, buffer);
+  }
+  DWIO_RAISE(
+      fmt::format(
+          "Unexpected leading zeros {} for value {}", leadingZeros, value));
+}
+
+} // namespace detail
 
 using facebook::velox::dwio::common::BufferedOutputStream;
 using facebook::velox::dwio::common::PositionRecorder;
@@ -224,17 +269,9 @@ class IntEncoder {
     }
   }
 
-  template <int32_t size>
-  FOLLY_ALWAYS_INLINE static int32_t writeVarint(uint64_t value, char* buffer);
-  FOLLY_ALWAYS_INLINE static int32_t write64Varint(
-      uint64_t value,
-      char* buffer);
-
   FOLLY_ALWAYS_INLINE int32_t writeVulong(int64_t value, char* buffer);
   FOLLY_ALWAYS_INLINE int32_t writeVslong(int64_t value, char* buffer);
   FOLLY_ALWAYS_INLINE int32_t writeLongLE(int64_t value, char* buffer);
-
-  VELOX_FRIEND_TEST(TestIntEncoder, TestVarIntEncoder);
 };
 
 #define WRITE_INTS(FUNC)                                       \
@@ -300,61 +337,13 @@ void IntEncoder<isSigned>::writeByte(char c) {
 }
 
 template <bool isSigned>
-template <int32_t size>
-/* static */ int32_t IntEncoder<isSigned>::writeVarint(
-    uint64_t value,
-    char* buffer) {
-  for (int32_t i = 1; i < size; i++) {
-    *buffer = static_cast<char>(0x80 | (value & dwio::common::BASE_128_MASK));
-    value >>= 7;
-    buffer++;
-  }
-  DCHECK(value < 128);
-  *buffer = static_cast<char>(value);
-  return size;
-}
-
-template <bool isSigned>
-/* static */ int32_t IntEncoder<isSigned>::write64Varint(
-    uint64_t value,
-    char* buffer) {
-  int32_t leadingZeros = __builtin_clzll(value | 1);
-  DCHECK(leadingZeros <= 63);
-  switch (leadingZeros) {
-    case 0:
-      return writeVarint<10>(value, buffer);
-    case 1 ... 7:
-      return writeVarint<9>(value, buffer);
-    case 8 ... 14:
-      return writeVarint<8>(value, buffer);
-    case 15 ... 21:
-      return writeVarint<7>(value, buffer);
-    case 22 ... 28:
-      return writeVarint<6>(value, buffer);
-    case 29 ... 35:
-      return writeVarint<5>(value, buffer);
-    case 36 ... 42:
-      return writeVarint<4>(value, buffer);
-    case 43 ... 49:
-      return writeVarint<3>(value, buffer);
-    case 50 ... 56:
-      return writeVarint<2>(value, buffer);
-    case 57 ... 63:
-      return writeVarint<1>(value, buffer);
-  }
-  DWIO_RAISE(
-      fmt::format(
-          "Unexpected leading zeros {} for value {}", leadingZeros, value));
-}
-
-template <bool isSigned>
 int32_t IntEncoder<isSigned>::writeVslong(int64_t value, char* buffer) {
-  return write64Varint(ZigZag::encode(value), buffer);
+  return detail::write64Varint(ZigZag::encode(value), buffer);
 }
 
 template <bool isSigned>
 int32_t IntEncoder<isSigned>::writeVulong(int64_t val, char* buffer) {
-  return write64Varint(static_cast<uint64_t>(val), buffer);
+  return detail::write64Varint(static_cast<uint64_t>(val), buffer);
 }
 
 template <bool isSigned>

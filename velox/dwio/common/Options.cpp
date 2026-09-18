@@ -68,7 +68,14 @@ std::string formatConfigPrefix(FileFormat fmt, std::string_view separator) {
   if (fmt == FileFormat::UNKNOWN) {
     return "";
   }
+  if (fmt == FileFormat::DWRF) {
+    fmt = FileFormat::ORC;
+  }
   return std::string(FileFormatName::toName(fmt)) + std::string(separator);
+}
+
+std::string formatSessionProperty(FileFormat fmt, std::string_view key) {
+  return formatConfigPrefix(fmt, "_") + std::string(key);
 }
 
 ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -40,6 +41,10 @@ struct HashTableCacheEntry {
 
   const std::string cacheKey;
   const std::string builderTaskId;
+  /// Leaf pool the cached table is allocated from. Immutable for the entry's
+  /// lifetime: drop() removes the entry rather than emptying it, so readers
+  /// need no synchronisation. The pool is destroyed once the cache and every
+  /// operator holding this entry have released it.
   const std::shared_ptr<memory::MemoryPool> tablePool;
   std::shared_ptr<BaseHashTable> table;
   bool hasNullKeys{false};
@@ -95,6 +100,12 @@ class HashTableCache {
 
   std::mutex lock_;
   std::unordered_map<std::string, std::shared_ptr<HashTableCacheEntry>> tables_;
+
+  // Distinguishes the leaf pool names of successive entries for one key. Every
+  // task of a query shares its query pool, so an entry created after a previous
+  // one for the same key was dropped would otherwise ask for a leaf child name
+  // that the previous pool still holds, and addLeafChild() rejects duplicates.
+  std::atomic_uint64_t tablePoolId_{0};
 };
 
 } // namespace facebook::velox::exec

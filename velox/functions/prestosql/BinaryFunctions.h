@@ -65,6 +65,29 @@ struct XxHash64Function {
   }
 };
 
+/// xxhash128(varbinary) → varbinary
+/// Return a 16-byte binary of the XXH3 128-bit hash of input (varbinary such as
+/// string) with optional seed. The result is the big-endian canonical
+/// representation produced by XXH128_canonicalFromHash.
+template <typename T>
+struct XxHash128Function {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE
+  void call(
+      out_type<Varbinary>& result,
+      const arg_type<Varbinary>& input,
+      const arg_type<int64_t>& seed = 0) {
+    const XXH128_hash_t hash =
+        XXH3_128bits_withSeed(input.data(), input.size(), seed);
+    XXH128_canonical_t canonical;
+    XXH128_canonicalFromHash(&canonical, hash);
+    static constexpr auto kLen = sizeof(canonical.digest);
+    result.resize(kLen);
+    std::memcpy(result.data(), canonical.digest, kLen);
+  }
+};
+
 /// md5(varbinary) → varbinary
 template <typename T>
 struct Md5Function {

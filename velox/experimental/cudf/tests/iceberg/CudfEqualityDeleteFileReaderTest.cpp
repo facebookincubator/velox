@@ -598,6 +598,41 @@ TEST_P(CudfEqualityDeleteFileReaderTest, mixedSequenceNumbers) {
   assertEqualResults({expected}, {result});
 }
 
+/// Verifies a pushed-down subfield filter with equality deletes.
+TEST_P(CudfEqualityDeleteFileReaderTest, subfieldFilter) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({10, 20, 30, 40})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), data);
+
+  auto deleteData = makeRowVector({"c0"}, {makeFlatVector<int64_t>({20})});
+  auto deleteFile = TempFilePath::create();
+  const auto deleteFileFormat = GetParam();
+  writeDeleteFile(deleteFileFormat, deleteFile->getPath(), {deleteData});
+
+  IcebergDeleteFile icebergDeleteFile(
+      FileContent::kEqualityDeletes,
+      deleteFile->getPath(),
+      toDwioFormat(deleteFileFormat),
+      1,
+      getFileSize(deleteFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  auto dataType = ROW({"c0"}, {BIGINT()});
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(dataType)
+                  .dataColumns(dataType)
+                  .subfieldFilter("c0 < 35")
+                  .endTableScan()
+                  .planNode();
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({10, 30})});
+  AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile}))
+      .assertResults({expected});
+}
+
 INSTANTIATE_TEST_SUITE_P(
     DeleteFormats,
     CudfEqualityDeleteFileReaderTest,

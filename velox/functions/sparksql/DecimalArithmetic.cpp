@@ -203,7 +203,7 @@ struct DecimalAddSubtractBase {
       bool& overflow) {
     VELOX_DCHECK(
         (a < 0 && b > 0) || (a > 0 && b < 0),
-        "One positve and one negative value are expected in addLargeOpposite.");
+        "One positive and one negative value are expected in addLargeOpposite.");
 
     // Separate whole and fraction parts.
     const auto [aWhole, aFraction] = getWholeAndFraction<A>(a, aScale);
@@ -423,8 +423,8 @@ struct DecimalMultiplyFunction {
         // It's possible that the intermediate value does not fit in 128-bits,
         // but the final value will (after scaling down).
         int32_t totalLeadingZeros =
-            bits::countLeadingZeros(DecimalUtil::absValue<A>(a)) +
-            bits::countLeadingZeros(DecimalUtil::absValue<B>(b));
+            bits::countLeadingZeros(velox::DecimalUtil::absValue<A>(a)) +
+            bits::countLeadingZeros(velox::DecimalUtil::absValue<B>(b));
         // This check is quick, but conservative. In some cases it will
         // indicate that converting to 256 bits is necessary, when it's not
         // actually the case.

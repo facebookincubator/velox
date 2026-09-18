@@ -99,7 +99,7 @@ class RowReader {
    * implementation specific and depends on a format of a file being read.
    * @param stats stats to update
    */
-  virtual void updateRuntimeStats(RuntimeStatistics& stats) const = 0;
+  virtual void updateRuntimeStats(RuntimeStats& stats) const = 0;
 
   /**
    * This method should be called whenever filter is modified in a ScanSpec

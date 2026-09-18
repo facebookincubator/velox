@@ -18,11 +18,14 @@
 
 #include <fstream>
 
-#include <folly/hash/Checksum.h>
+#include <folly/json.h>
 #include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
+#include <zlib.h>
 
 #include <cstring>
+#include <limits>
+#include <random>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -72,6 +75,50 @@ class DeletionVectorWriterTest : public ::testing::Test {
   BufferPtr allocateBitmap(uint64_t numBits) {
     auto numBytes = bits::nbytes(numBits);
     return AlignedBuffer::allocate<uint8_t>(numBytes, pool_.get(), 0);
+  }
+
+  /// Serializes 'positions', reads the blob back through
+  /// DeletionVectorReader, and returns every position the reader recovered.
+  ///
+  /// Prefer this over verifyRoundTrip for inputs spanning a wide range:
+  /// verifyRoundTrip walks the whole [0, maxPos] space one batch at a time,
+  /// which is impractical once positions reach into the 2^32 range.
+  std::vector<int64_t> roundTrip(const std::vector<int64_t>& positions) {
+    DeletionVectorWriter writer;
+    writer.addDeletedPositions(positions);
+    const auto blobData = writer.serialize();
+
+    auto tempFile = TempFilePath::create();
+    {
+      std::ofstream out(
+          tempFile->getPath(), std::ios::binary | std::ios::trunc);
+      out.write(blobData.data(), static_cast<std::streamsize>(blobData.size()));
+    }
+
+    IcebergDeleteFile dvFile(
+        FileContent::kDeletionVector,
+        tempFile->getPath(),
+        dwio::common::FileFormat::DWRF,
+        writer.numDistinctPositions(),
+        static_cast<uint64_t>(blobData.size()),
+        /*equalityFieldIds=*/{},
+        /*lowerBounds=*/{},
+        /*upperBounds=*/{},
+        /*dataSequenceNumber=*/0,
+        /*contentOffset=*/0,
+        /*contentLength=*/static_cast<int64_t>(blobData.size()));
+
+    DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+    return reader.deletedPositions();
+  }
+
+  /// Returns 'positions' sorted and de-duplicated — what a round trip through
+  /// a roaring bitmap is expected to yield, since the bitmap is a set.
+  static std::vector<int64_t> sortedUnique(std::vector<int64_t> positions) {
+    std::sort(positions.begin(), positions.end());
+    positions.erase(
+        std::unique(positions.begin(), positions.end()), positions.end());
+    return positions;
   }
 
   /// Writes serialized bitmap to a temp file, reads it back with
@@ -258,6 +305,105 @@ TEST_F(DeletionVectorWriterTest, fourOrMoreContainersWithOffsets) {
   verifyRoundTrip(positions, 5 * 65536 + 100);
 }
 
+// Decodes the Puffin footer of a file written by writePuffinFile and returns
+// the parsed footer JSON. Layout per the Puffin spec:
+//   Magic Blob... Footer
+//   Footer := Magic FooterPayload FooterPayloadSize Flags Magic
+// with FooterPayloadSize and Flags each a 4-byte little-endian value. The
+// trailer is located from the end of the file so nothing here depends on the
+// writer's own offset arithmetic.
+namespace {
+folly::dynamic readPuffinFooter(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  const std::string bytes(
+      (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+  constexpr size_t kMagicSize = 4;
+  constexpr size_t kTrailerSize = kMagicSize + 4 + 4;
+  EXPECT_GE(bytes.size(), kMagicSize + kTrailerSize);
+  EXPECT_EQ(bytes.substr(0, kMagicSize), "PFA1") << "missing leading magic";
+  EXPECT_EQ(bytes.substr(bytes.size() - kMagicSize), "PFA1")
+      << "missing trailing magic";
+
+  const auto readLittleEndian32 = [&](size_t offset) {
+    uint32_t value;
+    std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    return folly::Endian::little(value);
+  };
+
+  const size_t flagsOffset = bytes.size() - kMagicSize - 4;
+  const size_t sizeOffset = flagsOffset - 4;
+  EXPECT_EQ(readLittleEndian32(flagsOffset), 0u)
+      << "flags must be 0: an uncompressed footer payload is bit 0";
+
+  const uint32_t payloadSize = readLittleEndian32(sizeOffset);
+  const size_t payloadOffset = sizeOffset - payloadSize;
+  EXPECT_EQ(bytes.substr(payloadOffset - kMagicSize, kMagicSize), "PFA1")
+      << "footer payload must be preceded by magic";
+
+  return folly::parseJson(bytes.substr(payloadOffset, payloadSize));
+}
+} // namespace
+
+TEST_F(DeletionVectorWriterTest, puffinFooterIsSpecCompliant) {
+  // Nothing in our own read path parses the Puffin footer --
+  // DeletionVectorReader locates the blob from the manifest's contentOffset --
+  // so the footer is written blind. Other Iceberg engines do parse it, and
+  // FileMetadataParser.blobMetadataFromJson treats type, fields, snapshot-id,
+  // sequence-number, offset and length as required, reading fields as a list
+  // of integers. A footer that omits or mistypes any of them makes the whole
+  // deletion vector unreadable outside Velox.
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  const auto blobData = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/footer.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
+  sink->close();
+
+  const auto footer = readPuffinFooter(puffinPath);
+  ASSERT_TRUE(footer.isObject());
+  ASSERT_TRUE(footer["blobs"].isArray());
+  ASSERT_EQ(footer["blobs"].size(), 1);
+  const auto& blob = footer["blobs"][0];
+
+  EXPECT_EQ(blob["type"].asString(), "deletion-vector-v1");
+
+  // Iceberg's BaseDVFileWriter sets this to the single row-position metadata
+  // column ID, as a list of plain integers.
+  constexpr int64_t kRowPositionFieldId = 2'147'483'645;
+  ASSERT_TRUE(blob["fields"].isArray()) << "fields must be a list";
+  ASSERT_EQ(blob["fields"].size(), 1);
+  ASSERT_TRUE(blob["fields"][0].isInt())
+      << "fields entries must be integers, not objects";
+  EXPECT_EQ(blob["fields"][0].asInt(), kRowPositionFieldId);
+
+  // Required by the parser even though a freshly written DV has no snapshot
+  // assigned yet; Iceberg writes -1 for both.
+  ASSERT_TRUE(blob.count("snapshot-id")) << "snapshot-id is required";
+  ASSERT_TRUE(blob.count("sequence-number")) << "sequence-number is required";
+  EXPECT_EQ(blob["snapshot-id"].asInt(), -1);
+  EXPECT_EQ(blob["sequence-number"].asInt(), -1);
+
+  EXPECT_EQ(blob["offset"].asInt(), static_cast<int64_t>(blobOffset));
+  EXPECT_EQ(blob["length"].asInt(), static_cast<int64_t>(blobLength));
+
+  const auto& properties = blob["properties"];
+  EXPECT_EQ(
+      properties["referenced-data-file"].asString(),
+      "/data/test-data-file.parquet");
+  EXPECT_EQ(properties["cardinality"].asString(), "4");
+}
+
 TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
   DeletionVectorWriter writer;
   writer.addDeletedPositions({3, 7, 42, 100});
@@ -315,6 +461,55 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
   EXPECT_EQ(setBits, (std::vector<uint64_t>{3, 7, 42, 100}));
 }
 
+// Reads a writePuffinFile output back with NO bounds-map location, so the
+// reader must parse the Puffin footer (locateBlobFromPuffinFooter) to find the
+// blob. Unlike puffinFileRoundTrip -- which supplies explicit offset/length and
+// therefore skips the footer parser -- this exercises the writer's footer
+// layout against the reader's backwards footer parse, catching any drift in
+// trailer size, magic placement, or payload-size/flags encoding.
+TEST_F(DeletionVectorWriterTest, puffinFooterFallbackRoundTrip) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  auto blobData = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/test-dv-footer.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  VELOX_CHECK_NOT_NULL(sink);
+  writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
+  sink->close();
+
+  std::ifstream in(puffinPath, std::ios::binary | std::ios::ate);
+  auto fileSize = static_cast<uint64_t>(in.tellg());
+
+  // Empty bounds maps: with no offset/length the reader falls through to
+  // Puffin-footer parsing and selects the single deletion-vector blob.
+  IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      puffinPath,
+      dwio::common::FileFormat::DWRF,
+      4,
+      fileSize,
+      {},
+      {},
+      {});
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  auto bitmap = allocateBitmap(200);
+  reader.readDeletePositions(0, 200, bitmap);
+
+  auto setBits = getSetBits(bitmap, 200);
+  EXPECT_EQ(setBits, (std::vector<uint64_t>{3, 7, 42, 100}));
+}
+
 // Verifies the on-disk deletion-vector-v1 blob matches the Iceberg V3 spec
 // frame: [length: 4B BE][magic D1 D3 39 64][bitmap][CRC-32: 4B BE], where the
 // length and CRC-32 cover the magic + bitmap. This is what makes the DV
@@ -343,9 +538,11 @@ TEST_F(DeletionVectorWriterTest, deletionVectorV1FrameLayout) {
   ASSERT_EQ(blob.size(), bitmap.size() + 12);
 
   auto readBigEndian = [](const char* p) {
-    uint32_t value;
-    std::memcpy(&value, p, sizeof(value));
-    return folly::Endian::big(value);
+    const auto* bytes = reinterpret_cast<const unsigned char*>(p);
+    return (static_cast<uint32_t>(bytes[0]) << 24) |
+        (static_cast<uint32_t>(bytes[1]) << 16) |
+        (static_cast<uint32_t>(bytes[2]) << 8) |
+        static_cast<uint32_t>(bytes[3]);
   };
 
   // [length: 4B BE] covers magic (4) + bitmap.
@@ -359,11 +556,17 @@ TEST_F(DeletionVectorWriterTest, deletionVectorV1FrameLayout) {
   // [bitmap] matches the writer's serialize() output.
   EXPECT_EQ(blob.substr(8, bitmap.size()), bitmap);
 
-  // [CRC-32: 4B BE] over magic + bitmap.
+  // [CRC-32: 4B BE] over magic + bitmap. Iceberg stores the standard CRC-32
+  // (java.util.zip.CRC32); zlib's crc32 is the reference implementation of that
+  // same IEEE 802.3 algorithm.
   const uint32_t storedCrc =
       readBigEndian(blob.data() + 4 + magicAndVectorLength);
-  const uint32_t expectedCrc = folly::crc32(
-      reinterpret_cast<const uint8_t*>(blob.data() + 4), magicAndVectorLength);
+  uLong crcState = crc32(0L, Z_NULL, 0);
+  crcState = crc32(
+      crcState,
+      reinterpret_cast<const Bytef*>(blob.data() + 4),
+      static_cast<uInt>(magicAndVectorLength));
+  const auto expectedCrc = static_cast<uint32_t>(crcState);
   EXPECT_EQ(storedCrc, expectedCrc);
 }
 
@@ -393,4 +596,124 @@ TEST_F(DeletionVectorWriterTest, mixed32And64BitPositions) {
       8'589'934'592LL,
   };
   verifyRoundTrip(positions, 2'048);
+}
+
+/// Verifies that duplicate positions collapse in the cardinality reported for
+/// the DV blob. Seeding a writer from an existing deletion vector and then
+/// adding overlapping new deletes makes 'positions_' hold duplicates, so
+/// 'numPositions' overcounts and only 'numDistinctPositions' matches the
+/// cardinality Iceberg expects in the blob metadata.
+TEST_F(DeletionVectorWriterTest, numDistinctPositionsIgnoresDuplicates) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({7, 3, 7, 1, 3, 3});
+
+  EXPECT_EQ(writer.numPositions(), 6);
+  EXPECT_EQ(writer.numDistinctPositions(), 3);
+}
+
+// Randomized round trips across sparse, dense, and mixed position sets.
+// Hand-built fixtures only exercise the container shapes we thought to write
+// down; random inputs cross the array/bitset thresholds and 64-bit group
+// boundaries in combinations we did not enumerate.
+//
+// Seeds are fixed so a failure is reproducible, and reported on failure so a
+// counterexample can be replayed directly.
+TEST_F(DeletionVectorWriterTest, randomSparsePositionsRoundTrip) {
+  // Few positions spread over a wide 64-bit range: many container keys across
+  // several Roaring64 groups, each holding a small array container.
+  constexpr uint64_t kSeed = 0x1234'5678'9ABC'DEF0ULL;
+  constexpr int kNumPositions = 2'000;
+  constexpr int64_t kRange = int64_t{1} << 34;
+
+  std::mt19937_64 rng(kSeed);
+  std::uniform_int_distribution<int64_t> positionDist(0, kRange - 1);
+
+  std::vector<int64_t> positions;
+  positions.reserve(kNumPositions);
+  for (int i = 0; i < kNumPositions; ++i) {
+    positions.push_back(positionDist(rng));
+  }
+
+  EXPECT_EQ(roundTrip(positions), sortedUnique(positions)) << "seed=" << kSeed;
+}
+
+TEST_F(DeletionVectorWriterTest, randomDensePositionsRoundTrip) {
+  // Enough positions inside one 64K block to exceed the 4096 array-container
+  // threshold, so the block serializes as a bitset. Deliberately includes
+  // duplicates: the bitmap is a set, so they must collapse.
+  constexpr uint64_t kSeed = 0x0FED'CBA9'8765'4321ULL;
+  constexpr int kNumDraws = 30'000;
+  constexpr int64_t kBlockBase = int64_t{7} << 16;
+
+  std::mt19937_64 rng(kSeed);
+  std::uniform_int_distribution<int64_t> offsetDist(0, 65'535);
+
+  std::vector<int64_t> positions;
+  positions.reserve(kNumDraws);
+  for (int i = 0; i < kNumDraws; ++i) {
+    positions.push_back(kBlockBase + offsetDist(rng));
+  }
+
+  const auto expected = sortedUnique(positions);
+  ASSERT_GT(expected.size(), 4'096)
+      << "draws should exceed the array-container threshold";
+  EXPECT_EQ(roundTrip(positions), expected) << "seed=" << kSeed;
+}
+
+TEST_F(DeletionVectorWriterTest, randomMixedPositionsRoundTrip) {
+  // Dense block, sparse scatter, and a contiguous run in one bitmap, split
+  // across two Roaring64 groups. This is the shape most likely to expose an
+  // offset or stride error, because the reader must step over containers of
+  // different encodings to find the next one.
+  constexpr uint64_t kSeed = 0x2468'ACE0'1357'9BDFULL;
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+
+  std::mt19937_64 rng(kSeed);
+  std::vector<int64_t> positions;
+
+  // Dense block in group 0.
+  std::uniform_int_distribution<int64_t> denseDist(0, 65'535);
+  for (int i = 0; i < 20'000; ++i) {
+    positions.push_back(denseDist(rng));
+  }
+  // Sparse scatter across group 0's upper blocks.
+  std::uniform_int_distribution<int64_t> sparseDist(65'536, (int64_t{1} << 31));
+  for (int i = 0; i < 500; ++i) {
+    positions.push_back(sparseDist(rng));
+  }
+  // Contiguous run in group 1.
+  for (int64_t i = 0; i < 3'000; ++i) {
+    positions.push_back(kHighGroupBase + 1'000 + i);
+  }
+  // Sparse scatter in group 1.
+  for (int i = 0; i < 200; ++i) {
+    positions.push_back(kHighGroupBase + sparseDist(rng));
+  }
+
+  EXPECT_EQ(roundTrip(positions), sortedUnique(positions)) << "seed=" << kSeed;
+}
+
+// The Roaring64 group key is read back as a signed 32-bit int, so a position
+// whose high word reaches 2^31 would deserialize as a negative key and be
+// rejected by spec-compliant readers. Failing at insert time keeps us from
+// writing a blob Iceberg cannot read.
+TEST_F(DeletionVectorWriterTest, rejectsPositionsOutsideRepresentableRange) {
+  DeletionVectorWriter writer;
+
+  VELOX_ASSERT_THROW(writer.addDeletedPosition(-1), "must be non-negative");
+  VELOX_ASSERT_THROW(
+      writer.addDeletedPosition(DeletionVectorWriter::kMaxPosition + 1),
+      "exceeds the maximum");
+  VELOX_ASSERT_THROW(
+      writer.addDeletedPosition(std::numeric_limits<int64_t>::max()),
+      "exceeds the maximum");
+
+  // None of the rejected positions were recorded.
+  EXPECT_EQ(writer.numPositions(), 0);
+
+  // The bound itself is representable and round-trips.
+  writer.addDeletedPosition(DeletionVectorWriter::kMaxPosition);
+  EXPECT_EQ(
+      roundTrip({DeletionVectorWriter::kMaxPosition}),
+      std::vector<int64_t>{DeletionVectorWriter::kMaxPosition});
 }

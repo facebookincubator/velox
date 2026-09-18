@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <fmt/format.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -28,6 +31,7 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
@@ -1329,6 +1333,61 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinMultiDriver) {
       "ON t.c0 < u.c0");
 }
 
+// Full join with output columns from only one side: exercises the mismatch
+// emission path when probeColumnIndicesToGather_ or
+// buildColumnIndicesToGather_ is empty. Previously, apply_boolean_mask on a
+// zero-column table returned 0 rows, silently dropping mismatch rows.
+TEST_F(CudfNestedLoopJoinTest, fullJoinOneSidedOutput) {
+  auto probeVectors = makeRowVector(
+      {"p0", "p1"},
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<int32_t>({10, 20, 30})});
+  auto buildVectors = makeRowVector(
+      {"b0", "b1"},
+      {makeFlatVector<int32_t>({2, 4}), makeFlatVector<int32_t>({200, 400})});
+
+  createDuckDbTable("t", {probeVectors});
+  createDuckDbTable("u", {buildVectors});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Output only probe columns — build mismatch rows should still appear
+  // with null values for the probe columns.
+  auto probeOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"p0", "p1"},
+                               core::JoinType::kFull)
+                           .planNode();
+
+  assertQuery(
+      probeOnlyPlan,
+      "SELECT t.p0, t.p1 FROM t FULL OUTER JOIN u ON t.p0 = u.b0");
+
+  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  // Output only build columns — probe mismatch rows should still appear
+  // with null values for the build columns.
+  auto buildOnlyPlan = PlanBuilder(planNodeIdGenerator)
+                           .values({probeVectors})
+                           .nestedLoopJoin(
+                               PlanBuilder(planNodeIdGenerator)
+                                   .values({buildVectors})
+                                   .planNode(),
+                               "p0 = b0",
+                               {"b0", "b1"},
+                               core::JoinType::kFull)
+                           .planNode();
+
+  assertQuery(
+      buildOnlyPlan,
+      "SELECT u.b0, u.b1 FROM t FULL OUTER JOIN u ON t.p0 = u.b0");
+}
+
 // --- LeftSemiProject join tests ---
 
 // LeftSemiProject with filter: probe rows + boolean match column.
@@ -1555,6 +1614,102 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
       "WHERE t.c0 < u.c0) FROM t");
 }
 
+// LeftSemiProject with a cross-side LIKE condition: like
+// likeConditionSpanningBothSides, the LIKE value comes from the probe side
+// and the pattern from the build side, so it can't be represented as a
+// single cuDF AST tree and exercises crossJoinConditionalIndices() with
+// needBuildIndices=false (the kLeftSemiProject non-AST branch) instead of
+// cudf::conditional_left_semi_join(). leftSemiProjectWithFilter's condition
+// ("c0 < u_c0") is AST-representable and takes the useAstFilter_ path, so it
+// never reaches this branch.
+TEST_F(CudfNestedLoopJoinTest, leftSemiProjectLikeConditionSpanningBothSides) {
+  auto probe = makeRowVector(
+      {"t_val"},
+      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_pattern"},
+      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  createDuckDbTable("t", {probe});
+  createDuckDbTable("u", {build});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t_val LIKE u_pattern",
+              {"t_val", "match"},
+              core::JoinType::kLeftSemiProject)
+          .planNode();
+
+  // apple matches app%, banana matches ban%, cherry contains "err" so it
+  // matches %err%; date matches nothing.
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .assertResults(
+              "SELECT t.t_val, EXISTS (SELECT 1 FROM u WHERE t.t_val LIKE u.u_pattern) FROM t");
+
+  bool sawCudfNestedLoopJoinProbe = false;
+  for (auto& pipeline : task->taskStats().pipelineStats) {
+    for (auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "CudfNestedLoopJoinProbe") {
+        sawCudfNestedLoopJoinProbe = true;
+      }
+    }
+  }
+  ASSERT_TRUE(sawCudfNestedLoopJoinProbe);
+}
+
+// Regression test for a race in CudfNestedLoopJoinProbe::waitForBuildReady:
+// joinWithBuildBatch() grabs a fresh stream from cudfGlobalStreamPool() on
+// every call (once per probe batch), but this used to only wait on the
+// *first* such stream before discarding the build-ready event, leaving
+// later batches free to read build-side data before it was actually visible
+// on their stream. (The build-ready event is now created and recorded by
+// CudfNestedLoopJoinBuild itself, immediately when the build table is
+// materialized, rather than lazily by the probe - matching
+// CudfHashJoinProbe's waitForBuildReady()/buildReadyEvent_ pattern - so this
+// also guards against the event capturing a stale/recycled build stream.)
+// Uses many probe batches against a build side large enough to take
+// measurable GPU time, repeated several times, to exercise that ordering.
+// Every probe value has exactly one match in the build side, so any row
+// lost to the race shows up as a row-count mismatch.
+TEST_F(CudfNestedLoopJoinTest, buildStreamVisibleToAllProbeBatches) {
+  constexpr int32_t kNumBuildRows = 50'000;
+  constexpr int32_t kNumProbeBatches = 20;
+  constexpr int32_t kProbeBatchSize = 500;
+
+  auto buildVectors = {makeRowVector({sequence<int32_t>(kNumBuildRows)})};
+
+  std::vector<RowVectorPtr> probeVectors;
+  for (int32_t b = 0; b < kNumProbeBatches; ++b) {
+    probeVectors.push_back(makeRowVector(
+        {sequence<int32_t>(kProbeBatchSize, b * kProbeBatchSize)}));
+  }
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values(probeVectors)
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values(buildVectors)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 = u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  for (int i = 0; i < 15; ++i) {
+    assertQuery(plan, "SELECT t.c0, u.c0 FROM t, u WHERE t.c0 = u.c0");
+  }
+}
+
 // Test empty build always consumes probe input.
 // Verifies that probe input is consumed to prevent upstream exchange hanging,
 // matching CPU NLJ behavior (addresses PR#17113 review comment #3229357599).
@@ -1590,8 +1745,187 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
   ASSERT_EQ(inputPositions, 300);
 }
 
-// TODO: Zero-column build side is not yet supported. cudf::table with zero
-// columns reports num_rows() == 0, causing the operator to treat a non-empty
-// build as empty. Fixing this requires the bridge to carry row counts
-// separately. See CPU NestedLoopJoinTest::zeroColumnBuild for the expected
-// behavior.
+// With no equi-join keys, the LIKE condition becomes the entire join
+// condition and can't be represented as a single cuDF AST tree (the LIKE
+// value comes from the probe side, the pattern from the build side), so
+// this exercises crossJoinConditionalIndices() instead of
+// cudf::conditional_inner_join(). The operator-type assertion below matters
+// because this bug previously crashed the query entirely; without it, a
+// silent CPU fallback would also produce the correct result and this test
+// would pass without proving the GPU path works.
+TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSides) {
+  auto probe = makeRowVector(
+      {"t_val"},
+      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_pattern"},
+      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t_val LIKE u_pattern",
+              {"t_val", "u_pattern"})
+          .planNode();
+
+  // apple matches app%, banana matches ban%, cherry contains "err" so it
+  // matches %err%; date matches nothing.
+  auto expected = makeRowVector(
+      {makeFlatVector<std::string>({"apple", "banana", "cherry"}),
+       makeFlatVector<std::string>({"app%", "ban%", "%err%"})});
+  auto task = AssertQueryBuilder(plan).assertResults(expected);
+
+  bool sawCudfNestedLoopJoinProbe = false;
+  for (auto& pipeline : task->taskStats().pipelineStats) {
+    for (auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "CudfNestedLoopJoinProbe") {
+        sawCudfNestedLoopJoinProbe = true;
+      }
+    }
+  }
+  ASSERT_TRUE(sawCudfNestedLoopJoinProbe);
+}
+
+// Same cross-side LIKE condition as above, but with an unmatched row on
+// each side (date matches no pattern; %xyz% matches no value), to exercise
+// crossJoinConditionalIndices() together with probeMatchedFlags_/
+// buildMatchedFlags_ mismatch-row emission for left, right, and full outer
+// joins.
+TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSidesOuterJoins) {
+  auto probe = makeRowVector(
+      {"t_val"},
+      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_pattern"},
+      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  createDuckDbTable("t", {probe});
+  createDuckDbTable("u", {build});
+
+  for (auto [joinType, sqlJoin] :
+       std::vector<std::pair<core::JoinType, std::string>>{
+           {core::JoinType::kLeft, "LEFT JOIN"},
+           {core::JoinType::kRight, "RIGHT JOIN"},
+           {core::JoinType::kFull, "FULL JOIN"}}) {
+    SCOPED_TRACE(sqlJoin);
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .nestedLoopJoin(
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "t_val LIKE u_pattern",
+                {"t_val", "u_pattern"},
+                joinType)
+            .planNode();
+
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .plan(plan)
+            .assertResults(
+                fmt::format(
+                    "SELECT t.t_val, u.u_pattern FROM t {} u ON t.t_val LIKE u.u_pattern",
+                    sqlJoin));
+
+    bool sawCudfNestedLoopJoinProbe = false;
+    for (auto& pipeline : task->taskStats().pipelineStats) {
+      for (auto& op : pipeline.operatorStats) {
+        if (op.operatorType == "CudfNestedLoopJoinProbe") {
+          sawCudfNestedLoopJoinProbe = true;
+        }
+      }
+    }
+    ASSERT_TRUE(sawCudfNestedLoopJoinProbe);
+  }
+}
+
+// Same cross-side LIKE condition, but with the probe split across two
+// Values batches and a FULL outer join, to exercise cross-batch
+// buildMatchedFlags_ accumulation on the non-AST crossJoinConditionalIndices()
+// path - likeConditionSpanningBothSidesOuterJoins above is single-batch, so a
+// build row's matched flag there is only ever set once, from a single call to
+// joinWithBuildBatch(); this instead requires OR-ing matches found in batch 1
+// with matches found in batch 2 (see the buildMatchedFlags_ update in
+// joinWithBuildBatch()) before %xyz%'s build-side mismatch row is emitted.
+TEST_F(
+    CudfNestedLoopJoinTest,
+    likeConditionSpanningBothSidesFullJoinMultiBatch) {
+  std::vector<RowVectorPtr> probeVectors = {
+      makeRowVector(
+          {"t_val"}, {makeFlatVector<std::string>({"apple", "banana"})}),
+      makeRowVector(
+          {"t_val"}, {makeFlatVector<std::string>({"cherry", "date"})}),
+  };
+  auto build = makeRowVector(
+      {"u_pattern"},
+      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", {build});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values(probeVectors)
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t_val LIKE u_pattern",
+              {"t_val", "u_pattern"},
+              core::JoinType::kFull)
+          .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .plan(plan)
+          .assertResults(
+              "SELECT t.t_val, u.u_pattern FROM t FULL JOIN u ON t.t_val LIKE u.u_pattern");
+
+  bool sawCudfNestedLoopJoinProbe = false;
+  for (auto& pipeline : task->taskStats().pipelineStats) {
+    for (auto& op : pipeline.operatorStats) {
+      if (op.operatorType == "CudfNestedLoopJoinProbe") {
+        sawCudfNestedLoopJoinProbe = true;
+      }
+    }
+  }
+  ASSERT_TRUE(sawCudfNestedLoopJoinProbe);
+}
+
+TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
+  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 5})});
+  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildData})
+                          .project({})
+                          .planNode(),
+                      {"p0"})
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuildAndOutput) {
+  auto probeData = makeRowVector({makeFlatVector<int64_t>({4, 5})});
+  auto buildData = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeData})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildData})
+                          .project({})
+                          .planNode(),
+                      {})
+                  .planNode();
+
+  AssertQueryBuilder(plan).assertResults(makeRowVector(ROW({}), 6));
+}

@@ -40,7 +40,7 @@ using TestTypes = ::testing::Types<int, unsigned, long long, unsigned long long,
 
 TYPED_TEST_SUITE(AlgorithmTest, TestTypes);
 
-TYPED_TEST(AlgorithmTest, ReduceAdd) {
+TYPED_TEST(AlgorithmTest, reduceAdd) {
   constexpr int kBlockThreads = 32;
   constexpr int kItemsPerThread = 2;
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
@@ -58,7 +58,7 @@ TYPED_TEST(AlgorithmTest, ReduceAdd) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(AlgorithmTest, ReduceMin) {
+TYPED_TEST(AlgorithmTest, reduceMin) {
   constexpr int kBlockThreads = 32;
   constexpr int kItemsPerThread = 2;
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
@@ -75,7 +75,7 @@ TYPED_TEST(AlgorithmTest, ReduceMin) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(AlgorithmTest, ReduceMax) {
+TYPED_TEST(AlgorithmTest, reduceMax) {
   constexpr int kBlockThreads = 32;
   constexpr int kItemsPerThread = 2;
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;

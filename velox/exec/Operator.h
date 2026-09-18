@@ -133,12 +133,12 @@ class Operator : public BaseRuntimeStatWriter {
     toOperator(DriverCtx* ctx, int32_t id, const core::PlanNodePtr& node);
 
     /// An overloaded method that should be called when the operator needs an
-    /// ExchangeClient.
+    /// InMemoryExchangeClient.
     virtual std::unique_ptr<Operator> toOperator(
         DriverCtx* ctx,
         int32_t id,
         const core::PlanNodePtr& node,
-        std::shared_ptr<ExchangeClient> exchangeClient);
+        std::shared_ptr<InMemoryExchangeClient> exchangeClient);
 
     /// Translates plan node to join bridge. Returns nullptr if the plan node
     /// cannot be handled by this factory.
@@ -350,6 +350,13 @@ class Operator : public BaseRuntimeStatWriter {
     return false;
   }
 
+  /// Returns this operator's contribution to its plan node's input and output
+  /// totals. An operator that shares its plan node id with other operators
+  /// overrides this so that 'toPlanStats' does not count the same rows twice.
+  virtual core::PlanNode::Boundary planNodeBoundary() const {
+    return core::PlanNode::Boundary::kBoth;
+  }
+
   /// Returns copy of operator stats. If 'clear' is true, the function also
   /// clears the operator stats after retrieval.
   virtual OperatorStats stats(bool clear);
@@ -463,7 +470,7 @@ class Operator : public BaseRuntimeStatWriter {
       DriverCtx* ctx,
       int32_t id,
       const core::PlanNodePtr& planNode,
-      std::shared_ptr<ExchangeClient> exchangeClient = nullptr);
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient = nullptr);
 
   /// Calls all the registered PlanNodeTranslators on 'planNode' and returns the
   /// result of the first one that returns non-nullptr or nullptr if all return

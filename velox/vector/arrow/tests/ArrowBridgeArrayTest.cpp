@@ -155,7 +155,11 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     // Validate array contents.
     if constexpr (isString) {
-      validateStringArray(inputData, arrowArray);
+      if (options_.varTypeLayout == ArrowOptions::VarTypeLayout::kLarge) {
+        validateStringArray<T, int64_t>(inputData, arrowArray);
+      } else {
+        validateStringArray<T, int32_t>(inputData, arrowArray);
+      }
     } else if constexpr (isUnknownType) {
       validateNullArray(arrowArray);
     } else {
@@ -206,7 +210,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     }
   }
 
-  template <typename T>
+  template <typename T, typename TOffsets = int32_t>
   void validateStringArray(
       const std::vector<std::optional<T>>& inputData,
       const ArrowArray& arrowArray) {
@@ -215,7 +219,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
     const char* values = static_cast<const char*>(arrowArray.buffers[2]);
-    const int32_t* offsets = static_cast<const int32_t*>(arrowArray.buffers[1]);
+    const TOffsets* offsets =
+        static_cast<const TOffsets*>(arrowArray.buffers[1]);
 
     EXPECT_NE(values, nullptr);
     EXPECT_NE(offsets, nullptr);
@@ -610,7 +615,7 @@ TEST_F(ArrowBridgeArrayExportTest, flatTime) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, flatString) {
-  testFlatVector<std::string>({
+  const std::vector<std::optional<std::string>> inputData = {
       "my string",
       "another slightly longer string",
       std::nullopt,
@@ -620,10 +625,17 @@ TEST_F(ArrowBridgeArrayExportTest, flatString) {
       "a",
       "another even longer string to ensure it's for sure not stored inline!!!",
       std::nullopt,
-  });
+  };
 
-  // Empty vector.
-  testFlatVector<std::string>({});
+  for (auto layout :
+       {ArrowOptions::VarTypeLayout::kDefault,
+        ArrowOptions::VarTypeLayout::kLarge}) {
+    options_.varTypeLayout = layout;
+    testFlatVector(inputData);
+
+    // Empty vector.
+    testFlatVector<std::string>({});
+  }
 }
 
 TEST_F(ArrowBridgeArrayExportTest, rowVector) {
@@ -721,20 +733,28 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   // VectorMaker sets the RowVector size to the size of the first vector in the
   // list.
   const size_t rowVectorSize = 2;
+  const size_t longerChildSize = 1024;
+
+  auto longerNullableChild = vectorMaker_.flatVector<double>(longerChildSize);
+  longerNullableChild->setNull(0, true);
+  longerNullableChild->setNull(longerChildSize - 1, true);
+  longerNullableChild->setNullCount(2);
 
   auto vector = vectorMaker_.rowVector({
       vectorMaker_.flatVector<int64_t>(rowVectorSize),
-      vectorMaker_.flatVector<double>(1024),
+      longerNullableChild,
       vectorMaker_.arrayVector<int64_t>(128, identity, identity),
       vectorMaker_.mapVector<int64_t, int64_t>(
           64, identity, identity, identity),
   });
+  vector->setNull(rowVectorSize - 1, true);
+  vector->setNullCount(1);
 
   ArrowArray arrowArray;
   velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
 
   EXPECT_EQ(vector->size(), arrowArray.length);
-  EXPECT_EQ(0, arrowArray.null_count);
+  EXPECT_EQ(1, arrowArray.null_count);
   EXPECT_EQ(0, arrowArray.offset);
   EXPECT_EQ(1, arrowArray.n_buffers);
   EXPECT_EQ(nullptr, arrowArray.dictionary);
@@ -746,6 +766,9 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   EXPECT_EQ(2, arrowArray.children[1]->length);
   EXPECT_EQ(2, arrowArray.children[2]->length);
   EXPECT_EQ(2, arrowArray.children[3]->length);
+  // Only row 0 is null in the exported range. The null at the end of the
+  // longer child must not be counted.
+  EXPECT_EQ(1, arrowArray.children[1]->null_count);
 
   arrowArray.release(&arrowArray);
   EXPECT_EQ(nullptr, arrowArray.release);
@@ -1929,7 +1952,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           ASSERT_EQ(*vec.type(), *VARCHAR());
           EXPECT_EQ(vec.size(), 12);
         },
-        ArrowOptions{.exportToStringView = true});
+        ArrowOptions{
+            .varTypeLayout = ArrowOptions::VarTypeLayout::kStringView});
   }
 
   void testImportREE() {
@@ -2134,7 +2158,7 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
 
-TEST_F(ArrowBridgeArrayImportAsViewerTest, without_nulls_buffer) {
+TEST_F(ArrowBridgeArrayImportAsViewerTest, withoutNullsBuffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
   testImportWithoutNullsBuffer<Timestamp>(inputValues, "tsn:");
@@ -2253,7 +2277,7 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
 
-TEST_F(ArrowBridgeArrayImportAsOwnerTest, without_nulls_buffer) {
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, withoutNullsBuffer) {
   std::vector<std::optional<int64_t>> inputValues = {1, 2, 3, 4, 5};
   testImportWithoutNullsBuffer<int64_t>(inputValues, "l");
   testImportWithoutNullsBuffer<Timestamp>(inputValues, "tsn:");

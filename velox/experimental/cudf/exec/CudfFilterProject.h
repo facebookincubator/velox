@@ -19,7 +19,6 @@
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
@@ -44,11 +43,11 @@ class CudfFilterProject : public CudfOperatorBase {
 
   void filter(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   std::vector<std::unique_ptr<cudf::column>> project(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
@@ -83,9 +82,5 @@ class CudfFilterProject : public CudfOperatorBase {
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
 };
-
-bool canBeEvaluatedByCudf(
-    const std::vector<core::TypedExprPtr>& exprs,
-    core::QueryCtx* queryCtx);
 
 } // namespace facebook::velox::cudf_velox

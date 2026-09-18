@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 800 540" role="img" aria-labelledby="title description">
+  <title id="title">Nimble StreamSlicer range mapping</title>
+  <desc id="description">A requested top-level row range flows through schema-aware mapping of null, in-map, and length streams. EncodingFactory then creates a compact serialized output without re-encoding the full batch.</desc>
+  <defs>
+    <style>
+      text { font-family: 'Comic Sans MS', 'Segoe Print', cursive; fill: #172033; }
+      .heading { font-size: 21px; font-weight: 700; }
+      .label { font-size: 18px; font-weight: 700; }
+      .detail { font-size: 14px; }
+      .box { stroke-width: 2; }
+      .arrow { fill: none; stroke: #334155; stroke-width: 2.5; }
+    </style>
+    <filter id="sketch" x="-8%" y="-12%" width="116%" height="124%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="7" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.4"/>
+    </filter>
+    <marker id="arrowhead" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#334155"/>
+    </marker>
+  </defs>
+
+  <rect width="800" height="540" fill="#ffffff"/>
+
+  <rect filter="url(#sketch)" x="260" y="25" width="280" height="62" rx="8" fill="#dae8fc" stroke="#6c8ebf" class="box"/>
+  <text x="400" y="51" text-anchor="middle" class="label">Requested top-level row range</text>
+  <text x="400" y="74" text-anchor="middle" class="detail">[offset, offset + length)</text>
+
+  <rect filter="url(#sketch)" x="40" y="125" width="720" height="180" rx="10" fill="#fafafa" stroke="#64748b" class="box"/>
+  <rect filter="url(#sketch)" x="47" y="132" width="706" height="166" rx="8" fill="none" stroke="#94a3b8" stroke-width="1"/>
+  <text x="400" y="157" text-anchor="middle" class="heading">Schema-aware range mapping</text>
+  <text x="400" y="180" text-anchor="middle" class="detail">Translate top-level rows into nested child ranges</text>
+
+  <rect filter="url(#sketch)" x="75" y="215" width="180" height="64" rx="10" fill="#fff2cc" stroke="#d6b656" class="box"/>
+  <text x="165" y="241" text-anchor="middle" class="label">Null streams</text>
+  <text x="165" y="264" text-anchor="middle" class="detail">Track present values</text>
+
+  <rect filter="url(#sketch)" x="310" y="215" width="180" height="64" rx="10" fill="#f8cecc" stroke="#b85450" class="box"/>
+  <text x="400" y="241" text-anchor="middle" class="label">In-map streams</text>
+  <text x="400" y="264" text-anchor="middle" class="detail">Track values for each key</text>
+
+  <rect filter="url(#sketch)" x="545" y="215" width="180" height="64" rx="10" fill="#e1d5e7" stroke="#9673a6" class="box"/>
+  <text x="635" y="241" text-anchor="middle" class="label">Length streams</text>
+  <text x="635" y="264" text-anchor="middle" class="detail">Count child elements</text>
+
+  <path filter="url(#sketch)" d="M400 87 V108 H165 V208" class="arrow" marker-end="url(#arrowhead)"/>
+  <path filter="url(#sketch)" d="M400 87 V208" class="arrow" marker-end="url(#arrowhead)"/>
+  <path filter="url(#sketch)" d="M400 108 H635 V208" class="arrow" marker-end="url(#arrowhead)"/>
+
+  <path filter="url(#sketch)" d="M400 305 V337" class="arrow" marker-end="url(#arrowhead)"/>
+  <rect filter="url(#sketch)" x="250" y="345" width="300" height="66" rx="8" fill="#d5e8d4" stroke="#82b366" class="box"/>
+  <text x="400" y="372" text-anchor="middle" class="label">EncodingFactory::slice</text>
+  <text x="400" y="396" text-anchor="middle" class="detail">Native slice or SliceEncoding</text>
+
+  <path filter="url(#sketch)" d="M400 411 V446" class="arrow" marker-end="url(#arrowhead)"/>
+  <rect filter="url(#sketch)" x="265" y="454" width="270" height="62" rx="10" fill="#dae8fc" stroke="#6c8ebf" class="box"/>
+  <text x="400" y="480" text-anchor="middle" class="label">Compact serialized output</text>
+  <text x="400" y="503" text-anchor="middle" class="detail">Without re-encoding the full batch</text>
+</svg>

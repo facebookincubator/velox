@@ -98,8 +98,15 @@ struct UnpackStateFunctor {
   const uint8_t* chars;
   cuda::std::span<__int128_t> sums;
   cuda::std::span<int64_t> counts;
+  cudf::bitmask_type const* nullMask;
 
   __device__ void operator()(cudf::size_type idx) const {
+    if (nullMask && !cudf::bit_is_set(nullMask, idx)) {
+      return;
+    }
+    assert(
+        offsets[idx + 1] - offsets[idx] ==
+        static_cast<OffsetT>(detail::kDecimalSumStateSize));
     int64_t offset = static_cast<int64_t>(offsets[idx]);
     auto* state = reinterpret_cast<const DecimalSumState*>(chars + offset);
     counts[idx] = state->count;
@@ -134,13 +141,13 @@ template <typename BuildOp>
 void launchDeviceFor(
     cudf::size_type size,
     BuildOp buildOp,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (size == 0) {
     return;
   }
   auto op = buildOp();
   cub::DeviceFor::ForEachN(
-      cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.value());
+      cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.get());
   CUDF_CUDA_TRY(cudaGetLastError());
 }
 
@@ -159,7 +166,7 @@ struct StateValidPredicate {
 std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMaskImpl(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto numRows = sumCol.size();
   if (numRows == 0) {
@@ -205,7 +212,7 @@ concept ValidDecimalPackStorageTypes =
 struct fillOffsetsForDecimalSumStateKernel {
   cudf::mutable_column_view offsetsView;
   cudf::size_type numRows;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename OffsetT>
     requires OffsetStorageType<OffsetT>
@@ -232,7 +239,8 @@ struct unpackDecimalSumStateKernel {
   cudf::mutable_column_view sumView;
   cudf::mutable_column_view countView;
   cudf::size_type numRows;
-  rmm::cuda_stream_view stream;
+  cudf::bitmask_type const* nullMask;
+  cuda::stream_ref stream;
 
   template <typename OffsetT>
     requires OffsetStorageType<OffsetT>
@@ -242,10 +250,12 @@ struct unpackDecimalSumStateKernel {
         numRows,
         [&] {
           return UnpackStateFunctor<OffsetT>{
-              cuda::std::span<const OffsetT>{offsetsView.data<OffsetT>(), n},
+              cuda::std::span<const OffsetT>{
+                  offsetsView.data<OffsetT>(), n + 1},
               chars,
               cuda::std::span<__int128_t>{sumView.data<__int128_t>(), n},
-              cuda::std::span<int64_t>{countView.data<int64_t>(), n}};
+              cuda::std::span<int64_t>{countView.data<int64_t>(), n},
+              nullMask};
         },
         stream);
   }
@@ -262,7 +272,7 @@ struct averageRoundDecimalSumKernel {
   const int64_t* counts;
   cudf::mutable_column_view outView;
   cudf::size_type numRows;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename SumT>
     requires DecimalSumStorageType<SumT>
@@ -292,7 +302,7 @@ struct packDecimalSumStateKernel {
   cudf::column_view offsetsView;
   uint8_t* chars;
   cudf::size_type numRows;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename SumT, typename OffsetT>
     requires ValidDecimalPackStorageTypes<SumT, OffsetT>
@@ -322,7 +332,7 @@ void fillOffsetsForDecimalSumState(
     cudf::type_id offsetType,
     cudf::mutable_column_view offsetsView,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   cudf::type_dispatcher(
       cudf::data_type{offsetType},
       fillOffsetsForDecimalSumStateKernel{offsetsView, numRows, stream});
@@ -335,11 +345,12 @@ void unpackDecimalSumState(
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) {
+    cudf::bitmask_type const* nullMask,
+    cuda::stream_ref stream) {
   cudf::type_dispatcher(
       cudf::data_type{offsetType},
       unpackDecimalSumStateKernel{
-          offsetsView, chars, sumView, countView, numRows, stream});
+          offsetsView, chars, sumView, countView, numRows, nullMask, stream});
 }
 
 void averageRoundDecimalSum(
@@ -348,7 +359,7 @@ void averageRoundDecimalSum(
     const int64_t* counts,
     cudf::mutable_column_view outView,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   cudf::type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{sumType},
       averageRoundDecimalSumKernel{sumCol, counts, outView, numRows, stream});
@@ -362,7 +373,7 @@ void packDecimalSumState(
     cudf::column_view offsetsView,
     uint8_t* chars,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{sumType},
       cudf::data_type{offsetType},
@@ -373,7 +384,7 @@ void packDecimalSumState(
 std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return buildStateValidityMaskImpl(sumCol, countCol, stream, mr);
 }

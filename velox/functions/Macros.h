@@ -15,9 +15,10 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "velox/core/Metaprogramming.h"
-#include "velox/type/SimpleFunctionApi.h"
-#include "velox/type/Type.h"
+#include "velox/type/SimpleFunctionTags.h"
 
 #define VELOX_DEFINE_FUNCTION_TYPES(__Velox_ExecParams)                 \
   template <typename TArgs>                                             \

@@ -16,7 +16,20 @@
 
 #include "velox/dwio/orc/reader/OrcReader.h"
 
+#include "velox/dwio/dwrf/common/Config.h"
+
 namespace facebook::velox::orc {
+
+std::shared_ptr<dwio::common::FormatSpecificOptions>
+OrcReaderFactory::createFormatOptions(
+    const config::ConfigBase& connectorConfig,
+    const config::ConfigBase& session) const {
+  auto options = std::make_shared<dwrf::DwrfOptions>();
+  options->setMaxCoalesceDistance(
+      dwrf::Config::maxCoalesceDistance(connectorConfig, session));
+  return options;
+}
+
 void registerOrcReaderFactory() {
   dwio::common::registerReaderFactory(std::make_shared<OrcReaderFactory>());
 }

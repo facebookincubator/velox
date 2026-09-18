@@ -311,7 +311,7 @@ class ArrayWriter {
         auto& writer = add_item();
         // Handle copy_from for opaque and opaque custom types.
         using unwrapped_type = typename UnwrapCustomType<V>::type;
-        if constexpr (util::is_shared_ptr<unwrapped_type>::value) {
+        if constexpr (is_shared_ptr<unwrapped_type>::value) {
           writer =
               std::make_shared<typename unwrapped_type::element_type>(item);
         } else {

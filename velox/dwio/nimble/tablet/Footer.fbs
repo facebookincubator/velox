@@ -1,0 +1,85 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+namespace facebook.nimble.serialization;
+
+enum CompressionType:uint8 {
+  Uncompressed = 0,
+  Zstd = 1,
+  MetaInternal = 2,
+  Lz4 = 3,
+  OpenZL = 4,
+}
+
+table Stripes {
+  row_counts:[uint32];
+  offsets:[uint64];
+  sizes:[uint32];
+  group_indices:[uint32];
+}
+
+/// Raw (default) StripeGroup: flattened stripeCount x streamCount arrays
+/// (stripe-major) of per-stream byte offsets (relative to the owning stripe's
+/// start) and byte sizes. The original, universally-readable layout; short
+/// stripes are padded to streamCount with 0. Field slots 0..2 are FROZEN for
+/// backward compatibility with pre-existing files.
+table StripeGroup {
+  stripe_count:uint32;
+  stream_offsets:[uint32];
+  stream_sizes:[uint32];
+}
+
+/// One independently encoded array. Wraps the raw encoded bytes in a sub-table
+/// so flatbuffers can express a vector of them (`[EncodedStream]`); it cannot
+/// express a bare vector-of-vectors (`[[ubyte]]`).
+table EncodedStream {
+  data:[ubyte];
+}
+
+/// kStreamMajor: one Nimble-encoded uint32 array per leaf stream, each of length
+/// stripe_count holding that stream's offsets / sizes across every stripe in the
+/// group. Per-stream bit width is tight to that stream's value range.
+table StreamMajorStripeGroup {
+  stripe_count:uint32;
+  /// Total number of leaf streams in the group (length of stream_offsets /
+  /// stream_sizes), not a per-stripe count.
+  stream_count:uint32;
+  stream_offsets:[EncodedStream];
+  stream_sizes:[EncodedStream];
+}
+
+table MetadataSection {
+  offset:uint64;
+  size:uint32;
+  compression_type:CompressionType;
+  uncompressed_size:uint32;
+}
+
+table OptionalMetadataSections {
+  names:[string];
+  offsets:[uint64];
+  sizes:[uint32];
+  compression_types:[CompressionType];
+  uncompressed_sizes:[uint32];
+}
+
+table Footer {
+  row_count:uint64;
+  stripes:MetadataSection;
+  stripe_groups:[MetadataSection];
+  optional_sections:OptionalMetadataSections;
+}
+
+root_type Footer;

@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -676,7 +678,7 @@ TEST_F(LazyVectorTest, reset) {
 }
 
 TEST_F(LazyVectorTest, runtimeStats) {
-  TestRuntimeStatWriter writer;
+  ConcurrentRuntimeStatWriter writer;
   RuntimeStatWriterScopeGuard guard(&writer);
   auto lazy = std::make_shared<LazyVector>(
       pool_.get(),
@@ -686,17 +688,17 @@ TEST_F(LazyVectorTest, runtimeStats) {
         return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
       }));
   ASSERT_EQ(lazy->loadedVector()->size(), 10);
-  auto stats = writer.stats();
-  std::sort(stats.begin(), stats.end(), [](auto& x, auto& y) {
-    return x.first < y.first;
-  });
+  const auto stats = writer.runtimeStats();
   ASSERT_EQ(stats.size(), 3);
-  ASSERT_EQ(stats[0].first, LazyVector::kCpuNanos);
-  ASSERT_GE(stats[0].second.value, 0);
-  ASSERT_EQ(stats[1].first, LazyVector::kInputBytes);
-  ASSERT_GE(stats[1].second.value, 0);
-  ASSERT_EQ(stats[2].first, LazyVector::kWallNanos);
-  ASSERT_GE(stats[2].second.value, 0);
+  for (const auto& name :
+       {LazyVector::kCpuNanos,
+        LazyVector::kInputBytes,
+        LazyVector::kWallNanos}) {
+    SCOPED_TRACE(name);
+    const auto& metric = stats.at(std::string(name));
+    EXPECT_EQ(metric.count, 1);
+    EXPECT_GE(metric.sum, 0);
+  }
 }
 
 TEST_F(LazyVectorTest, chain) {
@@ -746,6 +748,153 @@ TEST_F(LazyVectorTest, containsLazyNotLoadedLazyEvaluation) {
   rowWithLazy->childAt(1) = lazy2;
   rowWithLazy->invalidateContainsLazyNotLoaded();
   EXPECT_TRUE(rowWithLazy->containsLazyNotLoaded());
+}
+
+TEST_F(LazyVectorTest, arrayRejectsLazyElements) {
+  constexpr vector_size_t size = 10;
+
+  auto offsets = allocateOffsets(1, pool_.get());
+  auto sizes = allocateSizes(1, pool_.get());
+  sizes->asMutable<vector_size_t>()[0] = size;
+
+  // Lazy flat vector as elements.
+  auto lazyFlat = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      size,
+      std::make_unique<SimpleVectorLoader>([&](RowSet) {
+        return makeFlatVector<int32_t>(size, folly::identity);
+      }));
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat),
+      "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
+
+  // A RowVector with a lazy child is also rejected, since isLazyNotLoaded()
+  // recurses into ROW.
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  auto rowWithLazyChild = makeRowVector(
+      {makeFlatVector<int32_t>(size, folly::identity),
+       vectorMaker_.lazyFlatVector<int32_t>(
+           size, [](vector_size_t row) { return row; })});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(),
+          ARRAY(rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          rowWithLazyChild),
+      "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
+
+  // After loading, construction succeeds.
+  lazyFlat->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat));
+
+  rowWithLazyChild->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(),
+          ARRAY(rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          rowWithLazyChild));
+}
+
+TEST_F(LazyVectorTest, mapRejectsLazyKeysOrValues) {
+  constexpr vector_size_t size = 10;
+
+  auto offsets = allocateOffsets(1, pool_.get());
+  auto sizes = allocateSizes(1, pool_.get());
+  sizes->asMutable<vector_size_t>()[0] = size;
+  auto flatIntegers = makeFlatVector<int32_t>(size, folly::identity);
+
+  auto makeLazyFlat = [&]() {
+    return std::make_shared<LazyVector>(
+        pool_.get(),
+        INTEGER(),
+        size,
+        std::make_unique<SimpleVectorLoader>([&](RowSet) {
+          return makeFlatVector<int32_t>(size, folly::identity);
+        }));
+  };
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          makeLazyFlat(),
+          flatIntegers),
+      "Cannot construct MapVector with an unloaded lazy vector as keys.");
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          makeLazyFlat()),
+      "Cannot construct MapVector with an unloaded lazy vector as values.");
+
+  // A RowVector with a lazy child is also rejected, since isLazyNotLoaded()
+  // recurses into ROW.
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  auto rowWithLazyChild = makeRowVector(
+      {makeFlatVector<int32_t>(size, folly::identity),
+       vectorMaker_.lazyFlatVector<int32_t>(
+           size, [](vector_size_t row) { return row; })});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          rowWithLazyChild),
+      "Cannot construct MapVector with an unloaded lazy vector as values.");
+
+  // After loading, construction succeeds.
+  auto lazyFlat = makeLazyFlat();
+  lazyFlat->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          lazyFlat));
+
+  rowWithLazyChild->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          rowWithLazyChild));
 }
 
 } // namespace

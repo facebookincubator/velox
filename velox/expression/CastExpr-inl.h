@@ -27,6 +27,24 @@
 namespace facebook::velox::exec {
 namespace {
 
+// Unscaled decimal values below this threshold can be cast to double and
+// divided by a power of ten without rounding the unscaled value, matching
+// Spark's BigDecimal-based conversion.
+// Reference:
+// https://github.com/openjdk/jdk8u-dev/blob/20e72d16f569e823a9ecdd9951a742b4397ca978/jdk/src/share/classes/java/math/BigDecimal.java#L3294
+constexpr int64_t kDoubleMaxExact = 1L << 52;
+
+// Powers of 10 which can be represented exactly in double. Only scales up to
+// this size can take the exact fast path; larger scales fall back to the
+// general conversion below.
+constexpr double kDoublePowersOfTen[] = {
+    1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
+    1.0e8,  1.0e9,  1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
+    1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22};
+
+constexpr size_t kDoublePowersOfTenSize =
+    sizeof(kDoublePowersOfTen) / sizeof(kDoublePowersOfTen[0]);
+
 inline std::string makeErrorMessage(
     const BaseVector& input,
     vector_size_t row,
@@ -424,29 +442,69 @@ VectorPtr CastExpr::applyDecimalToFloatCast(
   auto resultBuffer = result->asUnchecked<FlatVector<To>>()->mutableRawValues();
   const auto precisionScale = getDecimalPrecisionScale(*fromType);
   const auto simpleInput = input.as<SimpleVector<FromNativeType>>();
-  const auto scaleFactor = DecimalUtil::kPowersOfTen[precisionScale.second];
-  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
-    const auto unscaledValue = simpleInput->valueAt(row);
-    // Avoid precision loss: float has ~7 significant digits; casting unscaled
-    // int128 to float first loses precision for values with 8+ digits (e.g.
-    // 113751964). Divide in double then cast to float so result is correct.
-    To finalValue;
-    if constexpr (ToKind == TypeKind::REAL) {
-      const auto output =
-          util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
-              .thenOrThrow(folly::identity, [&](const Status& status) {
-                VELOX_USER_FAIL("{}", status.message());
-              });
-      finalValue = static_cast<To>(output / scaleFactor);
-    } else {
-      const auto output =
-          util::Converter<ToKind>::tryCast(unscaledValue)
-              .thenOrThrow(folly::identity, [&](const Status& status) {
-                VELOX_USER_FAIL("{}", status.message());
-              });
-      finalValue = output / scaleFactor;
+  const auto precision = precisionScale.first;
+  const auto scale = precisionScale.second;
+
+  const auto tryFastPath = [&](vector_size_t row,
+                               FromNativeType unscaledValue) {
+    if (scale == 0) {
+      resultBuffer[row] = static_cast<To>(unscaledValue);
+      return true;
     }
-    resultBuffer[row] = finalValue;
+    if (scale < kDoublePowersOfTenSize &&
+        DecimalUtil::absValue<FromNativeType>(unscaledValue) <
+            kDoubleMaxExact) {
+      const double output =
+          static_cast<double>(unscaledValue) / kDoublePowersOfTen[scale];
+      resultBuffer[row] = static_cast<To>(output);
+      return true;
+    }
+    return false;
+  };
+
+  const bool highPrecisionCastEnabled =
+      hooks_->decimalToFloatHighPrecisionCastEnabled();
+  if (highPrecisionCastEnabled) {
+    const auto rowSize = DecimalUtil::maxStringViewSize(precision, scale);
+    std::string buffer(rowSize, '\0');
+    applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+      auto unscaledValue = simpleInput->valueAt(row);
+
+      if (!tryFastPath(row, unscaledValue)) {
+        std::memset(buffer.data(), 0, rowSize);
+        const auto size = DecimalUtil::castToString<FromNativeType>(
+            unscaledValue, scale, rowSize, buffer.data());
+        resultBuffer[row] =
+            util::Converter<ToKind>::tryCast(StringView(buffer.data(), size))
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+      }
+    });
+    return result;
+  }
+
+  applyToSelectedNoThrowLocal(context, rows, result, [&](int row) {
+    auto unscaledValue = simpleInput->valueAt(row);
+    if (!tryFastPath(row, unscaledValue)) {
+      const double scaleFactor =
+          static_cast<double>(DecimalUtil::kPowersOfTen[scale]);
+      if constexpr (ToKind == TypeKind::REAL) {
+        const double output =
+            util::Converter<TypeKind::DOUBLE>::tryCast(unscaledValue)
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+        resultBuffer[row] = static_cast<To>(output / scaleFactor);
+      } else {
+        const auto output =
+            util::Converter<ToKind>::tryCast(unscaledValue)
+                .thenOrThrow(folly::identity, [&](const Status& status) {
+                  VELOX_USER_FAIL("{}", status.message());
+                });
+        resultBuffer[row] = output / scaleFactor;
+      }
+    }
   });
   return result;
 }

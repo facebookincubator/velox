@@ -1428,14 +1428,12 @@ TEST_F(OrderByTest, planNodeStats) {
   // Two operators implement this one plan node.
   ASSERT_EQ(stats.operatorStats.size(), 2);
   const auto& merge = stats.operatorStatsFor(OperatorType::kLocalMerge);
-  // Wrong: should equal outputRows.
-  EXPECT_EQ(merge.inputRows, 0);
+  EXPECT_EQ(merge.inputRows, 200);
   EXPECT_EQ(merge.outputRows, 200);
 
   const auto& sink = stats.operatorStatsFor(OperatorType::kCallbackSink);
   EXPECT_EQ(sink.inputRows, 200);
-  // Wrong: should equal inputRows.
-  EXPECT_EQ(sink.outputRows, 0);
+  EXPECT_EQ(sink.outputRows, 200);
 
   EXPECT_EQ(stats.inputRows, 200);
   EXPECT_EQ(stats.outputRows, 200);

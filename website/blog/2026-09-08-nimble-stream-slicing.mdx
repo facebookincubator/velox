@@ -1,0 +1,170 @@
+---
+slug: nimble-stream-slicing
+title: "Slicing Encoded Streams Efficiently in Velox Nimble"
+authors: [xiaoxmeng, tanjialiang]
+tags: [tech-blog, nimble, performance]
+---
+
+## Introduction
+
+On serving paths, indexed reads such as prefix scans often need a small row
+range from a much larger stripe. Fetching the full stripe creates row-level
+over-fetch: it wastes network bandwidth in NIC-bound workloads, while decoding
+it into Velox vectors, selecting rows, and serializing again incurs significant
+CPU, allocation, and data-copy costs.
+
+Nimble's
+[`StreamSlicer`](https://github.com/facebookincubator/velox/blob/main/velox/dwio/nimble/serializer/StreamSlicer.h)
+leverages white-box knowledge of each stream's encoding structure. It maps the
+requested top-level row range to the corresponding range in each nested stream
+and slices encoded bytes directly. For a compressed chunk, it decompresses the
+chunk before applying encoding-level slicing.
+
+This article explains how `StreamSlicer` maps nested row ranges and slices
+encoded streams without decoding and re-encoding the full batch.
+
+<!-- truncate -->
+
+## Nested stream mapping
+
+For a flat scalar stream, `[offset, offset + length)` maps directly to encoded
+positions. Nested streams require translation:
+
+- For nullable data, count non-null bits before and within the requested row
+  range. These counts define the offset and length in the values stream.
+- For arrays and maps, sum lengths before and within the requested row range.
+  The sums define the element-stream offset and length.
+- For flat maps, count each key's set in-map bits before and within the requested
+  row range. The counts define that key's value-stream offset and length.
+
+`StreamSlicer` applies these translations recursively.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/nimble-stream-slicer-range-mapping.svg"
+    alt="Flow from requested top-level rows through schema-aware range mapping for null, length, and in-map streams into EncodingFactory slicing and compact Nimble output."
+    width="95%"
+  />
+  <figcaption>
+    <em>
+      A top-level row range is translated into each nested stream's range
+      before encoding-level slicing.
+    </em>
+  </figcaption>
+</figure>
+
+This avoids constructing a complete `RowVector`. If an encoding has no native
+slice implementation, the fallback decodes only the requested values and
+re-encodes them using the source encoding layout.
+
+## Slicing methods
+
+Nimble supports four slicing methods:
+
+| Method | What it does | When it applies |
+| --- | --- | --- |
+| Full-range copy | Copies the original encoded stream | The request covers every row and the stream is self-contained |
+| Native slice | Rewrites metadata and copies only the required encoded payload | The encoding has a format-aware slice implementation |
+| Slice wrapper | Keeps complete structural units and records the requested sub-range in `SliceEncoding` | Trimming boundary units would require re-encoding |
+| Re-encode fallback | Materializes the requested range and re-encodes it using the source layout | No native slice implementation is available |
+
+Native slicing avoids the re-encode fallback. For example, FixedBitWidth copies
+packed bits while preserving its baseline and width; Dictionary preserves its
+alphabet and slices indices; nested encodings slice their children recursively.
+
+## Boolean range operations
+
+Null and in-map metadata streams determine how top-level rows map to child
+values. Nimble extends boolean decoders with range operations that extract a
+bit range and count its set bits in one pass. `StreamSlicer` uses those counts
+to retrieve child offsets and lengths without materializing or scanning the
+metadata stream twice.
+
+`SliceEncoding` supports two modes used below: row offset retains complete
+runs or blocks, while value delta rebases encoded positions.
+
+## Row-offset mode: avoiding boundary re-encoding
+
+RLE and BlockBitPacking are cheap to slice except when a range starts or ends
+inside a run or packed block. Trimming those units would require rewriting run
+lengths or unpacking and repacking boundary blocks.
+
+The row-offset mode stores a logical view over complete structural units:
+
+```text
+[slice prefix: logical row count]
+[row offset into inner encoding]
+[inner encoding bytes]
+```
+
+At read time, the wrapper skips the stored offset and stops at the logical
+length. RLE keeps complete touched runs; BlockBitPacking keeps complete touched
+blocks and rebases block offsets. This trades a small payload overhang and one
+decoder layer for avoiding boundary re-encoding.
+
+## Value-delta mode: rebasing encoded position streams
+
+SparseBool stores the positions of true values, while PFOR stores the positions
+of exceptions. Neither has one entry per logical row. For example, a SparseBool
+stream can be represented as:
+
+```text
+row:                0 1 2 3 4 5 6 7 8 9 10 ... 18
+logical value:      F F T F F F F T F F  T ...  T
+encoded positions: [2, 7, 10, 18]
+```
+
+For position stream `[2, 7, 10, 18]` and row range `[6, 13)`, slicing
+proceeds as follows:
+
+1. Find the first position at or after `6`: zero-based slot `1`, which
+   contains `7`.
+2. Find the first position at or after `13`: slot `3`, which contains
+   `18`.
+3. `EncodingFactory::slice` slices slots `[1, 3)`, producing positions
+   `[7, 10]`.
+4. Apply a delta of `-6`, producing positions `[1, 4]` relative to the
+   sliced row range.
+
+`EncodingView` finds the two slot boundaries directly in the encoded
+positions. Without a view, the fallback materializes the position stream once
+to find them.
+
+After slicing the position stream, the value-delta mode stores a delta that
+rebases positions relative to the requested range:
+
+```text
+[slice prefix]
+[inner row offset]
+[value delta]
+[inner encoding bytes]
+```
+
+`SliceEncoding` records this delta so readers interpret the sliced positions
+relative to the new row range.
+
+## Reducing per-stream overhead
+
+After removing most decode-and-re-encode work, smaller costs became visible:
+
+- `StreamSlicer` reuses Velox and encoding scratch pools.
+- Projected streams sharing physical bytes reuse stripped tablet chunks.
+- `NimbleIndexProjector` fetches selected stream locations in one pass.
+- One output arena serves all partial stripes and transfers its chunks into the
+  returned `IOBuf` chain without copying the completed body.
+
+The `maxOverfetchRowsRatio` option controls the tradeoff between network bytes
+and slicing CPU. For each stripe, the projector computes the fraction of stripe
+rows that were not requested. If this ratio exceeds the configured value, it
+uses `StreamSlicer`; otherwise, it directly packs the full stripe. A value of
+`0.0` slices whenever avoidable row over-fetch exists, while `1.0` disables
+slicing.
+
+## Summary
+
+`StreamSlicer` addresses row-level over-fetch on serving paths by translating a
+top-level range through nested metadata and slicing each encoded stream. Native
+slices, boolean range utilities, `SliceEncoding`'s row-offset and value-delta
+modes, and buffer reuse minimize the CPU, temporary allocations, and copies
+required to return the requested row range. This technique helps Meta's serving
+workloads reduce network bandwidth consumption with minimal CPU cost.

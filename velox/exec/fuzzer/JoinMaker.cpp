@@ -132,6 +132,10 @@ std::optional<core::JoinType> tryFlipJoinType(core::JoinType joinType) {
       return core::JoinType::kLeftSemiFilter;
     case core::JoinType::kRightSemiProject:
       return core::JoinType::kLeftSemiProject;
+    case core::JoinType::kAnti:
+      return core::JoinType::kRightAnti;
+    case core::JoinType::kRightAnti:
+      return core::JoinType::kAnti;
     default:
       return std::nullopt;
   }
@@ -571,6 +575,12 @@ bool JoinMaker::supportsFlippingHashJoin() const {
   //  Null-aware right semi project join doesn't support filter.
   if (!filter_.empty() && joinType_ == core::JoinType::kLeftSemiProject &&
       nullAware_) {
+    return false;
+  }
+
+  // Null-aware anti join has no right anti equivalent: kRightAnti rejects
+  // null-aware.
+  if (nullAware_ && joinType_ == core::JoinType::kAnti) {
     return false;
   }
 

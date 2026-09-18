@@ -26,6 +26,11 @@ add_subdirectory(external/date)
 add_subdirectory(external/tzdb)
 add_subdirectory(external/md5)
 add_subdirectory(external/hdfs)
+
+if(VELOX_ENABLE_NIMBLE)
+  # Nimble's string encoding is the only consumer of FSST.
+  add_subdirectory(external/fsst)
+endif()
 #
 
 # examples depend on expression

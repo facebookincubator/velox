@@ -756,4 +756,38 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
       decompressCounter);
 }
 
+std::unique_ptr<Decompressor> createBlockDecompressor(
+    CompressionKind kind,
+    uint64_t blockSize,
+    const CompressionOptions& options,
+    const std::string& streamDebugInfo) {
+  switch (static_cast<int64_t>(kind)) {
+    case CompressionKind::CompressionKind_NONE:
+      return nullptr;
+    case CompressionKind::CompressionKind_ZLIB:
+      return std::make_unique<ZlibDecompressor>(
+          blockSize, options.format.zlib.windowBits, streamDebugInfo, false);
+    case CompressionKind::CompressionKind_GZIP:
+      return std::make_unique<ZlibDecompressor>(
+          blockSize, options.format.zlib.windowBits, streamDebugInfo, true);
+    case CompressionKind::CompressionKind_SNAPPY:
+      return std::make_unique<SnappyDecompressor>(blockSize, streamDebugInfo);
+    case CompressionKind::CompressionKind_LZO:
+      return std::make_unique<LzoDecompressor>(
+          blockSize,
+          options.format.lz4_lzo.isHadoopFrameFormat,
+          streamDebugInfo);
+    case CompressionKind::CompressionKind_LZ4:
+    case CompressionKind::CompressionKind_LZ4_HADOOP:
+      return std::make_unique<Lz4Decompressor>(
+          blockSize,
+          options.format.lz4_lzo.isHadoopFrameFormat,
+          streamDebugInfo);
+    case CompressionKind::CompressionKind_ZSTD:
+      return std::make_unique<ZstdDecompressor>(blockSize, streamDebugInfo);
+    default:
+      DWIO_RAISE_FMT("Unknown compression codec {}", kind);
+  }
+}
+
 } // namespace facebook::velox::dwio::common::compression

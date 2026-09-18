@@ -104,6 +104,11 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "rand", prefix + "random"});
   registerFunction<RandFunction, double, Constant<int64_t>>(
       {prefix + "rand", prefix + "random"});
+  registerFunction<RandnFunction, double>({prefix + "randn"});
+  registerFunction<RandnFunction, double, Constant<int32_t>>(
+      {prefix + "randn"});
+  registerFunction<RandnFunction, double, Constant<int64_t>>(
+      {prefix + "randn"});
   registerFunction<SignFunction, double, double>({prefix + "sign"});
 
   // Operators.

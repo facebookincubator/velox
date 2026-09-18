@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -28,7 +29,9 @@
 #include <list>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -61,49 +64,99 @@ class CudfIcebergSplitReader : public CudfSplitReader {
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       bool useExperimentalCudfReader,
-      cudf::ast::expression const* subfieldFilterExpr);
-
-  /// Override to setup delete file readers and column projection.
-  /// @param runtimeStats Reference to the DataSource's runtime statistics,
-  /// passed through to delete file readers so they can accumulate stats
-  /// directly into the DataSource's stats object.
-  void prepareSplit(dwio::common::RuntimeStatistics& runtimeStats) override;
+      const cudf::ast::expression* subfieldFilterAst,
+      const common::SubfieldFilters* subfieldFilters);
 
  protected:
-  // Override to also clear delete readers and column injection
-  void resetSplit() override;
+  // Sets up delete file readers and column projection after base state reset.
+  void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats) override;
 
-  // Override to return the subfield filter when not deferred.
-  cudf::ast::expression const* subfieldFilter() override;
+  // Override to report a split the filter rejects as skipped.
+  bool isSplitSkipped() const override;
+
+  // Override to only setup cuDF reader if we have columns to read.
+  void setupReader() override;
+
+  // Skip Parquet pushdown when the subfield filter must run after reading.
+  cudf::ast::expression const* pushdownFilter() const override;
 
   // Override to determine the memory resource to construct cuDF reader.
-  rmm::device_async_resource_ref determineCudfMemoryResource() override;
+  rmm::device_async_resource_ref determineCudfMemoryResource() const override;
 
   // Override to apply Iceberg deletes after reading a cudf table chunk.
   std::optional<std::unique_ptr<cudf::table>> readNextChunk() override;
 
  private:
-  // Setup delete file readers for positional and equality deletes,
+  // Clear delete readers and column injection
+  void resetSplit();
+
+  // Selects applicable positional delete, equality delete, and deletion vector
+  // files that apply to the split without opening any files.
+  void classifyDeleteFiles();
+
+  // Setup delete file readers for selected positional and equality deletes,
   // and deletion vectors.
   // @param runtimeStats DataSource's runtime statistics, passed to delete
   // file readers for accumulation.
-  void setupDeleteFileReaders(dwio::common::RuntimeStatistics& runtimeStats);
+  void setupDeleteFileReaders(dwio::common::RuntimeStats& runtimeStats);
 
-  // Apply deletion vector (V3).
-  void applyDeletionVector(std::size_t numRows);
+  // Applicable equality delete file, together with the columns its field IDs
+  // key on.
+  struct EqualityDeleteFile {
+    // Owned by `icebergSplit_`.
+    const velox_iceberg::IcebergDeleteFile* file;
+    std::vector<std::string> keyNames;
+    std::vector<TypePtr> keyTypes;
+  };
 
-  // Apply positional deletes (V2).
-  void applyPositionalDeletes(std::size_t numRows);
+  // Resolves the equality field IDs of a delete file to the names and types of
+  // the columns they key on.
+  EqualityDeleteFile equalityDeleteKeys(
+      const velox_iceberg::IcebergDeleteFile& deleteFile) const;
+
+  // Applies deletion vector (V3).
+  void applyDeletionVector(cudf::column_view rowIndex);
+
+  // Applies positional deletes (V2).
+  void applyPositionalDeletes(
+      std::size_t startRow,
+      std::size_t numRows,
+      cudf::column_view rowIndex);
+
+  // Reads positional delete positions for a file row range.
+  void readPositionalDeleteBitmap(std::size_t startRow, std::size_t numRows);
 
   // Apply equality deletes (V2).
   void applyEqualityDeletes(cudf::table_view input);
+
+  // Returns whether cuDF must prepend absolute file row positions.
+  bool needPrependedRowIndex() const;
+
+  // Decides whether the subfield filter is pushed into the data-file reader as
+  // is, pushed as a filter over the columns read from the data file, or
+  // deferred to post table read.
+  void prepareSubfieldFilter();
+
+  // Removes and returns the prepended row-index column.
+  std::unique_ptr<cudf::column> extractRowIndex(
+      std::unique_ptr<cudf::table>& table) const;
+
+  // Creates contiguous absolute file row positions.
+  std::unique_ptr<cudf::column> makeRowIndex(cudf::size_type numRows) const;
+
+  // Returns the file row range covered by `rowIndex`.
+  std::pair<std::size_t, std::size_t> rowRange(
+      cudf::column_view rowIndex) const;
 
   // Setup column projection to include any equality delete key columns
   // that are not already in the output projection.
   void setupEqualityColumnKeys();
 
-  // Read metadata and cache `fileRowCount_` and `fileColumnNames_`
+  // Read metadata and cache `splitRowCount_` and `fileColumnNames_`
   void cacheSchemaFromMetadata();
+
+  // Returns the row range covered by the split.
+  std::pair<std::size_t, std::size_t> computeSplitRowRange() const;
 
   // Adapts the data file schema to match the table schema expected by the
   // query. Classifies each output and filter-only column into one of:
@@ -141,7 +194,7 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::unique_ptr<cudf::table> buildOutputTable(
       std::unique_ptr<cudf::table>&& table,
       rmm::device_async_resource_ref mr,
-      std::optional<cudf::size_type> rowCountOverride);
+      std::optional<cudf::size_type> rowCountOverride) const;
 
   // Describes a column that must be injected after reading because it is
   // not present in the parquet file (partition, info, or schema evolution).
@@ -159,8 +212,36 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   std::unique_ptr<cudf::scalar> makeInjectedScalar(
       const InjectedColumn& col) const;
 
+  // Returns whether timestamp partition values are read as local time.
+  bool readTimestampAsLocalTime() const;
+
+  // Returns the filter on a top-level column, or null when it is not involved
+  // in the filter, or filters only a subfield of it.
+  const common::Filter* topLevelColumnFilter(std::string_view name) const;
+
+  // Evaluates the query's filter on an injected column against the constant
+  // value that column holds for the whole split.
+  ConstantFilterFold foldInjectedColumn(const InjectedColumn& col) const;
+
+  // Returns the deferred filter to apply to the assembled table or null when
+  // the pushed filter already applies the complete filter.
+  const cudf::ast::expression* deferredFilter() const;
+
+  // Returns whether nothing can be pushed, so the whole filter is deferred.
+  bool deferEverything() const;
+
   std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit_;
   std::shared_ptr<const velox_hive::HiveConfig> hiveConfig_;
+
+  // Subfield filters the pushed AST was built from, used to fold the filter on
+  // an injected column against the constant that column holds. Owned by the
+  // data source, which outlives the split reader.
+  const common::SubfieldFilters* subfieldFilters_;
+
+  // Delete files that apply to the split, owned by `icebergSplit_`.
+  std::vector<const velox_iceberg::IcebergDeleteFile*> positionalDeleteFiles_;
+  std::vector<EqualityDeleteFile> equalityDeleteFiles_;
+  const velox_iceberg::IcebergDeleteFile* deletionVectorFile_{nullptr};
 
   // cuDF-accelerated reader for Iceberg V3 deletion vector (Puffin-encoded
   // roaring bitmaps).
@@ -185,16 +266,24 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   bool noColumnsToRead_{false};
   bool syntheticTableProduced_{false};
 
-  // Whether the subfield filter is deferred to post table read
-  bool deferSubfieldFilter_{false};
+  // Whether the filter rejects this split entirely.
+  bool skipSplit_{false};
+
+  // Filter over file-backed columns pushed to the Parquet reader. Empty when
+  // the original filter was not transformed or has a `nullptr` root when
+  // nothing can be pushed.
+  std::optional<TransformedFilter> transformedPushdownFilter_;
+
+  // Transform of the logical filter, held only when a `PushdownFilterBuilder`
+  // has transformed it differently from the pushed filter.
+  std::optional<TransformedFilter> transformedLogicalFilter_;
 
   // Top-level column names and total row count from the file metadata
   std::unordered_set<std::string> fileColumnNames_;
-  std::size_t fileRowCount_{0};
 
-  // Tracks the absolute row offset within the data file. Each chunk advances
-  // this by the number of rows read (before deletes).
-  uint64_t baseReadOffset_{0};
+  // Tracks the absolute row range covered by the split.
+  std::size_t baseReadOffset_{0};
+  std::size_t splitRowCount_{0};
 
   // Bitmaps for positional deletes
   BufferPtr deleteBitmap_{nullptr};

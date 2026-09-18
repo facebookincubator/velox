@@ -161,7 +161,7 @@ std::unique_ptr<Operator> Operator::PlanNodeTranslator::toOperator(
     DriverCtx* /*ctx*/,
     int32_t /*id*/,
     const core::PlanNodePtr& /*node*/,
-    std::shared_ptr<ExchangeClient> /*exchangeClient*/) {
+    std::shared_ptr<InMemoryExchangeClient> /*exchangeClient*/) {
   return nullptr;
 }
 
@@ -176,7 +176,7 @@ std::unique_ptr<Operator> Operator::fromPlanNode(
     DriverCtx* ctx,
     int32_t id,
     const core::PlanNodePtr& planNode,
-    std::shared_ptr<ExchangeClient> exchangeClient) {
+    std::shared_ptr<InMemoryExchangeClient> exchangeClient) {
   VELOX_CHECK_EQ(exchangeClient != nullptr, planNode->requiresExchangeClient());
   for (auto& translator : translators()) {
     std::unique_ptr<Operator> op;
@@ -319,6 +319,7 @@ OperatorStats Operator::stats(bool clear) {
   }
 
   stats.memoryStats = MemoryStats::memStatsFromPool(pool());
+  stats.planNodeBoundary = planNodeBoundary();
   return stats;
 }
 

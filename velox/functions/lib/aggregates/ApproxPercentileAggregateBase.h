@@ -760,12 +760,6 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
            ++i) {
         VELOX_USER_CHECK(rowVec->childAt(i)->isFlatEncoding());
       }
-      for (int i = static_cast<int>(Idx::kItems);
-           i <= static_cast<int>(Idx::kLevels);
-           ++i) {
-        VELOX_USER_CHECK(
-            rowVec->childAt(i)->encoding() == VectorEncoding::Simple::ARRAY);
-      }
     } else {
       VELOX_CHECK(rowVec);
     }
@@ -798,10 +792,12 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
                         ->asUnchecked<SimpleVector<T>>();
     auto maxValue = rowVec->childAt(static_cast<int>(Idx::kMaxValue))
                         ->asUnchecked<SimpleVector<T>>();
-    auto items = rowVec->childAt(static_cast<int>(Idx::kItems))
-                     ->asUnchecked<ArrayVector>();
-    auto levels = rowVec->childAt(static_cast<int>(Idx::kLevels))
-                      ->asUnchecked<ArrayVector>();
+    DecodedVector decodedItems(
+        *rowVec->childAt(static_cast<int>(Idx::kItems)), *baseRows);
+    DecodedVector decodedLevels(
+        *rowVec->childAt(static_cast<int>(Idx::kLevels)), *baseRows);
+    auto items = decodedItems.base()->asUnchecked<ArrayVector>();
+    auto levels = decodedLevels.base()->asUnchecked<ArrayVector>();
 
     auto itemsElements = items->elements()->asFlatVector<T>();
     auto levelElements = levels->elements()->asFlatVector<int32_t>();
@@ -825,6 +821,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
         return;
       }
       int i = decoded.index(row);
+      int itemsIndex = decodedItems.index(i);
+      int levelsIndex = decodedLevels.index(i);
       if (percentileIsArray->isNullAt(i)) {
         return;
       }
@@ -876,8 +874,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       if constexpr (checkIntermediateInputs) {
         VELOX_USER_CHECK(
             !(k->isNullAt(i) || n->isNullAt(i) || minValue->isNullAt(i) ||
-              maxValue->isNullAt(i) || items->isNullAt(i) ||
-              levels->isNullAt(i)));
+              maxValue->isNullAt(i) || decodedItems.isNullAt(i) ||
+              decodedLevels.isNullAt(i)));
       }
       detail::KllView<T> v{
           .k = static_cast<uint32_t>(k->valueAt(i)),
@@ -885,11 +883,11 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
           .minValue = minValue->valueAt(i),
           .maxValue = maxValue->valueAt(i),
           .items =
-              {rawItems + items->offsetAt(i),
-               static_cast<size_t>(items->sizeAt(i))},
+              {rawItems + items->offsetAt(itemsIndex),
+               static_cast<size_t>(items->sizeAt(itemsIndex))},
           .levels =
-              {rawLevels + levels->offsetAt(i),
-               static_cast<size_t>(levels->sizeAt(i))},
+              {rawLevels + levels->offsetAt(levelsIndex),
+               static_cast<size_t>(levels->sizeAt(levelsIndex))},
       };
       if constexpr (kSingleGroup) {
         views.push_back(v);

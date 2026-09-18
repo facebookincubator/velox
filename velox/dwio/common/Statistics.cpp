@@ -33,6 +33,16 @@ std::string toStringOr(
   return std::string{fallback};
 }
 
+void mergeRuntimeMetric(
+    std::string name,
+    const RuntimeMetric& metric,
+    std::unordered_map<std::string, RuntimeMetric>& result) {
+  auto [it, inserted] = result.emplace(std::move(name), metric);
+  if (!inserted) {
+    it->second.merge(metric);
+  }
+}
+
 } // namespace
 
 bool KeyInfo::operator==(const KeyInfo& other) const {
@@ -127,9 +137,9 @@ std::string TimestampColumnStatistics::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", min: ",
-      (min_.has_value() ? min_.value().toString() : "unknown"),
+      toStringOr(min_, kUnknown),
       ", max: ",
-      (max_.has_value() ? max_.value().toString() : "unknown"));
+      toStringOr(max_, kUnknown));
 }
 
 std::string StringColumnStatistics::toString() const {
@@ -164,122 +174,138 @@ void DecodingStats::merge(const DecodingStats& other) {
   decodeCPUTimeNanos.merge(other.decodeCPUTimeNanos);
 }
 
-DecodingStats* DecodingStatsSet::getOrCreate(
+void DecodingStats::toRuntimeMetrics(
+    std::string_view prefix,
+    std::unordered_map<std::string, RuntimeMetric>& result) const {
+  const auto addCounter = [&](std::string_view name, const auto& counter) {
+    if (counter.count() == 0) {
+      return;
+    }
+    mergeRuntimeMetric(
+        fmt::format("{}.{}", prefix, name),
+        RuntimeMetric{
+            saturateCast(counter.sum()),
+            counter.count(),
+            saturateCast(counter.min()),
+            saturateCast(counter.max()),
+            RuntimeCounter::Unit::kNanos},
+        result);
+  };
+  addCounter("decompressCPUTimeNanos", decompressCPUTimeNanos);
+  addCounter("decodeCPUTimeNanos", decodeCPUTimeNanos);
+}
+
+void ColumnRuntimeStats::accumulateStat(
+    const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+    int64_t value) {
+  auto [it, inserted] = columnMetrics.try_emplace(stat.first);
+  if (inserted) {
+    it->second.unit = stat.second;
+  } else {
+    VELOX_CHECK_EQ(it->second.unit, stat.second);
+  }
+  it->second.addValue(value);
+}
+
+ColumnRuntimeStats& SplitStats::getOrCreateColumnStats(
     uint32_t nodeId,
     TypeKind typeKind) {
-  auto locked = map_.wlock();
-  auto it = locked->find(nodeId);
-  if (it == locked->end()) {
-    it = locked->emplace(nodeId, std::make_unique<DecodingStats>(typeKind))
-             .first;
-  }
-  return it->second.get();
+  auto [it, inserted] = columnStats.try_emplace(nodeId, typeKind);
+  // TODO(#18171): We need to add the following check once we stable column
+  //  ID assignment. For now, we can have different typeKinds for the same
+  //  column ID.
+  // if (!inserted) {
+  //  VELOX_CHECK_EQ(it->second.typeKind, typeKind);
+  // }
+  return it->second;
 }
 
-void DecodingStatsSet::mergeFrom(const DecodingStatsSet& other) {
-  auto srcLocked = other.map_.rlock();
-  auto dstLocked = map_.wlock();
-  for (const auto& [nodeId, srcStats] : *srcLocked) {
-    auto it = dstLocked->find(nodeId);
-    if (it == dstLocked->end()) {
-      it = dstLocked->emplace(nodeId, std::make_unique<DecodingStats>()).first;
-      it->second->typeKind = srcStats->typeKind;
-    }
-    it->second->merge(*srcStats);
-  }
+DecodingStats* SplitStats::decodingStats(uint32_t nodeId) {
+  const auto it = columnStats.find(nodeId);
+  return it != columnStats.end() && it->second.decodingStats
+      ? &*it->second.decodingStats
+      : nullptr;
 }
 
-void DecodingStatsSet::toRuntimeMetrics(
-    std::unordered_map<std::string, RuntimeMetric>& result) const {
-  auto statsLocked = map_.rlock();
-  for (const auto& [nodeId, stats] : *statsLocked) {
-    // Export decompression timing.
-    const auto& decompressCounter = stats->decompressCPUTimeNanos;
-    if (decompressCounter.count() > 0) {
-      result.emplace(
-          fmt::format(
-              "column_{}.{}.decompressCPUTimeNanos",
-              nodeId,
-              TypeKindName::toName(stats->typeKind)),
-          RuntimeMetric{
-              saturateCast(decompressCounter.sum()),
-              decompressCounter.count(),
-              saturateCast(decompressCounter.min()),
-              saturateCast(decompressCounter.max()),
-              RuntimeCounter::Unit::kNanos});
-    }
-    // Export decode timing.
-    const auto& decodeCounter = stats->decodeCPUTimeNanos;
-    if (decodeCounter.count() > 0) {
-      result.emplace(
-          fmt::format(
-              "column_{}.{}.decodeCPUTimeNanos",
-              nodeId,
-              TypeKindName::toName(stats->typeKind)),
-          RuntimeMetric{
-              saturateCast(decodeCounter.sum()),
-              decodeCounter.count(),
-              saturateCast(decodeCounter.min()),
-              saturateCast(decodeCounter.max()),
-              RuntimeCounter::Unit::kNanos});
-    }
-  }
-}
-
-void ColumnReaderStatistics::initColumnStatsCollection(
+void SplitStats::initColumnStatsCollection(
     const TypeWithId& schema,
     const RowReaderOptions& options) {
-  if (!options.collectColumnCpuMetrics()) {
-    return;
-  }
-  decodingStatsSet.emplace();
-  registerDecodingStatsImpl(schema);
+  registerColumnStats(schema, options.collectColumnCpuMetrics());
 }
 
-void ColumnReaderStatistics::mergeFrom(const ColumnReaderStatistics& other) {
-  flattenStringDictionaryValues += other.flattenStringDictionaryValues;
-  pageLoadTimeNs.merge(other.pageLoadTimeNs);
-  if (other.decodingStatsSet) {
-    if (!decodingStatsSet) {
-      decodingStatsSet.emplace();
+void ColumnRuntimeStats::mergeFrom(const ColumnRuntimeStats& other) {
+  // TODO(#18171): Add the typeKind check once column ID assignment is stable.
+  //  For now, the same column ID can refer to different typeKinds.
+  // VELOX_CHECK_EQ(typeKind, other.typeKind);
+  for (const auto& [name, metric] : other.columnMetrics) {
+    auto [it, inserted] = columnMetrics.emplace(name, metric);
+    if (!inserted) {
+      it->second.merge(metric);
     }
-    decodingStatsSet->mergeFrom(*other.decodingStatsSet);
+  }
+  if (other.decodingStats) {
+    if (!decodingStats) {
+      decodingStats.emplace();
+    }
+    decodingStats->merge(*other.decodingStats);
   }
 }
 
-void ColumnReaderStatistics::toRuntimeMetrics(
+void ColumnRuntimeStats::toRuntimeMetrics(
+    std::string_view prefix,
     std::unordered_map<std::string, RuntimeMetric>& result) const {
-  if (flattenStringDictionaryValues > 0) {
-    result.emplace(
-        "flattenStringDictionaryValues",
-        RuntimeMetric(flattenStringDictionaryValues));
+  for (const auto& [name, metric] : columnMetrics) {
+    mergeRuntimeMetric(fmt::format("{}.{}", prefix, name), metric, result);
   }
-  if (pageLoadTimeNs.sum() > 0) {
-    result.emplace(
-        "pageLoadTimeNanos",
-        RuntimeMetric(
-            pageLoadTimeNs.sum(),
-            pageLoadTimeNs.count(),
-            pageLoadTimeNs.min(),
-            pageLoadTimeNs.max(),
-            RuntimeCounter::Unit::kNanos));
-  }
-  if (decodingStatsSet) {
-    decodingStatsSet->toRuntimeMetrics(result);
+  if (decodingStats) {
+    decodingStats->toRuntimeMetrics(prefix, result);
   }
 }
 
-void ColumnReaderStatistics::registerDecodingStatsImpl(const TypeWithId& node) {
-  decodingStatsSet->getOrCreate(node.id(), node.type()->kind());
+void SplitStats::accumulateStat(
+    const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+    int64_t value) {
+  auto [it, inserted] = splitMetrics.try_emplace(stat.first);
+  if (inserted) {
+    it->second.unit = stat.second;
+  } else {
+    VELOX_CHECK_EQ(it->second.unit, stat.second);
+  }
+  it->second.addValue(value);
+}
+
+void RuntimeStats::mergeFrom(const SplitStats& split) {
+  auto& target = formatSpecificStats[split.format];
+  for (const auto& [name, metric] : split.splitMetrics) {
+    auto [it, inserted] = target.emplace(name, metric);
+    if (!inserted) {
+      VELOX_CHECK_EQ(it->second.unit, metric.unit);
+      it->second.merge(metric);
+    }
+  }
+  for (const auto& [nodeId, stats] : split.columnStats) {
+    auto it =
+        columnStats[nodeId].try_emplace(split.format, stats.typeKind).first;
+    it->second.mergeFrom(stats);
+  }
+}
+
+void SplitStats::registerColumnStats(
+    const TypeWithId& node,
+    bool collectDecodingStats) {
+  auto& stats = getOrCreateColumnStats(node.id(), node.type()->kind());
+  if (collectDecodingStats && !stats.decodingStats) {
+    stats.decodingStats.emplace();
+  }
   for (uint32_t i = 0; i < node.size(); ++i) {
     if (const auto* child = node.childAt(i).get()) {
-      registerDecodingStatsImpl(*child);
+      registerColumnStats(*child, collectDecodingStats);
     }
   }
 }
 
 std::unordered_map<std::string, RuntimeMetric>
-RuntimeStatistics::toRuntimeMetricMap() const {
+RuntimeStats::toRuntimeMetricMap() const {
   std::unordered_map<std::string, RuntimeMetric> result;
   for (const auto& [name, metric] : unitLoaderStats.stats()) {
     result.emplace(name, RuntimeMetric(metric.sum, metric.unit));
@@ -317,13 +343,22 @@ RuntimeStatistics::toRuntimeMetricMap() const {
   if (numStripes > 0) {
     result.emplace("numStripes", RuntimeMetric(numStripes));
   }
-  if (parquetFooterEstimatedBytes > 0) {
-    result.emplace(
-        "parquetFooterEstimatedBytes",
-        RuntimeMetric(
-            parquetFooterEstimatedBytes, RuntimeCounter::Unit::kBytes));
+  for (const auto& [format, metrics] : formatSpecificStats) {
+    for (const auto& [name, metric] : metrics) {
+      result.emplace(
+          fmt::format("{}.{}", FileFormatName::toName(format), name), metric);
+    }
   }
-  columnReaderStats.toRuntimeMetrics(result);
+  for (const auto& [nodeId, statsByFormat] : columnStats) {
+    for (const auto& [format, stats] : statsByFormat) {
+      const auto formatPrefix = FileFormatName::toName(format);
+      const auto typeName = TypeKindName::toName(stats.typeKind);
+      const auto formatAndColumnPrefix =
+          fmt::format("{}.column_{}.{}", formatPrefix, nodeId, typeName);
+      stats.toRuntimeMetrics(formatPrefix, result);
+      stats.toRuntimeMetrics(formatAndColumnPrefix, result);
+    }
+  }
   return result;
 }
 } // namespace facebook::velox::dwio::common

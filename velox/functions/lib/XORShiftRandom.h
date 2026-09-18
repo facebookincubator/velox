@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 namespace facebook::velox::functions {
@@ -31,6 +32,9 @@ class XORShiftRandom {
 
   void setSeed(int64_t seed) {
     seed_ = hashSeed(seed);
+    // Match java.util.Random.setSeed(), which discards any cached Gaussian so
+    // nextGaussian() recomputes from the freshly seeded stream.
+    haveNextGaussian_ = false;
   }
 
   /// Returns a random 32-bit integer (like Java's nextInt() with no argument).
@@ -52,6 +56,30 @@ class XORShiftRandom {
     int64_t bits =
         (static_cast<int64_t>(next(26)) << 27) + static_cast<int64_t>(next(27));
     return static_cast<double>(bits) / static_cast<double>(1LL << 53);
+  }
+
+  /// Returns the next pseudorandom, Gaussian ("normally") distributed double
+  /// value with mean 0.0 and standard deviation 1.0, matching Java's
+  /// Random.nextGaussian(). Uses the polar form of the Box-Muller transform and
+  /// caches the second generated value for the following call, exactly as
+  /// java.util.Random does.
+  double nextGaussian() {
+    if (haveNextGaussian_) {
+      haveNextGaussian_ = false;
+      return nextGaussian_;
+    }
+    // v1 and v2 are coordinates of a point uniformly sampled inside the unit
+    // circle; s is its squared distance from the origin.
+    double v1, v2, s;
+    do {
+      v1 = 2.0 * nextDouble() - 1.0;
+      v2 = 2.0 * nextDouble() - 1.0;
+      s = v1 * v1 + v2 * v2;
+    } while (s >= 1.0 || s == 0.0);
+    const double multiplier = std::sqrt(-2.0 * std::log(s) / s);
+    nextGaussian_ = v2 * multiplier;
+    haveNextGaussian_ = true;
+    return v1 * multiplier;
   }
 
  private:
@@ -142,6 +170,10 @@ class XORShiftRandom {
   }
 
   int64_t seed_{0};
+  // Cached second value produced by the Box-Muller transform in
+  // nextGaussian(), and whether it is available.
+  double nextGaussian_{0.0};
+  bool haveNextGaussian_{false};
 };
 
 } // namespace facebook::velox::functions

@@ -36,7 +36,7 @@ DECLARE_bool(velox_time_allocations);
 namespace facebook::velox::memory {
 
 struct SizeClassStats {
-  //// Size of the tracked size class  in pages.
+  /// Size of the tracked size class in pages.
   int32_t size{0};
 
   /// Cumulative CPU clocks spent inside allocation.
@@ -70,7 +70,7 @@ struct SizeClassStats {
     SizeClassStats result;
     result.size = size;
     result.allocateClocks = allocateClocks - other.allocateClocks;
-    result.allocateClocks = freeClocks - other.freeClocks;
+    result.freeClocks = freeClocks - other.freeClocks;
     result.numAllocations = numAllocations - other.numAllocations;
     result.totalBytes = totalBytes - other.totalBytes;
     return result;
@@ -194,13 +194,12 @@ class Cache {
 /// on cache.
 void setCacheFailureMessage(std::string message);
 
-/// Returns and clears a thread local message set with
-/// setCacheFailureMessage().
+/// Returns and clears a thread local message set by 'setCacheFailureMessage()'.
 std::string getAndClearCacheFailureMessage();
 
 /// This class provides interface for the actual memory allocations from memory
 /// pool. It allocates runs of machine pages from predefined size classes, and
-/// supports both contiguous and non-contiguous memory allocations. An
+/// supports both contiguous and non-contiguous memory allocations. A
 /// non-contiguous allocation that does not match a size class is composed of
 /// multiple runs from different size classes. To get 11 pages, one could have a
 /// run of 8, one of 2 and one of 1 page. This is intended for all high volume
@@ -232,8 +231,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     /// Number of pages in the largest size class.
     int32_t largestSizeClass{256};
 
-    /// If set true, allocations larger than largest size class size will be
-    /// delegated to ManagedMmapArena. Otherwise a system mmap call will be
+    /// If set true, allocations larger than the largest size class size will be
+    /// delegated to ManagedMmapArena. Otherwise, a system mmap call will be
     /// issued for each such allocation.
     bool useMmapArena{false};
 
@@ -263,8 +262,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     kMalloc,
     /// The memory allocator kind which is implemented by MmapAllocator. It
     /// manages the large chunk of memory allocations on its own by leveraging
-    /// mmap and madvise, to optimize the memory fragmentation in the long
-    /// running service such as Prestissimo.
+    /// mmap and madvise, to optimize the memory fragmentation in the
+    /// long-running service such as Prestissimo.
     kMmap,
   };
 
@@ -429,7 +428,7 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
 
   /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is
   /// multiple of 'alignmentBytes'. Returns true if check succeeds, false
-  /// otherwise
+  /// otherwise.
   static bool isAlignmentValid(uint64_t allocateBytes, uint16_t alignmentBytes);
 
   /// Invoked to check if 'alignmentBytes' is valid and 'allocateBytes' is

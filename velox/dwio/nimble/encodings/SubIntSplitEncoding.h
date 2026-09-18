@@ -1,0 +1,1177 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <span>
+#include <string_view>
+#include <vector>
+
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/common/DecoderUtil.h"
+#include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitSelector.h"
+#include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
+
+// SubIntSplitEncoding: decomposes each value in a 32- or 64-bit integer stream
+// into bit-range sub-streams, selects an optimal encoding for each sub-stream
+// via a sample-driven DP algorithm, and stitches the encoded sub-streams back
+// together for efficient decoding.
+//
+// Only supported for 32- and 64-bit types (int32_t, uint32_t, int64_t,
+// uint64_t, float, double). The physical type for float is uint32_t and for
+// double is uint64_t; bit patterns are preserved across encode/decode.
+//
+// Each section is encoded as the narrowest unsigned integer type that fits its
+// bit width (uint8_t for 1-8 bits, uint16_t for 9-16, uint32_t for 17-32,
+// uint64_t for 33-64). This avoids paying an 8-byte-per-value penalty for
+// narrow sections when they land in e.g. Dictionary or Trivial encoding.
+//
+// Binary layout (after the standard Encoding prefix):
+//   [1 byte]  splitCount (number of sections, 1..64)
+//   [1 byte]  reserved (future: BitSplitOrder; currently 0)
+//   [splitCount × 6 bytes]  {bitStart(1B), bitEnd(1B), encodedSize(4B)}
+//   [section_0_bytes][section_1_bytes]...[section_{N-1}_bytes]
+//
+// Sections are stored in LSB-first order (section 0 covers the lowest bits).
+// Section identifiers equal the section index (0, 1, …, splitCount-1).
+
+namespace facebook::nimble {
+
+template <typename T>
+class SubIntSplitEncoding
+    : public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
+ public:
+  using cppDataType = T;
+  using physicalType = typename TypeTraits<T>::physicalType;
+
+  static_assert(
+      sizeof(physicalType) == 4 || sizeof(physicalType) == 8,
+      "SubIntSplitEncoding only supports 32- and 64-bit types");
+  static_assert(
+      isNumericType<physicalType>(),
+      "SubIntSplitEncoding only supports numeric types");
+
+  SubIntSplitEncoding(
+      velox::memory::MemoryPool& pool,
+      std::string_view data,
+      std::function<void*(uint32_t)> stringBufferFactory,
+      const Encoding::Options& options = {});
+
+  void reset() final;
+  void skip(uint32_t rowCount) final;
+  void materialize(uint32_t rowCount, void* buffer) final;
+
+  template <typename DecoderVisitor>
+  void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params);
+
+  // Bulk scan method for the readWithVisitor fast path. Decodes the contiguous
+  // span covering the selected rows once, then gathers/scatters the requested
+  // positions through the visitor. Invoked by detail::readWithVisitorFast.
+  template <bool kScatter, typename Visitor>
+  void bulkScan(
+      Visitor& visitor,
+      vector_size_t currentRow,
+      const vector_size_t* selectedRows,
+      vector_size_t numSelected,
+      const vector_size_t* scatterRows);
+
+  static std::string_view encode(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
+  // Encodes one candidate form. `flags` goes into the header byte and records
+  // whether `values` are raw or zigzag deltas.
+  static std::string_view encodeImpl(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      Buffer& buffer,
+      const Encoding::Options& options,
+      uint8_t flags);
+
+  std::string debugString(int offset) const final;
+
+ private:
+  struct SectionInfo {
+    int bitStart{0};
+    int bitEnd{0};
+    uint64_t mask{0}; // (1 << width) - 1, or ~0 for full 64-bit section
+    uint8_t storageBytes{8}; // 1, 2, 4, or 8 — matches the section's DataType
+    std::unique_ptr<Encoding> encoding;
+  };
+
+  std::vector<SectionInfo> sections_;
+
+  // Indices into sections_ that have to be decoded per chunk.
+  //
+  // A Constant section contributes the same bits to every value, so decoding it
+  // means materializing thousands of copies of one number and OR-ing them in a
+  // value at a time. Those sections are resolved once at construction into
+  // constantOr_ and dropped from the per-chunk loop. This is the common case
+  // rather than a corner one: the selector emits a Constant section for every
+  // constant high prefix or low suffix it trims.
+  std::vector<uint32_t> dynamicSections_;
+
+  // Combined contribution of every Constant section, pre-masked and
+  // pre-shifted, OR-ed into each output value by the first dynamic section.
+  physicalType constantOr_{0};
+
+  // Whether one dynamic section reproduces the value verbatim -- it spans the
+  // full width, starts at bit 0, and no constant section contributes. Then the
+  // mask, the shift and the OR are all identities, so materialize() can hand
+  // the caller's buffer straight to the section and skip the scratch round-trip
+  // and the combine pass.
+  bool directDecode_{false};
+
+  // Persistent scratch buffer reused across materialize() calls. Sized to
+  // kMaterializeChunkSize * sizeof(physicalType) bytes on first use.
+  Vector<uint8_t> scratchBuf_;
+
+  // Whether the stored sections hold zigzag deltas rather than raw values.
+  // Set from the header flag byte.
+  bool deltaEncoded_{false};
+
+  // Running prefix-sum accumulator for delta-encoded streams, carried across
+  // the chunk loop and across successive materialize() calls.
+  physicalType deltaAccumulator_{0};
+
+  // Logical read cursor (rows consumed so far). Maintained across skip(),
+  // materialize(), and the readWithVisitor slow path so the fast path can map
+  // external row numbers onto the section cursors.
+  uint32_t row_{0};
+
+  // Scratch buffer for the readWithVisitor fast path. Holds the decoded span of
+  // physical values before they are gathered/widened into the reader output.
+  Vector<physicalType> decodeBuf_;
+
+  // Values the readWithVisitor slow path decoded ahead of the read cursor.
+  //
+  // That path asks for one value at a time, which otherwise costs a virtual
+  // materialize(1, ...) per section per value. Decoding a block at a time
+  // amortises the dispatch and lets the section kernels vectorise, at the cost
+  // of running the section cursors ahead of row_. The section cursors therefore
+  // sit at row_ + pendingAvailable(), and skip() and materialize() both consume
+  // this buffer before touching the sections.
+  Vector<physicalType> pendingBuf_;
+  uint32_t pendingOffset_{0};
+  uint32_t pendingCount_{0};
+
+  // Values decoded per refill by the slow path. Small enough that a visitor
+  // skipping most rows wastes little, large enough to amortise the dispatch.
+  static constexpr uint32_t kSlowPathBlock = 256;
+
+  uint32_t pendingAvailable() const noexcept {
+    return pendingCount_ - pendingOffset_;
+  }
+
+  // Decode the next block of values into pendingBuf_, clamped to the values the
+  // stream has left.
+  void refillPending();
+
+  // Combine every section for `count` values, starting at the current section
+  // cursors, into `output`. Does not touch row_, the pending buffer or the
+  // delta accumulator; `count` must not exceed kMaterializeChunkSize.
+  void decodeSections(uint32_t count, physicalType* output);
+
+  // Return the storage byte width for a section of the given bit width.
+  static constexpr uint8_t sectionStorageBytes(int bitWidth) noexcept {
+    if (bitWidth <= 8)
+      return 1;
+    if (bitWidth <= 16)
+      return 2;
+    if (bitWidth <= 32)
+      return 4;
+    return 8;
+  }
+
+  // Number of output elements processed per chunk in materialize(). Chosen so
+  // that the output slice (kMaterializeChunkSize * sizeof(physicalType)) and
+  // the scratch buffer (kMaterializeChunkSize * storageBytes) together fit
+  // comfortably in L2 cache across all sections for a given chunk.
+  //   uint64 output + uint64 scratch: 4096 * 8 * 2 = 64 KB  (fits 256 KB L2)
+  //   uint64 output + uint8  scratch: 4096 * 8 + 4096 * 1 = 36 KB (fits L1)
+  static constexpr uint32_t kMaterializeChunkSize = 4096;
+
+  // Accumulate one section's decoded values into the output buffer.
+  // IsFirst=true: pure write (initialises the output element), OR-ing in
+  // `orConstant`, which carries the bits of every constant section.
+  // IsFirst=false: read-modify-write OR into the existing output element.
+  // __restrict__ informs the compiler that src and dst do not alias, enabling
+  // auto-vectorisation for same-width cases and providing correct alias
+  // semantics for the AVX2 widening paths below.
+  template <typename SectionT, bool IsFirst>
+  static void accumulateSection(
+      const SectionT* __restrict__ src,
+      physicalType* __restrict__ dst,
+      uint32_t count,
+      uint64_t mask,
+      int shift,
+      physicalType orConstant) noexcept;
+};
+
+//
+// End of public API. Implementation follows.
+//
+
+namespace detail {
+
+// Flag bits carried in the SubIntSplit header's second byte, which was
+// previously reserved and always written as zero.
+inline constexpr uint8_t kSubIntSplitFlagDelta = 1u << 0;
+
+// Zigzag maps signed deltas onto unsigned values so that small negative steps
+// stay small instead of wrapping to near-2^64. Mirrors the mapping OpenZL's
+// delta path uses, and is the difference between ReverseSorted compressing and
+// actively regressing.
+template <typename U>
+inline U zigzagEncodeDelta(U current, U previous) noexcept {
+  using S = std::make_signed_t<U>;
+  constexpr int kShift = static_cast<int>(sizeof(U) * 8 - 1);
+  const S difference = static_cast<S>(current - previous);
+  return static_cast<U>(
+      (static_cast<U>(difference) << 1) ^ static_cast<U>(difference >> kShift));
+}
+
+template <typename U>
+inline U zigzagDecodeDelta(U encoded, U previous) noexcept {
+  using S = std::make_signed_t<U>;
+  const S difference =
+      static_cast<S>((encoded >> 1) ^ (~(encoded & U{1}) + U{1}));
+  return static_cast<U>(previous + static_cast<U>(difference));
+}
+
+inline constexpr uint32_t kSubIntSplitSectionHeaderSize =
+    6; // bitStart+bitEnd+size
+
+inline uint32_t subIntSplitSpecificHeaderSize(uint8_t splitCount) noexcept {
+  return 2u + static_cast<uint32_t>(splitCount) * kSubIntSplitSectionHeaderSize;
+}
+} // namespace detail
+
+template <typename T>
+SubIntSplitEncoding<T>::SubIntSplitEncoding(
+    velox::memory::MemoryPool& pool,
+    std::string_view data,
+    std::function<void*(uint32_t)> stringBufferFactory,
+    const Encoding::Options& options)
+    : TypedEncoding<T, physicalType>{pool, data, options},
+      sections_{},
+      scratchBuf_{&pool},
+      decodeBuf_{&pool},
+      pendingBuf_{&pool} {
+  const auto* pos = data.data() + this->dataOffset();
+
+  const uint8_t splitCount = encoding::read<uint8_t>(pos);
+  const uint8_t flags = encoding::read<uint8_t>(pos);
+  deltaEncoded_ = (flags & detail::kSubIntSplitFlagDelta) != 0;
+
+  struct SectionMeta {
+    uint8_t bitStart;
+    uint8_t bitEnd;
+    uint32_t encodedSize;
+  };
+  std::vector<SectionMeta> meta(splitCount);
+  for (uint8_t s = 0; s < splitCount; ++s) {
+    meta[s].bitStart = encoding::read<uint8_t>(pos);
+    meta[s].bitEnd = encoding::read<uint8_t>(pos);
+    meta[s].encodedSize = encoding::readUint32(pos);
+  }
+
+  sections_.resize(splitCount);
+  for (uint8_t s = 0; s < splitCount; ++s) {
+    auto& sec = sections_[s];
+    sec.bitStart = meta[s].bitStart;
+    sec.bitEnd = meta[s].bitEnd;
+    const int width = sec.bitEnd - sec.bitStart + 1;
+    sec.mask = (width >= 64) ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
+    sec.storageBytes = sectionStorageBytes(width);
+    sec.encoding = EncodingFactory().create(
+        *this->pool_, {pos, meta[s].encodedSize}, stringBufferFactory, options);
+    pos += meta[s].encodedSize;
+
+    // ConstantEncoding is stateless -- its reset() and skip() are no-ops and
+    // materialize() ignores the read position -- so reading its value here does
+    // not disturb the cursor the decode path relies on, and the section can be
+    // left out of the chunk loop entirely.
+    if (sec.encoding->encodingType() == EncodingType::Constant) {
+      uint64_t value = 0;
+      switch (sec.storageBytes) {
+        case 1: {
+          uint8_t narrow = 0;
+          sec.encoding->materialize(1, &narrow);
+          value = narrow;
+          break;
+        }
+        case 2: {
+          uint16_t narrow = 0;
+          sec.encoding->materialize(1, &narrow);
+          value = narrow;
+          break;
+        }
+        case 4: {
+          uint32_t narrow = 0;
+          sec.encoding->materialize(1, &narrow);
+          value = narrow;
+          break;
+        }
+        case 8: {
+          sec.encoding->materialize(1, &value);
+          break;
+        }
+        default:
+          NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
+      }
+      constantOr_ |= static_cast<physicalType>(value & sec.mask)
+          << sec.bitStart;
+    } else {
+      dynamicSections_.push_back(s);
+    }
+  }
+
+  // Delta streams still need the prefix-sum pass, so they never take the direct
+  // route.
+  if (!deltaEncoded_ && dynamicSections_.size() == 1 && constantOr_ == 0) {
+    const auto& only = sections_[dynamicSections_.front()];
+    constexpr uint64_t fullMask =
+        ~uint64_t{0} >> (64 - sizeof(physicalType) * 8);
+    directDecode_ = only.bitStart == 0 &&
+        only.storageBytes == sizeof(physicalType) && only.mask == fullMask;
+  }
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::reset() {
+  for (auto& sec : sections_) {
+    sec.encoding->reset();
+  }
+  row_ = 0;
+  deltaAccumulator_ = 0;
+  pendingOffset_ = 0;
+  pendingCount_ = 0;
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::skip(uint32_t rowCount) {
+  NIMBLE_CHECK(
+      !deltaEncoded_,
+      "SubIntSplitEncoding: skip() is not supported on delta-encoded streams; "
+      "reconstructing a value requires every preceding delta.");
+
+  // The sections already sit past anything still buffered, so those rows are
+  // skipped by dropping them rather than by moving the section cursors.
+  const uint32_t fromPending = std::min(rowCount, pendingAvailable());
+  pendingOffset_ += fromPending;
+  const uint32_t remaining = rowCount - fromPending;
+  if (remaining > 0) {
+    for (auto& sec : sections_) {
+      sec.encoding->skip(remaining);
+    }
+  }
+  row_ += rowCount;
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::refillPending() {
+  if (pendingBuf_.size() < kSlowPathBlock) [[unlikely]] {
+    pendingBuf_.resize(kSlowPathBlock);
+  }
+  const uint32_t total = this->rowCount();
+  NIMBLE_CHECK(
+      row_ < total, "SubIntSplitEncoding: read past the end of the stream.");
+  const uint32_t block = std::min(kSlowPathBlock, total - row_);
+  decodeSections(block, pendingBuf_.data());
+  pendingOffset_ = 0;
+  pendingCount_ = block;
+}
+
+// accumulateSection: widen narrow section values into the physicalType output.
+//
+// For narrow→wide cases (SectionT smaller than physicalType) an AVX2 path uses
+// zero-extending widening intrinsics (_mm256_cvtepu*_epi*) followed by a
+// variable left-shift and optional OR-accumulate.  An L2 prefetch hint keeps
+// both src and dst warm across successive section loops in a chunk.
+//
+// For same-width cases (SectionT == physicalType) the __restrict__ qualifiers
+// and the compile-time IsFirst branch produce auto-vectoriser-friendly loops.
+template <typename T>
+template <typename SectionT, bool IsFirst>
+void SubIntSplitEncoding<T>::accumulateSection(
+    const SectionT* __restrict__ src,
+    physicalType* __restrict__ dst,
+    uint32_t count,
+    uint64_t mask,
+    int shift,
+    physicalType orConstant) noexcept {
+  const SectionT narrowMask = static_cast<SectionT>(mask);
+
+#ifdef __AVX2__
+  if constexpr (sizeof(SectionT) < sizeof(physicalType)) {
+    if constexpr (sizeof(physicalType) == 8) {
+      // ----------------------------------------------------------------
+      // Widening into 64-bit output
+      // ----------------------------------------------------------------
+      const __m128i vshift = _mm_cvtsi64_si128(static_cast<int64_t>(shift));
+      const __m256i vmask = _mm256_set1_epi64x(static_cast<int64_t>(mask));
+      const __m256i vconst =
+          _mm256_set1_epi64x(static_cast<int64_t>(orConstant));
+
+      if constexpr (sizeof(SectionT) == 1) {
+        // uint8 → uint64: _mm256_cvtepu8_epi64 processes 4 elements.
+        uint32_t i = 0;
+        for (; i + 4 <= count; i += 4) {
+          _mm_prefetch(
+              reinterpret_cast<const char*>(src + i + 32), _MM_HINT_T1);
+          _mm_prefetch(
+              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
+          int32_t tmp;
+          std::memcpy(&tmp, src + i, 4);
+          __m256i vs = _mm256_cvtepu8_epi64(_mm_cvtsi32_si128(tmp));
+          vs = _mm256_and_si256(vs, vmask);
+          if (shift)
+            vs = _mm256_sll_epi64(vs, vshift);
+          if constexpr (IsFirst) {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
+          } else {
+            __m256i vd =
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
+          }
+        }
+        for (; i < count; ++i) {
+          if constexpr (IsFirst)
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
+          else
+            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+        }
+        return;
+
+      } else if constexpr (sizeof(SectionT) == 2) {
+        // uint16 → uint64: _mm256_cvtepu16_epi64 processes 4 elements.
+        uint32_t i = 0;
+        for (; i + 4 <= count; i += 4) {
+          _mm_prefetch(
+              reinterpret_cast<const char*>(src + i + 32), _MM_HINT_T1);
+          _mm_prefetch(
+              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
+          __m256i vs = _mm256_cvtepu16_epi64(
+              _mm_loadl_epi64(reinterpret_cast<const __m128i*>(src + i)));
+          vs = _mm256_and_si256(vs, vmask);
+          if (shift)
+            vs = _mm256_sll_epi64(vs, vshift);
+          if constexpr (IsFirst) {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
+          } else {
+            __m256i vd =
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
+          }
+        }
+        for (; i < count; ++i) {
+          if constexpr (IsFirst)
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
+          else
+            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+        }
+        return;
+
+      } else if constexpr (sizeof(SectionT) == 4) {
+        // uint32 → uint64: _mm256_cvtepu32_epi64 processes 4 elements.
+        uint32_t i = 0;
+        for (; i + 4 <= count; i += 4) {
+          _mm_prefetch(
+              reinterpret_cast<const char*>(src + i + 16), _MM_HINT_T1);
+          _mm_prefetch(
+              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
+          __m256i vs = _mm256_cvtepu32_epi64(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)));
+          vs = _mm256_and_si256(vs, vmask);
+          if (shift)
+            vs = _mm256_sll_epi64(vs, vshift);
+          if constexpr (IsFirst) {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
+          } else {
+            __m256i vd =
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
+          }
+        }
+        for (; i < count; ++i) {
+          if constexpr (IsFirst)
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
+          else
+            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+        }
+        return;
+      }
+
+    } else if constexpr (sizeof(physicalType) == 4) {
+      // ----------------------------------------------------------------
+      // Widening into 32-bit output
+      // ----------------------------------------------------------------
+      const __m128i vshift = _mm_cvtsi32_si128(static_cast<int32_t>(shift));
+      const __m256i vmask = _mm256_set1_epi32(static_cast<int32_t>(mask));
+      const __m256i vconst =
+          _mm256_set1_epi32(static_cast<int32_t>(orConstant));
+
+      if constexpr (sizeof(SectionT) == 1) {
+        // uint8 → uint32: _mm256_cvtepu8_epi32 processes 8 elements.
+        uint32_t i = 0;
+        for (; i + 8 <= count; i += 8) {
+          _mm_prefetch(
+              reinterpret_cast<const char*>(src + i + 64), _MM_HINT_T1);
+          _mm_prefetch(
+              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
+          int64_t tmp;
+          std::memcpy(&tmp, src + i, 8);
+          __m256i vs = _mm256_cvtepu8_epi32(_mm_cvtsi64_si128(tmp));
+          vs = _mm256_and_si256(vs, vmask);
+          if (shift)
+            vs = _mm256_sll_epi32(vs, vshift);
+          if constexpr (IsFirst) {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
+          } else {
+            __m256i vd =
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
+          }
+        }
+        for (; i < count; ++i) {
+          if constexpr (IsFirst)
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
+          else
+            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+        }
+        return;
+
+      } else if constexpr (sizeof(SectionT) == 2) {
+        // uint16 → uint32: _mm256_cvtepu16_epi32 processes 8 elements.
+        uint32_t i = 0;
+        for (; i + 8 <= count; i += 8) {
+          _mm_prefetch(
+              reinterpret_cast<const char*>(src + i + 32), _MM_HINT_T1);
+          _mm_prefetch(
+              reinterpret_cast<const char*>(dst + i + 32), _MM_HINT_T1);
+          __m256i vs = _mm256_cvtepu16_epi32(
+              _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)));
+          vs = _mm256_and_si256(vs, vmask);
+          if (shift)
+            vs = _mm256_sll_epi32(vs, vshift);
+          if constexpr (IsFirst) {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i),
+                _mm256_or_si256(vs, vconst));
+          } else {
+            __m256i vd =
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(dst + i));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(dst + i), _mm256_or_si256(vd, vs));
+          }
+        }
+        for (; i < count; ++i) {
+          if constexpr (IsFirst)
+            dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+                orConstant;
+          else
+            dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+        }
+        return;
+      }
+    }
+  }
+#endif // __AVX2__
+
+  // Scalar path: same-width sections (SectionT == physicalType), or builds
+  // without AVX2, or narrow cases not covered by the AVX2 specialisations
+  // above.
+  // __restrict__ on the parameters allows the compiler to auto-vectorise this
+  // loop for same-width cases (e.g. uint32_t → uint32_t, uint64_t → uint64_t).
+  if constexpr (IsFirst) {
+    for (uint32_t i = 0; i < count; ++i) {
+      dst[i] = (static_cast<physicalType>(src[i] & narrowMask) << shift) |
+          orConstant;
+    }
+  } else {
+    for (uint32_t i = 0; i < count; ++i) {
+      dst[i] |= static_cast<physicalType>(src[i] & narrowMask) << shift;
+    }
+  }
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::decodeSections(
+    uint32_t count,
+    physicalType* output) {
+  // Lazily size the scratch buffer on the first call. The scratch must hold one
+  // chunk's worth of section values at the widest possible storage type.
+  constexpr uint32_t kScratchBytes =
+      kMaterializeChunkSize * static_cast<uint32_t>(sizeof(physicalType));
+  if (scratchBuf_.size() < kScratchBytes) [[unlikely]] {
+    scratchBuf_.resize(kScratchBytes);
+  }
+
+  for (size_t d = 0; d < dynamicSections_.size(); ++d) {
+    const auto& sec = sections_[dynamicSections_[d]];
+    const int shift = sec.bitStart;
+    const uint64_t mask = sec.mask;
+    // The first dynamic section initialises each output element (pure write,
+    // OR-ing in the constant sections' bits); the rest OR their bits in. This
+    // avoids a separate std::fill pass.
+    const bool isFirst = (d == 0);
+
+    switch (sec.storageBytes) {
+      case 1: {
+        auto* scratch = reinterpret_cast<uint8_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint8_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint8_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      case 2: {
+        auto* scratch = reinterpret_cast<uint16_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint16_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint16_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      case 4: {
+        auto* scratch = reinterpret_cast<uint32_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint32_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint32_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      case 8: {
+        auto* scratch = reinterpret_cast<uint64_t*>(scratchBuf_.data());
+        sec.encoding->materialize(count, scratch);
+        if (isFirst) {
+          accumulateSection<uint64_t, true>(
+              scratch, output, count, mask, shift, constantOr_);
+        } else {
+          accumulateSection<uint64_t, false>(
+              scratch, output, count, mask, shift, 0);
+        }
+        break;
+      }
+      default:
+        NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
+    }
+  }
+
+  // Every section was constant, so there is nothing to decode and each value is
+  // just the folded constant.
+  if (dynamicSections_.empty()) [[unlikely]] {
+    std::fill_n(output, count, constantOr_);
+  }
+}
+
+template <typename T>
+void SubIntSplitEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
+  physicalType* output = static_cast<physicalType*>(buffer);
+
+  // Hand back anything the slow path decoded ahead of the cursor before asking
+  // the sections for more.
+  if (pendingAvailable() > 0) [[unlikely]] {
+    const uint32_t fromPending = std::min(rowCount, pendingAvailable());
+    std::copy_n(pendingBuf_.data() + pendingOffset_, fromPending, output);
+    pendingOffset_ += fromPending;
+    row_ += fromPending;
+    rowCount -= fromPending;
+    if (rowCount == 0) {
+      return;
+    }
+    output += fromPending;
+  }
+
+  if (directDecode_) {
+    sections_[dynamicSections_.front()].encoding->materialize(rowCount, output);
+    row_ += rowCount;
+    return;
+  }
+
+  // Outer loop: advance through the output in kMaterializeChunkSize-element
+  // chunks.  For each chunk, all sections are accumulated before moving to the
+  // next chunk, so the output slice and the scratch buffer both stay in L2/L1
+  // cache across the entire section inner-loop.
+  for (uint32_t chunkStart = 0; chunkStart < rowCount;
+       chunkStart += kMaterializeChunkSize) {
+    const uint32_t chunkCount =
+        std::min(kMaterializeChunkSize, rowCount - chunkStart);
+    physicalType* chunkOutput = output + chunkStart;
+
+    decodeSections(chunkCount, chunkOutput);
+
+    // Delta streams store zigzag steps, so turn them back into values. The
+    // accumulator carries across chunks and across successive materialize()
+    // calls, which is why these streams can only be read sequentially.
+    if (deltaEncoded_) {
+      for (uint32_t i = 0; i < chunkCount; ++i) {
+        if (chunkStart == 0 && i == 0 && row_ == 0) {
+          deltaAccumulator_ = chunkOutput[0];
+        } else {
+          deltaAccumulator_ = detail::zigzagDecodeDelta<physicalType>(
+              chunkOutput[i], deltaAccumulator_);
+        }
+        chunkOutput[i] = deltaAccumulator_;
+      }
+    }
+  }
+
+  row_ += rowCount;
+}
+
+template <typename T>
+template <typename V>
+void SubIntSplitEncoding<T>::readWithVisitor(
+    V& visitor,
+    ReadWithVisitorParams& params) {
+  NIMBLE_CHECK(
+      !deltaEncoded_,
+      "SubIntSplitEncoding: readWithVisitor() is not supported on "
+      "delta-encoded streams; they require sequential reads from row 0.");
+  using OutputType = detail::ValueType<typename V::DataType>;
+  constexpr bool kIsSuitableWidth =
+      (isFourByteIntegralType<physicalType>() ||
+       isEightByteIntegralType<physicalType>());
+  constexpr bool kIsFluidCast = sizeof(OutputType) >= sizeof(physicalType) &&
+      std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
+
+  // Fast path: bulk-decode for integral 4/8-byte physical types extracted into
+  // the reader with a compatible (at-least-as-wide integral) output type.
+  // Float/double fall through here (kIsFluidCast is false for them) and use the
+  // slow path, which applies castFromPhysicalType. The runtime useFastPath
+  // check additionally requires a deterministic filter, AVX2, and the bulk path
+  // being enabled with null+filter/hook compatibility.
+  if constexpr (
+      kIsSuitableWidth &&
+      std::is_same_v<
+          typename V::Extract,
+          velox::dwio::common::ExtractToReader> &&
+      kIsFluidCast) {
+    auto* nulls = visitor.reader().rawNullsInReadRange();
+    if (velox::dwio::common::useFastPath(visitor, nulls)) {
+      detail::readWithVisitorFast(*this, visitor, params, nulls);
+      return;
+    }
+  }
+
+  // Slow path: reconstruct one value at a time from the section encodings.
+  detail::readWithVisitorSlow(
+      visitor,
+      params,
+      [&](auto toSkip) { skip(toSkip); },
+      [&] {
+        // Decoding a block at a time turns a virtual call per section per value
+        // into one per section per block.
+        if (pendingAvailable() == 0) {
+          refillPending();
+        }
+        // Keep row_ in sync so a subsequent fast-path chunk maps rows
+        // correctly.
+        ++row_;
+        return pendingBuf_[pendingOffset_++];
+      });
+}
+
+template <typename T>
+template <bool kScatter, typename V>
+void SubIntSplitEncoding<T>::bulkScan(
+    V& visitor,
+    vector_size_t currentRow,
+    const vector_size_t* selectedRows,
+    vector_size_t numSelected,
+    const vector_size_t* scatterRows) {
+  using OutputType = detail::ValueType<typename V::DataType>;
+  static_assert(
+      isFourByteIntegralType<physicalType>() ||
+          isEightByteIntegralType<physicalType>(),
+      "bulkScan only supports 4-byte or 8-byte integral types");
+
+  if (numSelected == 0) {
+    return;
+  }
+
+  const auto numRows = visitor.numRows() - visitor.rowIndex();
+
+  // Map external row numbers onto the section cursors. Nulls can make the
+  // encoding (non-null) position lag the logical row number.
+  const auto offset =
+      static_cast<int32_t>(row_) - static_cast<int32_t>(currentRow);
+
+  // The selected rows all lie within one contiguous span of stored (non-null)
+  // values. Decode that whole span once, then gather the selected positions.
+  const vector_size_t spanStart = selectedRows[0] + offset;
+  const vector_size_t spanEnd = selectedRows[numSelected - 1] + offset;
+  const uint32_t spanLength = static_cast<uint32_t>(spanEnd - spanStart + 1);
+
+  // Advance the section cursors to the start of the span.
+  if (spanStart > static_cast<vector_size_t>(row_)) {
+    skip(static_cast<uint32_t>(spanStart - static_cast<vector_size_t>(row_)));
+  }
+
+  auto* values = detail::mutableValues<OutputType>(visitor, numRows);
+
+  // Same-size integral output shares the physical bit pattern, so we can decode
+  // straight into the reader buffer; otherwise stage in decodeBuf_ and widen.
+  constexpr bool kSameSize = sizeof(physicalType) == sizeof(OutputType);
+
+  if constexpr (V::dense) {
+    // Dense: the span is exactly the selected rows (spanLength == numSelected).
+    if constexpr (kSameSize) {
+      materialize(spanLength, values);
+    } else {
+      decodeBuf_.resize(spanLength);
+      materialize(spanLength, decodeBuf_.data());
+      for (vector_size_t i = 0; i < numSelected; ++i) {
+        values[i] = static_cast<OutputType>(decodeBuf_[i]);
+      }
+    }
+  } else {
+    // Sparse: decode the span, then gather the selected positions.
+    decodeBuf_.resize(spanLength);
+    materialize(spanLength, decodeBuf_.data());
+    for (vector_size_t i = 0; i < numSelected; ++i) {
+      values[i] = static_cast<OutputType>(
+          decodeBuf_[selectedRows[i] - selectedRows[0]]);
+    }
+  }
+
+  // No scatter, filter, or hook: values are already in the output buffer.
+  if constexpr (!kScatter && !V::kHasFilter && !V::kHasHook) {
+    visitor.addNumValues(numRows);
+    visitor.setRowIndex(visitor.numRows());
+    return;
+  }
+
+  // processFixedWidthRun handles scatter (null gaps), filter evaluation, and
+  // hook forwarding. For non-hook paths it operates in place on the reader's
+  // rawValues; for hooks, values stays as the staged buffer.
+  if constexpr (!V::kHasHook) {
+    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
+  }
+
+  auto numValues = visitor.reader().numValues();
+  int32_t* filterHits = nullptr;
+  if constexpr (V::kHasFilter) {
+    filterHits = visitor.outputRows(numSelected) - numValues;
+  }
+
+  velox::dwio::common::
+      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
+          velox::RowSet(selectedRows, numSelected),
+          0,
+          numSelected,
+          scatterRows,
+          values,
+          filterHits,
+          numValues,
+          visitor.filter(),
+          visitor.hook());
+
+  if constexpr (!V::kHasHook) {
+    // Filter: count passing rows; no filter: all rows produce values.
+    visitor.addNumValues(
+        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
+  }
+  visitor.setRowIndex(visitor.numRows());
+}
+
+template <typename T>
+std::string_view SubIntSplitEncoding<T>::encodeImpl(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options,
+    uint8_t flags) {
+  const bool useVarint = options.useVarintRowCount;
+  const uint32_t valueCount = static_cast<uint32_t>(values.size());
+
+  if (values.empty()) {
+    NIMBLE_INCOMPATIBLE_ENCODING("SubIntSplitEncoding cannot be empty.");
+  }
+
+  constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
+
+  std::vector<detail::subintsplit::SegmentPlan> segments;
+  const auto modeConfig = selection.getConfig(
+      std::string(detail::subintsplit::kSplitModeConfigKey));
+  if (modeConfig.has_value() &&
+      *modeConfig == detail::subintsplit::kSplitModePreserve) {
+    const auto boundaryConfig = selection.getConfig(
+        std::string(detail::subintsplit::kSplitBoundariesConfigKey));
+    NIMBLE_CHECK(
+        boundaryConfig.has_value(),
+        "SubIntSplit preserve mode requires boundaries config.");
+    auto parsed =
+        detail::subintsplit::parseSplitBoundaries(*boundaryConfig, kBits);
+    NIMBLE_CHECK(parsed.has_value(), "Invalid SubIntSplit boundaries config.");
+    segments = std::move(parsed.value());
+  } else {
+    // Default behavior: recompute the split boundaries from the sampled data.
+    std::vector<uint64_t> sampleBuf;
+    detail::subintsplit::sampleIntoU64<physicalType>(
+        values, sampleBuf, detail::subintsplit::defaultSamplerConfig());
+
+    auto selectorResult = detail::subintsplit::selectSplits(
+        sampleBuf,
+        kBits,
+        valueCount,
+        detail::subintsplit::defaultSelectorConfig());
+
+    segments = std::move(selectorResult.segments);
+  }
+
+  NIMBLE_CHECK(
+      !segments.empty(), "SubIntSplitEncoding: selector returned no segments");
+  const uint8_t splitCount = static_cast<uint8_t>(segments.size());
+
+  // Encode each section into a temporary buffer.
+  // Each section is encoded as the narrowest unsigned integer type that fits
+  // its bit width, so narrow sections don't pay an 8-byte-per-value penalty.
+  auto* pool = &buffer.getMemoryPool();
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+  Buffer& sectionBuffer = scopedBuffer.get();
+  auto* sectionPool = &sectionBuffer.getMemoryPool();
+  std::vector<std::string_view> sectionData;
+  sectionData.reserve(splitCount);
+
+  // Pack each section at its exact bit width instead of rounding up to a byte,
+  // so e.g. a 12-bit section costs 12 bits/value rather than 16. Sections
+  // dominate the encoded size for multi-field values, where byte rounding
+  // wasted up to 7 bits/value per section. FixedBitWidth records its own bit
+  // width, so the decode path is unaffected.
+  Encoding::Options sectionOptions = options;
+  sectionOptions.fixedBitWidthUseExactBits = true;
+
+  for (uint8_t s = 0; s < splitCount; ++s) {
+    const auto& seg = segments[s];
+    const int bitStart = seg.bitStart;
+    const int bitEnd = seg.bitEnd;
+    const int width = bitEnd - bitStart + 1;
+    const uint64_t mask =
+        (width >= 64) ? ~uint64_t{0} : ((uint64_t{1} << width) - 1);
+    const uint8_t sb = sectionStorageBytes(width);
+
+    std::string_view encoded;
+    switch (sb) {
+      case 1: {
+        Vector<uint8_t> sectionValues{sectionPool, valueCount};
+        for (uint32_t i = 0; i < valueCount; ++i) {
+          uint64_t v = 0;
+          __builtin_memcpy(&v, &values[i], sizeof(physicalType));
+          sectionValues[i] = static_cast<uint8_t>((v >> bitStart) & mask);
+        }
+        encoded = selection.template encodeNested<uint8_t>(
+            static_cast<NestedEncodingIdentifier>(s),
+            std::span<const uint8_t>(
+                sectionValues.data(), sectionValues.size()),
+            sectionBuffer,
+            sectionOptions);
+        break;
+      }
+      case 2: {
+        Vector<uint16_t> sectionValues{sectionPool, valueCount};
+        for (uint32_t i = 0; i < valueCount; ++i) {
+          uint64_t v = 0;
+          __builtin_memcpy(&v, &values[i], sizeof(physicalType));
+          sectionValues[i] = static_cast<uint16_t>((v >> bitStart) & mask);
+        }
+        encoded = selection.template encodeNested<uint16_t>(
+            static_cast<NestedEncodingIdentifier>(s),
+            std::span<const uint16_t>(
+                sectionValues.data(), sectionValues.size()),
+            sectionBuffer,
+            sectionOptions);
+        break;
+      }
+      case 4: {
+        Vector<uint32_t> sectionValues{sectionPool, valueCount};
+        for (uint32_t i = 0; i < valueCount; ++i) {
+          uint64_t v = 0;
+          __builtin_memcpy(&v, &values[i], sizeof(physicalType));
+          sectionValues[i] = static_cast<uint32_t>((v >> bitStart) & mask);
+        }
+        encoded = selection.template encodeNested<uint32_t>(
+            static_cast<NestedEncodingIdentifier>(s),
+            std::span<const uint32_t>(
+                sectionValues.data(), sectionValues.size()),
+            sectionBuffer,
+            sectionOptions);
+        break;
+      }
+      case 8: {
+        Vector<uint64_t> sectionValues{sectionPool, valueCount};
+        for (uint32_t i = 0; i < valueCount; ++i) {
+          uint64_t v = 0;
+          __builtin_memcpy(&v, &values[i], sizeof(physicalType));
+          sectionValues[i] = (v >> bitStart) & mask;
+        }
+        encoded = selection.template encodeNested<uint64_t>(
+            static_cast<NestedEncodingIdentifier>(s),
+            std::span<const uint64_t>(
+                sectionValues.data(), sectionValues.size()),
+            sectionBuffer,
+            sectionOptions);
+        break;
+      }
+      default: {
+        NIMBLE_UNREACHABLE("Invalid SubIntSplit section storage width.");
+      }
+    }
+    sectionData.push_back(encoded);
+  }
+
+  // Write final encoding to main buffer.
+  const uint32_t prefixSize =
+      Encoding::serializePrefixSize(valueCount, useVarint);
+  const uint32_t specificHeader =
+      detail::subIntSplitSpecificHeaderSize(splitCount);
+  uint32_t sectionsSize = 0;
+  for (const auto& sv : sectionData) {
+    sectionsSize += static_cast<uint32_t>(sv.size());
+  }
+  const uint32_t encodingSize = prefixSize + specificHeader + sectionsSize;
+
+  char* reserved = buffer.reserve(encodingSize);
+  char* pos = reserved;
+
+  Encoding::serializePrefix(
+      EncodingType::SubIntSplit,
+      TypeTraits<T>::dataType,
+      valueCount,
+      useVarint,
+      pos);
+
+  encoding::write<uint8_t>(splitCount, pos);
+  encoding::write<uint8_t>(flags, pos); // flag bits (was reserved / order)
+
+  for (uint8_t s = 0; s < splitCount; ++s) {
+    const auto& seg = segments[s];
+    encoding::write<uint8_t>(static_cast<uint8_t>(seg.bitStart), pos);
+    encoding::write<uint8_t>(static_cast<uint8_t>(seg.bitEnd), pos);
+    encoding::writeUint32(static_cast<uint32_t>(sectionData[s].size()), pos);
+  }
+  for (const auto& sv : sectionData) {
+    encoding::writeBytes(sv, pos);
+  }
+
+  NIMBLE_DCHECK_EQ(
+      static_cast<uint32_t>(pos - reserved),
+      encodingSize,
+      "SubIntSplitEncoding: encoding size mismatch");
+
+  return {reserved, encodingSize};
+}
+
+template <typename T>
+std::string_view SubIntSplitEncoding<T>::encode(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  if (!options.subIntSplitDeltaPreTransform || values.size() < 2) {
+    return encodeImpl(selection, values, buffer, options, /*flags=*/0);
+  }
+
+  // Encode both forms and keep the smaller, so the pre-transform can never
+  // regress a stream it does not suit -- InterleavedCounters, for instance,
+  // is worse under delta because interleaved shards break monotonicity.
+  const std::string_view plain =
+      encodeImpl(selection, values, buffer, options, /*flags=*/0);
+
+  auto* pool = &buffer.getMemoryPool();
+  Vector<physicalType> residuals{pool, values.size()};
+  residuals[0] = values[0];
+  for (size_t i = 1; i < values.size(); ++i) {
+    residuals[i] =
+        detail::zigzagEncodeDelta<physicalType>(values[i], values[i - 1]);
+  }
+  const std::string_view delta = encodeImpl(
+      selection,
+      std::span<const physicalType>(residuals.data(), residuals.size()),
+      buffer,
+      options,
+      detail::kSubIntSplitFlagDelta);
+
+  return delta.size() < plain.size() ? delta : plain;
+}
+
+template <typename T>
+std::string SubIntSplitEncoding<T>::debugString(int offset) const {
+  std::string indent(offset, ' ');
+  std::string result = indent +
+      "SubIntSplitEncoding sections=" + std::to_string(sections_.size()) +
+      (deltaEncoded_ ? " delta=yes" : " delta=no") + "\n";
+  for (size_t s = 0; s < sections_.size(); ++s) {
+    const auto& sec = sections_[s];
+    result += indent + "  [" + std::to_string(sec.bitStart) + ".." +
+        std::to_string(sec.bitEnd) +
+        "] storageBytes=" + std::to_string(sec.storageBytes) + "\n";
+    result += sec.encoding->debugString(offset + 4);
+    result += "\n";
+  }
+  return result;
+}
+
+} // namespace facebook::nimble

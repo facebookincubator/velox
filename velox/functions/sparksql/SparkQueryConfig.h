@@ -162,6 +162,14 @@ class SparkQueryConfig {
       true,
       "If true, Spark collect_list() ignores nulls in the input.")
 
+  VELOX_SPARK_CONFIG(
+      kDecimalToFloatHighPrecisionCastEnabled,
+      decimalToFloatHighPrecisionCastEnabled,
+      "decimal_to_float_high_precision_cast_enabled",
+      bool,
+      false,
+      "Enable high precision casts from DECIMAL to REAL/DOUBLE.")
+
   /// Returns all registered Spark config properties. Property names are
   /// unqualified (no "spark." prefix).
   static const std::vector<config::ConfigProperty>& registeredProperties();

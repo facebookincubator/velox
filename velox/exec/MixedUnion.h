@@ -33,6 +33,10 @@ class MixedUnion : public SourceOperator {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::MixedUnionNode>& unionNode);
 
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return core::PlanNode::Boundary::kOutput;
+  }
+
   RowVectorPtr getOutput() override;
 
   BlockingReason isBlocked(ContinueFuture* future) override;

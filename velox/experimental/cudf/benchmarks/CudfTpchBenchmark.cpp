@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
@@ -52,6 +53,11 @@ DEFINE_int32(
     cudf_gpu_batch_size_rows,
     100000,
     "Preferred output batch size in rows for cudf operators.");
+
+DEFINE_uint64(
+    cudf_local_exchange_buffer_size,
+    1UL << 30,
+    "Maximum buffered bytes per local exchange before applying backpressure.");
 
 DEFINE_bool(velox_cudf_table_scan, true, "Enable cuDF table scan");
 
@@ -97,9 +103,13 @@ void CudfTpchBenchmark::initialize() {
   }
 
   cudf_velox::registerCudf();
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
 
   queryConfigs_[facebook::velox::cudf_velox::CudfFromVelox::kGpuBatchSizeRows] =
       std::to_string(FLAGS_cudf_gpu_batch_size_rows);
+  queryConfigs_[core::QueryConfig::kMaxLocalExchangeBufferSize] =
+      std::to_string(FLAGS_cudf_local_exchange_buffer_size);
 }
 
 std::shared_ptr<config::ConfigBase>

@@ -57,7 +57,7 @@ class ParquetFileMetadata : public dwio::common::FileMetadata {
 };
 
 /// Parquet writer enforces the row-count cap via Arrow, and this policy
-/// supplements it with a byte threshold. For Parquet,
+/// supplements it with a soft row-group byte target. For Parquet,
 /// - stripeSizeEstimate: the actual compressed bytes of current row group.
 /// - stripeRowCount: remains 0.
 /// Custom Parquet policies should derive from DefaultFlushPolicy to preserve
@@ -67,15 +67,17 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
   DefaultFlushPolicy()
       : rowsInRowGroup_(kDefaultRowsInGroup),
         bytesInRowGroup_(kDefaultBytesInRowGroup) {}
-  DefaultFlushPolicy(uint64_t rowsInRowGroup, int64_t bytesInRowGroup)
+  DefaultFlushPolicy(uint64_t rowsInRowGroup, uint64_t bytesInRowGroup)
       : rowsInRowGroup_(rowsInRowGroup), bytesInRowGroup_(bytesInRowGroup) {}
 
   static constexpr uint64_t kDefaultRowsInGroup{1'024 * 1'024};
-  static constexpr int64_t kDefaultBytesInRowGroup{128 * 1'024 * 1'024};
+  static constexpr uint64_t kDefaultBytesInRowGroup{128 * 1'024 * 1'024};
 
   bool shouldFlush(
       const dwio::common::StripeProgress& stripeProgress) override {
-    return stripeProgress.stripeSizeEstimate >= bytesInRowGroup_;
+    return stripeProgress.stripeSizeEstimate >= 0 &&
+        static_cast<uint64_t>(stripeProgress.stripeSizeEstimate) >=
+        bytesInRowGroup_;
   }
 
   void onClose() override {
@@ -86,20 +88,20 @@ class DefaultFlushPolicy : public dwio::common::FlushPolicy {
     return rowsInRowGroup_;
   }
 
-  int64_t bytesInRowGroup() const {
+  uint64_t bytesInRowGroup() const {
     return bytesInRowGroup_;
   }
 
  private:
   const uint64_t rowsInRowGroup_;
-  const int64_t bytesInRowGroup_;
+  const uint64_t bytesInRowGroup_;
 };
 
 class LambdaFlushPolicy : public DefaultFlushPolicy {
  public:
   explicit LambdaFlushPolicy(
       uint64_t rowsInRowGroup,
-      int64_t bytesInRowGroup,
+      uint64_t bytesInRowGroup,
       std::function<bool()> lambda)
       : DefaultFlushPolicy(rowsInRowGroup, bytesInRowGroup) {
     lambda_ = std::move(lambda);
@@ -116,6 +118,10 @@ class LambdaFlushPolicy : public DefaultFlushPolicy {
 };
 
 struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
+  /// Overlays session or connector Parquet config values on top of this options
+  /// object while preserving caller-provided non-config fields.
+  void merge(const dwio::common::FormatSpecificOptions& overrides) override;
+
   // Growth ratio passed to ArrowDataBufferSink. The default value is a
   // heuristic borrowed from
   // folly/FBVector(https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md#memory-handling).
@@ -137,6 +143,7 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<int64_t> batchSize;
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
+  std::optional<uint64_t> rowGroupSizeBytes;
   std::optional<bool> enableDictionary;
   /// Controls how DECIMAL values are stored by the Writer.
   /// - If unset, the Writer defaults to storing as integer (true),
@@ -146,6 +153,10 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   /// regardless of precision.
   std::optional<bool> enableStoreDecimalAsInteger;
   std::optional<bool> useParquetDataPageV2;
+  /// Whether to write the Parquet page index (column index and offset index).
+  /// When enabled, per-page statistics are stored in the page index rather than
+  /// the data page headers. Defaults to false.
+  std::optional<bool> enableWritePageIndex;
   std::optional<std::string> createdBy;
 
   std::shared_ptr<arrow::MemoryPool> arrowMemoryPool;
@@ -162,8 +173,13 @@ class Writer : public dwio::common::Writer {
  public:
   // Constructs a writer with output to 'sink'. 'options' carries common writer
   // options and Parquet-specific format options. For Parquet,
-  // 'options.flushPolicyFactory' must create a DefaultFlushPolicy (or a
-  // subclass); 'pool' is used for temporary memory. 'schema' specifies the
+  // 'options.flushPolicyFactory' is a programmatic C++ hook and must create a
+  // DefaultFlushPolicy (or a subclass). If not provided, the writer uses its
+  // built-in row-group limits: a soft 128MB byte target and a hard row-count
+  // cap of DefaultFlushPolicy::kDefaultRowsInGroup (~1M rows).
+  // 'options.maxTargetFileSizeBytes' is tracked independently so the writer
+  // can flush the current row group early and make file rotation visible to
+  // the caller. 'pool' is used for temporary memory. 'schema' specifies the
   // file's overall schema, and it is always non-null.
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
@@ -185,9 +201,6 @@ class Writer : public dwio::common::Writer {
 
   void flush() override;
 
-  // Forces a row group boundary before the data added by next write().
-  void newRowGroup(int32_t numRows);
-
   bool finish() override {
     return true;
   }
@@ -204,10 +217,27 @@ class Writer : public dwio::common::Writer {
   // Sets the memory reclaimers for all the memory pools used by this writer.
   void setMemoryReclaimers();
 
-  // Checks if the input data contains a nested wrapped vector or complex
-  // vector. If so, flatten the input to make it compatible with
-  // 'exportFlattenedVector' in Arrow export.
-  bool needFlatten(const VectorPtr& data) const;
+  // Selectively flattens columns that cannot be exported as-is to Arrow.
+  // Flattens:
+  //  - Dictionary wrapping a complex (non-primitive) type.
+  //  - Dictionary wrapping a non-flat inner vector (e.g., dict-of-dict).
+  //  - Dictionary of a non-string/binary type (no benefit in Parquet).
+  //  - Dictionary whose values contain nulls (unsupported by Arrow writer).
+  //  - Dictionary when cached schema expects a non-dictionary type (schema
+  //    consistency across batches).
+  //  - Constant wrapping a non-flat inner vector (e.g., constant-of-dict).
+  // Only VARCHAR/VARBINARY dictionary vectors with null-free values are
+  // passed through as Arrow DictionaryArrays for zero-copy Parquet writing.
+  //
+  // Also handles the reverse schema mismatch: if the cached schema expects a
+  // dictionary type but the current data is flat, the cached schema is updated
+  // to use the dictionary's value type so ImportRecordBatch buffer counts
+  // match.
+  //
+  // When flattening is needed, only the columns that require it are flattened.
+  // Columns that can be passed through are left unchanged, avoiding
+  // unnecessary materialization.
+  VectorPtr flattenIfNeeded(const VectorPtr& data) const;
 
   // Pool for 'stream_'.
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -222,10 +252,11 @@ class Writer : public dwio::common::Writer {
   std::vector<ParquetFieldId> parquetFieldIds_;
 
   std::unique_ptr<DefaultFlushPolicy> flushPolicy_;
+  const uint64_t maxTargetFileSizeBytes_{0};
 
   const RowTypePtr schema_;
 
-  ArrowOptions options_{.flattenDictionary = true, .flattenConstant = true};
+  ArrowOptions options_{.flattenDictionary = false, .flattenConstant = true};
 
   // Whether to write Int96 timestamps in Arrow Parquet write.
   bool writeInt96AsTimestamp_;

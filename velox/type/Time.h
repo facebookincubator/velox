@@ -19,6 +19,7 @@
 #include <cstdint>
 #include "velox/common/base/Status.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Type.h"
 
 namespace facebook::velox::util {
 
@@ -28,19 +29,39 @@ constexpr const int64_t kMillisInMinute = 60 * kMillisInSecond;
 constexpr const int64_t kMillisInHour = 60 * kMillisInMinute;
 constexpr const int64_t kMillisInDay = 24 * kMillisInHour;
 
-/// Represents parsed time components
+/// Represents parsed time components.
 struct TimeComponents {
   int32_t hour = 0;
   int32_t minute = 0;
   int32_t second = 0;
-  int32_t millis = 0;
+
+  /// Stores fractional seconds scaled to fractionalPrecision.
+  int32_t fractionalSecond = 0;
+
+  /// Stores the decimal precision used to scale fractionalSecond.
+  TimePrecision fractionalPrecision = TimePrecision::kMilliseconds;
 };
+
+/// Parse time components from a TIME string.
+/// @param buf Pointer to the TIME string.
+/// @param len Length of the string.
+/// @param requireSeconds If true, requires a seconds component.
+/// @param fractionalPrecision Fractional scale to parse. Supported values are
+/// TimePrecision::kMilliseconds and TimePrecision::kMicroseconds.
+/// @return Parsed time components. The fractional part is scaled to
+/// fractionalPrecision and stored in TimeComponents::fractionalSecond.
+Expected<TimeComponents> parseTimeComponents(
+    const char* buf,
+    size_t len,
+    bool requireSeconds,
+    TimePrecision fractionalPrecision);
 
 /// Parse a TIME string (H:m[:s[.SSS]] format)
 /// Supports formats:
 /// - "H:m" -> "1:30"
 /// - "H:m:s" -> "1:30:45"
 /// - "H:m:s.SSS" -> "1:30:45.123"
+/// Only millisecond precision is supported.
 ///
 /// Returns milliseconds since midnight (0 to 86399999)
 /// Returns Unexpected with UserError status if parsing fails

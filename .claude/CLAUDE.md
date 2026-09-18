@@ -116,7 +116,8 @@ or lightweight dependencies, use `add_executable` / `add_test`.
 ## Formatting
 
 ```bash
-make format  # format all changed files
+pre-commit run --files <paths>  # format/lint specific files
+pre-commit run --all-files      # sweep the whole repo
 ```
 
 ## Coding Style
@@ -135,7 +136,7 @@ are summarized below.
 - Comment every class, every non-trivial method, every member variable.
 - Do not restate the variable name. Either explain the semantic meaning or omit the comment.
   - ❌ `// A simple counter.` above `size_t count_{0};`
-- Avoid redundant comments that repeat what the code already says. Comments should explain *why*, not *what*.
+- Avoid redundant comments that repeat what the code already says. Comments should explain *why*, not *what*. "Why" means why the code is the way it is — the constraint or tradeoff a reader must respect. Not how it got that way: what the code used to be, why that was wrong, and which alternative was rejected belong in the commit message.
 - Use `// TODO: Description.` for future work. Do not include author's username.
 - Do not duplicate comments between `.h` and `.cpp`. Document the function in the header; the implementation should not repeat the same comment. Duplicated comments diverge over time.
 

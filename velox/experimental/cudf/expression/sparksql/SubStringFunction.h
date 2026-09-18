@@ -21,6 +21,7 @@ namespace facebook::velox::cudf_velox::sparksql {
 
 /// Creates a cuDF implementation of Spark SQL substr/substring semantics.
 std::shared_ptr<CudfFunction> makeSubStringFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr);
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool);
 
 } // namespace facebook::velox::cudf_velox::sparksql

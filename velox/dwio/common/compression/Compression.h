@@ -61,6 +61,11 @@ class Decompressor {
       char* dest,
       uint64_t destLength) = 0;
 
+  /// Returns the human-readable stream identity used in error messages.
+  const std::string& streamDebugInfo() const {
+    return streamDebugInfo_;
+  }
+
  protected:
   int64_t blockSize_;
   const std::string streamDebugInfo_;
@@ -121,5 +126,14 @@ std::unique_ptr<dwio::common::SeekableInputStream> createDecompressor(
 std::unique_ptr<Compressor> createCompressor(
     facebook::velox::common::CompressionKind kind,
     const CompressionOptions& options);
+
+/// Creates a one-shot, block-level decompressor for 'kind', used by the writer
+/// to verify that a freshly compressed page round-trips to its source bytes.
+/// Returns nullptr for CompressionKind_NONE.
+std::unique_ptr<Decompressor> createBlockDecompressor(
+    facebook::velox::common::CompressionKind kind,
+    uint64_t blockSize,
+    const CompressionOptions& options,
+    const std::string& streamDebugInfo);
 
 } // namespace facebook::velox::dwio::common::compression

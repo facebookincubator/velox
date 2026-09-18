@@ -240,6 +240,128 @@ TEST_F(IcebergDwrfInsertTest, partitioned) {
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 }
 
+/// IcebergFileNameGenerator participates in plan serialization
+/// (IcebergConnector::registerSerDe registers it), so its serialize /
+/// deserialize / toString methods are reachable from any serialized plan even
+/// though the write tests never round-trip a plan.
+TEST_F(IcebergDwrfInsertTest, fileNameGeneratorSerDeRoundTrip) {
+  IcebergFileNameGenerator::registerSerDe();
+
+  const IcebergFileNameGenerator generator;
+  EXPECT_EQ(generator.toString(), "IcebergFileNameGenerator");
+
+  const auto serialized = generator.serialize();
+  EXPECT_EQ(serialized["name"].asString(), "IcebergFileNameGenerator");
+
+  const auto deserialized =
+      IcebergFileNameGenerator::deserialize(serialized, /*context=*/nullptr);
+  ASSERT_NE(deserialized, nullptr);
+  EXPECT_EQ(deserialized->toString(), generator.toString());
+}
+
+/// Exercises writer file rotation. FileDataSink rotates once a writer's
+/// current file reaches 'maxTargetFileBytes', which HiveDataSink derives from
+/// the format-specific max-target-file-size setting (0 = unlimited, the
+/// default, so no other test reaches this path). IcebergDataSink overrides
+/// rotateWriter() to capture per-file statistics before the writer is reset;
+/// without rotation coverage that override and the post-rotation null-writer
+/// handling in closeInternal() never run.
+TEST_F(IcebergDwrfInsertTest, writerRotationProducesMultipleFiles) {
+  // 1 byte forces a rotation after essentially every batch.
+  setConnectorSessionProperty(
+      connector::hive::HiveConfig::kOrcMaxTargetFileSizeSession, "1B");
+
+  auto rowType = ROW({"c1", "c2"}, {BIGINT(), VARCHAR()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto vectors = createTestData(rowType, 3, 50);
+
+  const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
+  const auto commitTasks = dataSink->close();
+
+  // Rotation means one unpartitioned writer emits several files, each with its
+  // own commit task and its own record count.
+  ASSERT_GT(commitTasks.size(), 1)
+      << "expected rotation to split the write across multiple files";
+  EXPECT_EQ(listFiles(dataPath).size(), commitTasks.size());
+
+  int64_t totalRecords = 0;
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    const auto records = taskJson["metrics"]["recordCount"].asInt();
+    // Per-file counts are deltas, not the running total, so none may be zero
+    // and they must sum to the rows written.
+    EXPECT_GT(records, 0);
+    totalRecords += records;
+  }
+  EXPECT_EQ(totalRecords, 3 * 50);
+
+  // The rotated files still read back as the original data.
+  auto splits = createSplitsForDirectory(dataPath);
+  ASSERT_EQ(splits.size(), commitTasks.size());
+  auto plan = exec::test::PlanBuilder()
+                  .startTableScan(test::kIcebergConnectorId)
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+}
+
+/// Partition values are serialized into the commit message by a per-type
+/// dispatch. VARBINARY and TIMESTAMP take dedicated specializations —
+/// base64-encoding and micros-since-epoch respectively — that the BIGINT and
+/// VARCHAR partition tests never reach.
+TEST_F(IcebergDwrfInsertTest, varbinaryPartitionValue) {
+  auto rowType = ROW({"c1", "c2"}, {VARBINARY(), BIGINT()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto vectors = createTestData(rowType, 1, 20);
+
+  std::vector<test::PartitionField> partitionTransforms = {
+      {0, TransformType::kIdentity, std::nullopt}};
+  const auto dataSink =
+      createDataSinkAndAppendData(vectors, dataPath, partitionTransforms);
+  const auto commitTasks = dataSink->close();
+  ASSERT_GT(commitTasks.size(), 0);
+
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_GT(taskJson.count("partitionDataJson"), 0);
+    const auto partitionData =
+        folly::parseJson(taskJson["partitionDataJson"].asString());
+    ASSERT_EQ(partitionData["partitionValues"].size(), 1);
+    // Binary partition values are base64 strings, never raw bytes.
+    const auto& value = partitionData["partitionValues"][0];
+    EXPECT_TRUE(value.isString() || value.isNull());
+  }
+}
+
+TEST_F(IcebergDwrfInsertTest, timestampPartitionValue) {
+  auto rowType = ROW({"c1", "c2"}, {TIMESTAMP(), BIGINT()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto vectors = createTestData(rowType, 1, 20);
+
+  std::vector<test::PartitionField> partitionTransforms = {
+      {0, TransformType::kIdentity, std::nullopt}};
+  const auto dataSink =
+      createDataSinkAndAppendData(vectors, dataPath, partitionTransforms);
+  const auto commitTasks = dataSink->close();
+  ASSERT_GT(commitTasks.size(), 0);
+
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_GT(taskJson.count("partitionDataJson"), 0);
+    const auto partitionData =
+        folly::parseJson(taskJson["partitionDataJson"].asString());
+    ASSERT_EQ(partitionData["partitionValues"].size(), 1);
+    // Iceberg stores timestamps as micros since epoch, so the serialized
+    // partition value must be an integer rather than a formatted string.
+    const auto& value = partitionData["partitionValues"][0];
+    EXPECT_TRUE(value.isInt() || value.isNull());
+  }
+}
+
 /// Regression test for the isPartitioned() guard added to ensureWriter().
 /// Without the guard, calling ensureWriter() on a non-partitioned table
 /// invoked makeCommitPartitionValue(), which dereferences

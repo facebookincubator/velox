@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+#include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
+
 namespace facebook::velox::memory {
 class MemoryPool;
 } // namespace facebook::velox::memory
@@ -52,9 +54,25 @@ namespace facebook::velox::connector::hive::iceberg {
 ///   std::string blob = writer.serialize();
 class DeletionVectorWriter {
  public:
+  /// Largest position the Iceberg deletion-vector format can represent.
+  ///
+  /// Iceberg's RoaringPositionBitmap derives this as
+  /// `toPosition(MAX_KEY, Integer.MIN_VALUE)`, i.e.
+  /// `(key << 32) | (pos32 & 0xFFFFFFFF)` with `key = 2147483646`, and rejects
+  /// anything above it. The binding constraint is the Roaring64 group key: it
+  /// is read back as a signed 32-bit int, so a key at or above 2^31 would
+  /// deserialize as negative and be rejected by spec-compliant readers.
+  /// Matching the bound here means we never write a blob Iceberg cannot read.
+  static constexpr int64_t kMaxPosition = 9'223'372'030'412'324'864LL;
+
+  static_assert(
+      (kMaxPosition >> 32) == kMaxRoaring64GroupKey,
+      "Writer position bound and reader group-key bound must agree.");
+
   DeletionVectorWriter() = default;
 
-  /// Adds a deleted row position (0-based file row offset).
+  /// Adds a deleted row position (0-based file row offset). The position must
+  /// be in [0, kMaxPosition].
   void addDeletedPosition(int64_t position);
 
   /// Adds multiple deleted row positions.

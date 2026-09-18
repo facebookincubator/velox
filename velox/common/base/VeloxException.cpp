@@ -101,6 +101,7 @@ VeloxException::VeloxException(
         state.context = getExceptionContext().message(exceptionType);
         state.additionalContext =
             getAdditionalExceptionContextString(exceptionType, state.context);
+        state.properties = getExceptionContext().properties(exceptionType);
         state.isRetriable = isRetriable;
       })) {}
 
@@ -130,6 +131,7 @@ VeloxException::VeloxException(
         state.context = getExceptionContext().message(exceptionType);
         state.additionalContext =
             getAdditionalExceptionContextString(exceptionType, state.context);
+        state.properties = getExceptionContext().properties(exceptionType);
         state.isRetriable = isRetriable;
       })) {}
 
@@ -154,6 +156,7 @@ VeloxException::VeloxException(
         state.context = getExceptionContext().message(exceptionType);
         state.additionalContext =
             getAdditionalExceptionContextString(exceptionType, state.context);
+        state.properties = getExceptionContext().properties(exceptionType);
         state.isRetriable = isRetriable;
         state.wrappedException = e;
       })) {}

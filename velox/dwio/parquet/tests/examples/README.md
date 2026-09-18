@@ -180,6 +180,16 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests reading FIXED_LEN_BYTE_ARRAY as VARBINARY and validates mixed
   primitive physical type handling.
 
+### `flba_skip.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow version 24.0.0`, 40 rows, 1 row group,
+  columns `key: INT32` and `value: FIXED_LEN_BYTE_ARRAY` (4-byte width), both
+  optional, uncompressed. `value` equals the row index encoded big-endian.
+- Purpose: Regression fixture for skipping FIXED_LEN_BYTE_ARRAY values. Filtering
+  `key` to the even rows forces the FLBA decoder to skip the odd rows, which must
+  advance by a constant multiple of the fixed width. A skip that instead read the
+  value bytes as a 4-byte length prefix would misalign or read out of bounds.
+
 ### `uuid.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.12.2`, 3 rows, 1 row group,
@@ -712,6 +722,15 @@ annotation, definition level, repetition level, and compression when useful.
   required `a: BYTE_ARRAY String`, uncompressed.
 - Purpose: Tests DELTA_BYTE_ARRAY decoding. Expected strings are
   `axis, axle, babble, babyhood`.
+
+### `bss_float.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow`, 100 rows, 1 row group, required
+  column `float_val: FLOAT` encoded with BYTE_STREAM_SPLIT (encoding id 9),
+  data page v1, uncompressed.
+- Purpose: Tests BYTE_STREAM_SPLIT decoding for FLOAT columns. Values were
+  generated with numpy (seed 42) and stored as float32; the reader test spot
+  checks decoded values such as `float_val[0] = 0.49671414`.
 
 ### `parquet-251.parquet`
 

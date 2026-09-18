@@ -17,6 +17,11 @@
 #include "velox/common/memory/MmapAllocator.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
+
+#include <cerrno>
+
+#include <folly/String.h>
 
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Portability.h"
@@ -24,6 +29,23 @@
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::velox::memory {
+uint64_t MmapAllocator::systemPageSize() {
+  static const uint64_t pageSize = [] {
+    const long value{::sysconf(_SC_PAGESIZE)};
+    VELOX_CHECK_GT(
+        value,
+        0,
+        "Failed to determine the system page size: {}",
+        folly::errnoStr(errno));
+    return static_cast<uint64_t>(value);
+  }();
+  return pageSize;
+}
+
+bool MmapAllocator::isPageSizeSupported() {
+  return systemPageSize() == AllocationTraits::kPageSize;
+}
+
 MmapAllocator::MmapAllocator(const Options& options)
     : MemoryAllocator(options.largestSizeClass),
       kind_(MemoryAllocator::Kind::kMmap),
@@ -39,6 +61,24 @@ MmapAllocator::MmapAllocator(const Options& options)
               AllocationTraits::numPages(
                   options.capacity - mallocReservedBytes_),
               64 * sizeClassSizes_.back())) {
+  // MmapAllocator tracks memory at AllocationTraits::kPageSize granularity
+  // and calls madvise() on individual pages, which requires the address and
+  // length to line up with the OS's actual page size. NVIDIA's documented
+  // recommended default page size for Grace / Grace-Hopper systems is 64KB,
+  // not 4KB (see
+  // https://docs.nvidia.com/dccpu/grace-perf-tuning-guide/os-settings.html),
+  // and on such systems madvise() silently fails with EINVAL on sub-64KB
+  // regions instead of throwing, which corrupts this allocator's internal
+  // page-count accounting rather than surfacing a clear error. This isn't
+  // Velox-specific: jemalloc has the identical >4KB-page limitation (see
+  // https://github.com/arangodb/arangodb/issues/22177). Fail fast here
+  // instead of silently corrupting state.
+  VELOX_CHECK(
+      isPageSizeSupported(),
+      "MmapAllocator requires the system page size to match AllocationTraits::kPageSize ({} bytes); system page size is {} bytes. Use MemoryAllocator::Kind::kMalloc on this system instead.",
+      AllocationTraits::kPageSize,
+      systemPageSize());
+
   for (const auto& size : sizeClassSizes_) {
     sizeClasses_.push_back(std::make_unique<SizeClass>(capacity_ / size, size));
   }

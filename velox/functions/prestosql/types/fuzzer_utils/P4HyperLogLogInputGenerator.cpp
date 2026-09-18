@@ -24,10 +24,17 @@ P4HyperLogLogInputGenerator::P4HyperLogLogInputGenerator(
     const size_t seed,
     const double nullRatio,
     memory::MemoryPool* pool)
-    : HyperLogLogInputGenerator(seed, nullRatio, pool, 100) {
-  // P4HyperLogLog only supports dense format, unlike HyperLogLog which
-  // supports sparse and dense representations. 100 is the minimum number that
-  // generate sufficient values to trigger dense format.
+    : HyperLogLogInputGenerator(
+          seed,
+          nullRatio,
+          pool,
+          100,
+          {BIGINT(), VARCHAR(), DOUBLE()}) {
+  // P4HyperLogLog only supports dense format. Exclude UNKNOWN from base
+  // types because approx_set ignores nulls, so an UNKNOWN base type
+  // appends no values and the accumulator stays sparse. 100 is the
+  // minimum number that generates sufficient values to trigger dense
+  // format.
   type_ = P4HYPERLOGLOG();
 }
 

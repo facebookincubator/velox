@@ -17,6 +17,7 @@
 #include "velox/dwio/parquet/reader/RleBpDecoder.h"
 
 #include <folly/Varint.h>
+#include <folly/lang/Bits.h>
 
 namespace facebook::velox::parquet {
 
@@ -103,7 +104,7 @@ void RleBpDecoder::readHeader() {
     // Do not load past buffer end. Reports error in valgrind and could in
     // principle run into unmapped addresses.
     if (bufferStart_ <= lastSafeWord_) {
-      value_ = *reinterpret_cast<const int64_t*>(bufferStart_) & bitMask_;
+      value_ = folly::loadUnaligned<int64_t>(bufferStart_) & bitMask_;
     } else {
       value_ = bits::loadPartialWord(
           reinterpret_cast<const uint8_t*>(bufferStart_), byteWidth_);

@@ -277,7 +277,9 @@ KllSketch<T, A, C>::KllSketch(uint32_t k, const A& allocator, uint32_t seed)
       n_(0),
       items_(allocator),
       levels_(2, AllocU32(allocator)),
-      isLevelZeroSorted_(false) {}
+      isLevelZeroSorted_(false) {
+  VELOX_USER_CHECK_LE(k_, kMaxK, "K must be at most {}: {}", kMaxK, k_);
+}
 
 template <typename T, typename A, typename C>
 KllSketch<T, A, C>::KllSketch(const A& allocator, uint32_t seed)
@@ -292,6 +294,7 @@ void KllSketch<T, A, C>::setK(uint32_t k) {
     return;
   }
   VELOX_CHECK_EQ(n_, 0);
+  VELOX_USER_CHECK_LE(k, kMaxK, "K must be at most {}: {}", kMaxK, k);
   k_ = k;
   levels_.resize(2);
 }
@@ -329,12 +332,16 @@ uint32_t KllSketch<T, A, C>::insertPosition() {
     const uint8_t level = findLevelToCompact();
 
     if (level == numLevels() - 1) {
-      if (int delta =
-              detail::computeTotalCapacity(k_, numLevels()) - items_.size();
-          delta > 0) {
+      const auto totalCapacity = detail::computeTotalCapacity(k_, numLevels());
+      if (items_.size() < totalCapacity) {
         // Level zero must be under-populated (otherwise `findLevelToCompact()`
-        // would return 0), just grow it.
-        shiftItems(delta);
+        // would return 0). Grow geometrically instead of materializing the
+        // entire theoretical capacity. This keeps sparse, compacted sketches
+        // small while preserving amortized linear growth.
+        const auto delta = totalCapacity - items_.size();
+        const auto growth = static_cast<uint32_t>(
+            std::min<size_t>(delta, std::max<size_t>(items_.size(), 1)));
+        shiftItems(growth);
         return --levels_[0];
       }
       // It is important to add the new top level right here. Be aware
@@ -679,16 +686,15 @@ void KllSketch<T, A, C>::mergeViews(
         randomBit_);
     VELOX_DCHECK_LE(result.finalNumLevels, ub);
     // Now we need to transfer the results back into "this" sketch.
-    items_.resize(result.finalCapacity);
-    const auto freeSpaceAtBottom = result.finalCapacity - result.finalNumItems;
-    std::move(
-        workbuf.data() + outlevels[0],
-        workbuf.data() + outlevels[0] + result.finalNumItems,
-        items_.data() + freeSpaceAtBottom);
+    VELOX_DCHECK_EQ(outlevels[0], 0);
+    std::vector<T, A> packed(
+        std::make_move_iterator(workbuf.begin()),
+        std::make_move_iterator(workbuf.begin() + result.finalNumItems),
+        allocator_);
+    items_.swap(packed);
     levels_.resize(result.finalNumLevels + 1);
-    const auto offset = freeSpaceAtBottom - outlevels[0];
     for (unsigned lvl = 0; lvl < levels_.size(); ++lvl) {
-      levels_[lvl] = outlevels[lvl] + offset;
+      levels_[lvl] = outlevels[lvl];
     }
   }
   n_ = newN;
@@ -748,6 +754,7 @@ KllSketch<T, A, C> KllSketch<T, A, C>::fromView(
     const detail::View<T>& view,
     const A& allocator,
     uint32_t seed) {
+  VELOX_USER_CHECK_LE(view.k, kMaxK, "K must be at most {}: {}", kMaxK, view.k);
   KllSketch<T, A, C> ans(allocator, seed);
   ans.k_ = view.k;
   ans.n_ = view.n;

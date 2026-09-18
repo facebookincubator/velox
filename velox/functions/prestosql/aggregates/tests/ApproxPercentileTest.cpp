@@ -466,6 +466,20 @@ TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   assertQuery(op, "SELECT 5");
 }
 
+TEST_F(ApproxPercentileTest, tinyAccuracy) {
+  auto rows = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}), makeConstant<double>(1e-9, 3)});
+  auto plan = PlanBuilder()
+                  .values({rows})
+                  .singleAggregation({}, {"approx_percentile(c0, 0.5, c1)"})
+                  .planNode();
+
+  AssertQueryBuilder query(plan);
+  VELOX_ASSERT_THROW(
+      query.copyResults(pool()),
+      "Accuracy is too small: 1e-09 produces K 4243845673, but maximum K is 1073741824");
+}
+
 TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
   auto indices = AlignedBuffer::allocate<vector_size_t>(3, pool());
   auto rawIndices = indices->asMutable<vector_size_t>();

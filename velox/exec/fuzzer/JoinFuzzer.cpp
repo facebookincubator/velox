@@ -63,7 +63,7 @@ DEFINE_bool(
 
 DEFINE_double(
     filter_ratio,
-    0,
+    0.5,
     "The chance of testing plans with filters enabled.");
 
 namespace facebook::velox::exec {
@@ -455,6 +455,10 @@ std::optional<core::JoinType> tryFlipJoinType(core::JoinType joinType) {
       return core::JoinType::kLeftSemiFilter;
     case core::JoinType::kRightSemiProject:
       return core::JoinType::kLeftSemiProject;
+    case core::JoinType::kAnti:
+      return core::JoinType::kRightAnti;
+    case core::JoinType::kRightAnti:
+      return core::JoinType::kAnti;
     default:
       return std::nullopt;
   }

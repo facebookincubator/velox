@@ -218,6 +218,64 @@ CompiledPlan CompiledPlan::from(WaveGraph& graph, Mode mode) {
       << describe();
 }
 
+::testing::AssertionResult CompiledPlan::runsAfter(
+    std::string_view later,
+    std::string_view earlier) const {
+  using Point = std::pair<int32_t, int32_t>;
+  constexpr Point kNone{-1, -1};
+  Point firstLater = kNone;
+  Point lastEarlier = kNone;
+  for (size_t node = 0; node < nodes_.size(); ++node) {
+    for (size_t step = 0; step < nodes_[node].steps.size(); ++step) {
+      const Point here{static_cast<int32_t>(node), static_cast<int32_t>(step)};
+      for (const auto& kernel : nodes_[node].steps[step].kernels) {
+        if (kernel.has(later) && (firstLater == kNone || here < firstLater)) {
+          firstLater = here;
+        }
+        if (kernel.has(earlier) &&
+            (lastEarlier == kNone || lastEarlier < here)) {
+          lastEarlier = here;
+        }
+      }
+    }
+  }
+  if (firstLater != kNone && lastEarlier != kNone && lastEarlier < firstLater) {
+    return ::testing::AssertionSuccess();
+  }
+  return ::testing::AssertionFailure()
+      << later << " does not run after " << earlier << "\n"
+      << describe();
+}
+
+::testing::AssertionResult CompiledPlan::sideBySideWith(
+    std::string_view op,
+    std::string_view anchor,
+    int32_t howMany) const {
+  int32_t found = 0;
+  int32_t stranded = 0;
+  for (const auto& node : nodes_) {
+    for (const auto& step : node.steps) {
+      int32_t here = 0;
+      bool anchored = false;
+      for (const auto& kernel : step.kernels) {
+        here += kernel.has(op) ? 1 : 0;
+        anchored |= kernel.has(anchor);
+      }
+      found += here;
+      if (!anchored) {
+        stranded += here;
+      }
+    }
+  }
+  if (found == howMany && stranded == 0) {
+    return ::testing::AssertionSuccess();
+  }
+  return ::testing::AssertionFailure()
+      << found << " launches of " << op << ", expected " << howMany << "; "
+      << stranded << " of them in a step without " << anchor << "\n"
+      << describe();
+}
+
 std::string CompiledPlan::describe() const {
   std::string out = "compiled plan:\n";
   for (size_t n = 0; n < nodes_.size(); ++n) {

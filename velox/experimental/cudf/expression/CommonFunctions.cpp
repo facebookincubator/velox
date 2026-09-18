@@ -45,8 +45,10 @@ void registerArrayAccessFunction(
   registerCudfFunction(
       name,
       [policy](
-          const std::string&, const std::shared_ptr<velox::exec::Expr>& expr) {
-        return makeArrayAccessFunction(expr, policy);
+          const std::string&,
+          const core::TypedExprPtr& expr,
+          memory::MemoryPool* pool) {
+        return makeArrayAccessFunction(expr, policy, pool);
       },
       signatures);
 }

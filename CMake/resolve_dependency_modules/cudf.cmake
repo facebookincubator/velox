@@ -17,12 +17,12 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 323d37b from 2026-06-23
-set(VELOX_rapids_cmake_VERSION 26.08)
-set(VELOX_rapids_cmake_COMMIT 323d37beeb2030cd5c9e7e981810915d59ecda09)
+# rapids_cmake commit 5df8fd1 from 2026-09-08 (release/26.10 branch)
+set(VELOX_rapids_cmake_VERSION 26.10)
+set(VELOX_rapids_cmake_COMMIT 5df8fd1ea26515b6b50fa94844ef1855e457048c)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  bacf4aa0b253ddbc7b103793815909b5d61cee5604b2be14d715351b675e9de5
+  f7cb91451aeae915f066907f9ae4eb555348fb62db1857c205a67691816c78c3
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit a4ab399 from 2026-06-17
-set(VELOX_rmm_VERSION 26.08)
-set(VELOX_rmm_COMMIT a4ab39907900d45f220ea7c2d3ecff1b56d39909)
+# rmm commit 9a693e0 from 2026-09-10 (release/26.10 branch)
+set(VELOX_rmm_VERSION 26.10)
+set(VELOX_rmm_COMMIT 9a693e042004e1da9d2e2db018ce2c2963437d59)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  92a3280264ffa6225124452c1c10b38f047ae4a04b9c38052aa483e9b42f04cd
+  98916c2801fd9ad72eba8bb95ac45813ac933a4877d2d43445fa174402949063
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit bdb788f from 2026-06-16
-set(VELOX_kvikio_VERSION 26.08)
-set(VELOX_kvikio_COMMIT bdb788f45ef191384a294ecef3312ea2db35a2c7)
+# kvikio commit 3ea0db0 from 2026-09-10 (release/26.10 branch)
+set(VELOX_kvikio_VERSION 26.10)
+set(VELOX_kvikio_COMMIT 3ea0db06a308925097e6fe84628f5888efca13b8)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  c8db1083756337a3b0dc1616f3960f53fea891763fd9e1645cd38d7e218c7a47
+  b2c8418ef8eba3f08c4dcb859b3df44711b5ae5cbbf85fc8c5c09992bfb1f9bc
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 4302ee8 from 2026-06-24
-set(VELOX_cudf_VERSION 26.08 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT 4302ee801ecb2ce9edce9c75f8a5ee9efa0bceb9)
+# cudf commit 456580f from 2026-09-11 (release/26.10 branch)
+set(VELOX_cudf_VERSION 26.10 CACHE STRING "cudf version")
+set(VELOX_cudf_COMMIT 456580fcdd726380dcb3de6b9686e7d47d6dd0a2)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  d66e580e12a5265ef2e96768678de22862471023a50fca0c68ea5daaa684e0e1
+  160ff8be040c434c9f51fe3e41f08d26421c41710a8adabe559b1f994ad06959
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -74,12 +74,12 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit fe38756 from 2026-06-22 (release/0.50 branch)
-  set(VELOX_ucxx_VERSION 0.51)
-  set(VELOX_ucxx_COMMIT fe38756e340b6c4f5737f65f942f684197a32d12)
+  # ucxx commit 22d9c90 from 2026-09-09 (release/0.52 branch)
+  set(VELOX_ucxx_VERSION 0.52)
+  set(VELOX_ucxx_COMMIT 22d9c90a40055d439c3ec58f2606f2af620c5d71)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    74ac37c3f0ae4c531966a0cfd138edb5eac2f80854fa5ee299aa05c5073d45f9
+    cfb042ede89913744033aadacbe6768700a8ee8fe357cb80cbf47f14c9d4df5c
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
@@ -93,17 +93,10 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_TESTS OFF)
   set(CUDF_BUILD_TESTUTIL OFF)
   set(CUDF_BUILD_STREAMS_TEST_UTIL OFF)
+  # Keep spdlog/nvcomp shared to avoid multiple copies of spdlog in the final binary.
+  set(CUDF_BUILD_STATIC_DEPS OFF)
   set(BUILD_SHARED_LIBS ON)
-
-  # TODO(mh,bd): Remove this once we have a permanent solution for the spdlog/fmt
-  # incompatibility.
-
-  # cuDF (via rapids_logger) pins spdlog 1.14.1, which is incompatible with
-  # the fmt 11.2.0 that Velox builds. Override the rapids-cmake/CPM spdlog
-  # version to 1.15.3, which is fmt 11.2 compatible.
-  # RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE is honored by every rapids_cpm_init,
-  # so the override applies before rapids_logger fetches spdlog.
-  set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json")
+  set(KvikIO_BUILD_NSYS_PLUGIN OFF)
 
   FetchContent_Declare(
     rapids-cmake
@@ -163,7 +156,6 @@ block(SCOPE_FOR VARIABLES)
     cudf
     PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy -Wno-restrict
   )
-
   unset(BUILD_SHARED_LIBS)
   unset(BUILD_TESTING CACHE)
 endblock()

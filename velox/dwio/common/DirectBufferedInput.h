@@ -24,11 +24,34 @@
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
+#include "velox/common/memory/AllocationPool.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/CacheInputStream.h"
 #include "velox/dwio/common/InputStream.h"
 
 namespace facebook::velox::dwio::common {
+
+/// Loaded bytes for one region. At most one of the three representations
+/// below -- 'sharedData', 'ownedData', 'tinyData' -- is ever set; all three are
+/// unset until the region is loaded.
+struct LoadedBuffer {
+  /// Number of request bytes, or 0 if the region was not found.
+  int32_t requestBytes{0};
+  /// Borrowed read-only slice in the load's shared allocation. The consumer
+  /// keeps the load alive while reading it.
+  char* sharedData{nullptr};
+  /// Owned non-contiguous allocation, moved to the consumer.
+  memory::Allocation ownedData{};
+  /// Owned bytes for a tiny region, moved to the consumer.
+  std::string tinyData{};
+
+  /// True when no representation holds bytes, i.e. nothing has been loaded for
+  /// this region yet.
+  bool empty() const {
+    return sharedData == nullptr && ownedData.numPages() == 0 &&
+        tinyData.empty();
+  }
+};
 
 struct LoadRequest {
   LoadRequest() = default;
@@ -46,14 +69,10 @@ struct LoadRequest {
 
   const SeekableInputStream* stream;
 
-  /// Buffers to be handed to 'stream' after load.
-  memory::Allocation data;
-  std::string tinyData;
-  /// Number of bytes in 'data/tinyData'.
-  int32_t loadSize{0};
-  // Set after getData() moves 'data/tinyData' to the owning stream. Duplicate
-  // regions share an offset, so getData() skips consumed buffers to find the
-  // next duplicate buffer.
+  /// Loaded bytes for this request; see LoadedBuffer.
+  LoadedBuffer buffer;
+
+  /// Set once getData() moved 'buffer' out; lets it skip consumed duplicates.
   bool bufferConsumed{false};
 };
 
@@ -67,13 +86,16 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
       uint64_t /* groupId */,
       const std::vector<LoadRequest*>& requests,
       memory::MemoryPool* pool,
-      int32_t loadQuantum)
+      int32_t loadQuantum,
+      bool sharedAllocationEnabled)
       : CoalescedLoad({}, {}),
         ioStatistics_(ioStatistics),
         ioStats_(ioStats),
         input_(std::move(input)),
         loadQuantum_(loadQuantum),
-        pool_(pool) {
+        sharedAllocationEnabled_(sharedAllocationEnabled),
+        pool_(pool),
+        sharedAllocation_(pool) {
     VELOX_DCHECK_NOT_NULL(pool_);
     VELOX_DCHECK(
         std::is_sorted(
@@ -96,10 +118,9 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
     return false;
   }
 
-  /// Returns the buffer for 'region' in either 'data' or 'tinyData'. 'region'
-  /// must match a region given to DirectBufferedInput::enqueue().
-  int32_t
-  getData(int64_t offset, memory::Allocation& data, std::string& tinyData);
+  /// Returns the loaded buffer for the request at 'offset'. 'offset' must match
+  /// a region given to DirectBufferedInput::enqueue().
+  LoadedBuffer getData(uint64_t offset);
 
   const std::vector<LoadRequest>& requests() {
     return requests_;
@@ -114,11 +135,33 @@ class DirectCoalescedLoad : public cache::CoalescedLoad {
   }
 
  private:
+  // Sets each request's 'buffer.requestBytes' and returns the total
+  // page-padding bytes that per-request allocations would over-allocate.
+  int64_t computeLoadSizes();
+
+  // Allocates each non-duplicate request's buffer and returns the file-ordered
+  // ranges for the coalesced read. Adds read bytes to 'size', gap bytes to
+  // 'overread'; serves non-tiny buffers from the shared allocation when
+  // 'useSharedAllocation' is set.
+  std::vector<folly::Range<char*>>
+  buildReadRanges(bool useSharedAllocation, int64_t& size, int64_t& overread);
+
+  // Gives each duplicate region its buffer after the read: a copy of the source
+  // for tiny duplicates and for per-request allocations; duplicates backed by
+  // the shared allocation share the source's slice and are left untouched.
+  void fillDuplicates(bool useSharedAllocation);
+
   const std::shared_ptr<IoStatistics> ioStatistics_;
   const std::shared_ptr<velox::IoStats> ioStats_;
   const std::shared_ptr<ReadFileInputStream> input_;
   const int32_t loadQuantum_;
+  // Whether the shared allocation may back this load's buffers at all. When
+  // false, every request keeps its own page-rounded allocation.
+  const bool sharedAllocationEnabled_;
   memory::MemoryPool* const pool_;
+  // Shared allocation backing all non-tiny request buffers; bump-packs them
+  // into a few allocations, freed as a unit on destruction.
+  memory::AllocationPool sharedAllocation_;
   std::vector<LoadRequest> requests_;
 };
 

@@ -46,3 +46,7 @@ velox_link_libraries(
   velox_expression_functions
   glog::glog
 )
+
+if(${VELOX_BUILD_TESTING})
+  add_subdirectory(tests)
+endif()

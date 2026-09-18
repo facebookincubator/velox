@@ -255,8 +255,9 @@ void HashBuild::setupTable() {
   }
   auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
-      joinNode_->isRightSemiProjectJoin()) {
-    // Do not ignore null keys.
+      joinNode_->isRightSemiProjectJoin() || joinNode_->isRightAntiJoin()) {
+    // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
+    // build row never matches and is always returned.
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -472,8 +473,8 @@ void HashBuild::addInput(RowVectorPtr input) {
   }
 
   if (!isRightJoin(joinType_) && !isFullJoin(joinType_) &&
-      !isRightSemiProjectJoin(joinType_) && !nullAsValue_ &&
-      !isLeftNullAwareJoinWithFilter(joinNode_)) {
+      !isRightSemiProjectJoin(joinType_) && !isRightAntiJoin(joinType_) &&
+      !nullAsValue_ && !isLeftNullAwareJoinWithFilter(joinNode_)) {
     deselectRowsWithNulls(hashers, activeRows_);
     if (nullAware_ && !joinHasNullKeys_ &&
         activeRows_.countSelected() < input->size()) {
@@ -1450,6 +1451,15 @@ void HashBuild::close() {
     spiller_.reset();
     table_.reset();
   }
+
+  // Release the entry here rather than at operator destruction:
+  // Driver::closeOperators() closes every operator but never destroys
+  // 'operators_', so a failed build's leaf pool would otherwise stay attached
+  // to the shared query pool until the Driver goes away. Keep this after
+  // 'table_' is reset, whose allocations live in that pool, and outside
+  // 'mutex_' -- dropping the last reference destroys the pool, which takes the
+  // parent's lock via MemoryPool::dropChild().
+  cacheEntry_.reset();
 }
 
 HashBuildSpiller::HashBuildSpiller(

@@ -27,6 +27,8 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Spiller.h"
 #include "velox/exec/tests/SpillerBenchmarkBase.h"
+#include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/VectorStream.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_string(
@@ -80,6 +82,18 @@ using namespace facebook::velox::memory;
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
+
+// static. See header for the rationale (the named serde is what the spill path
+// looks up); keep both registrations here so a revert is caught by the smoke
+// test.
+void SpillerBenchmarkBase::registerSerde() {
+  if (!isRegisteredVectorSerde()) {
+    serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  }
+  if (!isRegisteredNamedVectorSerde("Presto")) {
+    serializer::presto::PrestoVectorSerde::registerNamedVectorSerde();
+  }
+}
 
 void SpillerBenchmarkBase::setUp() {
   rootPool_ =

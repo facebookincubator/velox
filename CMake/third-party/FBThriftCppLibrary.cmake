@@ -131,7 +131,17 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       "${FBTHRIFT_COMPILER}"
   )
 
-  add_library("${LIB_NAME}" STATIC ${generated_sources})
+  # Now emit the library rule to compile the sources
+  if (BUILD_SHARED_LIBS)
+    set(LIB_TYPE SHARED)
+  else ()
+    set(LIB_TYPE STATIC)
+  endif ()
+
+  add_library(
+    "${LIB_NAME}" ${LIB_TYPE}
+    ${generated_sources}
+  )
 
   target_include_directories(
     "${LIB_NAME}"

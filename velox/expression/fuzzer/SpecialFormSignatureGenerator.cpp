@@ -231,9 +231,6 @@ SpecialFormSignatureGenerator::getCommonSignaturesForCast() const {
   addCastFromVarcharSignature("timestamp", signatures);
   addCastFromDateSignature("timestamp", signatures);
 
-  // To time type.
-  addCastFromVarcharSignature("time", signatures);
-
   // To date type.
   addCastFromVarcharSignature("date", signatures);
   addCastFromTimestampSignature("date", signatures);
@@ -245,6 +242,9 @@ std::vector<exec::FunctionSignaturePtr>
 SpecialFormSignatureGenerator::getSignaturesForCast() const {
   std::vector<exec::FunctionSignaturePtr> signatures =
       getCommonSignaturesForCast();
+
+  // Presto-specific: To time type (uses TIME, not TIME_MICRO_UTC).
+  addCastFromVarcharSignature("time", signatures);
 
   // P4HyperLogLog <-> HyperLogLog casts
   signatures.push_back(makeCastSignature("hyperloglog", "p4hyperloglog"));

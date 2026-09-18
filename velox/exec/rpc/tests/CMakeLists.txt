@@ -118,3 +118,17 @@ target_link_libraries(
 )
 
 add_test(NAME velox_rpc_operator_test COMMAND velox_rpc_operator_test)
+
+add_executable(velox_rpc_aimd_under_load_test RPCAimdUnderLoadTest.cpp Main.cpp)
+
+target_link_libraries(
+  velox_rpc_aimd_under_load_test
+  velox_mock_rpc_client
+  velox_rpc_plan_node_translator
+  velox_async_rpc_function_registry
+  velox_exec_test_lib
+  GTest::gtest
+  Folly::folly
+)
+
+add_test(NAME velox_rpc_aimd_under_load_test COMMAND velox_rpc_aimd_under_load_test)
