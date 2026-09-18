@@ -149,9 +149,10 @@ class AsyncRPCFunction {
     return 0;
   }
 
-  /// Returns the service tier key for rate limiting.
-  /// Empty string means "no tier configured — uses global default limit."
-  virtual std::string tierKey() const {
+  /// Identifies the shared admission bucket for this function.
+  /// Empty string uses the global default bucket. The key may include more
+  /// than a service tier, such as a credential discriminator or tenant.
+  virtual std::string admissionKey() const {
     return "";
   }
 

@@ -130,9 +130,7 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
-  // Per-tier RPCRateLimiter observability (capacity trajectory), refreshed on
-  // every stats() call. The rpcCongestion* stats above are the per-DRIVER
-  // window; these are the capacity shared by every driver on the tier.
+  // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
@@ -198,8 +196,7 @@ class RPCOperator : public exec::Operator {
   // the whole input against a busy backend.
   bool inputBufferIsFull() const;
 
-  // Returns false when the flush did not happen: nothing accumulated, or the
-  // tier had no free slot. Callers loop on this so they stop rather than spin.
+  // Returns true if at least one accumulated row was admitted and flushed.
   bool flushBatchRequests(int32_t maxRows = 0);
 
   // Builds the output RowVector from a completed batch (BATCH mode).
@@ -231,7 +228,7 @@ class RPCOperator : public exec::Operator {
   RowVectorPtr finishIfDrained();
 
   // Feeds one drained unit's verdict to both controllers -- the per-driver
-  // window and the backend's shared cap. They must back off together: a
+  // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
   void recordCongestion(
@@ -249,10 +246,8 @@ class RPCOperator : public exec::Operator {
   std::optional<exec::BlockingReason> tryClaimOrParkOnBatch(
       ContinueFuture* future,
       bool isBackpressure);
-  // Asks the backend whether it can take work and parks on the answer.
-  // admitOrWait() decides and enrols under one lock, so there is no window in
-  // which the caller is neither admitted nor waiting on anything.
-  exec::BlockingReason parkOnTierCapacity(ContinueFuture* future);
+  // Parks if shared admission is full; otherwise returns kNotBlocked.
+  exec::BlockingReason parkOnAdmission(ContinueFuture* future);
 
   // Hands 'waitFuture' to the driver and starts a block-wait measurement.
   exec::BlockingReason
@@ -311,14 +306,10 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<RPCState> state_;
   std::shared_ptr<AsyncRPCFunction> function_;
 
-  // Identifies the provisioned capacity this operator admits against: a
-  // backend tier plus the credential used to reach it (from
-  // function_->tierKey()). Everything sharing this key shares one quota.
-  std::string tierKey_;
+  // Operators with the same admission key share rate-limiter capacity.
+  std::string admissionKey_;
 
-  // Admission control for tierKey_, resolved once in initialize(). Points into
-  // the process-scoped RPCRateLimiterRegistry, which outlives every operator
-  // and every token captured into a continuation.
+  // Process-scoped controller for admissionKey_; outlives this operator.
   RPCRateLimiter* limiter_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
