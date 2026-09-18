@@ -122,6 +122,8 @@ void configureReaderOptions(
   readerOptions.setFileSchema(fileSchema);
   readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
   readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
+  readerOptions.setDeferLazyColumnPrefetch(
+      fileConfig->deferLazyColumnPrefetch(sessionProperties));
   readerOptions.setCacheable(fileSplit->cacheable);
   const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
   if (!sessionTzName.empty()) {

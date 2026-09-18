@@ -851,6 +851,10 @@ Common Options
      - integer
      - 1
      - Number of row groups to prefetch.
+   * - ``defer-lazy-column-prefetch``
+     - bool
+     - false
+     - Do not prefetch columns that are read lazily (projected, no pushdown filter) together with their row group until the scan shows they are needed: a row passed all filters, or the column was read. Splits where no row passes the filters never read those columns; once needed, a column is prefetched for the row groups already buffered and with every following row group. Session: ``defer_lazy_column_prefetch``.
    * - ``parallel-unit-load-count``
      - integer
      - 0
