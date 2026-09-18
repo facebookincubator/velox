@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 
+#include <folly/container/F14Map.h>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -26,119 +28,42 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-// Hashes a single value from a vector at the given index.
-// Handles lazy vectors via loadedVector(). Returns 0 for null values.
-uint64_t hashValue(const VectorPtr& vectorPtr, vector_size_t index) {
-  const auto* vector = vectorPtr->loadedVector();
-  if (vector->isNullAt(index)) {
-    return 0;
+std::optional<std::pair<const BaseVector*, vector_size_t>> valueAtSubfield(
+    const RowVectorPtr& row,
+    vector_size_t index,
+    const common::Subfield& subfield) {
+  const BaseVector* current = row.get();
+  auto currentIndex = index;
+
+  for (const auto& element : subfield.path()) {
+    current = current->loadedVector();
+    if (current->isNullAt(currentIndex)) {
+      return std::nullopt;
+    }
+
+    const auto wrappedIndex = current->wrappedIndex(currentIndex);
+    const auto* rowVector = current->wrappedVector()->asChecked<RowVector>();
+    const auto* nestedField =
+        element->asChecked<common::Subfield::NestedField>();
+    const auto childIndex =
+        rowVector->type()->asRow().getChildIdx(nestedField->name());
+    current = rowVector->childAt(childIndex).get();
+    currentIndex = wrappedIndex;
   }
 
-  auto type = vector->type();
-  switch (type->kind()) { // NOLINT(clang-diagnostic-switch-enum)
-    case TypeKind::BOOLEAN:
-      return std::hash<bool>{}(
-          vector->as<SimpleVector<bool>>()->valueAt(index));
-    case TypeKind::TINYINT:
-      return std::hash<int8_t>{}(
-          vector->as<SimpleVector<int8_t>>()->valueAt(index));
-    case TypeKind::SMALLINT:
-      return std::hash<int16_t>{}(
-          vector->as<SimpleVector<int16_t>>()->valueAt(index));
-    case TypeKind::INTEGER:
-      return std::hash<int32_t>{}(
-          vector->as<SimpleVector<int32_t>>()->valueAt(index));
-    case TypeKind::BIGINT:
-      return std::hash<int64_t>{}(
-          vector->as<SimpleVector<int64_t>>()->valueAt(index));
-    case TypeKind::REAL:
-      return std::hash<float>{}(
-          vector->as<SimpleVector<float>>()->valueAt(index));
-    case TypeKind::DOUBLE:
-      return std::hash<double>{}(
-          vector->as<SimpleVector<double>>()->valueAt(index));
-    case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY: {
-      auto stringView = vector->as<SimpleVector<StringView>>()->valueAt(index);
-      return folly::hasher<std::string_view>{}(
-          std::string_view(stringView.data(), stringView.size()));
-    }
-    case TypeKind::TIMESTAMP: {
-      auto ts = vector->as<SimpleVector<Timestamp>>()->valueAt(index);
-      return std::hash<int64_t>{}(ts.toNanos());
-    }
-    default:
-      VELOX_NYI(
-          "Equality delete hash not implemented for type: {}",
-          type->toString());
+  current = current->loadedVector();
+  if (current->isNullAt(currentIndex)) {
+    return std::nullopt;
   }
-}
-
-// Compares two values from vectors at given indices.
-// Handles lazy vectors via loadedVector().
-bool compareValues(
-    const VectorPtr& leftPtr,
-    vector_size_t leftIndex,
-    const VectorPtr& rightPtr,
-    vector_size_t rightIndex) {
-  const auto* left = leftPtr->loadedVector();
-  const auto* right = rightPtr->loadedVector();
-  bool leftNull = left->isNullAt(leftIndex);
-  bool rightNull = right->isNullAt(rightIndex);
-  if (leftNull && rightNull) {
-    return true;
-  }
-  if (leftNull || rightNull) {
-    return false;
-  }
-
-  auto type = left->type();
-  switch (type->kind()) { // NOLINT(clang-diagnostic-switch-enum)
-    case TypeKind::BOOLEAN:
-      return left->as<SimpleVector<bool>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<bool>>()->valueAt(rightIndex);
-    case TypeKind::TINYINT:
-      return left->as<SimpleVector<int8_t>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<int8_t>>()->valueAt(rightIndex);
-    case TypeKind::SMALLINT:
-      return left->as<SimpleVector<int16_t>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<int16_t>>()->valueAt(rightIndex);
-    case TypeKind::INTEGER:
-      return left->as<SimpleVector<int32_t>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<int32_t>>()->valueAt(rightIndex);
-    case TypeKind::BIGINT:
-      return left->as<SimpleVector<int64_t>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<int64_t>>()->valueAt(rightIndex);
-    case TypeKind::REAL:
-      return left->as<SimpleVector<float>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<float>>()->valueAt(rightIndex);
-    case TypeKind::DOUBLE:
-      return left->as<SimpleVector<double>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<double>>()->valueAt(rightIndex);
-    case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY: {
-      auto leftValue = left->as<SimpleVector<StringView>>()->valueAt(leftIndex);
-      auto rightValue =
-          right->as<SimpleVector<StringView>>()->valueAt(rightIndex);
-      return std::string_view(leftValue.data(), leftValue.size()) ==
-          std::string_view(rightValue.data(), rightValue.size());
-    }
-    case TypeKind::TIMESTAMP:
-      return left->as<SimpleVector<Timestamp>>()->valueAt(leftIndex) ==
-          right->as<SimpleVector<Timestamp>>()->valueAt(rightIndex);
-    default:
-      VELOX_NYI(
-          "Equality delete comparison not implemented for type: {}",
-          type->toString());
-  }
+  return std::pair{current, currentIndex};
 }
 
 } // namespace
 
 EqualityDeleteFileReader::EqualityDeleteFileReader(
     const IcebergDeleteFile& deleteFile,
-    const std::vector<std::string>& equalityColumnNames,
-    const std::vector<TypePtr>& equalityColumnTypes,
+    const RowTypePtr& tableSchema,
+    const std::vector<common::Subfield>& equalityFields,
     const std::string& /*baseFilePath*/,
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -148,32 +73,45 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId)
-    : equalityColumnNames_(equalityColumnNames),
-      equalityColumnTypes_(equalityColumnTypes),
-      pool_(connectorQueryCtx->memoryPool()) {
+    : pool_(connectorQueryCtx->memoryPool()) {
+  equalityFields_.reserve(equalityFields.size());
+  for (const auto& field : equalityFields) {
+    equalityFields_.push_back(field.clone());
+  }
+
   VELOX_CHECK(
       deleteFile.content == FileContent::kEqualityDeletes,
       "Expected equality delete file but got content type: {}",
       static_cast<int>(deleteFile.content));
   VELOX_CHECK_GT(deleteFile.recordCount, 0, "Empty equality delete file.");
   VELOX_CHECK(
-      !equalityColumnNames_.empty(),
-      "Equality delete file must specify at least one column.");
-  VELOX_CHECK_EQ(
-      equalityColumnNames_.size(),
-      equalityColumnTypes_.size(),
-      "Equality column names and types must have the same size.");
+      !equalityFields_.empty(),
+      "Equality delete file must specify at least one field.");
 
-  // Build the file schema for the equality delete columns only.
-  auto deleteFileSchema =
-      ROW(std::vector<std::string>(equalityColumnNames_),
-          std::vector<TypePtr>(equalityColumnTypes_));
-
-  // Create a ScanSpec that reads only the equality delete columns.
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
-  for (size_t i = 0; i < equalityColumnNames_.size(); ++i) {
-    scanSpec->addField(equalityColumnNames_[i], static_cast<int>(i));
+  std::vector<std::string> deleteColumnNames;
+  std::vector<TypePtr> deleteColumnTypes;
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      equalitySubfields;
+  for (const auto& field : equalityFields_) {
+    auto& subfields = equalitySubfields[field.baseName()];
+    if (subfields.empty()) {
+      deleteColumnNames.push_back(field.baseName());
+      deleteColumnTypes.push_back(tableSchema->findChild(field.baseName()));
+    }
+    subfields.push_back(&field);
   }
+  auto deleteFileSchema =
+      ROW(std::move(deleteColumnNames), std::move(deleteColumnTypes));
+  auto scanSpec = makeScanSpec(
+      deleteFileSchema,
+      equalitySubfields,
+      /*subfieldFilters=*/{},
+      /*dataColumns=*/tableSchema,
+      /*partitionKeys=*/{},
+      /*infoColumns=*/{},
+      /*specialColumns=*/{},
+      /*disableStatsBasedFilterReorder=*/false,
+      pool_);
 
   auto deleteSplit = std::make_shared<HiveConnectorSplit>(
       connectorId,
@@ -259,17 +197,9 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     size_t batchIndex = deleteRows_.size();
     deleteRows_.push_back(rowOutput);
 
-    // Resolve column indices on the first batch.
-    if (deleteColumnIndices_.empty()) {
-      for (const auto& colName : equalityColumnNames_) {
-        auto idx = rowOutput->type()->as<TypeKind::ROW>().getChildIdx(colName);
-        deleteColumnIndices_.push_back(static_cast<column_index_t>(idx));
-      }
-    }
-
     // Hash each row and insert into the multimap.
     for (vector_size_t i = 0; i < numRows; ++i) {
-      uint64_t hash = hashRow(rowOutput, i, deleteColumnIndices_);
+      uint64_t hash = hashRow(rowOutput, i);
       deleteKeyHashes_.emplace(hash, DeleteKeyEntry{batchIndex, i});
     }
 
@@ -294,7 +224,7 @@ void EqualityDeleteFileReader::applyDeletes(
       continue;
     }
 
-    uint64_t hash = hashRow(output, i, resolveOutputColumnIndices(output));
+    uint64_t hash = hashRow(output, i);
     auto range = deleteKeyHashes_.equal_range(hash);
 
     for (auto it = range.first; it != range.second; ++it) {
@@ -307,32 +237,16 @@ void EqualityDeleteFileReader::applyDeletes(
   }
 }
 
-const std::vector<column_index_t>&
-EqualityDeleteFileReader::resolveOutputColumnIndices(
-    const RowVectorPtr& row) const {
-  if (outputColumnIndices_.empty()) {
-    const auto& rowType = row->type()->asRow();
-    outputColumnIndices_.reserve(equalityColumnNames_.size());
-    for (const auto& colName : equalityColumnNames_) {
-      auto colIdx = rowType.getChildIdxIfExists(colName);
-      VELOX_CHECK(
-          colIdx.has_value(),
-          "Equality delete column not found in the output columns: {}",
-          colName);
-      outputColumnIndices_.push_back(static_cast<column_index_t>(*colIdx));
-    }
-  }
-  return outputColumnIndices_;
-}
-
 uint64_t EqualityDeleteFileReader::hashRow(
     const RowVectorPtr& row,
-    vector_size_t index,
-    const std::vector<column_index_t>& colIndices) const {
+    vector_size_t index) const {
   uint64_t hash = 0;
 
-  for (auto colIdx : colIndices) {
-    auto colHash = hashValue(row->childAt(colIdx), index);
+  for (const auto& field : equalityFields_) {
+    const auto value = valueAtSubfield(row, index, field);
+    const auto colHash = value.has_value()
+        ? value->first->hashValueAt(value->second)
+        : BaseVector::kNullHash;
     hash ^= colHash + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
   }
   return hash;
@@ -343,14 +257,15 @@ bool EqualityDeleteFileReader::equalRows(
     vector_size_t leftIndex,
     const RowVectorPtr& right,
     vector_size_t rightIndex) const {
-  const auto& leftColIndices = resolveOutputColumnIndices(left);
-
-  for (size_t i = 0; i < leftColIndices.size(); ++i) {
-    if (!compareValues(
-            left->childAt(leftColIndices[i]),
-            leftIndex,
-            right->childAt(deleteColumnIndices_[i]),
-            rightIndex)) {
+  for (const auto& field : equalityFields_) {
+    const auto leftValue = valueAtSubfield(left, leftIndex, field);
+    const auto rightValue = valueAtSubfield(right, rightIndex, field);
+    if (leftValue.has_value() != rightValue.has_value()) {
+      return false;
+    }
+    if (leftValue.has_value() &&
+        !leftValue->first->equalValueAt(
+            rightValue->first, leftValue->second, rightValue->second)) {
       return false;
     }
   }
