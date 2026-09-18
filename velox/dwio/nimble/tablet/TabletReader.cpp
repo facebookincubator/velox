@@ -958,6 +958,13 @@ uint32_t TabletReader::streamSize(
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
 
+uint32_t TabletReader::streamChecksum(
+    const StripeIdentifier& stripe,
+    uint32_t streamId) const {
+  NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
+  return stripe.stripeGroup()->streamChecksum(stripe.stripeId(), streamId);
+}
+
 void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
     std::span<StreamLocation> locations) const {
@@ -995,9 +1002,11 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
   const bool allCached =
       stripeGroupCached && (!hasChunkStats || chunkStatsCached);
   if (allCached) {
+    auto cachedStripeGroup = stripeGroup(stripeGroupIndex);
+    checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
     return StripeIdentifier{
         stripeIndex,
-        stripeGroup(stripeGroupIndex),
+        std::move(cachedStripeGroup),
         hasChunkStats ? chunkStats(stripeGroupIndex) : nullptr};
   }
 
@@ -1017,8 +1026,28 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
         [&loaded](uint32_t) { return std::move(loaded.chunkStats); });
   }
 
+  checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
   return StripeIdentifier{
       stripeIndex, std::move(cachedStripeGroup), std::move(cachedChunkStats)};
+}
+
+void TabletReader::checkStreamChecksumsPresent(
+    const StripeGroup& stripeGroup,
+    uint32_t stripeGroupIndex) const {
+  if (!properties_.streamChecksumType().has_value()) {
+    // The file claims no checksums, so there is nothing to enforce. A group
+    // that carries an array anyway is inert: no reader resolves a checksum
+    // implementation for such a file, so the array is never read.
+    return;
+  }
+  if (stripeGroup.streamCount() == 0) {
+    // No streams, so no checksum array. Not a contradiction.
+    return;
+  }
+  NIMBLE_CHECK_FILE(
+      stripeGroup.hasStreamChecksums(),
+      "File properties record per-stream checksums, but stripe group {} carries none.",
+      stripeGroupIndex);
 }
 
 std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(

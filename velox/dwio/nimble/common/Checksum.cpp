@@ -33,6 +33,11 @@ class Xxh3_64Checksum : public Checksum {
     XXH3_freeState(state_);
   }
 
+  void reset() override {
+    const auto result = XXH3_64bits_reset(state_);
+    NIMBLE_CHECK(result != XXH_ERROR, "XXH3_64bits_reset error.");
+  }
+
   void update(std::string_view data) override {
     const auto result = XXH3_64bits_update(state_, data.data(), data.size());
     NIMBLE_CHECK(result != XXH_ERROR, "XXH3_64bits_update error.");
@@ -46,17 +51,39 @@ class Xxh3_64Checksum : public Checksum {
     return ret;
   }
 
+  uint32_t getChecksum32(bool reset) override {
+    return narrow(getChecksum(reset));
+  }
+
+  uint64_t computeChecksum(std::string_view data) override {
+    // The one-shot entry point skips the streaming state machine entirely and
+    // reaches XXH3's specialized small-input paths. Reset so accumulated state
+    // cannot leak into a later getChecksum().
+    reset();
+    return static_cast<uint64_t>(XXH3_64bits(data.data(), data.size()));
+  }
+
+  uint32_t computeChecksum32(std::string_view data) override {
+    return narrow(computeChecksum(data));
+  }
+
   ChecksumType getType() const override {
     return ChecksumType::XXH3_64;
   }
 
  private:
-  XXH3_state_t* state_;
-
-  void reset() {
-    const auto result = XXH3_64bits_reset(state_);
-    NIMBLE_CHECK(result != XXH_ERROR, "XXH3_64bits_reset error.");
+  // Folds the high half into the low half rather than truncating. XXH3
+  // avalanches, so plain truncation would also be sound, but folding costs one
+  // xor and stays correct if the digest is ever swapped for a hash with weaker
+  // low bits.
+  //
+  // This value is persisted in stripe-group metadata. Changing it invalidates
+  // the checksums in every file already written.
+  static uint32_t narrow(uint64_t checksum) {
+    return static_cast<uint32_t>(checksum ^ (checksum >> 32));
   }
+
+  XXH3_state_t* state_;
 };
 } // namespace
 

@@ -2007,6 +2007,7 @@ Writer::Writer(
            .metadataCompressionThreshold =
                context_->options().metadataCompressionThreshold.value_or(
                    kMetadataCompressionThreshold),
+           .streamChecksumsEnabled = context_->options().enableStreamChecksums,
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
            .enableChunkStats = context_->options().enableChunkStats,
@@ -2395,7 +2396,15 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
     clusterIndexKeyColumnsWithOmittedStorage = indexOptions.columns;
   }
 
-  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted) {
+  // Read back from the tablet writer rather than from options, so the recorded
+  // type cannot drift from the one actually used to compute the checksums.
+  std::optional<uint8_t> streamChecksumType;
+  if (tabletWriter_->streamChecksumsEnabled()) {
+    streamChecksumType = static_cast<uint8_t>(tabletWriter_->checksumType());
+  }
+
+  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
+      !streamChecksumType.has_value()) {
     return;
   }
 
@@ -2403,7 +2412,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
       FileProperties{
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
-          std::move(clusterIndexKeyColumnsWithOmittedStorage)}
+          std::move(clusterIndexKeyColumnsWithOmittedStorage),
+          streamChecksumType}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }

@@ -126,5 +126,74 @@ TEST(FilePropertiesTest, rejectsOmittedStorageWithoutColumns) {
   }
 }
 
+TEST(FilePropertiesTest, streamChecksumsAbsentByDefault) {
+  FileProperties properties{/*compactRowCountEncoding=*/false,
+                            /*clusterIndexKeyColumnStorageOmitted=*/false,
+                            /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
+
+  const auto decoded = FileProperties::deserialize(properties.serialize());
+  EXPECT_FALSE(decoded.streamChecksumType().has_value());
+  EXPECT_FALSE(decoded.streamChecksumType().has_value());
+}
+
+// ChecksumType::XXH3_64 is 0, so a lone type byte could not distinguish "no
+// checksums" from "XXH3_64 checksums". The presence bool is what separates
+// them; this pins that the two survive a round trip independently.
+TEST(FilePropertiesTest, roundTripStreamChecksumsWithZeroValuedType) {
+  static_assert(static_cast<uint8_t>(ChecksumType::XXH3_64) == 0);
+
+  FileProperties properties{/*compactRowCountEncoding=*/false,
+                            /*clusterIndexKeyColumnStorageOmitted=*/false,
+                            /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
+                            static_cast<uint8_t>(ChecksumType::XXH3_64)};
+
+  const auto decoded = FileProperties::deserialize(properties.serialize());
+  EXPECT_TRUE(decoded.streamChecksumType().has_value());
+  ASSERT_TRUE(decoded.streamChecksumType().has_value());
+  EXPECT_EQ(
+      *decoded.streamChecksumType(),
+      static_cast<uint8_t>(ChecksumType::XXH3_64));
+}
+
+// A file whose properties section exists only to record stream checksums must
+// still round trip; the writer skips the section entirely when nothing is set.
+TEST(FilePropertiesTest, streamChecksumsCoexistWithOtherProperties) {
+  FileProperties properties{
+      /*compactRowCountEncoding=*/true,
+      /*clusterIndexKeyColumnStorageOmitted=*/true,
+      /*clusterIndexKeyColumnsWithOmittedStorage=*/{"key0"},
+      static_cast<uint8_t>(ChecksumType::XXH3_64)};
+
+  const auto decoded = FileProperties::deserialize(properties.serialize());
+  EXPECT_TRUE(decoded.compactRowCountEncoding());
+  EXPECT_TRUE(decoded.clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(decoded.streamChecksumType().has_value());
+}
+
+// Properties are parsed by every reader, including full scans that never look
+// at stream checksums. A checksum type this binary does not recognize must
+// stay readable here; only a reader that actually verifies may reject it.
+// Otherwise the first file written with a future type becomes unreadable to
+// every already-deployed binary.
+TEST(FilePropertiesTest, unknownStreamChecksumTypeStillParses) {
+  flatbuffers::FlatBufferBuilder builder;
+  builder.Finish(
+      serialization::CreateFileProperties(
+          builder,
+          /*cluster_index_key_column_storage_omitted=*/false,
+          /*cluster_index_key_columns_with_omitted_storage=*/0,
+          /*compact_encoding=*/0,
+          /*has_stream_checksums=*/true,
+          /*stream_checksum_type=*/200));
+
+  const auto decoded = FileProperties::deserialize(
+      std::string_view{
+          reinterpret_cast<const char*>(builder.GetBufferPointer()),
+          builder.GetSize()});
+  EXPECT_TRUE(decoded.streamChecksumType().has_value());
+  ASSERT_TRUE(decoded.streamChecksumType().has_value());
+  EXPECT_EQ(*decoded.streamChecksumType(), 200);
+}
+
 } // namespace
 } // namespace facebook::nimble

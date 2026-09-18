@@ -34,6 +34,18 @@ table FileProperties {
 
   /// Experimental compact encoding state.
   compact_encoding:CompactEncoding;
+
+  /// Whether stripe groups carry per-stream checksums. Readers that require
+  /// verification consult this at open time, before any stripe group is
+  /// loaded.
+  has_stream_checksums:bool = false;
+
+  /// ChecksumType used for the per-stream checksums. Meaningful only when
+  /// has_stream_checksums is true; a separate field is required because the
+  /// enum's first value is 0, leaving no spare encoding for "absent". Defaults
+  /// to 255, which is not a ChecksumType, so a reader that overlooks
+  /// has_stream_checksums cannot mistake an absent value for XXH3_64.
+  stream_checksum_type:ubyte = 255;
 }
 
 root_type FileProperties;

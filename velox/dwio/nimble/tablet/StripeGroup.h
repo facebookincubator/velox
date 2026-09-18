@@ -26,6 +26,7 @@
 #include <fmt/format.h>
 
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 
@@ -109,11 +110,25 @@ class StripeGroup {
   /// `stripeIndex`. Stateless. `streamId` must be less than streamCount().
   uint32_t streamSize(uint32_t stripeIndex, uint32_t streamId) const;
 
+  /// O(1) random-access read of the stored checksum of `streamId` within
+  /// `stripeIndex`. Only meaningful when hasStreamChecksums() is true;
+  /// otherwise returns 0. Stateless.
+  uint32_t streamChecksum(uint32_t stripeIndex, uint32_t streamId) const;
+
+  /// Whether this group carries per-stream checksums.
+  bool hasStreamChecksums() const {
+    return streamChecksums_ != nullptr;
+  }
+
   /// Relative byte location of one stream within a stripe. A zero size means
   /// the stream is absent.
   struct StreamLocation {
     uint32_t offset{0};
     uint32_t size{0};
+    /// Checksum of the stream's on-disk bytes. Zero when the group carries no
+    /// checksums, so callers must gate on hasStreamChecksums() rather than on
+    /// this being non-zero.
+    uint32_t checksum{0};
   };
 
   /// Reads locations for all streams in one stripe. `locations.size()` must
@@ -134,6 +149,30 @@ class StripeGroup {
   // Maps an absolute stripe index to this group's local [0, stripeCount_)
   // index. Debug-checks that the stripe belongs to this group.
   uint32_t stripeOffset(uint32_t stripeIndex) const;
+
+  // Reads the checksum at a stripe-major flat index, yielding 0 when the group
+  // carries no checksum array.
+  //
+  // The bound is checked rather than debug-checked. Offsets and sizes reach
+  // their storage through EncodingView in the kStreamMajor layout, which
+  // range-checks every read; checksums are a bare pointer, so without this an
+  // out-of-group stripe index would read wild memory in opt builds instead of
+  // throwing. stripeOffset() underflows to ~4e9 for a stripe below
+  // firstStripe_, so the index is not merely off by a little.
+  uint32_t checksumAt(size_t flatIndex) const {
+    // Absent is the normal case, not an error: streamLocations() fills the
+    // checksum field for every stream of every file, and files written without
+    // checksums are the overwhelming majority. Throwing here would fail them
+    // all. Callers distinguish the two through hasStreamChecksums().
+    if (streamChecksums_ == nullptr) {
+      return 0;
+    }
+    NIMBLE_CHECK_LT(
+        flatIndex,
+        static_cast<size_t>(stripeCount_) * streamCount_,
+        "Stream checksum index is out of range.");
+    return streamChecksums_[flatIndex];
+  }
 
   // kRaw: raw pointers into the flatbuffer blob, laid out stripe-major
   // (stripeCount x streamCount). The blob is owned by metadata_ and outlives
@@ -159,6 +198,11 @@ class StripeGroup {
   // encoding provides a stateless O(1) const readAt, so point access needs no
   // auxiliary state and is safe for concurrent reads.
   const EncodingLayout encodingLayout_;
+  // Per-stream checksums, laid out stripe-major (stripeCount x streamCount) and
+  // pointing into the blob owned by metadata_. Stored flat under every
+  // encodingLayout_, so it needs no per-layout representation. nullptr when the
+  // group carries no checksums.
+  const uint32_t* streamChecksums_{nullptr};
   uint32_t streamCount_{0};
   uint32_t stripeCount_{0};
   uint32_t firstStripe_{0};
