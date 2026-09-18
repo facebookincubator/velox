@@ -44,6 +44,7 @@ add_executable(
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp
+  EncodingViewUtilsTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp
   EncodingLegacyTest.cpp

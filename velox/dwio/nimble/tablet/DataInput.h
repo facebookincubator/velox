@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <fmt/core.h>
+#include <folly/Range.h>
 
 #include "velox/common/file/File.h"
 #include "velox/common/file/Region.h"
@@ -93,6 +94,14 @@ class DataInput {
   /// after load().
   virtual const BufferRef& bufferRef(uint32_t index) const = 0;
 
+  /// All loaded BufferRefs as a random-access span, indexable by the
+  /// per-region indices returned by enqueue(). Only valid after load().
+  /// Hot-path callers (per-stream lookups inside a per-stripe loop) should
+  /// fetch this span once per stripe and index into it directly, avoiding
+  /// the vtable dispatch + per-call state check that bufferRef(index)
+  /// otherwise pays on every access.
+  virtual std::span<const BufferRef> bufferRefs() const = 0;
+
   /// Release all state (loaded buffers, enqueued requests).
   virtual void clear() = 0;
 };
@@ -129,6 +138,8 @@ class DirectDataInput : public DataInput {
 
   const BufferRef& bufferRef(uint32_t index) const override;
 
+  std::span<const BufferRef> bufferRefs() const override;
+
   void clear() override;
 
   enum class State { kInit, kEnqueuing, kLoaded };
@@ -161,8 +172,9 @@ class DirectDataInput : public DataInput {
 
   // Coalesces sorted regions into physical IO groups. Exact duplicate ranges
   // can share one physical read when the caller maps them to the same bytes.
-  std::vector<IoGroup> computeIoGroups(
-      const std::vector<EnqueuedRegion>& sortedRegions);
+  // Populates ioGroups_ and reuses coalesceIoRanges_ so a per-load() alloc
+  // is not required.
+  void computeIoGroups(const std::vector<EnqueuedRegion>& sortedRegions);
 
   // Computes the unique payload size for a sorted span of regions. Exact
   // duplicate ranges do not add payload bytes. Returns {payloadSize, lastEnd}
@@ -217,6 +229,14 @@ class DirectDataInput : public DataInput {
   std::vector<uint32_t> groupOffsets_;
   // Populated by load() with pointers into the aligned buffer.
   std::vector<BufferRef> bufferRefs_;
+
+  // --- Reused across load() calls to avoid per-call allocation ---
+  // Coalescer inputs / outputs (populated by computeIoGroups).
+  std::vector<int32_t> coalesceIoRanges_;
+  std::vector<IoGroup> ioGroups_;
+  // preadv inputs (populated by executeIoGroups).
+  std::vector<velox::common::Region> readRegions_;
+  std::vector<folly::Range<char*>> readBuffers_;
 };
 
 /// Loads and caches one contiguous entry per group. Enqueued regions return
@@ -257,6 +277,8 @@ class CachedDataInput final : public DataInput {
 
   /// Returns the loaded bytes for a previously enqueued stream region.
   const BufferRef& bufferRef(uint32_t index) const override;
+
+  std::span<const BufferRef> bufferRefs() const override;
 
   /// Clears request state without releasing pins owned by a returned handle.
   void clear() override;

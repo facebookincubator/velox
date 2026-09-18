@@ -54,6 +54,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     pool_ = memory::memoryManager()->addLeafPool("", false);
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoFunctions("");
     cudf_velox::registerSparkFunctions("");
@@ -508,6 +509,12 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
+  // canExprRunOnGpu reads this setting directly; no driver re-registration is
+  // needed.
+  CudfConfig::getInstance().allowCpuFallback = true;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().allowCpuFallback = false;
+  };
 
   // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
   // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's

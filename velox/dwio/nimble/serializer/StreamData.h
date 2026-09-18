@@ -29,7 +29,6 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaTypes.h"
 
 namespace facebook::nimble::serde {
 
@@ -37,34 +36,23 @@ class StreamData {
  public:
   /// Decode configuration for stream data.
   struct Options {
-    /// Serialization version. Determines whether streams use legacy bytes or
-    /// Nimble encodings.
-    SerializationVersion version;
     /// True when encoding stream prefixes store row counts as varints.
     bool streamEncodingUsesVarintRowCount{true};
     /// Optional pool for encoding scratch buffers.
     velox::BufferPool* bufferPool{nullptr};
-    /// Externally-owned decompression buffer. Required (must not be null).
-    /// Owned by BatchedStreamDecoder to persist across segment transitions
-    /// so the buffer capacity is reused.
-    velox::BufferPtr* decompressionBuffer{nullptr};
   };
 
   StreamData(
-      ScalarKind kind,
       std::vector<velox::BufferPtr>& stringBuffers,
-      velox::memory::MemoryPool* pool,
-      velox::BufferPtr* decompressionBuffer);
+      velox::memory::MemoryPool* pool);
 
-  /// @param kind Scalar kind for the stream data.
   /// @param data Stream data to initialize with.
   /// @param pool Memory pool for encoding buffer allocation.
-  /// @param options Decode configuration (version, bufferPool).
+  /// @param options Decode configuration (row-count format, bufferPool).
   /// @param stringBuffers External vector where string buffers from encoding
   ///        are stored. The caller must keep the vector alive while
   ///        string_views from this StreamData are in use.
   StreamData(
-      ScalarKind kind,
       std::string_view data,
       std::vector<velox::BufferPtr>& stringBuffers,
       velox::memory::MemoryPool* pool,
@@ -82,14 +70,7 @@ class StreamData {
     bool segmentExhausted{false};
   };
 
-  uint32_t copyTo(char* output, uint32_t bufferSize);
-
   DecodeResult decodeStrings(uint32_t count, std::string_view* output);
-
-  // Decode legacy raw fixed-width data. Legacy string streams use
-  // decodeStrings().
-  DecodeResult
-  decodeLegacy(void* output, uint32_t offset, uint32_t count, uint32_t width);
 
   /// Decode nimble-encoded data to output. Dispatches to typed materialize
   /// based on width. Only valid when hasEncoding() is true.
@@ -116,14 +97,11 @@ class StreamData {
     decode(output, /*offset=*/0, count, sizeof(T));
   }
 
-  void reset(
-      std::string_view data,
-      SerializationVersion version,
-      bool streamEncodingUsesVarintRowCount);
+  void reset(std::string_view data, bool streamEncodingUsesVarintRowCount);
 
   /// Advance the encoded stream cursor by `count` rows without materializing
   /// output. Uses the encoding's native state-only skip primitive. Only valid
-  /// when hasEncoding() is true (i.e. non-legacy streams).
+  /// when hasEncoding() is true.
   void skip(uint32_t count);
 
   /// Replace the external string-buffers vector this StreamData points to.
@@ -145,13 +123,8 @@ class StreamData {
   }
 
  private:
-  // Initialize with data. For encoding path, creates Encoding object.
-  // For legacy path, decompresses if not string/binary type.
+  // Initialize with data, creating the Encoding object.
   void init(std::string_view data);
-
-  // Decompress legacy zstd-compressed data. Reads compression type prefix and
-  // decompresses into decompressionBuffer_ if needed.
-  void decompress();
 
   // Prepare nimble-encoded data for reading. Creates an Encoding object that
   // can materialize values on demand.
@@ -178,31 +151,15 @@ class StreamData {
   template <typename T>
   void materialize(uint32_t count, T* output);
 
-  velox::BufferPtr& decompressionBuf() {
-    return *decompressionBuffer_;
-  }
-
-  void ensureDecompressionBuffer(size_t minBytes);
-
-  const ScalarKind kind_{ScalarKind::Undefined};
   velox::memory::MemoryPool* const pool_{nullptr};
-  // Whether nimble encoding is enabled. Non-const to allow reset() to change.
-  bool encodingEnabled_{false};
-  // Whether encoding headers use varint row counts (true for kLegacyCompact) or
-  // fixed u32 (false for kTablet). Non-const to allow
-  // reset() to change.
+  // Whether encoding headers use varint row counts (true for every version
+  // except kTablet). Non-const to allow reset() to change.
   bool useVarintRowCount_{true};
   // Optional pool for encoding scratch buffers. Owned externally
   // (typically by BatchedStreamDecoder) to persist across StreamData
   // lifetimes.
   velox::BufferPool* const bufferPool_{nullptr};
-  // Externally-owned decompression buffer. Always non-null; owned by
-  // BatchedStreamDecoder or thrift Decoder to persist across StreamData
-  // lifetimes.
-  velox::BufferPtr* const decompressionBuffer_{nullptr};
 
-  const char* pos_{nullptr};
-  const char* end_{nullptr};
   std::unique_ptr<Encoding> encoding_;
   // Track consumed rows for nimble encoding path.
   uint32_t readRows_{0};

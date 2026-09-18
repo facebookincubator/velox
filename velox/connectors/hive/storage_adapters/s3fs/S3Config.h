@@ -189,7 +189,7 @@ class S3Config {
 
   /// Virtual addressing is used for AWS S3 and is the default
   /// (path-style-access is false). Path access style is used for some on-prem
-  /// systems like Minio.
+  /// systems like Silo.
   bool useVirtualAddressing() const {
     auto value = config_.find(Keys::kPathStyleAccess)->second.value();
     return !folly::to<bool>(value);
