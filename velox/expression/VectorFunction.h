@@ -237,13 +237,17 @@ getVectorFunctionWithMetadata(
 
 /// Registers stateless VectorFunction. The same instance will be used for all
 /// expressions.
+/// 'defaultOwner' is recorded only when 'metadata' does not already name an
+/// owner. It is held as a non-owning view, so it must outlive the function
+/// registry.
 /// Returns true iff an new function is inserted
 bool registerVectorFunction(
     std::string_view name,
     std::vector<FunctionSignaturePtr> signatures,
     std::unique_ptr<VectorFunction> func,
     VectorFunctionMetadata metadata = {},
-    bool overwrite = true);
+    bool overwrite = true,
+    std::string_view defaultOwner = {});
 
 // Represents arguments for stateful vector functions. Stores element type, and
 // the constant value (if supplied).
@@ -295,45 +299,90 @@ bool registerStatefulVectorFunction(
     std::vector<FunctionSignaturePtr> signatures,
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata = {},
-    bool overwrite = true);
+    bool overwrite = true,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::exec
 
 // Private. Return the external function name given a UDF tag.
 #define _VELOX_REGISTER_FUNC_NAME(tag) registerVectorFunction_##tag
 
-// Declares a vectorized UDF function given a tag. Goes into the UDF .cpp file.
-#define VELOX_DECLARE_VECTOR_FUNCTION(tag, signatures, function) \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) {   \
-    facebook::velox::exec::registerVectorFunction(               \
-        (name), (signatures), (function));                       \
+// Private. Emits the one-argument form of a generated registrar, so callers
+// that declare it themselves and pass only a name keep compiling.
+#define _VELOX_DECLARE_REGISTRAR_WITHOUT_OWNER(tag)            \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) { \
+    _VELOX_REGISTER_FUNC_NAME(tag)(name, {});                  \
   }
 
-#define VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(           \
-    tag, signatures, metadata, function)                       \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) { \
-    facebook::velox::exec::registerVectorFunction(             \
-        (name), (signatures), (function), (metadata));         \
-  }
+// Declares a vectorized UDF function given a tag. Goes into the UDF .cpp file.
+// The generated function takes the default owner to record for the function;
+// it must outlive the function registry, so pass a string literal or a
+// constant.
+#define VELOX_DECLARE_VECTOR_FUNCTION(tag, signatures, function) \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(                           \
+      std::string_view name, std::string_view defaultOwner) {    \
+    facebook::velox::exec::registerVectorFunction(               \
+        (name),                                                  \
+        (signatures),                                            \
+        (function),                                              \
+        {},                                                      \
+        /*overwrite=*/true,                                      \
+        defaultOwner);                                           \
+  }                                                              \
+  _VELOX_DECLARE_REGISTRAR_WITHOUT_OWNER(tag)
+
+#define VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(          \
+    tag, signatures, metadata, function)                      \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(                        \
+      std::string_view name, std::string_view defaultOwner) { \
+    facebook::velox::exec::registerVectorFunction(            \
+        (name),                                               \
+        (signatures),                                         \
+        (function),                                           \
+        (metadata),                                           \
+        /*overwrite=*/true,                                   \
+        defaultOwner);                                        \
+  }                                                           \
+  _VELOX_DECLARE_REGISTRAR_WITHOUT_OWNER(tag)
 
 // Declares a stateful vectorized UDF.
 #define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(tag, signatures, function) \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) {            \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(                                    \
+      std::string_view name, std::string_view defaultOwner) {             \
     facebook::velox::exec::registerStatefulVectorFunction(                \
-        (name), (signatures), (function));                                \
-  }
+        (name),                                                           \
+        (signatures),                                                     \
+        (function),                                                       \
+        {},                                                               \
+        /*overwrite=*/true,                                               \
+        defaultOwner);                                                    \
+  }                                                                       \
+  _VELOX_DECLARE_REGISTRAR_WITHOUT_OWNER(tag)
 
-#define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(  \
-    tag, signatures, metadata, function)                       \
-  void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view name) { \
-    facebook::velox::exec::registerStatefulVectorFunction(     \
-        (name), (signatures), (function), (metadata));         \
-  }
+#define VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA( \
+    tag, signatures, metadata, function)                      \
+  void _VELOX_REGISTER_FUNC_NAME(tag)(                        \
+      std::string_view name, std::string_view defaultOwner) { \
+    facebook::velox::exec::registerStatefulVectorFunction(    \
+        (name),                                               \
+        (signatures),                                         \
+        (function),                                           \
+        (metadata),                                           \
+        /*overwrite=*/true,                                   \
+        defaultOwner);                                        \
+  }                                                           \
+  _VELOX_DECLARE_REGISTRAR_WITHOUT_OWNER(tag)
 
 // Registers a vectorized UDF associated with a given tag.
 // This should be used in the same namespace the declare macro is used in.
-#define VELOX_REGISTER_VECTOR_FUNCTION(tag, name)                 \
-  {                                                               \
-    extern void _VELOX_REGISTER_FUNC_NAME(tag)(std::string_view); \
-    _VELOX_REGISTER_FUNC_NAME(tag)(name);                         \
+#define VELOX_REGISTER_VECTOR_FUNCTION(tag, name) \
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(tag, name, std::string_view{})
+
+// Registers a vectorized UDF, recording 'defaultOwner' unless the function
+// declares an owner of its own.
+#define VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(tag, name, defaultOwner) \
+  {                                                                        \
+    extern void _VELOX_REGISTER_FUNC_NAME(tag)(                            \
+        std::string_view, std::string_view);                               \
+    _VELOX_REGISTER_FUNC_NAME(tag)((name), (defaultOwner));                \
   }
