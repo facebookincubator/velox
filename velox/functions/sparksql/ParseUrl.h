@@ -54,41 +54,6 @@ struct ParseUrlFunction {
 
   ParseUrlFunction() : cache_(0) {}
 
-  // The extractable parts, keyed once per part string instead of compared
-  // on every row.
-  enum class Part {
-    kProtocol,
-    kHost,
-    kPath,
-    kQuery,
-    kRef,
-    kFile,
-    kAuthority,
-    kUserInfo,
-    kUnknown
-  };
-
-  static Part parsePart(std::string_view part) {
-    if (part == "PROTOCOL") {
-      return Part::kProtocol;
-    } else if (part == "HOST") {
-      return Part::kHost;
-    } else if (part == "PATH") {
-      return Part::kPath;
-    } else if (part == "QUERY") {
-      return Part::kQuery;
-    } else if (part == "REF") {
-      return Part::kRef;
-    } else if (part == "FILE") {
-      return Part::kFile;
-    } else if (part == "AUTHORITY") {
-      return Part::kAuthority;
-    } else if (part == "USERINFO") {
-      return Part::kUserInfo;
-    }
-    return Part::kUnknown;
-  }
-
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& inputTypes,
       const core::QueryConfig& config,
@@ -127,41 +92,6 @@ struct ParseUrlFunction {
     if (key) {
       constKey_ = std::string(key->data(), key->size());
     }
-  }
-
-  // Returns the parsed URL, using the cached parse for a constant URL.
-  // Returns nullptr for an invalid URL; in ANSI mode an invalid URL fails
-  // the query instead, matching Spark's ParseUrl failOnError behavior.
-  ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
-    if (constUrl_.has_value()) {
-      return &*constUrl_;
-    }
-    if (constUrlInvalid_) {
-      if (ansiEnabled_) {
-        VELOX_USER_FAIL(
-            "The url is invalid: {}",
-            std::string_view(urlStr.data(), urlStr.size()));
-      }
-      return nullptr;
-    }
-    // parseUrl resets the scratch state itself.
-    if (!parseUrl(
-            std::string_view(urlStr.data(), urlStr.size()), parsedScratch_)) {
-      if (ansiEnabled_) {
-        VELOX_USER_FAIL(
-            "The url is invalid: {}",
-            std::string_view(urlStr.data(), urlStr.size()));
-      }
-      return nullptr;
-    }
-    return &parsedScratch_;
-  }
-
-  // Returns the part key, using the cached key for a constant part.
-  Part partArg(const arg_type<Varchar>& part) const {
-    return constPart_.has_value()
-        ? *constPart_
-        : parsePart(std::string_view(part.data(), part.size()));
   }
 
   FOLLY_ALWAYS_INLINE
@@ -239,6 +169,76 @@ struct ParseUrlFunction {
   // Regex metacharacters; a key containing any of them must go through the
   // regex path. The same set the regexp functions use for their fast paths.
   static constexpr std::string_view kReservedChars = ".$|()[{^?*+\\";
+
+  // The extractable parts, keyed once per part string instead of compared
+  // on every row.
+  enum class Part {
+    kProtocol,
+    kHost,
+    kPath,
+    kQuery,
+    kRef,
+    kFile,
+    kAuthority,
+    kUserInfo,
+    kUnknown
+  };
+
+  static Part parsePart(std::string_view part) {
+    if (part == "PROTOCOL") {
+      return Part::kProtocol;
+    } else if (part == "HOST") {
+      return Part::kHost;
+    } else if (part == "PATH") {
+      return Part::kPath;
+    } else if (part == "QUERY") {
+      return Part::kQuery;
+    } else if (part == "REF") {
+      return Part::kRef;
+    } else if (part == "FILE") {
+      return Part::kFile;
+    } else if (part == "AUTHORITY") {
+      return Part::kAuthority;
+    } else if (part == "USERINFO") {
+      return Part::kUserInfo;
+    }
+    return Part::kUnknown;
+  }
+
+  // Returns the parsed URL, using the cached parse for a constant URL.
+  // Returns nullptr for an invalid URL; in ANSI mode an invalid URL fails
+  // the query instead, matching Spark's ParseUrl failOnError behavior.
+  ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
+    if (constUrl_.has_value()) {
+      return &*constUrl_;
+    }
+    if (constUrlInvalid_) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "The url is invalid: {}",
+            std::string_view(urlStr.data(), urlStr.size()));
+      }
+      return nullptr;
+    }
+    // parseUrl resets the scratch state itself.
+    if (!parseUrl(
+            std::string_view(urlStr.data(), urlStr.size()), parsedScratch_)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL(
+            "The url is invalid: {}",
+            std::string_view(urlStr.data(), urlStr.size()));
+      }
+      return nullptr;
+    }
+    return &parsedScratch_;
+  }
+
+  // Returns the part key, using the cached key for a constant part.
+  Part partArg(const arg_type<Varchar>& part) const {
+    return constPart_.has_value()
+        ? *constPart_
+        : parsePart(std::string_view(part.data(), part.size()));
+  }
 
   // Returns true when key is a non-empty plain string with no regex
   // metacharacters.
