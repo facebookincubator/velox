@@ -113,8 +113,7 @@ struct UnpackStateFunctor {
     auto const* packed =
         reinterpret_cast<const DecimalSumState*>(serialized.data());
     counts[idx] = packed->count;
-    sums[idx] =
-        (static_cast<__int128_t>(packed->upper) << 64) | packed->lower;
+    sums[idx] = (static_cast<__int128_t>(packed->upper) << 64) | packed->lower;
   }
 };
 
@@ -316,16 +315,15 @@ bool unpackDecimalSumState(
   auto const numRows = stateCol.size();
   auto const n = static_cast<size_t>(numRows);
   auto stateDeviceView = cudf::column_device_view::create(stateCol, stream);
-  rmm::device_scalar<int32_t> invalidState{0, stream};
+  int32_t initialInvalidState{0};
+  rmm::device_scalar<int32_t> invalidState{initialInvalidState, stream};
   launchDeviceFor(
       numRows,
       [&] {
         return UnpackStateFunctor{
             .state = *stateDeviceView,
-            .sums = cuda::std::span<__int128_t>{
-                sumView.data<__int128_t>(), n},
-            .counts =
-                cuda::std::span<int64_t>{countView.data<int64_t>(), n},
+            .sums = cuda::std::span<__int128_t>{sumView.data<__int128_t>(), n},
+            .counts = cuda::std::span<int64_t>{countView.data<int64_t>(), n},
             .invalidState = invalidState.data()};
       },
       stream);

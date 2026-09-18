@@ -82,8 +82,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
   cudf::strings_column_view strings(stateCol);
   auto const offsetsView = strings.offsets();
   VELOX_CHECK_LE(
-      static_cast<size_t>(stateCol.offset()) +
-          static_cast<size_t>(numRows) + 1,
+      static_cast<size_t>(stateCol.offset()) + static_cast<size_t>(numRows) + 1,
       static_cast<size_t>(offsetsView.size()),
       "Decimal sum state offsets do not include every selected row");
 

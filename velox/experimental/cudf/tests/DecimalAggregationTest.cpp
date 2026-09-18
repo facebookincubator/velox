@@ -1400,8 +1400,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateArrowCompactedSlice) {
   auto compactStateView = compactTable->view().column(0);
   cudf::strings_column_view strings(compactStateView);
   EXPECT_LT(
-      strings.chars_size(stream),
-      static_cast<int64_t>(stateCol->size()) * 32);
+      strings.chars_size(stream), static_cast<int64_t>(stateCol->size()) * 32);
 
   auto slices = cudf::slice(compactStateView, {1, 4});
   ASSERT_EQ(slices.size(), 1);
@@ -1675,8 +1674,7 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64Slice) {
 
   auto sumParent =
       makeDecimalColumn<int64_t>(parentSums, 2, &parentSumValid, stream);
-  auto countParent =
-      makeInt64Column(parentCounts, &parentCountValid, stream);
+  auto countParent = makeInt64Column(parentCounts, &parentCountValid, stream);
   auto sumSlices = cudf::slice(sumParent->view(), {1, 5});
   auto countSlices = cudf::slice(countParent->view(), {1, 5});
   ASSERT_EQ(sumSlices.size(), 1);
@@ -1684,8 +1682,8 @@ TEST_F(CudfDecimalTest, decimalComputeAverageDecimal64Slice) {
   ASSERT_EQ(sumSlices.front().offset(), 1);
   ASSERT_EQ(countSlices.front().offset(), 1);
 
-  auto avgCol = computeDecimalAverage(
-      sumSlices.front(), countSlices.front(), stream, mr);
+  auto avgCol =
+      computeDecimalAverage(sumSlices.front(), countSlices.front(), stream, mr);
   auto avgMask = copyNullMask(avgCol->view(), stream);
   auto outAvg = copyColumnData<int64_t>(avgCol->view(), stream);
 
