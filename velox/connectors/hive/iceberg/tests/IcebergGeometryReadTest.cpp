@@ -626,6 +626,58 @@ TEST_F(IcebergGeometryReadTest, nestedXyWkbIsAccepted) {
   }
 }
 
+// Nesting is bounded so a deeply nested payload cannot exhaust the stack. Each
+// GEOMETRYCOLLECTION level costs about nine bytes on disk but one frame in both
+// this validator and in geos::io::WKBReader::read, and the GEOS version Velox
+// pins has no depth cap of its own, so the limit has to be enforced here.
+TEST_F(IcebergGeometryReadTest, wkbNestingDepthIsBounded) {
+  // A chain of 'collectionLevels' nested GEOMETRYCOLLECTIONs wrapping one
+  // POINT. Total nesting depth is collectionLevels + 1 (the point itself).
+  auto nestedCollections = [](int collectionLevels) {
+    std::string out;
+    out.push_back(1); // little endian
+    appendUint32Le(out, 1); // POINT
+    appendDoubleLe(out, 1.0);
+    appendDoubleLe(out, 2.0);
+    for (int i = 0; i < collectionLevels; ++i) {
+      std::string wrapped;
+      wrapped.push_back(1);
+      appendUint32Le(wrapped, 7); // GEOMETRYCOLLECTION
+      appendUint32Le(wrapped, 1); // exactly one child
+      wrapped += out;
+      out = std::move(wrapped);
+    }
+    return out;
+  };
+
+  // Depth exactly at the limit (99 collections + the innermost point) is
+  // accepted, so the cap does not reject legitimately nested data.
+  {
+    auto input = makeVarbinaryVector({nestedCollections(99)});
+    auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+    ASSERT_TRUE(isGeometryType(converted->type()));
+    ASSERT_EQ(converted->size(), 1);
+    EXPECT_FALSE(converted->isNullAt(0));
+  }
+
+  // One level beyond the limit is rejected, naming the column and the limit.
+  {
+    auto input = makeVarbinaryVector({nestedCollections(100)});
+    VELOX_ASSERT_THROW(
+        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"),
+        "Iceberg geometry column 'geom' is nested more than 100 levels deep");
+  }
+
+  // Far beyond the limit: rejected by the same check rather than recursing,
+  // which is the case that would otherwise reach GEOS and overflow the stack.
+  {
+    auto input = makeVarbinaryVector({nestedCollections(50'000)});
+    VELOX_ASSERT_THROW(
+        convertIcebergGeometry(input, GEOMETRY(), pool(), "geom"),
+        "nested more than 100 levels deep");
+  }
+}
+
 // A malformed or truncated payload must produce a user error rather than an
 // out-of-bounds read while walking nested headers.
 TEST_F(IcebergGeometryReadTest, malformedNestedWkbIsRejectedSafely) {

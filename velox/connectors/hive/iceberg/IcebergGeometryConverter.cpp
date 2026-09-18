@@ -73,6 +73,19 @@ constexpr uint32_t kWkbGeometryCollection = 7;
 constexpr uint32_t kXyCoordinateSize = 16;
 constexpr uint32_t kUint32Size = 4;
 
+// Maximum nesting depth accepted for a WKB payload, counting the outermost
+// geometry as depth 1. This mirrors the MAX_PARSE_DEPTH cap that newer GEOS
+// releases apply in WKBReader::readGeometry().
+//
+// The GEOS version Velox pins (3.10.7, see CMake/resolve_dependency_modules/
+// geos.cmake) has no such cap and recurses once per nesting level, so a
+// deeply nested GEOMETRYCOLLECTION -- roughly nine bytes per level -- can
+// exhaust the stack inside GEOS from a payload small enough to look
+// unremarkable. Bounding the depth here rejects such a payload before it
+// reaches the parser, and simultaneously bounds this validator's own
+// recursion.
+constexpr uint32_t kMaxParseDepth = 100;
+
 // Walks a WKB payload and validates the header of every geometry in it,
 // including the nested geometries of MULTIPOINT, MULTILINESTRING, MULTIPOLYGON
 // and GEOMETRYCOLLECTION, which each carry their own independent WKB header.
@@ -95,7 +108,7 @@ class WkbHeaderValidator {
       : wkb_{wkb}, columnPath_{columnPath} {}
 
   void validate() {
-    validateGeometry();
+    validateGeometry(/*depth=*/1);
     // Trailing bytes mean the payload does not describe exactly one geometry.
     VELOX_USER_CHECK_EQ(
         position_,
@@ -115,7 +128,15 @@ class WkbHeaderValidator {
   }
 
   // Validates one geometry at the current position and advances past it.
-  void validateGeometry() {
+  // 'depth' is the nesting level of this geometry, with the outermost at 1.
+  void validateGeometry(uint32_t depth) {
+    VELOX_USER_CHECK_LE(
+        depth,
+        kMaxParseDepth,
+        "Iceberg geometry column '{}' is nested more than {} levels deep; deeper nesting is rejected because it can exhaust the stack while parsing",
+        columnPath_,
+        kMaxParseDepth);
+
     const bool littleEndian = readByteOrder();
     const uint32_t typeCode = readUint32(littleEndian);
 
@@ -164,7 +185,7 @@ class WkbHeaderValidator {
         // path that catches a Z/M/ZM/EWKB child under an XY parent.
         const uint32_t numChildren = readUint32(littleEndian);
         for (uint32_t i = 0; i < numChildren; ++i) {
-          validateGeometry();
+          validateGeometry(depth + 1);
         }
         break;
       }
