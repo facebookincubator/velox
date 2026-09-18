@@ -88,7 +88,6 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     table.coverage tr:nth-child(25) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(25) td:nth-child(7) {background-color: #6BA81E;}
     table.coverage tr:nth-child(26) td:nth-child(1) {background-color: #6BA81E;}
-    table.coverage tr:nth-child(26) td:nth-child(2) {background-color: #6BA81E;}
     table.coverage tr:nth-child(26) td:nth-child(3) {background-color: #6BA81E;}
     table.coverage tr:nth-child(26) td:nth-child(5) {background-color: #6BA81E;}
     table.coverage tr:nth-child(26) td:nth-child(7) {background-color: #6BA81E;}
@@ -251,7 +250,7 @@ Here is a list of all scalar, aggregate, and window functions from Spark, with f
     arrays_overlap                             :spark:func:`dayofweek`                    :spark:func:`left`                         :spark:func:`randn`                        :spark:func:`to_json`                          grouping_id
     :spark:func:`arrays_zip`                   :spark:func:`dayofyear`                    :spark:func:`length`                       :spark:func:`random`                       to_timestamp                                   histogram_numeric
     :spark:func:`ascii`                        decimal                                    :spark:func:`levenshtein`                  range                                      :spark:func:`to_unix_timestamp`                :spark:func:`kurtosis`
-    :spark:func:`asin`                         :spark:func:`decode`                       :spark:func:`like`                         rank                                       :spark:func:`to_utc_timestamp`                 :spark:func:`last`
+    :spark:func:`asin`                         decode                                     :spark:func:`like`                         rank                                       :spark:func:`to_utc_timestamp`                 :spark:func:`last`
     :spark:func:`asinh`                        :spark:func:`degrees`                      :spark:func:`ln`                           reflect                                    :spark:func:`transform`                        last_value
     assert_true                                dense_rank                                 :spark:func:`locate`                       regexp                                     transform_keys                                 :spark:func:`max`
     :spark:func:`atan`                         :spark:func:`div`                          :spark:func:`log`                          :spark:func:`regexp_extract`               :spark:func:`transform_values`                 :spark:func:`max_by`
