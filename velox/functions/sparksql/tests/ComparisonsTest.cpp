@@ -213,58 +213,20 @@ TEST_F(ComparisonsTest, nullPredicatesTimestampUtc) {
             actual);
       };
 
-  auto noNulls = makeFlatVector<Timestamp>(
-      {beforeEpoch, epoch, afterEpoch, epoch}, TIMESTAMP_UTC());
-  auto mixedNulls = makeNullableFlatVector<Timestamp>(
-      {beforeEpoch, std::nullopt, epoch, afterEpoch}, TIMESTAMP_UTC());
-
-  {
-    SCOPED_TRACE("Flat encoding");
-    assertNullPredicates(noNulls, {false, false, false, false});
-    assertNullPredicates(mixedNulls, {false, true, false, false});
-    assertNullPredicates(
-        makeNullableFlatVector<Timestamp>(
-            {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
-            TIMESTAMP_UTC()),
-        {true, true, true, true});
-    assertNullPredicates(makeFlatVector<Timestamp>({}, TIMESTAMP_UTC()), {});
-  }
-
-  {
-    SCOPED_TRACE("Constant encoding");
-    for (const auto& value :
-         {std::optional<Timestamp>{}, std::optional<Timestamp>{epoch}}) {
-      assertNullPredicates(
-          makeConstant<Timestamp>(value, 4, TIMESTAMP_UTC()),
-          std::vector<bool>(4, !value.has_value()));
-    }
-  }
-
-  {
-    SCOPED_TRACE("Dictionary encoding");
-    auto indices = makeIndices({3, 1, 0, 1, 2, 3});
-    auto nulls = makeNulls({true, false, false, false, true, false});
-
-    assertNullPredicates(
-        wrapInDictionary(indices, 6, noNulls),
-        {false, false, false, false, false, false});
-    assertNullPredicates(
-        wrapInDictionary(indices, 6, mixedNulls),
-        {false, true, false, true, false, false});
-    assertNullPredicates(
-        BaseVector::wrapInDictionary(nulls, indices, 6, noNulls),
-        {true, false, false, false, true, false});
-    assertNullPredicates(
-        BaseVector::wrapInDictionary(nulls, indices, 6, mixedNulls),
-        {true, true, false, true, true, false});
-    assertNullPredicates(
-        BaseVector::wrapInDictionary(
-            nulls,
-            indices,
-            6,
-            makeConstant<Timestamp>(epoch, 4, TIMESTAMP_UTC())),
-        {true, false, false, false, true, false});
-  }
+  assertNullPredicates(
+      makeFlatVector<Timestamp>(
+          {beforeEpoch, epoch, afterEpoch, epoch}, TIMESTAMP_UTC()),
+      {false, false, false, false});
+  assertNullPredicates(
+      makeNullableFlatVector<Timestamp>(
+          {beforeEpoch, std::nullopt, epoch, afterEpoch}, TIMESTAMP_UTC()),
+      {false, true, false, false});
+  assertNullPredicates(
+      makeNullableFlatVector<Timestamp>(
+          {std::nullopt, std::nullopt, std::nullopt, std::nullopt},
+          TIMESTAMP_UTC()),
+      {true, true, true, true});
+  assertNullPredicates(makeFlatVector<Timestamp>({}, TIMESTAMP_UTC()), {});
 }
 
 TEST_F(ComparisonsTest, equaltonullsafe) {

@@ -146,9 +146,8 @@ General Aggregate Functions
     ``x`` must be an orderable type.
 
     Supported scalar types are BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, VARCHAR, VARBINARY, DATE, TIME, TIMESTAMP,
-    TIMESTAMP_UTC, and INTERVAL YEAR TO MONTH. UNKNOWN is supported for
-    null-only input.
+    REAL, DOUBLE, DECIMAL, VARCHAR, VARBINARY, DATE, TIME, TIMESTAMP, and
+    TIMESTAMP_UTC. UNKNOWN is supported for null-only input.
     ARRAY and ROW are supported when their element or field types are
     recursively orderable. MAP is not supported, including when nested
     in an ARRAY or ROW.
@@ -179,9 +178,8 @@ General Aggregate Functions
     ``x`` must be an orderable type.
 
     Supported scalar types are BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, VARCHAR, VARBINARY, DATE, TIME, TIMESTAMP,
-    TIMESTAMP_UTC, and INTERVAL YEAR TO MONTH. UNKNOWN is supported for
-    null-only input.
+    REAL, DOUBLE, DECIMAL, VARCHAR, VARBINARY, DATE, TIME, TIMESTAMP, and
+    TIMESTAMP_UTC. UNKNOWN is supported for null-only input.
     ARRAY and ROW are supported when their element or field types are
     recursively orderable. MAP is not supported, including when nested
     in an ARRAY or ROW.
