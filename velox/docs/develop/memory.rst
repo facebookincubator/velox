@@ -623,11 +623,16 @@ The end-to-end memory arbitration process in *SharedArbitrator* works as follows
       reclaimed memory to the requestor pool by increasing its memory capacity
       (*MemoryPool::grow*). If not, the memory arbitrator has to call
       *SharedArbitrator::handleOOM* to send the memory pool abort
-      (*MemoryPool::abort*) request to the candidate memory pool with the largest
-      capacity as victim to free up memory to let the other running queries
-      with enough memory proceed. The memory pool abort fails the query
-      execution and waits for its completion to release all the held memory
-      resources.
+      (*MemoryPool::abort*) request to a victim memory pool to free up memory to
+      let the other running queries with enough memory proceed. The victim is
+      chosen by a badness score that blends reclaimer priority with capacity:
+      ``score = currentCapacity + priority * (abort-priority-weight-pct *
+      arbitratorCapacity)``. A higher score means better victim. The
+      *abort-priority-weight-pct* config (default 1.0) controls how strongly
+      priority dominates: a large value keeps priority dominant, a small value
+      lets capacity matter. When scores are equal, the younger participant is
+      aborted first. The memory pool abort fails the query execution and waits
+      for its completion to release all the held memory resources.
 
    f. If the victim query pool is the requestor pool itself, then memory
       arbitration fails. Otherwise, go back to step-6-c to retry the memory
