@@ -22,6 +22,7 @@
 #include "velox/functions/sparksql/Base64Function.h"
 #include "velox/functions/sparksql/CharTypeWriteSideCheck.h"
 #include "velox/functions/sparksql/ConcatWs.h"
+#include "velox/functions/sparksql/Decode.h"
 #include "velox/functions/sparksql/FormatNumber.h"
 #include "velox/functions/sparksql/InitcapFunction.h"
 #include "velox/functions/sparksql/LuhnCheckFunction.h"
@@ -66,6 +67,8 @@ void registerToPrettyStringFunctions(const std::string& prefix) {
 
 void registerStringFunctions(const std::string& prefix) {
   registerSparkStringFunctions(prefix);
+  registerFunction<DecodeFunction, Varchar, Varbinary, Varchar>(
+      {prefix + "decode"});
   // randstr(length, seed) - Spark's analyzer always provides a seed.
   registerFunction<
       RandStrFunction,

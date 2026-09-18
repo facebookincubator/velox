@@ -41,6 +41,7 @@ add_executable(
   DecimalCeilFloorTest.cpp
   DecimalRoundTest.cpp
   DecimalUtilTest.cpp
+  DecodeTest.cpp
   ElementAtTest.cpp
   FactorialTest.cpp
   FilterTest.cpp
