@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include "velox/dwio/nimble/common/Types.h"
+
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,7 +31,8 @@ class FileProperties {
   FileProperties(
       bool compactRowCountEncoding,
       bool clusterIndexKeyColumnStorageOmitted,
-      std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage);
+      std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
+      std::optional<uint8_t> streamChecksumType = std::nullopt);
 
   /// Returns whether encoded stream row counts use compact varint encoding.
   bool compactRowCountEncoding() const {
@@ -46,6 +50,18 @@ class FileProperties {
     return clusterIndexKeyColumnsWithOmittedStorage_;
   }
 
+  /// Returns the raw ChecksumType byte used for per-stream checksums, or
+  /// nullopt when the file carries none. Presence and type are one value here
+  /// so the two cannot contradict each other; they are separate fields on disk
+  /// only because ChecksumType has no spare value meaning "absent".
+  ///
+  /// Deliberately not a ChecksumType: this is parsed for every reader, so an
+  /// unrecognized value must stay readable here and be rejected only by a
+  /// reader that actually verifies.
+  std::optional<uint8_t> streamChecksumType() const {
+    return streamChecksumType_;
+  }
+
   /// Serializes file properties into the `columnar.properties` optional
   /// section.
   std::string serialize() const;
@@ -57,6 +73,7 @@ class FileProperties {
   bool compactRowCountEncoding_{false};
   bool clusterIndexKeyColumnStorageOmitted_{false};
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage_;
+  std::optional<uint8_t> streamChecksumType_;
 };
 
 } // namespace facebook::nimble

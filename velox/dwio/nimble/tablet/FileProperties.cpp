@@ -20,18 +20,28 @@
 
 #include "flatbuffers/flatbuffers.h"
 
+#include <limits>
 #include <utility>
 
 namespace facebook::nimble {
 
+namespace {
+// Written when the file carries no stream checksums, so the type byte never
+// reads as a real ChecksumType for a reader that skips has_stream_checksums.
+constexpr uint8_t kInvalidStreamChecksumType =
+    std::numeric_limits<uint8_t>::max();
+} // namespace
+
 FileProperties::FileProperties(
     bool compactRowCountEncoding,
     bool clusterIndexKeyColumnStorageOmitted,
-    std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage)
+    std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
+    std::optional<uint8_t> streamChecksumType)
     : compactRowCountEncoding_{compactRowCountEncoding},
       clusterIndexKeyColumnStorageOmitted_{clusterIndexKeyColumnStorageOmitted},
       clusterIndexKeyColumnsWithOmittedStorage_{
-          std::move(clusterIndexKeyColumnsWithOmittedStorage)} {
+          std::move(clusterIndexKeyColumnsWithOmittedStorage)},
+      streamChecksumType_{streamChecksumType} {
   NIMBLE_CHECK_EQ(
       clusterIndexKeyColumnStorageOmitted_,
       !clusterIndexKeyColumnsWithOmittedStorage_.empty(),
@@ -60,7 +70,9 @@ std::string FileProperties::serialize() const {
           builder,
           clusterIndexKeyColumnStorageOmitted_,
           clusterIndexKeyColumnsWithOmittedStorage,
-          compactEncodingOffset));
+          compactEncodingOffset,
+          streamChecksumType_.has_value(),
+          streamChecksumType_.value_or(kInvalidStreamChecksumType)));
 
   return std::string{
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
@@ -88,10 +100,23 @@ FileProperties FileProperties::deserialize(std::string_view data) {
       serialized->cluster_index_key_column_storage_omitted(),
       !clusterIndexKeyColumnsWithOmittedStorage.empty(),
       "cluster_index_key_column_storage_omitted must match cluster_index_key_columns_with_omitted_storage presence");
+
+  // Deliberately not validated here. initProperties() runs for every reader,
+  // including full scans that never look at stream checksums, so rejecting an
+  // unrecognized type at this point would make the first file written with a
+  // future checksum type unreadable by every already-deployed binary. Readers
+  // that actually verify resolve the type through ChecksumFactory, which
+  // rejects what it cannot construct.
+  std::optional<uint8_t> streamChecksumType;
+  if (serialized->has_stream_checksums()) {
+    streamChecksumType = serialized->stream_checksum_type();
+  }
+
   return FileProperties{
       compactRowCountEncoding,
       serialized->cluster_index_key_column_storage_omitted(),
-      std::move(clusterIndexKeyColumnsWithOmittedStorage)};
+      std::move(clusterIndexKeyColumnsWithOmittedStorage),
+      streamChecksumType};
 }
 
 } // namespace facebook::nimble

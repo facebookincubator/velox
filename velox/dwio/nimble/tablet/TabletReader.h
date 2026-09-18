@@ -401,6 +401,13 @@ class TabletReader {
   /// stream does not exist in this stripe. O(1) point read.
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
 
+  /// Returns the recorded checksum of `streamId` within `stripe`, or 0 when
+  /// the file carries no per-stream checksums. Gate on
+  /// properties().streamChecksumType() rather than on a non-zero result.
+  /// O(1) point read.
+  uint32_t streamChecksum(const StripeIdentifier& stripe, uint32_t streamId)
+      const;
+
   /// Relative byte location of one stream within a stripe. A zero size means
   /// the stream is absent.
   using StreamLocation = StripeGroup::StreamLocation;
@@ -531,6 +538,14 @@ class TabletReader {
   std::shared_ptr<StripeGroup> stripeGroup(uint32_t stripeGroupIndex) const;
 
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
+
+  // Rejects a file whose properties claim per-stream checksums while a stripe
+  // group lacks the array. Without this the group's checksums all read as 0 and
+  // every stream in it fails verification, reporting storage corruption for
+  // what is really a malformed file.
+  void checkStreamChecksumsPresent(
+      const StripeGroup& stripeGroup,
+      uint32_t stripeGroupIndex) const;
 
   // Parses the shared index section and caches its runtime descriptors.
   void initIndexDescriptors();

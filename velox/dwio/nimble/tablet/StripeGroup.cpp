@@ -65,6 +65,26 @@ std::unique_ptr<EncodingView> makeStripeGroupView(
   return view;
 }
 
+// Validates and returns a pointer into the flat stripe-major checksum array,
+// or nullptr when the group carries none. `expectedLength` is the length of
+// the offsets array, which the checksum array must match exactly.
+const uint32_t* stripeGroupChecksums(
+    const flatbuffers::Vector<uint32_t>* fbVec,
+    size_t expectedLength) {
+  // Null is the only legitimate way for a group to carry no checksums: the
+  // writer omits the field entirely. Callers return before reaching here when
+  // the group has no streams, so a present-but-empty array is an inconsistent
+  // file and the length check below rejects it.
+  if (fbVec == nullptr) {
+    return nullptr;
+  }
+  NIMBLE_CHECK_FILE_EQ(
+      fbVec->size(),
+      expectedLength,
+      "stream_checksums length must match stream_offsets.");
+  return fbVec->data();
+}
+
 } // namespace
 
 StripeGroup::StripeGroup(
@@ -120,6 +140,8 @@ StripeGroup::StripeGroup(
       streamCount_ = offsetsLen / stripeCount_;
       raw_.offsets = offsets->data();
       raw_.sizes = sizes->data();
+      streamChecksums_ =
+          stripeGroupChecksums(root->stream_checksums(), offsetsLen);
       return;
     }
 
@@ -164,6 +186,9 @@ StripeGroup::StripeGroup(
         streamMajor_.sizes.emplace_back(
             makeStripeGroupView(sizesEntry->data(), stripeCount_, pool));
       }
+      streamChecksums_ = stripeGroupChecksums(
+          root->stream_checksums(),
+          static_cast<size_t>(stripeCount_) * streamCount_);
       return;
     }
   }
@@ -214,6 +239,15 @@ uint32_t StripeGroup::streamSize(uint32_t stripeIndex, uint32_t streamId)
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
 }
 
+uint32_t StripeGroup::streamChecksum(uint32_t stripeIndex, uint32_t streamId)
+    const {
+  NIMBLE_CHECK_LT(streamId, streamCount_, "streamId is out of range.");
+  const auto stripeOffset = this->stripeOffset(stripeIndex);
+  // Flat in every layout, so no encodingLayout_ dispatch is needed here.
+  return checksumAt(
+      static_cast<size_t>(stripeOffset) * streamCount_ + streamId);
+}
+
 void StripeGroup::streamLocations(
     uint32_t stripeIndex,
     std::span<StreamLocation> locations) const {
@@ -226,13 +260,16 @@ void StripeGroup::streamLocations(
       const auto base = static_cast<size_t>(localStripe) * streamCount_;
       for (uint32_t streamId{0}; streamId < streamCount_; ++streamId) {
         const auto size = raw_.sizes[base + streamId];
-        locations[streamId] = size == 0
-            ? StreamLocation{}
-            : StreamLocation{raw_.offsets[base + streamId], size};
+        locations[streamId] = size == 0 ? StreamLocation{}
+                                        : StreamLocation{
+                                              raw_.offsets[base + streamId],
+                                              size,
+                                              checksumAt(base + streamId)};
       }
       return;
     }
-    case EncodingLayout::kStreamMajor:
+    case EncodingLayout::kStreamMajor: {
+      const auto base = static_cast<size_t>(localStripe) * streamCount_;
       for (uint32_t streamId{0}; streamId < streamCount_; ++streamId) {
         const auto size = readEncodingViewAt<uint32_t>(
             streamMajor_.sizes[streamId].get(), localStripe);
@@ -242,9 +279,11 @@ void StripeGroup::streamLocations(
         }
         const auto offset = readEncodingViewAt<uint32_t>(
             streamMajor_.offsets[streamId].get(), localStripe);
-        locations[streamId] = StreamLocation{offset, size};
+        locations[streamId] =
+            StreamLocation{offset, size, checksumAt(base + streamId)};
       }
       return;
+    }
   }
   NIMBLE_UNREACHABLE(
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
@@ -270,13 +309,16 @@ void StripeGroup::streamLocations(
           continue;
         }
         const auto size = raw_.sizes[base + streamId];
-        locations[i] = size == 0
-            ? StreamLocation{}
-            : StreamLocation{raw_.offsets[base + streamId], size};
+        locations[i] = size == 0 ? StreamLocation{}
+                                 : StreamLocation{
+                                       raw_.offsets[base + streamId],
+                                       size,
+                                       checksumAt(base + streamId)};
       }
       return;
     }
-    case EncodingLayout::kStreamMajor:
+    case EncodingLayout::kStreamMajor: {
+      const auto base = static_cast<size_t>(localStripe) * streamCount_;
       for (size_t i = 0; i < streamIds.size(); ++i) {
         const auto streamId = streamIds[i];
         if (streamId >= streamCount_) {
@@ -291,9 +333,11 @@ void StripeGroup::streamLocations(
         }
         const auto offset = readEncodingViewAt<uint32_t>(
             streamMajor_.offsets[streamId].get(), localStripe);
-        locations[i] = StreamLocation{offset, size};
+        locations[i] =
+            StreamLocation{offset, size, checksumAt(base + streamId)};
       }
       return;
+    }
   }
   NIMBLE_UNREACHABLE(
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
