@@ -16,6 +16,7 @@
 #pragma once
 
 #include <span>
+#include <vector>
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -112,6 +113,13 @@ class PrefixEncoding final
   std::string debugString(int offset) const final;
 
  private:
+  struct StringPageSlot {
+    // Non-owning page address returned by stringBufferFactory_.
+    char* data;
+    // Number of writable bytes in the page.
+    size_t capacity;
+  };
+
   // Static helper methods for initializing const members.
   // startOffset is where encoding-specific data begins (after the base prefix).
   static uint32_t readRestartInterval(
@@ -159,9 +167,8 @@ class PrefixEncoding final
     return dataStart_ + restartOffset(restartIndex);
   }
 
-  // Allocates a new string page of at least minSize bytes via
-  // stringBufferFactory_.
-  void allocatePage(size_t minSize);
+  // Reuses or allocates a string page of at least minSize bytes.
+  void acquireStringPage(size_t minSize);
 
   // Factory for allocating string buffers tracked by ChunkedDecoder.
   // Used by decodeEntry() to allocate pages for stable string storage.
@@ -189,6 +196,10 @@ class PrefixEncoding final
   char* currentPage_{nullptr};
   size_t pageCapacity_{0};
   size_t pageUsed_{0};
+  // Factory-allocated pages retained as non-owning slots for reuse after reset.
+  std::vector<StringPageSlot> stringPages_;
+  // Slot containing currentPage_.
+  size_t currentPageIndex_{0};
 
   static constexpr size_t kStringPageSize = 256 * 1024;
 };

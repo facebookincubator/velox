@@ -74,7 +74,8 @@ CudfIcebergDataSource::createCudfSplitReader() {
       ioStatistics_,
       ioStats_,
       useExperimentalCudfReader_,
-      subfieldFilterExpr_);
+      subfieldFilterAst_,
+      CudfHiveDataSource::getFilters());
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

@@ -216,8 +216,8 @@ void runEncodingViewFuzzer(
               velox::AlignedBuffer::allocate<char>(bytes, pool.get()));
           return stringBuffer->asMutable<void>();
         };
-        auto encoding = EncodingFactory(options).create(
-            *pool, serialized, stringBufferFactory);
+        auto encoding = EncodingFactory().create(
+            *pool, serialized, stringBufferFactory, options);
         ASSERT_NE(encoding, nullptr);
 
         T expected;

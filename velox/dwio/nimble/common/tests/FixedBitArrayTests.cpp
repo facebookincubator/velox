@@ -24,7 +24,7 @@
 
 using namespace ::facebook;
 
-TEST(FixedBitArrayTests, SetThenGet) {
+TEST(FixedBitArrayTests, setThenGet) {
   constexpr int bitWidth = 10;
   constexpr int elementCount = 10000;
   auto buffer = std::make_unique<char[]>(
@@ -67,7 +67,7 @@ TEST(FixedBitArrayTests, zeroAndSet) {
 constexpr int kNumTestsPerBitWidth = 10;
 constexpr int kMaxElements = 1000;
 
-TEST(FixedBitArrayTests, SetThenGetRandom) {
+TEST(FixedBitArrayTests, setThenGetRandom) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -121,7 +121,7 @@ TEST(FixedBitArrayTests, zeroAndSetThenGetRandom) {
   }
 }
 
-TEST(FixedBitArrayTests, Set32ThenGet32Random) {
+TEST(FixedBitArrayTests, set32ThenGet32Random) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -169,7 +169,7 @@ TEST(FixedBitArrayTests, bulkGet32) {
   }
 }
 
-TEST(FixedBitArrayTests, BulkGet32Random) {
+TEST(FixedBitArrayTests, bulkGet32Random) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -212,7 +212,7 @@ TEST(FixedBitArrayTests, BulkGet32Random) {
   }
 }
 
-TEST(FixedBitArrayTests, BulkGetWithBaseline32Random) {
+TEST(FixedBitArrayTests, bulkGetWithBaseline32Random) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -360,7 +360,7 @@ TEST(FixedBitArrayTests, bulkGet64WithBaselineZeroBaseline) {
   }
 }
 
-TEST(FixedBitArrayTests, BulkSet32Random) {
+TEST(FixedBitArrayTests, bulkSet32Random) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -385,7 +385,7 @@ TEST(FixedBitArrayTests, BulkSet32Random) {
   }
 }
 
-TEST(FixedBitArrayTests, BulkSet32WithBaselineRandom) {
+TEST(FixedBitArrayTests, bulkSet32WithBaselineRandom) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -415,7 +415,7 @@ TEST(FixedBitArrayTests, BulkSet32WithBaselineRandom) {
   }
 }
 
-TEST(FixedBitArrayTests, Equals32Random) {
+TEST(FixedBitArrayTests, equals32Random) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);

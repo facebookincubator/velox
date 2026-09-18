@@ -41,7 +41,7 @@ class SerializerDumpLibTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_F(SerializerDumpLibTest, BasicStats) {
+TEST_F(SerializerDumpLibTest, basicStats) {
   // Create a simple Row<int32_t, int64_t> schema and serialize some data.
   auto type = velox::ROW({"a", "b"}, {velox::INTEGER(), velox::BIGINT()});
 
@@ -95,7 +95,7 @@ TEST_F(SerializerDumpLibTest, BasicStats) {
   EXPECT_NE(str.find("Nimble encoding dump"), std::string::npos);
 }
 
-TEST_F(SerializerDumpLibTest, MultipleSerializations) {
+TEST_F(SerializerDumpLibTest, multipleSerializations) {
   auto type = velox::ROW({"x"}, {velox::INTEGER()});
 
   SerializerOptions options{
@@ -138,7 +138,7 @@ TEST_F(SerializerDumpLibTest, MultipleSerializations) {
   EXPECT_EQ(stats.rowCount, 12);
 }
 
-TEST_F(SerializerDumpLibTest, Reset) {
+TEST_F(SerializerDumpLibTest, reset) {
   auto type = velox::ROW({"v"}, {velox::INTEGER()});
 
   SerializerOptions options{

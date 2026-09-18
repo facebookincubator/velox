@@ -59,6 +59,8 @@ class MetadataInput {
     // When both fileHandle and cache are set, creates CachedMetadataInput.
     const velox::FileHandle* fileHandle{nullptr};
     velox::cache::AsyncDataCache* cache{nullptr};
+    /// When set, metadata entries above this size in bytes bypass the cache.
+    std::optional<uint32_t> maxCacheEntrySize{};
   };
 
   static std::unique_ptr<MetadataInput> create(
@@ -268,6 +270,9 @@ class CachedMetadataInput : public MetadataInput {
       const std::vector<std::optional<velox::cache::CachePin>>& cachePins,
       ReadBuffers& readBuffers);
 
+  // Returns whether an entry of 'size' is eligible for this cache.
+  bool cacheable(uint64_t size) const;
+
   // Waits for a cache pin to become available via findOrCreate.
   // Blocks until the pin is no longer exclusively held by another thread.
   velox::cache::CachePin acquireCachePin(
@@ -297,6 +302,7 @@ class CachedMetadataInput : public MetadataInput {
 
   velox::cache::AsyncDataCache* const cache_;
   const velox::StringIdLease fileId_;
+  const std::optional<uint32_t> maxCacheEntrySize_;
 };
 
 } // namespace facebook::nimble

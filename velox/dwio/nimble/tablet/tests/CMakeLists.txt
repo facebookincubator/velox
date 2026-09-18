@@ -14,9 +14,10 @@
 add_executable(
   nimble_tablet_tests
   CompressionTest.cpp
-  FileFeaturesTest.cpp
+  FilePropertiesTest.cpp
   FileLayoutTest.cpp
   MetadataBufferTest.cpp
+  SharedDictionaryReaderTest.cpp
   TabletTest.cpp
   TabletTestUtils.h
 )
@@ -28,11 +29,15 @@ target_link_libraries(
   nimble_tablet_reader
   nimble_tablet_writer
   nimble_index
+  nimble_vector_index
   nimble_index_test_utils
   nimble_common
+  nimble_writer
   velox_dwio_common
   velox_memory
   velox_file
+  velox_vector
+  gmock
   gtest
   gtest_main
   glog::glog

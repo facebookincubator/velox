@@ -17,6 +17,9 @@
 #include "velox/dwio/nimble/serializer/ChunkedStreamPayload.h"
 
 #include <cstring>
+#include <optional>
+#include <string_view>
+#include <vector>
 
 #include <lz4.h>
 #include <zstd.h>
@@ -122,28 +125,75 @@ void appendChunkData(
   }
 }
 
-} // namespace
-
-std::string_view stripChunkHeaders(
+std::optional<std::string_view> tryStripUncompressedChunks(
     std::string_view streamData,
     Buffer& outputBuffer) {
   NIMBLE_CHECK_GE(
       streamData.size(), kChunkHeaderSize, "Truncated chunk header in stream");
 
-  const auto* pos = streamData.data();
+  auto* pos = streamData.data();
   const auto* const end = pos + streamData.size();
   const auto [firstChunkLength, firstCompressionType] = readChunkHeader(pos);
   NIMBLE_CHECK_LE(
       firstChunkLength,
       static_cast<uint32_t>(end - pos),
       "Chunk data exceeds stream boundary");
-  if (pos + firstChunkLength == end &&
-      firstCompressionType == CompressionType::Uncompressed) {
+  if (firstCompressionType != CompressionType::Uncompressed) {
+    return std::nullopt;
+  }
+  if (pos + firstChunkLength == end) {
     NIMBLE_CHECK_GT(
         firstChunkLength, 0, "Chunked stream must have a non-empty payload");
-    return {pos, firstChunkLength};
+    return std::string_view{pos, firstChunkLength};
   }
 
+  std::vector<std::string_view> chunks{{pos, firstChunkLength}};
+  size_t payloadSize{firstChunkLength};
+  pos += firstChunkLength;
+
+  while (pos < end) {
+    NIMBLE_CHECK_GE(
+        static_cast<size_t>(end - pos),
+        kChunkHeaderSize,
+        "Truncated chunk header in stream");
+    const auto [chunkLength, compressionType] = readChunkHeader(pos);
+    NIMBLE_CHECK_LE(
+        chunkLength,
+        static_cast<uint32_t>(end - pos),
+        "Chunk data exceeds stream boundary");
+    if (compressionType != CompressionType::Uncompressed) {
+      return std::nullopt;
+    }
+    chunks.push_back({pos, chunkLength});
+    payloadSize += chunkLength;
+    pos += chunkLength;
+  }
+
+  NIMBLE_CHECK_GT(
+      payloadSize, 0, "Chunked stream must have a non-empty payload");
+  auto* const data = outputBuffer.reserve(payloadSize);
+  auto* output = data;
+  auto* const outputEnd = output + payloadSize;
+  for (const auto chunk : chunks) {
+    std::memcpy(output, chunk.data(), chunk.size());
+    output += chunk.size();
+  }
+  NIMBLE_CHECK_EQ(output, outputEnd, "Stripped chunk size mismatch");
+  return std::string_view{data, payloadSize};
+}
+
+} // namespace
+
+std::string_view stripChunkHeaders(
+    std::string_view streamData,
+    Buffer& outputBuffer) {
+  if (auto uncompressedData =
+          tryStripUncompressedChunks(streamData, outputBuffer)) {
+    return *uncompressedData;
+  }
+
+  const char* pos = streamData.data();
+  const auto* const end = pos + streamData.size();
   const auto payloadSize = strippedStreamSize(streamData.data(), end);
   NIMBLE_CHECK_GT(
       payloadSize, 0, "Chunked stream must have a non-empty payload");

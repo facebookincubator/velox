@@ -20,9 +20,15 @@ buck build fbcode//velox/dwio/nimble/encodings/benchmarks:
 
 ## Deterministic encoding runner
 
-`nimble_encoding_runner_bin` is a machine-readable Stage-0 runner for Nimble
-encoding optimization. It currently accepts Dictionary, Nullable, ALP, and
+`nimble_encoding_runner_bin` is a machine-readable runner for Nimble encoding
+optimization. It currently accepts RLE, Dictionary, Nullable, ALP, and
 DeltaBlock task IDs.
+
+The RLE producer tasks use a bounded profile: each child must be uncompressed
+Trivial or FixedBitWidth with a positive bit width. The replayed `encode` layout
+uses Trivial run lengths and FixedBitWidth run values; `selection_e2e` may
+choose either accepted child layout. Peer artifacts outside that profile fail
+closed before the runner constructs a Nimble decoder.
 
 ```bash
 buck2 run fbcode//velox/dwio/nimble/encodings/benchmarks:nimble_encoding_runner_bin -- \
@@ -60,6 +66,10 @@ describes one linked Nimble implementation and is deliberately not an
 aggregate scoring report. A trusted host-side grader must run pristine and
 candidate binaries, verify their artifacts in both directions, and merge their
 outputs with manifest-owned scoring metadata.
+
+The runner accepts a single timing sample so a trusted host can interleave
+reference and candidate invocations in balanced A/B or B/A order. The final
+grader remains responsible for enforcing its minimum paired-sample count.
 
 ## Encoding Comparison
 

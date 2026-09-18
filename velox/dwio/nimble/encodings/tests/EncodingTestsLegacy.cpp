@@ -258,7 +258,7 @@ using TestTypes = ::testing::Types<
 
 TYPED_TEST_CASE(EncodingTestsLegacy, TestTypes);
 
-TYPED_TEST(EncodingTestsLegacy, Materialize) {
+TYPED_TEST(EncodingTestsLegacy, materialize) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
   std::mt19937 rng(seed);
@@ -371,7 +371,7 @@ void checkScatteredOutput(
   }
 }
 
-TYPED_TEST(EncodingTestsLegacy, ScatteredMaterialize) {
+TYPED_TEST(EncodingTestsLegacy, scatteredMaterialize) {
   using E = typename TypeParam::cppDataType;
 
   auto seed = folly::Random::rand32();

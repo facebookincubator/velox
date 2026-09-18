@@ -172,42 +172,48 @@ uint64_t NimbleData::skipNulls(uint64_t numValues, bool /*nullsOnly*/) {
 
 ChunkedDecoder NimbleData::makeScalarDecoder() {
   const auto streamId = nimbleType_->asScalar().scalarDescriptor().offset();
+  auto input = streams_->enqueue(static_cast<int>(streamId), lazyColumnIo_);
   return ChunkedDecoder(
-      streams_->enqueue(streamId, lazyColumnIo_),
-      streams_->streamIndex(streamId),
+      std::move(input),
+      streams_->streamIndex(static_cast<int>(streamId)),
       /*decodeValuesWithNulls=*/false,
       encodingFactory_,
       pool_,
       stringDecoderZeroCopy_,
-      decodingStats_);
+      decodingStats_,
+      streams_->dictionaryAlphabetLoader(streamId));
 }
 
 ChunkedDecoder NimbleData::makeMicrosDecoder() {
   VELOX_CHECK(nimbleType_->isTimestampMicroNano());
   const auto streamId =
       nimbleType_->asTimestampMicroNano().microsDescriptor().offset();
+  auto input = streams_->enqueue(static_cast<int>(streamId), lazyColumnIo_);
   return ChunkedDecoder(
-      streams_->enqueue(streamId, lazyColumnIo_),
-      streams_->streamIndex(streamId),
+      std::move(input),
+      streams_->streamIndex(static_cast<int>(streamId)),
       /*decodeValuesWithNulls=*/false,
       encodingFactory_,
       pool_,
       stringDecoderZeroCopy_,
-      decodingStats_);
+      decodingStats_,
+      streams_->dictionaryAlphabetLoader(streamId));
 }
 
 ChunkedDecoder NimbleData::makeNanosDecoder() {
   VELOX_CHECK(nimbleType_->isTimestampMicroNano());
   const auto streamId =
       nimbleType_->asTimestampMicroNano().nanosDescriptor().offset();
+  auto input = streams_->enqueue(static_cast<int>(streamId), lazyColumnIo_);
   return ChunkedDecoder(
-      streams_->enqueue(streamId, lazyColumnIo_),
-      streams_->streamIndex(streamId),
+      std::move(input),
+      streams_->streamIndex(static_cast<int>(streamId)),
       /*decodeValuesWithNulls=*/false,
       encodingFactory_,
       pool_,
       stringDecoderZeroCopy_,
-      decodingStats_);
+      decodingStats_,
+      streams_->dictionaryAlphabetLoader(streamId));
 }
 
 std::unique_ptr<ChunkedDecoder> NimbleData::makeLengthDecoder() {
@@ -238,7 +244,8 @@ std::unique_ptr<ChunkedDecoder> NimbleData::makeDecoder(
       encodingFactory_,
       pool_,
       stringDecoderZeroCopy_,
-      decodingStats_);
+      decodingStats_,
+      streams_->dictionaryAlphabetLoader(descriptor.offset()));
 }
 
 std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(

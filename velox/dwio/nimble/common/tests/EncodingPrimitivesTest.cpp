@@ -25,7 +25,7 @@ namespace facebook::nimble::encoding::test {
 
 // --- write/read round-trips for typed helpers ---
 
-TEST(EncodingPrimitivesTest, WriteReadUint32) {
+TEST(EncodingPrimitivesTest, writeReadUint32) {
   char buf[16];
   char* wpos = buf;
   writeUint32(12345, wpos);
@@ -36,7 +36,7 @@ TEST(EncodingPrimitivesTest, WriteReadUint32) {
   EXPECT_EQ(rpos, buf + sizeof(uint32_t));
 }
 
-TEST(EncodingPrimitivesTest, WriteReadUint64) {
+TEST(EncodingPrimitivesTest, writeReadUint64) {
   char buf[16];
   char* wpos = buf;
   writeUint64(0xDEADBEEFCAFEull, wpos);
@@ -47,7 +47,7 @@ TEST(EncodingPrimitivesTest, WriteReadUint64) {
   EXPECT_EQ(rpos, buf + sizeof(uint64_t));
 }
 
-TEST(EncodingPrimitivesTest, WriteReadChar) {
+TEST(EncodingPrimitivesTest, writeReadChar) {
   char buf[4];
   char* wpos = buf;
   writeChar('Z', wpos);
@@ -60,7 +60,7 @@ TEST(EncodingPrimitivesTest, WriteReadChar) {
 
 // --- write<T>/read<T> template round-trips ---
 
-TEST(EncodingPrimitivesTest, WriteReadTemplateInt32) {
+TEST(EncodingPrimitivesTest, writeReadTemplateInt32) {
   char buf[16];
   char* wpos = buf;
   write<int32_t>(-42, wpos);
@@ -69,7 +69,7 @@ TEST(EncodingPrimitivesTest, WriteReadTemplateInt32) {
   EXPECT_EQ((read<int32_t>(rpos)), -42);
 }
 
-TEST(EncodingPrimitivesTest, WriteReadTemplateFloat) {
+TEST(EncodingPrimitivesTest, writeReadTemplateFloat) {
   char buf[16];
   char* wpos = buf;
   write<float>(3.14f, wpos);
@@ -78,7 +78,7 @@ TEST(EncodingPrimitivesTest, WriteReadTemplateFloat) {
   EXPECT_FLOAT_EQ((read<float>(rpos)), 3.14f);
 }
 
-TEST(EncodingPrimitivesTest, WriteReadTemplateDouble) {
+TEST(EncodingPrimitivesTest, writeReadTemplateDouble) {
   char buf[16];
   char* wpos = buf;
   write<double>(2.718281828, wpos);
@@ -87,7 +87,7 @@ TEST(EncodingPrimitivesTest, WriteReadTemplateDouble) {
   EXPECT_DOUBLE_EQ((read<double>(rpos)), 2.718281828);
 }
 
-TEST(EncodingPrimitivesTest, WriteReadTemplateUint64) {
+TEST(EncodingPrimitivesTest, writeReadTemplateUint64) {
   char buf[16];
   char* wpos = buf;
   write<uint64_t>(999999999999ull, wpos);
@@ -98,7 +98,7 @@ TEST(EncodingPrimitivesTest, WriteReadTemplateUint64) {
 
 // --- writeString/readString with 4-byte length prefix ---
 
-TEST(EncodingPrimitivesTest, WriteReadString) {
+TEST(EncodingPrimitivesTest, writeReadString) {
   char buf[128];
   char* wpos = buf;
   std::string_view input = "hello";
@@ -112,7 +112,7 @@ TEST(EncodingPrimitivesTest, WriteReadString) {
   EXPECT_EQ(rpos, buf + sizeof(uint32_t) + 5);
 }
 
-TEST(EncodingPrimitivesTest, WriteReadStringEmpty) {
+TEST(EncodingPrimitivesTest, writeReadStringEmpty) {
   char buf[16];
   char* wpos = buf;
   writeString("", wpos);
@@ -126,7 +126,7 @@ TEST(EncodingPrimitivesTest, WriteReadStringEmpty) {
 
 // --- readOwnedString ---
 
-TEST(EncodingPrimitivesTest, ReadOwnedString) {
+TEST(EncodingPrimitivesTest, readOwnedString) {
   char buf[128];
   char* wpos = buf;
   writeString("owned", wpos);
@@ -140,7 +140,7 @@ TEST(EncodingPrimitivesTest, ReadOwnedString) {
 
 // --- writeBytes ---
 
-TEST(EncodingPrimitivesTest, WriteBytes) {
+TEST(EncodingPrimitivesTest, writeBytes) {
   char buf[32];
   char* wpos = buf;
   std::string_view data = "raw bytes";
@@ -151,7 +151,7 @@ TEST(EncodingPrimitivesTest, WriteBytes) {
 
 // --- peek ---
 
-TEST(EncodingPrimitivesTest, PeekDoesNotAdvance) {
+TEST(EncodingPrimitivesTest, peekDoesNotAdvance) {
   char buf[16];
   char* wpos = buf;
   write<uint32_t>(42, wpos);
@@ -163,7 +163,7 @@ TEST(EncodingPrimitivesTest, PeekDoesNotAdvance) {
   EXPECT_EQ(rpos, buf);
 }
 
-TEST(EncodingPrimitivesTest, PeekFloat) {
+TEST(EncodingPrimitivesTest, peekFloat) {
   char buf[16];
   char* wpos = buf;
   write<float>(1.5f, wpos);
@@ -175,7 +175,7 @@ TEST(EncodingPrimitivesTest, PeekFloat) {
 
 // --- Sequential writes and pointer advancement ---
 
-TEST(EncodingPrimitivesTest, SequentialWritesThenReads) {
+TEST(EncodingPrimitivesTest, sequentialWritesThenReads) {
   char buf[128];
   char* wpos = buf;
   write<uint32_t>(100, wpos);
@@ -195,7 +195,7 @@ TEST(EncodingPrimitivesTest, SequentialWritesThenReads) {
 
 // --- write/read via string_view template specialization ---
 
-TEST(EncodingPrimitivesTest, WriteReadTemplateStringView) {
+TEST(EncodingPrimitivesTest, writeReadTemplateStringView) {
   char buf[128];
   char* wpos = buf;
   write<std::string_view>(std::string_view("via template"), wpos);
@@ -205,7 +205,7 @@ TEST(EncodingPrimitivesTest, WriteReadTemplateStringView) {
   EXPECT_EQ(result, "via template");
 }
 
-TEST(EncodingPrimitivesTest, WriteReadTemplateStdString) {
+TEST(EncodingPrimitivesTest, writeReadTemplateStdString) {
   char buf[128];
   char* wpos = buf;
   std::string input = "std string";

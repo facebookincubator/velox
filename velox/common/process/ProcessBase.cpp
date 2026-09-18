@@ -25,6 +25,7 @@
 #include <folly/FileUtil.h>
 #include <folly/String.h>
 #include <gflags/gflags.h>
+#include <xsimd/xsimd.hpp>
 
 constexpr const char* kProcSelfCmdline = "/proc/self/cmdline";
 
@@ -111,6 +112,16 @@ bool avx2CpuFlag = folly::CpuId().avx2();
 bool hasAvx2() {
 #ifdef __AVX2__
   return avx2CpuFlag && FLAGS_avx2;
+#else
+  return false;
+#endif
+}
+
+bool hasSimd() {
+#if XSIMD_WITH_AVX2
+  return avx2CpuFlag && FLAGS_avx2;
+#elif XSIMD_WITH_NEON64
+  return true;
 #else
   return false;
 #endif

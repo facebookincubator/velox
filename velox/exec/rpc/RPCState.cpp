@@ -31,8 +31,9 @@ namespace facebook::velox::exec::rpc {
 
 namespace {
 // Safety ceiling for the BATCH latency-gradient window. The gradient backs off
-// as soon as queueing lifts RTT, well before this bound, so it caps
-// pathological growth rather than tuning throughput.
+// whenever queueing lifts RTT above the baseline, but the baseline EMA absorbs
+// sustained elevation and the window then resumes probing upward, so against a
+// backend that never visibly slows down this bound is what stops growth.
 constexpr int64_t kBatchMaxWindow = 256;
 
 // Monotonic now() in nanos for RTT measurement. steady_clock (not wall-clock)
@@ -125,6 +126,16 @@ std::vector<VectorPtr> RPCState::getInputBatchColumns(
   return inputBatches_[batchIndex].flatColumns;
 }
 
+void RPCState::releaseAllInputBatches() {
+  std::lock_guard<std::mutex> l(mutex_);
+  for (auto& batch : inputBatches_) {
+    batch.flatColumns.clear();
+    batch.activeRowCount = 0;
+  }
+  RPC_STATE_VLOG(1) << "releaseAllInputBatches: dropped "
+                    << inputBatches_.size() << " input batches";
+}
+
 void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
   std::lock_guard<std::mutex> l(mutex_);
   VELOX_CHECK_LT(
@@ -211,6 +222,7 @@ void RPCState::completeRow(
             .response = std::move(response),
             .rttNs = rttNs});
     inFlight_--;
+    ++numCompletionsSignaled_;
 
     if (rttNs > 0) {
       rttMinNs_ = std::min(rttMinNs_, rttNs);
@@ -316,6 +328,7 @@ void RPCState::addPendingBatch(
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
+              ++state->numCompletionsSignaled_;
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
@@ -328,6 +341,7 @@ void RPCState::addPendingBatch(
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
+              ++state->numCompletionsSignaled_;
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
@@ -559,6 +573,8 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .rttMaxNs = rttMaxNs_,
       .numRttSamples = numRttSamples_,
       .streamingMode = streamingMode_,
+      .inFlight = inFlight_,
+      .numCompletionsSignaled = numCompletionsSignaled_,
   };
 }
 

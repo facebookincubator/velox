@@ -19,6 +19,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/common/BufferedEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -75,6 +76,52 @@ class SparseBoolEncoding final : public TypedEncoding<bool, bool> {
 
   /// Advances rowCount rows and returns how many sparse positions were skipped.
   uint32_t skipSparseIndices(uint32_t rowCount);
+
+  /// True counts before and inside a row range.
+  struct RangeCounts {
+    /// Number of true values before the range offset.
+    uint32_t numTrueBeforeRange{0};
+
+    /// Number of true values inside the range.
+    uint32_t numTrueInRange{0};
+  };
+
+  /// Sliced SparseBool stream plus true counts needed by nested slicers.
+  struct SliceResult {
+    /// Encoded slice covering the requested row range.
+    std::string_view sliced;
+
+    /// True counts before and inside the requested row range.
+    RangeCounts counts;
+  };
+
+  /// Fills true counts before and inside non-empty rows [offset, offset +
+  /// length).
+  static void countTrue(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      velox::memory::MemoryPool* pool,
+      RangeCounts& counts,
+      const Encoding::Options& options = {});
+
+  /// Counts true values in non-empty rows [offset, offset + length).
+  static uint32_t countTrue(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      velox::memory::MemoryPool* pool,
+      const Encoding::Options& options = {});
+
+  /// Slices rows [offset, offset + length) and counts true values before and
+  /// inside the slice from the sparse-position bounds located during slicing,
+  /// avoiding a second pass over the position stream.
+  static SliceResult sliceAndCount(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      const Encoding::Options& options);
 
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params);

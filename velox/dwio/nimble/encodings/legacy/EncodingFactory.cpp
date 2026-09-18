@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
@@ -65,8 +66,8 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     std::string_view data,
     std::function<void*(uint32_t)> stringBufferFactory) const {
   // Maybe we should have a magic number of encodings too? Hrm.
-  const EncodingType encodingType = static_cast<EncodingType>(data[0]);
-  const DataType dataType = static_cast<DataType>(data[1]);
+  const EncodingType encodingType = EncodingPrefix::encodingType(data);
+  const DataType dataType = EncodingPrefix::readDataType(data);
 #define RETURN_ENCODING_BY_LEAF_TYPE(Encoding, dataType)                  \
   switch (dataType) {                                                     \
     case DataType::Int8:                                                  \
@@ -292,6 +293,10 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::DeltaBlock: {
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::DeltaBlockEncoding, dataType);
+    }
+    case EncodingType::EliasFano: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::EliasFanoEncoding, dataType);
     }
     // SubIntSplit integration commented out (disabled):
     /*

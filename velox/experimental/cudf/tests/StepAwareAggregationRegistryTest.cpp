@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
@@ -63,6 +64,7 @@ class StepAwareAggregationRegistryTest : public ::testing::Test {
  protected:
   void SetUp() override {
     memory::MemoryManager::testingSetInstance({});
+    CudfConfig::getInstance().allowCpuFallback = false;
     registerCudf();
     facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
     queryCtx_ = core::QueryCtx::create();

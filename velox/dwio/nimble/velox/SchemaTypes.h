@@ -59,6 +59,29 @@ enum class Kind : uint8_t {
 std::string toString(ScalarKind kind);
 std::string toString(Kind kind);
 
+/// Returns true for signed and unsigned integer scalar kinds.
+inline bool isIntegerScalarKind(ScalarKind kind) {
+  switch (kind) {
+    case ScalarKind::Int8:
+    case ScalarKind::UInt8:
+    case ScalarKind::Int16:
+    case ScalarKind::UInt16:
+    case ScalarKind::Int32:
+    case ScalarKind::UInt32:
+    case ScalarKind::Int64:
+    case ScalarKind::UInt64:
+      return true;
+    case ScalarKind::Float:
+    case ScalarKind::Double:
+    case ScalarKind::Bool:
+    case ScalarKind::String:
+    case ScalarKind::Binary:
+    case ScalarKind::Undefined:
+      return false;
+  }
+  return false;
+}
+
 inline std::ostream& operator<<(std::ostream& os, ScalarKind kind) {
   return os << toString(kind);
 }

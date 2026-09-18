@@ -18,9 +18,10 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <cstddef>
 #include <cstdint>
@@ -46,7 +47,7 @@ void fillOffsetsForDecimalSumState(
     cudf::type_id offsetType,
     cudf::mutable_column_view offsetsView,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * Encodes each row's partial sum and count into the fixed-width device layout
@@ -70,7 +71,7 @@ void packDecimalSumState(
     cudf::column_view offsetsView,
     uint8_t* chars,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * Decodes each non-null row of a serialized decimal SUM state STRING column.
@@ -87,7 +88,7 @@ bool unpackDecimalSumState(
     cudf::column_view stateCol,
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * Per-row half-up integer divide of sum by count; count == 0 writes zero
@@ -107,7 +108,7 @@ void averageRoundDecimalSum(
     const int64_t* counts,
     cudf::mutable_column_view outView,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * Builds a null mask for rows where sum and count are both valid and count is
@@ -122,7 +123,7 @@ void averageRoundDecimalSum(
 std::pair<rmm::device_buffer, cudf::size_type> buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox::detail

@@ -74,6 +74,8 @@ struct HiveConnectorSplit : public FileConnectorSplit {
       std::optional<FileProperties> _properties = std::nullopt,
       std::optional<RowIdProperties> _rowIdProperties = std::nullopt,
       const std::optional<HiveBucketConversion>& _bucketConversion =
+          std::nullopt,
+      std::optional<dwio::common::ColumnMappingMode> _columnMappingMode =
           std::nullopt)
       : FileConnectorSplit(
             connectorId,
@@ -84,7 +86,8 @@ struct HiveConnectorSplit : public FileConnectorSplit {
             splitWeight,
             cacheable,
             std::move(_properties),
-            _partitionKeys),
+            _partitionKeys,
+            _columnMappingMode),
         infoColumns(_infoColumns),
         serdeParameters(_serdeParameters),
         tableBucketNumber(_tableBucketNumber),
@@ -196,8 +199,19 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& columnMappingMode(
+      dwio::common::ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
+    return *this;
+  }
+
   HiveConnectorSplitBuilder& batchSizeHint(int32_t hint) {
     batchSizeHint_ = hint;
+    return *this;
+  }
+
+  HiveConnectorSplitBuilder& physicalFilePath(std::string path) {
+    physicalFilePath_ = std::move(path);
     return *this;
   }
 
@@ -218,13 +232,16 @@ class HiveConnectorSplitBuilder {
         infoColumns_,
         fileProperties_,
         rowIdProperties_,
-        bucketConversion_);
+        bucketConversion_,
+        columnMappingMode_);
     split->batchSizeHint = batchSizeHint_;
+    split->physicalFilePath = physicalFilePath_;
     return split;
   }
 
  private:
   const std::string filePath_;
+  std::string physicalFilePath_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};
   uint64_t length_{std::numeric_limits<uint64_t>::max()};
@@ -240,6 +257,7 @@ class HiveConnectorSplitBuilder {
   bool cacheable_{true};
   std::optional<FileProperties> fileProperties_;
   std::optional<RowIdProperties> rowIdProperties_ = std::nullopt;
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
   int32_t batchSizeHint_{0};
 };
 

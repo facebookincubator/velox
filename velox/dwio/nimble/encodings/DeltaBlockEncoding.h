@@ -24,6 +24,7 @@
 #include <type_traits>
 
 #include <fmt/format.h>
+#include <folly/CPortability.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -126,12 +127,6 @@ class DeltaBlockEncoding final
     return std::min<uint32_t>(blockSize, rowCount - start);
   }
 
-  static Encoding::Options prefixOptions(Encoding::Options options) {
-    // DeltaBlock is written with the varint row-count prefix.
-    options.useVarintRowCount = true;
-    return options;
-  }
-
   static uint8_t bitsRequired(uint64_t value) {
     return value == 0 ? 0
                       : static_cast<uint8_t>(velox::bits::bitsRequired(value));
@@ -192,7 +187,7 @@ DeltaBlockEncoding<T>::DeltaBlockEncoding(
     std::string_view data,
     const std::function<void*(uint32_t)>& /*stringBufferFactory*/,
     const Encoding::Options& options)
-    : TypedEncoding<T, physicalType>{pool, data, prefixOptions(options)},
+    : TypedEncoding<T, physicalType>{pool, data, options},
       blockBases_{this->template getVectorBuffer<physicalType>()},
       bitWidths_{this->template getVectorBuffer<uint8_t>()},
       blockOffsets_{this->template getVectorBuffer<uint32_t>()},
@@ -423,7 +418,7 @@ std::optional<uint64_t> DeltaBlockEncoding<T>::estimateSize(
     }
   }
 
-  return Encoding::serializePrefixSize(rowCount, /*useVarint=*/true) +
+  return Encoding::serializePrefixSize(rowCount, options.useVarintRowCount) +
       varint::varintSize(blockSize) + varint::varintSize(numBlocks) +
       blockBasesSize + /*bitWidths=*/numBlocks * sizeof(uint8_t) +
       blockOffsetsSize + packedSize;
@@ -461,7 +456,10 @@ std::string_view DeltaBlockEncoding<T>::encode(
     uint64_t maxDelta{0};
     for (uint32_t i = start + 1; i < end; ++i) {
       const auto curr = DeltaBlockEncoding<T>::toOrdered(values[i]);
-      NIMBLE_CHECK_GE(curr, prev, "DeltaBlock requires non-decreasing values.");
+      if (FOLLY_UNLIKELY(curr < prev)) {
+        NIMBLE_INCOMPATIBLE_ENCODING(
+            "DeltaBlock requires non-decreasing values.");
+      }
       maxDelta = std::max(maxDelta, curr - prev);
       prev = curr;
     }
@@ -512,7 +510,7 @@ std::string_view DeltaBlockEncoding<T>::encode(
   }
 
   const uint64_t encodingSize =
-      Encoding::serializePrefixSize(rowCount, /*useVarint=*/true) +
+      Encoding::serializePrefixSize(rowCount, options.useVarintRowCount) +
       varint::varintSize(blockSize) + varint::varintSize(numBlocks) +
       /*blockBases=*/blockBasesSize +
       /*bitWidths=*/numBlocks * sizeof(uint8_t) +
@@ -528,7 +526,7 @@ std::string_view DeltaBlockEncoding<T>::encode(
       EncodingType::DeltaBlock,
       TypeTraits<T>::dataType,
       rowCount,
-      /*useVarint=*/true,
+      options.useVarintRowCount,
       pos);
   varint::writeVarint(blockSize, &pos);
   varint::writeVarint(numBlocks, &pos);

@@ -45,7 +45,7 @@ class NimbleDumpLibTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_F(NimbleDumpLibTest, EmitStats_VectorizedStats) {
+TEST_F(NimbleDumpLibTest, emitStatsVectorizedStats) {
   auto type =
       velox::ROW({"intCol", "bigintCol"}, {velox::INTEGER(), velox::BIGINT()});
 
@@ -93,7 +93,7 @@ TEST_F(NimbleDumpLibTest, EmitStats_VectorizedStats) {
   EXPECT_NE(result.find("INTEGRAL"), std::string::npos);
 }
 
-TEST_F(NimbleDumpLibTest, EmitStats_VectorizedStats_NoHeader) {
+TEST_F(NimbleDumpLibTest, emitStatsVectorizedStatsNoHeader) {
   auto type = velox::ROW({"col"}, {velox::INTEGER()});
 
   auto intVector =
@@ -123,7 +123,7 @@ TEST_F(NimbleDumpLibTest, EmitStats_VectorizedStats_NoHeader) {
   EXPECT_NE(result.find("root"), std::string::npos);
 }
 
-TEST_F(NimbleDumpLibTest, EmitStats_LegacyStats) {
+TEST_F(NimbleDumpLibTest, emitStatsLegacyStats) {
   auto type = velox::ROW({"col"}, {velox::INTEGER()});
 
   auto intVector =
@@ -158,7 +158,7 @@ TEST_F(NimbleDumpLibTest, EmitStats_LegacyStats) {
   EXPECT_EQ(result.find("schema_node"), std::string::npos);
 }
 
-TEST_F(NimbleDumpLibTest, EmitStats_NoStats) {
+TEST_F(NimbleDumpLibTest, emitStatsNoStats) {
   auto type = velox::ROW({"col"}, {velox::INTEGER()});
 
   auto intVector =
@@ -190,7 +190,7 @@ TEST_F(NimbleDumpLibTest, EmitStats_NoStats) {
   EXPECT_NE(result.find("No stats section found"), std::string::npos);
 }
 
-TEST_F(NimbleDumpLibTest, EmitSchema_PrintsColumnAttributes) {
+TEST_F(NimbleDumpLibTest, emitSchemaPrintsColumnAttributes) {
   auto type = velox::ROW({"id", "name"}, {velox::BIGINT(), velox::VARCHAR()});
 
   auto idVector =

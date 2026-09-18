@@ -37,7 +37,7 @@
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/FlatVector.h"
 

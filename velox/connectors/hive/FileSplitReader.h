@@ -108,7 +108,7 @@ class FileSplitReader {
 
   /// This function is used by different table formats like Iceberg and Hudi to
   /// do additional preparations before reading the split, e.g. Open delete
-  /// files or log files, and add column adapatations for metadata columns. It
+  /// files or log files, and add column adaptations for metadata columns. It
   /// would be called only once per incoming split
   virtual void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
@@ -211,7 +211,7 @@ class FileSplitReader {
       RowTypePtr rowType);
 
  private:
-  /// Different table formats may have different meatadata columns.
+  /// Different table formats may have different metadata columns.
   /// This function will be used to update the scanSpec for these columns.
   virtual std::vector<TypePtr> adaptColumns(
       const RowTypePtr& fileType,

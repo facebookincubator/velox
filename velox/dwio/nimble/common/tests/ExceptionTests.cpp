@@ -77,6 +77,22 @@ void verifyException(
   }
 }
 
+template <typename Check>
+void verifyFileComparisonFailure(
+    Check&& check,
+    std::string_view comparedValues,
+    std::string_view message) {
+  try {
+    check();
+    FAIL() << "Should have thrown";
+  } catch (const nimble::NimbleUserError& exception) {
+    EXPECT_EQ(exception.errorCode(), "CORRUPTED_FILE");
+    EXPECT_EQ(exception.errorSource(), "USER");
+    EXPECT_NE(exception.errorMessage().find(comparedValues), std::string::npos);
+    EXPECT_NE(exception.errorMessage().find(message), std::string::npos);
+  }
+}
+
 TEST(ExceptionTests, format) {
   verifyException(
       nimble::NimbleUserError(
@@ -359,6 +375,57 @@ TEST(ExceptionTests, checkNull) {
   NIMBLE_CHECK_NOT_NULL(validPtr);
 }
 
+TEST(ExceptionTests, checkFileNotNull) {
+  int* nullPointer = nullptr;
+  int value = 42;
+  int* validPointer = &value;
+
+  try {
+    NIMBLE_CHECK_FILE_NOT_NULL(nullPointer, "Invalid file pointer");
+    FAIL() << "Should have thrown";
+  } catch (const nimble::NimbleUserError& exception) {
+    EXPECT_EQ(exception.errorCode(), "CORRUPTED_FILE");
+    EXPECT_EQ(exception.errorSource(), "USER");
+    EXPECT_EQ(exception.errorMessage(), "Invalid file pointer");
+  }
+
+  NIMBLE_CHECK_FILE_NOT_NULL(validPointer);
+}
+
+TEST(ExceptionTests, checkFileComparisons) {
+  verifyFileComparisonFailure(
+      [] { NIMBLE_CHECK_FILE_GT(5, 10, "Invalid greater-than value"); },
+      "(5 vs. 10)",
+      "Invalid greater-than value");
+  verifyFileComparisonFailure(
+      [] { NIMBLE_CHECK_FILE_GE(3, 5, "Invalid greater-or-equal value"); },
+      "(3 vs. 5)",
+      "Invalid greater-or-equal value");
+  verifyFileComparisonFailure(
+      [] { NIMBLE_CHECK_FILE_LT(10, 5, "Invalid less-than value"); },
+      "(10 vs. 5)",
+      "Invalid less-than value");
+  verifyFileComparisonFailure(
+      [] { NIMBLE_CHECK_FILE_LE(8, 3, "Invalid less-or-equal value"); },
+      "(8 vs. 3)",
+      "Invalid less-or-equal value");
+  verifyFileComparisonFailure(
+      [] { NIMBLE_CHECK_FILE_EQ(5, 10, "Mismatched file value"); },
+      "(5 vs. 10)",
+      "Mismatched file value");
+  verifyFileComparisonFailure(
+      [] { NIMBLE_CHECK_FILE_NE(7, 7, "Duplicate file value"); },
+      "(7 vs. 7)",
+      "Duplicate file value");
+
+  NIMBLE_CHECK_FILE_GT(10, 5);
+  NIMBLE_CHECK_FILE_GE(5, 5);
+  NIMBLE_CHECK_FILE_LT(3, 8);
+  NIMBLE_CHECK_FILE_LE(4, 4);
+  NIMBLE_CHECK_FILE_EQ(7, 7);
+  NIMBLE_CHECK_FILE_NE(7, 8);
+}
+
 TEST(ExceptionTests, checkNullWithMessage) {
   int* nullPtr = nullptr;
   int value = 42;
@@ -403,6 +470,19 @@ TEST(ExceptionTests, failMacros) {
         std::string(e.what()).find("User error: input is invalid"),
         std::string::npos);
     EXPECT_EQ(e.errorCode(), "INVALID_ARGUMENT");
+  }
+}
+
+TEST(ExceptionTests, fileFail) {
+  try {
+    NIMBLE_FILE_FAIL("Corrupted data at offset: {}", 42);
+    FAIL() << "Should have thrown";
+  } catch (const nimble::NimbleUserError& exception) {
+    EXPECT_EQ(exception.errorCode(), "CORRUPTED_FILE");
+    EXPECT_EQ(exception.errorSource(), "USER");
+    EXPECT_FALSE(exception.retryable());
+    EXPECT_EQ(exception.failingExpression(), "");
+    EXPECT_EQ(exception.errorMessage(), "Corrupted data at offset: 42");
   }
 }
 

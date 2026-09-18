@@ -137,7 +137,7 @@ TEST_F(BinaryStreamReaderTest, columnIdsEmpty) {
       "At least one column expected to be read");
 }
 
-TEST_F(BinaryStreamReaderTest, EmptyFile) {
+TEST_F(BinaryStreamReaderTest, emptyFile) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
 
   constexpr uint32_t STRIDE_LEN = 100;
@@ -203,7 +203,7 @@ void verifyStream(
   }
 }
 
-TEST_F(BinaryStreamReaderTest, BasicFlow) {
+TEST_F(BinaryStreamReaderTest, basicFlow) {
   auto type = HiveTypeParser().parse("struct<a:int,b:float>");
 
   auto config = std::make_shared<Config>();

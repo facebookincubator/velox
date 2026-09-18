@@ -79,6 +79,7 @@ void NullIfExpr::evalSpecialForm(
 
   // TODO: Spark uses kNullAsValue which produces different results for complex
   // types with nested nulls, e.g. NULLIF(ARRAY[1, NULL], ARRAY[1, NULL]).
+  bool anyEqual = false;
   rows.applyToSelected([&](auto row) {
     auto equal = compareA->equalValueAt(
         compareB.get(),
@@ -87,23 +88,20 @@ void NullIfExpr::evalSpecialForm(
         CompareFlags::NullHandlingMode::kNullAsIndeterminate);
     if (equal.has_value() && equal.value()) {
       nonNullRows->setValid(row, false);
+      anyEqual = true;
     }
   });
   nonNullRows->updateBounds();
 
-  if (nonNullRows->isSubset(rows) && rows.isSubset(*nonNullRows)) {
+  if (!anyEqual) {
     // No matches — return a as is.
     context.moveOrCopyResult(aResult, rows, result);
     return;
   }
 
-  if (!nonNullRows->hasSelections()) {
-    // All rows match — return constant null.
-    result = BaseVector::createNullConstant(type(), rows.end(), context.pool());
-    return;
-  }
-
-  // Some rows match — copy only non-null rows from a, set remaining to null.
+  // Copy the rows that do not match from a and null out the ones that do.
+  // Only 'rows' is written: under a conditional parent these are a subset of
+  // the batch, and the other rows keep whatever the parent put there.
   BaseVector::ensureWritable(rows, type(), context.pool(), result);
   result->copy(aResult.get(), *nonNullRows, /*toSourceRow=*/nullptr);
 

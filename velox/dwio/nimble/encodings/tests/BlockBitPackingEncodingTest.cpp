@@ -23,8 +23,12 @@
 #include "velox/dwio/common/Lemire/BitPacking/bitpackinghelpers.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
@@ -302,9 +306,14 @@ TEST_F(BlockBitPackingEncodingTest, compressionRoundTrip) {
 TEST_F(BlockBitPackingEncodingTest, slice) {
   using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
+  // Ranges whose boundaries sit inside a block come back wrapped in a
+  // SliceEncoding; ranges that hit block boundaries stay a plain
+  // BlockBitPacking. The last range covers exactly the partial trailing block
+  // (137 rows).
   struct Range {
     uint32_t offset;
     uint32_t length;
+    nimble::EncodingType expectedType;
   };
 
   std::vector<uint32_t> input(blockSize * 3 + 137);
@@ -322,11 +331,18 @@ TEST_F(BlockBitPackingEncodingTest, slice) {
   const auto encoded = nimble::test::Encoder<Enc>::encode(*buffer_, values);
 
   for (const auto range :
-       {Range{/*offset=*/0, /*length=*/128},
-        Range{/*offset=*/blockSize - 13, /*length=*/64},
-        Range{/*offset=*/blockSize + 17, /*length=*/blockSize + 29},
+       {Range{/*offset=*/0,
+              /*length=*/128,
+              nimble::EncodingType::Slice},
+        Range{/*offset=*/blockSize - 13,
+              /*length=*/64,
+              nimble::EncodingType::Slice},
+        Range{/*offset=*/blockSize + 17,
+              /*length=*/blockSize + 29,
+              nimble::EncodingType::Slice},
         Range{/*offset=*/static_cast<uint32_t>(input.size() - 137),
-              /*length=*/137}}) {
+              /*length=*/137,
+              nimble::EncodingType::BlockBitPacking}}) {
     SCOPED_TRACE(
         testing::Message() << "offset=" << range.offset
                            << " length=" << range.length);
@@ -334,14 +350,10 @@ TEST_F(BlockBitPackingEncodingTest, slice) {
     const auto sliced = nimble::EncodingFactory::slice(
         encoded, range.offset, range.length, sliceBuffer);
 
-    EXPECT_EQ(
-        nimble::EncodingPrefix::encodingType(sliced),
-        nimble::EncodingType::BlockBitPacking);
-    EXPECT_EQ(
-        nimble::EncodingPrefix::readRowCount(sliced, /*useVarint=*/false),
-        range.length);
+    EXPECT_EQ(nimble::EncodingPrefix::encodingType(sliced), range.expectedType);
 
     auto encoding = nimble::EncodingFactory{}.create(*pool_, sliced, nullptr);
+    EXPECT_EQ(encoding->rowCount(), range.length);
     std::vector<uint32_t> output(range.length);
     encoding->materialize(range.length, output.data());
     const std::vector<uint32_t> expected{
@@ -489,8 +501,11 @@ TEST_F(BlockBitPackingEncodingTest, sliceCompressedSource) {
   const auto encoded = nimble::test::Encoder<Enc>::encode(
       *buffer_, values, nimble::CompressionType::Zstd);
 
-  constexpr uint32_t kOffset{31};
-  constexpr uint32_t kLength{blockSize + 7};
+  // Block-aligned so the slice stays a plain BlockBitPacking rather than
+  // coming back wrapped in a SliceEncoding -- the compression-type byte read
+  // below is only meaningful at the BlockBitPacking header offset.
+  constexpr uint32_t kOffset{0};
+  constexpr uint32_t kLength{blockSize};
   nimble::Buffer sliceBuffer{*pool_};
   const auto sliced =
       nimble::EncodingFactory::slice(encoded, kOffset, kLength, sliceBuffer);
@@ -628,8 +643,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndices) {
           });
   auto trivialEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(trivialPolicy), boolSpan, *buffer_);
-  auto trivialEncoding =
-      nimble::EncodingFactory().create(*pool_, trivialEncoded, nullptr);
+  auto trivialEncoding = nimble::EncodingFactory().create(
+      *pool_, trivialEncoded, nullptr, nimble::Encoding::Options{});
 
   // Encode with BlockBitPacking indices.
   nimble::EncodingLayout cbpLayout{
@@ -652,8 +667,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndices) {
           });
   auto cbpEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(cbpPolicy), boolSpan, cbpBuffer);
-  auto cbpEncoding =
-      nimble::EncodingFactory().create(*pool_, cbpEncoded, nullptr);
+  auto cbpEncoding = nimble::EncodingFactory().create(
+      *pool_, cbpEncoded, nullptr, nimble::Encoding::Options{});
 
   // Compare materializeBoolsAsBits output.
   auto* trivialSB =
@@ -713,8 +728,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndicesLargeIrregular) {
           });
   auto trivialEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(trivialPolicy), boolSpan, *buffer_);
-  auto trivialEncoding =
-      nimble::EncodingFactory().create(*pool_, trivialEncoded, nullptr);
+  auto trivialEncoding = nimble::EncodingFactory().create(
+      *pool_, trivialEncoded, nullptr, nimble::Encoding::Options{});
 
   nimble::EncodingLayout cbpLayout{
       nimble::EncodingType::SparseBool,
@@ -736,8 +751,8 @@ TEST_F(BlockBitPackingEncodingTest, sparseBoolWithCbpIndicesLargeIrregular) {
           });
   auto cbpEncoded = nimble::EncodingFactory::encode<bool>(
       std::move(cbpPolicy), boolSpan, cbpBuffer);
-  auto cbpEncoding =
-      nimble::EncodingFactory().create(*pool_, cbpEncoded, nullptr);
+  auto cbpEncoding = nimble::EncodingFactory().create(
+      *pool_, cbpEncoded, nullptr, nimble::Encoding::Options{});
 
   auto* trivialSB =
       dynamic_cast<nimble::SparseBoolEncoding*>(trivialEncoding.get());
@@ -984,5 +999,105 @@ TEST_F(BlockBitPackingEncodingTest, fixedBitArrayBaselineMatchesFastUnpack) {
           << " baseline=" << baseline << ": original=" << values[i]
           << " decoded=" << decoded[i];
     }
+  }
+}
+
+namespace {
+
+// Extracts the encoded block-offsets sub-stream from a BlockBitPacking wire
+// payload. Mirrors the header parse in BlockBitPackingEncoding<T>::parseHeader
+// but stops after the offsets sub-stream. Only used by the push-down test
+// below.
+std::string_view blockBitPackingOffsetsBytes(
+    std::string_view encoded,
+    bool useVarintRowCount) {
+  const char* pos = encoded.data() +
+      nimble::EncodingPrefix::prefixSize(encoded, useVarintRowCount);
+  nimble::encoding::readChar(pos); // compressionType
+  nimble::varint::readVarint32(&pos); // blockSize
+  nimble::varint::readVarint32(&pos); // numBlocks
+  const auto baselinesSize = nimble::varint::readVarint32(&pos);
+  pos += baselinesSize;
+  const auto bitWidthsSize = nimble::varint::readVarint32(&pos);
+  pos += bitWidthsSize;
+  const auto blockOffsetsSize = nimble::varint::readVarint32(&pos);
+  return {pos, blockOffsetsSize};
+}
+
+} // namespace
+
+// Verifies that the block-offsets rebase introduced in D119280008 actually
+// pushes down: when the source's block-offsets sub-encoding is push-down-
+// capable (FixedBitWidth / PFOR / Constant via baseline rewrite, or Trivial
+// via per-value shift-during-copy -- the cost model's normal picks for a
+// strictly ascending uint32 offset stream), SliceEncoding::wrap folds the
+// -sourcePayloadStart shift into the inner encoding at write time and the
+// on-wire valueDelta is zero. Complements the correctness-only slice tests
+// above with a push-down "did it apply" assertion.
+TEST_F(BlockBitPackingEncodingTest, sliceOffsetsPushDownDelta) {
+  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  constexpr uint32_t blockSize = Enc::kMaxBlockSize;
+
+  // 5 full blocks. Different per-block value distributions produce a
+  // realistic ascending offset stream (each block encodes to a different
+  // packed byte count).
+  std::vector<uint32_t> input(blockSize * 5);
+  std::mt19937 rng{7788};
+  for (uint32_t block = 0; block < 5; ++block) {
+    const auto base = static_cast<uint32_t>(rng() % 1'000'000);
+    const auto spread = 1u << ((block % 5) + 3);
+    for (uint32_t i = 0; i < blockSize; ++i) {
+      input[block * blockSize + i] = base + (i % spread);
+    }
+  }
+  const auto values = toVector(input);
+  const auto encoded = nimble::test::Encoder<Enc>::encode(*buffer_, values);
+
+  // Slice at a block boundary (offset=blockSize) so the outer result is a
+  // plain BlockBitPacking -- no row-alignment SliceEncoding wrap around it --
+  // and firstBlock=1 makes sourcePayloadStart non-zero so the -shift the
+  // pushdown must absorb is a meaningful non-zero value.
+  constexpr uint32_t kOffset = blockSize;
+  constexpr uint32_t kLength = blockSize * 3;
+  nimble::Buffer sliceBuffer{*pool_};
+  const auto sliced =
+      nimble::EncodingFactory::slice(encoded, kOffset, kLength, sliceBuffer);
+  ASSERT_EQ(
+      nimble::EncodingPrefix::encodingType(sliced),
+      nimble::EncodingType::BlockBitPacking);
+
+  // Reach the encoded block-offsets sub-stream and verify it is wrapped in a
+  // SliceEncoding whose on-wire delta is ZERO (push-down applied) and whose
+  // inner encoding type is one of the push-down-capable set.
+  const std::string_view offsetsBytes =
+      blockBitPackingOffsetsBytes(sliced, /*useVarintRowCount=*/false);
+  ASSERT_EQ(
+      nimble::EncodingPrefix::encodingType(offsetsBytes),
+      nimble::EncodingType::Slice);
+  nimble::SliceEncoding<uint32_t> offsetsSlice{
+      *pool_, offsetsBytes, nullptr, {}};
+  EXPECT_EQ(offsetsSlice.valueDelta(), 0)
+      << "Expected -sourcePayloadStart to be folded into the inner encoding's "
+         "baseline (push-down applied); non-zero here means the shift stayed "
+         "on the wire and the reader would re-apply it every decode.";
+  const nimble::EncodingType innerType =
+      nimble::EncodingPrefix::encodingType(offsetsSlice.innerEncoding());
+  EXPECT_TRUE(
+      innerType == nimble::EncodingType::FixedBitWidth ||
+      innerType == nimble::EncodingType::PFOR ||
+      innerType == nimble::EncodingType::Constant ||
+      innerType == nimble::EncodingType::Trivial)
+      << "Expected offsets inner encoding to be push-down-capable "
+         "(FixedBitWidth / PFOR / Constant / Trivial); got: "
+      << toString(innerType);
+
+  // End-to-end round-trip: decode the sliced BlockBitPacking and confirm the
+  // rebased offsets still address the packed payload correctly.
+  auto encoding = nimble::EncodingFactory{}.create(*pool_, sliced, nullptr);
+  ASSERT_EQ(encoding->rowCount(), kLength);
+  std::vector<uint32_t> output(kLength);
+  encoding->materialize(kLength, output.data());
+  for (uint32_t i = 0; i < kLength; ++i) {
+    ASSERT_EQ(output[i], input[kOffset + i]) << "row " << i;
   }
 }

@@ -18,6 +18,7 @@
 
 #include "folly/String.h"
 #include "folly/json/json.h"
+#include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -152,14 +153,14 @@ StreamStats ChunkStatsTestHelper::streamStats(uint32_t streamId) const {
   StreamStats stats;
 
   const auto* root = flatbuffers::GetRoot<serialization::StripeChunkStats>(
-      chunkStats_->metadata_->content().data());
+      chunkStatsGroupV1MetadataForTest(*chunkStats_).content().data());
 
   const auto* streamChunkCounts = root->stream_chunk_counts();
   if (streamChunkCounts == nullptr) {
     return stats;
   }
 
-  const uint32_t streamCount = chunkStats_->streamCount_;
+  const uint32_t streamCount = chunkStats_->numStreams();
   if (streamId >= streamCount) {
     return stats;
   }
@@ -170,7 +171,19 @@ StreamStats ChunkStatsTestHelper::streamStats(uint32_t streamId) const {
   NIMBLE_CHECK_NOT_NULL(chunkOffsets);
   const auto* chunkNullCounts = root->stream_chunk_null_counts();
 
-  const uint32_t stripeCount = chunkStats_->stripeCount_;
+  const uint32_t stripeCount = chunkStats_->numStripes();
+  NIMBLE_CHECK_EQ(
+      streamChunkCounts->size(),
+      static_cast<size_t>(stripeCount) * streamCount);
+  NIMBLE_CHECK_EQ(chunkRows->size(), chunkOffsets->size());
+  if (chunkNullCounts != nullptr) {
+    NIMBLE_CHECK_EQ(chunkRows->size(), chunkNullCounts->size());
+  }
+  if (streamChunkCounts->size() > 0) {
+    NIMBLE_CHECK_EQ(
+        streamChunkCounts->Get(streamChunkCounts->size() - 1),
+        chunkRows->size());
+  }
 
   uint32_t accumulatedChunkCountForStream = 0;
   for (uint32_t stripeOffset = 0; stripeOffset < stripeCount; ++stripeOffset) {
@@ -178,6 +191,7 @@ StreamStats ChunkStatsTestHelper::streamStats(uint32_t streamId) const {
     const uint32_t globalAccumulatedCount = streamChunkCounts->Get(idx);
     const uint32_t prevGlobalAccumulatedCount =
         idx == 0 ? 0 : streamChunkCounts->Get(idx - 1);
+    NIMBLE_CHECK_LE(prevGlobalAccumulatedCount, globalAccumulatedCount);
     const uint32_t chunksInThisStripe =
         globalAccumulatedCount - prevGlobalAccumulatedCount;
     accumulatedChunkCountForStream += chunksInThisStripe;

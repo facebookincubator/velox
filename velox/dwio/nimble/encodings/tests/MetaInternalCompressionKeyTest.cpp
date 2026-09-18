@@ -33,19 +33,19 @@ class MetaInternalCompressionKeyTest : public ::testing::Test {
   }
 };
 
-TEST_F(MetaInternalCompressionKeyTest, BasicRoundTrip) {
+TEST_F(MetaInternalCompressionKeyTest, basicRoundTrip) {
   MetaInternalCompressionKey key{"namespace", "table", "column"};
 
   roundTripTest(key);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, EmptyFields) {
+TEST_F(MetaInternalCompressionKeyTest, emptyFields) {
   MetaInternalCompressionKey key{"", "", ""};
 
   roundTripTest(key);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, SingleFieldEmpty) {
+TEST_F(MetaInternalCompressionKeyTest, singleFieldEmpty) {
   // Test with one field empty at a time
   MetaInternalCompressionKey key1{"", "table", "column"};
   roundTripTest(key1);
@@ -57,7 +57,7 @@ TEST_F(MetaInternalCompressionKeyTest, SingleFieldEmpty) {
   roundTripTest(key3);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, ColonCharacters) {
+TEST_F(MetaInternalCompressionKeyTest, colonCharacters) {
   // Test with colon characters in various fields
   MetaInternalCompressionKey key1{"name:space", "table", "column"};
   roundTripTest(key1);
@@ -74,7 +74,7 @@ TEST_F(MetaInternalCompressionKeyTest, ColonCharacters) {
   roundTripTest(key4);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, SpecialCharacters) {
+TEST_F(MetaInternalCompressionKeyTest, specialCharacters) {
   // Test with various special characters that JSON should handle properly
   MetaInternalCompressionKey key{
       "namespace\"with'quotes",
@@ -83,7 +83,7 @@ TEST_F(MetaInternalCompressionKeyTest, SpecialCharacters) {
   roundTripTest(key);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, MixedSpecialCharacters) {
+TEST_F(MetaInternalCompressionKeyTest, mixedSpecialCharacters) {
   // Test with a mix of challenging characters
   MetaInternalCompressionKey key{
       "ns:with\"quotes'and\nnewlines\tand\\\\:backslashes",
@@ -92,7 +92,7 @@ TEST_F(MetaInternalCompressionKeyTest, MixedSpecialCharacters) {
   roundTripTest(key);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, InvalidJsonInput) {
+TEST_F(MetaInternalCompressionKeyTest, invalidJsonInput) {
   // Test error handling for invalid JSON
   EXPECT_THROW(
       MetaInternalCompressionKey::fromString("not json"), std::runtime_error);
@@ -107,7 +107,7 @@ TEST_F(MetaInternalCompressionKeyTest, InvalidJsonInput) {
       std::runtime_error);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, PartialJsonInput) {
+TEST_F(MetaInternalCompressionKeyTest, partialJsonInput) {
   // Test with JSON missing required fields
   EXPECT_THROW(
       MetaInternalCompressionKey::fromString(
@@ -128,7 +128,7 @@ TEST_F(MetaInternalCompressionKeyTest, PartialJsonInput) {
       std::runtime_error);
 }
 
-TEST_F(MetaInternalCompressionKeyTest, ExtraFieldsInJson) {
+TEST_F(MetaInternalCompressionKeyTest, extraFieldsInJson) {
   // Test that extra fields in JSON are ignored
   std::string jsonWithExtra = R"({
     "ns": "namespace",
@@ -144,7 +144,7 @@ TEST_F(MetaInternalCompressionKeyTest, ExtraFieldsInJson) {
   EXPECT_EQ(key.columnName(), "column");
 }
 
-TEST_F(MetaInternalCompressionKeyTest, NullValuesInJson) {
+TEST_F(MetaInternalCompressionKeyTest, nullValuesInJson) {
   // Test error handling for null values in JSON
   EXPECT_THROW(
       MetaInternalCompressionKey::fromString(

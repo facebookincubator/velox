@@ -156,6 +156,26 @@ TEST_F(GpuArenaTest, buffers) {
   EXPECT_EQ(1, arena->slabs().size());
 }
 
+// A request larger than the nominal slab size gets a slab sized to it. That
+// slab stays the current one after its buffer goes, so later allocations are
+// served from it, and the ones past the nominal size have to be freeable.
+TEST_F(GpuArenaTest, oversizedSlabServesLaterAllocations) {
+  constexpr uint64_t kNominal = 1 << 20;
+  auto arena = std::make_unique<GpuArena>(kNominal, allocator_.get());
+
+  auto oversized = arena->allocate<char>(4 * kNominal);
+  EXPECT_EQ(2, arena->slabs().size());
+  oversized = nullptr;
+
+  // Both land in the oversized slab; only the second starts past kNominal.
+  auto first = arena->allocate<char>(kNominal);
+  auto second = arena->allocate<char>(kNominal);
+  EXPECT_EQ(2, arena->slabs().size());
+
+  second = nullptr;
+  first = nullptr;
+}
+
 TEST_F(GpuArenaTest, views) {
   auto arena = std::make_unique<GpuArena>(1 << 20, allocator_.get());
   WaveBufferPtr buffer = arena->allocate<char>(1024);

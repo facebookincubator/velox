@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <span>
+#include <utility>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -29,10 +30,13 @@ class EncodingSelection;
 template <typename T>
 class EncodingSelectionPolicy;
 
+template <typename T>
+class SharedDictionaryEncoding;
+
 class EncodingFactory {
  public:
   explicit EncodingFactory(Encoding::Options options = {})
-      : options_{options} {}
+      : options_{std::move(options)} {}
 
   virtual ~EncodingFactory() = default;
 
@@ -117,6 +121,8 @@ class EncodingFactory {
   friend class EncodingSelection<double>;
   friend class EncodingSelection<bool>;
   friend class EncodingSelection<std::string_view>;
+  template <typename T>
+  friend class SharedDictionaryEncoding;
 };
 
 } // namespace facebook::nimble

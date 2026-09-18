@@ -121,8 +121,8 @@ class TrivialEncodingView<std::string_view> final
         "EncodingView does not support compressed Trivial streams.");
     const auto lengthsSize = encoding::readUint32(pos);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto lengths = EncodingFactory(options).create(
-        *this->pool_, {pos, lengthsSize}, noStringBufferFactory);
+    auto lengths = EncodingFactory().create(
+        *this->pool_, {pos, lengthsSize}, noStringBufferFactory, options);
     NIMBLE_CHECK_NOT_NULL(lengths);
 
     offsets_.resize(this->rowCount_ + 1);

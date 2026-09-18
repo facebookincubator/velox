@@ -20,7 +20,7 @@
 #include <memory>
 #include <vector>
 
-#include "velox/dwio/nimble/velox/VeloxReader.h"
+#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -45,7 +45,7 @@ struct ChunkSizeResults {
 // raw sizes stay within [minStreamChunkRawSize, maxStreamChunkRawSize] (modulo
 // a tolerance and string-value edge cases), returning per-stream chunk counts.
 ChunkSizeResults validateChunkSize(
-    nimble::VeloxReader& reader,
+    nimble::BatchReader& reader,
     uint64_t minStreamChunkRawSize,
     uint64_t maxStreamChunkRawSize);
 

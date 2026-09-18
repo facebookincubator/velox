@@ -53,12 +53,10 @@ DEFINE_int32(nimble_writer_fuzzer_num_batches, 3, "Batches written per file.");
 DEFINE_bool(
     nimble_writer_fuzzer_require_coverage,
     false,
-    "Fail the run if any candidate encoding was never applied to a chunk. "
-    "Round-trip assertions cannot catch this: an encoding the writer always "
-    "falls back on verifies Trivial over and over and still passes. Off by "
-    "default so a short local run does not fail on an encoding whose schema "
-    "shape it did not happen to draw; enabled in CI, where the run is long "
-    "enough for every candidate to appear.");
+    "Fail the run if any candidate encoding or required chunk-stats metadata "
+    "shape was not exercised. Off by default so short local runs do not fail "
+    "on a shape they did not happen to draw; enabled in CI, where the run is "
+    "long enough to cover every required case.");
 
 namespace facebook::nimble::fuzzer {
 
@@ -107,6 +105,7 @@ void runNimbleWriterFuzzer() {
     LOG(WARNING) << "Completed " << iteration << " iterations.";
     fuzzer.logCoverage();
     fuzzer.logPairCoverage();
+    fuzzer.logChunkStatsCoverage();
   };
 
   // Catch and rethrow rather than a scope guard: an exception that escapes
@@ -178,6 +177,13 @@ void runNimbleWriterFuzzer() {
           iteration,
           fmt::join(details, ", "));
     }
+
+    const auto uncoveredChunkStatsShapes = fuzzer.uncoveredChunkStatsShapes();
+    NIMBLE_CHECK(
+        uncoveredChunkStatsShapes.empty(),
+        "Chunk-stats metadata coverage is incomplete after {} iterations: {}.",
+        iteration,
+        fmt::join(uncoveredChunkStatsShapes, ", "));
   }
 }
 

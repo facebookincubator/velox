@@ -21,7 +21,7 @@
 using namespace ::testing;
 
 namespace facebook::velox::dwrf {
-TEST(PhysicalSizeAggregatorTest, UpdateLeaf) {
+TEST(PhysicalSizeAggregatorTest, updateLeaf) {
   auto leafOne = std::make_unique<PhysicalSizeAggregator>(nullptr);
   auto leafTwo = std::make_unique<PhysicalSizeAggregator>(nullptr);
   ASSERT_EQ(0, leafOne->getResult());
@@ -43,7 +43,7 @@ TEST(PhysicalSizeAggregatorTest, UpdateLeaf) {
   EXPECT_EQ(2, leafTwo->getResult());
 }
 
-TEST(PhysicalSizeAggregatorTest, UpdateParent) {
+TEST(PhysicalSizeAggregatorTest, updateParent) {
   auto parent = std::make_unique<PhysicalSizeAggregator>(nullptr);
   auto childOne = std::make_unique<PhysicalSizeAggregator>(parent.get());
   auto childTwo = std::make_unique<PhysicalSizeAggregator>(parent.get());

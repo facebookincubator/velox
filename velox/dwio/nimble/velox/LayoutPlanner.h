@@ -20,18 +20,23 @@
 
 namespace facebook::nimble {
 
+/// Orders streams according to the logical schema and configured FlatMap keys.
 class DefaultLayoutPlanner : public LayoutPlanner {
  public:
+  /// Creates a planner over a schema that may gain FlatMap streams.
   DefaultLayoutPlanner(
-      std::function<std::shared_ptr<const TypeBuilder>()> typeResolver,
+      const SchemaBuilder* schemaBuilder,
       const std::optional<
           std::vector<std::tuple<size_t, std::vector<int64_t>>>>&
           flatMapFeatureOrder);
 
+  /// Returns streams in their physical file order.
   virtual std::vector<Stream> getLayout(std::vector<Stream>&& streams) override;
 
  private:
-  std::function<std::shared_ptr<const TypeBuilder>()> typeResolver_;
+  // Provides the evolving logical schema and stripe dictionary bindings.
+  const SchemaBuilder* const schemaBuilder_;
+  // Preferred key order for configured top-level FlatMap columns.
   std::vector<std::tuple<size_t, std::vector<int64_t>>> flatMapFeatureOrder_;
 };
 } // namespace facebook::nimble

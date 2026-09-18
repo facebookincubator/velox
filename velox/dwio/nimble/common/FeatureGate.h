@@ -20,14 +20,14 @@
 
 namespace facebook::nimble {
 
-/// Runtime enablement gate for optional writer features (e.g. rollout
-/// killswitches). The base implementation applies no runtime override:
+/// Runtime enablement gate for optional writer and reader features (e.g.
+/// rollout killswitches). The base implementation applies no runtime override:
 /// enabled() returns the caller-provided default, so OSS builds honor the
-/// static writer config alone. Internal builds install a dynamic-config-backed
+/// static config alone. Internal builds install a dynamic-config-backed
 /// implementation via registerFeatureGate() to gate gradual rollouts.
 class FeatureGate {
  public:
-  /// Stable identifiers for the runtime-gated writer features. OSS-neutral: no
+  /// Stable identifiers for the runtime-gated features. OSS-neutral: no
   /// dynamic-config (e.g. JustKnobs) names leak into open source. The internal
   /// FeatureGate implementation maps each identifier to its backing knob.
   class FeatureSet {
@@ -37,6 +37,14 @@ class FeatureGate {
         "stream_deduplication";
     static constexpr std::string_view kDisableSharedStringBuffers =
         "disable_shared_string_buffers";
+    /// Writer-side: gates emitting the stripe-stats section (and the per-stripe
+    /// stats snapshot + file-stats-from-stripes merge that produces it). When
+    /// off, the writer accumulates stats across the whole file and emits no
+    /// stripe-stats section, matching pre-feature behavior.
+    static constexpr std::string_view kStripeStatsWrite = "stripe_stats_write";
+    /// Reader-side: gates stripe-stats stripe pruning in the selective reader.
+    static constexpr std::string_view kStripeStatsPruning =
+        "stripe_stats_pruning";
   };
 
   virtual ~FeatureGate() = default;

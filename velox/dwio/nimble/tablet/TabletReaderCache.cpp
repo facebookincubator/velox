@@ -27,11 +27,45 @@
 
 namespace facebook::nimble {
 
+CachedTabletReader::CachedTabletReader(
+    std::shared_ptr<TabletReader> tablet,
+    std::shared_ptr<const facebook::nimble::Type> nimbleSchema,
+    velox::RowTypePtr veloxSchema,
+    std::shared_ptr<velox::io::IoStatistics> metadataIoStats,
+    std::shared_ptr<velox::io::IoStatistics> indexIoStats,
+    std::function<void(const CachedTabletReader&)> onRelease)
+    : tablet_{std::move(tablet)},
+      nimbleSchema_{std::move(nimbleSchema)},
+      veloxSchema_{std::move(veloxSchema)},
+      metadataIoStats_{std::move(metadataIoStats)},
+      indexIoStats_{std::move(indexIoStats)},
+      onRelease_{std::move(onRelease)} {}
+
+CachedTabletReader::~CachedTabletReader() {
+  if (onRelease_ == nullptr) {
+    return;
+  }
+  // A destructor is implicitly noexcept, so an observer that threw here would
+  // terminate the process rather than propagate. Unlike onCreate, this one has
+  // no choice but to swallow. It runs on a scan thread, during eviction or on
+  // the last release.
+  try {
+    onRelease_(*this);
+  } catch (const std::exception& e) {
+    LOG_EVERY_N(WARNING, 100)
+        << "CachedTabletReader release observer threw: " << e.what();
+  }
+}
+
 TabletReaderCache::Generator::Generator(
     std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools,
-    std::shared_ptr<folly::Executor> executor)
+    std::shared_ptr<folly::Executor> executor,
+    std::function<void(const CachedTabletReader&)> onCreate,
+    std::function<void(const CachedTabletReader&)> onRelease)
     : pools_{std::move(pools)},
       executor_{std::move(executor)},
+      onCreate_{std::move(onCreate)},
+      onRelease_{std::move(onRelease)},
       shardMask_{static_cast<uint32_t>(pools_.size()) - 1} {
   NIMBLE_CHECK_GT(pools_.size(), 0);
   NIMBLE_CHECK(
@@ -41,16 +75,22 @@ TabletReaderCache::Generator::Generator(
   NIMBLE_CHECK_NOT_NULL(executor_);
 }
 
-std::unique_ptr<CachedTabletReader> TabletReaderCache::Generator::operator()(
+std::unique_ptr<std::shared_ptr<CachedTabletReader>>
+TabletReaderCache::Generator::operator()(
     const std::string& filename,
     const Properties* properties,
     void* /*stats*/) {
   NIMBLE_CHECK_NOT_NULL(properties);
   const auto shardIdx = std::hash<std::string>{}(filename)&shardMask_;
   auto options = properties->tabletOptions;
+  // The caller's ioOptions are replaced here, so its metadata/index statistics
+  // never see this tablet's IO. Keeping the pair on the entry lets a lifetime
+  // observer reach it instead.
+  auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+  auto indexIoStats = std::make_shared<velox::io::IoStatistics>();
   auto ioOptions = velox::io::ReaderOptions(pools_[shardIdx].get());
-  ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
-  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  ioOptions.setMetadataIoStats(metadataIoStats);
+  ioOptions.setIndexIoStats(indexIoStats);
   ioOptions.setIOExecutor(executor_);
   options.ioOptions = std::move(ioOptions);
   auto tablet = TabletReader::create(
@@ -61,8 +101,21 @@ std::unique_ptr<CachedTabletReader> TabletReaderCache::Generator::operator()(
   auto nimbleSchema =
       SchemaDeserializer::deserialize(section->content().data());
   auto veloxSchema = asRowType(convertToVeloxType(*nimbleSchema));
-  return std::make_unique<CachedTabletReader>(CachedTabletReader{
-      std::move(tablet), std::move(nimbleSchema), std::move(veloxSchema)});
+  auto entry = std::make_shared<CachedTabletReader>(
+      std::move(tablet),
+      std::move(nimbleSchema),
+      std::move(veloxSchema),
+      std::move(metadataIoStats),
+      std::move(indexIoStats),
+      onRelease_);
+  // Deliberately unguarded: the caller can still act on a failure here, and
+  // registering an entry is a set insert whose only realistic failure is
+  // allocation. The entry unwinds normally if it throws, firing onRelease.
+  if (onCreate_ != nullptr) {
+    onCreate_(*entry);
+  }
+  return std::make_unique<std::shared_ptr<CachedTabletReader>>(
+      std::move(entry));
 }
 
 TabletReaderCache::Factory TabletReaderCache::createFactory(
@@ -72,6 +125,12 @@ TabletReaderCache::Factory TabletReaderCache::createFactory(
       velox::bits::isPowerOfTwo(opts.numShards),
       fmt::format(
           "numShards must be a power of 2, but got: {}", opts.numShards));
+  // An observer that is told about creation but never about release has no way
+  // to know an entry is gone. Anything it keyed on the entry -- a registry of
+  // live tablets, say -- is left holding a pointer to freed memory.
+  NIMBLE_CHECK(
+      (opts.onCreate == nullptr) == (opts.onRelease == nullptr),
+      "TabletReaderCache onCreate and onRelease must be set together");
 
   std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools;
   pools.reserve(opts.numShards);
@@ -84,7 +143,7 @@ TabletReaderCache::Factory TabletReaderCache::createFactory(
   auto cache = std::make_unique<TabletReaderCache::LRUCache>(
       opts.maxEntries, opts.expireDurationMs);
   auto generator = std::make_unique<TabletReaderCache::Generator>(
-      std::move(pools), opts.executor);
+      std::move(pools), opts.executor, opts.onCreate, opts.onRelease);
   return Factory(std::move(cache), std::move(generator));
 }
 
@@ -93,27 +152,27 @@ TabletReaderCache::TabletReaderCache(const Options& options)
   LOG(INFO) << "TabletReaderCache created: " << options.toString();
 }
 
-CachedTabletReader TabletReaderCache::get(
+std::shared_ptr<CachedTabletReader> TabletReaderCache::get(
     const std::shared_ptr<velox::ReadFile>& readFile,
     const TabletReader::Options& tabletOptions) {
   Properties properties{readFile, tabletOptions};
+  // Copying the shared_ptr out and letting the CachedPtr die here keeps the
+  // cache pin momentary; the entry stays alive through the returned pointer.
   auto cached = factory_.generate(readFile->getName(), &properties);
-  return CachedTabletReader{
-      cached->tablet, cached->nimbleSchema, cached->veloxSchema};
+  return *cached;
 }
 
 velox::SimpleLRUCacheStats TabletReaderCache::stats() {
   return factory_.cacheStats();
 }
 
-std::optional<CachedTabletReader> TabletReaderCache::testingGet(
+std::shared_ptr<CachedTabletReader> TabletReaderCache::testingGet(
     const std::string& filename) {
   auto cached = factory_.get(filename);
   if (cached.get() == nullptr) {
-    return std::nullopt;
+    return nullptr;
   }
-  return CachedTabletReader{
-      cached->tablet, cached->nimbleSchema, cached->veloxSchema};
+  return *cached;
 }
 
 namespace {

@@ -15,10 +15,9 @@
  */
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
 
-#include <algorithm>
-
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewUtils.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 
 #include "flatbuffers/flatbuffers.h"
@@ -191,11 +190,9 @@ uint32_t StripeGroup::streamOffset(uint32_t stripeIndex, uint32_t streamId)
     case EncodingLayout::kRaw:
       return raw_
           .offsets[static_cast<size_t>(stripeOffset) * streamCount_ + streamId];
-    case EncodingLayout::kStreamMajor: {
-      uint32_t offset;
-      streamMajor_.offsets[streamId]->readAt(stripeOffset, &offset);
-      return offset;
-    }
+    case EncodingLayout::kStreamMajor:
+      return readEncodingViewAt<uint32_t>(
+          streamMajor_.offsets[streamId].get(), stripeOffset);
   }
   NIMBLE_UNREACHABLE(
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
@@ -209,33 +206,43 @@ uint32_t StripeGroup::streamSize(uint32_t stripeIndex, uint32_t streamId)
     case EncodingLayout::kRaw:
       return raw_
           .sizes[static_cast<size_t>(stripeOffset) * streamCount_ + streamId];
-    case EncodingLayout::kStreamMajor: {
-      uint32_t size;
-      streamMajor_.sizes[streamId]->readAt(stripeOffset, &size);
-      return size;
-    }
+    case EncodingLayout::kStreamMajor:
+      return readEncodingViewAt<uint32_t>(
+          streamMajor_.sizes[streamId].get(), stripeOffset);
   }
   NIMBLE_UNREACHABLE(
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
 }
 
-void StripeGroup::streamOffsets(uint32_t stripeIndex, std::span<uint32_t> out)
-    const {
+void StripeGroup::streamLocations(
+    uint32_t stripeIndex,
+    std::span<StreamLocation> locations) const {
   NIMBLE_CHECK_EQ(
-      out.size(), streamCount_, "output size must equal streamCount.");
-  const uint32_t stripeOffset = this->stripeOffset(stripeIndex);
+      locations.size(), streamCount_, "locations size must equal streamCount.");
+  const auto localStripe = stripeOffset(stripeIndex);
+
   switch (encodingLayout_) {
     case EncodingLayout::kRaw: {
-      const auto* base =
-          raw_.offsets + static_cast<size_t>(stripeOffset) * streamCount_;
-      std::copy(base, base + streamCount_, out.begin());
+      const auto base = static_cast<size_t>(localStripe) * streamCount_;
+      for (uint32_t streamId{0}; streamId < streamCount_; ++streamId) {
+        const auto size = raw_.sizes[base + streamId];
+        locations[streamId] = size == 0
+            ? StreamLocation{}
+            : StreamLocation{raw_.offsets[base + streamId], size};
+      }
       return;
     }
     case EncodingLayout::kStreamMajor:
-      // TODO: add a range-read API to EncodingView and decode the stripe's full
-      // offsets array in one call instead of per-stream readAt.
-      for (uint32_t i = 0; i < streamCount_; ++i) {
-        streamMajor_.offsets[i]->readAt(stripeOffset, &out[i]);
+      for (uint32_t streamId{0}; streamId < streamCount_; ++streamId) {
+        const auto size = readEncodingViewAt<uint32_t>(
+            streamMajor_.sizes[streamId].get(), localStripe);
+        if (size == 0) {
+          locations[streamId] = StreamLocation{};
+          continue;
+        }
+        const auto offset = readEncodingViewAt<uint32_t>(
+            streamMajor_.offsets[streamId].get(), localStripe);
+        locations[streamId] = StreamLocation{offset, size};
       }
       return;
   }
@@ -243,23 +250,48 @@ void StripeGroup::streamOffsets(uint32_t stripeIndex, std::span<uint32_t> out)
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
 }
 
-void StripeGroup::streamSizes(uint32_t stripeIndex, std::span<uint32_t> out)
-    const {
+void StripeGroup::streamLocations(
+    uint32_t stripeIndex,
+    std::span<const uint32_t> streamIds,
+    std::span<StreamLocation> locations) const {
   NIMBLE_CHECK_EQ(
-      out.size(), streamCount_, "output size must equal streamCount.");
-  const uint32_t stripeOffset = this->stripeOffset(stripeIndex);
+      streamIds.size(),
+      locations.size(),
+      "streamIds and locations sizes must match.");
+  const auto localStripe = stripeOffset(stripeIndex);
+
   switch (encodingLayout_) {
     case EncodingLayout::kRaw: {
-      const auto* base =
-          raw_.sizes + static_cast<size_t>(stripeOffset) * streamCount_;
-      std::copy(base, base + streamCount_, out.begin());
+      const auto base = static_cast<size_t>(localStripe) * streamCount_;
+      for (size_t i = 0; i < streamIds.size(); ++i) {
+        const auto streamId = streamIds[i];
+        if (streamId >= streamCount_) {
+          locations[i] = StreamLocation{};
+          continue;
+        }
+        const auto size = raw_.sizes[base + streamId];
+        locations[i] = size == 0
+            ? StreamLocation{}
+            : StreamLocation{raw_.offsets[base + streamId], size};
+      }
       return;
     }
     case EncodingLayout::kStreamMajor:
-      // TODO: add a range-read API to EncodingView and decode the stripe's full
-      // sizes array in one call instead of per-stream readAt.
-      for (uint32_t i = 0; i < streamCount_; ++i) {
-        streamMajor_.sizes[i]->readAt(stripeOffset, &out[i]);
+      for (size_t i = 0; i < streamIds.size(); ++i) {
+        const auto streamId = streamIds[i];
+        if (streamId >= streamCount_) {
+          locations[i] = StreamLocation{};
+          continue;
+        }
+        const auto size = readEncodingViewAt<uint32_t>(
+            streamMajor_.sizes[streamId].get(), localStripe);
+        if (size == 0) {
+          locations[i] = StreamLocation{};
+          continue;
+        }
+        const auto offset = readEncodingViewAt<uint32_t>(
+            streamMajor_.offsets[streamId].get(), localStripe);
+        locations[i] = StreamLocation{offset, size};
       }
       return;
   }

@@ -23,8 +23,12 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
@@ -170,12 +174,40 @@ class EncodingUtilitiesTest : public ::testing::Test {
     return buf;
   }
 
+  std::string buildBitRangeSplitUint32Stream(
+      const std::string& lowBits,
+      const std::string& highBits) {
+    constexpr uint32_t kRowCount{3};
+    const size_t totalSize =
+        EncodingPrefix::serializedSize(kRowCount, /*useVarint=*/false) +
+        1 /* numSections */ + 2 * (2 + sizeof(uint32_t)) + lowBits.size() +
+        highBits.size();
+    std::string buffer(totalSize, '\0');
+    char* position = buffer.data();
+    EncodingPrefix::serialize(
+        EncodingType::BitRangeSplit,
+        DataType::Uint32,
+        kRowCount,
+        /*useVarint=*/false,
+        position);
+    encoding::write<uint8_t>(2, position);
+    encoding::write<uint8_t>(0, position);
+    encoding::write<uint8_t>(15, position);
+    encoding::writeUint32(static_cast<uint32_t>(lowBits.size()), position);
+    encoding::write<uint8_t>(16, position);
+    encoding::write<uint8_t>(31, position);
+    encoding::writeUint32(static_cast<uint32_t>(highBits.size()), position);
+    encoding::writeBytes(lowBits, position);
+    encoding::writeBytes(highBits, position);
+    return buffer;
+  }
+
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
 // --- operator<< for EncodingPropertyType ---
 
-TEST_F(EncodingUtilitiesTest, EncodingPropertyTypeStreamOperator) {
+TEST_F(EncodingUtilitiesTest, encodingPropertyTypeStreamOperator) {
   {
     std::ostringstream ss;
     ss << EncodingPropertyType::Compression;
@@ -190,7 +222,7 @@ TEST_F(EncodingUtilitiesTest, EncodingPropertyTypeStreamOperator) {
 
 // --- getEncodingLabel ---
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelTrivial) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelTrivial) {
   auto stream = buildTrivialUint32Stream({10, 20, 30});
   auto label = getEncodingLabel(stream);
   // Should contain "Trivial" and "Uint32"
@@ -200,7 +232,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelTrivial) {
   EXPECT_NE(label.find("Uncompressed"), std::string::npos);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelConstant) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelConstant) {
   auto stream = buildConstantUint32Stream(42, 100);
   auto label = getEncodingLabel(stream);
   EXPECT_NE(label.find("Constant"), std::string::npos);
@@ -209,7 +241,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelConstant) {
 
 // --- traverseEncodings ---
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsTrivialVisitor) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsTrivialVisitor) {
   auto stream = buildTrivialUint32Stream({1, 2, 3});
   int visitCount = 0;
   EncodingType visitedType = EncodingType::Constant; // init to something else
@@ -243,7 +275,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsTrivialVisitor) {
   EXPECT_EQ(visitedType, EncodingType::Trivial);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsConstantVisitor) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsConstantVisitor) {
   auto stream = buildConstantUint32Stream(99, 50);
   int visitCount = 0;
 
@@ -273,7 +305,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsConstantVisitor) {
   EXPECT_EQ(visitCount, 1);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsEarlyStop) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsEarlyStop) {
   auto stream = buildTrivialUint32Stream({1, 2, 3});
   int visitCount = 0;
 
@@ -293,7 +325,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsEarlyStop) {
   EXPECT_EQ(visitCount, 1);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsEncodedSizeValue) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsEncodedSizeValue) {
   auto stream = buildTrivialUint32Stream({10, 20});
   std::string encodedSize;
 
@@ -319,7 +351,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsEncodedSizeValue) {
 
 // --- Test with real encoder (using test utilities) ---
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealTrivialEncoding) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelWithRealTrivialEncoding) {
   nimble::Buffer buffer(*pool_);
   nimble::Vector<uint32_t> values(pool_.get());
   for (uint32_t i = 0; i < 10; ++i) {
@@ -334,7 +366,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealTrivialEncoding) {
   EXPECT_NE(label.find("Uint32"), std::string::npos);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealConstantEncoding) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelWithRealConstantEncoding) {
   nimble::Buffer buffer(*pool_);
   nimble::Vector<uint32_t> values(pool_.get());
   for (uint32_t i = 0; i < 5; ++i) {
@@ -351,7 +383,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelWithRealConstantEncoding) {
 
 // --- PFOR nested exception sub-streams ---
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforChildren) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsPforChildren) {
   auto positions = buildTrivialUint32Stream({0, 5});
   auto values = buildTrivialUint32Stream({100, 200});
   auto stream = buildPforUint32Stream(/* numExceptions */ 2, positions, values);
@@ -381,7 +413,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforChildren) {
   EXPECT_EQ(nestedVisits, expected);
 }
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforNoExceptions) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsPforNoExceptions) {
   // With zero exceptions both sub-streams are empty and must be skipped rather
   // than traversed (which would read past the end of the stream).
   auto stream = buildPforUint32Stream(
@@ -406,7 +438,7 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsPforNoExceptions) {
   EXPECT_EQ(nestedVisitCount, 0);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelPfor) {
+TEST_F(EncodingUtilitiesTest, getEncodingLabelPfor) {
   // The rendered label surfaces the picked sub-encodings for the exception
   // side-channels, e.g. PFOR<Uint32>[ExceptionPositions:Trivial<...>,
   // ExceptionValues:Trivial<...>].
@@ -422,7 +454,7 @@ TEST_F(EncodingUtilitiesTest, GetEncodingLabelPfor) {
 
 // --- BlockBitPacking nested metadata sub-streams ---
 
-TEST_F(EncodingUtilitiesTest, TraverseEncodingsBlockBitPackingChildren) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsBlockBitPackingChildren) {
   auto baselines =
       buildTrivialUint32Stream({0, 64}, /*useVarintRowCount=*/false);
   auto bitWidths =
@@ -455,7 +487,137 @@ TEST_F(EncodingUtilitiesTest, TraverseEncodingsBlockBitPackingChildren) {
   EXPECT_EQ(nestedNames, expected);
 }
 
-TEST_F(EncodingUtilitiesTest, GetEncodingLabelBlockBitPacking) {
+TEST_F(EncodingUtilitiesTest, traverseEncodingsBitRangeSplitChildren) {
+  const auto lowBits = buildTrivialUint32Stream({1, 2, 3});
+  const auto highBits = buildTrivialUint32Stream({4, 5, 6});
+  const auto stream = buildBitRangeSplitUint32Stream(lowBits, highBits);
+
+  std::vector<std::string> nestedNames;
+  traverseEncodings(
+      stream,
+      [&](EncodingType /* encodingType */,
+          DataType /* dataType */,
+          uint32_t level,
+          uint32_t /* index */,
+          const std::string& nestedEncodingName,
+          const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+          /* properties */) -> bool {
+        if (level > 0) {
+          nestedNames.push_back(nestedEncodingName);
+        }
+        return true;
+      });
+
+  const std::vector<std::string> expected{"Bits0-15", "Bits16-31"};
+  EXPECT_EQ(nestedNames, expected);
+}
+
+TEST_F(EncodingUtilitiesTest, bitRangeSplitIntegratesWithChildEncodings) {
+  constexpr std::string_view kRangesConfig = "0-7;8-23;24-39;40-63";
+  Vector<uint64_t> values{pool_.get()};
+  values.reserve(128);
+  for (uint64_t row{0}; row < 128; ++row) {
+    values.push_back(
+        uint64_t{7} | ((row * 17) << 8) | ((row * 3) << 24) |
+        ((row * 29) << 40));
+  }
+
+  const auto layout = [](EncodingType encodingType, uint8_t numChildren = 0) {
+    return EncodingLayout{
+        encodingType,
+        {},
+        CompressionType::Uncompressed,
+        std::vector<std::optional<const EncodingLayout>>(numChildren)};
+  };
+  const EncodingLayout encodingLayout{
+      EncodingType::BitRangeSplit,
+      EncodingLayout::Config{{
+          {std::string(BitRangeSplitEncoding<uint64_t>::kRangesConfigKey),
+           std::string(kRangesConfig)},
+      }},
+      CompressionType::Uncompressed,
+      {
+          layout(EncodingType::Constant),
+          layout(EncodingType::Trivial),
+          layout(EncodingType::FixedBitWidth),
+          layout(EncodingType::BlockBitPacking, 3),
+      }};
+  const EncodingSelectionPolicyCreator policyCreator =
+      [](DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+    return ManualEncodingSelectionPolicyFactory{}.createPolicy(dataType);
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = EncodingFactory::encode<uint64_t>(
+      std::make_unique<ReplayedEncodingSelectionPolicy<uint64_t>>(
+          encodingLayout, std::nullopt, policyCreator),
+      values,
+      buffer,
+      Encoding::Options{.fixedBitWidthUseExactBits = true});
+
+  std::vector<std::pair<std::string, EncodingType>> visitedChildren;
+  const auto header = detail::BitRangeSplitEncodingBase::visitSections(
+      encoded,
+      {},
+      [&](NestedEncodingIdentifier sectionIndex,
+          const detail::BitRangeSplitEncodingBase::Section& section) {
+        visitedChildren.emplace_back(
+            "Bits" + std::to_string(section.bitStart) + "-" +
+                std::to_string(section.bitEnd),
+            EncodingPrefix::encodingType({section.data, section.dataBytes}));
+        EXPECT_EQ(sectionIndex, visitedChildren.size() - 1);
+      });
+  EXPECT_EQ(header.rowCount, values.size());
+  EXPECT_EQ(
+      visitedChildren,
+      (std::vector<std::pair<std::string, EncodingType>>{
+          {"Bits0-7", EncodingType::Constant},
+          {"Bits8-23", EncodingType::Trivial},
+          {"Bits24-39", EncodingType::FixedBitWidth},
+          {"Bits40-63", EncodingType::BlockBitPacking},
+      }));
+
+  const auto captured = EncodingLayoutCapture::capture(encoded, {});
+  ASSERT_EQ(captured.childrenCount(), visitedChildren.size());
+  EXPECT_EQ(
+      captured.config().get(
+          std::string(BitRangeSplitEncoding<uint64_t>::kRangesConfigKey)),
+      kRangesConfig);
+  for (NestedEncodingIdentifier sectionIndex{0};
+       sectionIndex < captured.childrenCount();
+       ++sectionIndex) {
+    SCOPED_TRACE(testing::Message() << "sectionIndex=" << sectionIndex);
+    ASSERT_TRUE(captured.child(sectionIndex).has_value());
+    EXPECT_EQ(
+        captured.child(sectionIndex)->encodingType(),
+        visitedChildren[sectionIndex].second);
+  }
+
+  std::vector<std::pair<std::string, EncodingType>> traversedChildren;
+  traverseEncodings(
+      encoded,
+      [&](EncodingType encodingType,
+          DataType /* dataType */,
+          uint32_t level,
+          uint32_t /* index */,
+          const std::string& nestedEncodingName,
+          const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+          /* properties */) -> bool {
+        if (level == 1) {
+          traversedChildren.emplace_back(nestedEncodingName, encodingType);
+        }
+        return true;
+      });
+  EXPECT_EQ(traversedChildren, visitedChildren);
+
+  auto decoded = EncodingFactory{}.create(*pool_, encoded, nullptr);
+  Vector<uint64_t> output{pool_.get(), values.size()};
+  decoded->materialize(static_cast<uint32_t>(values.size()), output.data());
+  EXPECT_EQ(
+      std::vector<uint64_t>(output.begin(), output.end()),
+      std::vector<uint64_t>(values.begin(), values.end()));
+}
+
+TEST_F(EncodingUtilitiesTest, getEncodingLabelBlockBitPacking) {
   // The rendered label surfaces the picked sub-encodings for the per-block
   // metadata, e.g. BlockBitPacking<Uint32>[Baselines:Trivial<...>,
   // BitWidths:Trivial<...>,DataOffsets:Trivial<...>].

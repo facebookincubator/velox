@@ -93,8 +93,11 @@ DictionaryEncoding<T>::DictionaryEncoding(
   const EncodingFactory factory;
   const auto* pos = data.data() + kAlphabetSizeOffset;
   const uint32_t alphabetSize = encoding::readUint32(pos);
-  alphabetEncoding_ =
-      factory.create(*this->pool_, {pos, alphabetSize}, stringBufferFactory);
+  alphabetEncoding_ = factory.create(
+      *this->pool_,
+      {pos, alphabetSize},
+      stringBufferFactory,
+      Encoding::Options{});
   const uint32_t alphabetCount = alphabetEncoding_->rowCount();
   alphabet_.resize(alphabetCount);
   alphabetEncoding_->materialize(alphabetCount, alphabet_.data());
@@ -102,8 +105,9 @@ DictionaryEncoding<T>::DictionaryEncoding(
   pos += alphabetSize;
   indicesEncoding_ = factory.create(
       *this->pool_,
-      {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+      stringBufferFactory,
+      Encoding::Options{});
 }
 
 template <typename T>

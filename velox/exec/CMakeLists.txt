@@ -32,10 +32,19 @@ velox_add_library(
   Exchange.cpp
   InMemoryExchangeClient.cpp
   ExchangeQueue.cpp
+  ExchangeSink.cpp
   ExchangeSource.cpp
+  FileExchangeFormat.cpp
+  FileExchangeSink.cpp
+  FileExchangeSource.cpp
+  MaterializedOutputBuffer.cpp
+  MaterializedOutputBufferManager.cpp
+  MaterializedPartitionedOutput.cpp
   SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
+  FixedPointLoop.cpp
+  FixedPointOperators.cpp
   GroupId.cpp
   GroupingSet.cpp
   HashAggregation.cpp
@@ -77,6 +86,7 @@ velox_add_library(
   ParallelProject.cpp
   PartitionFunction.cpp
   PartitionedOutput.cpp
+  PersistentState.cpp
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
@@ -131,12 +141,17 @@ velox_add_library(
   EnforceDistinct.h
   EnforceSingleRow.h
   Exchange.h
-  ExchangeClient.h
   InMemoryExchangeClient.h
   ExchangeQueue.h
+  ExchangeSink.h
   ExchangeSource.h
   Expand.h
+  FileExchangeFormat.h
+  FileExchangeSink.h
+  FileExchangeSource.h
   FilterProject.h
+  FixedPointLoop.h
+  FixedPointOperators.h
   GroupId.h
   GroupingSet.h
   HashAggregation.h
@@ -156,6 +171,9 @@ velox_add_library(
   LocalPlanner.h
   MarkDistinct.h
   MarkSorted.h
+  MaterializedOutputBuffer.h
+  MaterializedOutputBufferManager.h
+  MaterializedPartitionedOutput.h
   MemoryReclaimer.h
   Merge.h
   MergeJoin.h
@@ -182,6 +200,7 @@ velox_add_library(
   PartitionFunction.h
   PartitionedOutput.h
   PartitionedOutputFactory.h
+  PersistentState.h
   PlanNodeStats.h
   PrefixSort.h
   ProbeOperatorState.h

@@ -30,12 +30,17 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     torch.manual_seed(1)
+    # Uneven repeats, so a row of o8's gather lands at a different offset than
+    # the row it was expanded from and a densely written band shows up as a
+    # shifted result rather than an equal one.
+    reps = torch.tensor([2, 0, 1, 1, 2, 0], dtype=torch.long)
     inputs = (
         torch.randn(6, 5),
         torch.randn(4, 5),
         torch.randn(6, 3),
         torch.randn(2, 3, 4),
         torch.randn(2, 3, 4),
+        reps,
     )
 
     module = CatNdTest()

@@ -163,10 +163,12 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       // enable for production tables without consulting the Nimble team
       // (oncall: dwios).
       EncodingType::ALP,
+      EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,
       EncodingType::DeltaBlock,
+      EncodingType::EliasFano,
       EncodingType::Fsst,
       EncodingType::Huffman,
   };

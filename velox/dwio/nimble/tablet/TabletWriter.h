@@ -23,7 +23,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
-#include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
@@ -70,9 +69,10 @@ class TabletWriter {
     uint32_t metadataCompressionThreshold{kMetadataCompressionThreshold};
     ChecksumType checksumType{ChecksumType::XXH3_64};
     bool streamDeduplicationEnabled{true};
-    // When true, chunk-level position index is built for all streams,
-    // enabling O(1) chunk-level seeking within stripes.
-    bool enableChunkIndex{false};
+    // When true, chunk statistics are built for all streams.
+    bool enableChunkStats{false};
+    // Selects the on-disk chunk statistics representation.
+    ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
     // Skip writing chunk stats for a stripe group if the average number
     // of chunks per stream is below this threshold. 0 disables chunk stats
     // skipping.
@@ -169,6 +169,11 @@ class TabletWriter {
   // Write metadata entry to file. Uses options_.metadataCompressionThreshold
   // to decide whether to compress.
   CompressionType writeMetadata(std::string_view metadata);
+
+  // Writes raw data segments contiguously and returns their file offset and
+  // total byte length.
+  std::pair<uint64_t, uint32_t> writeSegments(
+      const std::vector<std::string_view>& segments);
 
   // Write stripe group metadata entry and also add that to footer sections if
   // exceeds metadata flush size.

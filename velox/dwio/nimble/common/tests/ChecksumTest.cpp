@@ -18,26 +18,26 @@
 
 using namespace facebook::nimble;
 
-TEST(ChecksumTests, CreateXxh3_64) {
+TEST(ChecksumTests, createXxh3_64) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   ASSERT_NE(checksum, nullptr);
   EXPECT_EQ(checksum->getType(), ChecksumType::XXH3_64);
 }
 
-TEST(ChecksumTests, EmptyDataChecksum) {
+TEST(ChecksumTests, emptyDataChecksum) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   auto result = checksum->getChecksum();
   EXPECT_NE(result, 0);
 }
 
-TEST(ChecksumTests, SingleUpdateChecksum) {
+TEST(ChecksumTests, singleUpdateChecksum) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   checksum->update("hello world");
   auto result = checksum->getChecksum();
   EXPECT_NE(result, 0);
 }
 
-TEST(ChecksumTests, MultipleUpdatesChecksum) {
+TEST(ChecksumTests, multipleUpdatesChecksum) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   checksum->update("hello");
   checksum->update(" ");
@@ -46,7 +46,7 @@ TEST(ChecksumTests, MultipleUpdatesChecksum) {
   EXPECT_NE(result, 0);
 }
 
-TEST(ChecksumTests, SameDataProducesSameChecksum) {
+TEST(ChecksumTests, sameDataProducesSameChecksum) {
   auto checksum1 = ChecksumFactory::create(ChecksumType::XXH3_64);
   auto checksum2 = ChecksumFactory::create(ChecksumType::XXH3_64);
 
@@ -56,7 +56,7 @@ TEST(ChecksumTests, SameDataProducesSameChecksum) {
   EXPECT_EQ(checksum1->getChecksum(), checksum2->getChecksum());
 }
 
-TEST(ChecksumTests, DifferentDataProducesDifferentChecksum) {
+TEST(ChecksumTests, differentDataProducesDifferentChecksum) {
   auto checksum1 = ChecksumFactory::create(ChecksumType::XXH3_64);
   auto checksum2 = ChecksumFactory::create(ChecksumType::XXH3_64);
 
@@ -66,7 +66,7 @@ TEST(ChecksumTests, DifferentDataProducesDifferentChecksum) {
   EXPECT_NE(checksum1->getChecksum(), checksum2->getChecksum());
 }
 
-TEST(ChecksumTests, GetChecksumWithoutReset) {
+TEST(ChecksumTests, getChecksumWithoutReset) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   checksum->update("test");
 
@@ -76,7 +76,7 @@ TEST(ChecksumTests, GetChecksumWithoutReset) {
   EXPECT_EQ(result1, result2);
 }
 
-TEST(ChecksumTests, GetChecksumWithReset) {
+TEST(ChecksumTests, getChecksumWithReset) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   checksum->update("test");
 
@@ -86,7 +86,7 @@ TEST(ChecksumTests, GetChecksumWithReset) {
   EXPECT_NE(resultBeforeReset, resultAfterReset);
 }
 
-TEST(ChecksumTests, ResetAllowsReuse) {
+TEST(ChecksumTests, resetAllowsReuse) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
 
   checksum->update("first data");
@@ -98,7 +98,7 @@ TEST(ChecksumTests, ResetAllowsReuse) {
   EXPECT_EQ(firstChecksum, secondChecksum);
 }
 
-TEST(ChecksumTests, IncrementalUpdateMatchesSingleUpdate) {
+TEST(ChecksumTests, incrementalUpdateMatchesSingleUpdate) {
   auto incrementalChecksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   auto singleChecksum = ChecksumFactory::create(ChecksumType::XXH3_64);
 
@@ -111,7 +111,7 @@ TEST(ChecksumTests, IncrementalUpdateMatchesSingleUpdate) {
   EXPECT_EQ(incrementalChecksum->getChecksum(), singleChecksum->getChecksum());
 }
 
-TEST(ChecksumTests, BinaryDataChecksum) {
+TEST(ChecksumTests, binaryDataChecksum) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   std::string binaryData = {'\x00', '\x01', '\x02', '\xff', '\xfe'};
   checksum->update(binaryData);
@@ -119,7 +119,7 @@ TEST(ChecksumTests, BinaryDataChecksum) {
   EXPECT_NE(result, 0);
 }
 
-TEST(ChecksumTests, LargeDataChecksum) {
+TEST(ChecksumTests, largeDataChecksum) {
   auto checksum = ChecksumFactory::create(ChecksumType::XXH3_64);
   std::string largeData(1024 * 1024, 'x');
   checksum->update(largeData);

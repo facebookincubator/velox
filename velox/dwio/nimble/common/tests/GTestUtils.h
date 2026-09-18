@@ -52,6 +52,17 @@
   NIMBLE_ASSERT_THROW_IMPL(                                  \
       facebook::nimble::NimbleUserError, _expression, _errorMessage)
 
+#define NIMBLE_ASSERT_FILE_THROW(_expression, _errorMessage)                   \
+  try {                                                                        \
+    static_cast<void>(_expression);                                            \
+    FAIL() << "Expected a corrupted file exception";                           \
+  } catch (const facebook::nimble::NimbleUserError& exception) {               \
+    ASSERT_EQ(exception.errorCode(), "CORRUPTED_FILE");                        \
+    ASSERT_NE(exception.errorMessage().find(_errorMessage), std::string::npos) \
+        << "Expected error message to contain '" << (_errorMessage)            \
+        << "', but received '" << exception.errorMessage() << "'.";            \
+  }
+
 #define NIMBLE_ASSERT_RUNTIME_THROW(_expression, _errorMessage) \
   NIMBLE_ASSERT_THROW_IMPL(                                     \
       facebook::nimble::NimbleRuntimeError, _expression, _errorMessage)

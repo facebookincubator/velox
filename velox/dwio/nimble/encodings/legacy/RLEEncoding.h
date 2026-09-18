@@ -94,7 +94,8 @@ class RLEEncodingBase
             {data.data() + EncodingPrefix::kFixedPrefixSize + 4,
              *reinterpret_cast<const uint32_t*>(
                  data.data() + EncodingPrefix::kFixedPrefixSize)},
-            stringBufferFactory)} {}
+            stringBufferFactory,
+            Encoding::Options{})} {}
 
   void reset() {
     materializedRunLengths_.reset();
@@ -303,9 +304,10 @@ RLEEncoding<T>::RLEEncoding(
           memoryPool,
           {internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart(),
            static_cast<size_t>(
-               data.end() -
+               data.data() + data.size() -
                internal::RLEEncodingBase<T, RLEEncoding<T>>::getValuesStart())},
-          stringBufferFactory)} {
+          stringBufferFactory,
+          Encoding::Options{})} {
   internal::RLEEncodingBase<T, RLEEncoding<T>>::reset();
 }
 

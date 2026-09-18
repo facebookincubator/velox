@@ -20,6 +20,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
@@ -29,22 +30,27 @@ namespace facebook::velox::ucx_exchange {
 
 /// @brief  Callback function for getting data from the queues.
 /// A nullptr indicates that there is no more data.
+/// 'numRows' is the logical row count of 'data', supplied by the producer
+/// because a packed table with no columns cannot report one: cuDF derives
+/// num_rows() from the columns. It is 0 for the end-of-stream marker.
 /// The remainingBytes vector contains the sizes for the
 /// packed_columns elements remaining in the queue.
 /// Uses shared_ptr to support broadcast mode where the same GPU data
 /// is shared across multiple destination queues without copying.
 using UcxDataAvailableCallback = std::function<void(
     std::shared_ptr<cudf::packed_columns> data,
+    vector_size_t numRows,
     std::vector<int64_t> remainingBytes)>;
 
 struct UcxDataAvailable {
   UcxDataAvailableCallback callback{nullptr};
   std::shared_ptr<cudf::packed_columns> data;
+  vector_size_t numRows{0};
   std::vector<int64_t> remainingBytes;
 
   void notify() {
     if (callback) {
-      callback(std::move(data), remainingBytes);
+      callback(std::move(data), numRows, remainingBytes);
     }
   }
 };
@@ -73,15 +79,22 @@ class UcxDestinationQueue {
 
   /// @brief Enqueues the data to the back of the queue.
   /// @param data Corresponds to a RowVector
-  void enqueueBack(std::shared_ptr<cudf::packed_columns> data);
+  /// @param numRows The logical row count of 'data'
+  void enqueueBack(
+      std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows);
 
   /// @brief Enqueues the data to the front of the queue. This is needed when
   /// a transfer fails.
   /// @param data
-  void enqueueFront(std::shared_ptr<cudf::packed_columns> data);
+  /// @param numRows The logical row count of 'data'
+  void enqueueFront(
+      std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows);
 
   struct Data {
     std::shared_ptr<cudf::packed_columns> data;
+    vector_size_t numRows{0};
     std::vector<int64_t> remainingBytes;
     /// Whether the result is returned immediately without invoking the `notify'
     /// callback.
@@ -112,7 +125,15 @@ class UcxDestinationQueue {
  private:
   void clearNotify();
 
-  std::deque<std::shared_ptr<cudf::packed_columns>> queue_;
+  // A queued page and the logical row count the producer gave it. Paired here
+  // rather than recovered from the page, which reports no rows when it has no
+  // columns.
+  struct QueuedPage {
+    std::shared_ptr<cudf::packed_columns> data;
+    vector_size_t numRows{0};
+  };
+
+  std::deque<QueuedPage> queue_;
   UcxDataAvailableCallback notify_{nullptr};
   Stats stats_;
 };
@@ -178,11 +199,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// in OutputQueue.
   /// @param destination The destination, must be < numDestinations.
   /// @param data The data.
-  /// @param numRows The number of rows in the data.
+  /// @param numRows The number of rows in the data. Supplied by the producer
+  /// rather than read back from 'data', which cannot report a row count once it
+  /// has no columns.
   void enqueue(
       int destination,
       std::unique_ptr<cudf::packed_columns> data,
-      int32_t numRows);
+      vector_size_t numRows);
 
   /// @brief Checks if the queue is over capacity and returns a future if so.
   /// This should be called after enqueueing all partitions for a batch.
@@ -228,6 +251,22 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// are never processed by Presto.
   exec::OutputBuffer::Stats stats();
 
+  /// @brief Queued bytes over this queue's byte capacity, the task's configured
+  /// maxOutputBufferSize. Producers are only blocked after adding data (see
+  /// checkBlocked), so the ratio can exceed 1.0. Returns nullopt while the
+  /// capacity is still unknown, which is the case for a placeholder queue
+  /// created by a getData() that arrived before initializeTask() supplied the
+  /// task's query config.
+  std::optional<double> getUtilization();
+
+  /// @brief Whether enough is queued to risk back-pressuring producers soon, or
+  /// the last data has been seen. Half the capacity is the threshold, matching
+  /// exec::OutputBuffer. Returns nullopt while the capacity is unknown, for the
+  /// same reason as getUtilization(): without a capacity there is no ratio to
+  /// compare against, and reporting `false` there would let a placeholder queue
+  /// masquerade as having spare room.
+  std::optional<bool> isOverutilized();
+
  private:
   // Percentage of maxSize below which a blocked producer should
   // be unblocked.
@@ -259,10 +298,12 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   bool enqueuePartitionedOutputLocked(
       int destination,
       std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
   void enqueueBroadcastOutputLocked(
       std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
   // Reference to the task that owns this UcxQueue.
@@ -279,7 +320,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   // For broadcast: stores data for late-arriving destinations that need
   // backfill. Cleared once noMoreQueues_ is set.
-  std::vector<std::shared_ptr<cudf::packed_columns>> dataToBroadcast_;
+  // Paired with the row count for the same reason QueuedPage is.
+  std::vector<std::pair<std::shared_ptr<cudf::packed_columns>, vector_size_t>>
+      dataToBroadcast_;
 
   /// If 'queuedBytes_' > 'maxSize_', each producer is blocked after adding
   /// data.

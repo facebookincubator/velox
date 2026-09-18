@@ -129,11 +129,24 @@ class CastHooks {
   /// the entire array if the cast of that element fails.
   virtual bool applyTryCastRecursively() const = 0;
 
+  /// Returns whether decimal to floating point casts should use high precision
+  /// conversion for values that cannot be represented exactly by floating point
+  /// arithmetic.
+  virtual bool decimalToFloatHighPrecisionCastEnabled() const {
+    return false;
+  }
+
   virtual PolicyType getPolicy() const = 0;
 
   /// Returns true if TIMESTAMP_UTC casts are supported.
   /// Spark supports them; Presto does not.
   virtual bool supportsTimestampUtc() const = 0;
+
+  /// True if 'days' is out of range for TIMESTAMP_UTC. Default never
+  /// overflows.
+  virtual bool isDateOverflowForTimestampUtc(int64_t days) const {
+    return false;
+  }
 
   /// Converts boolean to timestamp type.
   virtual Expected<Timestamp> castBooleanToTimestamp(bool seconds) const = 0;

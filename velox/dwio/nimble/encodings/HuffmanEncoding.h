@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <queue>
 #include <span>
@@ -69,10 +70,15 @@ class HuffmanEncoding final
   // OpenZL's standard Huffman codec supports 256 symbols with a maximum
   // 12-bit table. Its Large Huffman codec supports 65,536 symbols with a
   // maximum 20-bit table and length-limits deeper trees. Nimble keeps the
-  // 12-bit table but supports up to 4,096 integral symbols, falling back when
-  // a skewed distribution would require a deeper tree.
+  // 12-bit table and supports up to 4,096 integral symbols, length-limiting the
+  // tree to kMaxCodeBits so a skewed distribution never requires a deeper tree.
   static constexpr uint32_t kMaxSymbols{4096};
   static constexpr uint8_t kMaxCodeBits{12};
+
+  // Working maximum tree depth for the encoder. Leaves deeper than this are
+  // capped so per-symbol lengths always fit uint8_t; overflow beyond
+  // kMaxCodeBits is repaired into a valid length-limited prefix code.
+  static constexpr uint8_t kMaxTreeDepth{64};
 
   HuffmanEncoding(
       velox::memory::MemoryPool& pool,
@@ -133,6 +139,22 @@ class HuffmanEncoding final
         : frequency(frequency), left(left), right(right), symbol(symbol) {}
   };
 
+  struct QueueEntry {
+    uint64_t frequency;
+    int32_t node;
+
+    // Explicit constructor keeps priority_queue::emplace() working on OSS GCC
+    // versions that do not apply parenthesized aggregate initialization here.
+    QueueEntry(uint64_t frequency, int32_t node)
+        : frequency(frequency), node(node) {}
+
+    bool operator>(const QueueEntry& other) const {
+      // Node order makes equal-frequency trees deterministic.
+      return frequency != other.frequency ? frequency > other.frequency
+                                          : node > other.node;
+    }
+  };
+
   // Maps tableLog_ lookahead bits to an alphabet index and the number of bits
   // consumed for that symbol.
   struct DecodeEntry {
@@ -150,23 +172,54 @@ class HuffmanEncoding final
     return reversed;
   }
 
-  // Derive leaf depths for canonical code construction. Distributions that
-  // exceed the bounded decoder table are rejected as incompatible.
+  // Derive leaf depths for canonical code construction. Depths are clamped at
+  // kMaxTreeDepth so lengths stay within uint8_t even for degenerate trees; the
+  // caller length-limits any leaf deeper than kMaxCodeBits into a valid code.
+  template <typename NodeContainer, typename LengthContainer>
   static void assignCodeLengths(
-      const Vector<TreeNode>& nodes,
+      const NodeContainer& nodes,
       int32_t node,
       uint8_t depth,
-      Vector<uint8_t>& lengths) {
+      LengthContainer& lengths) {
     if (nodes[node].symbol >= 0) {
-      if (depth > kMaxCodeBits) {
-        NIMBLE_INCOMPATIBLE_ENCODING(
-            "Huffman tree exceeds the {}-bit limit", kMaxCodeBits);
-      }
       lengths[nodes[node].symbol] = std::max<uint8_t>(1, depth);
       return;
     }
-    assignCodeLengths(nodes, nodes[node].left, depth + 1, lengths);
-    assignCodeLengths(nodes, nodes[node].right, depth + 1, lengths);
+    const uint8_t childDepth =
+        depth < kMaxTreeDepth ? static_cast<uint8_t>(depth + 1) : kMaxTreeDepth;
+    assignCodeLengths(nodes, nodes[node].left, childDepth, lengths);
+    assignCodeLengths(nodes, nodes[node].right, childDepth, lengths);
+  }
+
+  template <
+      typename FrequencyContainer,
+      typename NodeContainer,
+      typename LengthContainer>
+  static void buildCodeLengths(
+      const FrequencyContainer& frequencies,
+      NodeContainer& nodes,
+      LengthContainer& lengths) {
+    std::priority_queue<
+        QueueEntry,
+        std::vector<QueueEntry>,
+        std::greater<QueueEntry>>
+        queue;
+    for (uint32_t symbol = 0; symbol < frequencies.size(); ++symbol) {
+      nodes.emplace_back(
+          frequencies[symbol], -1, -1, static_cast<int32_t>(symbol));
+      queue.emplace(frequencies[symbol], static_cast<int32_t>(symbol));
+    }
+    while (queue.size() > 1) {
+      const auto left = queue.top();
+      queue.pop();
+      const auto right = queue.top();
+      queue.pop();
+      const auto node = static_cast<int32_t>(nodes.size());
+      nodes.emplace_back(
+          left.frequency + right.frequency, left.node, right.node, -1);
+      queue.emplace(left.frequency + right.frequency, node);
+    }
+    assignCodeLengths(nodes, queue.top().node, 0, lengths);
   }
 
   physicalType decodeValue(uint32_t row) const;
@@ -292,6 +345,10 @@ std::optional<uint64_t> HuffmanEncoding<T>::estimateSize(
     return std::nullopt;
   }
 
+  // No depth gate here: encode() length-limits instead of failing, so there is
+  // nothing for the estimator to decline. Building the tree just to check depth
+  // would be pure cost — the estimate below is derived from uniqueCounts, not
+  // from the code lengths.
   uint64_t encodedBits = 0;
   const uint64_t rowsMinusOne = values.size() - 1;
   for (const auto& [value, count] : uniqueCounts.value()) {
@@ -343,47 +400,67 @@ std::string_view HuffmanEncoding<T>::encode(
         "Huffman encoding requires at least two symbols");
   }
 
-  struct QueueEntry {
-    uint64_t frequency;
-    int32_t node;
-
-    // Explicit constructor so priority_queue::emplace() works under compilers
-    // that do not apply parenthesized aggregate initialization (P0960) inside
-    // construct_at (e.g. the OSS GCC build).
-    QueueEntry(uint64_t frequency, int32_t node)
-        : frequency(frequency), node(node) {}
-
-    bool operator>(const QueueEntry& other) const {
-      // Node order makes equal-frequency trees deterministic.
-      return frequency != other.frequency ? frequency > other.frequency
-                                          : node > other.node;
-    }
-  };
   Vector<TreeNode> nodes{pool};
-  std::priority_queue<
-      QueueEntry,
-      std::vector<QueueEntry>,
-      std::greater<QueueEntry>>
-      queue;
-  for (uint32_t symbol = 0; symbol < frequencies.size(); ++symbol) {
-    nodes.emplace_back(
-        frequencies[symbol], -1, -1, static_cast<int32_t>(symbol));
-    queue.emplace(frequencies[symbol], static_cast<int32_t>(symbol));
-  }
-  while (queue.size() > 1) {
-    const auto left = queue.top();
-    queue.pop();
-    const auto right = queue.top();
-    queue.pop();
-    const auto node = static_cast<int32_t>(nodes.size());
-    nodes.emplace_back(
-        left.frequency + right.frequency, left.node, right.node, -1);
-    queue.emplace(left.frequency + right.frequency, node);
-  }
-
   Vector<uint8_t> lengths{pool, alphabet.size()};
-  assignCodeLengths(nodes, queue.top().node, /*depth=*/0, lengths);
-  const uint8_t tableLog = *std::max_element(lengths.begin(), lengths.end());
+  buildCodeLengths(frequencies, nodes, lengths);
+  uint8_t maxLen = *std::max_element(lengths.begin(), lengths.end());
+
+  // Length-limit the code so no code exceeds kMaxCodeBits. A Huffman tree can
+  // produce codes deeper than kMaxCodeBits for skewed distributions; fold the
+  // overflow into kMaxCodeBits, repair the Kraft sum so the canonical code
+  // stays a valid prefix code, then reassign lengths by frequency. When the
+  // tree already fits, the optimal tree-derived lengths are kept as-is.
+  if (maxLen > kMaxCodeBits) {
+    constexpr uint8_t L = kMaxCodeBits;
+
+    // Symbols per code length, indexed by bit length (0..maxLen).
+    std::array<uint32_t, kMaxTreeDepth + 1> blCount{};
+    for (const auto length : lengths) {
+      ++blCount[length];
+    }
+
+    // Fold every overlong code down to length L.
+    for (uint8_t len = L + 1; len <= maxLen; ++len) {
+      blCount[L] += blCount[len];
+      blCount[len] = 0;
+    }
+
+    // Repair the Kraft sum: while it exceeds the L-bit code space, lengthen the
+    // deepest available code by one bit. Each move reduces the sum by
+    // 2^(L-d-1); it terminates because N <= 2^L guarantees a valid assignment.
+    uint64_t kraft = 0;
+    for (uint8_t len = 1; len <= L; ++len) {
+      kraft += static_cast<uint64_t>(blCount[len]) << (L - len);
+    }
+    const uint64_t kraftMax = 1ULL << L;
+    while (kraft > kraftMax) {
+      uint8_t d = L - 1;
+      while (d >= 1 && blCount[d] == 0) {
+        --d;
+      }
+      --blCount[d];
+      ++blCount[d + 1];
+      kraft -= 1ULL << (L - d - 1);
+    }
+
+    // Reassign lengths so the most frequent symbols get the shortest codes,
+    // matching the repaired length distribution. Ties break on symbol index so
+    // the assignment is deterministic.
+    Vector<uint32_t> order{pool, alphabet.size()};
+    std::iota(order.begin(), order.end(), 0u);
+    std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+      return frequencies[a] != frequencies[b] ? frequencies[a] > frequencies[b]
+                                              : a < b;
+    });
+    size_t index = 0;
+    for (uint8_t len = 1; len <= L; ++len) {
+      for (uint32_t remaining = blCount[len]; remaining > 0; --remaining) {
+        lengths[order[index++]] = len;
+      }
+    }
+    maxLen = L;
+  }
+  const uint8_t tableLog = maxLen;
 
   // Number of symbols assigned to each code length, indexed by bit length.
   std::array<uint16_t, kMaxCodeBits + 1> counts{};

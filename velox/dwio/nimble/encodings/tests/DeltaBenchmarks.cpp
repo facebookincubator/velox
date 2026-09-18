@@ -131,7 +131,8 @@ template <typename T>
 void benchMaterialize(unsigned iters, const EncodedData& data, uint32_t rows) {
   std::vector<T> output(rows);
   for (unsigned i = 0; i < iters; ++i) {
-    auto encoding = EncodingFactory().create(*pool, data.encoded, {});
+    auto encoding =
+        EncodingFactory().create(*pool, data.encoded, {}, Encoding::Options{});
     encoding->materialize(rows, output.data());
     folly::doNotOptimizeAway(output[0]);
   }
@@ -146,7 +147,8 @@ void benchMaterializeBatched(
     uint32_t batchSize) {
   std::vector<T> output(batchSize);
   for (unsigned i = 0; i < iters; ++i) {
-    auto encoding = EncodingFactory().create(*pool, data.encoded, {});
+    auto encoding =
+        EncodingFactory().create(*pool, data.encoded, {}, Encoding::Options{});
     uint32_t remaining = rows;
     while (remaining > 0) {
       auto count = std::min(remaining, batchSize);
@@ -167,7 +169,8 @@ void benchSkipAndMaterialize(
     uint32_t readCount) {
   std::vector<T> output(readCount);
   for (unsigned i = 0; i < iters; ++i) {
-    auto encoding = EncodingFactory().create(*pool, data.encoded, {});
+    auto encoding =
+        EncodingFactory().create(*pool, data.encoded, {}, Encoding::Options{});
     uint32_t pos = 0;
     while (pos < rows) {
       auto toSkip = std::min(skipCount, rows - pos);

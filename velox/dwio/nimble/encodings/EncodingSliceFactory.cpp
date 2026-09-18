@@ -23,9 +23,11 @@
 #include "velox/dwio/nimble/common/NimbleException.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -74,19 +76,19 @@ std::string_view sliceByMaterializing(
   using physicalType = typename TypeTraits<T>::physicalType;
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-  Vector<physicalType> physicalValues{pool, length};
+  ScopedVector<physicalType> physicalValues{length, pool, options.bufferPool};
 
   auto encoding = EncodingFactory{options}.create(
       *pool, encoded, [&scopedBuffer](uint32_t size) -> void* {
         return scopedBuffer.get().reserve(size);
       });
   encoding->skip(offset);
-  encoding->materialize(length, physicalValues.data());
+  encoding->materialize(length, physicalValues->data());
 
   return encodeValuesWithLayout<T>(
       EncodingLayoutCapture::capture(encoded, options),
-      {reinterpret_cast<const T*>(physicalValues.data()),
-       physicalValues.size()},
+      {reinterpret_cast<const T*>(physicalValues->data()),
+       physicalValues->size()},
       buffer,
       options);
 }
@@ -189,6 +191,24 @@ std::string_view sliceDictionary(
       DictionaryEncoding<T>::slice(encoded, offset, length, buffer, options));
 }
 
+template <typename T>
+std::string_view sliceSharedDictionaryTyped(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options,
+    DataType dataType) {
+  if constexpr (isSharedDictionaryType<T>()) {
+    return SharedDictionaryEncoding<T>::slice(
+        encoded, offset, length, buffer, options);
+  }
+  NIMBLE_INCOMPATIBLE_ENCODING(
+      "Cannot slice SharedDictionary encoding for an incompatible data type "
+      "{}.",
+      dataType);
+}
+
 std::string_view sliceSharedDictionary(
     std::string_view encoded,
     DataType dataType,
@@ -196,11 +216,11 @@ std::string_view sliceSharedDictionary(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+  NIMBLE_RETURN_BY_NON_BOOL_DATA_TYPE(
       dataType,
       T,
-      SharedDictionaryEncoding<T>::slice(
-          encoded, offset, length, buffer, options));
+      sliceSharedDictionaryTyped<T>(
+          encoded, offset, length, buffer, options, dataType));
 }
 
 std::string_view sliceFixedBitWidth(
@@ -229,6 +249,36 @@ std::string_view sliceBlockBitPacking(
       T,
       BlockBitPackingEncoding<T>::slice(
           encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceEliasFano(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      EliasFanoEncoding<T>::slice(encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceBitRangeSplit(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_WIDE_INTEGER_DATA_TYPE_OR(
+      dataType,
+      T,
+      BitRangeSplitEncoding<T>::slice(encoded, offset, length, buffer, options),
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Cannot slice BitRangeSplit encoding for an incompatible data type "
+          "{}.",
+          dataType));
 }
 
 std::string_view slicePFOR(
@@ -339,6 +389,11 @@ std::string_view EncodingSliceFactory::slice(
           encoded, dataType, offset, length, buffer, options);
     case EncodingType::BlockBitPacking:
       return sliceBlockBitPacking(
+          encoded, dataType, offset, length, buffer, options);
+    case EncodingType::EliasFano:
+      return sliceEliasFano(encoded, dataType, offset, length, buffer, options);
+    case EncodingType::BitRangeSplit:
+      return sliceBitRangeSplit(
           encoded, dataType, offset, length, buffer, options);
     case EncodingType::PFOR:
       return slicePFOR(encoded, dataType, offset, length, buffer, options);

@@ -40,7 +40,8 @@ StringPayload readStringPayload(std::string_view encoded, uint32_t dataOffset) {
   return {
       .compressionType = compressionType,
       .lengths = lengths,
-      .blob = {pos, static_cast<size_t>(encoded.end() - pos)}};
+      .blob = {
+          pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)}};
 }
 
 void writeStringHeader(
@@ -107,8 +108,8 @@ TrivialEncoding<std::string_view>::TrivialEncoding(
       row_{0},
       buffer_{&pool} {
   const auto payload = readStringPayload(data, this->dataOffset());
-  lengths_ = EncodingFactory(options).create(
-      pool, payload.lengths, stringBufferFactory);
+  lengths_ = EncodingFactory().create(
+      pool, payload.lengths, stringBufferFactory, options);
   blob_ = payload.blob.data();
 
   if (payload.compressionType != CompressionType::Uncompressed) {
@@ -302,7 +303,7 @@ TrivialEncoding<bool>::TrivialEncoding(
         pool,
         compressionType,
         DataType::Undefined,
-        {bitmap_, static_cast<size_t>(data.end() - bitmap_)},
+        {bitmap_, static_cast<size_t>(data.data() + data.size() - bitmap_)},
         options.decompressCounter(),
         options.bufferPool);
     bitmap_ = uncompressed_->as<char>();
@@ -313,7 +314,7 @@ TrivialEncoding<bool>::TrivialEncoding(
   } else {
     NIMBLE_CHECK_EQ(
         bitmap_ + FixedBitArray::bufferSize(rowCount(), 1),
-        data.end(),
+        data.data() + data.size(),
         "Unexpected trivial encoding end");
   }
 }
@@ -447,7 +448,8 @@ std::string_view TrivialEncoding<bool>::slice(
       buffer.getMemoryPool(),
       compressionType,
       DataType::Undefined,
-      {sourcePos, static_cast<size_t>(encoded.end() - sourcePos)},
+      {sourcePos,
+       static_cast<size_t>(encoded.data() + encoded.size() - sourcePos)},
       options);
   sourcePos = sourceData.data;
 

@@ -141,6 +141,12 @@ void registerComparisonFunctions(const std::string& prefix) {
       {prefix + "between"});
   registerFunction<BetweenFunction, bool, IPPrefix, IPPrefix, IPPrefix>(
       {prefix + "between"});
+  registerFunction<
+      BetweenFunction,
+      bool,
+      UnknownValue,
+      UnknownValue,
+      UnknownValue>({prefix + "between"});
 }
 
 } // namespace facebook::velox::functions

@@ -47,7 +47,6 @@ target_link_libraries(
   nimble_serializer_options
   nimble_common
   nimble_encodings
-  nimble_legacy
   nimble_velox_stream_data
   velox_memory
 )
@@ -66,7 +65,6 @@ target_link_libraries(
   nimble_stream_data
   nimble_serializer_options
   nimble_encodings
-  nimble_velox_schema
   nimble_common
   velox_memory
 )
@@ -74,6 +72,7 @@ target_link_libraries(
 add_library(nimble_stream_data_parser StreamDataParser.cpp StreamDataParser.h)
 target_link_libraries(
   nimble_stream_data_parser
+  nimble_chunked_stream_payload
   nimble_serialization_header
   nimble_serializer_options
   nimble_encodings
@@ -138,6 +137,7 @@ target_link_libraries(
 add_library(nimble_stream_slicer StreamSlicer.cpp StreamSlicer.h)
 target_link_libraries(
   nimble_stream_slicer
+  nimble_chunked_stream_payload
   nimble_stream_data_parser
   nimble_stream_data_writer
   nimble_serialization_header

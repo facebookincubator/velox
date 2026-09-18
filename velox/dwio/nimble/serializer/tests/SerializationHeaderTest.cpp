@@ -39,33 +39,29 @@ void setNullBarrierRequiredFlag(
     size_t flagsOffset,
     bool requiresNullBarrier) {
   NIMBLE_CHECK_LT(flagsOffset, buffer.size(), "Invalid flags byte offset");
-  buffer[flagsOffset] = static_cast<char>(
-      facebook::nimble::serde::detail::makeFlagsByte(requiresNullBarrier));
-}
-
-std::string describeVersion(std::optional<SerializationVersion> version) {
-  return version.has_value() ? toString(*version) : std::string{"nullopt"};
+  buffer[flagsOffset] =
+      static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
+          requiresNullBarrier,
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*streamHasChunkHeader=*/false));
 }
 
 struct SerializationHeaderRoundTripParam {
   std::string name;
-  std::optional<SerializationVersion> version;
-  SerializationVersion expectedVersion{SerializationVersion::kLegacy};
+  SerializationVersion version{SerializationVersion::kSerialization};
   uint32_t rowCount{};
   bool requiresNullBarrier{};
-  bool hasHeader{};
 
   std::string toString() const {
-    return "version=" + describeVersion(version) +
+    return "version=" + facebook::nimble::toString(version) +
         " rowCount=" + std::to_string(rowCount) +
-        " requiresNullBarrier=" + nullBarrierName(requiresNullBarrier) +
-        " hasHeader=" + (hasHeader ? "true" : "false");
+        " requiresNullBarrier=" + nullBarrierName(requiresNullBarrier);
   }
 };
 
 struct SerializationHeaderSizeParam {
   std::string name;
-  SerializationVersion version{SerializationVersion::kLegacy};
+  SerializationVersion version{SerializationVersion::kSerialization};
   uint32_t rowCount{};
   bool requiresNullBarrier{};
 
@@ -78,13 +74,13 @@ struct SerializationHeaderSizeParam {
 
 struct ReadNullBarrierFlagParam {
   std::string name;
-  std::optional<SerializationVersion> version;
+  SerializationVersion version{SerializationVersion::kSerialization};
   uint8_t flagsByte{};
   bool expectedRequiresNullBarrier{};
   size_t expectedAdvance{};
 
   std::string toString() const {
-    return "version=" + describeVersion(version) +
+    return "version=" + facebook::nimble::toString(version) +
         " flagsByte=" + std::to_string(flagsByte) +
         " expectedRequiresNullBarrier=" +
         nullBarrierName(expectedRequiresNullBarrier) +
@@ -112,9 +108,10 @@ struct TabletChunkHeaderRoundTripParam {
   std::string name;
   uint32_t rowCount{};
   RowRange rowRange;
-  std::optional<std::string> resumeKey;
+  std::optional<std::string> resumeKey{};
   bool requiresNullBarrier{};
   bool streamEncodingUsesVarintRowCount{};
+  bool streamHasChunkHeader{};
 
   std::string toString() const {
     return "rowCount=" + std::to_string(rowCount) + " rowRange=[" +
@@ -123,6 +120,7 @@ struct TabletChunkHeaderRoundTripParam {
         "] requiresNullBarrier=" + nullBarrierName(requiresNullBarrier) +
         " streamEncodingUsesVarintRowCount=" +
         std::to_string(streamEncodingUsesVarintRowCount) +
+        " streamHasChunkHeader=" + std::to_string(streamHasChunkHeader) +
         " resumeKey=" + (resumeKey.has_value() ? "present" : "absent");
   }
 };
@@ -236,17 +234,22 @@ tabletChunkHeaderRoundTripParams() {
   for (const auto& baseCase : baseCases) {
     for (const bool requiresNullBarrier : {false, true}) {
       for (const bool streamEncodingUsesVarintRowCount : {false, true}) {
-        params.push_back({
-            .name = baseCase.name + "_" + nullBarrierName(requiresNullBarrier) +
-                "_rowCount" +
-                (streamEncodingUsesVarintRowCount ? "Varint" : "Fixed"),
-            .rowCount = baseCase.rowCount,
-            .rowRange = baseCase.rowRange,
-            .resumeKey = baseCase.resumeKey,
-            .requiresNullBarrier = requiresNullBarrier,
-            .streamEncodingUsesVarintRowCount =
-                streamEncodingUsesVarintRowCount,
-        });
+        for (const bool streamHasChunkHeader : {false, true}) {
+          params.push_back({
+              .name = baseCase.name + "_" +
+                  nullBarrierName(requiresNullBarrier) + "_rowCount" +
+                  (streamEncodingUsesVarintRowCount ? "Varint" : "Fixed") +
+                  (streamHasChunkHeader ? "_withChunkHeader"
+                                        : "_withoutChunkHeader"),
+              .rowCount = baseCase.rowCount,
+              .rowRange = baseCase.rowRange,
+              .resumeKey = baseCase.resumeKey,
+              .requiresNullBarrier = requiresNullBarrier,
+              .streamEncodingUsesVarintRowCount =
+                  streamEncodingUsesVarintRowCount,
+              .streamHasChunkHeader = streamHasChunkHeader,
+          });
+        }
       }
     }
   }
@@ -349,23 +352,25 @@ TEST_P(SerializationHeaderRoundTripTest, writeReadRoundtrip) {
   SCOPED_TRACE(testCase.toString());
 
   std::string buffer;
-  if (testCase.version.has_value() &&
-      usesCompactHeaderFlags(*testCase.version)) {
+  if (usesCompactHeaderFlags(testCase.version)) {
     const auto flagsOffset =
-        writeSerializationHeader(buffer, *testCase.version, testCase.rowCount);
+        writeSerializationHeader(buffer, testCase.version, testCase.rowCount);
     EXPECT_EQ(
         flagsOffset, sizeof(uint8_t) + varint::varintSize(testCase.rowCount));
     setNullBarrierRequiredFlag(
         buffer, flagsOffset, testCase.requiresNullBarrier);
   } else {
     EXPECT_FALSE(testCase.requiresNullBarrier);
-    writeLegacySerializationHeader(buffer, testCase.version, testCase.rowCount);
+    buffer.push_back(static_cast<char>(testCase.version));
+    const auto before = buffer.size();
+    buffer.resize(before + varint::varintSize(testCase.rowCount));
+    char* pos = buffer.data() + before;
+    varint::writeVarint(testCase.rowCount, &pos);
   }
 
   const char* pos = buffer.data();
-  const auto header =
-      readSerializationHeader(pos, pos + buffer.size(), testCase.hasHeader);
-  EXPECT_EQ(header.version, testCase.expectedVersion);
+  const auto header = readSerializationHeader(pos, pos + buffer.size());
+  EXPECT_EQ(header.version, testCase.version);
   EXPECT_EQ(header.rowCount, testCase.rowCount);
   EXPECT_EQ(header.flags.requiresNullBarrier, testCase.requiresNullBarrier);
   EXPECT_FALSE(header.rowRange.has_value());
@@ -376,69 +381,40 @@ INSTANTIATE_TEST_SUITE_P(
     SerializationHeaderRoundTripTest,
     ::testing::Values(
         SerializationHeaderRoundTripParam{
-            .name = "noHeader",
-            .version = std::nullopt,
-            .expectedVersion = SerializationVersion::kLegacy,
-            .rowCount = 100,
-            .requiresNullBarrier = false,
-            .hasHeader = false,
-        },
-        SerializationHeaderRoundTripParam{
-            .name = "legacy",
-            .version = std::optional{SerializationVersion::kLegacy},
-            .expectedVersion = SerializationVersion::kLegacy,
-            .rowCount = 42,
-            .requiresNullBarrier = false,
-            .hasHeader = true,
-        },
-        SerializationHeaderRoundTripParam{
             .name = "legacyCompact",
-            .version = std::optional{SerializationVersion::kLegacyCompact},
-            .expectedVersion = SerializationVersion::kLegacyCompact,
+            .version = SerializationVersion::kLegacyCompact,
             .rowCount = 1000,
             .requiresNullBarrier = false,
-            .hasHeader = true,
         },
         SerializationHeaderRoundTripParam{
             .name = "legacySerialization",
-            .version =
-                std::optional{SerializationVersion::kLegacySerialization},
-            .expectedVersion = SerializationVersion::kLegacySerialization,
+            .version = SerializationVersion::kLegacySerialization,
             .rowCount = 1000,
             .requiresNullBarrier = false,
-            .hasHeader = true,
         },
         SerializationHeaderRoundTripParam{
             .name = "serializationNoNullBarrier",
-            .version = std::optional{SerializationVersion::kSerialization},
-            .expectedVersion = SerializationVersion::kSerialization,
+            .version = SerializationVersion::kSerialization,
             .rowCount = 1000,
             .requiresNullBarrier = false,
-            .hasHeader = true,
         },
         SerializationHeaderRoundTripParam{
             .name = "serializationRequiresNullBarrier",
-            .version = std::optional{SerializationVersion::kSerialization},
-            .expectedVersion = SerializationVersion::kSerialization,
+            .version = SerializationVersion::kSerialization,
             .rowCount = 1000,
             .requiresNullBarrier = true,
-            .hasHeader = true,
         },
         SerializationHeaderRoundTripParam{
             .name = "projectionNoNullBarrier",
-            .version = std::optional{SerializationVersion::kProjection},
-            .expectedVersion = SerializationVersion::kProjection,
+            .version = SerializationVersion::kProjection,
             .rowCount = 1000,
             .requiresNullBarrier = false,
-            .hasHeader = true,
         },
         SerializationHeaderRoundTripParam{
             .name = "projectionRequiresNullBarrier",
-            .version = std::optional{SerializationVersion::kProjection},
-            .expectedVersion = SerializationVersion::kProjection,
+            .version = SerializationVersion::kProjection,
             .rowCount = 1000,
             .requiresNullBarrier = true,
-            .hasHeader = true,
         }),
     [](const ::testing::TestParamInfo<SerializationHeaderRoundTripParam>&
            info) { return info.param.name; });
@@ -448,14 +424,12 @@ TEST(SerializationHeaderTest, readRejectsUnsupportedVersion) {
   buffer.push_back(static_cast<char>(99));
   const char* pos = buffer.data();
   NIMBLE_ASSERT_THROW(
-      readSerializationHeader(pos, pos + buffer.size(), true),
-      "Unsupported version");
+      readSerializationHeader(pos, pos + buffer.size()), "Unsupported version");
 }
 
 TEST(SerializationHeaderTest, writeNullableHeaderRejectsNonNullableVersions) {
   for (const auto version :
-       {SerializationVersion::kLegacy,
-        SerializationVersion::kLegacyCompact,
+       {SerializationVersion::kLegacyCompact,
         SerializationVersion::kTablet,
         SerializationVersion::kLegacySerialization}) {
     SCOPED_TRACE(toString(version));
@@ -466,120 +440,9 @@ TEST(SerializationHeaderTest, writeNullableHeaderRejectsNonNullableVersions) {
   }
 }
 
-TEST(SerializationHeaderTest, writeLegacyHeaderRejectsFlaggedVersions) {
-  for (const auto version :
-       {SerializationVersion::kSerialization,
-        SerializationVersion::kProjection,
-        SerializationVersion::kTablet}) {
-    SCOPED_TRACE(toString(version));
-    std::string buffer;
-    NIMBLE_ASSERT_THROW(
-        writeLegacySerializationHeader(buffer, std::optional{version}, 100),
-        "Serialization headers without flags cannot write versions with header flags");
-  }
-}
-
-TEST(
-    SerializationHeaderTest,
-    writeLegacySerializationHeaderEncodesLegacyFormats) {
-  enum class RowCountEncoding {
-    kFixed32,
-    kVarint32,
-  };
-
-  struct TestCase {
-    std::string name;
-    std::optional<SerializationVersion> version;
-    SerializationVersion expectedVersion{SerializationVersion::kLegacy};
-    uint32_t rowCount{};
-    bool hasHeader{};
-    RowCountEncoding rowCountEncoding{RowCountEncoding::kFixed32};
-  };
-
-  const TestCase testCases[]{
-      {
-          .name = "noHeader",
-          .version = std::nullopt,
-          .expectedVersion = SerializationVersion::kLegacy,
-          .rowCount = 0x12345678,
-          .hasHeader = false,
-          .rowCountEncoding = RowCountEncoding::kFixed32,
-      },
-      {
-          .name = "legacy",
-          .version = std::optional{SerializationVersion::kLegacy},
-          .expectedVersion = SerializationVersion::kLegacy,
-          .rowCount = 42,
-          .hasHeader = true,
-          .rowCountEncoding = RowCountEncoding::kFixed32,
-      },
-      {
-          .name = "legacyCompact",
-          .version = std::optional{SerializationVersion::kLegacyCompact},
-          .expectedVersion = SerializationVersion::kLegacyCompact,
-          .rowCount = 1000,
-          .hasHeader = true,
-          .rowCountEncoding = RowCountEncoding::kVarint32,
-      },
-      {
-          .name = "legacySerialization",
-          .version = std::optional{SerializationVersion::kLegacySerialization},
-          .expectedVersion = SerializationVersion::kLegacySerialization,
-          .rowCount = 128,
-          .hasHeader = true,
-          .rowCountEncoding = RowCountEncoding::kVarint32,
-      },
-  };
-
-  for (const auto& testCase : testCases) {
-    SCOPED_TRACE(testCase.name);
-
-    std::string buffer;
-    writeLegacySerializationHeader(buffer, testCase.version, testCase.rowCount);
-
-    const size_t versionSize = testCase.hasHeader ? sizeof(uint8_t) : 0;
-    if (testCase.hasHeader) {
-      ASSERT_TRUE(testCase.version.has_value());
-      ASSERT_GE(buffer.size(), versionSize);
-      EXPECT_EQ(
-          static_cast<uint8_t>(buffer[0]),
-          static_cast<uint8_t>(*testCase.version));
-    }
-
-    const char* rowCountStart = buffer.data() + versionSize;
-    switch (testCase.rowCountEncoding) {
-      case RowCountEncoding::kFixed32: {
-        ASSERT_EQ(buffer.size(), versionSize + sizeof(uint32_t));
-        const auto* data = reinterpret_cast<const uint8_t*>(rowCountStart);
-        EXPECT_EQ(data[0], static_cast<uint8_t>(testCase.rowCount));
-        EXPECT_EQ(data[1], static_cast<uint8_t>(testCase.rowCount >> 8));
-        EXPECT_EQ(data[2], static_cast<uint8_t>(testCase.rowCount >> 16));
-        EXPECT_EQ(data[3], static_cast<uint8_t>(testCase.rowCount >> 24));
-        break;
-      }
-      case RowCountEncoding::kVarint32: {
-        ASSERT_GE(buffer.size(), versionSize + 1);
-        const char* pos = rowCountStart;
-        EXPECT_EQ(varint::readVarint32(&pos), testCase.rowCount);
-        EXPECT_EQ(pos, buffer.data() + buffer.size());
-        break;
-      }
-    }
-
-    const char* pos = buffer.data();
-    const auto header = readSerializationHeader(
-        pos, pos + buffer.size(), /*hasHeader=*/testCase.hasHeader);
-    EXPECT_EQ(header.version, testCase.expectedVersion);
-    EXPECT_EQ(header.rowCount, testCase.rowCount);
-    EXPECT_FALSE(header.flags.requiresNullBarrier);
-    EXPECT_EQ(pos, buffer.data() + buffer.size());
-  }
-}
-
 TEST(SerializationHeaderTest, estimateRejectsReadOnlyVersions) {
   for (const auto version :
-       {SerializationVersion::kLegacy,
-        SerializationVersion::kLegacyCompact,
+       {SerializationVersion::kLegacyCompact,
         SerializationVersion::kTablet,
         SerializationVersion::kLegacySerialization}) {
     SCOPED_TRACE(toString(version));
@@ -773,7 +636,8 @@ TEST(SerializationHeaderTest, parsesHeaderFlags) {
 
     const auto flagsByte = facebook::nimble::serde::detail::makeFlagsByte(
         testCase.requiresNullBarrier,
-        testCase.streamEncodingUsesVarintRowCount);
+        testCase.streamEncodingUsesVarintRowCount,
+        /*streamHasChunkHeader=*/false);
     EXPECT_EQ(flagsByte, testCase.expectedFlagsByte);
 
     const auto flags =
@@ -782,6 +646,7 @@ TEST(SerializationHeaderTest, parsesHeaderFlags) {
     EXPECT_EQ(
         flags.streamEncodingUsesVarintRowCount,
         testCase.streamEncodingUsesVarintRowCount);
+    EXPECT_FALSE(flags.streamHasChunkHeader);
   }
 }
 
@@ -844,7 +709,7 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
           .version = SerializationVersion::kProjection,
           .requiresNullBarrier = false,
           .streamVarintRowCountFlag = false,
-          .expectedStreamEncodingUsesVarintRowCount = false,
+          .expectedStreamEncodingUsesVarintRowCount = true,
       },
       {
           .version = SerializationVersion::kProjection,
@@ -856,7 +721,7 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
           .version = SerializationVersion::kProjection,
           .requiresNullBarrier = true,
           .streamVarintRowCountFlag = false,
-          .expectedStreamEncodingUsesVarintRowCount = false,
+          .expectedStreamEncodingUsesVarintRowCount = true,
       },
       {
           .version = SerializationVersion::kProjection,
@@ -903,6 +768,7 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
           .rowCount = kRowCount,
           .requiresNullBarrier = testCase.requiresNullBarrier,
           .streamEncodingUsesVarintRowCount = testCase.streamVarintRowCountFlag,
+          .streamHasChunkHeader = true,
           .rowRange = RowRange{0, kRowCount},
       });
       buffer.assign(
@@ -911,20 +777,26 @@ TEST(SerializationHeaderTest, readsHeaderFlagCombinations) {
     } else {
       const auto flagsOffset =
           writeSerializationHeader(buffer, testCase.version, kRowCount);
-      buffer[flagsOffset] =
-          static_cast<char>(facebook::nimble::serde::detail::makeFlagsByte(
-              testCase.requiresNullBarrier, testCase.streamVarintRowCountFlag));
+      buffer[flagsOffset] = static_cast<char>(
+          facebook::nimble::serde::detail::makeFlagsByte(
+              testCase.requiresNullBarrier,
+              testCase.streamVarintRowCountFlag,
+              /*streamHasChunkHeader=*/false) |
+          SerializationHeader::kStreamChunkHeaderFlag);
     }
 
     const char* pos = buffer.data();
-    const auto header = readSerializationHeader(
-        pos, buffer.data() + buffer.size(), /*hasHeader=*/true);
+    const auto header =
+        readSerializationHeader(pos, buffer.data() + buffer.size());
     EXPECT_EQ(header.version, testCase.version);
     EXPECT_EQ(header.rowCount, kRowCount);
     EXPECT_EQ(header.flags.requiresNullBarrier, testCase.requiresNullBarrier);
     EXPECT_EQ(
         header.flags.streamEncodingUsesVarintRowCount,
         testCase.expectedStreamEncodingUsesVarintRowCount);
+    EXPECT_EQ(
+        header.flags.streamHasChunkHeader,
+        testCase.version == SerializationVersion::kTablet);
     EXPECT_EQ(
         header.rowRange.has_value(),
         testCase.version == SerializationVersion::kTablet);
@@ -938,14 +810,14 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         ReadNullBarrierFlagParam{
             .name = "serializationNoNullBarrier",
-            .version = std::optional{SerializationVersion::kSerialization},
+            .version = SerializationVersion::kSerialization,
             .flagsByte = SerializationHeader::kStreamVarintRowCountFlag,
             .expectedRequiresNullBarrier = false,
             .expectedAdvance = 1,
         },
         ReadNullBarrierFlagParam{
             .name = "serializationRequiresNullBarrier",
-            .version = std::optional{SerializationVersion::kSerialization},
+            .version = SerializationVersion::kSerialization,
             .flagsByte = SerializationHeader::kNullBarrierRequiredFlag |
                 SerializationHeader::kStreamVarintRowCountFlag,
             .expectedRequiresNullBarrier = true,
@@ -953,14 +825,14 @@ INSTANTIATE_TEST_SUITE_P(
         },
         ReadNullBarrierFlagParam{
             .name = "serializationReservedBitsIgnored",
-            .version = std::optional{SerializationVersion::kSerialization},
+            .version = SerializationVersion::kSerialization,
             .flagsByte = SerializationHeader::kStreamVarintRowCountFlag | 0x04,
             .expectedRequiresNullBarrier = false,
             .expectedAdvance = 1,
         },
         ReadNullBarrierFlagParam{
             .name = "serializationReservedBitsWithNullBarrier",
-            .version = std::optional{SerializationVersion::kSerialization},
+            .version = SerializationVersion::kSerialization,
             .flagsByte = SerializationHeader::kNullBarrierRequiredFlag |
                 SerializationHeader::kStreamVarintRowCountFlag | 0x04,
             .expectedRequiresNullBarrier = true,
@@ -968,44 +840,29 @@ INSTANTIATE_TEST_SUITE_P(
         },
         ReadNullBarrierFlagParam{
             .name = "projectionNoNullBarrier",
-            .version = std::optional{SerializationVersion::kProjection},
+            .version = SerializationVersion::kProjection,
             .flagsByte = SerializationHeader::kStreamVarintRowCountFlag,
             .expectedRequiresNullBarrier = false,
             .expectedAdvance = 1,
         },
         ReadNullBarrierFlagParam{
             .name = "projectionRequiresNullBarrier",
-            .version = std::optional{SerializationVersion::kProjection},
+            .version = SerializationVersion::kProjection,
             .flagsByte = SerializationHeader::kNullBarrierRequiredFlag |
                 SerializationHeader::kStreamVarintRowCountFlag,
             .expectedRequiresNullBarrier = true,
             .expectedAdvance = 1,
         },
         ReadNullBarrierFlagParam{
-            .name = "legacyIgnoresFlagByte",
-            .version = std::optional{SerializationVersion::kLegacy},
-            .flagsByte = SerializationHeader::kNullBarrierRequiredFlag,
-            .expectedRequiresNullBarrier = false,
-            .expectedAdvance = 0,
-        },
-        ReadNullBarrierFlagParam{
             .name = "legacyCompactIgnoresFlagByte",
-            .version = std::optional{SerializationVersion::kLegacyCompact},
+            .version = SerializationVersion::kLegacyCompact,
             .flagsByte = SerializationHeader::kNullBarrierRequiredFlag,
             .expectedRequiresNullBarrier = false,
             .expectedAdvance = 0,
         },
         ReadNullBarrierFlagParam{
             .name = "legacySerializationIgnoresFlagByte",
-            .version =
-                std::optional{SerializationVersion::kLegacySerialization},
-            .flagsByte = SerializationHeader::kNullBarrierRequiredFlag,
-            .expectedRequiresNullBarrier = false,
-            .expectedAdvance = 0,
-        },
-        ReadNullBarrierFlagParam{
-            .name = "noHeaderIgnoresFlagByte",
-            .version = std::nullopt,
+            .version = SerializationVersion::kLegacySerialization,
             .flagsByte = SerializationHeader::kNullBarrierRequiredFlag,
             .expectedRequiresNullBarrier = false,
             .expectedAdvance = 0,
@@ -1028,6 +885,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readTabletChunkHeaderRoundtrip) {
       .requiresNullBarrier = testCase.requiresNullBarrier,
       .streamEncodingUsesVarintRowCount =
           testCase.streamEncodingUsesVarintRowCount,
+      .streamHasChunkHeader = testCase.streamHasChunkHeader,
       .rowRange = testCase.rowRange,
       .resumeKey = testCase.resumeKey,
   });
@@ -1036,6 +894,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readTabletChunkHeaderRoundtrip) {
   EXPECT_EQ(
       out.streamEncodingUsesVarintRowCount,
       testCase.streamEncodingUsesVarintRowCount);
+  EXPECT_EQ(out.streamHasChunkHeader, testCase.streamHasChunkHeader);
   EXPECT_EQ(out.rowRange, testCase.rowRange);
   EXPECT_EQ(out.resumeKey, testCase.resumeKey);
 }
@@ -1049,12 +908,13 @@ TEST_P(TabletChunkHeaderRoundTripTest, readSerializationHeaderRoundtrip) {
       .requiresNullBarrier = testCase.requiresNullBarrier,
       .streamEncodingUsesVarintRowCount =
           testCase.streamEncodingUsesVarintRowCount,
+      .streamHasChunkHeader = testCase.streamHasChunkHeader,
       .rowRange = testCase.rowRange,
       .resumeKey = testCase.resumeKey,
   });
   const char* pos = reinterpret_cast<const char*>(buf.data());
   const char* end = pos + buf.length();
-  const auto header = readSerializationHeader(pos, end, true);
+  const auto header = readSerializationHeader(pos, end);
 
   EXPECT_EQ(header.version, SerializationVersion::kTablet);
   EXPECT_EQ(header.rowCount, testCase.rowCount);
@@ -1062,6 +922,7 @@ TEST_P(TabletChunkHeaderRoundTripTest, readSerializationHeaderRoundtrip) {
   EXPECT_EQ(
       header.flags.streamEncodingUsesVarintRowCount,
       testCase.streamEncodingUsesVarintRowCount);
+  EXPECT_EQ(header.flags.streamHasChunkHeader, testCase.streamHasChunkHeader);
   ASSERT_TRUE(header.rowRange.has_value());
   EXPECT_EQ(*header.rowRange, testCase.rowRange);
 }

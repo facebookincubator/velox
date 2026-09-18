@@ -374,6 +374,28 @@ Invalid examples
   SELECT cast('2012/10/23' as date); -- NULL // Invalid argument
   SELECT cast('2012.10.23' as date); -- NULL // Invalid argument
 
+From TIMESTAMP_UTC
+^^^^^^^^^^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a timestamp_utc to date extracts the date from the stored timestamp
+fields without applying the session timezone.
+
+``cast`` throws when the value is too far from the epoch to fit in a date
+(regardless of ANSI mode); ``try_cast`` returns NULL instead.
+
+Valid examples
+
+::
+
+  SELECT cast(TIMESTAMP_NTZ '2020-01-01 15:30:00' as date); -- 2020-01-01
+  SELECT cast(TIMESTAMP_NTZ '2020-01-01 00:00:00' as date); -- 2020-01-01
+
+Under session timezone ``America/Los_Angeles`` (UTC-8): ::
+
+  SELECT cast(TIMESTAMP_NTZ '2020-01-01 00:00:00' as date); -- 2020-01-01
+
 Cast to Time
 ------------
 
@@ -671,7 +693,10 @@ From strings
 
 Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
-separators, fractional seconds, and leading or trailing spaces.
+separators, fractional seconds, and leading or trailing spaces. Both ``' '``
+and ``'T'`` date-time separators must be followed immediately by a digit.
+Outer whitespace is trimmed before the parser runs, so a bare trailing
+separator such as ``"2015-03-18 "`` is handled as a date-only value.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
@@ -692,6 +717,9 @@ Invalid examples
 
   SELECT cast('INVALID' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2012-Oct-01' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18T 12:00:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2015-03-18 Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From boolean
 ^^^^^^^^^^^^
@@ -762,3 +790,26 @@ Valid examples
   SELECT cast('2015-03-18 12:03:17.123' as timestamp_ntz); -- 2015-03-18 12:03:17.123
   SELECT cast('1970-01-01 00:00:00-08:00' as timestamp_ntz); -- 1970-01-01 00:00:00
   SELECT cast('2015-03-18T12:03:17Z' as timestamp_ntz); -- 2015-03-18 12:03:17
+
+From DATE
+^^^^^^^^^
+
+*(ANSI compliant)*
+
+Casting a date to timestamp_utc returns midnight of the given date, not
+subject to the session timezone.
+
+``cast`` throws when the date is too far from the epoch to fit in a
+timestamp_utc (regardless of ANSI mode); ``try_cast`` returns NULL instead.
+
+Valid examples
+
+Under session timezone UTC: ::
+
+  SELECT cast(DATE '2020-01-01' as timestamp_ntz); -- 2020-01-01 00:00:00
+  SELECT cast(DATE '1970-01-01' as timestamp_ntz); -- 1970-01-01 00:00:00
+
+Under session timezone ``America/Los_Angeles`` (UTC-8): ::
+
+  SELECT cast(DATE '2020-01-01' as timestamp_ntz); -- 2020-01-01 00:00:00
+  SELECT cast(DATE '1970-01-01' as timestamp_ntz); -- 1970-01-01 00:00:00

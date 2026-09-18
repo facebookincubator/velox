@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -317,7 +318,7 @@ std::ostream& operator<<(
 /// over hundreds of keys. Concrete-typed callables remove that dispatch
 /// without forcing every caller to materialize an intermediate offset list.
 template <typename Visitor>
-bool visitValueStreamLeaves(const Type& type, Visitor&& visit) {
+bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
   switch (type.kind()) {
     case Kind::Scalar:
       return visit(type.asScalar().scalarDescriptor().offset());
@@ -363,6 +364,84 @@ bool visitValueStreamLeaves(const Type& type, Visitor&& visit) {
     default:
       NIMBLE_UNREACHABLE("Unsupported type kind: {}", type.kind());
   }
+}
+
+template <typename Visitor>
+bool visitValueStreamLeaves(const Type& type, Visitor&& visit) {
+  auto&& visitRef = std::forward<Visitor>(visit);
+  return visitValueStreamLeaves(type, visitRef);
+}
+
+/// Visits stream offsets whose presence proves `type` has data in the current
+/// stripe. Unlike visitValueStreamLeaves(), this includes container presence
+/// streams such as Row and FlatMap null streams, and nested FlatMap in-map
+/// streams.
+template <typename Visitor>
+bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
+  switch (type.kind()) {
+    case Kind::Scalar:
+      return visit(type.asScalar().scalarDescriptor().offset());
+    case Kind::TimestampMicroNano:
+      return visit(type.asTimestampMicroNano().microsDescriptor().offset()) ||
+          visit(type.asTimestampMicroNano().nanosDescriptor().offset());
+    case Kind::Array: {
+      const auto& array = type.asArray();
+      return visit(array.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(*array.elements(), visit);
+    }
+    case Kind::ArrayWithOffsets: {
+      const auto& array = type.asArrayWithOffsets();
+      return visit(array.offsetsDescriptor().offset()) ||
+          visit(array.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(*array.elements(), visit);
+    }
+    case Kind::Map: {
+      const auto& map = type.asMap();
+      return visit(map.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(*map.keys(), visit) ||
+          visitPresenceStreamOffsets(*map.values(), visit);
+    }
+    case Kind::SlidingWindowMap: {
+      const auto& map = type.asSlidingWindowMap();
+      return visit(map.offsetsDescriptor().offset()) ||
+          visit(map.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(*map.keys(), visit) ||
+          visitPresenceStreamOffsets(*map.values(), visit);
+    }
+    case Kind::Row: {
+      const auto& row = type.asRow();
+      if (visit(row.nullsDescriptor().offset())) {
+        return true;
+      }
+      for (size_t i = 0; i < row.childrenCount(); ++i) {
+        if (visitPresenceStreamOffsets(*row.childAt(i), visit)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    case Kind::FlatMap: {
+      const auto& flatMap = type.asFlatMap();
+      if (visit(flatMap.nullsDescriptor().offset())) {
+        return true;
+      }
+      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
+        if (visit(flatMap.inMapDescriptorAt(i).offset()) ||
+            visitPresenceStreamOffsets(*flatMap.childAt(i), visit)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    default:
+      NIMBLE_UNREACHABLE("Unsupported type kind: {}", type.kind());
+  }
+}
+
+template <typename Visitor>
+bool visitPresenceStreamOffsets(const Type& type, Visitor&& visit) {
+  auto&& visitRef = std::forward<Visitor>(visit);
+  return visitPresenceStreamOffsets(type, visitRef);
 }
 
 } // namespace facebook::nimble

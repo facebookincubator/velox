@@ -14,119 +14,15 @@
  * limitations under the License.
  */
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/prestosql/types/BigintEnumType.h"
-#include "velox/functions/prestosql/types/HyperLogLogType.h"
-#include "velox/functions/prestosql/types/IPPrefixType.h"
-#include "velox/functions/prestosql/types/KHyperLogLogType.h"
-#include "velox/functions/prestosql/types/P4HyperLogLogType.h"
-#include "velox/functions/prestosql/types/QDigestType.h"
-#include "velox/functions/prestosql/types/SetDigestType.h"
-#include "velox/functions/prestosql/types/TDigestType.h"
-#include "velox/functions/prestosql/types/VarcharEnumType.h"
+#include "velox/functions/prestosql/types/PrestoTypes.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-// Converts a TypePtr to its string representation. Handles most types by
-// default, but provides special handling for types with mixed casing, custom
-// names, or complex formatting.
-std::string typeName(const TypePtr& type) {
-  // Handle decimal types with precision and scale
-  if (type->isDecimal()) {
-    auto precision = type->isShortDecimal() ? type->asShortDecimal().precision()
-                                            : type->asLongDecimal().precision();
-    auto scale = type->isShortDecimal() ? type->asShortDecimal().scale()
-                                        : type->asLongDecimal().scale();
-    return fmt::format("decimal({},{})", precision, scale);
-  }
-
-  // Handle complex types with recursive formatting
-  if (type->kind() == TypeKind::ARRAY) {
-    return fmt::format("array({})", typeName(type->childAt(0)));
-  }
-
-  if (type->kind() == TypeKind::MAP) {
-    return fmt::format(
-        "map({}, {})", typeName(type->childAt(0)), typeName(type->childAt(1)));
-  }
-
-  if (type->kind() == TypeKind::ROW) {
-    if (isIPPrefixType(type)) {
-      return "ipprefix";
-    }
-    const auto& rowType = type->asRow();
-    std::ostringstream out;
-    out << "row(";
-    for (auto i = 0; i < type->size(); ++i) {
-      if (i > 0) {
-        out << ", ";
-      }
-      if (!rowType.nameOf(i).empty()) {
-        out << "\"" << rowType.nameOf(i) << "\" ";
-      }
-      out << typeName(type->childAt(i));
-    }
-    out << ")";
-    return out.str();
-  }
-
-  // Handle enum types that have custom names
-  if (isBigintEnumType(*type)) {
-    return asBigintEnum(type)->enumName();
-  }
-  if (isVarcharEnumType(*type)) {
-    return asVarcharEnum(type)->enumName();
-  }
-
-  // Handle HyperLogLog types that use mixed case
-  if (isHyperLogLogType(type)) {
-    return "HyperLogLog";
-  }
-  if (isP4HyperLogLogType(type)) {
-    return "P4HyperLogLog";
-  }
-  if (isKHyperLogLogType(type)) {
-    return "KHyperLogLog";
-  }
-
-  // Handle SetDigest types
-  if (isSetDigestType(type)) {
-    return "SetDigest";
-  }
-
-  // Handle special digest types that need parameter formatting
-  if (*type == *TDIGEST(DOUBLE())) {
-    return "tdigest(double)";
-  }
-  if (*type == *QDIGEST(BIGINT())) {
-    return "qdigest(bigint)";
-  }
-  if (*type == *QDIGEST(REAL())) {
-    return "qdigest(real)";
-  }
-  if (*type == *QDIGEST(DOUBLE())) {
-    return "qdigest(double)";
-  }
-
-  if (type->kind() == TypeKind::UNKNOWN) {
-    return "unknown";
-  }
-
-  // Handle unsupported types
-  if (type->kind() == TypeKind::OPAQUE || type->kind() == TypeKind::FUNCTION ||
-      type->kind() == TypeKind::INVALID) {
-    VELOX_UNSUPPORTED("Unsupported type: {}", type->toString());
-  }
-
-  // Default: use type->name() and lowercase it
-  std::string name = type->name();
-  folly::toLowerAscii(name);
-  return name;
-}
-
 class TypeOfFunction : public exec::VectorFunction {
  public:
-  TypeOfFunction(const TypePtr& type) : typeName_{typeName(type)} {}
+  TypeOfFunction(const TypePtr& type)
+      : typeName_{PrestoTypes::displayName(*type)} {}
 
   void apply(
       const SelectivityVector& rows,

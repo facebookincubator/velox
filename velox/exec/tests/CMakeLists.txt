@@ -116,6 +116,7 @@ set(
   # group5 (~445s): TableWriterTest 225 + DefaultOutputBufMgr 98
   # + TopNRowNumber 64 + StreamingAgg 58
   TableWriterTest.cpp
+  TableWriterNotNullTest.cpp
   DefaultOutputBufferManagerTest.cpp
   TopNRowNumberTest.cpp
   StreamingAggregationTest.cpp
@@ -151,6 +152,7 @@ set(
   FilterProjectTest.cpp
   AsyncConnectorTest.cpp
   VectorWindowPartitionTest.cpp
+  FileExchangeTest.cpp
 )
 
 set(
@@ -475,6 +477,44 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
   GTest::gmock
+)
+
+add_executable(materialized_output_buffer_test MaterializedOutputBufferTest.cpp)
+add_test(materialized_output_buffer_test materialized_output_buffer_test)
+target_link_libraries(
+  materialized_output_buffer_test
+  velox_exec
+  fmt::fmt
+  Folly::folly
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(materialized_partitioned_output_test MaterializedPartitionedOutputTest.cpp Main.cpp)
+add_test(materialized_partitioned_output_test materialized_partitioned_output_test)
+target_link_libraries(
+  materialized_partitioned_output_test
+  velox_exec
+  velox_exec_test_lib
+  fmt::fmt
+  Folly::folly
+  GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(velox_fixed_point_test FixedPointTest.cpp)
+add_test(
+  NAME velox_fixed_point_test
+  COMMAND velox_fixed_point_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_fixed_point_test
+  velox_exec
+  velox_exec_test_lib
+  velox_core
+  GTest::gtest
+  GTest::gtest_main
 )
 
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)

@@ -223,6 +223,15 @@ const TypeBuilder& RowTypeBuilder::childAt(size_t index) const {
   return *children_[index];
 }
 
+const TypeBuilder& RowTypeBuilder::findChild(std::string_view name) const {
+  for (size_t i = 0; i < children_.size(); ++i) {
+    if (names_[i] == name) {
+      return *children_[i];
+    }
+  }
+  NIMBLE_USER_FAIL("Row child '{}' does not exist.", name);
+}
+
 const std::string& RowTypeBuilder::nameAt(size_t index) const {
   NIMBLE_CHECK_LT(index, children_.size(), "Index out of range.");
   return names_[index];
@@ -452,6 +461,38 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
 
 offset_size SchemaBuilder::nodeCount() const {
   return currentOffset_;
+}
+
+offset_size SchemaBuilder::createSharedDictionaryStream(
+    offset_size valueStreamOffset) {
+  NIMBLE_CHECK_LT(
+      valueStreamOffset,
+      currentOffset_,
+      "Shared dictionary value stream is not allocated.");
+  NIMBLE_CHECK(
+      !sharedDictionaryStreamOffsets_.contains(valueStreamOffset),
+      "Value stream {} already has a shared dictionary stream.",
+      valueStreamOffset);
+  for (const auto& entry : sharedDictionaryStreamOffsets_) {
+    NIMBLE_CHECK(
+        valueStreamOffset != entry.second,
+        "Stream {} is already the shared dictionary stream for value stream {}; it cannot have its own shared dictionary stream.",
+        valueStreamOffset,
+        entry.first);
+  }
+  const auto dictionaryStreamOffset = allocateStreamOffset();
+  sharedDictionaryStreamOffsets_.emplace(
+      valueStreamOffset, dictionaryStreamOffset);
+  return dictionaryStreamOffset;
+}
+
+std::optional<offset_size> SchemaBuilder::sharedDictionaryStreamOffset(
+    offset_size valueStreamOffset) const {
+  const auto iterator = sharedDictionaryStreamOffsets_.find(valueStreamOffset);
+  if (iterator == sharedDictionaryStreamOffsets_.end()) {
+    return std::nullopt;
+  }
+  return iterator->second;
 }
 
 const std::shared_ptr<const TypeBuilder>& SchemaBuilder::root() const {

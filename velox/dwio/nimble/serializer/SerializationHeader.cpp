@@ -25,8 +25,7 @@ namespace {
 inline SerializationVersion validateVersion(uint8_t versionByte) {
   const auto version = static_cast<SerializationVersion>(versionByte);
   NIMBLE_CHECK(
-      version == SerializationVersion::kLegacy ||
-          version == SerializationVersion::kLegacyCompact ||
+      version == SerializationVersion::kLegacyCompact ||
           version == SerializationVersion::kLegacySerialization ||
           version == SerializationVersion::kTablet ||
           version == SerializationVersion::kSerialization ||
@@ -46,6 +45,7 @@ TabletChunkHeader extractTabletChunkHeader(const char*& pos, const char* end) {
   header.requiresNullBarrier = flags.requiresNullBarrier;
   header.streamEncodingUsesVarintRowCount =
       flags.streamEncodingUsesVarintRowCount;
+  header.streamHasChunkHeader = flags.streamHasChunkHeader;
 
   const uint32_t startRow = varint::readVarint32(&pos);
   const uint32_t endRow = varint::readVarint32(&pos);
@@ -74,14 +74,11 @@ TabletChunkHeader extractTabletChunkHeader(const char*& pos, const char* end) {
 
 // ---- Generic serialization header ----
 
-SerializationHeader
-readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
+SerializationHeader readSerializationHeader(const char*& pos, const char* end) {
   SerializationHeader header;
 
-  if (hasHeader) {
-    NIMBLE_CHECK_GE(end - pos, 1, "Truncated header (version)");
-    header.version = validateVersion(static_cast<uint8_t>(*pos++));
-  }
+  NIMBLE_CHECK_GE(end - pos, 1, "Truncated header (version)");
+  header.version = validateVersion(static_cast<uint8_t>(*pos++));
 
   if (isTabletVersion(header.version)) {
     auto tablet = extractTabletChunkHeader(pos, end);
@@ -90,6 +87,7 @@ readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
         .requiresNullBarrier = tablet.requiresNullBarrier,
         .streamEncodingUsesVarintRowCount =
             tablet.streamEncodingUsesVarintRowCount,
+        .streamHasChunkHeader = tablet.streamHasChunkHeader,
     };
     // TODO: consider setting rowRange to nullopt when it covers the full
     // stripe (startRow==0 && endRow==rowCount) to let consumers skip the
@@ -98,12 +96,7 @@ readSerializationHeader(const char*& pos, const char* end, bool hasHeader) {
     return header;
   }
 
-  if (usesVarintRowCount(header.version)) {
-    header.rowCount = varint::readVarint32(&pos);
-  } else {
-    header.rowCount = encoding::readUint32(pos);
-  }
-
+  header.rowCount = varint::readVarint32(&pos);
   header.flags = readHeaderFlags(pos, header.version);
 
   return header;
@@ -135,7 +128,9 @@ folly::IOBuf createTabletChunkHeader(const TabletChunkHeader& header) {
   *pos++ = static_cast<char>(SerializationVersion::kTablet);
   varint::writeVarint(/*val=*/header.rowCount, &pos);
   *pos++ = static_cast<char>(detail::makeFlagsByte(
-      header.requiresNullBarrier, header.streamEncodingUsesVarintRowCount));
+      header.requiresNullBarrier,
+      header.streamEncodingUsesVarintRowCount,
+      header.streamHasChunkHeader));
   varint::writeVarint(/*val=*/header.rowRange.startRow, &pos);
   varint::writeVarint(/*val=*/header.rowRange.endRow, &pos);
   varint::writeVarint(/*val=*/resumeKeyLength, &pos);

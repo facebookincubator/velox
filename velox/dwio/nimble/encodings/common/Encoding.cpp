@@ -25,7 +25,7 @@ Encoding::Encoding(
     const Options& options)
     : pool_{&pool},
       data_{data},
-      encodingType_{data_[EncodingPrefix::kEncodingTypeOffset]},
+      encodingType_{EncodingPrefix::encodingType(data)},
       options_{options},
       dataType_{EncodingPrefix::readDataType(data)},
       rowCount_{EncodingPrefix::readRowCount(data, options_.useVarintRowCount)},
@@ -33,6 +33,7 @@ Encoding::Encoding(
           EncodingPrefix::prefixSize(data, options_.useVarintRowCount)} {}
 
 /* static */ void Encoding::copyIOBuf(char* pos, const folly::IOBuf& buf) {
+  NIMBLE_CHECK_NOT_NULL(pos);
   [[maybe_unused]] size_t length = buf.computeChainDataLength();
   for (auto data : buf) {
     std::copy(data.cbegin(), data.cend(), pos);

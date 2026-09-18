@@ -16,17 +16,20 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "velox/dwio/nimble/common/Constants.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
-#include "velox/dwio/nimble/encodings/SharedDictionaryTypes.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 
@@ -68,6 +71,12 @@ namespace facebook::nimble {
 
 class EncodingSelectionPolicyBase;
 
+/// Writer-provided input for shared dictionary value-stream encoding.
+struct SharedDictionaryEncodingInput {
+  /// One dictionary index for each non-null input value.
+  std::span<const uint32_t> indices;
+};
+
 /// Type representing a selected encoding.
 /// This is the result type returned from the select() method of an encoding
 /// selection policy. Also provides access to the compression policies for
@@ -80,11 +89,10 @@ struct EncodingSelectionResult {
   /// Estimated serialized size for encodingType, when the policy computed one
   /// while selecting the encoding.
   std::optional<uint64_t> estimatedSize{};
-  /// SharedDictionary-specific encoding data supplied by the writer-side
-  /// selection policy.
-  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput{};
   std::function<std::unique_ptr<CompressionPolicy>()> compressionPolicyFactory =
       []() { return std::make_unique<NoCompressionPolicy>(); };
+  /// Additional input required when encodingType is SharedDictionary.
+  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput{};
 };
 
 /// The EncodingSelection class is passed in to the encode() method of each
@@ -114,8 +122,7 @@ class EncodingSelection {
     return policy;
   }
 
-  /// Returns SharedDictionary-specific input supplied by the selection policy.
-  std::optional<SharedDictionaryEncodingInput> sharedDictionaryInput()
+  const std::optional<SharedDictionaryEncodingInput>& sharedDictionaryInput()
       const noexcept {
     return selectionResult_.sharedDictionaryInput;
   }

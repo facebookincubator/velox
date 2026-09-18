@@ -68,7 +68,9 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       std::optional<FileProperties> fileProperties = std::nullopt,
       int64_t dataSequenceNumber = 0,
       const std::unordered_map<int32_t, std::optional<std::string>>&
-          identityPartitionKeys = {});
+          identityPartitionKeys = {},
+      std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+          std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -88,7 +90,9 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       std::optional<FileProperties> fileProperties = std::nullopt,
       int64_t dataSequenceNumber = 0,
       const std::unordered_map<int32_t, std::optional<std::string>>&
-          identityPartitionKeys = {});
+          identityPartitionKeys = {},
+      std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+          std::nullopt);
 };
 
 /// Builds Iceberg splits with named parameters.
@@ -151,10 +155,21 @@ class IcebergSplitBuilder {
     return *this;
   }
 
+  IcebergSplitBuilder& physicalFilePath(std::string path) {
+    physicalFilePath_ = std::move(path);
+    return *this;
+  }
+
+  IcebergSplitBuilder& columnMappingMode(dwio::common::ColumnMappingMode mode) {
+    columnMappingMode_ = mode;
+    return *this;
+  }
+
   std::shared_ptr<HiveIcebergSplit> build() const;
 
  private:
   const std::string filePath_;
+  std::string physicalFilePath_;
   std::string connectorId_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};
@@ -165,6 +180,7 @@ class IcebergSplitBuilder {
   int64_t dataSequenceNumber_{0};
   std::unordered_map<int32_t, std::optional<std::string>>
       identityPartitionKeys_;
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

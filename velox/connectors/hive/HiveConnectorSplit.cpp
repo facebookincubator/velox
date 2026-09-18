@@ -19,15 +19,20 @@
 namespace facebook::velox::connector::hive {
 
 std::string HiveConnectorSplit::toString() const {
+  const std::string physicalPath = physicalFilePath.empty()
+      ? ""
+      : fmt::format(" read from {}", physicalFilePath);
   if (tableBucketNumber.has_value()) {
     return fmt::format(
-        "Hive: {} {} - {} {}",
+        "Hive: {} {} - {} {}{}",
         filePath,
         start,
         length,
-        tableBucketNumber.value());
+        tableBucketNumber.value(),
+        physicalPath);
   }
-  return fmt::format("Hive: {} {} - {}", filePath, start, length);
+  return fmt::format(
+      "Hive: {} {} - {}{}", filePath, start, length, physicalPath);
 }
 
 folly::dynamic HiveConnectorSplit::serialize() const {
@@ -98,6 +103,13 @@ folly::dynamic HiveConnectorSplit::serialize() const {
     rowIdObj["partitionId"] = rowIdProperties->partitionId;
     rowIdObj["tableGuid"] = rowIdProperties->tableGuid;
     obj["rowIdProperties"] = rowIdObj;
+  }
+  if (columnMappingMode.has_value()) {
+    obj["columnMappingMode"] =
+        dwio::common::ColumnMappingModeName::toName(*columnMappingMode);
+  }
+  if (!physicalFilePath.empty()) {
+    obj["physicalFilePath"] = physicalFilePath;
   }
 
   return obj;
@@ -178,7 +190,20 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
         .tableGuid = rowIdObj["tableGuid"].asString()};
   }
 
-  return std::make_shared<HiveConnectorSplit>(
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+      std::nullopt;
+  if (auto it = obj.find("columnMappingMode"); it != obj.items().end()) {
+    auto parsedColumnMappingMode =
+        dwio::common::ColumnMappingModeName::tryToColumnMappingMode(
+            it->second.asString());
+    VELOX_USER_CHECK(
+        parsedColumnMappingMode.has_value(),
+        "Invalid HiveConnectorSplit column mapping mode: {}",
+        it->second.asString());
+    columnMappingMode = *parsedColumnMappingMode;
+  }
+
+  auto split = std::make_shared<HiveConnectorSplit>(
       connectorId,
       filePath,
       fileFormat,
@@ -194,7 +219,12 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       infoColumns,
       properties,
       rowIdProperties,
-      bucketConversion);
+      bucketConversion,
+      columnMappingMode);
+  if (auto it = obj.find("physicalFilePath"); it != obj.items().end()) {
+    split->physicalFilePath = it->second.asString();
+  }
+  return split;
 }
 
 // static

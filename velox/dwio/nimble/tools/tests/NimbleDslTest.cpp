@@ -47,7 +47,7 @@ class NimbleDslTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
 };
 
-TEST_F(NimbleDslTest, ExecDescribeShowsColumns) {
+TEST_F(NimbleDslTest, execDescribeShowsColumns) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"user_id", "name", "score"},
@@ -67,7 +67,7 @@ TEST_F(NimbleDslTest, ExecDescribeShowsColumns) {
   EXPECT_NE(output.find("score"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectAllColumns) {
+TEST_F(NimbleDslTest, execSelectAllColumns) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"id", "value"},
@@ -92,7 +92,7 @@ TEST_F(NimbleDslTest, ExecSelectAllColumns) {
   EXPECT_NE(output.find("(3 rows)"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectWithColumnProjection) {
+TEST_F(NimbleDslTest, execSelectWithColumnProjection) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"col_a", "col_b", "col_c"},
@@ -115,7 +115,7 @@ TEST_F(NimbleDslTest, ExecSelectWithColumnProjection) {
   EXPECT_NE(output.find("7"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectWithLimit) {
+TEST_F(NimbleDslTest, execSelectWithLimit) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"x"}, {maker.flatVector<int32_t>({10, 20, 30, 40, 50})});
@@ -130,7 +130,7 @@ TEST_F(NimbleDslTest, ExecSelectWithLimit) {
   EXPECT_NE(output.find("(2 rows)"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectWithOffset) {
+TEST_F(NimbleDslTest, execSelectWithOffset) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"val"}, {maker.flatVector<int32_t>({100, 200, 300, 400, 500})});
@@ -147,7 +147,7 @@ TEST_F(NimbleDslTest, ExecSelectWithOffset) {
   EXPECT_NE(output.find("(2 rows)"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectWithNulls) {
+TEST_F(NimbleDslTest, execSelectWithNulls) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"nullable_col"},
@@ -165,7 +165,7 @@ TEST_F(NimbleDslTest, ExecSelectWithNulls) {
   EXPECT_NE(output.find("(5 rows)"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectInvalidColumn) {
+TEST_F(NimbleDslTest, execSelectInvalidColumn) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector({"col1"}, {maker.flatVector<int32_t>({1, 2})});
 
@@ -180,7 +180,7 @@ TEST_F(NimbleDslTest, ExecSelectInvalidColumn) {
   EXPECT_NE(output.find("nonexistent"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecSelectWithStripeFilter) {
+TEST_F(NimbleDslTest, execSelectWithStripeFilter) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto v1 = maker.rowVector({"id"}, {maker.flatVector<int32_t>({1, 2, 3})});
   auto v2 = maker.rowVector({"id"}, {maker.flatVector<int32_t>({4, 5, 6})});
@@ -201,7 +201,7 @@ TEST_F(NimbleDslTest, ExecSelectWithStripeFilter) {
   EXPECT_NE(output.find("(3 rows)"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowSchema) {
+TEST_F(NimbleDslTest, execShowSchema) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"id", "name"},
@@ -221,7 +221,7 @@ TEST_F(NimbleDslTest, ExecShowSchema) {
   EXPECT_NE(output.find("Row"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowInfo) {
+TEST_F(NimbleDslTest, execShowInfo) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3, 4, 5})});
@@ -241,7 +241,7 @@ TEST_F(NimbleDslTest, ExecShowInfo) {
   EXPECT_NE(output.find("5"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowStripes) {
+TEST_F(NimbleDslTest, execShowStripes) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto v1 = maker.rowVector({"x"}, {maker.flatVector<int32_t>({1, 2})});
   auto v2 = maker.rowVector({"x"}, {maker.flatVector<int32_t>({3, 4, 5})});
@@ -262,7 +262,7 @@ TEST_F(NimbleDslTest, ExecShowStripes) {
   EXPECT_NE(output.find("1"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowStreams) {
+TEST_F(NimbleDslTest, execShowStreams) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"a", "b"},
@@ -280,7 +280,7 @@ TEST_F(NimbleDslTest, ExecShowStreams) {
   EXPECT_NE(output.find("Stream Label"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowStatsNoStats) {
+TEST_F(NimbleDslTest, execShowStatsNoStats) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -299,7 +299,7 @@ TEST_F(NimbleDslTest, ExecShowStatsNoStats) {
   EXPECT_NE(output.find("No vectorized statistics"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowStatsWithStats) {
+TEST_F(NimbleDslTest, execShowStatsWithStats) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"num"}, {maker.flatVector<int32_t>({10, 20, 30})});
@@ -319,7 +319,7 @@ TEST_F(NimbleDslTest, ExecShowStatsWithStats) {
   EXPECT_NE(output.find("Nulls"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowEncoding) {
+TEST_F(NimbleDslTest, execShowEncoding) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"a", "b"},
@@ -339,7 +339,7 @@ TEST_F(NimbleDslTest, ExecShowEncoding) {
   EXPECT_NE(output.find("Trivial"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowIndexNoIndex) {
+TEST_F(NimbleDslTest, execShowIndexNoIndex) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -354,7 +354,7 @@ TEST_F(NimbleDslTest, ExecShowIndexNoIndex) {
   EXPECT_NE(output.find("Not configured"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowHistogram) {
+TEST_F(NimbleDslTest, execShowHistogram) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector(
       {"a", "b"},
@@ -374,7 +374,7 @@ TEST_F(NimbleDslTest, ExecShowHistogram) {
   EXPECT_NE(output.find("Storage %"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowHistogramTopLevel) {
+TEST_F(NimbleDslTest, execShowHistogramTopLevel) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector = maker.rowVector({"x"}, {maker.flatVector<int32_t>({1, 2, 3})});
 
@@ -388,7 +388,7 @@ TEST_F(NimbleDslTest, ExecShowHistogramTopLevel) {
   EXPECT_NE(output.find("Encoding Type"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowContent) {
+TEST_F(NimbleDslTest, execShowContent) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"val"}, {maker.flatVector<int32_t>({42, 99, 7})});
@@ -406,7 +406,7 @@ TEST_F(NimbleDslTest, ExecShowContent) {
   EXPECT_FALSE(output.empty());
 }
 
-TEST_F(NimbleDslTest, ExecShowContentInvalidStream) {
+TEST_F(NimbleDslTest, execShowContentInvalidStream) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -421,7 +421,7 @@ TEST_F(NimbleDslTest, ExecShowContentInvalidStream) {
   EXPECT_NE(output.find("Error"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowFileLayout) {
+TEST_F(NimbleDslTest, execShowFileLayout) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -439,7 +439,7 @@ TEST_F(NimbleDslTest, ExecShowFileLayout) {
   EXPECT_NE(output.find("File Postscript"), std::string::npos);
 }
 
-TEST_F(NimbleDslTest, ExecShowStripesMetadata) {
+TEST_F(NimbleDslTest, execShowStripesMetadata) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -455,7 +455,7 @@ TEST_F(NimbleDslTest, ExecShowStripesMetadata) {
   EXPECT_FALSE(output.empty());
 }
 
-TEST_F(NimbleDslTest, ExecShowStripeGroupsMetadata) {
+TEST_F(NimbleDslTest, execShowStripeGroupsMetadata) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});
@@ -471,7 +471,7 @@ TEST_F(NimbleDslTest, ExecShowStripeGroupsMetadata) {
   EXPECT_FALSE(output.empty());
 }
 
-TEST_F(NimbleDslTest, ExecShowOptionalSections) {
+TEST_F(NimbleDslTest, execShowOptionalSections) {
   velox::test::VectorMaker maker{leafPool_.get()};
   auto vector =
       maker.rowVector({"col"}, {maker.flatVector<int32_t>({1, 2, 3})});

@@ -16,7 +16,10 @@
 #pragma once
 
 #include <deque>
+#include <optional>
+#include <string_view>
 
+#include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
@@ -259,6 +262,8 @@ class RowTypeBuilder : public TypeBuilder {
   const StreamDescriptorBuilder& nullsDescriptor() const;
   size_t childrenCount() const;
   const TypeBuilder& childAt(size_t index) const;
+  /// Returns child with name, or throws if no child has that name.
+  const TypeBuilder& findChild(std::string_view name) const;
   const std::string& nameAt(size_t index) const;
   void addChild(std::string name, std::shared_ptr<TypeBuilder> child);
 
@@ -367,6 +372,13 @@ class SchemaBuilder {
 
   offset_size nodeCount() const;
 
+  /// Creates a stripe dictionary stream associated with a value stream.
+  offset_size createSharedDictionaryStream(offset_size valueStreamOffset);
+
+  /// Returns the stripe dictionary stream associated with a value stream.
+  std::optional<offset_size> sharedDictionaryStreamOffset(
+      offset_size valueStreamOffset) const;
+
   const std::shared_ptr<const TypeBuilder>& root() const;
 
  private:
@@ -385,7 +397,10 @@ class SchemaBuilder {
   // was attached to a parent of a different schema builder.
   // 2. Attaching a node more than once to a parent.
   folly::F14FastSet<std::shared_ptr<const TypeBuilder>> roots_;
-  offset_size currentOffset_ = 0;
+  // Used by the physical layout planner to colocate stripe dictionaries with
+  // their value streams. File and external dictionaries have no stream here.
+  folly::F14FastMap<offset_size, offset_size> sharedDictionaryStreamOffsets_;
+  offset_size currentOffset_{0};
 
   friend class ScalarTypeBuilder;
   friend class TimestampMicroNanoTypeBuilder;

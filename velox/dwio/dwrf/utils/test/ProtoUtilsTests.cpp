@@ -22,7 +22,7 @@
 using namespace facebook::velox::dwrf;
 using namespace facebook::velox::type::fbhive;
 
-TEST(ProtoUtilsTests, AllTypes) {
+TEST(ProtoUtilsTests, allTypes) {
   std::vector<std::string> types{
       "struct<a:boolean,b:tinyint,c:smallint,d:int,e:bigint,f:float,g:double,f:string,g:binary,h:timestamp>",
       "struct<a:map<int,array<struct<a:map<string,int>,b:array<int>>>>>"};
@@ -41,7 +41,7 @@ TEST(ProtoUtilsTests, AllTypes) {
   }
 }
 
-TEST(ProtoUtilsTests, Projection) {
+TEST(ProtoUtilsTests, projection) {
   HiveTypeParser parser;
   auto schema = parser.parse(
       "struct<a:boolean,b:tinyint,c:smallint,d:struct<a:int,b:int,c:int>>");
@@ -56,7 +56,7 @@ TEST(ProtoUtilsTests, Projection) {
   EXPECT_EQ("struct<a:boolean,c:smallint,d:struct<b:int,c:int>>", res);
 }
 
-TEST(ProtoUtilsTests, AttributesRoundTrip) {
+TEST(ProtoUtilsTests, attributesRoundTrip) {
   // iceberg.id stamped on a subset of nodes must survive footer serialization
   // and come back keyed by the same pre-order node id, leaving the schema
   // intact. Node ids: 0=root, 1=a, 2=b, 3=c, 4=c.x, 5=c.y.
@@ -94,7 +94,7 @@ TEST(ProtoUtilsTests, AttributesRoundTrip) {
       "struct<a:int,b:bigint,c:struct<x:int,y:int>>");
 }
 
-TEST(ProtoUtilsTests, AttributesRoundTripOrc) {
+TEST(ProtoUtilsTests, attributesRoundTripOrc) {
   // The same iceberg.id round-trip must work for ORC footers: DWRF/ORC Iceberg
   // reads resolve columns by field id from these attributes, and Iceberg
   // manifest-tags DWRF files as ORC. Node ids: 0=root, 1=a, 2=b, 3=c, 4=c.x,
@@ -130,7 +130,7 @@ TEST(ProtoUtilsTests, AttributesRoundTripOrc) {
   EXPECT_EQ(ProtoUtils::readAttributes(FooterWrapper(&parsed)), expected);
 }
 
-TEST(ProtoUtilsTests, AttributesAbsentByDefault) {
+TEST(ProtoUtilsTests, attributesAbsentByDefault) {
   // A type written without an attribute provider -- the existing path for every
   // DWRF file today -- yields an empty attribute map.
   HiveTypeParser parser;

@@ -34,6 +34,11 @@ template <typename T>
 struct EncodingPhysicalType {
   using type = typename TypeTraits<T>::physicalType;
 
+  static std::span<type> asEncodingPhysicalTypeSpan(std::span<T> values) {
+    return std::span<type>(
+        reinterpret_cast<type*>(values.data()), values.size());
+  }
+
   static std::span<const type> asEncodingPhysicalTypeSpan(
       std::span<const T> values) {
     return std::span<const type>(

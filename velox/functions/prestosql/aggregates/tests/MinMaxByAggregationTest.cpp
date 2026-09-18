@@ -16,7 +16,9 @@
 
 #include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -1139,6 +1141,110 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(getTestParams()));
 
 class MinMaxByComplexTypes : public AggregationTestBase {};
+
+TEST_F(MinMaxByComplexTypes, trackRowSize) {
+  // A non-numeric value is held in the HashStringAllocator by
+  // SingleValueAccumulator, with only a Position in the row, so the row's
+  // variable-length size must be tracked. Untracked, RowContainer::rowSize()
+  // reports just the fixed part and Spiller::extractSpillVector sizes its
+  // batches from a number that can be orders of magnitude too small.
+  auto comparisons = makeFlatVector<int64_t>({5, 4, 3, 2, 1});
+
+  // Strings well past the inline StringView limit, so the payload really is
+  // out of line.
+  auto strings = makeFlatVector<StringView>({
+      "a string comfortably longer than the inlined limit 1"_sv,
+      "a string comfortably longer than the inlined limit 2"_sv,
+      "a string comfortably longer than the inlined limit 3"_sv,
+      "a string comfortably longer than the inlined limit 4"_sv,
+      "a string comfortably longer than the inlined limit 5"_sv,
+  });
+  auto arrays = makeArrayVector<int64_t>({
+      {1, 2, 3},
+      {4, 5},
+      {6},
+      {7, 8, 9, 10},
+      {11},
+  });
+  // Numeric value and comparison: the accumulator is genuinely fixed size, so
+  // nothing should be tracked and no tracker should be constructed. This is
+  // also what shows the counter is only ever moved by the tracker.
+  auto numbers = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
+
+  // Bound the tracked size rather than just requiring it to be non-zero, so a
+  // garbage or uninitialised read fails too. The lower bound is the payload the
+  // accumulator must be holding; the upper bound is every candidate value plus
+  // room for allocator headers, since a comparison that keeps improving stores
+  // each value in turn. Deliberately loose: this pins the order of magnitude,
+  // not HashStringAllocator's block layout.
+  constexpr uint32_t kAllocatorSlack = 1024;
+  const uint32_t stringBytes =
+      strings->as<FlatVector<StringView>>()->valueAt(0).size();
+  const uint32_t allStringBytes = stringBytes * strings->size();
+  // Each array element is an int64 plus per-element serde overhead.
+  constexpr uint32_t kArrayBytes = 11 * sizeof(int64_t);
+
+  // min_by and max_by share MinMaxByAggregateBase but reach the store through
+  // opposite comparator outcomes, so exercise both.
+  for (const auto& name : {"min_by", "max_by"}) {
+    SCOPED_TRACE(name);
+    const auto varcharSize =
+        aggregateAndReadRowSize(pool(), name, VARCHAR(), strings, comparisons);
+    EXPECT_GE(varcharSize, stringBytes);
+    EXPECT_LE(varcharSize, allStringBytes + kAllocatorSlack);
+
+    const auto arraySize = aggregateAndReadRowSize(
+        pool(), name, ARRAY(BIGINT()), arrays, comparisons);
+    EXPECT_GE(arraySize, sizeof(int64_t));
+    EXPECT_LE(arraySize, kArrayBytes + kAllocatorSlack);
+
+    EXPECT_EQ(
+        aggregateAndReadRowSize(pool(), name, BIGINT(), numbers, comparisons),
+        0);
+  }
+}
+
+// The tracker above can only write a size because RowContainer reserved a slot
+// for it, and it reserves one only for an accumulator that reports itself as
+// not fixed size. Check that a real container does so, since
+// aggregateAndReadRowSize lays the row out by hand and would keep passing even
+// if the accumulator claimed to be fixed size.
+TEST_F(MinMaxByComplexTypes, rowContainerReservesRowSize) {
+  core::QueryConfig queryConfig({});
+  for (const auto& name : {"min_by", "max_by"}) {
+    SCOPED_TRACE(name);
+    for (const auto& valueType :
+         std::vector<TypePtr>{VARCHAR(), ARRAY(BIGINT()), BIGINT()}) {
+      SCOPED_TRACE(valueType->toString());
+      auto fn = exec::Aggregate::create(
+          name,
+          core::AggregationNode::Step::kSingle,
+          std::vector<TypePtr>{valueType, BIGINT()},
+          valueType,
+          queryConfig);
+      std::vector<exec::Accumulator> accumulators;
+      accumulators.emplace_back(fn.get(), valueType);
+      exec::RowContainer container(
+          {BIGINT()},
+          /*nullableKeys=*/false,
+          accumulators,
+          /*dependentTypes=*/std::vector<TypePtr>{},
+          /*hasNext=*/false,
+          /*isJoinBuild=*/false,
+          /*hasProbedFlag=*/false,
+          /*hasCountFlag=*/false,
+          /*hasNormalizedKey=*/false,
+          /*useListRowIndex=*/false,
+          pool());
+      // A numeric accumulator holds everything inline, so it needs no slot.
+      if (valueType->isFixedWidth()) {
+        EXPECT_EQ(container.rowSizeOffset(), 0);
+      } else {
+        EXPECT_NE(container.rowSizeOffset(), 0);
+      }
+    }
+  }
+}
 
 TEST_F(MinMaxByComplexTypes, array) {
   auto data = makeRowVector({

@@ -18,9 +18,11 @@
 
 #include <functional>
 #include <optional>
+#include <string_view>
 #include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
@@ -28,6 +30,7 @@
 #include "velox/dwio/nimble/encodings/legacy/EncodingTrait.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/velox/selective/NimbleData.h"
+#include "velox/dwio/nimble/velox/selective/ReaderBase.h"
 
 namespace facebook::nimble {
 
@@ -60,7 +63,8 @@ class ChunkedDecoder {
       const EncodingFactory* encodingFactory,
       velox::memory::MemoryPool* pool,
       bool stringDecoderZeroCopy = false,
-      velox::dwio::common::DecodingStats* decodingStats = nullptr)
+      velox::dwio::common::DecodingStats* decodingStats = nullptr,
+      DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr)
       : input_{std::move(input)},
         pool_{pool},
         decodeValuesWithNulls_{decodeValuesWithNulls},
@@ -70,7 +74,8 @@ class ChunkedDecoder {
         streamRowCount_{
             streamIndex_ ? std::optional<uint32_t>(streamIndex_->rowCount())
                          : std::nullopt},
-        decodingStats_{decodingStats} {
+        decodingStats_{decodingStats},
+        dictionaryAlphabetLoader_{std::move(dictionaryAlphabetLoader)} {
     NIMBLE_CHECK_NOT_NULL(input_);
     NIMBLE_CHECK_NOT_NULL(encodingFactory_);
   }
@@ -326,7 +331,7 @@ class ChunkedDecoder {
   // reading stopped early at a chunk boundary (the callback returned false);
   // in that case it advances the reader's readOffset_ to the boundary so the
   // flat encoding fallback resumes the decode there.
-  template <typename DictionaryVisitor>
+  template <typename T, typename DictionaryVisitor>
   bool readDictionaryIndices(
       DictionaryVisitor& visitor,
       const ChunkBoundaryCallback& onChunkBoundary) {
@@ -380,7 +385,7 @@ class ChunkedDecoder {
           return nulls->template asMutable<uint64_t>();
         };
       }
-      return readDictionaryIndicesImpl<true>(
+      return readDictionaryIndicesImpl<T, true>(
           visitor, nulls->template as<uint64_t>(), onChunkBoundary, params);
     } else {
       const auto numRows = visitor.numRows();
@@ -399,7 +404,7 @@ class ChunkedDecoder {
             .nullsInReadRange()
             ->template asMutable<uint64_t>();
       };
-      return readDictionaryIndicesImpl<false>(
+      return readDictionaryIndicesImpl<T, false>(
           visitor, /*nulls=*/nullptr, onChunkBoundary, params);
     }
   }
@@ -415,7 +420,7 @@ class ChunkedDecoder {
   // readWithVisitorImpl, this handles chunk transitions explicitly at the
   // top of the loop (for both kHasNulls and !kHasNulls paths) instead of
   // relying on testNulls which counts non-nulls across chunk boundaries.
-  template <bool kHasNulls, typename V>
+  template <typename T, bool kHasNulls, typename V>
   bool readDictionaryIndicesImpl(
       V& visitor,
       const uint64_t* nulls,
@@ -516,7 +521,7 @@ class ChunkedDecoder {
       if (visitor.rowIndex() < endRowIndex) {
         visitor.setRows(velox::RowSet(visitor.rows(), endRowIndex));
         if (numNonNulls > 0) {
-          callReadIndicesWithVisitor(*encoding_, visitor, params);
+          callReadIndicesWithVisitor<T>(*encoding_, visitor, params);
         } else if (!visitor.allowNulls()) {
           visitor.setRowIndex(endRowIndex);
         } else {
@@ -878,6 +883,17 @@ class ChunkedDecoder {
       int64_t numValues,
       const ChunkBoundaryCallback& onChunkBoundary);
 
+  // Creates and caches the shared dictionary alphabet the first time a shared
+  // dictionary chunk is loaded.
+  void ensureSharedDictionaryAlphabet();
+
+  // Returns true if this stream has a shared dictionary alphabet available or
+  // pending lazy load.
+  bool hasSharedDictionaryBinding() const {
+    return dictionaryAlphabet_ != nullptr ||
+        dictionaryAlphabetLoader_ != nullptr;
+  }
+
   const std::unique_ptr<velox::dwio::common::SeekableInputStream> input_;
   velox::memory::MemoryPool* const pool_;
   // When true, decode nullable values (for array/map length streams that
@@ -912,6 +928,11 @@ class ChunkedDecoder {
   // Per-column decoding statistics. Owned by SplitStats; valid for
   // the lifetime of this decoder.
   velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
+  // Lazily resolves the alphabet bound to this stream. Reset after
+  // dictionaryAlphabet_ is loaded.
+  DictionaryAlphabetLoader dictionaryAlphabetLoader_;
+  // Cached alphabet returned by dictionaryAlphabetLoader_.
+  std::shared_ptr<const SharedDictionaryAlphabet> dictionaryAlphabet_;
   friend class ChunkedDecoderTestHelper;
 };
 

@@ -17,6 +17,7 @@ target_link_libraries(
   nimble_data_input
   nimble_index
   nimble_stream_data_writer
+  nimble_stream_slicer
   nimble_tablet_reader
   nimble_tablet_reader_cache
   nimble_velox_common

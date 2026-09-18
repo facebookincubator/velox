@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -81,16 +82,16 @@ std::vector<T> makeFuzzValues() {
 }
 
 template <>
-std::vector<std::string> makeFuzzValues<std::string>() {
-  const std::array<std::string, 23> alphabet{
+std::vector<std::string_view> makeFuzzValues<std::string_view>() {
+  static constexpr std::array<std::string_view, 23> kAlphabet{
       "alpha",  "bravo",    "charlie", "delta",  "echo",   "foxtrot",
       "golf",   "hotel",    "india",   "juliet", "kilo",   "lima",
       "mike",   "november", "oscar",   "papa",   "quebec", "romeo",
       "sierra", "tango",    "uniform", "victor", "whiskey"};
-  std::vector<std::string> values;
+  std::vector<std::string_view> values;
   values.reserve(128);
   for (auto i = 0; i < 128; ++i) {
-    values.push_back(alphabet[(i * 17 + i / 3) % alphabet.size()]);
+    values.push_back(kAlphabet[(i * 17 + i / 3) % kAlphabet.size()]);
   }
   return values;
 }
@@ -104,8 +105,23 @@ std::vector<int32_t> makeTypedValues<int32_t>() {
 }
 
 template <>
-std::vector<std::string> makeTypedValues<std::string>() {
+std::vector<std::string_view> makeTypedValues<std::string_view>() {
   return {"gamma", "alpha", "omega", "beta", "gamma", "alpha"};
+}
+
+template <typename T>
+void verifyBuildDictionaryIndex(std::vector<T> alphabet, const char* type) {
+  SCOPED_TRACE(type);
+  const auto alphabetSize = alphabet.size();
+  const auto dictionaryIndex = buildDictionaryIndex(
+      std::span<const T>{alphabet.data(), alphabet.size()});
+
+  EXPECT_EQ(dictionaryIndex.size(), alphabetSize);
+  for (uint32_t i = 0; i < alphabetSize; ++i) {
+    const auto it = dictionaryIndex.find(alphabet[i]);
+    ASSERT_NE(it, dictionaryIndex.end());
+    EXPECT_EQ(it->second, i);
+  }
 }
 
 template <typename T>
@@ -148,27 +164,25 @@ void verifyFuzzedDictionary(velox::memory::MemoryPool* pool, const char* type) {
 
   const std::span<const T> expectedAlphabetSpan{
       expectedAlphabet.data(), expectedAlphabet.size()};
-  FixedSharedDictionaryBuilder<T> prebuiltBuilder{
-      expectedAlphabetSpan,
-      buildDictionaryIndex(expectedAlphabetSpan),
+  ExternalSharedDictionaryBuilder<T> fileScopeBuilder{
       SharedDictionaryScope::File,
+      expectedAlphabetSpan,
       /*dictionaryId=*/7,
       pool};
-  auto prebuiltMapping = prebuiltBuilder.lookup(values);
-  EXPECT_EQ(toIndexVector(prebuiltMapping.indices()), expectedIndices);
-  EXPECT_EQ(prebuiltMapping.newEntryCount(), 0);
-  EXPECT_EQ(toVector(prebuiltBuilder.alphabet()), expectedAlphabet);
+  auto fileScopeMapping = fileScopeBuilder.lookup(values);
+  EXPECT_EQ(toIndexVector(fileScopeMapping.indices()), expectedIndices);
+  EXPECT_EQ(fileScopeMapping.newEntryCount(), 0);
+  EXPECT_EQ(toVector(fileScopeBuilder.alphabet()), expectedAlphabet);
 
   ExternalSharedDictionaryBuilder<T> externalBuilder{
-      buildDictionaryIndex(
-          std::span<const T>{expectedAlphabet.data(), expectedAlphabet.size()}),
+      SharedDictionaryScope::External,
+      expectedAlphabetSpan,
       /*dictionaryId=*/7,
       pool};
   auto externalMapping = externalBuilder.lookup(values);
   EXPECT_EQ(toIndexVector(externalMapping.indices()), expectedIndices);
   EXPECT_EQ(externalMapping.newEntryCount(), 0);
-  NIMBLE_ASSERT_THROW(
-      externalBuilder.alphabet(), "does not expose an alphabet");
+  EXPECT_EQ(toVector(externalBuilder.alphabet()), expectedAlphabet);
 }
 
 class SharedDictionaryBuilderTest : public testing::Test {
@@ -184,7 +198,7 @@ template <typename T>
 class SharedDictionaryBuilderTypedTest : public SharedDictionaryBuilderTest {};
 
 using SharedDictionaryBuilderTypedTestTypes =
-    ::testing::Types<int32_t, std::string>;
+    ::testing::Types<int32_t, std::string_view>;
 
 TYPED_TEST_SUITE(
     SharedDictionaryBuilderTypedTest,
@@ -194,31 +208,60 @@ TEST_F(SharedDictionaryBuilderTest, builderKindStringFormats) {
   using Builder = SharedDictionaryBuilder<int32_t>;
 
   EXPECT_EQ(Builder::kindString(Builder::Kind::Streaming), "Streaming");
-  EXPECT_EQ(Builder::kindString(Builder::Kind::Fixed), "Fixed");
   EXPECT_EQ(Builder::kindString(Builder::Kind::External), "External");
   EXPECT_EQ(Builder::kindString(static_cast<Builder::Kind>(42)), "Unknown: 42");
 }
 
-TEST_F(SharedDictionaryBuilderTest, buildDictionaryIndexMapsAlphabetValues) {
-  const std::array<int32_t, 3> alphabet{7, 11, 13};
-  const std::span<const int32_t> alphabetSpan{alphabet};
-
-  const auto dictionaryIndex = buildDictionaryIndex(alphabetSpan);
-
-  EXPECT_EQ(dictionaryIndex.size(), alphabet.size());
-  for (uint32_t i = 0; i < alphabet.size(); ++i) {
-    const auto it = dictionaryIndex.find(alphabet[i]);
-    ASSERT_NE(it, dictionaryIndex.end());
-    EXPECT_EQ(it->second, i);
-  }
+TEST_F(SharedDictionaryBuilderTest, buildDictionaryIndex) {
+  verifyBuildDictionaryIndex<int16_t>({7, 11, 13}, "int16_t");
+  verifyBuildDictionaryIndex<uint16_t>({7, 11, 13}, "uint16_t");
+  verifyBuildDictionaryIndex<int32_t>({7, 11, 13}, "int32_t");
+  verifyBuildDictionaryIndex<uint32_t>({7, 11, 13}, "uint32_t");
+  verifyBuildDictionaryIndex<int64_t>({7, -11, 13}, "int64_t");
+  verifyBuildDictionaryIndex<uint64_t>({7, uint64_t{1} << 40, 13}, "uint64_t");
+  verifyBuildDictionaryIndex<std::string_view>(
+      {"alpha", "bravo", "charlie"}, "std::string_view");
 }
 
-TEST_F(SharedDictionaryBuilderTest, buildDictionaryIndexRejectsDuplicates) {
+TEST_F(SharedDictionaryBuilderTest, buildDictionaryIndexError) {
+  const std::vector<int32_t> int32Alphabet{7, 11, 7};
+  NIMBLE_ASSERT_USER_THROW(
+      buildDictionaryIndex(std::span<const int32_t>{int32Alphabet}),
+      "Shared dictionary has duplicate values.");
+
+  const std::vector<uint64_t> uint64Alphabet{7, uint64_t{1} << 40, 7};
+  NIMBLE_ASSERT_USER_THROW(
+      buildDictionaryIndex(std::span<const uint64_t>{uint64Alphabet}),
+      "Shared dictionary has duplicate values.");
+
+  const std::vector<std::string_view> stringAlphabet{"alpha", "bravo", "alpha"};
+  NIMBLE_ASSERT_USER_THROW(
+      buildDictionaryIndex(std::span<const std::string_view>{stringAlphabet}),
+      "Shared dictionary has duplicate values.");
+}
+
+TEST_F(SharedDictionaryBuilderTest, externalBuilderWithDuplicateAlphabetError) {
   const std::array<int32_t, 3> alphabet{7, 11, 7};
 
   NIMBLE_ASSERT_USER_THROW(
-      buildDictionaryIndex(std::span<const int32_t>{alphabet}),
+      (ExternalSharedDictionaryBuilder<int32_t>{
+          SharedDictionaryScope::External,
+          alphabet,
+          /*dictionaryId=*/7,
+          pool_.get()}),
       "Shared dictionary has duplicate values.");
+}
+
+TEST_F(SharedDictionaryBuilderTest, externalBuilderWithStripeScopeError) {
+  const std::array<int32_t, 3> alphabet{7, 11, 13};
+
+  NIMBLE_ASSERT_THROW(
+      (ExternalSharedDictionaryBuilder<int32_t>{
+          SharedDictionaryScope::Stripe,
+          alphabet,
+          /*dictionaryId=*/7,
+          pool_.get()}),
+      "External shared dictionary builder requires file or external scope.");
 }
 
 TEST_F(SharedDictionaryBuilderTest, alphabet) {
@@ -231,28 +274,31 @@ TEST_F(SharedDictionaryBuilderTest, alphabet) {
   EXPECT_EQ(
       toVector(streamingBuilder.alphabet()), (std::vector<int32_t>{4, 8, 12}));
 
-  const std::array<int32_t, 3> fixedAlphabet{7, 11, 13};
-  const std::span<const int32_t> fixedAlphabetSpan{fixedAlphabet};
-  FixedSharedDictionaryBuilder<int32_t> fixedBuilder{
-      fixedAlphabetSpan,
-      buildDictionaryIndex(fixedAlphabetSpan),
+  const std::array<int32_t, 3> fileAlphabet{7, 11, 13};
+  const std::span<const int32_t> fileAlphabetSpan{fileAlphabet};
+  ExternalSharedDictionaryBuilder<int32_t> fileBuilder{
       SharedDictionaryScope::File,
+      fileAlphabetSpan,
       /*dictionaryId=*/7,
       pool_.get()};
-  EXPECT_EQ(fixedBuilder.kind(), SharedDictionaryBuilder<int32_t>::Kind::Fixed);
   EXPECT_EQ(
-      toVector(fixedBuilder.alphabet()), (std::vector<int32_t>{7, 11, 13}));
+      fileBuilder.kind(), SharedDictionaryBuilder<int32_t>::Kind::External);
+  EXPECT_EQ(
+      toVector(fileBuilder.alphabet()), (std::vector<int32_t>{7, 11, 13}));
 
-  DictionaryIndexType<int32_t> dictionaryIndex{{7, 0}, {11, 1}, {13, 2}};
+  const std::array<int32_t, 3> externalAlphabet{7, 11, 13};
   ExternalSharedDictionaryBuilder<int32_t> externalBuilder{
-      std::move(dictionaryIndex), /*dictionaryId=*/7, pool_.get()};
+      SharedDictionaryScope::External,
+      externalAlphabet,
+      /*dictionaryId=*/7,
+      pool_.get()};
   EXPECT_EQ(
       externalBuilder.kind(), SharedDictionaryBuilder<int32_t>::Kind::External);
-  NIMBLE_ASSERT_THROW(
-      externalBuilder.alphabet(), "does not expose an alphabet");
+  EXPECT_EQ(
+      toVector(externalBuilder.alphabet()), (std::vector<int32_t>{7, 11, 13}));
 }
 
-TEST_F(SharedDictionaryBuilderTest, lookupWithFixedDictionary) {
+TEST_F(SharedDictionaryBuilderTest, lookupWithFileScopeExternalDictionary) {
   const std::array<int32_t, 4> alphabet{7, 11, 13, 17};
   struct Scenario {
     std::vector<int32_t> values;
@@ -270,10 +316,9 @@ TEST_F(SharedDictionaryBuilderTest, lookupWithFixedDictionary) {
     const auto& scenario = scenarios[i];
     SCOPED_TRACE(fmt::format("scenario={}", i));
     const std::span<const int32_t> alphabetSpan{alphabet};
-    FixedSharedDictionaryBuilder<int32_t> builder{
-        alphabetSpan,
-        buildDictionaryIndex(alphabetSpan),
+    ExternalSharedDictionaryBuilder<int32_t> builder{
         SharedDictionaryScope::File,
+        alphabetSpan,
         /*dictionaryId=*/7,
         pool_.get()};
 
@@ -312,8 +357,10 @@ TEST_F(SharedDictionaryBuilderTest, lookupWithExternalDictionary) {
   for (auto i = 0; i < scenarios.size(); ++i) {
     const auto& scenario = scenarios[i];
     SCOPED_TRACE(fmt::format("scenario={}", i));
+    const std::span<const int32_t> alphabetSpan{alphabet};
     ExternalSharedDictionaryBuilder<int32_t> builder{
-        buildDictionaryIndex(std::span<const int32_t>{alphabet}),
+        SharedDictionaryScope::External,
+        alphabetSpan,
         /*dictionaryId=*/7,
         pool_.get()};
 
@@ -321,7 +368,8 @@ TEST_F(SharedDictionaryBuilderTest, lookupWithExternalDictionary) {
       NIMBLE_ASSERT_USER_THROW(
           builder.lookup(scenario.values),
           "External shared dictionary 7 does not contain value 99.");
-      NIMBLE_ASSERT_THROW(builder.alphabet(), "does not expose an alphabet");
+      EXPECT_EQ(
+          toVector(builder.alphabet()), (std::vector<int32_t>{7, 11, 13, 17}));
       continue;
     }
 
@@ -329,7 +377,8 @@ TEST_F(SharedDictionaryBuilderTest, lookupWithExternalDictionary) {
     EXPECT_EQ(
         toIndexVector(mapping.indices()), scenario.expectedIndices.value());
     EXPECT_EQ(mapping.newEntryCount(), 0);
-    NIMBLE_ASSERT_THROW(builder.alphabet(), "does not expose an alphabet");
+    EXPECT_EQ(
+        toVector(builder.alphabet()), (std::vector<int32_t>{7, 11, 13, 17}));
   }
 }
 
@@ -346,16 +395,17 @@ TYPED_TEST(SharedDictionaryBuilderTypedTest, lookupWithStreamingDictionary) {
   EXPECT_EQ(toVector(builder.alphabet()), expected.alphabet);
 }
 
-TYPED_TEST(SharedDictionaryBuilderTypedTest, lookupWithFixedDictionary) {
+TYPED_TEST(
+    SharedDictionaryBuilderTypedTest,
+    lookupWithFileScopeExternalDictionary) {
   using T = TypeParam;
   const auto values = makeTypedValues<T>();
   const auto expected = expectedFirstSeenDictionary<T>(values);
   const std::span<const T> alphabet{
       expected.alphabet.data(), expected.alphabet.size()};
-  FixedSharedDictionaryBuilder<T> builder{
-      alphabet,
-      buildDictionaryIndex(alphabet),
+  ExternalSharedDictionaryBuilder<T> builder{
       SharedDictionaryScope::File,
+      alphabet,
       /*dictionaryId=*/7,
       this->pool_.get()};
 
@@ -369,17 +419,18 @@ TYPED_TEST(SharedDictionaryBuilderTypedTest, lookupWithExternalDictionary) {
   using T = TypeParam;
   const auto values = makeTypedValues<T>();
   const auto expected = expectedFirstSeenDictionary<T>(values);
+  const std::span<const T> alphabet{
+      expected.alphabet.data(), expected.alphabet.size()};
   ExternalSharedDictionaryBuilder<T> builder{
-      buildDictionaryIndex(
-          std::span<const T>{
-              expected.alphabet.data(), expected.alphabet.size()}),
+      SharedDictionaryScope::External,
+      alphabet,
       /*dictionaryId=*/7,
       this->pool_.get()};
 
   auto mapping = builder.lookup(values);
   EXPECT_EQ(toIndexVector(mapping.indices()), expected.indices);
   EXPECT_EQ(mapping.newEntryCount(), 0);
-  NIMBLE_ASSERT_THROW(builder.alphabet(), "does not expose an alphabet");
+  EXPECT_EQ(toVector(builder.alphabet()), expected.alphabet);
 }
 
 TEST_F(SharedDictionaryBuilderTest, fuzzDifferentTypes) {
@@ -388,7 +439,7 @@ TEST_F(SharedDictionaryBuilderTest, fuzzDifferentTypes) {
   verifyFuzzedDictionary<int32_t>(pool_.get(), "int32_t");
   verifyFuzzedDictionary<int64_t>(pool_.get(), "int64_t");
   verifyFuzzedDictionary<uint64_t>(pool_.get(), "uint64_t");
-  verifyFuzzedDictionary<std::string>(pool_.get(), "std::string");
+  verifyFuzzedDictionary<std::string_view>(pool_.get(), "std::string_view");
 }
 
 TEST_F(SharedDictionaryBuilderTest, lookupAndReset) {
@@ -529,18 +580,19 @@ TEST_F(SharedDictionaryBuilderTest, reset) {
       (std::vector<int16_t>{8, 4}));
 }
 
-TEST_F(SharedDictionaryBuilderTest, fixedBuilderRejectsMissingValue) {
+TEST_F(SharedDictionaryBuilderTest, externalBuilderRejectsMissingValue) {
   const std::array<int32_t, 3> alphabet{7, 11, 13};
   const std::span<const int32_t> alphabetSpan{alphabet};
-  FixedSharedDictionaryBuilder<int32_t> prebuiltBuilder{
-      alphabetSpan,
-      buildDictionaryIndex(alphabetSpan),
+  ExternalSharedDictionaryBuilder<int32_t> fileScopeBuilder{
       SharedDictionaryScope::File,
+      alphabetSpan,
       /*dictionaryId=*/7,
       pool_.get()};
-  DictionaryIndexType<int32_t> dictionaryIndex{{7, 0}, {11, 1}, {13, 2}};
   ExternalSharedDictionaryBuilder<int32_t> externalBuilder{
-      std::move(dictionaryIndex), /*dictionaryId=*/7, pool_.get()};
+      SharedDictionaryScope::External,
+      alphabetSpan,
+      /*dictionaryId=*/7,
+      pool_.get()};
 
   struct BuilderCase {
     const char* name;
@@ -549,9 +601,9 @@ TEST_F(SharedDictionaryBuilderTest, fixedBuilderRejectsMissingValue) {
   };
 
   const std::array<BuilderCase, 2> builders{{
-      {"fixed",
-       &prebuiltBuilder,
-       SharedDictionaryBuilder<int32_t>::Kind::Fixed},
+      {"file",
+       &fileScopeBuilder,
+       SharedDictionaryBuilder<int32_t>::Kind::External},
       {"external",
        &externalBuilder,
        SharedDictionaryBuilder<int32_t>::Kind::External},
@@ -573,37 +625,45 @@ TEST_F(SharedDictionaryBuilderTest, fixedBuilderRejectsMissingValue) {
 
   EXPECT_EQ(
       std::vector<int32_t>(
-          prebuiltBuilder.alphabet().begin(), prebuiltBuilder.alphabet().end()),
+          fileScopeBuilder.alphabet().begin(),
+          fileScopeBuilder.alphabet().end()),
       (std::vector<int32_t>{7, 11, 13}));
-  auto prebuiltResetMapping = prebuiltBuilder.lookup(covered);
-  NIMBLE_ASSERT_THROW(prebuiltBuilder.reset(), "does not support reset()");
-  NIMBLE_ASSERT_THROW(
-      externalBuilder.alphabet(), "does not expose an alphabet");
-}
-
-TEST_F(SharedDictionaryBuilderTest, fixedAndExternalLookupDoesNotGrowAlphabet) {
-  const std::array<int32_t, 3> alphabet{7, 11, 13};
-  const std::span<const int32_t> alphabetSpan{alphabet};
-  FixedSharedDictionaryBuilder<int32_t> fixedBuilder{
-      alphabetSpan,
-      buildDictionaryIndex(alphabetSpan),
-      SharedDictionaryScope::File,
-      /*dictionaryId=*/7,
-      pool_.get()};
-  DictionaryIndexType<int32_t> dictionaryIndex{{7, 0}, {11, 1}, {13, 2}};
-  ExternalSharedDictionaryBuilder<int32_t> externalBuilder{
-      std::move(dictionaryIndex), /*dictionaryId=*/7, pool_.get()};
-
-  const std::array<int32_t, 3> covered{13, 7, 11};
-  auto fixedMapping = fixedBuilder.lookup(covered);
-  EXPECT_EQ(fixedMapping.newEntryCount(), 0);
+  NIMBLE_ASSERT_THROW(fileScopeBuilder.reset(), "does not support reset()");
   EXPECT_EQ(
       std::vector<int32_t>(
-          fixedBuilder.alphabet().begin(), fixedBuilder.alphabet().end()),
+          externalBuilder.alphabet().begin(), externalBuilder.alphabet().end()),
+      (std::vector<int32_t>{7, 11, 13}));
+}
+
+TEST_F(SharedDictionaryBuilderTest, externalBuilderLookupDoesNotGrowAlphabet) {
+  const std::array<int32_t, 3> alphabet{7, 11, 13};
+  const std::span<const int32_t> alphabetSpan{alphabet};
+  ExternalSharedDictionaryBuilder<int32_t> fileScopeBuilder{
+      SharedDictionaryScope::File,
+      alphabetSpan,
+      /*dictionaryId=*/7,
+      pool_.get()};
+  ExternalSharedDictionaryBuilder<int32_t> externalBuilder{
+      SharedDictionaryScope::External,
+      alphabetSpan,
+      /*dictionaryId=*/7,
+      pool_.get()};
+
+  const std::array<int32_t, 3> covered{13, 7, 11};
+  auto fileScopeMapping = fileScopeBuilder.lookup(covered);
+  EXPECT_EQ(fileScopeMapping.newEntryCount(), 0);
+  EXPECT_EQ(
+      std::vector<int32_t>(
+          fileScopeBuilder.alphabet().begin(),
+          fileScopeBuilder.alphabet().end()),
       (std::vector<int32_t>{7, 11, 13}));
 
   auto externalMapping = externalBuilder.lookup(covered);
   EXPECT_EQ(externalMapping.newEntryCount(), 0);
+  EXPECT_EQ(
+      std::vector<int32_t>(
+          externalBuilder.alphabet().begin(), externalBuilder.alphabet().end()),
+      (std::vector<int32_t>{7, 11, 13}));
 }
 
 } // namespace

@@ -48,10 +48,14 @@ constexpr auto kEncodingTypes =
         {EncodingType::Huffman, "Huffman"},
         {EncodingType::DeltaBlock, "DeltaBlock"},
         {EncodingType::SharedDictionary, "SharedDictionary"},
+        {EncodingType::Slice, "Slice"},
+        {EncodingType::EliasFano, "EliasFano"},
+        {EncodingType::BitRangeSplit, "BitRangeSplit"},
     });
 
-constexpr auto kReadOnlyEncodingTypes =
-    std::to_array<EncodingType>({EncodingType::PFOR});
+constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({
+    EncodingType::FOR,
+});
 
 constexpr auto kCompressionTypes =
     std::to_array<std::pair<CompressionType, std::string_view>>({

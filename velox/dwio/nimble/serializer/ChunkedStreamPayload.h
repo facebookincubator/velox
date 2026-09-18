@@ -25,6 +25,9 @@ namespace facebook::nimble::serde {
 /// Removes chunk headers and decompresses chunk payloads. Returns a zero-copy
 /// input view for one uncompressed chunk; other views are backed by
 /// `outputBuffer` and remain valid for its lifetime.
+///
+/// TODO: Change stripChunkHeaders() to return a vector of stripped payload
+/// views so all-uncompressed multi-chunk streams can avoid copying.
 std::string_view stripChunkHeaders(
     std::string_view streamData,
     Buffer& outputBuffer);

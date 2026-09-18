@@ -16,6 +16,8 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <utility>
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -56,6 +58,7 @@ class NullableEncoding final
 
   ~NullableEncoding() override {
     this->releaseVectorBuffer(nullBuffer_);
+    this->releaseVectorBuffer(nonNullBitsBuffer_);
   }
 
   NullableEncoding(const NullableEncoding&) = delete;
@@ -96,6 +99,15 @@ class NullableEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Wraps pre-serialized value and null child encodings in a NullableEncoding
+  /// envelope. The value child may use either T or physicalType.
+  static std::string_view encodeNullable(
+      uint32_t rowCount,
+      std::string_view serializedValues,
+      std::string_view serializedNulls,
+      Buffer& buffer,
+      const Encoding::Options& options = {});
+
   static std::string_view slice(
       std::string_view encoded,
       uint32_t offset,
@@ -123,6 +135,21 @@ class NullableEncoding final
   }
 
  private:
+  // Materializes consecutive rows while keeping the validity stream packed.
+  uint32_t contiguousRead(
+      uint32_t rowCount,
+      std::function<void*()>& getOutputNulls,
+      uint32_t offset,
+      void* buffer);
+
+  // Materializes rows into positions selected by the scatter bitmap.
+  uint32_t scatteredRead(
+      uint32_t rowCount,
+      std::function<void*()>& getOutputNulls,
+      const velox::bits::Bitmap& scatterOutputBitmap,
+      uint32_t offset,
+      void* buffer);
+
   /// Materializes null bits into the visitor's reader null bitmap.
   /// Shared by readWithVisitor and readIndicesWithVisitor.
   template <typename V>
@@ -136,13 +163,16 @@ class NullableEncoding final
       const Encoding::Options& options);
 
   // One bit for each row. A true bit represents a row with a non-null value.
-  const char* bitmap_;
+  const char* bitmap_{};
   std::unique_ptr<Encoding> nonNullValues_;
   std::unique_ptr<Encoding> nulls_;
   uint32_t row_ = 0;
 
-  /// Scratch buffer for null bitmap during decode.
+  // Byte-per-row validity scratch used by materialize and scattered reads.
   Vector<bool> nullBuffer_;
+
+  // Packed validity scratch used by contiguous nullable reads.
+  Vector<uint64_t> nonNullBitsBuffer_;
 };
 
 //
@@ -156,17 +186,18 @@ NullableEncoding<T>::NullableEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>(pool, data, options),
-      nullBuffer_(this->template getVectorBuffer<bool>()) {
-  const EncodingFactory factory{options};
+      nullBuffer_(this->template getVectorBuffer<bool>()),
+      nonNullBitsBuffer_(this->template getVectorBuffer<uint64_t>()) {
   const char* pos = data.data() + this->dataOffset();
   const uint32_t nonNullsBytes = encoding::readUint32(pos);
-  nonNullValues_ =
-      factory.create(*this->pool_, {pos, nonNullsBytes}, stringBufferFactory);
+  nonNullValues_ = EncodingFactory().create(
+      *this->pool_, {pos, nonNullsBytes}, stringBufferFactory, options);
   pos += nonNullsBytes;
-  nulls_ = factory.create(
+  nulls_ = EncodingFactory().create(
       *this->pool_,
-      {pos, static_cast<size_t>(data.end() - pos)},
-      stringBufferFactory);
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+      stringBufferFactory,
+      options);
   NIMBLE_DCHECK_EQ(
       Encoding::rowCount(), nulls_->rowCount(), "Nulls count mismatch.");
 }
@@ -243,6 +274,77 @@ uint32_t NullableEncoding<T>::materializeNullable(
     std::function<void*()> getOutputNulls,
     const velox::bits::Bitmap* scatterOutputBitmap,
     uint32_t offset) {
+  const uint32_t nonNullCount = scatterOutputBitmap == nullptr
+      ? contiguousRead(rowCount, getOutputNulls, offset, buffer)
+      : scatteredRead(
+            rowCount, getOutputNulls, *scatterOutputBitmap, offset, buffer);
+  row_ += rowCount;
+  return nonNullCount;
+}
+
+template <typename T>
+uint32_t NullableEncoding<T>::contiguousRead(
+    uint32_t rowCount,
+    std::function<void*()>& getOutputNulls,
+    uint32_t offset,
+    void* buffer) {
+  // Empty reads are valid and must not access either output buffer.
+  if (rowCount == 0) {
+    return 0;
+  }
+
+  const auto numWords = velox::bits::nwords(rowCount);
+  nonNullBitsBuffer_.resize(numWords);
+  auto* nonNullBits = nonNullBitsBuffer_.data();
+  // Validity streams can only use bool encodings that implement this API;
+  // SliceEncoding<bool> forwards it to one of those encodings.
+  nulls_->materializeBoolsAsBits(rowCount, nonNullBits, 0);
+  NIMBLE_CHECK_LE(rowCount, std::numeric_limits<int32_t>::max());
+  const auto nonNullCount = static_cast<uint32_t>(
+      velox::bits::countBits(nonNullBits, 0, static_cast<int32_t>(rowCount)));
+
+  auto* output = static_cast<physicalType*>(buffer) + offset;
+  nonNullValues_->materialize(nonNullCount, output);
+  if (nonNullCount == rowCount) {
+    return nonNullCount;
+  }
+
+  velox::bits::copyBits(
+      nonNullBits,
+      0,
+      static_cast<uint64_t*>(getOutputNulls()),
+      offset,
+      rowCount);
+
+  // Expand backward to avoid overwriting dense source values. Iterating set
+  // bits keeps work proportional to non-null rows; the destinations are not
+  // contiguous enough for SIMD stores.
+  uint32_t sourceIndex = nonNullCount;
+  const uint32_t remainingBits = rowCount % 64;
+  for (auto wordIndex = numWords; wordIndex > 0;) {
+    --wordIndex;
+    uint64_t word = nonNullBits[wordIndex];
+    if (wordIndex + 1 == numWords && remainingBits != 0) {
+      word &= (uint64_t{1} << remainingBits) - 1;
+    }
+    while (word != 0) {
+      const uint32_t bit = 63 - __builtin_clzll(word);
+      const uint32_t outputIndex = wordIndex * 64 + bit;
+      output[outputIndex] = output[--sourceIndex];
+      word ^= uint64_t{1} << bit;
+    }
+  }
+  NIMBLE_CHECK_EQ(sourceIndex, 0);
+  return nonNullCount;
+}
+
+template <typename T>
+uint32_t NullableEncoding<T>::scatteredRead(
+    uint32_t rowCount,
+    std::function<void*()>& getOutputNulls,
+    const velox::bits::Bitmap& scatterOutputBitmap,
+    uint32_t offset,
+    void* buffer) {
   nullBuffer_.resize(rowCount);
   nulls_->materialize(rowCount, nullBuffer_.data());
   const uint32_t nonNullCount =
@@ -253,12 +355,21 @@ uint32_t NullableEncoding<T>::materializeNullable(
   }
   nonNullValues_->materialize(nonNullCount, buffer);
 
-  const auto scatterSize =
-      scatterOutputBitmap ? scatterOutputBitmap->size() - offset : rowCount;
+  const auto scatterSize = scatterOutputBitmap.size() - offset;
   NIMBLE_CHECK_GE(
       scatterSize,
       rowCount,
       "Scattered output must have at least rowCount positions");
+
+  // A column that is entirely null over this batch would still walk every
+  // position in the scatter loop below to set nothing. Short-circuit to the
+  // cleared bitmap.
+  if (nonNullCount == 0 && scatterSize != 0) {
+    velox::bits::BitmapBuilder nullBits{getOutputNulls(), offset + scatterSize};
+    nullBits.clear(offset, offset + scatterSize);
+    return 0;
+  }
+
   if (nonNullCount != scatterSize) {
     void* nullBitmap = getOutputNulls();
     velox::bits::BitmapBuilder nullBits{nullBitmap, offset + scatterSize};
@@ -275,7 +386,7 @@ uint32_t NullableEncoding<T>::materializeNullable(
       // |buffer| and |nullBitmap| based on the bits set to 1 in
       // |scatterOutputBitmap|.
       while (output != lastNonNull) {
-        if (scatterOutputBitmap->test(pos)) {
+        if (scatterOutputBitmap.test(pos)) {
           if (*nonNullIt--) {
             nullBits.set(pos);
             *output = *lastNonNull;
@@ -302,7 +413,6 @@ uint32_t NullableEncoding<T>::materializeNullable(
     }
   }
 
-  row_ += rowCount;
   return nonNullCount;
 }
 
@@ -364,7 +474,11 @@ void NullableEncoding<T>::readIndicesWithVisitor(
   NIMBLE_CHECK(
       !V::kHasHook, "readIndicesWithVisitor does not support value hooks");
   materializeNullsForVisitor(visitor, params);
-  callReadIndicesWithVisitor(*nonNullValues_, visitor, params);
+  if (nonNullValues_->dataType() == TypeTraits<T>::dataType) {
+    callReadIndicesWithVisitor<T>(*nonNullValues_, visitor, params);
+  } else {
+    callReadIndicesWithVisitor<physicalType>(*nonNullValues_, visitor, params);
+  }
 }
 
 template <typename T>
@@ -374,8 +488,12 @@ std::string_view NullableEncoding<T>::encodeNullable(
     std::span<const bool> nulls,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const bool useVarint = options.useVarintRowCount;
-  const uint32_t rowCount = nulls.size();
+  NIMBLE_CHECK_LE(
+      values.size(),
+      nulls.size(),
+      "Nullable value count cannot exceed null count.");
+  NIMBLE_CHECK_LE(nulls.size(), std::numeric_limits<uint32_t>::max());
+  const auto rowCount = static_cast<uint32_t>(nulls.size());
 
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
@@ -388,7 +506,41 @@ std::string_view NullableEncoding<T>::encodeNullable(
   std::string_view serializedNulls = selection.template encodeNested<bool>(
       EncodingIdentifiers::Nullable::Nulls, nulls, scopedBuffer.get(), options);
 
-  const uint32_t encodingSize =
+  return encodeNullable(
+      rowCount, serializedValues, serializedNulls, buffer, options);
+}
+
+template <typename T>
+std::string_view NullableEncoding<T>::encodeNullable(
+    uint32_t rowCount,
+    std::string_view serializedValues,
+    std::string_view serializedNulls,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  const bool useVarint = options.useVarintRowCount;
+  const auto valueDataType = EncodingPrefix::readDataType(serializedValues);
+  NIMBLE_CHECK(
+      valueDataType == TypeTraits<T>::dataType ||
+          valueDataType == TypeTraits<physicalType>::dataType,
+      "Nullable value child data type must match the parent or its physical type.");
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::readDataType(serializedNulls),
+      DataType::Bool,
+      "Nullable null child must be bool.");
+  const auto valueRowCount =
+      EncodingPrefix::readRowCount(serializedValues, useVarint);
+  const auto nullRowCount =
+      EncodingPrefix::readRowCount(serializedNulls, useVarint);
+  NIMBLE_CHECK_LE(
+      valueRowCount,
+      rowCount,
+      "Nullable value child row count cannot exceed null child row count.");
+  NIMBLE_CHECK_EQ(
+      nullRowCount,
+      rowCount,
+      "Nullable null child row count must match parent.");
+
+  const size_t encodingSize =
       TypedEncoding<T, physicalType>::serializePrefixSize(rowCount, useVarint) +
       4 + serializedValues.size() + serializedNulls.size();
   char* reserved = buffer.reserve(encodingSize);
@@ -421,7 +573,7 @@ std::pair<uint32_t, uint32_t> NullableEncoding<T>::countNonNullsForSlice(
   auto encoding = EncodingFactory{options}.create(
       *pool, encoded, [](uint32_t /*size*/) -> void* { return nullptr; });
 
-  Vector<bool> values{pool, rowEnd};
+  ScopedVector<bool> values{rowEnd, pool, options.bufferPool};
   encoding->materialize(rowEnd, values.data());
   const auto sliceBegin = values.begin() + offset;
   return {
@@ -447,7 +599,7 @@ std::string_view NullableEncoding<T>::slice(
   const uint32_t valuesSize = encoding::readUint32(pos);
   const std::string_view values{pos, valuesSize};
   pos += valuesSize;
-  const std::string_view nulls{pos, encoded.end()};
+  const std::string_view nulls{pos, encoded.data() + encoded.size()};
 
   const auto [nonNullOffset, nonNullCount] =
       countNonNullsForSlice(nulls, offset, length, buffer, options);
@@ -468,22 +620,7 @@ std::string_view NullableEncoding<T>::slice(
   const auto slicedNulls = EncodingFactory::slice(
       nulls, offset, length, scopedBuffer.get(), options);
 
-  const auto prefixSize =
-      EncodingPrefix::serializedSize(length, options.useVarintRowCount);
-  const auto encodingSize =
-      prefixSize + sizeof(uint32_t) + slicedValues.size() + slicedNulls.size();
-  char* reserved = buffer.reserve(encodingSize);
-  char* writePos = reserved;
-  EncodingPrefix::serialize(
-      EncodingType::Nullable,
-      TypeTraits<T>::dataType,
-      length,
-      options.useVarintRowCount,
-      writePos);
-  encoding::writeString(slicedValues, writePos);
-  encoding::writeBytes(slicedNulls, writePos);
-  NIMBLE_CHECK_EQ(writePos - reserved, encodingSize, "Encoding size mismatch.");
-  return {reserved, encodingSize};
+  return encodeNullable(length, slicedValues, slicedNulls, buffer, options);
 }
 
 template <typename T>

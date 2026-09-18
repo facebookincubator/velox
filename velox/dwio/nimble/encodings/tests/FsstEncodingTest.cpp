@@ -17,7 +17,10 @@
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cstring>
 #include <limits>
+#include <numeric>
 #include <random>
 
 #include "velox/buffer/Buffer.h"
@@ -26,16 +29,26 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 namespace facebook::nimble::test {
 namespace {
 
 class FsstEncodingTest : public ::testing::Test {
  protected:
+  struct FsstSections {
+    std::string_view prefix;
+    std::string_view symbolTable;
+    std::string_view lengths;
+    std::string_view blob;
+  };
+
   static void SetUpTestCase() {
     if (!velox::memory::MemoryManager::testInstance()) {
       velox::memory::MemoryManager::initialize({});
@@ -49,12 +62,14 @@ class FsstEncodingTest : public ::testing::Test {
   std::unique_ptr<EncodingSelectionPolicy<std::string_view>>
   createSelectionPolicy(
       CompressionOptions compressionOptions = {},
-      CompressionType compressionType = CompressionType::Uncompressed) {
+      CompressionType compressionType = CompressionType::Uncompressed,
+      EncodingLayout lengthsLayout = {
+          EncodingType::Trivial,
+          {},
+          CompressionType::Uncompressed}) {
     // FSST has one nested child encoding for compressed string lengths.
     std::vector<std::optional<const EncodingLayout>> children;
-    children.emplace_back(
-        EncodingLayout{
-            EncodingType::Trivial, {}, CompressionType::Uncompressed});
+    children.emplace_back(std::move(lengthsLayout));
     EncodingLayout layout{
         EncodingType::Fsst, {}, compressionType, std::move(children)};
     return std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
@@ -96,6 +111,200 @@ class FsstEncodingTest : public ::testing::Test {
         {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
   }
 
+  std::string encodeZeroTerminatedFsst(
+      const std::vector<std::string_view>& values) {
+    NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+    const auto valueCount = static_cast<uint32_t>(values.size());
+    std::vector<size_t> inputLengths;
+    std::vector<const unsigned char*> inputPointers;
+    inputLengths.reserve(values.size());
+    inputPointers.reserve(values.size());
+    for (const auto value : values) {
+      inputLengths.push_back(value.size());
+      inputPointers.push_back(
+          reinterpret_cast<const unsigned char*>(value.data()));
+    }
+
+    std::unique_ptr<fsst_encoder_t, decltype(&nimble_fsst_destroy)> encoder{
+        nimble_fsst_create(
+            valueCount,
+            inputLengths.data(),
+            inputPointers.data(),
+            /*zeroTerminated=*/1),
+        &nimble_fsst_destroy};
+    NIMBLE_CHECK_NOT_NULL(encoder, "FSST encoder creation failed.");
+
+    std::vector<unsigned char> symbolTable(FSST_MAXHEADER);
+    const auto symbolTableSize =
+        nimble_fsst_export(encoder.get(), symbolTable.data());
+    NIMBLE_CHECK_LE(symbolTableSize, symbolTable.size());
+
+    const auto totalInputSize =
+        std::accumulate(inputLengths.begin(), inputLengths.end(), size_t{0});
+    std::vector<unsigned char> compressedBlob(7 + 2 * totalInputSize);
+    std::vector<size_t> compressedLengths(valueCount);
+    std::vector<unsigned char*> compressedPointers(valueCount);
+    const auto numCompressed = nimble_fsst_compress(
+        encoder.get(),
+        valueCount,
+        inputLengths.data(),
+        inputPointers.data(),
+        compressedBlob.size(),
+        compressedBlob.data(),
+        compressedLengths.data(),
+        compressedPointers.data());
+    NIMBLE_CHECK_EQ(numCompressed, valueCount);
+
+    std::vector<uint32_t> lengths;
+    lengths.reserve(compressedLengths.size());
+    size_t totalCompressedSize{0};
+    for (const auto compressedLength : compressedLengths) {
+      NIMBLE_CHECK_LE(compressedLength, std::numeric_limits<uint32_t>::max());
+      lengths.push_back(static_cast<uint32_t>(compressedLength));
+      totalCompressedSize += compressedLength;
+    }
+    const auto serializedLengths = encodeTrivialChild<uint32_t>(lengths);
+
+    const auto encodingSize =
+        EncodingPrefix::serializedSize(valueCount, /*useVarint=*/false) +
+        varint::varintSize(symbolTableSize) + symbolTableSize +
+        varint::varintSize(serializedLengths.size()) +
+        serializedLengths.size() + totalCompressedSize;
+    std::string encoded(encodingSize, '\0');
+    char* position = encoded.data();
+    EncodingPrefix::serialize(
+        EncodingType::Fsst,
+        DataType::String,
+        valueCount,
+        /*useVarint=*/false,
+        position);
+    encoding::writeVarintString(
+        {reinterpret_cast<const char*>(symbolTable.data()), symbolTableSize},
+        position);
+    encoding::writeVarintString(serializedLengths, position);
+    for (uint32_t i = 0; i < valueCount; ++i) {
+      encoding::writeBytes(
+          {reinterpret_cast<const char*>(compressedPointers[i]),
+           compressedLengths[i]},
+          position);
+    }
+    NIMBLE_CHECK_EQ(position, encoded.data() + encoded.size());
+    return encoded;
+  }
+
+  FsstSections splitFsst(std::string_view encoded) {
+    const auto prefixSize = EncodingPrefix::prefixSize(encoded, false);
+    auto remaining = encoded.substr(prefixSize);
+    const char* cursor = remaining.data();
+    NIMBLE_CHECK_NOT_NULL(cursor);
+    const auto symbolTableSize = varint::readVarint32(&cursor);
+    remaining.remove_prefix(cursor - remaining.data());
+    const auto symbolTable = remaining.substr(0, symbolTableSize);
+    remaining.remove_prefix(symbolTableSize);
+    cursor = remaining.data();
+    const auto lengthsSize = varint::readVarint32(&cursor);
+    remaining.remove_prefix(varint::varintSize(lengthsSize));
+    const auto lengths = remaining.substr(0, lengthsSize);
+    remaining.remove_prefix(lengthsSize);
+    return {
+        .prefix = encoded.substr(0, prefixSize),
+        .symbolTable = symbolTable,
+        .lengths = lengths,
+        .blob = remaining,
+    };
+  }
+
+  std::string rebuildFsst(
+      const FsstSections& sections,
+      std::string_view symbolTable,
+      std::string_view lengths,
+      std::string_view blob) {
+    std::string rebuilt{sections.prefix};
+    const auto appendSection = [&](std::string_view section) {
+      NIMBLE_CHECK_LE(section.size(), std::numeric_limits<uint32_t>::max());
+      char encodedSize[5];
+      char* cursor = encodedSize;
+      varint::writeVarint(static_cast<uint32_t>(section.size()), &cursor);
+      rebuilt.append(encodedSize, cursor);
+      rebuilt.append(section);
+    };
+    appendSection(symbolTable);
+    appendSection(lengths);
+    rebuilt.append(blob);
+    return rebuilt;
+  }
+
+  template <typename T>
+  std::string encodeTrivialChild(std::span<const T> values) {
+    Vector<T> input{pool_.get(), values.size()};
+    std::copy(values.begin(), values.end(), input.begin());
+    Buffer buffer{*pool_};
+    return std::string{Encoder<TrivialEncoding<T>>::encode(buffer, input)};
+  }
+
+  std::string encodeNullableLengths(std::span<const uint32_t> values) {
+    Vector<uint32_t> input{pool_.get(), values.size()};
+    std::copy(values.begin(), values.end(), input.begin());
+    Vector<bool> nonNulls{pool_.get(), values.size()};
+    std::fill(nonNulls.begin(), nonNulls.end(), true);
+    Buffer buffer{*pool_};
+    return std::string{Encoder<NullableEncoding<uint32_t>>::encodeNullable(
+        buffer, input, nonNulls)};
+  }
+
+  std::vector<uint32_t> decodeLengths(std::string_view encodedLengths) {
+    auto encoding = EncodingFactory().create(
+        *pool_, encodedLengths, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        });
+    NIMBLE_CHECK_NOT_NULL(encoding);
+    const auto rowCount = encoding->rowCount();
+    std::vector<uint32_t> lengths(rowCount);
+    encoding->materialize(rowCount, lengths.data());
+    return lengths;
+  }
+
+  std::string buildOversizedLengthsEncoding(const FsstSections& sections) {
+    auto lengths = decodeLengths(sections.lengths);
+    NIMBLE_CHECK(!lengths.empty());
+    NIMBLE_CHECK_GT(lengths.back(), 0);
+    ++lengths.back();
+    const auto oversizedLengths = encodeTrivialChild<uint32_t>(lengths);
+    return rebuildFsst(
+        sections, sections.symbolTable, oversizedLengths, sections.blob);
+  }
+
+  std::string buildIncompleteEscapeEncoding(
+      const FsstSections& sections,
+      size_t row) {
+    const auto lengths = decodeLengths(sections.lengths);
+    NIMBLE_CHECK_LT(row, lengths.size());
+    NIMBLE_CHECK_GT(lengths[row], 0);
+    size_t rowEnd{0};
+    for (size_t i = 0; i <= row; ++i) {
+      rowEnd += lengths[i];
+    }
+
+    std::string blob{sections.blob};
+    // Break an existing escape pair so the injected final FSST_ESC always
+    // forms an odd trailing run.
+    if (lengths[row] >= 2 &&
+        static_cast<uint8_t>(blob[rowEnd - 2]) == FSST_ESC) {
+      blob[rowEnd - 2] = 0;
+    }
+    blob[rowEnd - 1] = static_cast<char>(FSST_ESC);
+    return rebuildFsst(sections, sections.symbolTable, sections.lengths, blob);
+  }
+
+  void expectMalformedEncoding(
+      std::string_view malformed,
+      const char* expectedMessage) {
+    NIMBLE_ASSERT_THROW(
+        EncodingFactory().create(
+            *pool_, malformed, createStringBufferFactory()),
+        expectedMessage);
+  }
+
   void roundTrip(
       const std::vector<std::string_view>& values,
       const std::string& testName = "",
@@ -106,8 +315,8 @@ class FsstEncodingTest : public ::testing::Test {
     auto encoded = encodeFsst(values, buffer);
     stringBuffers_.clear();
 
-    auto encoding =
-        EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
     ASSERT_EQ(encoding->dataType(), DataType::String);
     ASSERT_EQ(encoding->encodingType(), expectedEncodingType);
@@ -120,6 +329,39 @@ class FsstEncodingTest : public ::testing::Test {
     for (size_t i = 0; i < values.size(); ++i) {
       EXPECT_EQ(decoded[i], values[i]) << "mismatch at row " << i;
     }
+  }
+
+  void expectMalformedHeaderFromAllApis(
+      std::string_view malformed,
+      const char* expectedMessage) {
+    const auto expectMalformed = [&](const char* api, auto&& operation) {
+      SCOPED_TRACE(api);
+      try {
+        operation();
+        ADD_FAILURE() << "Expected malformed FSST header to be rejected";
+      } catch (const NimbleException& exception) {
+        EXPECT_NE(
+            exception.errorMessage().find(expectedMessage), std::string::npos)
+            << "Expected error message to contain '" << expectedMessage
+            << "', but received '" << exception.errorMessage() << "'.";
+      }
+    };
+
+    expectMalformed("lengthsEncoding", [&] {
+      static_cast<void>(FsstEncoding::lengthsEncoding(malformed));
+    });
+    expectMalformed("constructor", [&] {
+      static_cast<void>(EncodingFactory().create(
+          *pool_, malformed, createStringBufferFactory()));
+    });
+    expectMalformed("slice", [&] {
+      Buffer sliceBuffer{*pool_};
+      static_cast<void>(FsstEncoding::slice(
+          malformed,
+          /*offset=*/0,
+          /*length=*/1,
+          sliceBuffer));
+    });
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -332,6 +574,497 @@ TEST_F(FsstEncodingTest, capturesLengthsLayoutWithVarintHeaderSizes) {
       EncodingType::Trivial);
 }
 
+TEST_F(FsstEncodingTest, rejectsTruncatedHeadersBeforeExternalConsumers) {
+  std::vector<std::string> storage;
+  storage.reserve(256);
+  for (uint32_t i = 0; i < 256; ++i) {
+    storage.emplace_back(fmt::format("common/fsst/header/value/{:04}", i));
+  }
+  std::vector<std::string_view> values;
+  values.reserve(storage.size());
+  for (const auto& value : storage) {
+    values.push_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+  const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+  const char* cursor = encoded.data() + headerOffset;
+  const auto symbolTableSize = varint::readVarint32(&cursor);
+  const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
+  const auto symbolTableEnd = symbolTableOffset + symbolTableSize;
+  cursor = encoded.data() + symbolTableEnd;
+  const auto lengthsSizeOffset = symbolTableEnd;
+  const auto lengthsSize = varint::readVarint32(&cursor);
+  const auto lengthsOffset = static_cast<size_t>(cursor - encoded.data());
+  const auto blobOffset = lengthsOffset + lengthsSize;
+
+  ASSERT_LT(blobOffset, encoded.size());
+
+  struct Case {
+    size_t size;
+    const char* message;
+  };
+  std::vector<Case> cases{
+      {headerOffset, "Truncated FSST header varint."},
+      {symbolTableEnd - 1, "FSST symbol table exceeds encoding bounds."},
+      {symbolTableEnd, "Truncated FSST header varint."},
+      {blobOffset - 1, "FSST lengths encoding exceeds encoding bounds."},
+  };
+  if (symbolTableOffset - headerOffset > 1) {
+    cases.push_back({headerOffset + 1, "Truncated FSST header varint."});
+  }
+  if (lengthsOffset - lengthsSizeOffset > 1) {
+    cases.push_back({lengthsSizeOffset + 1, "Truncated FSST header varint."});
+  }
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testing::Message() << "size=" << testCase.size);
+    expectMalformedHeaderFromAllApis(
+        {encoded.data(), testCase.size}, testCase.message);
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
+  const std::vector<std::string_view> values{
+      "common/fsst/header/value/0000",
+      "common/fsst/header/value/0001",
+      "common/fsst/header/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+  const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+  const char* cursor = encoded.data() + headerOffset;
+  const auto symbolTableSize = varint::readVarint32(&cursor);
+  const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
+  const auto symbolTableEnd = symbolTableOffset + symbolTableSize;
+  cursor = encoded.data() + symbolTableEnd;
+  varint::readVarint32(&cursor);
+  const auto lengthsOffset = static_cast<size_t>(cursor - encoded.data());
+
+  const auto replaceHeaderField =
+      [&](size_t begin, size_t end, std::initializer_list<char> bytes) {
+        std::vector<char> malformed{encoded.begin(), encoded.begin() + begin};
+        malformed.insert(malformed.end(), bytes);
+        malformed.insert(malformed.end(), encoded.begin() + end, encoded.end());
+        return malformed;
+      };
+
+  const std::vector<std::vector<char>> malformedHeaders{
+      replaceHeaderField(
+          headerOffset,
+          symbolTableOffset,
+          {static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           0}),
+      replaceHeaderField(
+          headerOffset,
+          symbolTableOffset,
+          {static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x10),
+           0}),
+      replaceHeaderField(
+          headerOffset, symbolTableOffset, {static_cast<char>(0x80), 0, 0}),
+      replaceHeaderField(
+          symbolTableEnd,
+          lengthsOffset,
+          {static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           static_cast<char>(0x80),
+           0}),
+  };
+
+  for (const auto& malformed : malformedHeaders) {
+    NIMBLE_ASSERT_THROW(
+        FsstEncoding::lengthsEncoding({malformed.data(), malformed.size()}),
+        "Overlong FSST header varint.");
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsHeaderSizesOutsideEncoding) {
+  const std::vector<std::string_view> values{
+      "common/fsst/header/value/0000",
+      "common/fsst/header/value/0001",
+      "common/fsst/header/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
+
+  std::vector<char> symbolTableBacking(128, 0);
+  std::copy_n(encoded.data(), headerOffset, symbolTableBacking.data());
+  char* cursor = symbolTableBacking.data() + headerOffset;
+  varint::writeVarint(uint32_t{64}, &cursor);
+  const auto shortSymbolTableSize =
+      static_cast<size_t>(cursor - symbolTableBacking.data()) + 8;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {symbolTableBacking.data(), shortSymbolTableSize}),
+      "FSST symbol table exceeds encoding bounds.");
+
+  std::vector<char> lengthsBacking(128, 0);
+  std::copy_n(encoded.data(), headerOffset, lengthsBacking.data());
+  cursor = lengthsBacking.data() + headerOffset;
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  varint::writeVarint(uint32_t{64}, &cursor);
+  const auto shortLengthsSize =
+      static_cast<size_t>(cursor - lengthsBacking.data()) + 8;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding({lengthsBacking.data(), shortLengthsSize}),
+      "FSST lengths encoding exceeds encoding bounds.");
+
+  std::vector<char> oversizedSymbolTable(headerOffset + FSST_MAXHEADER + 16, 0);
+  std::copy_n(encoded.data(), headerOffset, oversizedSymbolTable.data());
+  cursor = oversizedSymbolTable.data() + headerOffset;
+  varint::writeVarint(static_cast<uint32_t>(FSST_MAXHEADER + 1), &cursor);
+  cursor += FSST_MAXHEADER + 1;
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {oversizedSymbolTable.data(),
+           static_cast<size_t>(cursor - oversizedSymbolTable.data())}),
+      "FSST symbol table size exceeds FSST_MAXHEADER.");
+
+  std::vector<char> emptySectionHeader(headerOffset + 4, 0);
+  std::copy_n(encoded.data(), headerOffset, emptySectionHeader.data());
+  cursor = emptySectionHeader.data() + headerOffset;
+  varint::writeVarint(uint32_t{0}, &cursor);
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {emptySectionHeader.data(),
+           static_cast<size_t>(cursor - emptySectionHeader.data())}),
+      "FSST symbol table size must be positive.");
+
+  cursor = emptySectionHeader.data() + headerOffset;
+  varint::writeVarint(uint32_t{1}, &cursor);
+  *cursor++ = 0;
+  varint::writeVarint(uint32_t{0}, &cursor);
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::lengthsEncoding(
+          {emptySectionHeader.data(),
+           static_cast<size_t>(cursor - emptySectionHeader.data())}),
+      "FSST lengths encoding size must be positive.");
+}
+
+TEST_F(FsstEncodingTest, rejectsMalformedSymbolTablesBeforeImport) {
+  const std::vector<std::string_view> values{
+      "common/fsst/symbol/value/0000",
+      "common/fsst/symbol/value/0001",
+      "common/fsst/symbol/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto sections = splitFsst(encoded);
+  ASSERT_GE(sections.symbolTable.size(), 17);
+
+  const auto truncated = rebuildFsst(
+      sections,
+      sections.symbolTable.substr(0, 16),
+      sections.lengths,
+      sections.blob);
+  expectMalformedEncoding(truncated, "Truncated FSST symbol table.");
+
+  auto invalidFlag = std::string{sections.symbolTable};
+  invalidFlag[8] = 2;
+  const auto invalidFlagEncoding =
+      rebuildFsst(sections, invalidFlag, sections.lengths, sections.blob);
+  expectMalformedEncoding(
+      invalidFlagEncoding, "Invalid FSST zero-terminated flag.");
+
+  auto missingTerminator = std::string{sections.symbolTable};
+  missingTerminator[8] = 1;
+  missingTerminator[9] = 0;
+  const auto missingTerminatorEncoding =
+      rebuildFsst(sections, missingTerminator, sections.lengths, sections.blob);
+  expectMalformedEncoding(
+      missingTerminatorEncoding,
+      "FSST zero-terminated table has no terminator symbol.");
+
+  auto excessiveHistogram = std::string{sections.symbolTable};
+  std::fill(
+      excessiveHistogram.begin() + 9,
+      excessiveHistogram.begin() + 17,
+      static_cast<char>(0xff));
+  const auto excessiveHistogramEncoding = rebuildFsst(
+      sections, excessiveHistogram, sections.lengths, sections.blob);
+  expectMalformedEncoding(
+      excessiveHistogramEncoding,
+      "FSST symbol table contains too many symbols.");
+
+  auto mismatchedHistogram = std::string{sections.symbolTable};
+  const auto oneByteSymbolCount = static_cast<uint8_t>(mismatchedHistogram[9]);
+  mismatchedHistogram[9] =
+      static_cast<char>(oneByteSymbolCount == 0 ? 1 : oneByteSymbolCount - 1);
+  const auto mismatchedHistogramEncoding = rebuildFsst(
+      sections, mismatchedHistogram, sections.lengths, sections.blob);
+  expectMalformedEncoding(
+      mismatchedHistogramEncoding,
+      "FSST symbol table histogram does not match its serialized size.");
+
+  auto unsupportedVersion = std::string{sections.symbolTable};
+  std::fill(
+      unsupportedVersion.begin(), unsupportedVersion.begin() + 8, char{0});
+  const auto unsupportedVersionEncoding = rebuildFsst(
+      sections, unsupportedVersion, sections.lengths, sections.blob);
+  expectMalformedEncoding(
+      unsupportedVersionEncoding, "FSST symbol table import size mismatch.");
+}
+
+TEST_F(FsstEncodingTest, rejectsInvalidLengthsEncodingContract) {
+  const std::vector<std::string_view> values{
+      "common/fsst/length/value/0000",
+      "common/fsst/length/value/0001",
+      "common/fsst/length/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto sections = splitFsst(encoded);
+  const auto lengths = decodeLengths(sections.lengths);
+  ASSERT_EQ(lengths.size(), values.size());
+
+  std::vector<uint64_t> uint64Lengths(lengths.begin(), lengths.end());
+  const auto wrongTypeLengths = encodeTrivialChild<uint64_t>(uint64Lengths);
+  const auto wrongTypeEncoding = rebuildFsst(
+      sections, sections.symbolTable, wrongTypeLengths, sections.blob);
+  expectMalformedEncoding(
+      wrongTypeEncoding, "FSST lengths encoding must contain Uint32 values.");
+
+  const auto shortLengths = encodeTrivialChild<uint32_t>(
+      std::span<const uint32_t>{lengths}.first(lengths.size() - 1));
+  const auto wrongRowCountEncoding =
+      rebuildFsst(sections, sections.symbolTable, shortLengths, sections.blob);
+  expectMalformedEncoding(
+      wrongRowCountEncoding,
+      "FSST lengths row count does not match the parent encoding.");
+
+  const auto nullableLengths = encodeNullableLengths(lengths);
+  const auto nullableEncoding = rebuildFsst(
+      sections, sections.symbolTable, nullableLengths, sections.blob);
+  expectMalformedEncoding(
+      nullableEncoding, "FSST lengths encoding must not be nullable.");
+}
+
+TEST_F(FsstEncodingTest, rejectsCompressedDataLazily) {
+  const std::vector<std::string_view> values{
+      "common/fsst/blob/value/0000",
+      "common/fsst/blob/value/0001",
+      "common/fsst/blob/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto sections = splitFsst(encoded);
+
+  {
+    const auto oversizedEncoding = buildOversizedLengthsEncoding(sections);
+    auto decoder = EncodingFactory().create(
+        *pool_, oversizedEncoding, createStringBufferFactory());
+    ASSERT_NE(decoder, nullptr);
+    std::vector<std::string_view> decoded(values.size());
+    NIMBLE_ASSERT_THROW(
+        decoder->materialize(values.size(), decoded.data()),
+        "FSST compressed length exceeds the remaining blob.");
+  }
+
+  {
+    std::string blobWithTrailingByte{sections.blob};
+    blobWithTrailingByte.push_back('\0');
+    const auto trailingBlobEncoding = rebuildFsst(
+        sections, sections.symbolTable, sections.lengths, blobWithTrailingByte);
+    auto decoder = EncodingFactory().create(
+        *pool_, trailingBlobEncoding, createStringBufferFactory());
+    ASSERT_NE(decoder, nullptr);
+    std::vector<std::string_view> decoded(values.size());
+    decoder->materialize(values.size() - 1, decoded.data());
+    NIMBLE_ASSERT_THROW(
+        decoder->skip(1),
+        "FSST compressed lengths do not match the blob size.");
+  }
+
+  {
+    const auto incompleteEscapeEncoding =
+        buildIncompleteEscapeEncoding(sections, 1);
+    auto decoder = EncodingFactory().create(
+        *pool_, incompleteEscapeEncoding, createStringBufferFactory());
+    ASSERT_NE(decoder, nullptr);
+    std::vector<std::string_view> decoded(values.size());
+    decoder->materialize(1, decoded.data());
+    NIMBLE_ASSERT_THROW(
+        decoder->skip(1),
+        "FSST compressed string ends with an incomplete escape code.");
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsOversizedLengthsInSlice) {
+  const std::vector<std::string_view> values{
+      "common/fsst/blob/value/0000",
+      "common/fsst/blob/value/0001",
+      "common/fsst/blob/value/0002",
+  };
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto oversizedEncoding =
+      buildOversizedLengthsEncoding(splitFsst(encoded));
+
+  Buffer sliceBuffer{*pool_};
+  NIMBLE_ASSERT_THROW(
+      FsstEncoding::slice(
+          oversizedEncoding,
+          /*offset=*/0,
+          /*length=*/values.size(),
+          sliceBuffer),
+      "FSST compressed length exceeds the remaining blob.");
+}
+
+TEST_F(FsstEncodingTest, allowsEscapedLiteralAtEnd) {
+  const std::string value(2, static_cast<char>(FSST_ESC));
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst({value}, buffer);
+  const auto sections = splitFsst(encoded);
+  for (const uint32_t numTrailingEscapes : {2, 4}) {
+    SCOPED_TRACE(numTrailingEscapes);
+    const std::vector<uint32_t> compressedLengths{numTrailingEscapes};
+    const auto lengths = encodeTrivialChild<uint32_t>(compressedLengths);
+    const std::string escapedLiterals(
+        numTrailingEscapes, static_cast<char>(FSST_ESC));
+    const auto escapedEncoding =
+        rebuildFsst(sections, sections.symbolTable, lengths, escapedLiterals);
+    auto decoder = EncodingFactory().create(
+        *pool_, escapedEncoding, createStringBufferFactory());
+    ASSERT_NE(decoder, nullptr);
+
+    std::string_view decoded;
+    decoder->materialize(1, &decoded);
+
+    EXPECT_EQ(
+        decoded,
+        std::string(numTrailingEscapes / 2, static_cast<char>(FSST_ESC)));
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsLongOddEscapeRunAtEnd) {
+  const std::string value(1, static_cast<char>(FSST_ESC));
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst({value}, buffer);
+  const auto sections = splitFsst(encoded);
+  const std::vector<uint32_t> compressedLengths{3};
+  const auto lengths = encodeTrivialChild<uint32_t>(compressedLengths);
+  const std::string incompleteEscapes(3, static_cast<char>(FSST_ESC));
+  const auto malformedEncoding =
+      rebuildFsst(sections, sections.symbolTable, lengths, incompleteEscapes);
+  auto decoder = EncodingFactory().create(
+      *pool_, malformedEncoding, createStringBufferFactory());
+  ASSERT_NE(decoder, nullptr);
+
+  std::string_view decoded;
+  NIMBLE_ASSERT_THROW(
+      decoder->materialize(1, &decoded),
+      "FSST compressed string ends with an incomplete escape code.");
+}
+
+TEST_F(FsstEncodingTest, rejectsSequentialReadsPastEnd) {
+  const std::vector<std::string_view> values{"alpha", "bravo", "charlie"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+  ASSERT_NE(encoding, nullptr);
+  std::vector<std::string_view> decoded(values.size() + 1);
+  NIMBLE_ASSERT_THROW(
+      encoding->materialize(decoded.size(), decoded.data()),
+      "Reading past end of FSST encoding.");
+
+  encoding->reset();
+  NIMBLE_ASSERT_THROW(
+      encoding->skip(values.size() + 1), "Skipping past end of FSST encoding.");
+
+  FsstEncoding visitorEncoding{*pool_, encoded, createStringBufferFactory()};
+  StringReadWithVisitor visitor{{static_cast<vector_size_t>(values.size())}};
+  ReadWithVisitorParams params;
+  params.numScanned = 0;
+  NIMBLE_ASSERT_THROW(
+      visitorEncoding.readWithVisitor(visitor, params),
+      "Reading past end of FSST encoding.");
+}
+
+TEST_F(FsstEncodingTest, materializeZeroRowsAllowsNullBuffer) {
+  const std::vector<std::string_view> values{"alpha"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+  ASSERT_NE(encoding, nullptr);
+
+  encoding->materialize(0, nullptr);
+
+  std::string_view decoded;
+  encoding->materialize(1, &decoded);
+  EXPECT_EQ(decoded, values.front());
+}
+
+TEST_F(FsstEncodingTest, zeroRowReadsRejectTrailingBlob) {
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst({"value"}, buffer);
+  const auto sections = splitFsst(encoded);
+  std::string zeroRowPrefix(
+      EncodingPrefix::serializedSize(0, /*useVarint=*/false), '\0');
+  char* position = zeroRowPrefix.data();
+  EncodingPrefix::serialize(
+      EncodingType::Fsst,
+      DataType::String,
+      /*rowCount=*/0,
+      /*useVarint=*/false,
+      position);
+  const auto emptyLengths =
+      encodeTrivialChild<uint32_t>(std::span<const uint32_t>{});
+  const FsstSections zeroRowSections{
+      .prefix = zeroRowPrefix,
+      .symbolTable = sections.symbolTable,
+      .lengths = emptyLengths,
+      .blob = "x",
+  };
+  const auto malformed = rebuildFsst(
+      zeroRowSections,
+      zeroRowSections.symbolTable,
+      zeroRowSections.lengths,
+      zeroRowSections.blob);
+
+  auto decoder = EncodingFactory().create(
+      *pool_, malformed, createStringBufferFactory(), Encoding::Options{});
+  ASSERT_NE(decoder, nullptr);
+  NIMBLE_ASSERT_THROW(
+      decoder->materialize(0, nullptr),
+      "FSST compressed lengths do not match the blob size.");
+
+  FsstEncoding visitorEncoding{*pool_, malformed, createStringBufferFactory()};
+  StringReadWithVisitor visitor{std::vector<vector_size_t>{}};
+  ReadWithVisitorParams params;
+  NIMBLE_ASSERT_THROW(
+      visitorEncoding.readWithVisitor(visitor, params),
+      "FSST compressed lengths do not match the blob size.");
+}
+
 TEST_F(FsstEncodingTest, invalidSliceRange) {
   const std::vector<std::string> storage{
       "common/prefix/value/0000",
@@ -498,7 +1231,10 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   stringBuffers_.clear();
 
   auto permissiveTargetEncoding = EncodingFactory().create(
-      *pool_, permissiveTargetEncoded, createStringBufferFactory());
+      *pool_,
+      permissiveTargetEncoded,
+      createStringBufferFactory(),
+      Encoding::Options{});
   EXPECT_EQ(permissiveTargetEncoding->encodingType(), EncodingType::Fsst);
 
   Buffer strictTargetBuffer{*pool_};
@@ -510,13 +1246,193 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   stringBuffers_.clear();
 
   auto strictTargetEncoding = EncodingFactory().create(
-      *pool_, strictTargetEncoded, createStringBufferFactory());
+      *pool_,
+      strictTargetEncoded,
+      createStringBufferFactory(),
+      Encoding::Options{});
 
   EXPECT_EQ(strictTargetEncoded, trivialOnlyEncoded);
   EXPECT_EQ(strictTargetEncoding->encodingType(), EncodingType::Trivial);
   std::vector<std::string_view> decoded(values.size());
   strictTargetEncoding->materialize(values.size(), decoded.data());
   EXPECT_EQ(decoded, values);
+}
+
+TEST_F(FsstEncodingTest, encodeWithReusableBuffers) {
+  std::vector<std::string> storage;
+  for (int i = 0; i < 256; ++i) {
+    storage.push_back(
+        fmt::format("common/prefix/{}/{}", i, std::string(i % 31, 'x')));
+  }
+  std::vector<std::string_view> values(storage.begin(), storage.end());
+  values[0] = "";
+  values[1] = std::string_view("embedded\0null", 13);
+
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  const EncodingLayout dictionaryLengths{
+      EncodingType::Dictionary,
+      {},
+      CompressionType::Uncompressed,
+      {trivial, trivial}};
+
+  for (const auto& lengthsLayout :
+       {trivial,
+        EncodingLayout{
+            EncodingType::FixedBitWidth, {}, CompressionType::Uncompressed},
+        dictionaryLengths}) {
+    for (const bool useVarint : {false, true}) {
+      for (const bool fallback : {false, true}) {
+        for (const auto compressionType :
+             {CompressionType::Uncompressed, CompressionType::Zstd}) {
+          SCOPED_TRACE(
+              fmt::format(
+                  "lengths={}, varint={}, fallback={}, compression={}",
+                  lengthsLayout.encodingType(),
+                  useVarint,
+                  fallback,
+                  compressionType));
+          Encoding::Options options;
+          options.useVarintRowCount = useVarint;
+          options.fsstCompressionTargetRatio =
+              fallback ? 0 : std::numeric_limits<double>::max();
+          CompressionOptions compressionOptions;
+          compressionOptions.zstdMinCompressionSize = 0;
+          const auto encode = [&](auto input, Buffer& buffer) {
+            return EncodingFactory::encode<std::string_view>(
+                createSelectionPolicy(
+                    compressionOptions, compressionType, lengthsLayout),
+                input,
+                buffer,
+                options);
+          };
+
+          Buffer expectedBuffer{*pool_};
+          Buffer output{*pool_};
+          const auto prefix = output.writeString("previous output");
+          std::vector<std::string_view> expected;
+          std::vector<std::string_view> encoded;
+          const std::vector<uint32_t> batchSizes{256, 64, 192};
+          for (const auto size : batchSizes) {
+            expected.push_back(encode(
+                std::span<const std::string_view>(values.data(), size),
+                expectedBuffer));
+          }
+
+          {
+            EncodingBufferPool bufferPool{pool_.get()};
+            options.encodingBufferPool = &bufferPool;
+            for (const auto size : batchSizes) {
+              encoded.push_back(encode(
+                  std::span<const std::string_view>(values.data(), size),
+                  output));
+              // Force the next result into a different output chunk and keep
+              // all earlier results alive while scratch buffers are reused.
+              output.reserve(1 << 20);
+            }
+            auto scratch = bufferPool.acquire();
+            std::memset(scratch->reserve(8192), 0xa5, 8192);
+          }
+          options.encodingBufferPool = nullptr;
+
+          EXPECT_EQ(prefix, "previous output");
+          EXPECT_EQ(encoded, expected);
+          for (size_t i = 0; i < encoded.size(); ++i) {
+            auto decoder = EncodingFactory().create(
+                *pool_, encoded[i], createStringBufferFactory(), options);
+            EXPECT_EQ(
+                decoder->encodingType(),
+                fallback ? EncodingType::Trivial : EncodingType::Fsst);
+            std::vector<std::string_view> decoded(batchSizes[i]);
+            decoder->materialize(decoded.size(), decoded.data());
+            EXPECT_EQ(
+                decoded,
+                std::vector<std::string_view>(
+                    values.begin(), values.begin() + batchSizes[i]));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(FsstEncodingTest, encodesLengthsIntoPooledBuffer) {
+  const std::vector<std::string_view> values{
+      "common/prefix/one", "common/prefix/two", "common/prefix/three"};
+  Buffer output{*pool_};
+  EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+  auto cachedBuffer = bufferPool.acquire();
+  auto* cachedAddress = cachedBuffer.get();
+  // A returned buffer must be reset before FSST writes its lengths into it.
+  std::memset(cachedBuffer->reserve(128), 0xa5, 128);
+  bufferPool.release(std::move(cachedBuffer));
+
+  const auto encoded = EncodingFactory::encode<std::string_view>(
+      createSelectionPolicy(),
+      values,
+      output,
+      {.encodingBufferPool = &bufferPool,
+       .fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+  const auto lengths = FsstEncoding::lengthsEncoding(encoded);
+  auto reusedBuffer = bufferPool.acquire();
+  ASSERT_EQ(reusedBuffer.get(), cachedAddress);
+  EXPECT_EQ(
+      (std::string_view{reusedBuffer->reserve(lengths.size()), lengths.size()}),
+      lengths);
+}
+
+TEST_F(FsstEncodingTest, pooledDictionaryAlphabet) {
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  const EncodingLayout fsst{
+      EncodingType::Fsst, {}, CompressionType::Uncompressed, {trivial}};
+  const EncodingLayout dictionary{
+      EncodingType::Dictionary,
+      {},
+      CompressionType::Uncompressed,
+      {fsst, trivial}};
+  const std::vector<std::string_view> values{
+      "common/prefix/one",
+      "common/prefix/two",
+      "common/prefix/one",
+      "common/prefix/three"};
+
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(useVarint);
+    Encoding::Options options;
+    options.useVarintRowCount = useVarint;
+    options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+    const auto encode = [&](Buffer& buffer) {
+      return EncodingFactory::encode<std::string_view>(
+          std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
+              dictionary, std::nullopt, encodingSelectionPolicyCreator_),
+          values,
+          buffer,
+          options);
+    };
+    Buffer expectedBuffer{*pool_};
+    const auto expected = encode(expectedBuffer);
+    Buffer output{*pool_};
+    std::vector<std::string_view> encoded;
+    {
+      // The dictionary output scratch arena must remain checked out while
+      // FSST acquires and releases a separate arena for its lengths.
+      EncodingBufferPool bufferPool{pool_.get(), /*maxCachedBuffers=*/1};
+      options.encodingBufferPool = &bufferPool;
+      for (int i = 0; i < 3; ++i) {
+        encoded.push_back(encode(output));
+      }
+    }
+    options.encodingBufferPool = nullptr;
+    for (const auto data : encoded) {
+      EXPECT_EQ(data, expected);
+      auto decoder = EncodingFactory().create(
+          *pool_, data, createStringBufferFactory(), options);
+      std::vector<std::string_view> decoded(values.size());
+      decoder->materialize(decoded.size(), decoded.data());
+      EXPECT_EQ(decoded, values);
+    }
+  }
 }
 
 TEST_F(FsstEncodingTest, skipAndMaterialize) {
@@ -527,8 +1443,8 @@ TEST_F(FsstEncodingTest, skipAndMaterialize) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   encoding->skip(2);
 
@@ -584,6 +1500,87 @@ TEST_F(FsstEncodingTest, readWithVisitorReadsSelectedRows) {
   }
 }
 
+TEST_F(FsstEncodingTest, readWithVisitorRejectsMalformedSelectedRow) {
+  const std::vector<std::string_view> values{
+      "zero/value", "one/value", "two/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  const auto malformed = buildIncompleteEscapeEncoding(splitFsst(encoded), 0);
+
+  FsstEncoding encoding{*pool_, malformed, createStringBufferFactory()};
+  StringReadWithVisitor visitor{{0}};
+  ReadWithVisitorParams params;
+  params.numScanned = 0;
+
+  NIMBLE_ASSERT_THROW(
+      encoding.readWithVisitor(visitor, params),
+      "FSST compressed string ends with an incomplete escape code.");
+  EXPECT_TRUE(visitor.values().empty());
+}
+
+TEST_F(FsstEncodingTest, readWithVisitorRejectsMalformedSparseGap) {
+  const std::vector<std::string_view> values{
+      "zero/value", "one/value", "two/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  const auto malformed = buildIncompleteEscapeEncoding(splitFsst(encoded), 1);
+
+  FsstEncoding encoding{*pool_, malformed, createStringBufferFactory()};
+  StringReadWithVisitor visitor{{0, 2}};
+  ReadWithVisitorParams params;
+  params.numScanned = 0;
+
+  NIMBLE_ASSERT_THROW(
+      encoding.readWithVisitor(visitor, params),
+      "FSST compressed string ends with an incomplete escape code.");
+  EXPECT_TRUE(visitor.values().empty());
+}
+
+TEST_F(FsstEncodingTest, readWithVisitorRejectsTrailingBlobAtEnd) {
+  const std::vector<std::string_view> values{
+      "zero/value", "one/value", "two/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  const auto sections = splitFsst(encoded);
+  std::string blobWithTrailingByte{sections.blob};
+  blobWithTrailingByte.push_back('\0');
+  const auto malformed = rebuildFsst(
+      sections, sections.symbolTable, sections.lengths, blobWithTrailingByte);
+
+  FsstEncoding encoding{*pool_, malformed, createStringBufferFactory()};
+  StringReadWithVisitor visitor{{2}};
+  ReadWithVisitorParams params;
+  params.numScanned = 0;
+
+  NIMBLE_ASSERT_THROW(
+      encoding.readWithVisitor(visitor, params),
+      "FSST compressed lengths do not match the blob size.");
+  EXPECT_EQ(visitor.values(), std::vector<std::string_view>{values.back()});
+}
+
+TEST_F(FsstEncodingTest, readWithVisitorHandlesNullsInSparseRange) {
+  const std::vector<std::string_view> nonNullValues{
+      "zero/value", "two/value", "four/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(nonNullValues, buffer);
+
+  FsstEncoding encoding{*pool_, encoded, createStringBufferFactory()};
+  StringReadWithVisitor visitor{{0, 4}};
+  auto nulls = velox::allocateNulls(5, pool_.get(), velox::bits::kNotNull);
+  auto* rawNulls = nulls->asMutable<uint64_t>();
+  velox::bits::setNull(rawNulls, 1);
+  velox::bits::setNull(rawNulls, 3);
+  visitor.reader().nullsInReadRange() = std::move(nulls);
+  ReadWithVisitorParams params;
+  params.numScanned = 0;
+
+  encoding.readWithVisitor(visitor, params);
+
+  EXPECT_EQ(
+      visitor.values(),
+      (std::vector<std::string_view>{nonNullValues[0], nonNullValues[2]}));
+}
+
 TEST_F(FsstEncodingTest, resetAndRematerialize) {
   std::vector<std::string_view> values = {"first", "second", "third"};
 
@@ -591,8 +1588,8 @@ TEST_F(FsstEncodingTest, resetAndRematerialize) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   std::vector<std::string_view> decoded1(3);
   encoding->materialize(3, decoded1.data());
@@ -608,6 +1605,195 @@ TEST_F(FsstEncodingTest, resetAndRematerialize) {
   }
 }
 
+TEST_F(FsstEncodingTest, resetReusesMultipleStringBufferPages) {
+  constexpr uint32_t kValueCount = 48;
+  constexpr size_t kValueSize = 20 * 1024;
+
+  std::vector<std::string> storage;
+  storage.reserve(kValueCount);
+  for (uint32_t i = 0; i < kValueCount; ++i) {
+    std::string value(kValueSize, static_cast<char>('a' + i % 8));
+    value.append(fmt::format("/{:04}", i));
+    storage.push_back(std::move(value));
+  }
+
+  std::vector<std::string_view> values;
+  values.reserve(storage.size());
+  for (const auto& value : storage) {
+    values.push_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+  std::vector<velox::BufferPtr> pages;
+  uint64_t allocatedBytes{0};
+  auto encoding =
+      EncodingFactory().create(*pool_, encoded, [&](uint32_t bytes) -> void* {
+        allocatedBytes += bytes;
+        auto& page = pages.emplace_back(
+            velox::AlignedBuffer::allocate<char>(bytes, pool_.get()));
+        return page->asMutable<void>();
+      });
+
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(values.size(), decoded.data());
+  ASSERT_EQ(values, decoded);
+  const auto stablePageCount = pages.size();
+  const auto stableAllocatedBytes = allocatedBytes;
+  ASSERT_GT(stablePageCount, 2);
+  ASSERT_GT(stableAllocatedBytes, 0);
+
+  auto decodeAll = [&](bool fragmented) {
+    encoding->reset();
+    if (!fragmented) {
+      encoding->materialize(values.size(), decoded.data());
+    } else {
+      uint32_t offset{0};
+      while (offset < values.size()) {
+        const uint32_t count =
+            std::min<uint32_t>(1 + offset % 7, values.size() - offset);
+        encoding->materialize(count, decoded.data() + offset);
+        offset += count;
+      }
+    }
+    ASSERT_EQ(values, decoded);
+  };
+
+  std::vector<std::string_view> selected(values.size());
+  auto decodeSkipTrace = [&] {
+    encoding->reset();
+    uint32_t cursor{0};
+    uint32_t outputIndex{0};
+    while (cursor < values.size()) {
+      const uint32_t skip =
+          std::min<uint32_t>(2 + cursor % 5, values.size() - cursor);
+      encoding->skip(skip);
+      cursor += skip;
+      if (cursor == values.size()) {
+        break;
+      }
+      const uint32_t count =
+          std::min<uint32_t>(1 + cursor % 3, values.size() - cursor);
+      encoding->materialize(count, selected.data() + outputIndex);
+      for (uint32_t i = 0; i < count; ++i) {
+        ASSERT_EQ(values[cursor + i], selected[outputIndex + i]);
+      }
+      cursor += count;
+      outputIndex += count;
+    }
+    ASSERT_GT(outputIndex, 0);
+  };
+
+  for (uint32_t round = 0; round < 100; ++round) {
+    decodeAll(false);
+    ASSERT_EQ(stablePageCount, pages.size()) << "dense round=" << round;
+    ASSERT_EQ(stableAllocatedBytes, allocatedBytes) << "dense round=" << round;
+
+    decodeAll(true);
+    ASSERT_EQ(stablePageCount, pages.size()) << "fragmented round=" << round;
+    ASSERT_EQ(stableAllocatedBytes, allocatedBytes)
+        << "fragmented round=" << round;
+
+    decodeSkipTrace();
+    ASSERT_EQ(stablePageCount, pages.size()) << "skip round=" << round;
+    ASSERT_EQ(stableAllocatedBytes, allocatedBytes) << "skip round=" << round;
+  }
+}
+
+TEST_F(FsstEncodingTest, exactPageFillWithZeroTerminatedSymbolTable) {
+  size_t pageSize{0};
+  {
+    const std::vector<std::string_view> probeValues{"a"};
+    const auto encoded = encodeZeroTerminatedFsst(probeValues);
+    auto encoding =
+        EncodingFactory().create(*pool_, encoded, [&](uint32_t size) {
+          pageSize = size;
+          auto& buffer = stringBuffers_.emplace_back(
+              velox::AlignedBuffer::allocate<char>(size, pool_.get()));
+          return buffer->asMutable<void>();
+        });
+    ASSERT_NE(encoding, nullptr);
+    std::string_view decoded;
+    encoding->materialize(1, &decoded);
+    EXPECT_EQ(decoded, probeValues.front());
+  }
+
+  constexpr size_t kFsstMaxSymbolLength = 8;
+  constexpr size_t kTailCodeCount = 8;
+  const std::vector<std::string> trainingStorage{
+      std::string(pageSize, 'a'), std::string(pageSize, 'b')};
+  const std::vector<std::string_view> trainingValues{
+      trainingStorage[0], trainingStorage[1]};
+  const auto trained = encodeZeroTerminatedFsst(trainingValues);
+  const auto sections = splitFsst(trained);
+  std::string symbolTable{sections.symbolTable};
+  fsst_decoder_t decoder{};
+  ASSERT_GT(
+      nimble_fsst_import(
+          &decoder, reinterpret_cast<unsigned char*>(symbolTable.data())),
+      0);
+
+  uint16_t maxLengthSymbol = FSST_ESC;
+  for (uint16_t code = 0; code < FSST_ESC; ++code) {
+    if (decoder.len[code] == kFsstMaxSymbolLength) {
+      maxLengthSymbol = code;
+      break;
+    }
+  }
+  ASSERT_LT(maxLengthSymbol, FSST_ESC);
+
+  // Build the compressed rows explicitly from literal escapes and an
+  // eight-byte symbol. This makes the last row's decompressed size equal its
+  // conservative maximum expansion without depending on how the encoder
+  // compresses a particular input row. The preceding row leaves exactly that
+  // many bytes in the page, so only the extra terminator byte forces the
+  // scratch/copy path.
+  const size_t tailValueSize = kTailCodeCount * kFsstMaxSymbolLength;
+  ASSERT_GT(pageSize, tailValueSize);
+  std::vector<std::string> storage{
+      std::string(pageSize - tailValueSize, 'x'),
+      std::string(tailValueSize, '\0'),
+  };
+  for (size_t i = 0; i < kTailCodeCount; ++i) {
+    std::memcpy(
+        storage[1].data() + i * kFsstMaxSymbolLength,
+        &decoder.symbol[maxLengthSymbol],
+        kFsstMaxSymbolLength);
+  }
+  const std::vector<std::string_view> values{storage[0], storage[1]};
+
+  std::string blob;
+  blob.reserve(2 * storage[0].size() + kTailCodeCount);
+  for (const auto byte : storage[0]) {
+    blob.push_back(static_cast<char>(FSST_ESC));
+    blob.push_back(byte);
+  }
+  blob.append(kTailCodeCount, static_cast<char>(maxLengthSymbol));
+  const std::vector<uint32_t> compressedLengths{
+      static_cast<uint32_t>(2 * storage[0].size()),
+      static_cast<uint32_t>(kTailCodeCount),
+  };
+  const auto encodedLengths = encodeTrivialChild<uint32_t>(compressedLengths);
+  const auto encoded =
+      rebuildFsst(sections, sections.symbolTable, encodedLengths, blob);
+
+  stringBuffers_.clear();
+  auto encoding = EncodingFactory().create(*pool_, encoded, [&](uint32_t size) {
+    EXPECT_EQ(size, pageSize);
+    auto& buffer = stringBuffers_.emplace_back(
+        velox::AlignedBuffer::allocate<char>(size, pool_.get()));
+    return buffer->asMutable<void>();
+  });
+  ASSERT_NE(encoding, nullptr);
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(static_cast<uint32_t>(values.size()), decoded.data());
+
+  EXPECT_EQ(decoded, values);
+  EXPECT_EQ(stringBuffers_.size(), 1);
+}
+
 TEST_F(FsstEncodingTest, materializeOneAtATime) {
   std::vector<std::string_view> values = {"alpha", "bravo", "charlie"};
 
@@ -615,8 +1801,8 @@ TEST_F(FsstEncodingTest, materializeOneAtATime) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   for (size_t i = 0; i < values.size(); ++i) {
     std::string_view decoded;
@@ -666,8 +1852,8 @@ TEST_F(FsstEncodingTest, debugString) {
   auto encoded = encodeFsst(values, buffer);
   stringBuffers_.clear();
 
-  auto encoding =
-      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
 
   EXPECT_EQ(encoding->debugString(0), "FsstEncoding: 2000 rows");
 }
@@ -692,8 +1878,8 @@ TEST_F(FsstEncodingTest, lengthsEncodingReturnsNestedLengthsEncoding) {
       EncodingType::Fsst);
 
   const auto lengths = FsstEncoding::lengthsEncoding(encoded);
-  auto lengthsEncoding =
-      EncodingFactory().create(*pool_, lengths, createStringBufferFactory());
+  auto lengthsEncoding = EncodingFactory().create(
+      *pool_, lengths, createStringBufferFactory(), Encoding::Options{});
 
   EXPECT_EQ(lengthsEncoding->dataType(), DataType::Uint32);
   EXPECT_EQ(lengthsEncoding->encodingType(), EncodingType::Trivial);

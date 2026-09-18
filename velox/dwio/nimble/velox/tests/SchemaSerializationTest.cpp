@@ -18,6 +18,7 @@
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaGenerated.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/velox/SchemaTypes.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
 
 using namespace facebook;
@@ -53,6 +54,34 @@ void expectSchemaNodesEqual(
 }
 
 } // namespace
+
+TEST(SchemaTypesTest, isIntegerScalarKind) {
+  struct TestCase {
+    ScalarKind scalarKind;
+    bool expected;
+  };
+  const std::vector<TestCase> testCases{
+      {ScalarKind::Int8, true},
+      {ScalarKind::UInt8, true},
+      {ScalarKind::Int16, true},
+      {ScalarKind::UInt16, true},
+      {ScalarKind::Int32, true},
+      {ScalarKind::UInt32, true},
+      {ScalarKind::Int64, true},
+      {ScalarKind::UInt64, true},
+      {ScalarKind::Float, false},
+      {ScalarKind::Double, false},
+      {ScalarKind::Bool, false},
+      {ScalarKind::String, false},
+      {ScalarKind::Binary, false},
+      {ScalarKind::Undefined, false},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(toString(testCase.scalarKind));
+    EXPECT_EQ(isIntegerScalarKind(testCase.scalarKind), testCase.expected);
+  }
+}
 
 TEST(SchemaSerializationTest, scalarInt8) {
   SchemaBuilder schemaBuilder;

@@ -34,7 +34,8 @@ SparseBoolEncoding::SparseBoolEncoding(
       indices_{EncodingFactory().create(
           memoryPool,
           {data.data() + kIndicesOffset, data.size() - kIndicesOffset},
-          stringBufferFactory)} {
+          stringBufferFactory,
+          Encoding::Options{})} {
   reset();
 }
 

@@ -242,18 +242,27 @@ struct BenchmarkState : public velox::test::VectorTestBase {
 
     // Extract per-column decode and decompression stats (CPU time).
     // nodeId: root=0, c0=1, c1=2.
-    dwio::common::RuntimeStatistics stats;
+    dwio::common::RuntimeStats stats;
     readers.rowReader->updateRuntimeStats(stats);
-    ColumnStats c0Stats{};
-    ColumnStats c1Stats{};
-    if (stats.columnReaderStats.decodingStatsSet.has_value()) {
-      auto* c0m = stats.columnReaderStats.decodingStatsSet->getOrCreate(1);
-      c0Stats = {
-          c0m->decodeCPUTimeNanos.sum(), c0m->decompressCPUTimeNanos.sum()};
-      auto* c1m = stats.columnReaderStats.decodingStatsSet->getOrCreate(2);
-      c1Stats = {
-          c1m->decodeCPUTimeNanos.sum(), c1m->decompressCPUTimeNanos.sum()};
-    }
+    const auto columnDecodingStats = [&](uint32_t nodeId) -> ColumnStats {
+      const auto nodeIt = stats.columnStats.find(nodeId);
+      if (nodeIt == stats.columnStats.end()) {
+        return {};
+      }
+      const auto formatIt =
+          nodeIt->second.find(dwio::common::FileFormat::NIMBLE);
+      if (formatIt == nodeIt->second.end() ||
+          !formatIt->second.decodingStats.has_value()) {
+        return {};
+      }
+      const auto& decoding = *formatIt->second.decodingStats;
+      return {
+          decoding.decodeCPUTimeNanos.sum(),
+          decoding.decompressCPUTimeNanos.sum()};
+    };
+    // nodeId: root=0, c0=1, c1=2.
+    const ColumnStats c0Stats = columnDecodingStats(1);
+    const ColumnStats c1Stats = columnDecodingStats(2);
 
     return {
         us(t1 - t0),
@@ -568,7 +577,7 @@ void runMultiTypeBenchmarks() {
 
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
-  facebook::velox::memory::MemoryManager::testingSetInstance(
+  facebook::velox::memory::initializeMemoryManager(
       facebook::velox::memory::MemoryManager::Options{});
 
   facebook::nimble::runBenchmarks();
