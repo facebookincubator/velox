@@ -341,7 +341,7 @@ void RPCOperator::dispatchRowsUnderAdmission() {
 namespace {
 
 // Turns a whole-batch failure into one errored response per row, so the per-row
-// error policy (meta_ai_on_error) applies downstream instead of the query
+// error policy applies downstream instead of the query
 // hard-failing. Responses carry batch-position rowIds, so the scatter stamps
 // global ids identically to the success path.
 std::vector<RPCResponse> degradeBatchFailureToRowErrors(
@@ -436,10 +436,37 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
       1,
       "A one-row batch must require exactly one admission unit");
 
-  // Determine how many rows to flush.
-  auto flushCount = maxRows > 0
-      ? std::min(static_cast<int32_t>(batchRowLocations_.size()), maxRows)
-      : static_cast<int32_t>(batchRowLocations_.size());
+  // Determine how many rows to flush. maxRows == 0 means "flush all pending".
+  const auto pending = static_cast<int32_t>(batchRowLocations_.size());
+  const auto desiredFlushCount =
+      maxRows > 0 ? std::min(pending, maxRows) : pending;
+  VELOX_CHECK_GT(
+      desiredFlushCount,
+      0,
+      "RPC batch flush must include at least one pending row");
+  // The function caps the flush to what its backend will accept in one
+  // request; only it knows whether that limit is bytes, tokens, or a protocol
+  // maximum. A backend that rejects an oversized request loses every row in
+  // it, so this applies to the flush-all paths too.
+  auto flushCount = function_->maxRowsPerFlush(desiredFlushCount);
+  VELOX_CHECK_GE(
+      flushCount,
+      1,
+      "RPC function '{}' maxRowsPerFlush({}) returned {}; expected a value "
+      "in [1, {}]",
+      function_->name(),
+      desiredFlushCount,
+      flushCount,
+      desiredFlushCount);
+  VELOX_CHECK_LE(
+      flushCount,
+      desiredFlushCount,
+      "RPC function '{}' maxRowsPerFlush({}) returned {}; expected a value "
+      "in [1, {}]",
+      function_->name(),
+      desiredFlushCount,
+      flushCount,
+      desiredFlushCount);
 
   const auto requestedUnits = function_->admissionUnitsForBatch(flushCount);
   VELOX_CHECK_GT(requestedUnits, 0);
