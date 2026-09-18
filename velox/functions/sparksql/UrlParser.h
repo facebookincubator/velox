@@ -20,7 +20,7 @@
 
 namespace facebook::velox::functions::sparksql {
 
-// Parses URLs with the java.net.URI (JDK 8) grammar that Spark's
+// Parses URLs with the java.net.URI (JDK 17) grammar that Spark's
 // parse_url is defined against. See parseUrl for the supported
 // grammar and its lenient deviations from RFC 3986.
 
@@ -41,7 +41,7 @@ struct ParsedUrl {
 };
 
 // Parses a complete URL into its components. The grammar follows the
-// java.net.URI (JDK 8) rules Spark's parse_url is defined against,
+// java.net.URI (JDK 17) rules Spark's parse_url is defined against,
 // including these lenient deviations from RFC 3986:
 // - non-ASCII characters are accepted outside the authority;
 // - '[' and ']' are allowed in queries;
