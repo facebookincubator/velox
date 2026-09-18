@@ -199,7 +199,7 @@ AsyncRPCFunction::CongestionSignal DemoBatchRPCFunction::evaluateCongestion(
   }
   for (const auto& response : responses) {
     if (response.hasError()) {
-      return CongestionSignal::kError;
+      return CongestionSignal::kOverloaded;
     }
   }
   return CongestionSignal::kSuccess;
