@@ -35,6 +35,7 @@
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
 #include "velox/dwio/parquet/writer/arrow/FileEncryptorInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
+#include "velox/dwio/parquet/writer/arrow/SizeStatistics.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
 
 #include "velox/dwio/parquet/writer/arrow/Properties.h"
@@ -267,6 +268,14 @@ static inline SortingColumn FromThrift(
   return sorting_column;
 }
 
+static inline SizeStatistics fromThrift(
+    const facebook::velox::parquet::thrift::SizeStatistics& sizeStats) {
+  return SizeStatistics{
+      sizeStats.definition_level_histogram().value_or(std::vector<int64_t>{}),
+      sizeStats.repetition_level_histogram().value_or(std::vector<int64_t>{}),
+      sizeStats.unencoded_byte_array_data_bytes().to_optional()};
+}
+
 // ----------------------------------------------------------------------.
 // Convert Thrift enums from Parquet enums.
 
@@ -377,6 +386,20 @@ static inline facebook::velox::parquet::thrift::Statistics toThrift(
   }
 
   return Statistics;
+}
+
+static inline facebook::velox::parquet::thrift::SizeStatistics toThrift(
+    const SizeStatistics& sizeStats) {
+  facebook::velox::parquet::thrift::SizeStatistics sizeStatistics;
+  sizeStatistics.definition_level_histogram() =
+      sizeStats.definitionLevelHistogram;
+  sizeStatistics.repetition_level_histogram() =
+      sizeStats.repetitionLevelHistogram;
+  if (sizeStats.unencodedByteArrayDataBytes.has_value()) {
+    sizeStatistics.unencoded_byte_array_data_bytes() =
+        *sizeStats.unencodedByteArrayDataBytes;
+  }
+  return sizeStatistics;
 }
 
 static inline facebook::velox::parquet::thrift::AesGcmV1 toAesGcmV1Thrift(

@@ -28,6 +28,7 @@ namespace facebook::velox::parquet::arrow {
 
 class ColumnDescriptor;
 class EncodedStatistics;
+struct SizeStatistics;
 class FileMetaData;
 class InternalFileDecryptor;
 struct PageIndexLocation;
@@ -86,8 +87,19 @@ class PARQUET_EXPORT ColumnIndex {
 
   /// \brief A vector of page indices for non-null pages.
   virtual const std::vector<int32_t>& nonNullPageIndices() const = 0;
-};
 
+  /// \brief Whether definition-level histograms are available.
+  virtual bool hasDefinitionLevelHistograms() const = 0;
+
+  /// \brief Whether repetition-level histograms are available.
+  virtual bool hasRepetitionLevelHistograms() const = 0;
+
+  /// \brief Concatenated definition-level histograms for all data pages.
+  virtual const std::vector<int64_t>& definitionLevelHistograms() const = 0;
+
+  /// \brief Concatenated repetition-level histograms for all data pages.
+  virtual const std::vector<int64_t>& repetitionLevelHistograms() const = 0;
+};
 /// \brief Typed implementation of ColumnIndex.
 template <typename DType>
 class PARQUET_EXPORT TypedColumnIndex : public ColumnIndex {
@@ -141,6 +153,9 @@ class PARQUET_EXPORT OffsetIndex {
 
   /// \brief A vector of locations for each data page in this column.
   virtual const std::vector<PageLocation>& pageLocations() const = 0;
+  /// \brief A vector of unencoded/uncompressed size of each page for BYTE_ARRAY
+  /// types, or empty for other types.
+  virtual const std::vector<int64_t>& unencodedByteArrayDataBytes() const = 0;
 };
 
 /// \brief Interface for reading the page index for a Parquet row group.
@@ -290,7 +305,10 @@ class PARQUET_EXPORT ColumnIndexBuilder {
   /// not update statistics any more.
   ///
   /// \param stats Page statistics in the encoded form.
-  virtual void addPage(const EncodedStatistics& stats) = 0;
+  /// \param sizeStats Size statistics of the page if available.
+  virtual void addPage(
+      const EncodedStatistics& stats,
+      const SizeStatistics& sizeStats) = 0;
 
   /// \brief Complete the column index.
   ///
@@ -322,19 +340,17 @@ class PARQUET_EXPORT OffsetIndexBuilder {
 
   virtual ~OffsetIndexBuilder() = default;
 
-  /// \brief Add page location of a data page.
+  /// \brief Add page location and size statistics of a data page.
   virtual void addPage(
       int64_t offset,
       int32_t compressedPageSize,
-      int64_t firstRowIndex) = 0;
+      int64_t firstRowIndex,
+      std::optional<int64_t> unencodedByteArrayLength = {}) = 0;
 
-  /// \brief Add page location of a data page.
-  void addPage(const PageLocation& pageLocation) {
-    addPage(
-        pageLocation.offset,
-        pageLocation.compressedPageSize,
-        pageLocation.firstRowIndex);
-  }
+  /// \brief Add page location and size stats of a data page.
+  void addPage(
+      const PageLocation& pageLocation,
+      const SizeStatistics& sizeStats);
 
   /// \brief Complete the offset index.
   ///
