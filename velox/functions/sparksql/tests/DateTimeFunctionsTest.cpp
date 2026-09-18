@@ -347,6 +347,24 @@ TEST_F(DateTimeFunctionsTest, unixTimestampTimestampInput) {
   EXPECT_EQ(kMin, unixTimestamp(Timestamp(kMin, 0)));
 }
 
+TEST_F(DateTimeFunctionsTest, unixTimestampTimestampUtcInput) {
+  const auto unixTimestamp = [&](std::optional<Timestamp> timestamp) {
+    return evaluateOnce<int64_t>(
+        "unix_timestamp(c0)", TIMESTAMP_UTC(), timestamp);
+  };
+  EXPECT_EQ(0, unixTimestamp(Timestamp(0, 0)));
+  EXPECT_EQ(1, unixTimestamp(Timestamp(1, 990)));
+  EXPECT_EQ(61, unixTimestamp(Timestamp(61, 0)));
+  EXPECT_EQ(-1, unixTimestamp(Timestamp(-1, 0)));
+
+  // TIMESTAMP UTC must not be affected by session timezone.
+  setQueryTimeZone("Pacific/Apia");
+  EXPECT_EQ(1739933174, unixTimestamp(Timestamp(1739933174, 0)));
+  EXPECT_EQ(-1739933174, unixTimestamp(Timestamp(-1739933174, 0)));
+  EXPECT_EQ(kMax, unixTimestamp(Timestamp(kMax, 0)));
+  EXPECT_EQ(kMin, unixTimestamp(Timestamp(kMin, 0)));
+}
+
 TEST_F(DateTimeFunctionsTest, unixTimestampDateInput) {
   const auto unixTimestamp = [&](std::optional<int32_t> date) {
     return evaluateOnce<int64_t>("unix_timestamp(c0)", {DATE()}, date);
