@@ -727,8 +727,8 @@ class ScalarFieldReader final
       nonNullCount = decoder_->next(
           count,
           buf,
-          stringBuffers,
           [&]() { return ensureNulls(vector, rowCount); },
+          stringBuffers,
           scatterBitmap);
 
       NIMBLE_DCHECK_EQ(
@@ -754,8 +754,8 @@ class ScalarFieldReader final
       nonNullCount = decoder_->next(
           count,
           vector->values()->template asMutable<TRequested>(),
-          stringBuffers,
           [&]() { return ensureNulls(vector, rowCount); },
+          stringBuffers,
           scatterBitmap);
     }
 
@@ -915,8 +915,8 @@ class StringFieldReader final : public FieldReader {
     auto nonNullCount = decoder_->next(
         count,
         buffer_.data(),
-        stringBuffers,
         [&]() { return ensureNulls(vector, rowCount); },
+        stringBuffers,
         scatterBitmap);
     auto* valuesPtr = vector->mutableValues()->asMutable<velox::StringView>();
     if (nonNullCount == rowCount) {
@@ -1022,8 +1022,8 @@ class LegacyStringFieldReader final : public FieldReader {
     auto nonNullCount = decoder_->next(
         count,
         buffer_.data(),
-        stringBuffers,
         [&]() { return ensureNulls(vector, rowCount); },
+        stringBuffers,
         scatterBitmap);
     size_t totalLength = 0;
     const bool hasNulls = (nonNullCount != rowCount);
@@ -1165,8 +1165,8 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
     auto nonNullCount = decoder_->next(
         count,
         microsBuffer_.data(),
-        stringBuffers,
         [&]() { return ensureNulls(vector, rowCount); },
+        stringBuffers,
         scatterBitmap);
 
     stringBuffers.clear();
@@ -1174,8 +1174,8 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
     nanosDecoder_->next(
         nonNullCount,
         nanosBuffer_.data(),
-        stringBuffers,
         []() { return nullptr; },
+        stringBuffers,
         nullptr);
 
     auto* rawValues = vector->mutableRawValues();
@@ -1210,8 +1210,8 @@ class TimestampMicroNanoFieldReader final : public FieldReader {
       nonNullCount += decoder_->next(
           readSize,
           microsBuffer.data(),
-          stringBuffers,
           [&]() { return nulls.data(); },
+          stringBuffers,
           /* scatterBitmap */ nullptr);
       count -= readSize;
     }
@@ -1323,8 +1323,8 @@ class MultiValueFieldReader : public FieldReader {
     auto nonNullCount = decoder_->next(
         count,
         sizes,
-        stringBuffers_,
         [&]() { return ensureNulls(vector, allocationSize); },
+        stringBuffers_,
         scatterBitmap);
 
     size_t childrenRows = 0;
@@ -1374,8 +1374,8 @@ class MultiValueFieldReader : public FieldReader {
       auto nonNullCount = decoder_->next(
           readSize,
           sizes.data(),
-          stringBuffers,
           [&]() { return nulls.data(); },
+          stringBuffers,
           /* scatterBitmap */ nullptr);
 
       if (nonNullCount == readSize) {
@@ -1836,11 +1836,11 @@ class ArrayWithOffsetsFieldReader final : public MultiValueFieldReader {
     nonNullCount = offsetDecoder_->next(
         count,
         indices,
-        stringBuffers,
         [&]() {
           nullsPtr = nulls();
           return nullsPtr;
         },
+        stringBuffers,
         scatterBitmap);
 
     // remove duplicated indices and calculate unique count
@@ -1987,11 +1987,11 @@ class SlidingWindowMapFieldReader final : public FieldReader {
     const uint32_t nonNullCount = offsetDecoder_->next(
         count,
         indices,
-        stringBuffers,
         [&]() {
           nullsPtr = ensureNulls(dictionaryVector, rowCount);
           return nullsPtr;
         },
+        stringBuffers,
         scatterBitmap);
 
     // Return early if everything is null
@@ -2005,7 +2005,10 @@ class SlidingWindowMapFieldReader final : public FieldReader {
     lengthBuffer.resize(nonNullCount);
     std::vector<velox::BufferPtr> lengthStringBuffers;
     lengthsDecoder_->next(
-        nonNullCount, lengthBuffer.data(), lengthStringBuffers);
+        nonNullCount,
+        lengthBuffer.data(),
+        /*getOutputNulls=*/nullptr,
+        lengthStringBuffers);
 
     // Convert the offsets and lengths to a list of unique offsets and lengths
     // and update the indices to be 0-based indices
@@ -2212,11 +2215,15 @@ class SlidingWindowMapFieldReader final : public FieldReader {
       auto nonNullCount = offsetDecoder_->next(
           skipSize,
           offsets.data(),
-          stringBuffers,
           [&]() { return nullsPtr; },
+          stringBuffers,
           /* scatterBitmap */ nullptr);
       std::vector<velox::BufferPtr> lengthStringBuffers;
-      lengthsDecoder_->next(nonNullCount, lengths.data(), lengthStringBuffers);
+      lengthsDecoder_->next(
+          nonNullCount,
+          lengths.data(),
+          /*getOutputNulls=*/nullptr,
+          lengthStringBuffers);
 
       const bool hasNulls = nonNullCount != skipSize;
 
@@ -2528,7 +2535,7 @@ uint32_t readBooleanValues(
     uint32_t count,
     TrueHandler handler) {
   std::vector<velox::BufferPtr> stringBuffers;
-  decoder->next(count, buffer, stringBuffers);
+  decoder->next(count, buffer, /*getOutputNulls=*/nullptr, stringBuffers);
 
   uint32_t trueCount = 0;
   for (uint32_t i = 0; i < count; ++i) {
@@ -2758,7 +2765,11 @@ class RowFieldReader final : public FieldReader {
       // rowCount values in its original place without removal
       boolBuffer_.resize(count);
       std::vector<velox::BufferPtr> stringBuffers;
-      decoder_->next(count, boolBuffer_.data(), stringBuffers);
+      decoder_->next(
+          count,
+          boolBuffer_.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers);
 
       auto* nullBuffer = ensureNulls(vector, rowCount);
       velox::bits::BitmapBuilder nullBits{nullBuffer, rowCount};

@@ -95,6 +95,9 @@ target_link_libraries(
   Folly::folly
 )
 
+add_library(nimble_encoding_view_decoder EncodingViewDecoder.cpp EncodingViewDecoder.h)
+target_link_libraries(nimble_encoding_view_decoder nimble_common nimble_encodings velox_memory)
+
 add_library(nimble_deserializer Deserializer.cpp Deserializer.h)
 target_link_libraries(
   nimble_deserializer

@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
@@ -206,6 +207,14 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
       NIMBLE_UNREACHABLE(
           "BitRangeSplit encoding only supports 32- and 64-bit integer data "
+          "types, got {}.",
+          encoding.dataType());
+    case EncodingType::SubIntSplit:
+      if constexpr (isNumericType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
+        return f(static_cast<SubIntSplitEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNREACHABLE(
+          "SubIntSplit encoding only supports 32- and 64-bit numeric data "
           "types, got {}.",
           encoding.dataType());
     case EncodingType::Huffman:
