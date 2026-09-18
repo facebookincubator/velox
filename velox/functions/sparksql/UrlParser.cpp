@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/UriParser.h"
+#include "velox/functions/sparksql/UrlParser.h"
 
 #include <array>
 #include <cstdint>
