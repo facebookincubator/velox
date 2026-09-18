@@ -125,11 +125,11 @@ class CudfSplitReader : public NvtxHelper {
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
   // Read the next table chunk from the parquet reader. Returns nullopt when no
-  // more data. All read decimals, including nested,filter-only and equality-delete
-  // key columns, have their logical Velox scale and storage width (DECIMAL64 for
-  // short decimals, DECIMAL128 for long decimals) before deferred filters or
-  // equality deletes consume the table. A prepended row-index column is not part
-  // of the logical read schema.
+  // more data. All read decimals, including nested,filter-only and
+  // equality-delete key columns, have their logical Velox scale and storage
+  // width (DECIMAL64 for short decimals, DECIMAL128 for long decimals) before
+  // deferred filters or equality deletes consume the table. A prepended
+  // row-index column is not part of the logical read schema.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
 
   // Setup the cuDF data source
