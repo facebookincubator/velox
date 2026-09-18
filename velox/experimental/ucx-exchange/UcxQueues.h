@@ -42,6 +42,11 @@ using UcxDataAvailableCallback = std::function<void(
     vector_size_t numRows,
     std::vector<int64_t> remainingBytes)>;
 
+/// Called once output-queue initialization determines whether the task can use
+/// the process-local exchange path. False means the task is broadcast or was
+/// terminated before initialization.
+using UcxIntraNodeEligibilityCallback = std::function<void(bool)>;
+
 struct UcxDataAvailable {
   UcxDataAvailableCallback callback{nullptr};
   std::shared_ptr<cudf::packed_columns> data;
@@ -168,12 +173,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// later properly, and eventually the callback fires.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
+  /// @param eligibilityCallbacks Receives pending callbacks so the manager can
+  /// invoke them after clearing stale cancellation state for a reused task ID.
   bool initialize(
       std::shared_ptr<exec::Task> task,
       uint32_t numDestinations,
       uint32_t numDrivers,
       core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+          core::PartitionedOutputNode::Kind::kPartitioned,
+      std::vector<UcxIntraNodeEligibilityCallback>* eligibilityCallbacks =
+          nullptr);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -186,6 +195,12 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   bool isInitialized() const {
     return initialized_.load(std::memory_order_acquire);
   }
+
+  /// Invokes 'callback' once task metadata is initialized and its output kind
+  /// is known. If initialization already completed, invokes it immediately.
+  /// A callback receives false if this queue is broadcast or is terminated
+  /// before initialization.
+  void notifyOnIntraNodeEligibility(UcxIntraNodeEligibilityCallback callback);
 
   /// @brief When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
@@ -317,6 +332,12 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // (canUseIntraNode) load with memory_order_acquire so kind_ and task_
   // written before the store are visible.
   std::atomic<bool> initialized_{false};
+
+  // Handshakes that arrived before initializeTask() wait here instead of
+  // permanently selecting the remote UCX path based on a placeholder queue.
+  std::vector<UcxIntraNodeEligibilityCallback> intraNodeEligibilityCallbacks_;
+
+  bool terminated_{false};
 
   // For broadcast: stores data for late-arriving destinations that need
   // backfill. Cleared once noMoreQueues_ is set.

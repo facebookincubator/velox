@@ -146,6 +146,9 @@ struct ExchangeTestParamsPrinter {
 
 class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
  protected:
+  // Tests that mutate CudfConfig::intraNodeExchange must use process-level
+  // parallelism only: it is mutable process-global state read by the
+  // communicator's Acceptor thread.
   // Chosen per process in SetUpTestCase() rather than hardcoded. The
   // communicator opens a listener on this port without address reuse, so two
   // runs of this binary in quick succession fail the second with
@@ -1024,6 +1027,13 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
     }
   }
 
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
+
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcProducerNeverSends";
   const std::string sinkTaskId = taskPrefix + "sinkConsumer";
@@ -1038,6 +1048,7 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
       /*numDrivers=*/1);
+  EXPECT_TRUE(queueManager_->canUseIntraNode(srcTaskId));
 
   // 2. Create sink task with exchange plan node.
   core::PlanNodeId exchangeNodeId;
@@ -1083,6 +1094,188 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
   // If we get here, the source correctly detected the cancelled task.
 }
 
+// A same-process consumer can connect before the producer task has initialized
+// its output queue. The handshake must wait for the real output kind instead of
+// permanently falling back to remote UCX based on the placeholder queue.
+TEST_P(UcxExchangeTest, partitionedPlaceholderDefersHandshakeWithBusyWorker) {
+  // This test doesn't use parameters — run only for the first param set.
+  {
+    ExchangeTestParams p = GetParam();
+    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
+        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
+        p.tableType != TableType::NARROW) {
+      GTEST_SKIP()
+          << "partitionedPlaceholderDefersHandshakeWithBusyWorker: runs only once";
+    }
+  }
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool origIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
+
+  auto metricSum = [](
+                       const folly::F14FastMap<std::string, RuntimeMetric>&
+                           stats,
+                       std::string_view name) {
+    auto it = stats.find(std::string{name});
+    return it == stats.end() ? 0 : it->second.sum;
+  };
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string pollingSrcTaskId = taskPrefix + "pollingSrc";
+  const std::string pollingSinkTaskId = taskPrefix + "pollingSink";
+  const std::string srcTaskId = taskPrefix + "partitionedPlaceholderSrc";
+  const std::string sinkTaskId = taskPrefix + "partitionedPlaceholderSink";
+  constexpr int numChunks = 2;
+  constexpr int numRowsPerChunk = 1000;
+
+  auto waitForMetric = [&metricSum](
+                           const std::shared_ptr<SinkDriverMock>& sinkDriver,
+                           std::string_view name,
+                           int64_t target) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (metricSum(sinkDriver->exchangeClientStats(), name) < target &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return metricSum(sinkDriver->exchangeClientStats(), name) >= target;
+  };
+  auto waitForPlaceholder = [this](const std::string& taskId) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!queueManager_->stats(taskId).has_value() &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return queueManager_->stats(taskId).has_value();
+  };
+
+  // Establish one intra-node source with no data. It continuously re-enqueues
+  // itself while polling the transfer registry, keeping the communicator work
+  // queue non-empty. A later deferred handshake must still make progress.
+  auto pollingSrcTask =
+      createSourceTask(pollingSrcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      pollingSrcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+
+  core::PlanNodeId pollingExchangeNodeId;
+  auto pollingSinkTask = createExchangeTask(
+      pollingSinkTaskId,
+      UcxTestData::kTestRowType,
+      /*partitionId=*/0,
+      pollingExchangeNodeId);
+  auto pollingSinkDriver =
+      std::make_shared<SinkDriverMock>(pollingSinkTask, /*numDrivers=*/1);
+  std::vector<exec::Split> pollingSplits;
+  pollingSplits.emplace_back(remoteSplit(pollingSrcTaskId, /*partitionId=*/0));
+  pollingSinkDriver->addSplits(pollingSplits);
+  pollingSinkDriver->run();
+  if (!waitForMetric(
+          pollingSinkDriver, "ucxExchangeSource.intraNodeSources", 1)) {
+    pollingSinkTask->requestAbort();
+    pollingSinkDriver->joinThreads();
+    FAIL() << "Polling source did not select intra-node transfer";
+    return;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
+  auto sinkDriver =
+      std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  std::vector<exec::Split> splits;
+  splits.emplace_back(remoteSplit(srcTaskId, /*partitionId=*/0));
+  sinkDriver->addSplits(splits);
+
+  // Start the consumer first. Waiting for the placeholder proves that its
+  // handshake has reached the output queue while the producer is uninitialized.
+  sinkDriver->run();
+  if (!waitForPlaceholder(srcTaskId)) {
+    sinkTask->requestAbort();
+    pollingSinkTask->requestAbort();
+    sinkDriver->joinThreads();
+    pollingSinkDriver->joinThreads();
+    FAIL() << "Consumer handshake did not create the producer placeholder";
+    return;
+  }
+  EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager_->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  EXPECT_TRUE(queueManager_->canUseIntraNode(srcTaskId));
+
+  // This specifically catches starvation in Communicator::run(): the polling
+  // source above keeps workQueue_ non-empty while this handshake is submitted
+  // through deferredActions_.
+  if (!waitForMetric(sinkDriver, "ucxExchangeSource.intraNodeSources", 1)) {
+    sinkTask->requestAbort();
+    pollingSinkTask->requestAbort();
+    sinkDriver->joinThreads();
+    pollingSinkDriver->joinThreads();
+    FAIL() << "Deferred handshake did not select intra-node transfer";
+    return;
+  }
+  auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      srcTaskId,
+      /*numDrivers=*/1,
+      /*numPartitions=*/1,
+      numChunks,
+      numRowsPerChunk);
+  auto pollingSourceMock = std::make_shared<UcxPartitionedOutputMock>(
+      pollingSrcTaskId,
+      /*numDrivers=*/1,
+      /*numPartitions=*/1,
+      numChunks,
+      numRowsPerChunk);
+  sourceMock->run();
+  pollingSourceMock->run();
+
+  sourceMock->joinThreads();
+  pollingSourceMock->joinThreads();
+  sinkDriver->joinThreads();
+  pollingSinkDriver->joinThreads();
+
+  EXPECT_EQ(
+      sinkDriver->numRows(),
+      static_cast<uint64_t>(numChunks * numRowsPerChunk));
+
+  EXPECT_EQ(
+      pollingSinkDriver->numRows(),
+      static_cast<uint64_t>(numChunks * numRowsPerChunk));
+
+  const auto sinkStats = sinkDriver->exchangeClientStats();
+  EXPECT_EQ(
+      metricSum(sinkStats, "ucxExchangeSource.intraNodePackedColumns"),
+      numChunks);
+  EXPECT_GT(metricSum(sinkStats, "ucxExchangeSource.intraNodeBytes"), 0);
+  EXPECT_EQ(metricSum(sinkStats, "ucxExchangeSource.remotePackedColumns"), 0);
+  EXPECT_EQ(metricSum(sinkStats, "ucxExchangeSource.remoteBytes"), 0);
+
+  const auto pollingSinkStats = pollingSinkDriver->exchangeClientStats();
+  EXPECT_EQ(
+      metricSum(pollingSinkStats, "ucxExchangeSource.intraNodePackedColumns"),
+      numChunks);
+  EXPECT_GT(
+      metricSum(pollingSinkStats, "ucxExchangeSource.intraNodeBytes"), 0);
+  EXPECT_EQ(
+      metricSum(pollingSinkStats, "ucxExchangeSource.remotePackedColumns"), 0);
+  EXPECT_EQ(metricSum(pollingSinkStats, "ucxExchangeSource.remoteBytes"), 0);
+
+  queueManager_->removeTask(srcTaskId);
+  queueManager_->removeTask(pollingSrcTaskId);
+}
+
 // Regression test for broadcast + intra-node SIGSEGV.
 // Before the fix in Acceptor.cpp, broadcast tasks using intra-node transfer
 // would crash because the intra-node source destructively moves gpu_data from
@@ -1105,6 +1298,9 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
   config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "broadcastSrc";
@@ -1120,6 +1316,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
+  EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
   // Finalize destinations for broadcast.
   queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
 
@@ -1168,7 +1365,6 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
 
   // Cleanup.
   queueManager_->removeTask(srcTaskId);
-  config.intraNodeExchange = origIntraNode;
 }
 
 // Regression test for broadcast + intra-node placeholder race condition.
@@ -1194,6 +1390,9 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
   config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "broadcastPlaceholderSrc";
@@ -1238,6 +1437,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
+  EXPECT_FALSE(queueManager_->canUseIntraNode(srcTaskId));
 
   // Step 4: Finalize destinations for broadcast.
   queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
@@ -1263,7 +1463,6 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
 
   // Cleanup.
   queueManager_->removeTask(srcTaskId);
-  config.intraNodeExchange = origIntraNode;
 }
 
 // Test that UcxPartitionedOutput's batch accumulation correctly merges many
@@ -1586,6 +1785,9 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
   config.intraNodeExchange = false;
+  SCOPE_EXIT {
+    config.intraNodeExchange = origIntraNode;
+  };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcActiveTransfer";
@@ -1656,8 +1858,6 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
 
   // If we reach here without crashing, the deferred cleanup is working.
   VLOG(0) << "deferredRequestCleanupOnTaskAbort: completed without crash";
-
-  config.intraNodeExchange = origIntraNode;
 }
 
 std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;

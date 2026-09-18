@@ -19,6 +19,7 @@
 #include <velox/exec/OutputBufferManager.h>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <mutex>
 #include <string_view>
 #include <unordered_set>
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
@@ -117,6 +118,13 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// source's destructive move would corrupt data for other servers).
   bool canUseIntraNode(std::string_view taskId);
 
+  /// Resolves whether a task can use process-local exchange after its real
+  /// output kind is known. If the task is still represented by a placeholder,
+  /// callback invocation is deferred until initializeTask() or removeTask().
+  void notifyOnIntraNodeEligibility(
+      std::string_view taskId,
+      UcxIntraNodeEligibilityCallback callback);
+
   /// @brief Removes the queue for the given task from the queue manager.
   /// Calls "terminate" on the queue to awake waiting producers.
   void removeTask(const std::string& taskId) override;
@@ -154,6 +162,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   // that exceed the placeholder's undersized queues_ vector.
   folly::Synchronized<std::unordered_set<std::string>, std::mutex>
       removedTasks_;
+
+  // Serializes task initialization and removal with registry cancellation.
+  // A newly initialized queue must never be visible while a cancellation from
+  // its previous task incarnation is still active.
+  std::mutex taskLifecycleMutex_;
 };
 
 } // namespace facebook::velox::ucx_exchange
