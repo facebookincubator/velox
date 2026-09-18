@@ -81,7 +81,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
-    IcebergParquetStatsTest.cpp
     IcebergSessionCredentialsE2ETest.cpp
     IcebergTestBase.cpp
     Main.cpp
@@ -211,6 +210,11 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_hive_iceberg_insert_test
       velox_dwio_parquet_reader
       velox_dwio_parquet_writer
+    )
+
+    target_sources(
+      velox_hive_iceberg_insert_test
+      PRIVATE IcebergParquetStatsTest.cpp
     )
   endif()
 
