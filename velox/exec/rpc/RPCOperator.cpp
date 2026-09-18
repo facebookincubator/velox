@@ -643,6 +643,9 @@ void RPCOperator::recordCongestion(
   }
   if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
     state_->onUnitSamples(roundTripTimesNs);
+  }
+  if (signal == AsyncRPCFunction::CongestionSignal::kSuccess ||
+      signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency) {
     limiter_->onOutcome(RPCRateLimiter::Outcome::kSuccess, successUnits);
   }
 }

@@ -147,6 +147,14 @@ class UnsetPerRowRPCFunction : public DemoAsyncRPCFunction {
   }
 };
 
+class NoLatencySuccessBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& /*responses*/) const override {
+    return CongestionSignal::kSuccessNoLatency;
+  }
+};
+
 // Declares a per-request byte budget and reports a fixed number of rows that
 // fit it, so the operator must chunk a large backlog to keep each request
 // under the cap. Records every flush's row count so the test can assert no
@@ -218,6 +226,10 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "invalid_admission_batch_rpc",
         []() { return std::make_shared<InvalidAdmissionBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "no_latency_success_batch_rpc",
+        []() { return std::make_shared<NoLatencySuccessBatchRPCFunction>(); },
         DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc",
@@ -979,6 +991,41 @@ TEST_F(RPCOperatorTest, batchAimdRecoversPerBatchNotPerRow) {
       << " over " << kNumBatches
       << " successful batches; additive increase on a batch-denominated "
          "capacity must be one step per batch";
+}
+
+TEST_F(
+    RPCOperatorTest,
+    batchSuccessWithoutLatencyRecoversLimiterWithoutRttSample) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int64_t kRows = 8;
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce([](RPCRateLimiter::Config& config) {
+    config.ceiling = kCeiling;
+    config.adaptive = true;
+    config.floor = 1;
+    config.decreaseFactor = 0.5;
+  });
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
+  ASSERT_EQ(limiter.stats().capacity, 4);
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>({"0", "1", "2", "3", "4", "5", "6", "7"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "no_latency_success_batch_rpc",
+      /*dispatchBatchSize=*/1);
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kRows);
+
+  EXPECT_EQ(limiter.stats().capacity, kCeiling);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  EXPECT_EQ(customStats.count(RPCOperator::kRpcBaselineRttNanos), 0);
 }
 
 // The low-water capacity lands on every query, not only the ones where the
