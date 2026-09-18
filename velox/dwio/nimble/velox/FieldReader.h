@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <span>
+
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
@@ -116,6 +118,13 @@ class FieldReader {
       uint32_t count,
       velox::VectorPtr& output,
       const velox::bits::Bitmap* scatterBitmap = nullptr) = 0;
+
+  /// Reads absolute source rows and maps the dense decoded values to the
+  /// specified output ranges.
+  virtual folly::coro::Task<void> co_read(
+      std::span<const uint32_t> rows,
+      std::span<const velox::BaseVector::CopyRange> ranges,
+      velox::VectorPtr& output);
 
   /// Advances past count rows without materializing output.
   virtual folly::coro::Task<void> co_skip(uint32_t count) = 0;
