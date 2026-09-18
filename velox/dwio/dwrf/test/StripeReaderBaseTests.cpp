@@ -118,22 +118,22 @@ class StripeLoadKeysTest : public Test {
 
 } // namespace facebook::velox::dwrf
 
-TEST_F(StripeLoadKeysTest, FirstStripeHasKey) {
+TEST_F(StripeLoadKeysTest, firstStripeHasKey) {
   runTest(0);
   ASSERT_EQ(enc_->getKey(), "stripe0");
 }
 
-TEST_F(StripeLoadKeysTest, SecondStripeNoKey) {
+TEST_F(StripeLoadKeysTest, secondStripeNoKey) {
   runTest(1);
   ASSERT_EQ(enc_->getKey(), "stripe0");
 }
 
-TEST_F(StripeLoadKeysTest, ThirdStripeHasKey) {
+TEST_F(StripeLoadKeysTest, thirdStripeHasKey) {
   runTest(2);
   ASSERT_EQ(enc_->getKey(), "stripe2");
 }
 
-TEST_F(StripeLoadKeysTest, KeyMismatch) {
+TEST_F(StripeLoadKeysTest, keyMismatch) {
   try {
     static_cast<void>(runTest(3));
     FAIL() << "Expected an exception";

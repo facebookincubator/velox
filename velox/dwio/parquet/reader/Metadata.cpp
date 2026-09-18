@@ -241,10 +241,11 @@ std::optional<Timestamp> int64ToTimestamp(
   }
   if (logicalType.has_value() &&
       logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP) {
-    const auto& unit = logicalType->get_TIMESTAMP().unit();
-    if (unit->getType() == thrift::TimeUnit::Type::MILLIS) {
+    auto unit = logicalType->get_TIMESTAMP().unit();
+    const auto unitType = unit->getType();
+    if (unitType == thrift::TimeUnit::Type::MILLIS) {
       return Timestamp::fromMillis(value.value());
-    } else if (unit->getType() == thrift::TimeUnit::Type::NANOS) {
+    } else if (unitType == thrift::TimeUnit::Type::NANOS) {
       return Timestamp::fromNanos(value.value());
     }
     return Timestamp::fromMicros(value.value());
@@ -420,6 +421,13 @@ bool ColumnChunkMetaDataPtr::hasDictionaryPageOffset() const {
           .has_value();
 }
 
+bool ColumnChunkMetaDataPtr::hasIndexPage() const {
+  return hasMetadata() &&
+      apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
+          ->index_page_offset()
+          .has_value();
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics>
 ColumnChunkMetaDataPtr::getColumnStatistics(
     const TypePtr type,
@@ -513,6 +521,13 @@ int64_t ColumnChunkMetaDataPtr::totalUncompressedSize() const {
   return apache::thrift::can_throw(
       *apache::thrift::can_throw(thriftColumnChunkPtr(ptr_)->meta_data())
            ->total_uncompressed_size());
+}
+
+uint64_t ColumnChunkMetaDataPtr::readSize() const {
+  return static_cast<uint64_t>(
+      compression() == common::CompressionKind::CompressionKind_NONE
+          ? totalUncompressedSize()
+          : totalCompressedSize());
 }
 
 FOLLY_ALWAYS_INLINE const thrift::RowGroup* thriftRowGroupPtr(

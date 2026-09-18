@@ -430,7 +430,7 @@ void SelectiveStringDirectColumnReader::readWithVisitor(
       std::is_same_v<typename TVisitor::Extract, dwio::common::ExtractToReader>;
   auto nulls = nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
 
-  if (process::hasAvx2() && isExtract) {
+  if (process::hasSimd() && isExtract) {
     if (nullsInReadRange_) {
       if (TVisitor::dense) {
         returnReaderNulls_ = true;

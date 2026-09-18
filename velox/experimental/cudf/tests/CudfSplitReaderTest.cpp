@@ -34,7 +34,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
   using CudfSplitReader::CudfSplitReader;
 
   cudf::ast::expression const* logicalFilter() const {
-    return subfieldFilter();
+    return subfieldFilterAst();
   }
 
   cudf::ast::expression const* splitFilter() const {
@@ -47,7 +47,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 
  protected:
   void prepareSplitInternal(
-      dwio::common::RuntimeStatistics& /*runtimeStats*/) override {
+      dwio::common::RuntimeStats& /*runtimeStats*/) override {
     fileMetaDatas();
     // Metadata caching must not rebuild the filter during one preparation.
     fileMetaDatas();
@@ -125,7 +125,7 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   EXPECT_EQ(reader.splitFilter(), &logicalFilter);
   EXPECT_FALSE(reader.hasSplitFilter());
 
-  dwio::common::RuntimeStatistics runtimeStats;
+  dwio::common::RuntimeStats runtimeStats;
   reader.prepareSplit(runtimeStats);
   EXPECT_EQ(builderCalls, 1);
   ASSERT_EQ(schemaSizes.size(), 1);

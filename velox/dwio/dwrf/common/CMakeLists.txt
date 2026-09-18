@@ -45,6 +45,7 @@ velox_add_library(
   FloatingPointDecoder.h
   IntEncoder.h
   NextVisitor.h
+  DwrfRuntimeStats.h
   RLEv1.h
   RLEv2.h
   Statistics.h

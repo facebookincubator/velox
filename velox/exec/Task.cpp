@@ -28,6 +28,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/LocalPlanner.h"
@@ -377,7 +378,8 @@ std::shared_ptr<Task> Task::create(
     Consumer consumer,
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
-    std::function<void(std::exception_ptr)> onError) {
+    std::function<void(std::exception_ptr)> onError,
+    const FixedPointOptions* fixedPointOptions) {
   return Task::create(
       taskId,
       std::move(planFragment),
@@ -388,7 +390,8 @@ std::shared_ptr<Task> Task::create(
                 : ConsumerSupplier{}),
       memoryArbitrationPriority,
       std::move(spillDiskOpts),
-      std::move(onError));
+      std::move(onError),
+      fixedPointOptions);
 }
 
 // static
@@ -401,8 +404,22 @@ std::shared_ptr<Task> Task::create(
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
-    std::function<void(std::exception_ptr)> onError) {
+    std::function<void(std::exception_ptr)> onError,
+    const FixedPointOptions* fixedPointOptions) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
+  // A plan containing a FixedPointNode runs as a schedule of sub-tasks rather
+  // than a Driver pipeline.  The loop is built after the Task so it can hold
+  // its owner -- which outlives it -- and before init(), which skips compiling
+  // drivers when there is one.  Note the owner is constructed but not yet
+  // initialized here: pool() is assigned in init(), below.
+  const bool isFixedPoint =
+      FixedPointLoop::claims(planFragment, fixedPointOptions);
+  // An enclosing loop names itself here when it creates a sub-task, so the
+  // link is fixed before anything can observe the task.
+  FixedPointLoop* const parentFixedPoint =
+      (fixedPointOptions != nullptr && fixedPointOptions->nested.has_value())
+      ? fixedPointOptions->nested->parent
+      : nullptr;
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -411,7 +428,12 @@ std::shared_ptr<Task> Task::create(
       mode,
       std::move(consumerSupplier),
       memoryArbitrationPriority,
-      std::move(onError)));
+      std::move(onError),
+      parentFixedPoint));
+  if (isFixedPoint) {
+    task->fixedPoint_ =
+        std::make_unique<FixedPointLoop>(task.get(), fixedPointOptions);
+  }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();
   return task;
@@ -425,7 +447,8 @@ Task::Task(
     ExecutionMode mode,
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
-    std::function<void(std::exception_ptr)> onError)
+    std::function<void(std::exception_ptr)> onError,
+    FixedPointLoop* parentFixedPoint)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -437,6 +460,7 @@ Task::Task(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
+      parentFixedPoint_(parentFixedPoint),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
@@ -487,6 +511,9 @@ Task::~Task() {
 #define CLEAR(_action_)   \
   clearStage = #_action_; \
   _action_;
+  // Before pool_ and queryCtx_ are released below: the executor tears down
+  // sub-tasks and state that reach back through the owning task.
+  CLEAR(fixedPoint_.reset());
   CLEAR(threadFinishPromises_.clear());
   CLEAR(splitGroupStates_.clear());
   CLEAR(taskStats_ = TaskStats());
@@ -531,6 +558,12 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
   setSpillDiskConfig(std::move(spillDiskOpts));
 
   if (mode_ != Task::ExecutionMode::kSerial) {
+    return;
+  }
+
+  if (fixedPoint_ != nullptr) {
+    // The fixed point runs this plan itself as a schedule of sub-tasks; do not
+    // compile it into a Driver pipeline.
     return;
   }
 
@@ -674,14 +707,10 @@ bool Task::allNodesReceivedNoMoreSplitsMessageLocked() const {
 }
 
 const std::string& Task::getOrCreateSpillDirectory() {
+  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
   VELOX_CHECK(
       !spillDirectory_.empty() || spillDirectoryCallback_,
       "Spill directory or spill directory callback must be set");
-  if (spillDirectoryCreated_) {
-    return spillDirectory_;
-  }
-
-  std::lock_guard<std::mutex> l(spillDirCreateMutex_);
   if (spillDirectoryCreated_) {
     return spillDirectory_;
   }
@@ -709,16 +738,22 @@ const std::string& Task::getOrCreateSpillDirectory() {
 }
 
 void Task::removeSpillDirectoryIfExists() {
-  if (spillDirectory_.empty() || !spillDirectoryCreated_) {
-    return;
+  {
+    std::lock_guard<std::mutex> l(spillDirCreateMutex_);
+    if (spillDirectory_.empty() || !spillDirectoryCreated_) {
+      return;
+    }
+    try {
+      auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
+      fs->rmdir(spillDirectory_);
+      spillDirectoryCreated_ = false;
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
+                 << "' for Task " << taskId() << ": " << e.what();
+    }
   }
-  try {
-    auto fs = filesystems::getFileSystem(spillDirectory_, nullptr);
-    fs->rmdir(spillDirectory_);
-  } catch (const std::exception& e) {
-    LOG(ERROR) << "Failed to remove spill directory '" << spillDirectory_
-               << "' for Task " << taskId() << ": " << e.what();
-  }
+  TestValue::adjust(
+      "facebook::velox::exec::Task::removeSpillDirectoryIfExists", this);
 }
 
 uint64_t Task::driverCpuTimeSliceLimitMs() const {
@@ -992,6 +1027,25 @@ bool Task::supportSerialExecutionMode() const {
 }
 
 RowVectorPtr Task::next(ContinueFuture* future) {
+  if (fixedPoint_ != nullptr) {
+    // Same invariant as the driver path below: next() is the serial API.
+    checkExecutionMode(ExecutionMode::kSerial);
+    RowVectorPtr batch;
+    try {
+      batch = fixedPoint_->next(future);
+    } catch (...) {
+      // No driver reports the failure for a fixed point, so record it here;
+      // state() and error() then read as they would for a driver-based task.
+      setError(std::current_exception());
+      throw;
+    }
+    if (batch == nullptr) {
+      // Drained.  Nothing else moves the task off kRunning on this path, so
+      // taskCompletionFuture() would never resolve.
+      terminate(TaskState::kFinished);
+    }
+    return batch;
+  }
   recordBatchStartTime();
 
   checkExecutionMode(ExecutionMode::kSerial);
@@ -1114,6 +1168,29 @@ void Task::recordBatchEndTime() {
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
+  if (fixedPoint_ != nullptr) {
+    // Same invariant as the driver path below: start() is the parallel API.
+    checkExecutionMode(ExecutionMode::kParallel);
+    try {
+      fixedPoint_->start(
+          maxDrivers,
+          concurrentSplitGroups,
+          [self = shared_from_this()](std::exception_ptr error) {
+            if (error != nullptr) {
+              self->setError(error);
+            } else {
+              self->terminate(TaskState::kFinished);
+            }
+          });
+    } catch (...) {
+      // The loop rejected the start before it could schedule anything -- a
+      // missing orchestration executor, say.  Without this the task would stay
+      // kRunning for ever with no error recorded.
+      setError(std::current_exception());
+      throw;
+    }
+    return;
+  }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -1645,6 +1722,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
 
   if (allFinished) {
     self->terminate(TaskState::kFinished);
+    self->removeSpillDirectoryIfExists();
   }
 }
 
@@ -1746,6 +1824,12 @@ bool Task::addSplitWithSequence(
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
+  if (fixedPoint_ != nullptr) {
+    // The loop routes the split to whichever sub-task consumes it; there
+    // is no driver source operator to deliver it to.
+    fixedPoint_->addSplit(planNodeId, std::move(split));
+    return;
+  }
   bool isTaskRunning;
   bool shouldLogSplit = false;
   std::vector<ContinuePromise> promises;
@@ -1870,9 +1954,13 @@ void Task::noMoreSplitsForGroup(
 }
 
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
+  if (fixedPoint_ != nullptr) {
+    fixedPoint_->noMoreSplits(planNodeId);
+    return;
+  }
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
-  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::shared_ptr<InMemoryExchangeClient> exchangeClient;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2681,7 +2769,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier taskCompletionNotifier;
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
-  std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
+  std::vector<std::shared_ptr<InMemoryExchangeClient>> exchangeClients;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -3768,7 +3856,7 @@ void Task::createExchangeClientLocked(
       planNodeId);
   // Low-water mark for filling the exchange queue is 1/2 of the per worker
   // buffer size of the producers.
-  exchangeClients_[pipelineId] = std::make_shared<ExchangeClient>(
+  exchangeClients_[pipelineId] = std::make_shared<InMemoryExchangeClient>(
       taskId_,
       destination_,
       queryCtx()->queryConfig().maxExchangeBufferSize(),
@@ -3782,7 +3870,7 @@ void Task::createExchangeClientLocked(
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
 }
 
-std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
+std::shared_ptr<InMemoryExchangeClient> Task::getExchangeClientLocked(
     const core::PlanNodeId& planNodeId) const {
   auto it = exchangeClientByPlanNode_.find(planNodeId);
   if (it == exchangeClientByPlanNode_.end()) {
@@ -3791,7 +3879,7 @@ std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
   return it->second;
 }
 
-std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
+std::shared_ptr<InMemoryExchangeClient> Task::getExchangeClientLocked(
     int32_t pipelineId) const {
   VELOX_CHECK_LT(pipelineId, exchangeClients_.size());
   return exchangeClients_[pipelineId];

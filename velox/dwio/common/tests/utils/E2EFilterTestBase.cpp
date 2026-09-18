@@ -505,7 +505,7 @@ void E2EFilterTestBase::readWithFilter(
   }
   OwnershipChecker ownershipChecker;
   auto rowReader = reader->createRowReader(rowReaderOpts);
-  runtimeStats_ = dwio::common::RuntimeStatistics();
+  runtimeStats_ = dwio::common::RuntimeStats();
   auto rowIndex = 0;
   auto resultBatch = BaseVector::create(rowType_, 1, leafPool_.get());
   resetReadBatchSizes();

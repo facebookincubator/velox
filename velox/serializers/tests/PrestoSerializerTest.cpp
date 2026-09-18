@@ -1130,6 +1130,42 @@ TEST_P(PrestoSerializerTest, multiPage) {
   }
 }
 
+TEST_P(PrestoSerializerTest, appendDeserializeInvalidatesNullCount) {
+  const auto options = getParamSerdeOptions(nullptr);
+  RowVectorPtr result;
+  const auto deserializePage = [&](const RowVectorPtr& page,
+                                   vector_size_t resultOffset) {
+    std::ostringstream out;
+    serialize(page, &out, nullptr);
+    const auto serialized = out.str();
+    auto input = toByteStream(serialized);
+    serde_->deserialize(
+        input.get(),
+        pool_.get(),
+        asRowType(page->type()),
+        &result,
+        resultOffset,
+        &options);
+  };
+
+  // Overwrite a nullable result to establish a cached zero null count.
+  deserializePage(
+      makeRowVector({makeNullableFlatVector<int64_t>({0, std::nullopt})}), 0);
+  const auto first = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  deserializePage(first, 0);
+  ASSERT_EQ(0, result->childAt(0)->getNullCount());
+
+  deserializePage(
+      makeRowVector({makeNullableFlatVector<int64_t>(
+          {3, std::nullopt, 4, std::nullopt, 5})}),
+      result->size());
+  EXPECT_FALSE(result->childAt(0)->getNullCount().has_value());
+
+  auto expected = makeRowVector({makeNullableFlatVector<int64_t>(
+      {1, 2, 3, std::nullopt, 4, std::nullopt, 5})});
+  assertEqualVectors(expected, result);
+}
+
 TEST_P(PrestoSerializerTest, timestampWithNanosecondPrecision) {
   // Verify that nanosecond precision is preserved when the right options are
   // passed to the serde.
@@ -1555,6 +1591,36 @@ TEST_P(PrestoSerializerTest, opaqueBatchVectorSerializer) {
   auto rowType = asRowType(inputRowVector->type());
   auto deserialized = deserialize(rowType, out.str(), nullptr);
   assertEqualVectors(inputRowVector, deserialized);
+}
+
+TEST_P(PrestoSerializerTest, opaqueNestedInRowBatchVectorSerializer) {
+  OpaqueType::registerSerialization<Foo>(
+      "Foo", Foo::serialize, Foo::deserialize);
+  auto opaqueVector = makeFlatVector<std::shared_ptr<void>>(
+      3,
+      [](vector_size_t row) { return Foo::create(row + 10); },
+      [](vector_size_t row) { return row == 1; },
+      OPAQUE<Foo>());
+  // Nesting the opaque column inside an inner row makes deserialization run the
+  // struct-nulls pass, which dispatches through a reader table separate from
+  // the one used to read values. The null inner row is omitted from the child
+  // by the serializer, so deserialization has to restore the gap.
+  auto innerRow = makeRowVector({opaqueVector});
+  innerRow->setNull(0, true);
+  auto inputRowVector = makeRowVector({innerRow});
+  auto rowType = asRowType(inputRowVector->type());
+
+  for (const bool nullsFirst : {false, true}) {
+    SCOPED_TRACE(fmt::format("nullsFirst: {}", nullsFirst));
+    serializer::presto::PrestoVectorSerde::PrestoOptions serdeOptions;
+    serdeOptions.nullsFirst = nullsFirst;
+
+    std::ostringstream out;
+    serializeBatch(inputRowVector, &out, &serdeOptions);
+
+    auto deserialized = deserialize(rowType, out.str(), &serdeOptions);
+    assertEqualVectors(inputRowVector, deserialized);
+  }
 }
 
 TEST_P(PrestoSerializerTest, opaqueInteractiveVectorSerializer) {

@@ -50,7 +50,9 @@ StreamingAggregation::StreamingAggregation(
           operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes()},
       aggregationNode_{aggregationNode},
       step_{aggregationNode->step()},
-      noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()} {
+      noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()},
+      mayRetainInput_{aggregationNode_->mayRetainInput().value_or(
+          aggregationNode_->noGroupsSpanBatches())} {
   if (aggregationNode_->ignoreNullKeys()) {
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
@@ -101,12 +103,16 @@ void StreamingAggregation::initialize() {
     }
   }
 
-  if (isRawInput(step_)) {
+  // Retaining a reference to the input instead of copying is only bounded when
+  // no group spans batches, since the reference is dropped once the group's
+  // output is produced. A plan that sets mayRetainInput takes on that memory
+  // itself.
+  if (isRawInput(step_) && mayRetainInput_) {
     for (column_index_t i = 0; i < aggregates_.size(); ++i) {
       if (aggregates_[i].sortingKeys.empty() && !aggregates_[i].distinct) {
         // Must be set before we initialize row container, because it could
         // change the type and size of accumulator.
-        aggregates_[i].function->setClusteredInput(true);
+        aggregates_[i].function->setCanRetainInput(true);
       }
     }
   }
@@ -335,7 +341,7 @@ void StreamingAggregation::evaluateAggregates() {
   }
 
   if (sortedAggregations_) {
-    sortedAggregations_->addInput(inputGroups_.data(), input_);
+    sortedAggregations_->addInput(inputGroups_.data(), input_, inputRows_);
   }
 }
 

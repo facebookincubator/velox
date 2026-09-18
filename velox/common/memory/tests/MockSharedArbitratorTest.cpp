@@ -22,6 +22,7 @@
 #include <deque>
 #include <vector>
 #include "folly/synchronization/EventCount.h"
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
@@ -42,22 +43,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 
 namespace facebook::velox::memory {
-// Class to write runtime stats in the tests to the stats container.
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  explicit TestRuntimeStatWriter(
-      std::unordered_map<std::string, RuntimeMetric>& stats)
-      : stats_{stats} {}
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    addOperatorRuntimeStats(name, value, stats_);
-  }
-
- private:
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
-};
-
 constexpr int64_t KB = 1024L;
 constexpr int64_t MB = 1024L * KB;
 
@@ -1446,10 +1431,10 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationsFromSameQuery) {
 
   std::atomic_int allocationCount{0};
   auto runThread = std::thread([&]() {
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     runPool->allocate(memoryCapacity / 2);
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -1471,10 +1456,10 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, localArbitrationsFromSameQuery) {
 
   auto waitThread = std::thread([&]() {
     allocationWait.await([&]() { return !allocationWaitFlag.load(); });
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     waitPool->allocate(memoryCapacity / 2 + MB);
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -1548,11 +1533,11 @@ DEBUG_ONLY_TEST_F(
 
   std::atomic_int allocationCount{0};
   auto taskThread1 = std::thread([&]() {
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     op1->allocate(MB);
     ASSERT_EQ(task1->capacity(), 8 * MB);
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -1573,11 +1558,11 @@ DEBUG_ONLY_TEST_F(
   });
 
   auto taskThread2 = std::thread([&]() {
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     op2->allocate(MB);
     ASSERT_EQ(task2->capacity(), 8 * MB);
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -1801,9 +1786,8 @@ DEBUG_ONLY_TEST_F(
        .memoryPoolReserveCapacity = memoryPoolReservedCapacity});
 
   auto globalArbitrationTriggerThread = std::thread([&]() {
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
 
     std::vector<std::shared_ptr<MockTask>> tasks;
     std::vector<MockMemoryOperator*> ops;
@@ -1817,6 +1801,7 @@ DEBUG_ONLY_TEST_F(
       ops[i]->allocate(memoryPoolCapacity);
     }
     // We expect global arbitration has been triggered.
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_GE(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -1921,9 +1906,8 @@ DEBUG_ONLY_TEST_F(
           })));
 
   auto globalArbitrationTriggerThread = std::thread([&]() {
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
 
     std::vector<std::shared_ptr<MockTask>> tasks;
     std::vector<MockMemoryOperator*> ops;
@@ -1937,6 +1921,7 @@ DEBUG_ONLY_TEST_F(
       ops[i]->allocate(memoryPoolCapacity);
     }
     // We expect global arbitration has been triggered.
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_GE(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -1975,9 +1960,8 @@ DEBUG_ONLY_TEST_F(
   globalArbitrationStartWait.await(
       [&]() { return globalArbitrationStarted.load(); });
 
-  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-  auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-  setThreadLocalRunTimeStatWriter(statsWriter.get());
+  ConcurrentRuntimeStatWriter statsWriter;
+  setThreadLocalRunTimeStatWriter(&statsWriter);
 
   localArbitrationOp->allocate(memoryPoolReservedCapacity);
   // Inject some delay for global arbitration.
@@ -1987,6 +1971,7 @@ DEBUG_ONLY_TEST_F(
 
   globalArbitrationTriggerThread.join();
   ASSERT_EQ(localArbitrationOp->capacity(), memoryPoolReservedCapacity);
+  auto runtimeStats = statsWriter.runtimeStats();
   ASSERT_EQ(
       runtimeStats[std::string(SharedArbitrator::kGlobalArbitrationWaitCount)]
           .count,
@@ -2043,13 +2028,13 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, globalArbitrationAbortTimeRatio) {
                   std::chrono::nanoseconds(pauseTimeNs));
             })));
 
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     const auto prevGlobalArbitrationRuns =
         arbitratorHelper.globalArbitrationRuns();
     op1->allocate(memoryCapacity / 2);
 
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -2109,11 +2094,11 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationWithoutSpill) {
   abortOp->allocate(memoryCapacity / 2);
   ASSERT_EQ(triggerTask->capacity(), memoryCapacity / 2);
 
-  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-  auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-  setThreadLocalRunTimeStatWriter(statsWriter.get());
+  ConcurrentRuntimeStatWriter statsWriter;
+  setThreadLocalRunTimeStatWriter(&statsWriter);
   triggerOp->allocate(memoryCapacity / 2);
 
+  auto runtimeStats = statsWriter.runtimeStats();
   ASSERT_EQ(
       runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
           .count,
@@ -2164,15 +2149,15 @@ TEST_F(MockSharedArbitrationTest, globalArbitrationSmallParticipantLargeGrow) {
   op1->allocate(kMemoryCapacity / 2);
   ASSERT_EQ(task0->capacity(), kMemoryCapacity / 2);
 
-  std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-  auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-  setThreadLocalRunTimeStatWriter(statsWriter.get());
+  ConcurrentRuntimeStatWriter statsWriter;
+  setThreadLocalRunTimeStatWriter(&statsWriter);
 
   // task0 has 256MB + 256MB (attempt) = 512MB in top abort capacity limit
   // bucket, which shall be evaluated first, and hence killed by global
   // arbitration.
   VELOX_ASSERT_THROW(op0->allocate(kMemoryCapacity / 2), "aborted");
 
+  auto runtimeStats = statsWriter.runtimeStats();
   ASSERT_EQ(
       runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
           .count,
@@ -2392,10 +2377,10 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, multipleGlobalRuns) {
   std::atomic_int allocations{0};
   auto waitThread = std::thread([&]() {
     allocationWait.await([&]() { return !allocationWaitFlag.load(); });
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     waitPool->allocate(memoryCapacity / 2);
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,
@@ -2420,10 +2405,10 @@ DEBUG_ONLY_TEST_F(MockSharedArbitrationTest, multipleGlobalRuns) {
   });
 
   auto runThread = std::thread([&]() {
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats;
-    auto statsWriter = std::make_unique<TestRuntimeStatWriter>(runtimeStats);
-    setThreadLocalRunTimeStatWriter(statsWriter.get());
+    ConcurrentRuntimeStatWriter statsWriter;
+    setThreadLocalRunTimeStatWriter(&statsWriter);
     runPool->allocate(memoryCapacity / 2);
+    auto runtimeStats = statsWriter.runtimeStats();
     ASSERT_EQ(
         runtimeStats[std::string(SharedArbitrator::kMemoryArbitrationWallNanos)]
             .count,

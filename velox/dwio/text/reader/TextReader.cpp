@@ -317,7 +317,7 @@ int64_t TextRowReader::nextReadSize(uint64_t size) {
 }
 
 void TextRowReader::updateRuntimeStats(
-    dwio::common::RuntimeStatistics& /*stats*/) const {
+    dwio::common::RuntimeStats& /*stats*/) const {
   // No-op for non-selective reader.
 }
 

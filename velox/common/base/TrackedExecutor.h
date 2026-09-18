@@ -67,8 +67,8 @@ class TrackedExecutor final : public folly::Executor {
     return executor_->getNumPriorities();
   }
 
-  /// Reports accumulated metrics to 'writer', naming each 'prefix-<metric>'.
-  void reportTo(BaseRuntimeStatWriter& writer, std::string_view prefix) const;
+  /// Reports accumulated metrics to 'writer' under the kExecutor* names.
+  void reportTo(BaseRuntimeStatWriter& writer) const;
 
  private:
   // Instruments 'func' to record its enqueue-wait, wall, and cpu time into

@@ -34,6 +34,11 @@ void RuntimeMetric::aggregate() {
   min = max = sum;
 }
 
+void RuntimeMetric::merge(const RuntimeCounter& value) {
+  VELOX_CHECK_EQ(unit, value.unit, "Unit mismatch for runtime stat");
+  addValue(value.value);
+}
+
 void RuntimeMetric::merge(const RuntimeMetric& other)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)

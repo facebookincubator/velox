@@ -95,7 +95,7 @@ TEST_F(VarianceAggregationTest, stddev) {
   testVarianceAggregate("stddev");
 }
 
-TEST_F(VarianceAggregationTest, stddev_samp) {
+TEST_F(VarianceAggregationTest, stddevSamp) {
   testVarianceAggregate("stddev_samp");
 }
 
@@ -103,7 +103,7 @@ TEST_F(VarianceAggregationTest, variance) {
   testVarianceAggregate("variance");
 }
 
-TEST_F(VarianceAggregationTest, var_samp) {
+TEST_F(VarianceAggregationTest, varSamp) {
   testVarianceAggregate("var_samp");
 }
 

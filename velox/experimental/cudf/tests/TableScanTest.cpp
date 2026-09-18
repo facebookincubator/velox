@@ -246,7 +246,17 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
                     .endTableScan()
                     .planNode();
 
-    assertQuery(plan, {filePath}, "SELECT * FROM tmp");
+    for (const bool experimental : {false, true}) {
+      SCOPED_TRACE(experimental);
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kUseExperimentalCudfReaderSession,
+              experimental ? "true" : "false")
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .assertResults("SELECT * FROM tmp");
+    }
   }
 
   RowTypePtr rowType_{
@@ -498,7 +508,7 @@ TEST_F(TableScanTest, filterPushdown) {
           .endTableScan()
           .planNode(),
       filePaths,
-      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 ) AND c3");
+      "SELECT c1, c3, c0 FROM tmp WHERE (c1 >= 0 OR c1 IS NULL) AND c3");
 
   auto tableScanStats = getTableScanStats(task);
   // EXPECT_EQ(tableScanStats.rawInputRows, 10'000);

@@ -7,6 +7,14 @@ description: Draft a commit message for a Velox commit. Use when the user asks t
 
 Drafts a commit message that follows the rules in `CODING_STYLE.md` and `CLAUDE.md` at the repo root. The rules there are authoritative — this skill is the workflow for applying them.
 
+## Guiding principle
+
+**Write to orient a reviewer, not to defend the change.** A commit message's job is to orient the reader to the change — not to enumerate every affected file, restate every claim at multiple abstraction levels, or hedge against "you didn't mention X". The diff and the version-control history are the system of record. The message picks the smallest set of facts the reader needs to navigate the diff, and stops.
+
+Apply the **would-I-say-this-aloud** test to every sentence: read it as if briefing a teammate verbally. Sentences that exist to prove a claim, recite enum values, attribute jargon to a subsystem, or acknowledge symbols by name die on first contact with speech. Sentences that orient — "this query failed", "Velox doesn't support it", "treat it as a regular function call" — survive. If a sentence wouldn't survive being spoken aloud, delete it.
+
+The per-pattern rules below all derive from this principle. If a draft passes the rules but still reads like a legal brief, trust the principle and trim further.
+
 ## Process
 
 1. **Read the rules** — Open `CODING_STYLE.md` and `CLAUDE.md` and re-read the commit-message sections. Do not draft from memory.
@@ -36,6 +44,14 @@ Drafts a commit message that follows the rules in `CODING_STYLE.md` and `CLAUDE.
    - Prefer short sentences. If a sentence has two clauses joined by "so", "because", "but", "even though", "although", or a comma + participle, consider splitting it. Contrastive joiners ("but X", "even though Y") are especially risky when both halves introduce a fact the reader does not already have — pack two new facts into one sentence and the reader stalls. State each rule in its own sentence, then connect them.
    - Avoid stacked abstractions like "left the outer scope advertising the column as X" or "the projection inherits the source's reverseLookup names". Replace with a concrete chain.
    - Avoid compiler/optimizer/execution-engine jargon ("outer reference", "outer scope", "binding context", "name resolution scope", "vector encoding") unless the rest of the paragraph already established it. If you must use it, define it inline with a tiny example.
+   - State what is. A sentence built on "no", "not", "nothing", "nobody", "neither", "never" or "without" makes the reader construct the missing thing before they learn the present one. Name what exists and what it does. Negation earns its place when absence is the fact being reported, as in "a call in a lambda body cannot become a node".
+     - ❌ Nothing in the optimizer looked for these functions, so it had nothing to resolve against.
+     - ✅ These functions live in the inference registry, which the optimizer looked past.
+     - ❌ Neither the server nor the CLI links the function libraries.
+     - ✅ The server and the CLI now link the function libraries.
+   - End a sentence on what the reader needs. A trailing contrast leaves them holding the version you rejected, and the clause they must keep is no longer the last thing they read. State the fact and stop. Contrast only where a reader would otherwise apply the wrong rule, and then put the correction last.
+     - ❌ The node reads the call's arguments as columns of its input, not as expressions of the projection above it.
+     - ✅ The node reads the call's arguments as columns of its input.
    - Prefer plain verbs (`used`, `dropped`, `kept`) over jargon verbs (`advertise`, `surface`, `propagate`, `materialize`) unless the jargon is the precise term.
    - Avoid hyphenated compound-noun stacks ("user-written case", "lookup-based fallback", "context-aware resolver"). They require the reader to unpack a modifier chain before getting to the noun. Rewrite as a relative clause ("the case the user wrote") or a single concrete noun.
    - Prefer the word with one obvious meaning in this context. "Case" can mean legal case, match case, or upper/lower case — use "capitalization" when you mean letter case. Similarly: "operator" vs "function", "key" vs "column", "type" vs "kind" — pick the one a SQL reader and a C++ reader both interpret the same way.
@@ -78,6 +94,7 @@ Drafts a commit message that follows the rules in `CODING_STYLE.md` and `CLAUDE.
    - [ ] Reads in ~30 seconds.
    - [ ] Length matches the change. Trivial changes are not padded to standard length; standard changes are not condensed to one line.
    - [ ] Prose clarity: no sentence longer than ~30 words; no stacked abstractions ("X advertising Y", "scope of Z"). Each sentence is parseable on first read.
+   - [ ] Every sentence states what is, and ends on what the reader needs — no leading absence, no trailing contrast.
 
    If any item fails, fix the draft before showing.
 

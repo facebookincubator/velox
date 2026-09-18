@@ -18,11 +18,11 @@
 #include <algorithm>
 #include <memory>
 
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -38,21 +38,6 @@ using namespace facebook::velox::common::testutil;
 namespace {
 static const int64_t kGB = 1'000'000'000;
 
-// Class to write runtime stats in the tests to the stats container.
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  explicit TestRuntimeStatWriter(
-      std::unordered_map<std::string, RuntimeMetric>& stats)
-      : stats_{stats} {}
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    addOperatorRuntimeStats(name, value, stats_);
-  }
-
- private:
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
-};
 } // namespace
 
 struct TestParam {
@@ -86,9 +71,8 @@ inline void PrintTo(const TestParam& param, std::ostream* os) {
 class SpillTest : public ::testing::TestWithParam<uint32_t>,
                   public facebook::velox::test::VectorTestBase {
  public:
-  explicit SpillTest()
-      : statWriter_(std::make_unique<TestRuntimeStatWriter>(runtimeStats_)) {
-    setThreadLocalRunTimeStatWriter(statWriter_.get());
+  explicit SpillTest() {
+    setThreadLocalRunTimeStatWriter(&statWriter_);
     updateSpilledBytesCb_ = [&](uint64_t) {};
   }
 
@@ -240,7 +224,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     state_.reset();
     batchesByPartition_.clear();
     values_.clear();
-    runtimeStats_.clear();
+    statWriter_.clear();
     spillStats_.reset();
 
     fileNamePrefix_ = "test";
@@ -607,10 +591,12 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       ASSERT_TRUE(fs->exists(spilledFile));
     }
     // Verify stats.
+    const auto spillFileSizeCount =
+        statWriter_.runtimeStats().at("spillFileSize").count;
     if (!usePreMerge) {
-      ASSERT_EQ(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+      ASSERT_EQ(spillFileSizeCount, spilledFiles.size());
     } else {
-      ASSERT_GE(runtimeStats_["spillFileSize"].count, spilledFiles.size());
+      ASSERT_GE(spillFileSizeCount, spilledFiles.size());
     }
   }
 
@@ -681,8 +667,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
   std::string fileNamePrefix_;
   exec::SpillStats spillStats_;
   std::unique_ptr<SpillState> state_;
-  std::unordered_map<std::string, RuntimeMetric> runtimeStats_;
-  std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  ConcurrentRuntimeStatWriter statWriter_;
   common::UpdateAndCheckSpillLimitCB updateSpilledBytesCb_;
 };
 

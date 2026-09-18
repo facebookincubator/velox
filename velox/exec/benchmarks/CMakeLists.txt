@@ -56,6 +56,15 @@ add_executable(velox_hash_rows_benchmark HashRowsBenchmark.cpp)
 
 target_link_libraries(velox_hash_rows_benchmark Folly::folly Folly::follybenchmark)
 
+add_executable(velox_row_container_list_rows_benchmark RowContainerListRowsBenchmark.cpp)
+
+target_link_libraries(
+  velox_row_container_list_rows_benchmark
+  velox_exec
+  Folly::folly
+  Folly::follybenchmark
+)
+
 add_executable(velox_hash_benchmark HashTableBenchmark.cpp)
 
 target_link_libraries(
@@ -233,7 +242,7 @@ target_link_libraries(
 
 add_executable(velox_atomics_benchmark AtomicsBench.cpp)
 
-target_link_libraries(velox_atomics_benchmark Folly::follybenchmark)
+target_link_libraries(velox_atomics_benchmark Folly::folly Folly::follybenchmark)
 
 if(VELOX_ENABLE_GEO)
   add_executable(velox_spatial_join_benchmark SpatialJoinBenchmark.cpp)

@@ -29,7 +29,7 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/error.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <arrow/c/bridge.h>
 #include <arrow/io/interfaces.h>
@@ -133,12 +133,35 @@ bool isTypeSupportedByCudf(const TypePtr& type) {
   return tryVeloxToCudfDataType(type).has_value();
 }
 
+bool canMakeCudfDefaultScalar(const TypePtr& type) {
+  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
+    return false;
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
+  }
+}
+
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(
     const facebook::velox::RowVectorPtr& veloxTable,
     facebook::velox::memory::MemoryPool* pool,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
     std::optional<std::string> timestampTimeZone) {
   TimestampUnit unit;
@@ -186,7 +209,7 @@ std::unique_ptr<cudf::table> toCudfTable(
   // which defers reading the host source buffers until the stream reaches
   // each copy.  The Arrow arrays must therefore stay alive until the stream
   // has executed those copies.
-  stream.synchronize();
+  stream.sync();
 
   // Release Arrow resources
   if (arrowArray.release) {
@@ -241,7 +264,7 @@ RowVectorPtr toVeloxColumn(
     memory::MemoryPool* pool,
     const std::vector<cudf::column_metadata>& metadata,
     const RowTypePtr* outputType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // To avoid ownership issues, we make copies of the Arrow objects
   // returned from cuDF as unique_ptrs, then mark the originals as
@@ -333,7 +356,7 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     facebook::velox::memory::MemoryPool* pool,
     std::string namePrefix,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
   return toVeloxColumn(table, pool, metadata, nullptr, stream, mr);
@@ -344,7 +367,7 @@ facebook::velox::RowVectorPtr toVeloxColumn(
     facebook::velox::memory::MemoryPool* pool,
     const facebook::velox::RowTypePtr& outputType,
     std::string namePrefix,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto metadata = getMetadata(table.begin(), table.end(), namePrefix);
   return toVeloxColumn(table, pool, metadata, &outputType, stream, mr);
@@ -355,7 +378,7 @@ RowVectorPtr toVeloxColumn(
     const cudf::table_view& table,
     memory::MemoryPool* pool,
     const TypePtr& type,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Recursively generate metadata using Velox type names for all columns.
   // This assumes 'type' is a RowType and its children match the cudf table

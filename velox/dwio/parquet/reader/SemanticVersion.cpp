@@ -16,7 +16,24 @@
 
 #include "SemanticVersion.h"
 
+#include <charconv>
+
 namespace facebook::velox::parquet {
+
+namespace {
+
+std::optional<int> parseVersionComponent(const std::string& input) {
+  int value;
+  const auto parseResult =
+      std::from_chars(input.data(), input.data() + input.size(), value);
+  if (parseResult.ec != std::errc{} ||
+      parseResult.ptr != input.data() + input.size()) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+} // namespace
 
 const re2::RE2 SemanticVersion::pattern_(
     "(.*?)\\s+version\\s+(\\d+)\\.(\\d+)\\.(\\d+)");
@@ -50,10 +67,13 @@ std::optional<SemanticVersion> SemanticVersion::parse(
           &major_str,
           &minor_str,
           &patch_str)) {
-    int major = std::stoi(major_str);
-    int minor = std::stoi(minor_str);
-    int patch = std::stoi(patch_str);
-    return SemanticVersion(application_str, major, minor, patch);
+    auto major = parseVersionComponent(major_str);
+    auto minor = parseVersionComponent(minor_str);
+    auto patch = parseVersionComponent(patch_str);
+    if (!major || !minor || !patch) {
+      return std::nullopt;
+    }
+    return SemanticVersion(application_str, *major, *minor, *patch);
   } else {
     return std::nullopt;
   }

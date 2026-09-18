@@ -54,6 +54,7 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     pool_ = memory::memoryManager()->addLeafPool("", false);
     queryCtx_ = core::QueryCtx::create();
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoFunctions("");
     cudf_velox::registerSparkFunctions("");
@@ -508,6 +509,12 @@ TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
 
 TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
   facebook::velox::functions::sparksql::registerFunctions();
+  // canExprRunOnGpu reads this setting directly; no driver re-registration is
+  // needed.
+  CudfConfig::getInstance().allowCpuFallback = true;
+  SCOPE_EXIT {
+    CudfConfig::getInstance().allowCpuFallback = false;
+  };
 
   // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
   // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
@@ -565,6 +572,82 @@ TEST_F(CudfExpressionSelectionTest, signatureTypeVariableSwitchIf) {
   auto ok1 = optimizeTypedExpr(
       "if(true, a, b)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(ok1, queryCtx_.get(), pool_.get()));
+}
+
+TEST_F(CudfExpressionSelectionTest, switchWithoutElseResultTypes) {
+  const std::vector<TypePtr> supported{
+      BOOLEAN(),
+      TINYINT(),
+      SMALLINT(),
+      INTEGER(),
+      BIGINT(),
+      REAL(),
+      DOUBLE(),
+      VARCHAR(),
+      VARBINARY(),
+      TIMESTAMP(),
+      DATE(),
+      DECIMAL(7, 2),
+      DECIMAL(20, 2)};
+  const std::vector<TypePtr> unsupported{
+      ARRAY(BIGINT()),
+      ROW("x", BIGINT()),
+      MAP(BIGINT(), BIGINT()),
+      UNKNOWN(),
+      HUGEINT(),
+      INTERVAL_DAY_TIME(),
+      INTERVAL_YEAR_MONTH()};
+  for (const auto& name : {"switch", "if"}) {
+    for (const bool expected : {false, true}) {
+      for (const auto& type : expected ? supported : unsupported) {
+        SCOPED_TRACE(fmt::format("{}: {}", name, type->toString()));
+        auto expr = std::make_shared<core::CallTypedExpr>(
+            type,
+            std::vector<core::TypedExprPtr>{
+                std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "flag"),
+                std::make_shared<core::FieldAccessTypedExpr>(type, "value")},
+            name);
+        EXPECT_EQ(
+            canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()), expected);
+      }
+    }
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, switchConstantCondition) {
+  for (const auto& sql :
+       {"CASE WHEN true THEN a END",
+        "CASE WHEN false THEN a END",
+        "if(true, a, b)",
+        "if(false, a, b)"}) {
+    SCOPED_TRACE(sql);
+    auto expr = parseAndInferTypedExpr(sql, rowType_, execCtx_.get());
+    const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+    EXPECT_EQ(createCudfFunction(call->name(), expr, pool_.get()), nullptr);
+    auto optimized =
+        optimizeTypedExpr(sql, rowType_, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(canExprRunOnGpu(optimized, queryCtx_.get(), pool_.get()));
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, switchWithElseRetainsNestedTypes) {
+  auto rowType = ROW({
+      {"flag", BOOLEAN()},
+      {"values", ARRAY(BIGINT())},
+      {"others", ARRAY(BIGINT())},
+      {"pair", ROW("x", BIGINT())},
+      {"other_pair", ROW("x", BIGINT())},
+  });
+  for (const auto& sql :
+       {"CASE WHEN flag THEN values ELSE others END",
+        "CASE WHEN flag THEN pair ELSE other_pair END",
+        "if(flag, values, others)",
+        "if(flag, pair, other_pair)"}) {
+    SCOPED_TRACE(sql);
+    auto expr =
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get());
+    EXPECT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
 }
 
 TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {

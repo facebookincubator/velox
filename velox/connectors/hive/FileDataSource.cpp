@@ -85,6 +85,28 @@ inline void addIoLatencyMetric(
   }
 }
 
+void addOperationStatsToRuntimeStats(
+    io::IoStatistics& ioStats,
+    std::unordered_map<std::string, RuntimeMetric>& res) {
+  for (const auto& [operation, counters] : ioStats.operationStats()) {
+    const auto add = [&](std::string_view counter, uint64_t value) {
+      if (value == 0) {
+        return;
+      }
+      res[fmt::format("storage.{}.{}", operation, counter)] =
+          RuntimeMetric(value, RuntimeCounter::Unit::kNone);
+    };
+    add("requestCount", counters.requestCount);
+    add("localThrottleCount", counters.localThrottleCount);
+    add("globalThrottleCount", counters.globalThrottleCount);
+    add("resourceThrottleCount", counters.resourceThrottleCount);
+    add("retryCount", counters.retryCount);
+    // Cumulative across requests, so consumers must divide by requestCount to
+    // recover a per-request mean.
+    add("latencyInMs", counters.latencyInMs);
+  }
+}
+
 void addIoStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::string_view prefix,
@@ -684,6 +706,8 @@ FileDataSource::getRuntimeStats() {
       res.emplace(key, value);
     }
   }
+
+  addOperationStatsToRuntimeStats(*dataIoStats_, res);
   return res;
 }
 

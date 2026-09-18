@@ -544,15 +544,24 @@ vector_size_t TopNRowNumber::fixTopRank(TopRows& partition) {
 }
 
 TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
-  auto setNextRankAndPeer = [&](TopRows& partition) {
-    nextRank_ = fixTopRank(partition);
+  auto preparePartition = [&](TopRows& partition) {
+    fixTopRank(partition);
+    const auto numRows = partition.rows.size();
+    currentPartitionRows_.resize(numRows);
+    for (int32_t i = static_cast<int32_t>(numRows) - 1; i >= 0; --i) {
+      currentPartitionRows_[i] = partition.rows.top();
+      partition.rows.pop();
+    }
+    currentPartitionRowOffset_ = 0;
+    nextRank_ = 1;
     numPeers_ = 1;
+    previousRow_ = nullptr;
   };
 
   if (!table_) {
     if (!outputPartitionNumber_) {
       outputPartitionNumber_ = 0;
-      setNextRankAndPeer(*singlePartition_);
+      preparePartition(*singlePartition_);
       return singlePartition_.get();
     }
     return nullptr;
@@ -578,56 +587,51 @@ TopNRowNumber::TopRows* TopNRowNumber::nextPartition() {
   }
 
   auto partition = &partitionAt(partitions_[outputPartitionNumber_.value()]);
-  setNextRankAndPeer(*partition);
+  preparePartition(*partition);
   return partition;
 }
 
 template <core::TopNRowNumberNode::RankFunction TRank>
-void TopNRowNumber::computeNextRankInMemory(
-    TopRows& partition,
-    vector_size_t outputIndex) {
-  if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kRowNumber) {
-    nextRank_ -= 1;
-    return;
-  }
-
-  // This is the logic for rank() and dense_rank().
-  // If the next row is a peer of the current one, then the rank remains the
-  // same.
-  if (comparator_.compare(outputRows_[outputIndex], partition.rows.top()) ==
-      0) {
-    return;
-  }
-
-  // The new row is not a peer of the current one. So dense_rank drops the
-  // rank by 1, but rank drops by the number of peers of the new top
-  // row (new rank) in TopRows queue.
-  if constexpr (TRank == core::TopNRowNumberNode::RankFunction::kDenseRank) {
-    nextRank_ -= 1;
-  } else {
-    nextRank_ -= partition.numTopRankRows();
-  }
-}
-
-template <core::TopNRowNumberNode::RankFunction TRank>
 void TopNRowNumber::appendPartitionRows(
-    TopRows& partition,
     vector_size_t numRows,
     vector_size_t outputOffset,
     FlatVector<int64_t>* rankValues) {
-  // The partition.rows priority queue pops rows in order of reverse
-  // ranks. Output rows based on nextRank_ and update it with each row.
-  for (auto i = 0; i < numRows; ++i) {
-    auto index = outputOffset + i;
+  // Output rows in ascending order of ranks (lowest sorting key / rank 1
+  // first).
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    const auto rowIndex = currentPartitionRowOffset_ + i;
+    const auto outputIndex = outputOffset + i;
+    char* row = currentPartitionRows_[rowIndex];
+    outputRows_[outputIndex] = row;
+
     if (rankValues) {
-      rankValues->set(index, nextRank_);
-    }
-    outputRows_[index] = partition.rows.top();
-    partition.rows.pop();
-    if (!partition.rows.empty()) {
-      computeNextRankInMemory<TRank>(partition, index);
+      if (rowIndex == 0) {
+        nextRank_ = 1;
+        numPeers_ = 1;
+      } else {
+        if constexpr (
+            TRank == core::TopNRowNumberNode::RankFunction::kRowNumber) {
+          nextRank_ = rowIndex + 1;
+        } else if constexpr (
+            TRank == core::TopNRowNumberNode::RankFunction::kDenseRank) {
+          if (comparator_.compare(previousRow_, row) != 0) {
+            nextRank_ += 1;
+          }
+        } else {
+          // kRank
+          if (comparator_.compare(previousRow_, row) == 0) {
+            numPeers_ += 1;
+          } else {
+            nextRank_ += numPeers_;
+            numPeers_ = 1;
+          }
+        }
+      }
+      rankValues->set(outputIndex, nextRank_);
+      previousRow_ = row;
     }
   }
+  currentPartitionRowOffset_ += numRows;
 }
 
 RowVectorPtr TopNRowNumber::getOutput() {
@@ -698,13 +702,14 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
       }
     }
 
+    const auto numPartitionRowsLeft =
+        currentPartitionRows_.size() - currentPartitionRowOffset_;
     const auto numOutputRowsLeft = outputBatchSize_ - offset;
-    if (outputPartition_->rows.size() > numOutputRowsLeft) {
+    if (numPartitionRowsLeft > numOutputRowsLeft) {
       // Output as many rows as possible.
       RANK_FUNCTION_DISPATCH(
           appendPartitionRows,
           rankFunction_,
-          *outputPartition_,
           numOutputRowsLeft,
           offset,
           rowNumbers);
@@ -712,16 +717,14 @@ RowVectorPtr TopNRowNumber::getOutputFromMemory() {
       break;
     }
 
-    // Add all partition rows.
-    const auto numPartitionRows = outputPartition_->rows.size();
+    // Add all remaining partition rows.
     RANK_FUNCTION_DISPATCH(
         appendPartitionRows,
         rankFunction_,
-        *outputPartition_,
-        numPartitionRows,
+        numPartitionRowsLeft,
         offset,
         rowNumbers);
-    offset += numPartitionRows;
+    offset += numPartitionRowsLeft;
     outputPartition_ = nullptr;
   }
 

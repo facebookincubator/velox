@@ -81,7 +81,7 @@ class ArrowDataBufferSink : public ::arrow::io::OutputStream {
     return bytesFlushed_ + buffer_.size();
   }
 
-  int64_t bufferedBytes() const {
+  uint64_t bufferedBytes() const {
     return buffer_.size();
   }
 
@@ -133,6 +133,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(enableWritePageIndex, parquetOverrides->enableWritePageIndex);
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
+  mergeIfSet(rowGroupSizeBytes, parquetOverrides->rowGroupSizeBytes);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
 }
 
@@ -378,6 +379,21 @@ std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
   return config::toCapacity(*pageSize, config::CapacityUnit::BYTE);
 }
 
+std::optional<uint64_t> toParquetRowGroupSize(
+    std::optional<std::string> rowGroupSize) {
+  if (!rowGroupSize) {
+    return std::nullopt;
+  }
+  const auto sizeInBytes =
+      config::toCapacity(*rowGroupSize, config::CapacityUnit::BYTE);
+  VELOX_USER_CHECK_GT(
+      sizeInBytes,
+      0,
+      "Parquet writer row group size must be greater than zero: {}",
+      *rowGroupSize);
+  return sizeInBytes;
+}
+
 std::optional<bool> toBoolConfigValue(
     std::optional<std::string> value,
     const char* optionName) {
@@ -448,7 +464,11 @@ Writer::Writer(
   if (options.flushPolicyFactory) {
     castUniquePointer(options.flushPolicyFactory(), flushPolicy_);
   } else {
-    flushPolicy_ = std::make_unique<DefaultFlushPolicy>();
+    const auto bytesInRowGroup =
+        parquetWriterOptions.rowGroupSizeBytes.value_or(
+            DefaultFlushPolicy::kDefaultBytesInRowGroup);
+    flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
+        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
   }
   options_.timestampUnit = static_cast<TimestampUnit>(
       parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
@@ -633,33 +653,34 @@ void Writer::setMemoryReclaimers() {
 
 namespace {
 
-// Returns true if 'vector' or any of its descendants is dictionary-encoded.
-// Used to detect dictionary encoding nested inside a top-level complex column
-// (ARRAY/MAP/ROW). Constant descendants are exported densely by the Arrow
-// bridge (flattenConstant=true) and therefore do not need to be checked here.
-bool hasDictionaryDescendant(const VectorPtr& vector) {
+// Returns true if 'vector' or any descendant needs flattening before Arrow
+// export. Used to detect dictionary-encoded and non-scalar constant vectors
+// nested inside a top-level complex column (ARRAY/MAP/ROW).
+bool descendantNeedsFlatten(const VectorPtr& vector) {
   if (vector == nullptr) {
     return false;
   }
   switch (vector->encoding()) {
     case VectorEncoding::Simple::DICTIONARY:
       return true;
+    case VectorEncoding::Simple::CONSTANT:
+      return !vector->isScalar();
     case VectorEncoding::Simple::ROW: {
       const auto* row = vector->asUnchecked<RowVector>();
       for (const auto& child : row->children()) {
-        if (hasDictionaryDescendant(child)) {
+        if (descendantNeedsFlatten(child)) {
           return true;
         }
       }
       return false;
     }
     case VectorEncoding::Simple::ARRAY:
-      return hasDictionaryDescendant(
+      return descendantNeedsFlatten(
           vector->asUnchecked<ArrayVector>()->elements());
     case VectorEncoding::Simple::MAP: {
       const auto* map = vector->asUnchecked<MapVector>();
-      return hasDictionaryDescendant(map->mapKeys()) ||
-          hasDictionaryDescendant(map->mapValues());
+      return descendantNeedsFlatten(map->mapKeys()) ||
+          descendantNeedsFlatten(map->mapValues());
     }
     default:
       return false;
@@ -704,18 +725,20 @@ bool childNeedsFlatten(const VectorPtr& child) {
       }
     }
   } else if (encoding == VectorEncoding::Simple::CONSTANT) {
+    // Flatten non-scalar constants since Arrow bridge supports exporting only
+    // scalar constants.
+    if (!child->isScalar()) {
+      return true;
+    }
     // Flatten constant wrapping a non-flat inner vector
     // (e.g., constant-of-dictionary).
     if (child->valueVector() && !child->wrappedVector()->isFlatEncoding()) {
       return true;
     }
   } else if (!child->type()->isPrimitiveType()) {
-    // A flat complex column (ARRAY/MAP/ROW) is not itself flattened, but the
-    // Velox-to-Arrow bridge exports dictionary-encoded descendants as Arrow
-    // DictionaryArrays (flattenDictionary=false). Dictionary passthrough is
-    // only safe for top-level scalar VARCHAR/VARBINARY columns, so flatten the
-    // whole column if any descendant is dictionary-encoded.
-    return hasDictionaryDescendant(child);
+    // A flat complex column (ARRAY/MAP/ROW) is not itself flattened. Flatten
+    // the whole column if any descendant needs flattening before Arrow export.
+    return descendantNeedsFlatten(child);
   }
   return false;
 }
@@ -837,6 +860,8 @@ ParquetWriterFactory::createFormatOptions(
       "enable write page index");
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
+  parquetOptions->rowGroupSizeBytes = toParquetRowGroupSize(
+      ParquetConfig::writerRowGroupSize(connectorConfig, session));
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);

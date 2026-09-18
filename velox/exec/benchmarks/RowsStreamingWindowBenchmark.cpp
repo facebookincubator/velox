@@ -108,6 +108,37 @@ class RowsStreamingWindowBenchmark : public VectorTestBase {
          "count(v) over (partition by p order by s)",
          "min(v) over (partition by p order by s)",
          "max(v) over (partition by p order by s)"});
+
+    // The cases above omit the frame clause, which parses to RANGE. Only a
+    // ROWS frame reaches the retained-byte throttle, so these measure it.
+    addBenchmark(
+        "rowsStreamingWindowRankRowsFrame_" + sizeName,
+        data,
+        {rowsFrame("rank()")});
+    addBenchmark(
+        "rowsStreamingWindowSumRowsFrame_" + sizeName,
+        data,
+        {rowsFrame("sum(v)")});
+    addBenchmark(
+        "rowsStreamingWindowRankAndSumRowsFrame_" + sizeName,
+        data,
+        {rowsFrame("rank()"), rowsFrame("sum(v)")});
+    addBenchmark(
+        "rowsStreamingWindowSevenFunctionsRowsFrame_" + sizeName,
+        data,
+        {rowsFrame("rank()"),
+         rowsFrame("dense_rank()"),
+         rowsFrame("row_number()"),
+         rowsFrame("sum(v)"),
+         rowsFrame("count(v)"),
+         rowsFrame("min(v)"),
+         rowsFrame("max(v)")});
+  }
+
+  static std::string rowsFrame(const std::string& call) {
+    return call +
+        " over (partition by p order by s rows between unbounded preceding "
+        "and current row)";
   }
 
   void addBenchmark(

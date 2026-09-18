@@ -181,6 +181,15 @@ class BaseVector {
     return pool_;
   }
 
+  /// Changes the pool used by this vector node for future allocations without
+  /// transferring or copying existing buffers or changing child vectors. The
+  /// caller must ensure that existing allocations remain valid and that
+  /// 'pool' outlives this vector.
+  void unsafeSetPool(velox::memory::MemoryPool* pool) {
+    VELOX_CHECK_NOT_NULL(pool);
+    pool_ = pool;
+  }
+
   virtual bool isNullAt(vector_size_t idx) const {
     VELOX_DCHECK_GE(idx, 0, "Index must not be negative");
     VELOX_DCHECK_LT(idx, length_, "Index is too large");
@@ -954,7 +963,7 @@ class BaseVector {
 
   FOLLY_ALWAYS_INLINE static std::optional<int32_t>
   compareNulls(bool thisNull, bool otherNull, CompareFlags flags) {
-    DCHECK(thisNull || otherNull);
+    VELOX_DCHECK(thisNull || otherNull);
     switch (flags.nullHandlingMode) {
       case CompareFlags::NullHandlingMode::kNullAsIndeterminate:
         if (flags.equalsOnly) {

@@ -150,7 +150,9 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp.  If the
     :doc:`adjust_timestamp_to_session_timezone <../../configs>` property is set
     to true, then the timestamp is adjusted to the time zone specified in
-    :doc:`session_timezone <../../configs>`.
+    :doc:`session_timezone <../../configs>`. Values above or below the range
+    representable by a timestamp are clamped to the maximum or minimum
+    timestamp, respectively.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
     :noindex:

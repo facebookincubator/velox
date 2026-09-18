@@ -115,6 +115,11 @@ class ConjunctCallToSpecialForm : public FunctionCallToSpecialForm {
 
   TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
 
+  TypePtr resolveTypeWithCoercions(
+      const std::vector<TypePtr>& argTypes,
+      std::vector<TypePtr>& coercions,
+      const TypeCoercer& coercer) override;
+
   ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<ExprPtr>&& compiledChildren,
