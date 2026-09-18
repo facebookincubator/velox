@@ -895,8 +895,9 @@ SpillPartitionId SpillPartitionIdLookup::partition(uint64_t hash) const {
 SpillPartitionFunction::SpillPartitionFunction(
     const SpillPartitionIdLookup& lookup,
     const RowTypePtr& inputType,
-    const std::vector<column_index_t>& keyChannels)
-    : lookup_(lookup) {
+    const std::vector<column_index_t>& keyChannels,
+    bool scatterNullKeyRows)
+    : lookup_(lookup), scatterNullKeyRows_(scatterNullKeyRows) {
   VELOX_CHECK(!keyChannels.empty(), "Key channels must not be empty.");
   hashers_.reserve(keyChannels.size());
   for (const auto channel : keyChannels) {
@@ -918,6 +919,23 @@ void SpillPartitionFunction::partition(
     auto& hasher = hashers_[i];
     hashers_[i]->decode(*input.childAt(hasher->channel()), rows_);
     hashers_[i]->hash(rows_, i > 0, hashes_);
+  }
+
+  if (scatterNullKeyRows_) {
+    // Null keys hash to a constant; scatter those rows instead of letting
+    // them concentrate in one partition. They can never match, so their
+    // partition assignment is semantically free.
+    for (const auto& hasher : hashers_) {
+      const auto& decoded = hasher->decodedVector();
+      if (!decoded.mayHaveNulls()) {
+        continue;
+      }
+      for (vector_size_t row = 0; row < size; ++row) {
+        if (decoded.isNullAt(row)) {
+          hashes_[row] = folly::hasher<uint64_t>()(nullScatterSeq_++);
+        }
+      }
+    }
   }
 
   partitionIds.resize(size);
