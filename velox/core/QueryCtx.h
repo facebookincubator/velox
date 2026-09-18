@@ -272,8 +272,38 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return connectorSessionProperties_;
   }
 
-  std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
-    return fsTokenProvider_;
+  /// Returns the token provider for planNodeId, falling back to the
+  /// query-level default if no planNode-specific provider is set.
+  /// Pass an empty planNodeId (the default) to retrieve the query-level
+  /// provider directly.  Called from driver threads, concurrently with
+  /// setFsTokenProvider().
+  /// Returns nullptr if planNodeId is non-empty and no provider is set
+  /// for it.
+  std::shared_ptr<filesystems::TokenProvider> fsTokenProvider(
+      const std::string& planNodeId = "") const {
+    return planNodeTokenProviders_.withRLock(
+        [&](const auto& providers)
+            -> std::shared_ptr<filesystems::TokenProvider> {
+          if (providers.empty() || planNodeId.empty()) {
+            return fsTokenProvider_;
+          }
+          auto it = providers.find(planNodeId);
+          if (it != providers.end()) {
+            return it->second;
+          }
+          return nullptr;
+        });
+  }
+
+  /// Sets a token provider for planNodeId.  No-op if one is already
+  /// set; the TokenProvider for a given planNodeId is fixed for the
+  /// lifetime of the query — only the credentials it vends change.
+  void setFsTokenProvider(
+      const std::string& planNodeId,
+      std::shared_ptr<filesystems::TokenProvider> provider) {
+    planNodeTokenProviders_.withWLock([&](auto& providers) {
+      providers.try_emplace(planNodeId, std::move(provider));
+    });
   }
 
   /// Registers a callback to be invoked when this QueryCtx is destroyed.
@@ -513,7 +543,14 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   // Indicates if this query is under memory arbitration or not.
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;
+  // Query-level fallback provider, set at construction and never mutated.
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  // Per-planNode providers registered after construction, possibly while driver
+  // threads are reading them, hence synchronized.
+  folly::Synchronized<std::unordered_map<
+      std::string,
+      std::shared_ptr<filesystems::TokenProvider>>>
+      planNodeTokenProviders_;
   // Callbacks invoked before destruction to clean up external resources.
   std::deque<ReleaseCallback> releaseCallbacks_;
 
