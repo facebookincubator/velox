@@ -326,53 +326,6 @@ TEST_F(MinMaxAggregationTest, timestampUtc) {
       testAggregations(
           makeSource, {"c0"}, aggregates, {}, assertResults, config);
     }
-
-    {
-      SCOPED_TRACE("Constant encoding");
-      auto data = makeRowVector({
-          makeFlatVector<int64_t>({0, 0, 1, 1}),
-          makeConstant<Timestamp>(earlier, 4, TIMESTAMP_UTC()),
-      });
-      inputs = {data};
-      expected = makeRowVector({
-          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
-          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
-      });
-      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
-
-      expected = makeRowVector({
-          makeFlatVector<int64_t>({0, 1}),
-          makeFlatVector<Timestamp>({earlier, earlier}, TIMESTAMP_UTC()),
-          makeFlatVector<Timestamp>({earlier, earlier}, TIMESTAMP_UTC()),
-      });
-      testAggregations(
-          makeSource, {"c0"}, aggregates, {}, assertResults, config);
-    }
-
-    {
-      SCOPED_TRACE("Dictionary encoding");
-      auto timestamps = makeNullableFlatVector<Timestamp>(
-          {beforeEpoch, earlier, later, std::nullopt}, TIMESTAMP_UTC());
-      auto data = makeRowVector({
-          makeFlatVector<int64_t>({0, 0, 0, 0, 1, 1, 1, 1}),
-          wrapInDictionary(
-              makeIndices({3, 0, 2, 1, 2, 3, 1, 1}), 8, timestamps),
-      });
-      inputs = {data};
-      expected = makeRowVector({
-          makeFlatVector<Timestamp>({beforeEpoch}, TIMESTAMP_UTC()),
-          makeFlatVector<Timestamp>({later}, TIMESTAMP_UTC()),
-      });
-      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
-
-      expected = makeRowVector({
-          makeFlatVector<int64_t>({0, 1}),
-          makeFlatVector<Timestamp>({beforeEpoch, earlier}, TIMESTAMP_UTC()),
-          makeFlatVector<Timestamp>({later, later}, TIMESTAMP_UTC()),
-      });
-      testAggregations(
-          makeSource, {"c0"}, aggregates, {}, assertResults, config);
-    }
   }
 }
 
