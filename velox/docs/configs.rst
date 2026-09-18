@@ -72,6 +72,15 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
+   * - legacy_timestamp_with_timezone
+     - bool
+     - true
+     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, each value renders in its own
+       embedded time zone. If false, values render the UTC instant in the session time zone, so values that compare
+       equal produce equal results. Covers field extraction, formatting, date arithmetic, and ``CAST`` to ``VARCHAR``,
+       ``DATE`` and ``TIME``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
+       SECOND`` operates on milliseconds and never consults a time zone. ``CAST`` to ``TIMESTAMP`` is governed by
+       ``adjust_timestamp_to_session_timezone``.
    * - track_operator_cpu_usage
      - bool
      - true

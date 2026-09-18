@@ -208,7 +208,22 @@ ReaderBase::ReaderBase(
           return {};
         }
         return fileStats->toColumnStatistics(fileSchema_, nimbleSchema_);
-      }()} {}
+      }()},
+      stripeColumnStats_{
+          [&]() -> std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> {
+            auto statsSection =
+                tablet_->loadOptionalSection(std::string(kStripeStatsSection));
+            if (!statsSection.has_value()) {
+              return {};
+            }
+            auto stripeStats = VectorizedStripeStats::deserialize(
+                statsSection->content(), *pool_);
+            if (!stripeStats) {
+              return {};
+            }
+            return stripeStats->takeStripeColumnStatistics(
+                fileSchema_, nimbleSchema_);
+          }()} {}
 
 void LazyInput::load() {
   if (!loaded_) {

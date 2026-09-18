@@ -28,6 +28,7 @@ endif()
 
 add_library(
   nimble_encodings
+  ALPEncoding.cpp
   ConstantEncoding.cpp
   EncodingSliceFactory.cpp
   FsstEncoding.cpp
@@ -48,6 +49,7 @@ add_library(
   common/EncodingTypeDispatch.h
   selection/EncodingSelectionPolicy.cpp
   selection/Statistics.cpp
+  views/EncodingView.cpp
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
@@ -55,12 +57,15 @@ add_library(
   views/TrivialEncodingView.h
   views/SparseBoolEncodingView.h
   views/SimdForBitpackEncodingView.h
+  views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
+  views/NullableEncodingView.h
   views/FixedBitWidthEncodingView.h
   views/FOREncodingView.h
   views/EncodingViewFactory.h
+  views/EncodingViewUtils.h
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h

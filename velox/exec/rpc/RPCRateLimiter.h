@@ -86,7 +86,9 @@ class RPCRateLimiter {
     kNone,
   };
 
-  /// A snapshot for per-query runtime stats, read once at operator close().
+  /// A snapshot for per-query runtime stats. Read at operator close() for the
+  /// final stats, and on every RPCOperator::stats() call so the admission
+  /// capacity trajectory is observable while the query is still running.
   struct Stats {
     /// Current capacity, after any adaptation.
     int64_t capacity{0};

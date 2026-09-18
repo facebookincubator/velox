@@ -499,6 +499,22 @@ target_link_libraries(
   fmt::fmt
   Folly::folly
   GTest::gtest
+  GTest::gtest_main
+)
+
+add_executable(velox_fixed_point_test FixedPointTest.cpp)
+add_test(
+  NAME velox_fixed_point_test
+  COMMAND velox_fixed_point_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_fixed_point_test
+  velox_exec
+  velox_exec_test_lib
+  velox_core
+  GTest::gtest
+  GTest::gtest_main
 )
 
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)

@@ -222,6 +222,7 @@ void RPCState::completeRow(
             .response = std::move(response),
             .rttNs = rttNs});
     inFlight_--;
+    ++numCompletionsSignaled_;
 
     if (rttNs > 0) {
       rttMinNs_ = std::min(rttMinNs_, rttNs);
@@ -327,6 +328,7 @@ void RPCState::addPendingBatch(
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
+              ++state->numCompletionsSignaled_;
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
@@ -339,6 +341,7 @@ void RPCState::addPendingBatch(
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
+              ++state->numCompletionsSignaled_;
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
@@ -570,6 +573,8 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .rttMaxNs = rttMaxNs_,
       .numRttSamples = numRttSamples_,
       .streamingMode = streamingMode_,
+      .inFlight = inFlight_,
+      .numCompletionsSignaled = numCompletionsSignaled_,
   };
 }
 

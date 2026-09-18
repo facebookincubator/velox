@@ -91,10 +91,11 @@ class VectorIndex {
     uint64_t numVectors{0};
   };
 
-  /// Deserializes and validates one FAISS index.
+  /// Deserializes an index backed by bytes retained by indexData.
   static std::shared_ptr<const VectorIndex> create(
       Metadata metadata,
-      std::string_view serializedIndex);
+      std::string_view serializedIndex,
+      std::shared_ptr<const void> indexData);
 
   ~VectorIndex();
 
@@ -119,7 +120,10 @@ class VectorIndex {
 
  private:
   // Constructs and validates one eagerly deserialized FAISS index.
-  VectorIndex(Metadata metadata, std::string_view serializedIndex);
+  VectorIndex(
+      Metadata metadata,
+      std::string_view serializedIndex,
+      std::shared_ptr<const void> indexData);
 
   // Identifies the indexed top-level column.
   const std::string columnName_;
@@ -135,6 +139,9 @@ class VectorIndex {
 
   // Bounds valid row IDs returned by FAISS.
   const uint64_t numVectors_;
+
+  // Keeps zero-copy FAISS views valid for this index's lifetime.
+  const std::shared_ptr<const void> indexData_;
 
   // Remains immutable so concurrent searches only read shared state.
   const std::unique_ptr<faiss::Index> faissIndex_;

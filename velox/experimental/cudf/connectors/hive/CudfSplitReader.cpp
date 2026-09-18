@@ -49,6 +49,7 @@
 #include <memory>
 #include <numeric>
 #include <ranges>
+#include <span>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -142,22 +143,26 @@ std::unique_ptr<cudf::column> castDecimalColumns(
   return col;
 }
 
+} // namespace
+
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
-    const RowTypePtr& rowType,
+    std::span<const TypePtr> columnTypes,
+    size_t numPrependedColumns,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  auto numColumns =
-      std::min<size_t>(table->view().num_columns(), rowType->size());
+  VELOX_CHECK_EQ(
+      numPrependedColumns + columnTypes.size(),
+      table->view().num_columns(),
+      "Read column types must match the cuDF table width");
   auto columns = table->release();
-  for (size_t i = 0; i < numColumns; ++i) {
-    columns[i] = castDecimalColumns(
-        std::move(columns[i]), rowType->childAt(i), stream, mr);
+  for (size_t i = 0; i < columnTypes.size(); ++i) {
+    const auto columnIndex = numPrependedColumns + i;
+    columns[columnIndex] = castDecimalColumns(
+        std::move(columns[columnIndex]), columnTypes[i], stream, mr);
   }
   return std::make_unique<cudf::table>(std::move(columns));
 }
-
-} // namespace
 
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
@@ -179,6 +184,7 @@ CudfSplitReader::CudfSplitReader(
       tableHandle_(std::move(tableHandle)),
       outputType_(outputType),
       readColumnNames_(readColumnNames),
+      readColumnTypes_(outputType->children()),
       fileHandleFactory_(fileHandleFactory),
       executor_(executor),
       connectorQueryCtx_(connectorQueryCtx),
@@ -189,6 +195,20 @@ CudfSplitReader::CudfSplitReader(
       baseReaderOpts_(pool_),
       subfieldFilterAst_(subfieldFilterAst),
       pushdownFilterExpr_(subfieldFilterAst) {
+  VELOX_CHECK_GE(
+      readColumnNames_.size(),
+      readColumnTypes_.size(),
+      "Read columns must include all output columns");
+  if (readColumnNames_.size() > readColumnTypes_.size()) {
+    const auto& dataColumns = tableHandle_->dataColumns();
+    VELOX_CHECK_NOT_NULL(
+        dataColumns,
+        "Table schema is required to resolve filter-only column types");
+    for (size_t i = readColumnTypes_.size(); i < readColumnNames_.size(); ++i) {
+      readColumnTypes_.push_back(dataColumns->findChild(readColumnNames_[i]));
+    }
+  }
+  VELOX_DCHECK_EQ(readColumnNames_.size(), readColumnTypes_.size());
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 }
@@ -288,8 +308,12 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
   }
 
   auto tableWithMetadata = splitReader_->materialize_all_columns_chunk();
-  auto table = castDecimalColumnsToVeloxTypes(
-      std::move(tableWithMetadata.tbl), outputType_, stream_, outputMr);
+  return castDecimalColumnsToVeloxTypes(
+      std::move(tableWithMetadata.tbl),
+      readColumnTypes_,
+      prependRowIndex_ ? 1 : 0,
+      stream_,
+      output_mr);
 
   // This was the last chunk of the pass. Drop its fetch buffers and begin
   // I/O for the next pass while the caller consumes this table.

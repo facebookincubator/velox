@@ -117,6 +117,8 @@ void RPCOperator::initialize() {
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
   limiter_ = &RPCRateLimiterRegistry::global().get(tierKey_);
+  *liveStatsSources_.wlock() =
+      LiveStatsSources{.state = state_, .limiter = limiter_};
   // A backend's configuration is fixed by the first query to reach it and is
   // shared by every query after. The limiter is a controller: its policy has
   // to hold still while it adapts, and the adaptation itself is learned from
@@ -250,7 +252,8 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
     auto batchIndex = state_->storeInputBatch(
         flattenedColumns, static_cast<int64_t>(rowIndices.size()));
-    numRequestsDispatched_ += static_cast<int64_t>(rowIndices.size());
+    numRequestsDispatched_.fetch_add(
+        static_cast<int64_t>(rowIndices.size()), std::memory_order_relaxed);
 
     for (auto originalRowIndex : rowIndices) {
       auto rowId = globalRowIdCounter_++;
@@ -308,7 +311,8 @@ void RPCOperator::dispatchRowsUnderAdmission() {
         "dispatchPerRow returned {} futures for {} selected rows",
         futures.size(),
         numRowsInChunk);
-    numRequestsDispatched_ += static_cast<int64_t>(futures.size());
+    numRequestsDispatched_.fetch_add(
+        static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
     size_t reservedIndex = 0;
     for (auto& [originalRowIndex, future] : futures) {
       auto rowId = globalRowIdCounter_++;
@@ -484,7 +488,7 @@ void RPCOperator::noMoreInput() {
   exec::Operator::noMoreInput();
 
   RPC_OP_VLOG(1) << "noMoreInput: totalRequestsDispatched="
-                 << numRequestsDispatched_;
+                 << numRequestsDispatched_.load(std::memory_order_relaxed);
 
   // BATCH flushes its accumulator here; PER_ROW has nothing buffered at this
   // point (see hasUndispatchedWork()).
@@ -944,6 +948,10 @@ void RPCOperator::close() {
   // still alive. Otherwise the retained reservation makes the arbitrator's
   // reservedBytes() == 0 check throw from ~MemoryPoolImpl() and terminate the
   // worker, or a late callback frees into pools that are already gone.
+  // Stop publishing to stats() first: the write blocks until any in-progress
+  // sample has finished reading RPCState, so the reset below cannot free it
+  // underneath the collector thread.
+  *liveStatsSources_.wlock() = LiveStatsSources{};
   if (state_ != nullptr) {
     state_->releaseAllInputBatches();
   }
@@ -1005,10 +1013,60 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
   }
 }
 
+void RPCOperator::addLiveProgressStats(
+    exec::OperatorStats& stats,
+    bool includeGauges) const {
+  // Cleared by close() before RPCState is dropped, so a closed operator stops
+  // contributing here entirely. That matters because Task folds a closed
+  // driver's stats into the task totals while the driver is briefly still in
+  // its driver list: republishing from a closed operator would double count.
+  const auto sources = liveStatsSources_.rlock();
+  if (sources->state == nullptr) {
+    return;
+  }
+  stats.runtimeStats[kRpcRequestsDispatched] =
+      RuntimeMetric(numRequestsDispatched_.load(std::memory_order_relaxed));
+  const auto snapshot = sources->state->operatorSnapshot();
+  stats.runtimeStats[kRpcCompletionsSignaled] =
+      RuntimeMetric(snapshot.numCompletionsSignaled);
+  // The backend's admission capacity trajectory: the capacity this operator
+  // shares with every other driver dispatching to the same backend, as
+  // distinct from the per-driver rpcCongestion* window. Emitted for every
+  // backend including the default one, whose key is empty; gating on a
+  // non-empty key would hide the cap on exactly the most common path.
+  //
+  // limiter_ is resolved in initialize(), but Driver::closeOperators() closes
+  // every operator whether or not initializeOperators() ran -- a task that
+  // terminates during setup reaches close() first. There is no limiter to
+  // report in that case, and no stats worth reporting either.
+  if (sources->limiter != nullptr) {
+    const auto limiterStats = sources->limiter->stats();
+    stats.runtimeStats[kRpcRateLimiterCap] =
+        RuntimeMetric(limiterStats.capacity);
+    stats.runtimeStats[kRpcRateLimiterPeakPending] =
+        RuntimeMetric(limiterStats.peakPending);
+    stats.runtimeStats[kRpcRateLimiterMinCap] =
+        RuntimeMetric(limiterStats.lowWaterCapacity);
+  }
+  if (!includeGauges) {
+    return;
+  }
+  // A gauge, not a counter. Task accumulates a closed driver's stats into the
+  // task totals permanently, so publishing this at close() would leave a
+  // positive in-flight reading in the finished task's stats long after the
+  // RPCs completed. Live samples only.
+  stats.runtimeStats[kRpcInFlight] = RuntimeMetric(snapshot.inFlight);
+}
+
+exec::OperatorStats RPCOperator::stats(bool clear) {
+  auto stats = Operator::stats(clear);
+  addLiveProgressStats(stats, /*includeGauges=*/true);
+  return stats;
+}
+
 void RPCOperator::recordRuntimeStats() {
   auto lockedStats = stats_.wlock();
-  lockedStats->addRuntimeStat(
-      kRpcRequestsDispatched, RuntimeCounter(numRequestsDispatched_));
+  addLiveProgressStats(*lockedStats, /*includeGauges=*/false);
   lockedStats->addRuntimeStat(
       kRpcResponsesReceived, RuntimeCounter(numResponsesReceived_));
   lockedStats->addRuntimeStat(kRpcErrorCount, RuntimeCounter(numErrors_));
@@ -1078,26 +1136,6 @@ void RPCOperator::recordRuntimeStats() {
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
         kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
-  }
-
-  // The backend's admission capacity trajectory: the capacity this operator
-  // shares with every other driver dispatching to the same backend, as
-  // distinct from the per-driver rpcCongestion* window. Emitted for every
-  // backend including the default one, whose key is empty; gating on a
-  // non-empty key would hide the cap on exactly the most common path.
-  //
-  // limiter_ is resolved in initialize(), but Driver::closeOperators() closes
-  // every operator whether or not initializeOperators() ran -- a task that
-  // terminates during setup reaches close() first. There is no limiter to
-  // report in that case, and no stats worth reporting either.
-  if (limiter_ != nullptr) {
-    const auto limiterStats = limiter_->stats();
-    lockedStats->addRuntimeStat(
-        kRpcRateLimiterCap, RuntimeCounter(limiterStats.capacity));
-    lockedStats->addRuntimeStat(
-        kRpcRateLimiterPeakPending, RuntimeCounter(limiterStats.peakPending));
-    lockedStats->addRuntimeStat(
-        kRpcRateLimiterMinCap, RuntimeCounter(limiterStats.lowWaterCapacity));
   }
 }
 

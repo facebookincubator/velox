@@ -16,6 +16,7 @@ add_executable(
   BatchedStreamDecoderTest.cpp
   ChunkedStreamPayloadTest.cpp
   DeserializerSkipTest.cpp
+  EncodingViewDecoderTest.cpp
   OptionsTest.cpp
   ProjectorTest.cpp
   SerializationHeaderTest.cpp
@@ -30,6 +31,7 @@ target_link_libraries(
   nimble_chunked_stream_payload
   nimble_serializer
   nimble_deserializer
+  nimble_encoding_view_decoder
   nimble_stream_data
   nimble_stream_data_parser
   nimble_stream_data_writer

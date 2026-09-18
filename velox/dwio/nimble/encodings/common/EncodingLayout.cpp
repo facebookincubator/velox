@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -199,7 +200,6 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
-    case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
       // Non nested encodings have zero children
@@ -220,6 +220,39 @@ EncodingLayout EncodingLayoutCapture::capture(
             captureChild(children, position, section.dataBytes, options);
           },
           encodingConfig);
+      break;
+    }
+    case EncodingType::SubIntSplit: {
+      const auto dataType = EncodingPrefix::dataType(encoding);
+      const auto physicalBits = detail::dataTypeSize(dataType) * 8;
+      const char* pos = encoding.data() + prefixSize;
+      const auto numSections = encoding::read<uint8_t>(pos);
+      // Skip the reserved section-order byte.
+      encoding::read<uint8_t>(pos);
+
+      std::vector<detail::subintsplit::SegmentPlan> segments;
+      std::vector<uint32_t> encodedSizes;
+      segments.reserve(numSections);
+      encodedSizes.reserve(numSections);
+      uint32_t expectedBitStart{0};
+      for (uint8_t section{0}; section < numSections; ++section) {
+        const auto bitStart = encoding::read<uint8_t>(pos);
+        const auto bitEnd = encoding::read<uint8_t>(pos);
+        NIMBLE_CHECK_EQ(bitStart, expectedBitStart);
+        NIMBLE_CHECK_GE(bitEnd, bitStart);
+        NIMBLE_CHECK_LT(bitEnd, physicalBits);
+        segments.push_back({.bitStart = bitStart, .bitEnd = bitEnd});
+        encodedSizes.push_back(encoding::readUint32(pos));
+        expectedBitStart = bitEnd + 1;
+      }
+      NIMBLE_CHECK_EQ(expectedBitStart, physicalBits);
+
+      children.reserve(numSections);
+      for (const auto encodedSize : encodedSizes) {
+        captureChild(children, pos, encodedSize, options);
+      }
+      encodingConfig = EncodingLayout::Config{
+          detail::subintsplit::makePreserveSplitConfig(segments)};
       break;
     }
     case EncodingType::ALP: {

@@ -38,7 +38,9 @@
 #include <folly/futures/Future.h>
 
 #include <chrono>
+#include <thread>
 
+#include "velox/exec/Cursor.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec::rpc {
@@ -51,53 +53,70 @@ class RPCOperatorTest : public OperatorTestBase {
     OperatorTestBase::SetUpTestCase();
     registerRPCPlanNodeTranslator();
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_rpc", []() { return std::make_shared<DemoAsyncRPCFunction>(); });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_held", []() {
-      auto fn = std::make_shared<DemoBatchRPCFunction>();
-      fn->testingHoldFlushes();
-      return fn;
-    });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc", []() {
-      return std::make_shared<DemoBatchRPCFunction>();
-    });
-    AsyncRPCFunctionRegistry::registerFunction("demo_batch_rpc_reversed", []() {
-      return std::make_shared<DemoBatchRPCFunction>(
-          DemoBatchRPCFunction::ResponseOrder::kReversed);
-    });
+        "demo_rpc",
+        []() { return std::make_shared<DemoAsyncRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_partial_fail", []() {
+        "demo_batch_rpc_held",
+        []() {
+          auto fn = std::make_shared<DemoBatchRPCFunction>();
+          fn->testingHoldFlushes();
+          return fn;
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc",
+        []() { return std::make_shared<DemoBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_reversed",
+        []() {
+          return std::make_shared<DemoBatchRPCFunction>(
+              DemoBatchRPCFunction::ResponseOrder::kReversed);
+        },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "demo_batch_rpc_partial_fail",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{1, 3});
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_whole_fail", []() {
+        "demo_batch_rpc_whole_fail",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     // Whole-batch failure AND a fail-on-error policy (mimics
     // meta_ai_on_error='fail'): the query must still hard-fail, not degrade.
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_whole_fail_strict", []() {
+        "demo_batch_rpc_whole_fail_strict",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/true,
               /*failOnError=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
     // Returns fewer responses than rows (function-contract violation): the
     // operator's scatter must hard-fail on the count mismatch.
     AsyncRPCFunctionRegistry::registerFunction(
-        "demo_batch_rpc_wrong_count", []() {
+        "demo_batch_rpc_wrong_count",
+        []() {
           return std::make_shared<DemoBatchRPCFunction>(
               DemoBatchRPCFunction::ResponseOrder::kInOrder,
               std::unordered_set<int32_t>{},
               /*failWholeBatch=*/false,
               /*failOnError=*/false,
               /*dropOneResponse=*/true);
-        });
+        },
+        DemoBatchRPCFunction::signatures());
   }
 
   static void TearDownTestCase() {
@@ -929,9 +948,11 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   constexpr std::chrono::milliseconds kLatency{200};
   auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
   AsyncRPCFunctionRegistry::registerFunction(
-      "slow_batch_rpc", [kLatency, rpcExecutor]() {
+      "slow_batch_rpc",
+      [kLatency, rpcExecutor]() {
         return std::make_shared<SlowBatchRPCFunction>(kLatency, rpcExecutor);
-      });
+      },
+      DemoBatchRPCFunction::signatures());
 
   constexpr int kRows = 8;
   std::vector<RowVectorPtr> inputs;
@@ -965,6 +986,116 @@ TEST_F(RPCOperatorTest, batchMidStreamBackpressureParksNotSpins) {
   EXPECT_GT(blockedNs, 2 * latencyNs)
       << "RPC operator did not park under mid-stream BATCH back-pressure: "
       << "blockedWallNanos=" << blockedNs << " latencyNs=" << latencyNs;
+}
+
+// RPC progress must be observable from Task::taskStats() while the driver is
+// blocked, not only after the operator closes.
+//
+// While a driver is blocked on kWaitForRPC no operator counter advances:
+// inputVectors and outputVectors are frozen and the memory reservation is
+// already taken. Previously RPCOperator published its counters from close()
+// only, so a caller sampling Task::taskStats() saw identical stats for the
+// whole backend round trip. stats() now refreshes them on every sample.
+//
+// The plan runs a slow BATCH RPC and drives the task through a non-blocking
+// TaskCursor, sampling Task::taskStats() while the cursor reports itself
+// blocked. Without the stats() override rpcInFlight is absent from
+// runtimeStats for every sample and both assertions below fail.
+TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
+  constexpr std::chrono::milliseconds kLatency{500};
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  AsyncRPCFunctionRegistry::registerFunction(
+      "slow_batch_rpc_liveness",
+      [kLatency, rpcExecutor]() {
+        return std::make_shared<SlowBatchRPCFunction>(kLatency, rpcExecutor);
+      },
+      DemoBatchRPCFunction::signatures());
+
+  constexpr int kRows = 4;
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    inputs.push_back(makeRowVector(
+        {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})}));
+  }
+
+  CursorParameters params;
+  params.planNode = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "slow_batch_rpc_liveness",
+      /*dispatchBatchSize=*/1);
+  params.maxDrivers = 1;
+
+  auto cursor = TaskCursor::create(params);
+  const auto task = cursor->task();
+
+  // Highest rpcInFlight and rpcCompletionsSignaled seen mid-run, i.e. strictly
+  // before the operator closes and publishes its final stats.
+  int64_t peakInFlightWhileRunning{0};
+  int64_t completionsWhileRunning{0};
+  const auto sampleLiveStats = [&]() {
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.operatorType != "RPC") {
+          continue;
+        }
+        const auto inFlight = op.runtimeStats.find(RPCOperator::kRpcInFlight);
+        if (inFlight != op.runtimeStats.end()) {
+          peakInFlightWhileRunning =
+              std::max(peakInFlightWhileRunning, inFlight->second.sum);
+        }
+        const auto completions =
+            op.runtimeStats.find(RPCOperator::kRpcCompletionsSignaled);
+        if (completions != op.runtimeStats.end()) {
+          completionsWhileRunning =
+              std::max(completionsWhileRunning, completions->second.sum);
+        }
+      }
+    }
+  };
+
+  int32_t numOutputRows{0};
+  while (true) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    if (cursor->moveNext(&future)) {
+      numOutputRows += cursor->current()->size();
+      continue;
+    }
+    if (!future.valid()) {
+      break;
+    }
+    // The cursor is parked on the in-flight batch. Sample repeatedly so the
+    // assertion does not depend on catching a single instant.
+    while (!future.isReady()) {
+      sampleLiveStats();
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    std::move(future).wait();
+  }
+
+  EXPECT_EQ(numOutputRows, kRows);
+  EXPECT_GT(peakInFlightWhileRunning, 0)
+      << "rpcInFlight was never observed while the driver was blocked";
+  EXPECT_GT(completionsWhileRunning, 0)
+      << "rpcCompletionsSignaled did not advance mid-run";
+
+  // The in-flight gauge must not survive into the finished task's stats. Task
+  // accumulates a closed driver's stats permanently, so a leftover positive
+  // reading would report RPCs still in flight long after they completed. The
+  // monotonic counter, by contrast, is meaningful after the fact and is still
+  // published at close().
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.operatorType != "RPC") {
+        continue;
+      }
+      EXPECT_EQ(op.runtimeStats.count(RPCOperator::kRpcInFlight), 0)
+          << "in-flight gauge was frozen into the finished task's stats";
+      EXPECT_GT(
+          op.runtimeStats.at(RPCOperator::kRpcCompletionsSignaled).sum, 0);
+    }
+  }
 }
 
 /// PER_ROW congestion path. On the function's overload verdict
