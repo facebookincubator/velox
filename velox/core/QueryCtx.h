@@ -284,7 +284,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     return planNodeTokenProviders_.withRLock(
         [&](const auto& providers)
             -> std::shared_ptr<filesystems::TokenProvider> {
-          if (providers.empty()) {
+          if (providers.empty() || planNodeId.empty()) {
             return fsTokenProvider_;
           }
           auto it = providers.find(planNodeId);

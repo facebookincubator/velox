@@ -175,6 +175,11 @@ TEST_F(QueryCtxTest, fsTokenProviderRouting) {
   queryCtx->setFsTokenProvider("scan-1", nodeProvider);
   ASSERT_EQ(queryCtx->fsTokenProvider("scan-1"), nodeProvider);
 
+  // Empty planNodeId always returns the query-level provider, even after
+  // per-node providers have been set.
+  ASSERT_EQ(queryCtx->fsTokenProvider(), queryLevelProvider);
+  ASSERT_EQ(queryCtx->fsTokenProvider(""), queryLevelProvider);
+
   // An unregistered planNodeId returns nullptr.
   ASSERT_EQ(queryCtx->fsTokenProvider("scan-2"), nullptr);
 }
