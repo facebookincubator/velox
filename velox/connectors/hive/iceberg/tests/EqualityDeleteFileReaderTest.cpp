@@ -361,8 +361,15 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityFilterOnlyColumnNotInProjection) {
 
   auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
   // WHERE id >= 3 => {3,4,5,6,7,8,9}; delete id=4,8 => {3,5,6,7,9}.
-  auto plan = makeIcebergTableScanPlan(
-      outputType, tableType, {}, /*subfieldFilters=*/{"id >= 3"});
+  // 'id' is filter-only (not in outputType). IcebergTableScanBuilder
+  // auto-builds its handle and assigns field IDs via 1-based ordinal fallback.
+  IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(tableType)
+                  .subfieldFilters({"id >= 3"})
+                  .endTableScan()
+                  .planNode();
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
@@ -547,7 +554,13 @@ TEST_F(EqualityDeleteFileReaderTest, nonSequentialEqualityFieldId) {
       {},
       {dwio::common::FileFormat::DWRF, false},
       {icebergDeleteFile});
-  auto plan = makeIcebergTableScanPlan(tableType, tableType, fieldIds);
+  IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
+                  .outputType(tableType)
+                  .dataColumns(tableType)
+                  .dataColumnFieldIds(fieldIds)
+                  .endTableScan()
+                  .planNode();
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
@@ -595,7 +608,13 @@ TEST_F(
       /*partitionKeys=*/{},
       {dwio::common::FileFormat::DWRF, false},
       {icebergDeleteFile});
-  auto plan = makeIcebergTableScanPlan(outputType, tableType, fieldIds);
+  IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
+                  .outputType(outputType)
+                  .dataColumns(tableType)
+                  .dataColumnFieldIds(fieldIds)
+                  .endTableScan()
+                  .planNode();
   auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
 
   auto expected = makeRowVector(
