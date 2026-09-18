@@ -165,4 +165,14 @@ Timestamp truncateTimestamp(
     Timestamp timestamp,
     DateTimeUnit unit,
     const tz::TimeZone* timeZone);
+
+/// Truncates a date (days since 1970-01-01) to the start of the
+/// specified unit. Supported units are kDay, kWeek, kMonth, kQuarter,
+/// and kYear; any other value is undefined behavior. Avoids the
+/// std::tm round trip used by adjustDateTime + calendarUtcToEpoch:
+/// kWeek is pure int math on the day count, and kMonth/kQuarter/kYear
+/// go directly through the Neri-Schneider primitives in FastDate.h.
+/// Falls back to the std::tm path for the rare boundary years where
+/// the inverse Neri-Schneider isn't safe.
+int32_t truncateDate(int32_t days, DateTimeUnit unit);
 } // namespace facebook::velox::functions
