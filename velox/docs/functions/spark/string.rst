@@ -8,6 +8,8 @@ String Functions
 
     These functions assume that input strings contain valid UTF-8 encoded Unicode code points.
     The behavior is undefined if they are not.
+    This assumption does not apply to the binary input of :spark:func:`decode`,
+    which accepts arbitrary bytes.
 
 .. spark:function:: ascii(string) -> integer
 
@@ -110,6 +112,98 @@ String Functions
         SELECT conv("11ABC", 10, 16); -- 'B'
         SELECT conv("11abc", 10, 10); -- '11'
         SELECT conv('H016F', 16, 10); -- '0'
+
+.. spark:function:: decode(binary, charset) -> varchar
+
+    Decodes ``binary`` (VARBINARY) using ``charset`` (VARCHAR) and returns a
+    VARCHAR containing valid UTF-8. The binary input may contain arbitrary bytes,
+    including embedded zeros, and does not need to be valid UTF-8.
+    See the
+    `Spark decode specification <https://spark.apache.org/docs/latest/api/sql/index.html#decode>`_.
+
+    Supports exactly these canonical charset names: ``US-ASCII``, ``ISO-8859-1``,
+    ``UTF-8``, ``UTF-16BE``, ``UTF-16LE``, ``UTF-16``, and ``UTF-32``. Matching is
+    ASCII case-insensitive and exact over the entire name. Whitespace is not
+    trimmed; aliases such as ``ASCII`` and ``UTF8``, names containing embedded
+    zeros, and other charsets are not supported. The charset may vary by row.
+
+    Returns NULL if either argument is NULL, even when a NULL binary is paired
+    with an unsupported charset. Empty binary input with a supported charset
+    returns an empty string. An unsupported charset, including an empty name,
+    raises a user error even for empty binary input. In Velox,
+    ``TRY(decode(binary, charset))`` converts this error to NULL for the failing
+    row without affecting successful rows.
+
+    Compatibility follows JDK 17 replacement-mode decoding (verified on
+    OpenJDK 17.0.19), followed by Java string re-encoding to UTF-8. See
+    `CharsetDecoder <https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/nio/charset/CharsetDecoder.html>`_
+    and
+    `String.getBytes(Charset) <https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/lang/String.html#getBytes(java.nio.charset.Charset)>`_.
+    This is a supported subset, not support for all JDK charsets or aliases.
+    The charset restriction corresponds to
+    ``spark.sql.legacy.javaCharsets=false``, the Spark 4.x default. Replacement
+    of malformed input corresponds to
+    ``spark.sql.legacy.codingErrorAction=true``; with the Spark 4.x default of
+    ``false``, Spark raises ``MALFORMED_CHARACTER_CODING`` instead. Earlier
+    Spark versions may accept additional JDK charset names and aliases.
+    Behavior is not guaranteed to match every JDK version: unlike JDK 8,
+    JDK 17 preserves U+FFFE in UTF-16 decoding rather than replacing it.
+
+    Malformed byte sequences are replaced rather than raising decoding errors:
+
+    * ``US-ASCII`` replaces each byte above 0x7F with U+FFFD. ``ISO-8859-1`` maps
+      every byte to the corresponding U+0000 through U+00FF character.
+    * ``UTF-8`` uses U+FFFD with JDK malformed-sequence grouping, not necessarily
+      one replacement per byte. For example, ``EDA080`` produces one replacement,
+      while ``C080`` produces two.
+    * The UTF-16 charsets use U+FFFD for malformed input. A high surrogate
+      followed by a non-low-surrogate code unit consumes both units (four bytes)
+      as one replacement. A high surrogate followed by just one final byte
+      consumes all three bytes as one replacement. A lone low surrogate or an
+      otherwise incomplete final code unit also produces a replacement.
+    * ``UTF-32`` follows both the JDK decoder and the subsequent Java UTF-8
+      re-encoding step. Adjacent surrogate-valued words representing a high
+      surrogate and a low surrogate combine into one supplementary character.
+      An unpaired surrogate becomes a question mark (``?``, byte ``3F``), not
+      U+FFFD or an encoded surrogate. Words above 0x10FFFF and incomplete final
+      words produce U+FFFD.
+
+    Byte-order marks (BOMs) are charset-specific:
+
+    * ``UTF-8`` preserves a BOM as U+FEFF.
+    * ``UTF-16BE`` and ``UTF-16LE`` always use big-endian and little-endian order,
+      respectively. They do not consume an initial BOM: its bytes decode as
+      U+FEFF, or U+FFFE when reversed relative to the specified byte order.
+    * ``UTF-16`` consumes an initial ``FEFF`` or ``FFFE`` BOM to select big-endian
+      or little-endian order, respectively. Without a BOM, it uses big-endian.
+    * ``UTF-32`` consumes an initial ``0000FEFF`` or ``FFFE0000`` BOM to select
+      big-endian or little-endian order, respectively. Without a BOM, it uses
+      big-endian.
+
+    Only the initial BOM is consumed by ``UTF-16`` and ``UTF-32``; later bytes
+    are decoded in the selected byte order. A BOM-only input in these two
+    charsets returns an empty string. Empty input never inserts a BOM. ::
+
+        SELECT decode(x'41', 'uTf-8'); -- 'A'
+        SELECT decode(x'', 'UTF-16'); -- ''
+        SELECT decode(NULL, 'invalid'); -- NULL
+        SELECT decode(x'41', NULL); -- NULL
+        SELECT try(decode(x'', 'UTF8')); -- NULL
+        SELECT hex(decode(x'007F80FF', 'US-ASCII')); -- '007FEFBFBDEFBFBD'
+        SELECT hex(decode(x'007F80FF', 'ISO-8859-1')); -- '007FC280C3BF'
+        SELECT hex(decode(x'EDA080', 'UTF-8')); -- 'EFBFBD'
+        SELECT hex(decode(x'C080', 'UTF-8')); -- 'EFBFBDEFBFBD'
+        SELECT hex(decode(x'D80000410042', 'UTF-16BE')); -- 'EFBFBD42'
+        SELECT hex(decode(x'D80000', 'UTF-16BE')); -- 'EFBFBD'
+        SELECT hex(decode(x'FFFE', 'UTF-16BE')); -- 'EFBFBE'
+        SELECT hex(decode(x'FEFF', 'UTF-16BE')); -- 'EFBBBF'
+        SELECT hex(decode(x'FFFE', 'UTF-16LE')); -- 'EFBBBF'
+        SELECT hex(decode(x'FEFF', 'UTF-16')); -- ''
+        SELECT hex(decode(x'FFFE4100', 'UTF-16')); -- '41'
+        SELECT hex(decode(x'FFFE000041000000', 'UTF-32')); -- '41'
+        SELECT hex(decode(x'0000D800', 'UTF-32')); -- '3F'
+        SELECT hex(decode(x'0000D8000000DC00', 'UTF-32')); -- 'F0908080'
+        SELECT hex(decode(x'0000004100', 'UTF-32')); -- '41EFBFBD'
 
 .. spark:function:: empty2null(input) -> varchar
 
