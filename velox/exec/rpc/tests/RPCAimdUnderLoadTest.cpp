@@ -71,7 +71,7 @@ AsyncRPCFunctionRegistry::Signatures varcharSignature() {
 }
 
 // What the two burst harnesses share: a ResponseSimulator that fails a
-// deterministic window of call ordinals, the backend key, and the overload
+// deterministic window of call ordinals, the admission key, and the overload
 // classifier. Only the dispatch shape differs, so only that is left to the
 // subclasses -- a contract change on AsyncRPCFunction is then absorbed here
 // once instead of in both.
@@ -88,8 +88,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
     int64_t burstLastCall{0};
     RPCErrorKind burstKind{RPCErrorKind::kRateLimited};
     std::chrono::milliseconds latency{std::chrono::milliseconds(1)};
-    // Non-empty so the process-global rate limiter is keyed on a real tier.
-    std::string tier{"layer2.test.tier"};
+    // Non-empty so the process-global rate limiter is keyed on a real backend.
+    std::string backend{"layer2.test.backend"};
   };
 
   explicit BurstFunctionBase(Config config) : config_{std::move(config)} {}
@@ -113,8 +113,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
     return VARCHAR();
   }
 
-  std::string tierKey() const override {
-    return config_.tier;
+  std::string admissionKey() const override {
+    return config_.backend;
   }
 
   // Overload classifier: rate-limit / timeout failures are backend overload
@@ -286,10 +286,10 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   static constexpr int32_t kTotalRows =
       kWarmupRows + kBurstRows + kRecoveryRows;
 
-  // Rate-limiter AIMD bounds for the test tier. Keeping the in-flight ceiling
-  // (window 32, cap 64) below the burst size guarantees the burst drains in
-  // several waves, so the cap shrinks multiple times (64 -> 32 -> 16 -> ...)
-  // well below its ceiling before recovery.
+  // Rate-limiter AIMD bounds for the test backend. Keeping the in-flight
+  // ceiling (window 32, cap 64) below the burst size guarantees the burst
+  // drains in several waves, so the cap shrinks multiple times (64 -> 32 -> 16
+  // -> ...) well below its ceiling before recovery.
   static constexpr int64_t kMaxLimit = 64;
   static constexpr int64_t kMinLimit = 4;
   static constexpr int64_t kMaxWindow = 32;
@@ -315,7 +315,7 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
                   /*burstLastCall=*/kWarmupRows + kBurstRows,
                   /*burstKind=*/RPCErrorKind::kRateLimited,
                   /*latency=*/std::chrono::milliseconds(1),
-                  /*tier=*/"layer2.test.batch.tier"});
+                  /*backend=*/"layer2.test.batch.backend"});
         },
         varcharSignature());
   }
