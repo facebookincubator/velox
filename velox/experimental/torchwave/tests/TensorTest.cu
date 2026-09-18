@@ -38,6 +38,17 @@ CudaPtr<T[]> allocateManagedArray(size_t count) {
   return CudaPtr<T[]>(ptr);
 }
 
+cudaError_t prefetchToDevice(const void* ptr, size_t count, int device) {
+#if CUDA_VERSION >= 13000
+  cudaMemLocation loc{};
+  loc.type = cudaMemLocationTypeDevice;
+  loc.id = device;
+  return cudaMemPrefetchAsync(ptr, count, loc, 0);
+#else
+  return cudaMemPrefetchAsync(ptr, count, device);
+#endif
+}
+
 void fillTensorParam(const at::Tensor& tensor, Tensor* t) {
   memset(t, 0, sizeof(Tensor));
   t->storage = tensor.data_ptr();
@@ -215,14 +226,13 @@ TEST_F(TensorTest, initAndIndexCalculator) {
   // Prefetch all managed memory to device before launching the kernel.
   int device;
   CUDA_CHECK_FATAL(cudaGetDevice(&device));
-  CUDA_CHECK_FATAL(
-      cudaMemPrefetchAsync(paramsBuffer.get(), kParamsSize, device));
-  CUDA_CHECK_FATAL(cudaMemPrefetchAsync(
+  CUDA_CHECK_FATAL(prefetchToDevice(paramsBuffer.get(), kParamsSize, device));
+  CUDA_CHECK_FATAL(prefetchToDevice(
       linearIndices.get(), kTotalIndices * sizeof(int32_t), device));
-  CUDA_CHECK_FATAL(cudaMemPrefetchAsync(
-      offsets.get(), kTotalIndices * sizeof(int32_t), device));
   CUDA_CHECK_FATAL(
-      cudaMemPrefetchAsync(debugInfo.get(), sizeof(DebugInfo), device));
+      prefetchToDevice(offsets.get(), kTotalIndices * sizeof(int32_t), device));
+  CUDA_CHECK_FATAL(
+      prefetchToDevice(debugInfo.get(), sizeof(DebugInfo), device));
   CUDA_CHECK_FATAL(cudaDeviceSynchronize());
 
   // Set up TorchWaveParams with a single block.
@@ -382,14 +392,13 @@ TEST_F(TensorTest, broadcastIndexCalculator) {
 
   int device;
   CUDA_CHECK_FATAL(cudaGetDevice(&device));
-  CUDA_CHECK_FATAL(
-      cudaMemPrefetchAsync(paramsBuffer.get(), kParamsSize, device));
-  CUDA_CHECK_FATAL(cudaMemPrefetchAsync(
+  CUDA_CHECK_FATAL(prefetchToDevice(paramsBuffer.get(), kParamsSize, device));
+  CUDA_CHECK_FATAL(prefetchToDevice(
       offsets.get(),
       kBroadcastInputs * kBroadcastElements * sizeof(int32_t),
       device));
   CUDA_CHECK_FATAL(
-      cudaMemPrefetchAsync(debugInfo.get(), sizeof(DebugInfo), device));
+      prefetchToDevice(debugInfo.get(), sizeof(DebugInfo), device));
   CUDA_CHECK_FATAL(cudaDeviceSynchronize());
 
   TorchWaveParams twParams;
