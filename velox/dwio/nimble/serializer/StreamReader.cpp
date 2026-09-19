@@ -174,7 +174,7 @@ void StreamReader::prepareRead(std::span<const std::string_view> streams) {
         !chunkedStream->hasNext(),
         "StreamReader requires exactly one encoded chunk per stream");
     auto decoder = std::make_unique<EncodingViewDecoder>(
-        encoded, pool_, [this](std::string_view encoding) {
+        encoded, pool_, options_.bufferPool, [this](std::string_view encoding) {
           return createEncodingView(encoding, pool_, options_);
         });
     chunkedStreams_.push_back(std::move(chunkedStream));
