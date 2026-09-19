@@ -55,6 +55,13 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
 
 class FileConfig;
 
+/// Adds DWIO file I/O counters and latency histograms to connector runtime
+/// stats. The optional prefix distinguishes data and metadata I/O.
+void addIoStatsToRuntimeStats(
+    io::IoStatistics& ioStats,
+    std::string_view prefix,
+    std::unordered_map<std::string, RuntimeMetric>& res);
+
 /// Base class for file-based data sources that read from columnar file formats
 /// (ORC, Parquet, etc.) using FileSplitReader. Provides the common scan
 /// pipeline: column resolution, filter extraction, scan spec construction,
@@ -74,6 +81,9 @@ class FileDataSource : public DataSource {
   static constexpr std::string_view kTotalScanTime{"totalScanTime"};
   static constexpr std::string_view kOverreadBytes{"overreadBytes"};
   static constexpr std::string_view kStorageReadBytes{"storageReadBytes"};
+  /// Preserves the DWIO value when a ReadFile counter uses kStorageReadBytes.
+  static constexpr std::string_view kDwioStorageReadBytes{
+      "dwio.storageReadBytes"};
   static constexpr std::string_view kNumLocalRead{"numLocalRead"};
   static constexpr std::string_view kLocalReadBytes{"localReadBytes"};
   static constexpr std::string_view kNumRamRead{"numRamRead"};
