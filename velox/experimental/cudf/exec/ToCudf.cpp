@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/GpuCapabilities.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
@@ -322,6 +323,11 @@ void registerCudf() {
   cudaGetDevice(&contextDevice);
   VELOX_CHECK_GE(contextDevice, 0, "Failed to get current CUDA device ordinal");
   setCudfContextDevice(contextDevice);
+
+  // Read the device before anything derives a default from it. The context
+  // exists by this point, and every memory-related default below is a size that
+  // only means something relative to the device it will live on.
+  initializeGpuCapabilities(contextDevice);
 
   const std::string mrMode = CudfConfig::getInstance().memoryResource;
   auto mr = cudf_velox::createMemoryResource(
