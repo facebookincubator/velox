@@ -92,11 +92,6 @@ class TestingStream final : public MergeStream {
                                          : 1;
   }
 
-  bool nextEquals() final {
-    return numbers_.size() > 1 &&
-        numbers_.back() == numbers_[numbers_.size() - 2];
-  }
-
  private:
   // True if 'current_' is initialized.
   mutable bool currentValid_{false};
@@ -127,9 +122,12 @@ class TestingSpillMergeStream : public SpillMergeStream {
     return sortingKeys_;
   }
 
-  bool nextBatch(RowVectorPtr& /*rowVector*/) override {
+  void nextBatch() override {
     VELOX_CHECK(!closed_);
-    return false;
+    index_ = 0;
+    size_ = 0;
+    close();
+    rowVector_.reset();
   }
 
   void close() override {

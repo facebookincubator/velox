@@ -24,6 +24,9 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::exec {
 
 namespace {
+constexpr CompareFlags kEqualFlags =
+    CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
+
 bool allAreSinglyReferenced(
     const std::vector<column_index_t>& argList,
     const std::unordered_map<column_index_t, int>& channelUseCount) {
@@ -1270,17 +1273,14 @@ bool GroupingSet::mergeNextWithAggregates(
   VELOX_CHECK(!isDistinct());
   VELOX_CHECK_NOT_NULL(merge_);
 
-  // True if 'merge_' indicates that the next key is the same as the current
-  // one.
-  bool nextKeyIsEqual{false};
   for (;;) {
-    const auto next = merge_->nextWithEquals();
-    if (next.first == nullptr) {
+    auto* stream = merge_->next();
+    if (stream == nullptr) {
       extractSpillResult(result);
+      mergeState_ = nullptr;
       if (result->size() > 0) {
         return true;
       }
-      VELOX_CHECK(!nextKeyIsEqual);
       if (!prepareNextSpillPartitionOutput()) {
         VELOX_CHECK_NULL(merge_);
         return false;
@@ -1288,20 +1288,31 @@ bool GroupingSet::mergeNextWithAggregates(
       VELOX_CHECK_NOT_NULL(merge_);
       continue;
     }
-    if (!nextKeyIsEqual) {
-      mergeState_ = mergeRows_->newRow();
-      initializeRow(*next.first, mergeState_);
+    bool sameKey = mergeState_ != nullptr;
+    for (auto i = 0; sameKey && i < keyChannels_.size(); ++i) {
+      if (mergeRows_->compare(
+              mergeState_,
+              mergeRows_->columnAt(i),
+              stream->decoded(i),
+              stream->currentIndex(),
+              kEqualFlags) != 0) {
+        sameKey = false;
+      }
     }
-    updateRow(*next.first, mergeState_);
-    nextKeyIsEqual = next.second;
-    next.first->pop();
-
-    if (!nextKeyIsEqual &&
-        ((mergeRows_->numRows() >= maxOutputRows) ||
-         (mergeRowBytes() >= maxOutputBytes))) {
+    if (!sameKey && mergeState_ != nullptr &&
+        (mergeRows_->numRows() >= maxOutputRows ||
+         mergeRowBytes() >= maxOutputBytes)) {
       extractSpillResult(result);
+      mergeState_ = nullptr;
       return true;
     }
+
+    if (!sameKey) {
+      mergeState_ = mergeRows_->newRow();
+      initializeRow(*stream, mergeState_);
+    }
+    updateRow(*stream, mergeState_);
+    stream->pop();
   }
   VELOX_UNREACHABLE();
 }
@@ -1393,68 +1404,77 @@ bool GroupingSet::mergeNextWithoutAggregates(
   // been output as distinct before we trigger spilling. A distinct stream id is
   // less than 'numDistinctSpillFilesPerPartition_'.
   bool newDistinct{true};
-  int32_t numOutputRows{0};
   int32_t outputSize{0};
-  bool endOfBatch = false;
+  RowVectorPtr lastVector;
+  vector_size_t lastIndex{0};
+  std::vector<RowVectorPtr> spillSourceVectors(maxOutputRows);
   prepareSpillResultWithoutAggregates(maxOutputRows, result);
 
-  while (numOutputRows + outputSize < maxOutputRows) {
-    const auto next = merge_->nextWithEquals();
-    auto* stream = next.first;
+  auto addLastRow = [&]() {
+    spillSources_[outputSize] = lastVector.get();
+    spillSourceRows_[outputSize] = lastIndex;
+    spillSourceVectors[outputSize] = lastVector;
+    ++outputSize;
+  };
+  auto flushOutput = [&]() {
+    gatherCopy(
+        spillResultWithoutAggregates_.get(),
+        0,
+        outputSize,
+        spillSources_,
+        spillSourceRows_);
+    spillResultWithoutAggregates_->resize(outputSize);
+    projectResult(result);
+  };
+
+  while (outputSize < maxOutputRows) {
+    auto* stream = merge_->next();
     if (stream == nullptr) {
-      VELOX_CHECK_EQ(outputSize, 0);
-      if (numOutputRows > 0) {
-        break;
+      if (lastVector != nullptr && newDistinct) {
+        addLastRow();
+      }
+      if (outputSize != 0) {
+        flushOutput();
+        return true;
       }
       if (!prepareNextSpillPartitionOutput()) {
         VELOX_CHECK_NULL(merge_);
-        break;
+        return false;
       }
       VELOX_CHECK_NOT_NULL(merge_);
+      newDistinct = true;
+      lastVector.reset();
       continue;
+    }
+    const auto& currentVector = *stream->current();
+    const auto index = stream->currentIndex();
+    bool sameKey = lastVector != nullptr;
+    for (auto i = 0; sameKey && i < keyChannels_.size(); ++i) {
+      sameKey =
+          lastVector->childAt(i)
+              ->compare(
+                  currentVector.childAt(i).get(), lastIndex, index, kEqualFlags)
+              .value() == 0;
+    }
+    if (!sameKey && lastVector != nullptr && newDistinct) {
+      addLastRow();
+      if (outputSize == maxOutputRows) {
+        flushOutput();
+        return true;
+      }
+    }
+    if (!sameKey) {
+      newDistinct = true;
     }
     if (stream->id() <
         numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
       newDistinct = false;
     }
-    auto index = stream->currentIndex(&endOfBatch);
-    if (!next.second && newDistinct) {
-      // Yield result for new distinct.
-      spillSources_[outputSize] = &stream->current();
-      spillSourceRows_[outputSize] = index;
-      ++outputSize;
-    }
-
-    if (FOLLY_UNLIKELY(endOfBatch)) {
-      // The stream is at end of input batch. Need to copy out the rows before
-      // fetching next batch in 'pop'.
-      gatherCopy(
-          spillResultWithoutAggregates_.get(),
-          numOutputRows,
-          outputSize,
-          spillSources_,
-          spillSourceRows_);
-      numOutputRows += outputSize;
-      outputSize = 0;
-    }
+    lastVector = stream->current();
+    lastIndex = index;
     stream->pop();
-    // Reset newDistinct flag for new row.
-    if (!next.second) {
-      newDistinct = true;
-    }
   }
-  if (FOLLY_LIKELY(outputSize != 0)) {
-    gatherCopy(
-        spillResultWithoutAggregates_.get(),
-        numOutputRows,
-        outputSize,
-        spillSources_,
-        spillSourceRows_);
-    numOutputRows += outputSize;
-  }
-  spillResultWithoutAggregates_->resize(numOutputRows);
-  projectResult(result);
-  return numOutputRows > 0;
+  VELOX_UNREACHABLE();
 }
 
 void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
@@ -1519,7 +1539,7 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;
     }
-    mergeArgs_[0] = input.current().childAt(i + keyChannels_.size());
+    mergeArgs_[0] = input.current()->childAt(i + keyChannels_.size());
     aggregates_[i].function->addSingleGroupIntermediateResults(
         row, mergeSelection_, mergeArgs_, false);
   }
@@ -1527,7 +1547,7 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
 
   auto sortOrDistinctAggIndex = aggregates_.size() + keyChannels_.size();
   if (sortedAggregations_ != nullptr) {
-    const auto& vector = input.current().childAt(sortOrDistinctAggIndex);
+    const auto& vector = input.current()->childAt(sortOrDistinctAggIndex);
     sortedAggregations_->addSingleGroupSpillInput(
         row, vector, input.currentIndex());
     ++sortOrDistinctAggIndex;
@@ -1537,7 +1557,7 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
     if (distinctAgg != nullptr) {
       distinctAgg->addSingleGroupSpillInput(
           row,
-          input.current().childAt(sortOrDistinctAggIndex),
+          input.current()->childAt(sortOrDistinctAggIndex),
           input.currentIndex());
       ++sortOrDistinctAggIndex;
     }

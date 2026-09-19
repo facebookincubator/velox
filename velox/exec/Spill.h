@@ -71,13 +71,11 @@ class SpillMergeStream : public MergeStream {
 
   int32_t compare(const MergeStream& other) const override;
 
-  bool nextEquals() override;
-
   void pop();
 
-  const RowVector& current() const {
+  const RowVectorPtr& current() const {
     VELOX_CHECK(!closed_);
-    return *rowVector_;
+    return rowVector_;
   }
 
   /// Invoked to get the current row index in 'rowVector_'. If 'isLastRow' is
@@ -111,21 +109,13 @@ class SpillMergeStream : public MergeStream {
  protected:
   virtual const std::vector<SpillSortKey>& sortingKeys() const = 0;
 
-  virtual bool nextBatch(RowVectorPtr& rowVector) = 0;
+  virtual void nextBatch() = 0;
 
   virtual void close();
 
   // loads the next 'rowVector' and sets 'decoded_' if this is initialized.
   void setNextBatch() {
-    if (nextRowVector_ != nullptr) {
-      rowVector_ = std::move(nextRowVector_);
-    } else if (!nextBatch(rowVector_)) {
-      size_ = 0;
-      close();
-      return;
-    }
-    index_ = 0;
-    size_ = rowVector_->size();
+    nextBatch();
     if (!decoded_.empty()) {
       ensureRows();
       for (auto i = 0; i < decoded_.size(); ++i) {
@@ -133,14 +123,6 @@ class SpillMergeStream : public MergeStream {
       }
     }
   }
-
-  bool loadNextBatch();
-
-  int32_t compareRows(
-      const RowVector& left,
-      vector_size_t leftIndex,
-      const RowVector& right,
-      vector_size_t rightIndex) const;
 
   void ensureDecodedValid(int32_t index) {
     int32_t oldSize = decoded_.size();
@@ -166,9 +148,6 @@ class SpillMergeStream : public MergeStream {
   // Current batch of rows.
   RowVectorPtr rowVector_;
 
-  // The following batch, loaded on demand by nextEquals().
-  RowVectorPtr nextRowVector_;
-
   // The current row in 'rowVector_'
   vector_size_t index_{0};
 
@@ -190,7 +169,7 @@ class FileSpillMergeStream : public SpillMergeStream {
       std::unique_ptr<SpillReadFile> spillFile) {
     auto spillStream = std::unique_ptr<SpillMergeStream>(
         new FileSpillMergeStream(std::move(spillFile)));
-    static_cast<FileSpillMergeStream*>(spillStream.get())->setNextBatch();
+    static_cast<FileSpillMergeStream*>(spillStream.get())->nextBatch();
     return spillStream;
   }
 
@@ -207,7 +186,7 @@ class FileSpillMergeStream : public SpillMergeStream {
     return spillFile_->sortingKeys();
   }
 
-  bool nextBatch(RowVectorPtr& rowVector) override;
+  void nextBatch() override;
 
   void close() override;
 
@@ -277,7 +256,7 @@ class ConcatFilesSpillMergeStream final : public SpillMergeStream {
 
   uint32_t id() const override;
 
-  bool nextBatch(RowVectorPtr& rowVector) override;
+  void nextBatch() override;
 
   void close() override;
 
