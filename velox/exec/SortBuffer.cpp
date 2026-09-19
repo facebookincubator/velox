@@ -53,7 +53,7 @@ SortBuffer::SortBuffer(
   std::unordered_set<column_index_t> sortedChannelSet;
   // Sorted key columns.
   for (column_index_t i = 0; i < sortColumnIndices.size(); ++i) {
-    columnMap_.emplace_back(IdentityProjection(i, sortColumnIndices.at(i)));
+    columnMap_.emplace_back(i, sortColumnIndices.at(i));
     sortedColumnTypes.emplace_back(input_->childAt(sortColumnIndices.at(i)));
     sortedSpillColumnTypes.emplace_back(
         input_->childAt(sortColumnIndices.at(i)));
