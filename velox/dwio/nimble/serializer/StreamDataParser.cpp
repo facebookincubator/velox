@@ -350,7 +350,7 @@ Buffer& StreamDataParser::ensureStrippedStreamBuffer() {
 
 uint32_t StreamDataParser::initialize(std::string_view data) {
   pos_ = data.data();
-  end_ = data.end();
+  end_ = data.data() + data.size();
   auto header = readSerializationHeader(pos_, end_);
   version_ = header.version;
   requiresNullBarrier_ = header.flags.requiresNullBarrier;
