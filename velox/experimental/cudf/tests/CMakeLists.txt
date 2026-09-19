@@ -254,7 +254,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_subfield_filter_ast_test
   SOURCES Main.cpp SubfieldFilterAstTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_iceberg_connector
 )
 
 velox_add_cudf_test(
