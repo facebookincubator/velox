@@ -77,8 +77,8 @@ class StreamReader {
 
   // Decodes selected rows through the configured reader tree asynchronously.
   folly::coro::Task<void> co_decodeRows(
-      std::span<const uint32_t> rows,
-      std::span<const velox::BaseVector::CopyRange> ranges,
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output);
 
   // Projected schema shared by every stream set decoded by this instance.

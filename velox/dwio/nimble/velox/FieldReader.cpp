@@ -270,6 +270,14 @@ uint32_t scatterCount(
   return scatterBitmap ? scatterBitmap->size() : count;
 }
 
+uint32_t countRows(std::span<const RowRange> ranges) {
+  uint32_t numRows{0};
+  for (const auto& range : ranges) {
+    numRows += range.numRows();
+  }
+  return numRows;
+}
+
 #ifndef NDEBUG
 void validateCopyRanges(
     size_t numRows,
@@ -549,14 +557,14 @@ class NullColumnReader final : public FieldReader {
   }
 
   folly::coro::Task<void> co_read(
-      std::span<const uint32_t> rows,
-      std::span<const velox::BaseVector::CopyRange> ranges,
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output) final {
     NIMBLE_CHECK_NOT_NULL(output);
-    validateCopyRanges(rows.size(), ranges, output->size());
+    validateCopyRanges(countRows(sourceRanges), outputRanges, output->size());
     output->resetDataDependentFlags(nullptr);
     auto* rawOutputNulls = output->mutableRawNulls();
-    for (const auto& range : ranges) {
+    for (const auto& range : outputRanges) {
       velox::bits::fillBits(
           rawOutputNulls,
           range.targetIndex,
@@ -749,21 +757,21 @@ class ScalarFieldReader final
   }
 
   folly::coro::Task<void> co_read(
-      std::span<const uint32_t> rows,
-      std::span<const velox::BaseVector::CopyRange> ranges,
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output) final {
     NIMBLE_CHECK_NOT_NULL(output);
-    validateCopyRanges(rows.size(), ranges, output->size());
+    validateCopyRanges(countRows(sourceRanges), outputRanges, output->size());
     output->resetDataDependentFlags(nullptr);
     auto* vector = output->asFlatVector<TRequested>();
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires flat output");
 
-    const auto rowCount = static_cast<uint32_t>(rows.size());
+    const auto rowCount = countRows(sourceRanges);
     auto* values = this->ensureBuffer(rowCount);
     velox::BufferPtr nulls;
     std::vector<velox::BufferPtr> stringBuffers;
     const auto nonNullCount = decoder_->read(
-        rows,
+        sourceRanges,
         TypeTraits<TData>::dataType,
         values,
         [&]() {
@@ -781,7 +789,7 @@ class ScalarFieldReader final
     if constexpr (std::is_same_v<TRequested, bool>) {
       auto* outputValues = vector->template mutableRawValues<uint64_t>();
       if (nullBits == nullptr) {
-        for (const auto& range : ranges) {
+        for (const auto& range : outputRanges) {
           velox::bits::fillBits(
               rawOutputNulls,
               range.targetIndex,
@@ -795,7 +803,7 @@ class ScalarFieldReader final
           }
         }
       } else {
-        for (const auto& range : ranges) {
+        for (const auto& range : outputRanges) {
           velox::bits::copyBits(
               nullBits,
               range.sourceIndex,
@@ -814,7 +822,7 @@ class ScalarFieldReader final
     } else {
       auto* outputValues = vector->mutableRawValues();
       if (nullBits == nullptr) {
-        for (const auto& range : ranges) {
+        for (const auto& range : outputRanges) {
           velox::bits::fillBits(
               rawOutputNulls,
               range.targetIndex,
@@ -833,7 +841,7 @@ class ScalarFieldReader final
           }
         }
       } else {
-        for (const auto& range : ranges) {
+        for (const auto& range : outputRanges) {
           velox::bits::copyBits(
               nullBits,
               range.sourceIndex,
@@ -1090,21 +1098,21 @@ class StringFieldReader final : public FieldReader {
   }
 
   folly::coro::Task<void> co_read(
-      std::span<const uint32_t> rows,
-      std::span<const velox::BaseVector::CopyRange> ranges,
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output) final {
     NIMBLE_CHECK_NOT_NULL(output);
-    validateCopyRanges(rows.size(), ranges, output->size());
+    validateCopyRanges(countRows(sourceRanges), outputRanges, output->size());
     output->resetDataDependentFlags(nullptr);
     auto* vector = output->asFlatVector<velox::StringView>();
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires flat string output");
 
-    const auto rowCount = static_cast<uint32_t>(rows.size());
+    const auto rowCount = countRows(sourceRanges);
     auto* values = ensureBuffer(rowCount);
     velox::BufferPtr nulls;
     std::vector<velox::BufferPtr> stringBuffers;
     const auto nonNullCount = decoder_->read(
-        rows,
+        sourceRanges,
         DataType::String,
         values,
         [&]() {
@@ -1124,7 +1132,7 @@ class StringFieldReader final : public FieldReader {
     auto* outputValues = vector->mutableRawValues();
 
     if (nullBits == nullptr) {
-      for (const auto& range : ranges) {
+      for (const auto& range : outputRanges) {
         velox::bits::fillBits(
             rawOutputNulls,
             range.targetIndex,
@@ -1137,7 +1145,7 @@ class StringFieldReader final : public FieldReader {
         }
       }
     } else {
-      for (const auto& range : ranges) {
+      for (const auto& range : outputRanges) {
         velox::bits::copyBits(
             nullBits,
             range.sourceIndex,
@@ -2964,13 +2972,14 @@ class RowFieldReader final : public FieldReader {
   }
 
   folly::coro::Task<void> co_read(
-      std::span<const uint32_t> rows,
-      std::span<const velox::BaseVector::CopyRange> ranges,
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output) final {
-    auto* vector = prepareRead(rows, ranges, output);
+    auto* vector = prepareRead(sourceRanges, outputRanges, output);
     for (uint32_t i{0}; i < childrenReaders_.size(); ++i) {
       if (childrenReaders_[i] != nullptr) {
-        co_await childrenReaders_[i]->co_read(rows, ranges, vector->childAt(i));
+        co_await childrenReaders_[i]->co_read(
+            sourceRanges, outputRanges, vector->childAt(i));
       }
     }
     co_return;
@@ -3011,8 +3020,8 @@ class RowFieldReader final : public FieldReader {
   // Initializes the row output and makes all child vectors large enough for
   // the requested output positions.
   velox::RowVector* prepareRead(
-      std::span<const uint32_t> rows,
-      std::span<const velox::BaseVector::CopyRange> ranges,
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output) {
     if constexpr (hasNull) {
       // TODO: Map logical rows to compact child rows for nullable ROW streams.
@@ -3021,14 +3030,14 @@ class RowFieldReader final : public FieldReader {
     }
 
     NIMBLE_CHECK_NOT_NULL(output);
-    validateCopyRanges(rows.size(), ranges, output->size());
+    validateCopyRanges(countRows(sourceRanges), outputRanges, output->size());
     output->resetDataDependentFlags(nullptr);
     auto* vector = output->as<velox::RowVector>();
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires row output");
     // Calling resize with the current row count also grows shorter children.
     vector->resize(vector->size());
     auto* rawOutputNulls = output->mutableRawNulls();
-    for (const auto& range : ranges) {
+    for (const auto& range : outputRanges) {
       velox::bits::fillBits(
           rawOutputNulls,
           range.targetIndex,
@@ -4679,8 +4688,8 @@ void FieldReader::ensureNullConstant(
 }
 
 folly::coro::Task<void> FieldReader::co_read(
-    std::span<const uint32_t> /*rows*/,
-    std::span<const velox::BaseVector::CopyRange> /*ranges*/,
+    std::span<const RowRange> /*sourceRanges*/,
+    std::span<const velox::BaseVector::CopyRange> /*outputRanges*/,
     velox::VectorPtr& /*output*/) {
   NIMBLE_UNSUPPORTED(
       "Scattered row decoding is not supported for type: {}",

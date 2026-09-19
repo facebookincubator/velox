@@ -56,6 +56,13 @@ class ChunkedStreamDecoder : public Decoder {
       std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers) override;
 
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
+
   void skip(uint32_t count) override;
 
   void reset() override;
