@@ -41,10 +41,12 @@ std::optional<SubfieldFilterDecimalType> subfieldDecimalType(
   if (const auto it = decimalTypes->find(fieldName);
       it != decimalTypes->end()) {
     VELOX_CHECK(
-        it->second.type == cudf::type_id::DECIMAL32 ||
+        it->second.type == cudf::type_id::INT32 ||
+            it->second.type == cudf::type_id::INT64 ||
+            it->second.type == cudf::type_id::DECIMAL32 ||
             it->second.type == cudf::type_id::DECIMAL64 ||
             it->second.type == cudf::type_id::DECIMAL128,
-        "Invalid cuDF decimal storage type for field '{}'",
+        "Invalid cuDF storage type for decimal field '{}'",
         fieldName);
     return it->second;
   }
@@ -115,10 +117,13 @@ std::pair<int128_t, int128_t> getInt128BoundsForType(
         min = -fileMax.floor;
         max = fileMax.floor;
       }
-      if (decimalType->type == cudf::type_id::DECIMAL32) {
+      if (decimalType->type == cudf::type_id::INT32 ||
+          decimalType->type == cudf::type_id::DECIMAL32) {
         min = std::max<int128_t>(min, std::numeric_limits<int32_t>::min());
         max = std::min<int128_t>(max, std::numeric_limits<int32_t>::max());
-      } else if (decimalType->type == cudf::type_id::DECIMAL64) {
+      } else if (
+          decimalType->type == cudf::type_id::INT64 ||
+          decimalType->type == cudf::type_id::DECIMAL64) {
         min = std::max<int128_t>(min, std::numeric_limits<int64_t>::min());
         max = std::min<int128_t>(max, std::numeric_limits<int64_t>::max());
       }
@@ -299,7 +304,11 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerRangeExpr(
       }
       auto const& literal = addLiteral(rescaledLower.floor);
       return buildEqualityExpr(
-          tree, columnRef, literal, columnTypePtr->isDecimal());
+          tree,
+          columnRef,
+          literal,
+          columnTypePtr->isDecimal() &&
+              (!decimalType || decimalType->isDecimal));
     }
 
     // Range comparison: column >= lower AND column <= upper.
@@ -398,7 +407,11 @@ const cudf::ast::expression& buildValuesListExpr(
       exprVec.push_back(&notEqualExpr);
     } else {
       exprVec.push_back(&buildEqualityExpr(
-          tree, columnRef, literal, columnTypePtr->isDecimal()));
+          tree,
+          columnRef,
+          literal,
+          columnTypePtr->isDecimal() &&
+              (!decimalType || decimalType->isDecimal)));
     }
   }
 
@@ -492,7 +505,11 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
           decimalType ? std::optional{decimalType->scale} : std::nullopt);
       auto const& cudfLiteral = tree.push(literal);
       exprVec.push_back(&buildEqualityExpr(
-          tree, columnRef, cudfLiteral, columnTypePtr->isDecimal()));
+          tree,
+          columnRef,
+          cudfLiteral,
+          columnTypePtr->isDecimal() &&
+              (!decimalType || decimalType->isDecimal)));
     }
 
     if (exprVec.empty()) {

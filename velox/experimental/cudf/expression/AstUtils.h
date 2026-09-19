@@ -44,6 +44,14 @@ cudf::ast::literal makeLiteralFromScalar(
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
       switch (scalar.type().id()) {
+        case cudf::type_id::INT32: {
+          using CudfScalarType = cudf::numeric_scalar<int32_t>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        case cudf::type_id::INT64: {
+          using CudfScalarType = cudf::numeric_scalar<int64_t>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
         case cudf::type_id::DECIMAL32: {
           using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal32>;
           return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
@@ -174,6 +182,14 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       std::unique_ptr<cudf::scalar> scalar;
       const auto targetType = toType.value_or(defaultType);
       switch (targetType) {
+        case cudf::type_id::INT32:
+          scalar = std::make_unique<cudf::numeric_scalar<int32_t>>(
+              static_cast<int32_t>(value), !isNull, stream, mr);
+          break;
+        case cudf::type_id::INT64:
+          scalar = std::make_unique<cudf::numeric_scalar<int64_t>>(
+              static_cast<int64_t>(value), !isNull, stream, mr);
+          break;
         case cudf::type_id::DECIMAL32:
           scalar =
               std::make_unique<cudf::fixed_point_scalar<numeric::decimal32>>(
