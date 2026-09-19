@@ -98,11 +98,7 @@ target_link_libraries(
 add_library(nimble_encoding_view_decoder EncodingViewDecoder.cpp EncodingViewDecoder.h)
 target_link_libraries(nimble_encoding_view_decoder nimble_common nimble_encodings velox_memory)
 
-add_library(
-  nimble_stream_reader
-  StreamReader.cpp
-  StreamReader.h
-)
+add_library(nimble_stream_reader StreamReader.cpp StreamReader.h)
 target_link_libraries(
   nimble_stream_reader
   nimble_common

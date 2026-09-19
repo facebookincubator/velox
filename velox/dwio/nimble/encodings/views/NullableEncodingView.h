@@ -21,6 +21,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
@@ -132,6 +133,57 @@ class NullableEncodingView final : public TypedEncodingView<T> {
       typedOutput[outputIndices[i]] = values[i];
     }
     return static_cast<uint32_t>(nonNullIndices.size());
+  }
+
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& setNull,
+      void* output) const final {
+    const auto numRows = this->checkReadRanges(ranges);
+    auto* typedOutput = static_cast<physicalType*>(output);
+    std::vector<RowRange> nonNullRanges;
+    std::vector<uint32_t> outputIndices;
+    nonNullRanges.reserve(numRows);
+    outputIndices.reserve(numRows);
+
+    uint32_t outputIndex{0};
+    for (const auto& range : ranges) {
+      auto sourceRow = range.startRow;
+      while (sourceRow < range.endRow) {
+        if (!isNonNull_[sourceRow]) {
+          typedOutput[outputIndex] = physicalType{};
+          setNull(outputIndex);
+          ++sourceRow;
+          ++outputIndex;
+          continue;
+        }
+
+        const auto nonNullStart = nonNullOffsets_[sourceRow];
+        do {
+          outputIndices.push_back(outputIndex);
+          ++sourceRow;
+          ++outputIndex;
+        } while (sourceRow < range.endRow && isNonNull_[sourceRow]);
+        nonNullRanges.emplace_back(nonNullStart, nonNullOffsets_[sourceRow]);
+      }
+    }
+
+    if (nonNullRanges.empty()) {
+      return 0;
+    }
+    if (outputIndices.size() == numRows) {
+      nonNullValues_->read(nonNullRanges, setNull, typedOutput);
+      return numRows;
+    }
+
+    ScopedVector<physicalType> values{
+        0, this->pool_, this->options_.bufferPool};
+    values.resize(outputIndices.size());
+    nonNullValues_->read(nonNullRanges, setNull, values.data());
+    for (size_t i{0}; i < values.size(); ++i) {
+      typedOutput[outputIndices[i]] = values[i];
+    }
+    return static_cast<uint32_t>(outputIndices.size());
   }
 
  protected:

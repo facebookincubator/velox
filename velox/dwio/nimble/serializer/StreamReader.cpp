@@ -45,17 +45,8 @@ class StringViewStreamLoader final : public StreamLoader {
   const std::string_view stream_;
 };
 
-// Owns the dense source rows and their contiguous output mapping for one read.
-struct ReadPlan {
-  // Absolute source rows decoded densely by FieldReader.
-  std::vector<uint32_t> rows;
-
-  // Maps dense decoded rows to the caller's output positions.
-  std::vector<velox::BaseVector::CopyRange> ranges;
-};
-
 // Validates one request and builds its dense source-to-output mapping.
-ReadPlan makeReadPlan(
+std::vector<velox::BaseVector::CopyRange> makeOutputRanges(
     size_t numStreams,
     size_t expectedNumStreams,
     const velox::TypePtr& outputType,
@@ -100,23 +91,20 @@ ReadPlan makeReadPlan(
       static_cast<uint64_t>(output->size()),
       "Read rows exceed the output vector");
 
-  ReadPlan plan;
-  plan.rows.reserve(static_cast<size_t>(numReadRows));
-  plan.ranges.reserve(ranges.size());
+  std::vector<velox::BaseVector::CopyRange> outputRanges;
+  outputRanges.reserve(ranges.size());
   auto nextOutputOffset = outputOffset;
+  velox::vector_size_t nextSourceOffset{0};
   for (const auto& range : ranges) {
-    plan.ranges.push_back({
-        .sourceIndex = static_cast<velox::vector_size_t>(plan.rows.size()),
+    outputRanges.push_back({
+        .sourceIndex = nextSourceOffset,
         .targetIndex = nextOutputOffset,
         .count = static_cast<velox::vector_size_t>(range.numRows()),
     });
+    nextSourceOffset += static_cast<velox::vector_size_t>(range.numRows());
     nextOutputOffset += static_cast<velox::vector_size_t>(range.numRows());
-    for (uint32_t sourceRow{range.startRow}; sourceRow < range.endRow;
-         ++sourceRow) {
-      plan.rows.push_back(sourceRow);
-    }
   }
-  return plan;
+  return outputRanges;
 }
 
 } // namespace
@@ -164,7 +152,7 @@ folly::coro::Task<void> StreamReader::co_read(
     std::span<const RowRange> ranges,
     velox::vector_size_t outputOffset,
     velox::VectorPtr& output) {
-  const auto plan = makeReadPlan(
+  const auto outputRanges = makeOutputRanges(
       streams.size(),
       readerOffsets_.size(),
       outputType_,
@@ -172,7 +160,7 @@ folly::coro::Task<void> StreamReader::co_read(
       outputOffset,
       output);
   prepareRead(streams);
-  co_await co_decodeRows(plan.rows, plan.ranges, output);
+  co_await co_decodeRows(ranges, outputRanges, output);
 }
 
 void StreamReader::prepareRead(std::span<const std::string_view> streams) {
@@ -209,10 +197,10 @@ void StreamReader::prepareRead(std::span<const std::string_view> streams) {
 }
 
 folly::coro::Task<void> StreamReader::co_decodeRows(
-    std::span<const uint32_t> rows,
-    std::span<const velox::BaseVector::CopyRange> ranges,
+    std::span<const RowRange> sourceRanges,
+    std::span<const velox::BaseVector::CopyRange> outputRanges,
     velox::VectorPtr& output) {
-  co_await reader_->co_read(rows, ranges, output);
+  co_await reader_->co_read(sourceRanges, outputRanges, output);
 }
 
 } // namespace facebook::nimble

@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -34,6 +36,20 @@
 
 namespace facebook::nimble {
 namespace {
+
+// Builds ordered, disjoint ranges with randomized gaps and lengths.
+std::vector<RowRange> makeRandomRanges(uint32_t rowCount, std::mt19937& rng) {
+  std::vector<RowRange> ranges;
+  uint32_t row = static_cast<uint32_t>(rng() % std::min<uint32_t>(rowCount, 8));
+  while (row < rowCount) {
+    const auto maxLength = std::min<uint32_t>(rowCount - row, 16);
+    const uint32_t length{1 + static_cast<uint32_t>(rng() % maxLength)};
+    const auto end = row + length;
+    ranges.emplace_back(row, end);
+    row = std::min<uint32_t>(rowCount, end + static_cast<uint32_t>(rng() % 8));
+  }
+  return ranges;
+}
 
 class EncodingViewDecoderTest : public ::testing::Test {
  protected:
@@ -115,6 +131,90 @@ TEST_F(EncodingViewDecoderTest, readsSelectedNullableRows) {
   }
   EXPECT_EQ(actualNotNulls, (std::array<bool, 4>{false, true, false, true}));
   EXPECT_TRUE(stringBuffers.empty());
+}
+
+TEST_F(EncodingViewDecoderTest, readsNullableRanges) {
+  const auto stream =
+      encodeNullable<int64_t>({10, std::nullopt, 12, 13, std::nullopt, 15});
+  auto decoder = makeDecoder(stream);
+  const std::array<RowRange, 2> ranges{{{0, 2}, {4, 6}}};
+  std::array<int64_t, 4> output{};
+  std::array<uint64_t, 1> outputNulls{};
+  std::vector<velox::BufferPtr> stringBuffers;
+
+  const auto numNonNulls = decoder->read(
+      ranges,
+      DataType::Int64,
+      output.data(),
+      [&outputNulls]() { return outputNulls.data(); },
+      stringBuffers);
+
+  EXPECT_EQ(numNonNulls, 2);
+  EXPECT_EQ(output, (std::array<int64_t, 4>{10, 0, 0, 15}));
+  std::array<bool, 4> actualNotNulls{};
+  for (size_t i{0}; i < actualNotNulls.size(); ++i) {
+    actualNotNulls[i] = velox::bits::isBitSet(outputNulls.data(), i);
+  }
+  EXPECT_EQ(actualNotNulls, (std::array<bool, 4>{true, false, false, true}));
+  EXPECT_TRUE(stringBuffers.empty());
+}
+
+TEST_F(EncodingViewDecoderTest, readsRandomNullableRanges) {
+  constexpr uint32_t kSeed{2'718'281};
+  std::mt19937 rng{kSeed};
+  for (uint32_t iteration{0}; iteration < 100; ++iteration) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "seed=" << kSeed << ", iteration=" << iteration);
+    const uint32_t rowCount{1 + static_cast<uint32_t>(rng() % 256)};
+    const uint32_t nullModulo{1 + static_cast<uint32_t>(rng() % 8)};
+    std::vector<std::optional<int64_t>> rows;
+    rows.reserve(rowCount);
+    for (uint32_t row{0}; row < rowCount; ++row) {
+      rows.push_back(
+          rng() % nullModulo == 0
+              ? std::nullopt
+              : std::optional<int64_t>{static_cast<int64_t>(rng())});
+    }
+    const auto ranges = makeRandomRanges(rowCount, rng);
+    std::vector<std::optional<int64_t>> expected;
+    for (const auto& range : ranges) {
+      expected.insert(
+          expected.end(),
+          rows.begin() + range.startRow,
+          rows.begin() + range.endRow);
+    }
+    const auto stream = encodeNullable<int64_t>(rows);
+    auto decoder = makeDecoder(stream);
+    std::vector<int64_t> output(expected.size(), -1);
+    std::vector<uint64_t> outputNulls(
+        velox::bits::nwords(expected.size()), ~uint64_t{0});
+    std::vector<velox::BufferPtr> stringBuffers;
+
+    const auto numNonNulls = decoder->read(
+        ranges,
+        DataType::Int64,
+        output.data(),
+        [&outputNulls]() { return outputNulls.data(); },
+        stringBuffers);
+
+    std::vector<std::optional<int64_t>> actual;
+    actual.reserve(output.size());
+    for (size_t i{0}; i < output.size(); ++i) {
+      actual.push_back(
+          velox::bits::isBitSet(outputNulls.data(), i)
+              ? std::optional<int64_t>{output[i]}
+              : std::nullopt);
+    }
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(
+        numNonNulls,
+        static_cast<uint32_t>(std::count_if(
+            expected.begin(), expected.end(), [](const auto& value) {
+              return value.has_value();
+            })));
+    EXPECT_TRUE(stringBuffers.empty());
+  }
 }
 
 TEST_F(EncodingViewDecoderTest, retainsSelectedStrings) {

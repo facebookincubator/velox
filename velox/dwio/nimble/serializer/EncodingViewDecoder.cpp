@@ -62,6 +62,68 @@ void retainStringContent(
   stringBuffers.push_back(std::move(buffer));
 }
 
+uint32_t countRows(std::span<const RowRange> ranges) {
+  uint64_t numRows{0};
+  for (size_t i{0}; i < ranges.size(); ++i) {
+    const auto& range = ranges[i];
+    NIMBLE_CHECK(!range.empty(), "Read range must not be empty");
+    if (i > 0) {
+      NIMBLE_CHECK_LE(
+          ranges[i - 1].endRow,
+          range.startRow,
+          "Read ranges must be ordered and disjoint");
+    }
+    numRows += range.numRows();
+  }
+  NIMBLE_CHECK_LE(
+      numRows,
+      static_cast<uint64_t>(std::numeric_limits<velox::vector_size_t>::max()));
+  return static_cast<uint32_t>(numRows);
+}
+
+template <typename ReadFunction>
+uint32_t readSelected(
+    uint32_t numRows,
+    DataType dataType,
+    const EncodingView& encodingView,
+    velox::memory::MemoryPool* pool,
+    void* output,
+    const std::function<void*()>& getOutputNulls,
+    std::vector<velox::BufferPtr>& stringBuffers,
+    ReadFunction readFunction) {
+  if (numRows == 0) {
+    return 0;
+  }
+  NIMBLE_CHECK_NOT_NULL(output);
+  NIMBLE_CHECK_EQ(
+      encodingView.dataType(),
+      dataType,
+      "EncodingView data type does not match FieldReader");
+
+  void* outputNulls{nullptr};
+  const auto setNull = [&](uint32_t outputIndex) {
+    NIMBLE_CHECK_NOT_NULL(
+        getOutputNulls, "Nullable selected read requires output nulls");
+    if (outputNulls == nullptr) {
+      outputNulls = getOutputNulls();
+      velox::bits::fillBits(
+          static_cast<uint64_t*>(outputNulls),
+          0,
+          static_cast<velox::vector_size_t>(numRows),
+          velox::bits::kNotNull);
+    }
+    velox::bits::clearBit(static_cast<uint64_t*>(outputNulls), outputIndex);
+  };
+
+  const auto numNonNulls = readFunction(setNull);
+  if (dataType == DataType::String) {
+    // TODO: Avoid this copy when EncodingView can transfer an ownership handle
+    // for its encoded bytes to the output vector.
+    retainStringContent(outputNulls, numRows, pool, output, stringBuffers);
+  }
+  return numNonNulls;
+}
+
 } // namespace
 
 EncodingViewDecoder::EncodingViewDecoder(
@@ -91,45 +153,40 @@ uint32_t EncodingViewDecoder::read(
     void* output,
     std::function<void*()> getOutputNulls,
     std::vector<velox::BufferPtr>& stringBuffers) {
-  if (rows.empty()) {
-    return 0;
-  }
   NIMBLE_CHECK_LE(
       rows.size(),
       static_cast<size_t>(std::numeric_limits<velox::vector_size_t>::max()));
-  NIMBLE_CHECK_NOT_NULL(output);
-  NIMBLE_CHECK_EQ(
-      encodingView_->dataType(),
+  return readSelected(
+      static_cast<uint32_t>(rows.size()),
       dataType,
-      "EncodingView data type does not match FieldReader");
+      *encodingView_,
+      pool_,
+      output,
+      getOutputNulls,
+      stringBuffers,
+      [&](const auto& setNull) {
+        return encodingView_->read(rows, setNull, output);
+      });
+}
 
-  void* outputNulls{nullptr};
-  const auto setNull = [&](uint32_t outputIndex) {
-    NIMBLE_CHECK_NOT_NULL(
-        getOutputNulls, "Nullable selected read requires output nulls");
-    if (outputNulls == nullptr) {
-      outputNulls = getOutputNulls();
-      velox::bits::fillBits(
-          static_cast<uint64_t*>(outputNulls),
-          0,
-          static_cast<velox::vector_size_t>(rows.size()),
-          velox::bits::kNotNull);
-    }
-    velox::bits::clearBit(static_cast<uint64_t*>(outputNulls), outputIndex);
-  };
-
-  const auto numNonNulls = encodingView_->read(rows, setNull, output);
-  if (dataType == DataType::String) {
-    // TODO: Avoid this copy when EncodingView can transfer an ownership handle
-    // for its encoded bytes to the output vector.
-    retainStringContent(
-        outputNulls,
-        static_cast<uint32_t>(rows.size()),
-        pool_,
-        output,
-        stringBuffers);
-  }
-  return numNonNulls;
+uint32_t EncodingViewDecoder::read(
+    std::span<const RowRange> ranges,
+    DataType dataType,
+    void* output,
+    std::function<void*()> getOutputNulls,
+    std::vector<velox::BufferPtr>& stringBuffers) {
+  const auto numRows = countRows(ranges);
+  return readSelected(
+      numRows,
+      dataType,
+      *encodingView_,
+      pool_,
+      output,
+      getOutputNulls,
+      stringBuffers,
+      [&](const auto& setNull) {
+        return encodingView_->read(ranges, setNull, output);
+      });
 }
 
 void EncodingViewDecoder::skip(uint32_t /*count*/) {
