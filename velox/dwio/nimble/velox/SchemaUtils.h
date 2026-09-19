@@ -15,17 +15,35 @@
  */
 #pragma once
 
+#include <string_view>
+
 #include <folly/container/F14Set.h>
 
+#include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
 namespace facebook::nimble {
 
+class TypeBuilder;
+
 velox::TypePtr convertToVeloxType(const Type& type);
 
 std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type);
+
+/// Parses a Velox subfield path used to identify a value stream.
+velox::common::Subfield parseValueStreamSubfield(std::string_view fieldPath);
+
+/// Resolves a parsed value-stream path against a Velox schema tree.
+const velox::dwio::common::TypeWithId& resolveValueStreamSubfield(
+    const velox::dwio::common::TypeWithId& root,
+    const velox::common::Subfield& subfield);
+
+/// Resolves a parsed value-stream path against a Nimble schema-builder tree.
+const TypeBuilder& resolveValueStreamSubfield(
+    const TypeBuilder& root,
+    const velox::common::Subfield& subfield);
 
 /// Encoding types for top-level columns extracted from a nimble file schema.
 /// Records which columns use encoding-specific types (ArrayWithOffsets,
