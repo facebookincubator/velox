@@ -39,6 +39,7 @@
 #include <folly/futures/Future.h>
 
 #include <chrono>
+#include <string>
 #include <thread>
 
 #include "velox/exec/Cursor.h"
@@ -389,7 +390,13 @@ class RPCOperatorTest : public OperatorTestBase {
     auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
 
     return std::make_shared<core::RPCNode>(
-        "rpc-0", source, std::move(call), "__rpc_result", outputType);
+        "rpc-0",
+        source,
+        std::move(call),
+        "__rpc_result",
+        outputType,
+        RPCStreamingMode::kPerRow,
+        0);
   }
 };
 
@@ -711,7 +718,8 @@ class MismatchedResultTypeRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig&,
       const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode) override {}
 
   std::string name() const override {
     return "mismatched_result_type_rpc";
@@ -1265,11 +1273,6 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
       : latency_(latency), executor_(std::move(executor)) {}
 
-  void initialize(
-      const core::QueryConfig&,
-      const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
-
   std::string name() const override {
     return "slow_batch_rpc";
   }
@@ -1333,6 +1336,30 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       memory::MemoryPool* pool) const override {
     return buildTextOutput(responses, pool);
   }
+};
+
+class ExecutionModeRecordingRPCFunction : public SlowBatchRPCFunction {
+ public:
+  using SlowBatchRPCFunction::SlowBatchRPCFunction;
+
+  std::string name() const override {
+    return "execution_mode_recording_rpc";
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    receivedExecutionMode_ = instruction;
+  }
+
+  RPCStreamingMode receivedExecutionMode() const {
+    return receivedExecutionMode_;
+  }
+
+ private:
+  RPCStreamingMode receivedExecutionMode_{RPCStreamingMode::kPerRow};
 };
 
 } // namespace
@@ -1537,6 +1564,32 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
   EXPECT_EQ(rows["OVERLOAD one"], "demo: OVERLOAD one");
   EXPECT_EQ(rows["OVERLOAD two"], "demo: OVERLOAD two");
   EXPECT_EQ(rows["normal three"], "demo: normal three");
+}
+
+TEST_F(RPCOperatorTest, batchExecutionModeReachesTheFunction) {
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  std::shared_ptr<ExecutionModeRecordingRPCFunction> function;
+  AsyncRPCFunctionRegistry::registerFunction(
+      "execution_mode_recording_rpc",
+      [&function, rpcExecutor]() {
+        function = std::make_shared<ExecutionModeRecordingRPCFunction>(
+            std::chrono::milliseconds{0}, rpcExecutor);
+        return function;
+      },
+      DemoBatchRPCFunction::signatures());
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "execution_mode_recording_rpc");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  ASSERT_NE(function, nullptr);
+  EXPECT_EQ(function->receivedExecutionMode(), RPCStreamingMode::kBatch);
 }
 
 } // namespace facebook::velox::exec::rpc
