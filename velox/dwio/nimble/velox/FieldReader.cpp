@@ -2876,12 +2876,12 @@ class RowFieldReader final : public FieldReader {
       velox::TypePtr type,
       Decoder* decoder,
       std::vector<std::unique_ptr<FieldReader>> childrenReaders,
-      Vector<bool>& boolBuffer,
+      Vector<bool>& presenceBuffer,
       velox::memory::MemoryPool* pool,
       const FieldReader::Options& options)
       : FieldReader{*pool, std::move(type), decoder, options},
         childrenReaders_{std::move(childrenReaders)},
-        boolBuffer_{boolBuffer} {}
+        presenceBuffer_{presenceBuffer} {}
 
   std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize() const final {
     uint64_t totalBytes{0};
@@ -2976,6 +2976,11 @@ class RowFieldReader final : public FieldReader {
       std::span<const velox::BaseVector::CopyRange> outputRanges,
       velox::VectorPtr& output) final {
     auto* vector = prepareRead(sourceRanges, outputRanges, output);
+    if (sourceRanges.empty()) {
+      // All selected parent rows are null, so there are no child values.
+      co_return;
+    }
+
     for (uint32_t i{0}; i < childrenReaders_.size(); ++i) {
       if (childrenReaders_[i] != nullptr) {
         co_await childrenReaders_[i]->co_read(
@@ -3017,18 +3022,12 @@ class RowFieldReader final : public FieldReader {
   }
 
  private:
-  // Initializes the row output and makes all child vectors large enough for
-  // the requested output positions.
+  // Initializes the row output. For nullable rows, replaces the input spans
+  // with compact child ranges and their corresponding output positions.
   velox::RowVector* prepareRead(
-      std::span<const RowRange> sourceRanges,
-      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      std::span<const RowRange>& sourceRanges,
+      std::span<const velox::BaseVector::CopyRange>& outputRanges,
       velox::VectorPtr& output) {
-    if constexpr (hasNull) {
-      // TODO: Map logical rows to compact child rows for nullable ROW streams.
-      NIMBLE_UNSUPPORTED(
-          "Selective row decoding does not support nullable row streams");
-    }
-
     NIMBLE_CHECK_NOT_NULL(output);
     validateCopyRanges(countRows(sourceRanges), outputRanges, output->size());
     output->resetDataDependentFlags(nullptr);
@@ -3036,15 +3035,114 @@ class RowFieldReader final : public FieldReader {
     NIMBLE_CHECK_NOT_NULL(vector, "Scattered read requires row output");
     // Calling resize with the current row count also grows shorter children.
     vector->resize(vector->size());
-    auto* rawOutputNulls = output->mutableRawNulls();
+    if constexpr (hasNull) {
+      prepareNullableRead(
+          sourceRanges, outputRanges, vector->mutableRawNulls());
+    } else {
+      auto* rawOutputNulls = output->mutableRawNulls();
+      for (const auto& range : outputRanges) {
+        velox::bits::fillBits(
+            rawOutputNulls,
+            range.targetIndex,
+            range.targetIndex + range.count,
+            velox::bits::kNotNull);
+      }
+    }
+    return vector;
+  }
+
+  // Reads the parent presence stream, maps logical rows to compact child
+  // ranges, and updates the parent output nulls.
+  void prepareNullableRead(
+      std::span<const RowRange>& sourceRanges,
+      std::span<const velox::BaseVector::CopyRange>& outputRanges,
+      uint64_t* rawOutputNulls) {
+    NIMBLE_CHECK_EQ(sourceRanges.size(), outputRanges.size());
+    NIMBLE_CHECK(!sourceRanges.empty(), "Source ranges must not be empty");
+    for (size_t i{0}; i < sourceRanges.size(); ++i) {
+      NIMBLE_CHECK(!sourceRanges[i].empty(), "Source range must not be empty");
+      if (i > 0) {
+        NIMBLE_CHECK_LE(
+            sourceRanges[i - 1].endRow,
+            sourceRanges[i].startRow,
+            "Source ranges must be ordered and disjoint");
+      }
+    }
+
+    childSourceRanges_.clear();
+    childOutputRanges_.clear();
+    const auto endRow = sourceRanges.back().endRow;
+    // Compact child offsets require the count of present parent rows before
+    // each selection. Until EncodingView exposes a rank API, decode the parent
+    // presence prefix once and derive every child range from it.
+    presenceBuffer_.resize(endRow);
+    const std::array<RowRange, 1> presenceRange{{{0, endRow}}};
+    std::vector<velox::BufferPtr> unusedStringBuffers;
+    const auto numPresenceRows = decoder_->read(
+        presenceRange,
+        DataType::Bool,
+        presenceBuffer_.data(),
+        /*getOutputNulls=*/nullptr,
+        unusedStringBuffers);
+    NIMBLE_CHECK_EQ(
+        numPresenceRows, endRow, "ROW presence streams must not contain nulls");
+
+    // Start with all requested parent positions null. Non-null runs below
+    // overwrite their corresponding bits.
     for (const auto& range : outputRanges) {
       velox::bits::fillBits(
           rawOutputNulls,
           range.targetIndex,
           range.targetIndex + range.count,
-          velox::bits::kNotNull);
+          velox::bits::kNull);
     }
-    return vector;
+
+    uint32_t sourceRow{0};
+    uint32_t childRow{0};
+    velox::vector_size_t childOutputOffset{0};
+    for (size_t rangeIndex{0}; rangeIndex < sourceRanges.size(); ++rangeIndex) {
+      const auto& sourceRange = sourceRanges[rangeIndex];
+      const auto& outputRange = outputRanges[rangeIndex];
+      NIMBLE_CHECK_EQ(sourceRange.numRows(), outputRange.count);
+      // Unselected non-null parents still consume positions in compact child
+      // streams.
+      childRow += static_cast<uint32_t>(std::count(
+          presenceBuffer_.begin() + sourceRow,
+          presenceBuffer_.begin() + sourceRange.startRow,
+          velox::bits::kNotNull));
+      const auto* rangeBegin = presenceBuffer_.data() + sourceRange.startRow;
+      const auto* rangeEnd = presenceBuffer_.data() + sourceRange.endRow;
+      auto* runBegin = std::find(rangeBegin, rangeEnd, velox::bits::kNotNull);
+      // Emit one compact child range for each contiguous run of non-null rows.
+      // Reaching rangeEnd means no child rows remain in this source range.
+      while (runBegin != rangeEnd) {
+        const auto* runEnd = std::find(runBegin, rangeEnd, velox::bits::kNull);
+        const auto childStartRow = childRow;
+        const auto outputStartRow = outputRange.targetIndex +
+            static_cast<velox::vector_size_t>(runBegin - rangeBegin);
+        const auto numRunRows = static_cast<uint32_t>(runEnd - runBegin);
+        childRow += numRunRows;
+        const auto outputRunCount =
+            static_cast<velox::vector_size_t>(numRunRows);
+        childSourceRanges_.emplace_back(childStartRow, childRow);
+        childOutputRanges_.push_back({
+            .sourceIndex = childOutputOffset,
+            .targetIndex = outputStartRow,
+            .count = outputRunCount,
+        });
+        childOutputOffset += outputRunCount;
+        velox::bits::fillBits(
+            rawOutputNulls,
+            outputStartRow,
+            outputStartRow + outputRunCount,
+            velox::bits::kNotNull);
+        runBegin = std::find(runEnd, rangeEnd, velox::bits::kNotNull);
+      }
+      sourceRow = sourceRange.endRow;
+    }
+    sourceRanges = std::span<const RowRange>{childSourceRanges_};
+    outputRanges =
+        std::span<const velox::BaseVector::CopyRange>{childOutputRanges_};
   }
 
   struct OutputContext {
@@ -3077,27 +3175,28 @@ class RowFieldReader final : public FieldReader {
       // values from the nulls, we count the set value in scatterBitmap and
       // read only those values, if there is no scatter then we can read
       // rowCount values in its original place without removal
-      boolBuffer_.resize(count);
+      presenceBuffer_.resize(count);
       std::vector<velox::BufferPtr> stringBuffers;
       decoder_->next(
           count,
-          boolBuffer_.data(),
+          presenceBuffer_.data(),
           /*getOutputNulls=*/nullptr,
           stringBuffers);
 
       auto* nullBuffer = ensureNulls(vector, rowCount);
       velox::bits::BitmapBuilder nullBits{nullBuffer, rowCount};
       if (scatterBitmap != nullptr) {
-        uint32_t boolBufferOffset = 0;
+        uint32_t presenceBufferOffset = 0;
         for (uint32_t i = 0; i < rowCount; ++i) {
-          if (scatterBitmap->test(i) && boolBuffer_[boolBufferOffset++]) {
+          if (scatterBitmap->test(i) &&
+              presenceBuffer_[presenceBufferOffset++]) {
             nullBits.set(i);
             ++selectedNonNullCount;
           }
         }
       } else {
         for (uint32_t i = 0; i < rowCount; ++i) {
-          if (boolBuffer_[i]) {
+          if (presenceBuffer_[i]) {
             nullBits.set(i);
             ++selectedNonNullCount;
           }
@@ -3129,7 +3228,13 @@ class RowFieldReader final : public FieldReader {
   }
 
   std::vector<std::unique_ptr<FieldReader>> childrenReaders_;
-  Vector<bool>& boolBuffer_;
+  Vector<bool>& presenceBuffer_;
+
+  // Reused compact child ranges for nullable selected reads.
+  std::vector<RowRange> childSourceRanges_;
+
+  // Reused mappings from compact child rows to parent output positions.
+  std::vector<velox::BaseVector::CopyRange> childOutputRanges_;
 };
 
 class RowFieldReaderFactory final : public FieldReaderFactory {
@@ -3146,7 +3251,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
         decodeExecutor_{params.decodeExecutor},
         decodeTaskPlan_{std::move(decodeTaskPlan)},
         children_{std::move(children)},
-        boolBuffer_{pool_} {}
+        presenceBuffer_{pool_} {}
 
   std::unique_ptr<FieldReader> createReader(
       const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>& decoders)
@@ -3171,7 +3276,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
           veloxType_,
           nulls,
           std::move(childrenReaders),
-          boolBuffer_,
+          presenceBuffer_,
           pool_,
           options);
     }
@@ -3180,7 +3285,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
         veloxType_,
         nulls,
         std::move(childrenReaders),
-        boolBuffer_,
+        presenceBuffer_,
         pool_,
         options);
   }
@@ -3189,7 +3294,7 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
   folly::Executor* const decodeExecutor_;
   const std::shared_ptr<const DecodeTaskPlan> decodeTaskPlan_;
   std::vector<std::unique_ptr<FieldReaderFactory>> children_;
-  Vector<bool> boolBuffer_;
+  Vector<bool> presenceBuffer_;
 };
 
 // Represent a keyed value node for flat map
