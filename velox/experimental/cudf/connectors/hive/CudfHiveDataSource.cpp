@@ -56,7 +56,16 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
   const bool hasConvertedDecimal =
       schema.converted_type == cudf::io::parquet::ConvertedType::DECIMAL;
   if (!hasLogicalDecimal && !hasConvertedDecimal) {
-    return std::nullopt;
+    switch (schema.type) {
+      case ParquetType::INT32:
+        return SubfieldFilterDecimalType{
+            cudf::type_id::INT32, 0, /*isDecimal=*/false};
+      case ParquetType::INT64:
+        return SubfieldFilterDecimalType{
+            cudf::type_id::INT64, 0, /*isDecimal=*/false};
+      default:
+        return std::nullopt;
+    }
   }
   const auto scale =
       hasLogicalDecimal ? schema.logical_type->scale() : schema.decimal_scale;

@@ -38,9 +38,10 @@ namespace facebook::velox::cudf_velox {
 struct SubfieldFilterDecimalType {
   cudf::type_id type;
   int32_t scale;
+  bool isDecimal{true};
 };
 
-// Physical cuDF decimal storage type and scale for each top-level input field.
+// Physical cuDF storage type and scale for each top-level decimal input field.
 using SubfieldFilterDecimalTypes =
     std::unordered_map<std::string, SubfieldFilterDecimalType>;
 

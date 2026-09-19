@@ -957,6 +957,50 @@ TEST_F(TableScanTest, decimalFilterUsesSplitScale) {
   }
 }
 
+TEST_F(TableScanTest, decimalFilterUsesRawIntegerStorage) {
+  auto rowType = ROW({{"c0", DECIMAL(10, 0)}, {"c1", BIGINT()}});
+  auto fileVector = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int32_t>({123, 456}), makeFlatVector<int64_t>({1, 2})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {fileVector});
+  createDuckDbTable({makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({123, 456}, DECIMAL(10, 0)),
+       makeFlatVector<int64_t>({1, 2})})});
+
+  auto filters = common::test::SubfieldFiltersBuilder()
+                     .add(
+                         "c0",
+                         std::make_unique<common::BigintRange>(
+                             123, 123, /*nullAllowed=*/false))
+                     .build();
+  auto tableHandle =
+      makeTableHandle("parquet_table", rowType, std::move(filters), nullptr);
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .tableHandle(tableHandle)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .planNode();
+
+  for (const bool useExperimentalReader : {false, true}) {
+    auto config = std::unordered_map<std::string, std::string>{
+        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
+             kUseExperimentalCudfReader,
+         useExperimentalReader ? "true" : "false"}};
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(std::move(config)));
+    assertQuery(
+        plan,
+        {filePath},
+        "SELECT * FROM tmp WHERE c0 = CAST(123 AS DECIMAL(10, 0))");
+  }
+}
+
 TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
   // The file retains precision 5; the table schema widens it to precision 12.
   auto rowType = ROW({{"c0", DECIMAL(12, 2)}, {"c1", BIGINT()}});
