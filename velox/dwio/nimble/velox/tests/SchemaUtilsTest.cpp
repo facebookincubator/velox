@@ -103,6 +103,83 @@ void expectSameType(const Type& a, const Type& b, const std::string& path) {
 
 } // namespace
 
+TEST(SchemaUtilsTest, resolvesValueStreamSubfields) {
+  const auto veloxType = velox::ROW({
+      {"top_level", velox::VARCHAR()},
+      {"nested", velox::ROW({{"target", velox::VARCHAR()}})},
+      {"items", velox::ARRAY(velox::VARCHAR())},
+      {"properties", velox::MAP(velox::INTEGER(), velox::VARCHAR())},
+  });
+  const auto typeWithId = velox::dwio::common::TypeWithId::create(veloxType);
+
+  SchemaBuilder schemaBuilder;
+  auto nested = test::row(
+      schemaBuilder,
+      {{"target", schemaBuilder.createScalarTypeBuilder(ScalarKind::String)}});
+  auto items = test::array(
+      schemaBuilder, schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  auto properties = test::map(
+      schemaBuilder,
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int32),
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  auto typeBuilder = test::row(
+      schemaBuilder,
+      {{"top_level", schemaBuilder.createScalarTypeBuilder(ScalarKind::String)},
+       {"nested", std::move(nested)},
+       {"items", std::move(items)},
+       {"properties", std::move(properties)}});
+
+  for (const auto path :
+       {"top_level", "nested.target", "items[*]", "properties[*]"}) {
+    SCOPED_TRACE(path);
+    const auto subfield = parseValueStreamSubfield(path);
+    EXPECT_TRUE(
+        resolveValueStreamSubfield(*typeWithId, subfield).type()->isVarchar());
+    const auto& builderNode =
+        resolveValueStreamSubfield(*typeBuilder, subfield);
+    EXPECT_EQ(builderNode.kind(), Kind::Scalar);
+    EXPECT_EQ(
+        builderNode.asScalar().scalarDescriptor().scalarKind(),
+        ScalarKind::String);
+  }
+}
+
+TEST(SchemaUtilsTest, rejectsAllSubscriptOnRowAndFlatMap) {
+  const auto veloxType = velox::ROW({
+      {"nested", velox::ROW({{"target", velox::VARCHAR()}})},
+  });
+  const auto typeWithId = velox::dwio::common::TypeWithId::create(veloxType);
+  NIMBLE_ASSERT_USER_THROW(
+      resolveValueStreamSubfield(
+          *typeWithId, parseValueStreamSubfield("nested[*]")),
+      "Value stream subfield path cannot apply [*]");
+
+  SchemaBuilder schemaBuilder;
+  test::FlatMapChildAdder flatMapChildAdder;
+  auto nested = test::row(
+      schemaBuilder,
+      {{"target", schemaBuilder.createScalarTypeBuilder(ScalarKind::String)}});
+  auto flatMap = test::flatMap(
+      schemaBuilder,
+      ScalarKind::Int32,
+      [](SchemaBuilder& builder) {
+        return builder.createScalarTypeBuilder(ScalarKind::String);
+      },
+      flatMapChildAdder);
+  auto typeBuilder = test::row(
+      schemaBuilder,
+      {{"nested", std::move(nested)}, {"flat_map", std::move(flatMap)}});
+  flatMapChildAdder.addChild("1");
+
+  for (const auto path : {"nested[*]", "flat_map[*]"}) {
+    SCOPED_TRACE(path);
+    NIMBLE_ASSERT_USER_THROW(
+        resolveValueStreamSubfield(
+            *typeBuilder, parseValueStreamSubfield(path)),
+        "Value stream subfield path cannot apply [*]");
+  }
+}
+
 // --- convertToVeloxType tests ---
 
 TEST(SchemaUtilsTest, convertScalarToVelox) {
