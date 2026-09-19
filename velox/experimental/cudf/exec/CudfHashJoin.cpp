@@ -171,8 +171,31 @@ class ProbeMatchTracker {
 
 } // namespace
 
+void CudfHashJoinProbe::recordGetOutputStream(cuda::stream_ref stream) {
+  // Round-robin pool streams mean batch n-1 may still be reading scalars_/
+  // tree_ on stream A while this call uses stream B. Join the outgoing
+  // stream into the new one so a single later host sync waits for both.
+  if (lastGetOutputStream_.has_value() &&
+      lastGetOutputStream_->get() != stream.get()) {
+    cudf::detail::join_streams(
+        std::vector<cuda::stream_ref>{lastGetOutputStream_.value()}, stream);
+  }
+  lastGetOutputStream_ = stream;
+}
+
+void CudfHashJoinProbe::syncGetOutputStreams() {
+  if (lastGetOutputStream_.has_value()) {
+    lastGetOutputStream_->sync();
+    lastGetOutputStream_.reset();
+  }
+}
+
 void CudfHashJoinProbe::doClose() {
   Operator::close();
+  // Wait for this instance's doGetOutput() reads of filterEvaluator_/
+  // scalars_/tree_ to finish before releasing them below - otherwise the
+  // resulting stream-ordered free could race a still-in-flight read.
+  syncGetOutputStreams();
   filterEvaluator_.reset();
   scalars_.clear();
   tree_ = {};
@@ -2068,6 +2091,9 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
         !finished_ && isLastDriver_) {
       auto& rightTables = hashObject_.value().first;
       auto stream = cudfGlobalStreamPool().get_stream();
+      // Fresh pool stream reading hashObject_ - chain it so doClose()/
+      // isFinished() wait for this read before releasing hashObject_.
+      recordGetOutputStream(stream);
       std::vector<std::unique_ptr<cudf::table>> toConcat;
       vector_size_t unmatchedRows = 0;
       for (size_t i = 0; i < rightTables.size(); ++i) {
@@ -2135,6 +2161,10 @@ RowVectorPtr CudfHashJoinProbe::doGetOutput() {
   auto cudfInput = std::dynamic_pointer_cast<CudfVector>(input_);
   VELOX_CHECK_NOT_NULL(cudfInput);
   auto stream = cudfInput->stream();
+  // Chain every doGetOutput() stream (unlike lastProbeStream_ below, which
+  // is right/full-join-only) so doClose()/isFinished() wait for every
+  // hashObject_/scalars_/tree_/filterEvaluator_ read, not only the last.
+  recordGetOutputStream(stream);
   waitForBuildReady(stream);
   // Use getTableView() to avoid expensive materialization for packed_table.
   // cudfInput is staying alive until the table view is no longer needed.
@@ -2357,8 +2387,15 @@ exec::BlockingReason CudfHashJoinProbe::isBlocked(ContinueFuture* future) {
 bool CudfHashJoinProbe::isFinished() {
   auto const isFinished = finished_ || (noMoreInput_ && input_ == nullptr);
 
-  // Release hashObject_ if finished
+  // Release hashObject_ if finished. hashObject_'s tables/hash_join objects
+  // are shared (via shared_ptr) with the bridge and other probe instances,
+  // so this reset() may or may not be the one that actually triggers their
+  // destruction - but whichever instance's reset() is last must not race a
+  // read still in flight on this instance's getOutput streams. Sync is
+  // gated on lastGetOutputStream_ (cleared after the wait) so later
+  // isFinished() polls do not host-sync again; hashObject_ is not that gate.
   if (isFinished) {
+    syncGetOutputStreams();
     hashObject_.reset();
     buildReadyEvent_.reset();
     buildStream_.reset();
