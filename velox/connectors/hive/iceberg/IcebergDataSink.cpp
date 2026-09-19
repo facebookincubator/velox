@@ -16,12 +16,14 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSink.h"
 
+#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
 #include <folly/json.h>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -29,6 +31,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldId.h"
@@ -139,7 +142,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     WriteKind writeKind,
     std::unordered_map<std::string, ExistingDeletionVector>
         existingDeletionVectors,
-    std::shared_ptr<const FileNameGenerator> fileNameGenerator)
+    std::shared_ptr<const FileNameGenerator> fileNameGenerator,
+    std::vector<std::string> insertedColumns)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -154,7 +158,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
           std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
       writeKind_(writeKind),
-      existingDeletionVectors_(std::move(existingDeletionVectors)) {
+      existingDeletionVectors_(std::move(existingDeletionVectors)),
+      insertedColumns_(std::move(insertedColumns)) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The
@@ -364,19 +369,120 @@ IcebergDataSink::IcebergDataSink(
       icebergInsertTableHandle_(insertTableHandle) {
   commitPartitionValue_.resize(maxOpenWriters_);
 
-  // Build the column handle list once for whichever format-specific stats
-  // collector applies.
+  // Pre-compute write-default constant vectors for columns omitted from the
+  // INSERT statement. Also build the column handle list for the stats
+  // collector.
+  // Statement column names arrive lowercased by the engine
+  // (ConnectorMetadata::normalizeIdentifier), while handle names carry the
+  // Iceberg schema's spelling verbatim, so both sides are folded to match on
+  // a mixed-case schema.
+  std::unordered_set<std::string> insertedColumnSet;
+  for (const auto& name : insertTableHandle->insertedColumns()) {
+    insertedColumnSet.insert(boost::algorithm::to_lower_copy(name));
+  }
+
   std::vector<IcebergColumnHandlePtr> columnHandles;
-  columnHandles.reserve(insertTableHandle->inputColumns().size());
-  for (auto& column : insertTableHandle->inputColumns()) {
-    columnHandles.emplace_back(
-        checkedPointerCast<const IcebergColumnHandle>(column));
+  const auto& inputColumns = insertTableHandle->inputColumns();
+  columnHandles.reserve(inputColumns.size());
+  for (size_t i = 0; i < inputColumns.size(); ++i) {
+    auto columnHandle =
+        checkedPointerCast<const IcebergColumnHandle>(inputColumns[i]);
+    columnHandles.emplace_back(columnHandle);
+
+    // A column needs a write-default only when:
+    // 1. It has a write-default value set.
+    // 2. It was omitted from the INSERT (absent from insertedColumnSet).
+    const auto& writeDefaultValue = columnHandle->writeDefaultValue();
+    const bool isOmittedColumn = !insertedColumnSet.empty() &&
+        !insertedColumnSet.contains(
+            boost::algorithm::to_lower_copy(columnHandle->name()));
+    if (writeDefaultValue.has_value() && isOmittedColumn) {
+      writeDefaultColumns_.push_back(
+          {static_cast<column_index_t>(i),
+           newConstantFromString(
+               inputType_->childAt(i),
+               writeDefaultValue.value(),
+               connectorQueryCtx_->memoryPool(),
+               /*isLocalTimestamp=*/false,
+               /*isDaysSinceEpoch=*/false)});
+    }
   }
 
   // Statistics extraction and field-id wiring are format-specific; the factory
   // returns the matching collector, or nullptr for formats without support.
   statsCollector_ = IcebergStatsCollector::create(
       insertTableHandle->storageFormat(), columnHandles, inputType_);
+}
+
+namespace {
+
+// Returns the index of the first non-null row, or -1 when every row is null.
+// Runs on every write batch, so it uses the cheapest test the encoding
+// allows: a constant carries one value for the whole batch, and a flat
+// vector's null bits count a word at a time. Only the failure path pays a
+// per-row scan, to name the offending row in the error message.
+vector_size_t findFirstNonNullRow(
+    const BaseVector& vector,
+    vector_size_t size) {
+  switch (vector.encoding()) {
+    case VectorEncoding::Simple::CONSTANT:
+      return vector.isNullAt(0) ? -1 : 0;
+    case VectorEncoding::Simple::FLAT: {
+      const auto* rawNulls = vector.rawNulls();
+      if (rawNulls == nullptr) {
+        return size == 0 ? -1 : 0;
+      }
+      if (bits::countNulls(rawNulls, 0, size) == static_cast<uint64_t>(size)) {
+        return -1;
+      }
+      break;
+    }
+    default:
+      // Dictionary and other wrappings resolve nulls through their indices,
+      // and a wrapper-level null count says nothing about the base, so the
+      // per-row test below is the only correct option.
+      break;
+  }
+
+  for (vector_size_t row = 0; row < size; ++row) {
+    if (!vector.isNullAt(row)) {
+      return row;
+    }
+  }
+  return -1;
+}
+
+} // namespace
+
+void IcebergDataSink::appendData(RowVectorPtr input) {
+  if (!writeDefaultColumns_.empty()) {
+    std::vector<VectorPtr> children(input->children());
+    for (const auto& writeDefault : writeDefaultColumns_) {
+      // Omission is a statement-level decision fixed at plan time: every row
+      // in every batch of an omitted column is null. A non-null value means
+      // the planner misclassified the column, and substituting the default
+      // would silently discard user data, so check in optimized builds too.
+      const auto firstNonNullRow =
+          findFirstNonNullRow(*children[writeDefault.index], input->size());
+      VELOX_CHECK_EQ(
+          firstNonNullRow,
+          -1,
+          "Non-null value found at row {} in write-default column '{}' "
+          "(channel {}). Omitted INSERT columns must be entirely null.",
+          firstNonNullRow,
+          inputType_->nameOf(writeDefault.index),
+          writeDefault.index);
+      children[writeDefault.index] = BaseVector::wrapInConstant(
+          input->size(), 0, writeDefault.constantVector);
+    }
+    input = std::make_shared<RowVector>(
+        input->pool(),
+        input->type(),
+        input->nulls(),
+        input->size(),
+        std::move(children));
+  }
+  HiveDataSink::appendData(input);
 }
 
 std::vector<std::string> IcebergDataSink::commitMessage() const {
