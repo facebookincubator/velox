@@ -38,6 +38,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::MainlyConstant, "MainlyConstant"},
         {EncodingType::Prefix, "Prefix"},
         {EncodingType::ALP, "ALP"},
+        {EncodingType::ALPRD, "ALPRD"},
         {EncodingType::PFOR, "PFOR"},
         {EncodingType::SimdForBitpack, "SimdForBitpack"},
         {EncodingType::BlockBitPacking, "BlockBitPacking"},

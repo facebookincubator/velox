@@ -497,12 +497,29 @@ std::string_view NullableEncoding<T>::encodeNullable(
 
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-  std::string_view serializedValues =
-      selection.template encodeNested<physicalType>(
-          EncodingIdentifiers::Nullable::Data,
-          values,
-          scopedBuffer.get(),
-          options);
+  std::string_view serializedValues;
+  if constexpr (isFloatingPointType<T>()) {
+    // Preserve the logical type for child selection. The factory converts the
+    // span back to physical bits without copying or floating-point arithmetic.
+    auto policy = std::unique_ptr<EncodingSelectionPolicy<T>>(
+        static_cast<EncodingSelectionPolicy<T>*>(
+            selection
+                .template createNestedPolicy<T>(
+                    selection.encodingType(),
+                    EncodingIdentifiers::Nullable::Data)
+                .release()));
+    serializedValues = EncodingFactory::encode<T>(
+        std::move(policy),
+        {reinterpret_cast<const T*>(values.data()), values.size()},
+        scopedBuffer.get(),
+        options);
+  } else {
+    serializedValues = selection.template encodeNested<physicalType>(
+        EncodingIdentifiers::Nullable::Data,
+        values,
+        scopedBuffer.get(),
+        options);
+  }
   std::string_view serializedNulls = selection.template encodeNested<bool>(
       EncodingIdentifiers::Nullable::Nulls, nulls, scopedBuffer.get(), options);
 

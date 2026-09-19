@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -165,6 +166,13 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       } else {
         NIMBLE_UNREACHABLE("{}", encoding.dataType());
       }
+    case EncodingType::ALPRD:
+      if constexpr (isFloatingPointType<T>()) {
+        return f(static_cast<::facebook::nimble::ALPRDEncoding<T>&>(encoding));
+      }
+      NIMBLE_UNSUPPORTED(
+          "ALPRD encoding only supports float and double data types, got {}.",
+          encoding.dataType());
     case EncodingType::ALP:
       if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
         return f(static_cast<::facebook::nimble::ALPEncoding<T>&>(encoding));

@@ -68,6 +68,13 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier ExceptionValues = 2;
   };
 
+  struct ALPRD {
+    static constexpr NestedEncodingIdentifier Codes = 0;
+    static constexpr NestedEncodingIdentifier RightParts = 1;
+    static constexpr NestedEncodingIdentifier ExceptionPositions = 2;
+    static constexpr NestedEncodingIdentifier ExceptionHighParts = 3;
+  };
+
   struct FrequencyPartition {
     // Partition metadata
     // Eventually we may want to allow for non-power-of-two bit partitions, but
