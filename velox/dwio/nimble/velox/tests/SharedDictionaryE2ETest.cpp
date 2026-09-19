@@ -1481,6 +1481,44 @@ TEST_F(
   verifyStripeDictionaryPhysicalStatsCovered();
 }
 
+// A stripe whose values are all null never reaches encoding selection, so the
+// dictionary sits the stripe out. The stripe boundary visits every configured
+// dictionary regardless, so it must tolerate one that has nothing to encode.
+TEST_F(SharedDictionaryE2ETest, stripeScopeIdleStripe) {
+  auto options = makeSharedDictionaryWriterOptions();
+  addColumnDictionary(
+      options,
+      sharedDictionaryConfig(SharedDictionaryScope::Stripe, /*dictionaryId=*/0),
+      "value");
+
+  velox::test::VectorMaker maker{leafPool_.get()};
+  const auto valued = maker.rowVector(
+      {"value"}, {maker.flatVector<int32_t>(kStripeRows, [](auto row) {
+        return dictionaryStripeValue(row);
+      })});
+  const auto allNull = maker.rowVector(
+      {"value"},
+      {maker.flatVector<int32_t>(
+          kStripeRows,
+          [](auto row) { return dictionaryStripeValue(row); },
+          [](auto /*row*/) { return true; })});
+
+  const std::vector<velox::RowVectorPtr> stripeInputs{valued, valued, allNull};
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  BatchReader reader{readFile, *leafPool_, nullptr, BatchReadParams{}};
+  velox::VectorPtr output;
+  for (const auto& expected : stripeInputs) {
+    ASSERT_TRUE(reader.next(kStripeRows, output));
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t i{0}; i < output->size(); ++i) {
+      ASSERT_TRUE(output->equalValueAt(expected.get(), i, i)) << "row " << i;
+    }
+  }
+  EXPECT_FALSE(reader.next(kStripeRows, output));
+}
+
 TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
