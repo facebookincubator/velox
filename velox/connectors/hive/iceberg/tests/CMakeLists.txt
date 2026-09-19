@@ -170,10 +170,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_writer
     )
 
-    target_sources(
-      velox_hive_iceberg_insert_test
-      PRIVATE IcebergParquetStatsTest.cpp
-    )
+    target_sources(velox_hive_iceberg_insert_test PRIVATE IcebergParquetStatsTest.cpp)
   endif()
 
   add_executable(
