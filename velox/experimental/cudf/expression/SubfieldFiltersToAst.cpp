@@ -803,6 +803,24 @@ cudf::ast::expression const& createAstFromSubfieldFilterImpl(
 
 } // namespace
 
+bool hasDecimalSubfieldFilter(
+    const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& inputRowSchema) {
+  for (const auto& [subfield, _] : subfieldFilters) {
+    if (subfield.path().empty() ||
+        subfield.path()[0]->kind() != common::SubfieldKind::kNestedField) {
+      continue;
+    }
+    const auto* field = static_cast<const common::Subfield::NestedField*>(
+        subfield.path()[0].get());
+    if (inputRowSchema->containsChild(field->name()) &&
+        inputRowSchema->findChild(field->name())->isDecimal()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,

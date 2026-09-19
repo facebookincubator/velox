@@ -111,6 +111,7 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Cached combined AST filter expression compiled from 'subfieldFilters_',
   // owned by 'subfieldTree_'.
   const cudf::ast::expression* subfieldFilterAst_{nullptr};
+  bool hasDecimalSubfieldFilter_{false};
 
  private:
   // Construct and cache a RowTypePtr for the table column names and types.

@@ -253,6 +253,8 @@ CudfHiveDataSource::CudfHiveDataSource(
   // each Parquet footer.
   if (!subfieldFilters_.empty()) {
     auto const readerFilterType = getTableRowType();
+    hasDecimalSubfieldFilter_ =
+        hasDecimalSubfieldFilter(subfieldFilters_, readerFilterType);
     subfieldFilterAst_ = &createAstFromSubfieldFilters(
         subfieldFilters_, subfieldTree_, subfieldScalars_, readerFilterType);
   }
@@ -329,7 +331,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
-  if (!subfieldFilters_.empty()) {
+  if (hasDecimalSubfieldFilter_) {
     const auto readerFilterType = getTableRowType();
     cudfSplitReader_->setPushdownFilterBuilder(
         [this,
