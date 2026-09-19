@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/DecimalFunctions.h"
 #include "velox/functions/sparksql/Arithmetic.h"
+#include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/DecimalCeil.h"
 #include "velox/functions/sparksql/Factorial.h"
@@ -74,6 +75,7 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "round"});
   registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
   registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+  registerBRoundFunctions(prefix);
   registerFunction<UnHexFunction, Varbinary, Varchar>({prefix + "unhex"});
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});
