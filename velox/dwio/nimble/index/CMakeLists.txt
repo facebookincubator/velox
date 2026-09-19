@@ -16,6 +16,7 @@ add_library(
   BloomFilter.cpp
   ChunkStats.cpp
   ChunkStatsGroup.cpp
+  ChunkStatsGroupV2.cpp
   ClusterIndex.cpp
   ClusterIndexFactory.cpp
   ClusterIndexWriter.cpp

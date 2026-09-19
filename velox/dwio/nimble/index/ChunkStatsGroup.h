@@ -20,6 +20,11 @@
 #include <optional>
 
 #include "velox/dwio/nimble/index/IndexTypes.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+
+namespace facebook::velox::memory {
+class MemoryPool;
+} // namespace facebook::velox::memory
 
 namespace facebook::nimble {
 class MetadataBuffer;
@@ -41,6 +46,14 @@ class ChunkStatsGroup : public std::enable_shared_from_this<ChunkStatsGroup> {
       uint32_t firstStripe,
       uint32_t stripeCount,
       std::unique_ptr<MetadataBuffer> metadata);
+
+  /// Creates the requested version over decompressed metadata.
+  static std::shared_ptr<ChunkStatsGroup> create(
+      ChunkStatsVersion version,
+      uint32_t firstStripe,
+      uint32_t stripeCount,
+      std::unique_ptr<MetadataBuffer> metadata,
+      velox::memory::MemoryPool& pool);
 
   virtual ~ChunkStatsGroup();
 
@@ -74,6 +87,12 @@ class ChunkStatsGroup : public std::enable_shared_from_this<ChunkStatsGroup> {
   uint32_t stripeOffset(uint32_t stripe) const;
 
  private:
+  // Creates the V1 implementation shared by both factory overloads.
+  static std::shared_ptr<ChunkStatsGroup> createV1(
+      uint32_t firstStripe,
+      uint32_t stripeCount,
+      std::unique_ptr<MetadataBuffer> metadata);
+
   const uint32_t firstStripe_;
   const uint32_t stripeCount_;
   // Total number of streams indexed in this stripe group.
@@ -90,8 +109,8 @@ class StreamIndex {
   virtual ChunkLocation lookupChunk(uint32_t rowId) const = 0;
 
   /// Returns the per-chunk null-value count for the chunk at the given absolute
-  /// position (ChunkLocation::chunkIndex), or std::nullopt when per-chunk null
-  /// statistics are absent (files written before chunk statistics were added).
+  /// position (ChunkLocation::chunkIndex), or std::nullopt when the format
+  /// permits omitted null statistics.
   virtual std::optional<uint32_t> chunkNullCount(uint32_t chunkIndex) const = 0;
 
   /// Returns the total number of rows in this stream.

@@ -592,6 +592,12 @@ class TabletReader {
   std::shared_ptr<ChunkStatsGroup> loadChunkStatsGroup(
       uint32_t stripeGroupIndex) const;
 
+  // Creates the version-specific chunk stats group implementation.
+  std::shared_ptr<ChunkStatsGroup> createChunkStatsGroup(
+      uint32_t firstStripe,
+      uint32_t stripeCount,
+      std::unique_ptr<MetadataBuffer> metadata) const;
+
   // Computes first stripe index for the given stripe group.
   uint32_t firstStripe(uint32_t stripeGroupIndex) const;
 
@@ -645,8 +651,11 @@ class TabletReader {
   mutable MetadataCache<std::string, const index::VectorIndex>
       vectorIndexCache_;
 
-  // Chunk stats root, loaded from the "columnar.chunk.stats" optional section.
+  // Chunk stats root, loaded from "columnar.chunk.stats" (V1) or
+  // "columnar.chunk.stats.v2" (V2) optional section.
   std::unique_ptr<ChunkStats> chunkStats_;
+  // Identifies the representation used by chunkStats_.
+  ChunkStatsVersion chunkStatsVersion_{ChunkStatsVersion::kV1};
   mutable MetadataCache<uint32_t, ChunkStatsGroup> chunkStatsCache_;
 
   std::unordered_map<std::string, MetadataSection> optionalSections_;
