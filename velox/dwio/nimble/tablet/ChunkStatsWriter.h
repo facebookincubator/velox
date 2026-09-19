@@ -20,19 +20,12 @@
 #include <memory>
 #include <vector>
 
+#include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 
 namespace facebook::nimble {
 
 struct Chunk;
-
-/// Selects the on-disk representation for chunk statistics.
-enum class ChunkStatsVersion : uint8_t {
-  /// Stores statistics as raw FlatBuffer arrays.
-  kV1 = 1,
-  /// Stores statistics as Nimble-encoded arrays.
-  kV2 = 2,
-};
 
 /// ChunkStatsWriter manages chunk-level position index data for streams.
 ///

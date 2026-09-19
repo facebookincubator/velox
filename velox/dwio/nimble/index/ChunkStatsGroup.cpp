@@ -39,7 +39,7 @@ class ChunkStatsGroupV1 final : public ChunkStatsGroup {
       uint32_t streamCount,
       std::unique_ptr<MetadataBuffer> metadata);
 
-  std::shared_ptr<StreamIndex> createStreamIndex(
+  std::shared_ptr<index::StreamIndex> createStreamIndex(
       uint32_t stripe,
       uint32_t streamId,
       uint32_t streamSize) const final;
@@ -49,13 +49,15 @@ class ChunkStatsGroupV1 final : public ChunkStatsGroup {
   }
 
  private:
+  class StreamIndex;
+
   const std::unique_ptr<MetadataBuffer> metadata_;
 };
 
 // Implements V1 stream lookup while retaining its backing metadata.
-class StreamIndexV1 final : public StreamIndex {
+class ChunkStatsGroupV1::StreamIndex final : public index::StreamIndex {
  public:
-  StreamIndexV1(
+  StreamIndex(
       std::shared_ptr<const ChunkStatsGroupV1> owner,
       uint32_t streamId,
       uint32_t startChunkOffset,
@@ -125,15 +127,23 @@ std::shared_ptr<ChunkStatsGroup> ChunkStatsGroup::create(
     uint32_t firstStripe,
     uint32_t stripeCount,
     std::unique_ptr<MetadataBuffer> metadata) {
-  NIMBLE_CHECK_NOT_NULL(metadata, "Chunk stats metadata must not be null.");
+  return createV1(firstStripe, stripeCount, std::move(metadata));
+}
+
+std::shared_ptr<ChunkStatsGroup> ChunkStatsGroup::createV1(
+    uint32_t firstStripe,
+    uint32_t stripeCount,
+    std::unique_ptr<MetadataBuffer> metadata) {
+  const auto* metadataPtr = metadata.get();
+  NIMBLE_CHECK_NOT_NULL(metadataPtr, "Chunk stats metadata must not be null.");
   const auto streamCount =
-      asFlatBuffersRoot<serialization::StripeChunkStats>(metadata->content())
+      asFlatBuffersRoot<serialization::StripeChunkStats>(metadataPtr->content())
           ->stream_count();
   return std::make_shared<ChunkStatsGroupV1>(
       firstStripe, stripeCount, streamCount, std::move(metadata));
 }
 
-std::shared_ptr<StreamIndex> ChunkStatsGroupV1::createStreamIndex(
+std::shared_ptr<index::StreamIndex> ChunkStatsGroupV1::createStreamIndex(
     uint32_t stripe,
     uint32_t streamId,
     uint32_t streamSize) const {
@@ -161,7 +171,7 @@ std::shared_ptr<StreamIndex> ChunkStatsGroupV1::createStreamIndex(
     return nullptr;
   }
 
-  return std::make_shared<StreamIndexV1>(
+  return std::make_shared<StreamIndex>(
       std::static_pointer_cast<const ChunkStatsGroupV1>(shared_from_this()),
       streamId,
       startChunkOffset,
@@ -169,13 +179,13 @@ std::shared_ptr<StreamIndex> ChunkStatsGroupV1::createStreamIndex(
       streamSize);
 }
 
-StreamIndexV1::StreamIndexV1(
+ChunkStatsGroupV1::StreamIndex::StreamIndex(
     std::shared_ptr<const ChunkStatsGroupV1> owner,
     uint32_t streamId,
     uint32_t startChunkOffset,
     uint32_t endChunkOffset,
     uint32_t streamSize)
-    : StreamIndex{streamId},
+    : index::StreamIndex{streamId},
       chunkStatsGroup_{std::move(owner)},
       startChunkOffset_(startChunkOffset),
       endChunkOffset_(endChunkOffset),
@@ -183,7 +193,8 @@ StreamIndexV1::StreamIndexV1(
 
 StreamIndex::~StreamIndex() = default;
 
-ChunkLocation StreamIndexV1::lookupChunk(uint32_t rowId) const {
+ChunkLocation ChunkStatsGroupV1::StreamIndex::lookupChunk(
+    uint32_t rowId) const {
   const auto* root = asFlatBuffersRoot<serialization::StripeChunkStats>(
       chunkStatsGroup_->metadata().content());
 
@@ -200,7 +211,7 @@ ChunkLocation StreamIndexV1::lookupChunk(uint32_t rowId) const {
       rowId,
       streamId());
 
-  const uint32_t chunkIndex = it - chunkRows->begin();
+  const auto chunkIndex = static_cast<uint32_t>(it - chunkRows->begin());
   const auto* chunkOffsets = root->stream_chunk_offsets();
   NIMBLE_CHECK_NOT_NULL(chunkOffsets);
   const uint32_t rowOffset =
@@ -213,7 +224,7 @@ ChunkLocation StreamIndexV1::lookupChunk(uint32_t rowId) const {
       chunkIndex, streamOffset, nextOffset - streamOffset, rowOffset};
 }
 
-std::optional<uint32_t> StreamIndexV1::chunkNullCount(
+std::optional<uint32_t> ChunkStatsGroupV1::StreamIndex::chunkNullCount(
     uint32_t chunkIndex) const {
   const auto* root = asFlatBuffersRoot<serialization::StripeChunkStats>(
       chunkStatsGroup_->metadata().content());
@@ -231,7 +242,7 @@ std::optional<uint32_t> StreamIndexV1::chunkNullCount(
   return nullCounts->Get(chunkIndex);
 }
 
-uint32_t StreamIndexV1::rowCount() const {
+uint32_t ChunkStatsGroupV1::StreamIndex::rowCount() const {
   if (endChunkOffset_ == startChunkOffset_) {
     return 0;
   }
