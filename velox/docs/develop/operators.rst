@@ -42,6 +42,7 @@ MarkDistinctNode            MarkDistinct
 MarkSortedNode              MarkSorted
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
+SpatialJoinNode             SpatialJoinProbe and SpatialJoinBuild
 NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
 OrderByNode                 OrderBy
 TopNNode                    TopN
@@ -562,6 +563,38 @@ and emitting results.
      - Optional non-equality filter expression that may reference columns from both inputs.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
+
+SpatialJoinNode
+~~~~~~~~~~~~~~~
+
+SpatialJoinNode represents a spatial join between two geometries. It executes
+as SpatialJoinProbe and SpatialJoinBuild. A bounding-box index provides a quick
+``no`` or ``maybe`` filter before the join condition is evaluated for each
+candidate.
+
+Supported local predicates include ``ST_Intersects``, DE-9IM predicates other
+than ``ST_Disjoint``, and ``ST_Distance(g1, g2) <= d``. Inner and left joins
+are supported.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - joinType
+     - Join type: inner or left.
+   * - joinCondition
+     - Spatial predicate evaluated between probe and build geometries.
+   * - probeGeometry
+     - Geometry column from the probe input.
+   * - buildGeometry
+     - Geometry column from the build input.
+   * - radius
+     - Optional radius expression for distance predicates.
+   * - outputType
+     - A list of output columns. This is a subset of columns available in the probe and build inputs.
 
 NestedLoopJoinNode
 ~~~~~~~~~~~~~~~~~~
