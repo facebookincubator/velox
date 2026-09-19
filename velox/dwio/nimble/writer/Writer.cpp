@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
@@ -61,6 +62,7 @@
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
+#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/velox/StatsGenerated.h"
@@ -75,13 +77,32 @@ namespace facebook::nimble {
 
 using velox::dwio::common::TypeWithId;
 
+namespace {
+
+using FsstEncodingNodeIds = folly::F14FastSet<uint32_t>;
+
+} // namespace
+
 namespace detail {
 
 class WriterContext : public FieldWriterContext {
  public:
-  WriterContext(velox::memory::MemoryPool& memoryPool, WriterOptions options)
-      : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
-        options_{std::move(options)},
+  // Writer options normalized for the stored schema, plus resolved FSST stream
+  // node IDs owned by the context that consumes them.
+  struct Options {
+    WriterOptions writerOptions;
+    FsstEncodingNodeIds fsstEncodingNodeIds;
+  };
+
+  WriterContext(
+      velox::memory::MemoryPool& memoryPool,
+      Options options)
+      : FieldWriterContext{
+            memoryPool,
+            options.writerOptions.reclaimerFactory(),
+            options.writerOptions.vectorDecoderVisitor},
+        options_{std::move(options.writerOptions)},
+        fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         stripeStatsWriteEnabled_{featureGate()->enabled(
             FeatureGate::FeatureSet::kStripeStatsWrite,
@@ -99,6 +120,10 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  const FsstEncodingNodeIds& fsstEncodingNodeIds() const {
+    return fsstEncodingNodeIds_;
   }
 
   // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
@@ -252,6 +277,7 @@ class WriterContext : public FieldWriterContext {
   }
 
   const WriterOptions options_;
+  const FsstEncodingNodeIds fsstEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
   const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
@@ -466,7 +492,7 @@ void normalizeChunkStatsOptions(WriterOptions& options) {
   options.chunkStatsVersion = ChunkStatsVersion::kV1;
 }
 
-WriterOptions storedWriterOptions(
+detail::WriterContext::Options prepareWriterContextOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
@@ -475,8 +501,64 @@ WriterOptions storedWriterOptions(
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
-  if (!omitClusterIndexKeyColumnStorage(options)) {
-    return options;
+
+  const bool omitsClusterIndexKeys = omitClusterIndexKeyColumnStorage(options);
+  FsstEncodingNodeIds fsstEncodingNodeIds;
+  if (!options.fsstEncodingSubfields.empty()) {
+    // Resolve against the schema used by field writers so node IDs remain
+    // correct when cluster-index key columns are omitted.
+    auto inputSchema = TypeWithId::create(inputType);
+    const auto storedSchema = omitsClusterIndexKeys
+        ? TypeWithId::create(storedType)
+        : std::move(inputSchema);
+
+    const std::vector<std::string>* clusterIndexKeyColumns{nullptr};
+    if (options.clusterIndexConfig != nullptr) {
+      const auto& config = *options.clusterIndexConfig;
+      NIMBLE_USER_CHECK_EQ(
+          config.family,
+          index::IndexFamily::Cluster,
+          "Cluster index configuration must use the cluster family: {}",
+          config.name);
+      const auto* builtInConfig =
+          dynamic_cast<const index::ClusterIndexConfig*>(&config);
+      NIMBLE_USER_CHECK_NOT_NULL(
+          builtInConfig,
+          "FSST subfields cannot be combined with custom cluster index "
+          "configuration '{}': key columns are unavailable.",
+          config.name);
+      clusterIndexKeyColumns = &builtInConfig->columns;
+    }
+
+    fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
+    for (const auto& fieldPath : options.fsstEncodingSubfields) {
+      const auto subfield = parseValueStreamSubfield(fieldPath);
+      if (clusterIndexKeyColumns != nullptr) {
+        NIMBLE_USER_CHECK(
+            std::find(
+                clusterIndexKeyColumns->begin(),
+                clusterIndexKeyColumns->end(),
+                subfield.baseName()) == clusterIndexKeyColumns->end(),
+            "FSST subfield '{}' cannot target cluster index key column '{}'.",
+            fieldPath,
+            subfield.baseName());
+      }
+      const auto& node = resolveValueStreamSubfield(*storedSchema, subfield);
+      NIMBLE_USER_CHECK(
+          node.type()->isVarchar(),
+          "FSST subfield '{}' must resolve to VARCHAR, got {}.",
+          fieldPath,
+          node.type()->toString());
+      NIMBLE_USER_CHECK(
+          fsstEncodingNodeIds.insert(node.id()).second,
+          "Duplicate FSST subfield configuration for schema node {}: '{}'.",
+          node.id(),
+          fieldPath);
+    }
+  }
+
+  if (!omitsClusterIndexKeys) {
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   if (!options.schemaAttributes.empty()) {
@@ -498,7 +580,7 @@ WriterOptions storedWriterOptions(
 
   const bool hasFeatureReordering = options.featureReordering.has_value();
   if (!hasFeatureReordering) {
-    return options;
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   // Field writers and the layout planner are built from storedDataType().
@@ -525,7 +607,7 @@ WriterOptions storedWriterOptions(
   }
   options.featureReordering = std::move(remapped);
 
-  return options;
+  return {std::move(options), std::move(fsstEncodingNodeIds)};
 }
 
 void writeIndexSection(
@@ -909,52 +991,6 @@ void configureDictionary(
   }
 }
 
-// Resolves [*] to the selected array element or map value type.
-const TypeBuilder& allSubscriptValueType(
-    const TypeBuilder& typeBuilder,
-    std::string_view subfield) {
-  switch (typeBuilder.kind()) {
-    case Kind::Array:
-      return typeBuilder.asArray().elements();
-    case Kind::ArrayWithOffsets:
-      return typeBuilder.asArrayWithOffsets().elements();
-    case Kind::Map:
-      return typeBuilder.asMap().values();
-    case Kind::SlidingWindowMap:
-      return typeBuilder.asSlidingWindowMap().values();
-    case Kind::Scalar:
-    case Kind::TimestampMicroNano:
-    case Kind::Row:
-    case Kind::FlatMap:
-      NIMBLE_USER_FAIL(
-          "Shared dictionary value subfield '{}' cannot apply [*] to {}.",
-          subfield,
-          typeBuilder.kind());
-  }
-  NIMBLE_UNREACHABLE("Unknown schema kind: {}.", typeBuilder.kind());
-}
-
-const TypeBuilder& resolveFieldPath(
-    const TypeBuilder& root,
-    const std::string& fieldPath) {
-  if (fieldPath.empty()) {
-    return root;
-  }
-  const velox::common::Subfield subfield{fieldPath};
-  const auto& path = subfield.path();
-  const TypeBuilder* current = &root;
-  for (const auto& pathElement : path) {
-    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
-      current = &allSubscriptValueType(*current, fieldPath);
-      continue;
-    }
-    const auto& childName =
-        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
-    current = &current->asRow().findChild(childName);
-  }
-  return *current;
-}
-
 void maybeAddFileDictionaryId(
     const SharedDictionaryConfig& config,
     folly::F14FastSet<uint32_t>& fileDictionaryIds) {
@@ -967,56 +1003,6 @@ void maybeAddFileDictionaryId(
       "File shared dictionary ID {} is configured for multiple streams. "
       "Cross-stream domains are not supported yet.",
       config.dictionaryId);
-}
-
-// Resolves [*] to the selected array element or map value type.
-const TypeWithId& allSubscriptValueType(
-    const TypeWithId& type,
-    const std::string& fieldPath) {
-  switch (type.type()->kind()) {
-    case velox::TypeKind::ARRAY:
-      return *type.childAt(0);
-    case velox::TypeKind::MAP:
-      return *type.childAt(1);
-    case velox::TypeKind::BOOLEAN:
-    case velox::TypeKind::TINYINT:
-    case velox::TypeKind::SMALLINT:
-    case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-    case velox::TypeKind::REAL:
-    case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
-    case velox::TypeKind::TIMESTAMP:
-    case velox::TypeKind::HUGEINT:
-    case velox::TypeKind::ROW:
-    case velox::TypeKind::UNKNOWN:
-    case velox::TypeKind::FUNCTION:
-    case velox::TypeKind::OPAQUE:
-    case velox::TypeKind::INVALID:
-      NIMBLE_USER_FAIL(
-          "Shared dictionary path '{}' cannot apply [*] to {}.",
-          fieldPath,
-          type.type()->toString());
-  }
-  VELOX_UNREACHABLE();
-}
-
-const TypeWithId& resolveFieldPath(
-    const TypeWithId& root,
-    const std::string& fieldPath) {
-  const velox::common::Subfield subfield{fieldPath};
-  const TypeWithId* current = &root;
-  for (const auto& pathElement : subfield.path()) {
-    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
-      current = &allSubscriptValueType(*current, fieldPath);
-      continue;
-    }
-    const auto& childName =
-        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
-    current = current->childByName(childName).get();
-  }
-  return *current;
 }
 
 const TypeWithId& resolveDictionaryValueType(
@@ -1418,11 +1404,14 @@ DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
   DictionaryConfigs configs;
+  const auto& fsstEncodingNodeIds = context.fsstEncodingNodeIds();
   const auto& dictionaryEncodingConfig =
       context.options().experimentalSharedDictionaryEncoding;
   if (dictionaryEncodingConfig.empty()) {
     return configs;
   }
+  // TODO: Define targeted FSST/shared-dictionary coexistence, including
+  // writer-owned alphabet encoding, instead of rejecting exact overlaps.
 
   NIMBLE_USER_CHECK_EQ(
       type.type()->kind(),
@@ -1433,7 +1422,8 @@ DictionaryConfigs collectDictionaryConfigs(
   folly::F14FastSet<uint32_t> columnValueNodeIds;
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
   for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
-    const auto& fieldType = resolveFieldPath(type, columnDictionary.fieldPath);
+    const auto subfield = parseValueStreamSubfield(columnDictionary.fieldPath);
+    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
     const auto& valueType =
         resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
     const auto valueNodeId = static_cast<uint32_t>(valueType.id());
@@ -1450,6 +1440,12 @@ DictionaryConfigs collectDictionaryConfigs(
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
+    NIMBLE_USER_CHECK(
+        fsstEncodingNodeIds.find(valueNodeId) == fsstEncodingNodeIds.end(),
+        "Targeted FSST and shared dictionary column '{}' resolve to the same "
+        "value stream (schema node {}).",
+        columnDictionary.fieldPath,
+        valueNodeId);
     maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     const auto inserted =
@@ -1462,14 +1458,14 @@ DictionaryConfigs collectDictionaryConfigs(
 
   configs.flatMaps.reserve(dictionaryEncodingConfig.flatMaps.size());
   for (const auto& flatMap : dictionaryEncodingConfig.flatMaps) {
-    const velox::common::Subfield subfield{flatMap.fieldPath};
+    const auto subfield = parseValueStreamSubfield(flatMap.fieldPath);
     NIMBLE_USER_CHECK_EQ(
         subfield.path().size(),
         1,
         "Shared dictionary flat-map path '{}' must be a top-level writer input "
         "column.",
         flatMap.fieldPath);
-    const auto& fieldType = resolveFieldPath(type, flatMap.fieldPath);
+    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
     NIMBLE_USER_CHECK_EQ(
         fieldType.type()->kind(),
         velox::TypeKind::MAP,
@@ -1483,8 +1479,30 @@ DictionaryConfigs collectDictionaryConfigs(
 
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     auto& flatMapKeys = configs.flatMaps[nodeId];
+    const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
       const auto& config = flatMapKey.dictionary;
+      if (!fsstEncodingNodeIds.empty()) {
+        const TypeWithId* configuredType = &mapValueType;
+        if (!flatMapKey.valueSubfield.empty()) {
+          const auto valueSubfield =
+              parseValueStreamSubfield(flatMapKey.valueSubfield);
+          configuredType =
+              &resolveValueStreamSubfield(mapValueType, valueSubfield);
+        }
+        const auto& valueType =
+            resolveDictionaryValueType(*configuredType, flatMap.fieldPath);
+        NIMBLE_USER_CHECK(
+            fsstEncodingNodeIds.find(valueType.id()) ==
+                fsstEncodingNodeIds.end(),
+            "Targeted FSST and shared dictionary flat-map column '{}', key "
+            "{}, value subfield '{}' resolve to the same value stream "
+            "(schema node {}).",
+            flatMap.fieldPath,
+            flatMapKey.key,
+            flatMapKey.valueSubfield,
+            valueType.id());
+      }
       maybeAddFileDictionaryId(config, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
@@ -1527,7 +1545,11 @@ void configureFlatMapValueStreams(
   }
   for (const auto& valueDictionary : it->second) {
     configureDictionary(
-        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
+        valueDictionary.valueSubfield.empty()
+            ? fieldType
+            : resolveValueStreamSubfield(
+                  fieldType,
+                  parseValueStreamSubfield(valueDictionary.valueSubfield)),
         valueDictionary.dictionary,
         context.schemaBuilder());
   }
@@ -1666,6 +1688,22 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
             nodeId,
             _dictionaryConfigs,
             _flatMapKeyEncodingLayouts);
+        if (context.fsstEncodingNodeIds().find(nodeId) !=
+            context.fsstEncodingNodeIds().end()) {
+          auto& writerStreamContext =
+              streamContext(type.asScalar().scalarDescriptor());
+          // Target only the FSST parent. Its blob, nested streams, and Trivial
+          // fallback use the writer's normal encoding-selection settings. A
+          // caller-provided encodingLayoutTree is applied later and takes
+          // precedence when it configures the same stream.
+          writerStreamContext.setEncoding(
+              EncodingLayout{
+                  EncodingType::Fsst,
+                  {},
+                  context.options().compressionOptions.compressionType,
+                  {std::nullopt},
+              });
+        }
       });
 }
 
@@ -1980,7 +2018,7 @@ Writer::Writer(
           })},
       context_{std::make_unique<detail::WriterContext>(
           *pool_,
-          storedWriterOptions(
+          prepareWriterContextOptions(
               type,
               storedDataType_,
               storedInputColumnIndices_,

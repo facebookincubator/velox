@@ -185,7 +185,7 @@ EncodingLayout EncodingLayoutCapture::capture(
   if (encodingType == EncodingType::FixedBitWidth ||
       encodingType == EncodingType::Trivial ||
       encodingType == EncodingType::BlockBitPacking ||
-      encodingType == EncodingType::FOR) {
+      encodingType == EncodingType::FOR || encodingType == EncodingType::Fsst) {
     compressionType =
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
   }
