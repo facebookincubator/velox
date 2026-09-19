@@ -89,7 +89,14 @@ QueryCtx::QueryCtx(
 }
 
 QueryCtx::~QueryCtx() {
-  for (auto& cb : releaseCallbacks_) {
+  // Move the callbacks out before running them: a callback may re-enter
+  // QueryCtx, which would deadlock on mutex_ if it were held here.
+  std::deque<ReleaseCallback> callbacks;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    callbacks.swap(releaseCallbacks_);
+  }
+  for (auto& cb : callbacks) {
     try {
       cb();
     } catch (const std::exception& e) {
