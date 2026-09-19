@@ -154,8 +154,15 @@ std::unique_ptr<cudf::column> makeDecimalColumn(
     int32_t scale,
     const std::vector<bool>* valid,
     cuda::stream_ref stream) {
-  cudf::type_id typeId = std::is_same_v<T, int64_t> ? cudf::type_id::DECIMAL64
-                                                    : cudf::type_id::DECIMAL128;
+  cudf::type_id typeId;
+  if constexpr (std::is_same_v<T, int32_t>) {
+    typeId = cudf::type_id::DECIMAL32;
+  } else if constexpr (std::is_same_v<T, int64_t>) {
+    typeId = cudf::type_id::DECIMAL64;
+  } else {
+    static_assert(std::is_same_v<T, int128_t>);
+    typeId = cudf::type_id::DECIMAL128;
+  }
   cudf::data_type type{typeId, -scale};
   return makeFixedWidthColumn(type, values, valid, stream);
 }
@@ -243,7 +250,236 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
     unregisterCudf();
     exec::test::OperatorTestBase::TearDown();
   }
+
+  template <typename T>
+  void assertCompactExpression(
+      const std::string& sql,
+      const RowTypePtr& rowType,
+      const std::vector<cudf::column_view>& inputs,
+      const std::vector<std::optional<T>>& expected,
+      cuda::stream_ref stream) {
+    SCOPED_TRACE(sql);
+    auto queryCtx = core::QueryCtx::create();
+    core::ExecCtx execCtx(pool(), queryCtx.get());
+    auto expression =
+        test_utils::optimizeTypedExpr(sql, rowType, queryCtx.get(), &execCtx);
+    auto evaluator = createCudfExpression(expression, rowType, pool());
+    auto result = evaluator->eval(
+        inputs, stream, cudf::get_current_device_resource_ref());
+    const auto view = asView(result);
+    ASSERT_EQ(view.type(), veloxToCudfDataType(expression->type()));
+    const auto values = copyColumnData<T>(view, stream);
+    const auto nullMask = copyNullMask(view, stream);
+    ASSERT_EQ(values.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+      const bool valid = !view.nullable() || isValidAt(nullMask, i);
+      ASSERT_EQ(valid, expected[i].has_value()) << i;
+      if (valid) {
+        EXPECT_EQ(values[i], expected[i].value()) << i;
+      }
+    }
+  }
 };
+
+TEST_F(CudfDecimalTest, compactDecimalArithmetic) {
+  auto stream = cudf::get_default_stream();
+  const auto rowType = ROW({
+      {"price", DECIMAL(7, 2)},
+      {"factor", DECIMAL(7, 1)},
+      {"long_divisor", DECIMAL(20, 3)},
+  });
+  const std::vector<bool> valid{true, true, false};
+  auto price =
+      makeDecimalColumn<int32_t>({1'000, -1'000, 0}, 2, &valid, stream);
+  auto factor = makeDecimalColumn<int32_t>({20, 40, 20}, 1, nullptr, stream);
+  auto longDivisor = makeDecimalColumn<int128_t>(
+      {2'000, int128_t{1} << 64, 2'000}, 3, nullptr, stream);
+  const std::vector<cudf::column_view> inputs{
+      price->view(), factor->view(), longDivisor->view()};
+  for (const auto& sql :
+       {"price * factor",
+        "price * CAST('2.0' AS DECIMAL(7, 1))",
+        "CAST('2.0' AS DECIMAL(7, 1)) * price"}) {
+    const bool columnFactor = std::string_view(sql) == "price * factor";
+    assertCompactExpression<int64_t>(
+        sql,
+        rowType,
+        inputs,
+        {20'000, columnFactor ? -40'000 : -20'000, std::nullopt},
+        stream);
+  }
+  assertCompactExpression<int64_t>(
+      "price + factor", rowType, inputs, {1'200, -600, std::nullopt}, stream);
+  assertCompactExpression<int64_t>(
+      "price - factor", rowType, inputs, {800, -1'400, std::nullopt}, stream);
+  assertCompactExpression<int128_t>(
+      "price * CAST('2.000' AS DECIMAL(20, 3))",
+      rowType,
+      inputs,
+      {2'000'000, -2'000'000, std::nullopt},
+      stream);
+  assertCompactExpression<int64_t>(
+      "price / factor", rowType, inputs, {500, -250, std::nullopt}, stream);
+  assertCompactExpression<int64_t>(
+      "price / long_divisor",
+      rowType,
+      inputs,
+      {5'000, 0, std::nullopt},
+      stream);
+  assertCompactExpression<int64_t>(
+      "price / CAST('18446744073709551.616' AS DECIMAL(20, 3))",
+      rowType,
+      inputs,
+      {0, 0, std::nullopt},
+      stream);
+  assertCompactExpression<int64_t>(
+      "CAST('10.00' AS DECIMAL(7, 2)) / price",
+      rowType,
+      inputs,
+      {100, -100, std::nullopt},
+      stream);
+}
+
+TEST_F(CudfDecimalTest, compactDecimalBetween) {
+  auto stream = cudf::get_default_stream();
+  const auto rowType =
+      ROW({"price", "lower_bound", "upper_bound"}, DECIMAL(7, 2));
+  const std::vector<bool> valid{true, true, true, true, true, false};
+  auto price =
+      makeDecimalColumn<int32_t>({98, 99, 100, 149, 150, 0}, 2, &valid, stream);
+  auto lowerBound =
+      makeDecimalColumn<int64_t>({99, 99, 99, 99, 99, 99}, 2, nullptr, stream);
+  auto upperBound = makeDecimalColumn<int32_t>(
+      {149, 149, 149, 149, 149, 149}, 2, nullptr, stream);
+  const std::vector<cudf::column_view> inputs{
+      price->view(), lowerBound->view(), upperBound->view()};
+  for (const auto& lower : {"lower_bound", "CAST('0.99' AS DECIMAL(7, 2))"}) {
+    for (const auto& upper : {"upper_bound", "CAST('1.49' AS DECIMAL(7, 2))"}) {
+      assertCompactExpression<int8_t>(
+          fmt::format("price BETWEEN {} AND {}", lower, upper),
+          rowType,
+          inputs,
+          {0, 1, 1, 1, 0, std::nullopt},
+          stream);
+    }
+  }
+}
+
+TEST_F(CudfDecimalTest, compactDecimalSelection) {
+  auto stream = cudf::get_default_stream();
+  const auto rowType = ROW({
+      {"condition", BOOLEAN()},
+      {"price", DECIMAL(7, 2)},
+      {"fallback", DECIMAL(7, 2)},
+  });
+  const std::vector<bool> conditionValid{true, true, true, false};
+  auto condition = makeFixedWidthColumn<int8_t>(
+      cudf::data_type{cudf::type_id::BOOL8},
+      {1, 0, 1, 0},
+      &conditionValid,
+      stream);
+  const std::vector<bool> priceValid{true, false, true, false};
+  auto price =
+      makeDecimalColumn<int32_t>({123, 0, -789, 0}, 2, &priceValid, stream);
+  const std::vector<bool> fallbackValid{true, true, true, false};
+  auto fallback =
+      makeDecimalColumn<int64_t>({100, 200, 300, 0}, 2, &fallbackValid, stream);
+  const std::vector<cudf::column_view> inputs{
+      condition->view(), price->view(), fallback->view()};
+  for (const auto& sql :
+       {"CASE WHEN condition THEN price ELSE NULL END",
+        "CASE WHEN condition THEN price END"}) {
+    assertCompactExpression<int64_t>(
+        sql, rowType, inputs, {123, std::nullopt, -789, std::nullopt}, stream);
+  }
+  assertCompactExpression<int64_t>(
+      "CASE WHEN condition THEN price ELSE fallback END",
+      rowType,
+      inputs,
+      {123, 200, -789, std::nullopt},
+      stream);
+  assertCompactExpression<int64_t>(
+      "CASE WHEN condition THEN CAST('1.00' AS DECIMAL(7, 2)) ELSE price END",
+      rowType,
+      inputs,
+      {100, std::nullopt, 100, std::nullopt},
+      stream);
+  assertCompactExpression<int64_t>(
+      "coalesce(price, fallback)",
+      rowType,
+      inputs,
+      {123, 200, -789, std::nullopt},
+      stream);
+  assertCompactExpression<int64_t>(
+      "coalesce(price, CAST('0.00' AS DECIMAL(7, 2)))",
+      rowType,
+      inputs,
+      {123, 0, -789, 0},
+      stream);
+  assertCompactExpression<int64_t>(
+      "coalesce(CAST(price AS DECIMAL(12, 2)), CAST(fallback AS DECIMAL(12, 2)))",
+      rowType,
+      inputs,
+      {123, 200, -789, std::nullopt},
+      stream);
+}
+
+TEST_F(CudfDecimalTest, compactDecimalCoalesceOwnership) {
+  auto stream = cudf::get_default_stream();
+  const auto rowType = ROW("price", DECIMAL(7, 2));
+  auto price = makeDecimalColumn<int32_t>({123, -789}, 2, nullptr, stream);
+  const std::vector<cudf::column_view> inputs{price->view()};
+  for (
+      const auto& sql :
+      {"coalesce(price, CAST('0.00' AS DECIMAL(7, 2)))",
+       "coalesce(CAST(price AS DECIMAL(12, 2)), CAST('0.00' AS DECIMAL(12, 2)))"}) {
+    assertCompactExpression<int64_t>(sql, rowType, inputs, {123, -789}, stream);
+  }
+}
+
+TEST_F(CudfDecimalTest, compactDecimalGreatestLeast) {
+  auto stream = cudf::get_default_stream();
+  const auto rowType = ROW({"price", "other", "fallback"}, DECIMAL(7, 2));
+  const std::vector<bool> priceValid{true, true, true, false, false};
+  auto price = makeDecimalColumn<int32_t>(
+      {100, 500, -300, 0, 0}, 2, &priceValid, stream);
+  const std::vector<bool> otherValid{true, true, true, true, false};
+  auto other = makeDecimalColumn<int32_t>(
+      {400, 200, -100, 200, 0}, 2, &otherValid, stream);
+  for (bool compactFallback : {false, true}) {
+    auto fallback = compactFallback
+        ? makeDecimalColumn<int32_t>(
+              {300, 300, -200, 100, 0}, 2, &otherValid, stream)
+        : makeDecimalColumn<int64_t>(
+              {300, 300, -200, 100, 0}, 2, &otherValid, stream);
+    const std::vector<cudf::column_view> inputs{
+        price->view(), other->view(), fallback->view()};
+    assertCompactExpression<int64_t>(
+        "greatest(price, other, fallback)",
+        rowType,
+        inputs,
+        {400, 500, -100, 200, std::nullopt},
+        stream);
+    assertCompactExpression<int64_t>(
+        "least(price, other, fallback)",
+        rowType,
+        inputs,
+        {100, 200, -300, 100, std::nullopt},
+        stream);
+    assertCompactExpression<int64_t>(
+        "greatest(price, CAST('1.00' AS DECIMAL(7, 2)))",
+        rowType,
+        inputs,
+        {100, 500, 100, 100, 100},
+        stream);
+    assertCompactExpression<int64_t>(
+        "least(price, CAST('1.00' AS DECIMAL(7, 2)))",
+        rowType,
+        inputs,
+        {100, 100, -300, 100, 100},
+        stream);
+  }
+}
 
 TEST_F(CudfDecimalTest, mixedWidthDecimalDivision) {
   const auto rowType = ROW({
