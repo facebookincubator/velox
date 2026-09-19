@@ -447,7 +447,7 @@ void SortBuffer::getOutputWithSpill() {
     SpillMergeStream* stream = spillMerger_->next();
     VELOX_CHECK_NOT_NULL(stream);
 
-    spillSources_[outputSize] = &stream->current();
+    spillSources_[outputSize] = stream->current().get();
     spillSourceRows_[outputSize] = stream->currentIndex(&isEndOfBatch);
     ++outputSize;
     if (FOLLY_UNLIKELY(isEndOfBatch)) {
