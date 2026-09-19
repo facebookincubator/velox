@@ -18,8 +18,7 @@
 #include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::test;
+namespace facebook::velox::test {
 
 class EnsureWritableVectorTest : public testing::Test, public VectorTestBase {
  protected:
@@ -1078,3 +1077,5 @@ TEST_F(EnsureWritableVectorTest, lazyMap) {
     EXPECT_EQ(size, lazy->size());
   }
 }
+
+} // namespace facebook::velox::test
