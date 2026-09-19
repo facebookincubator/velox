@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <utility>
@@ -41,6 +43,20 @@
 
 namespace facebook::nimble {
 namespace {
+
+// Builds ordered, disjoint ranges with randomized gaps and lengths.
+std::vector<RowRange> makeRandomRanges(uint32_t rowCount, std::mt19937& rng) {
+  std::vector<RowRange> ranges;
+  uint32_t row = static_cast<uint32_t>(rng() % std::min<uint32_t>(rowCount, 8));
+  while (row < rowCount) {
+    const auto maxLength = std::min<uint32_t>(rowCount - row, 16);
+    const uint32_t length{1 + static_cast<uint32_t>(rng() % maxLength)};
+    const auto end = row + length;
+    ranges.emplace_back(row, end);
+    row = std::min<uint32_t>(rowCount, end + static_cast<uint32_t>(rng() % 8));
+  }
+  return ranges;
+}
 
 class StreamReaderTest : public ::testing::Test {
  protected:
@@ -466,11 +482,12 @@ TEST_F(StreamReaderTest, resizesShortRowChildren) {
       row->childAt(0)->asFlatVector<int64_t>()->rawValues()[1], int64_t{11});
 }
 
-TEST_F(StreamReaderTest, rejectsNullableRowStream) {
-  const std::array<bool, 3> rowIsNonNull{true, false, true};
-  const auto rowStream = encodeChunk<bool>(rowIsNonNull, EncodingType::Trivial);
-  const auto valueStream =
-      encodeChunk<int64_t>(std::vector<int64_t>{10, 12}, EncodingType::Trivial);
+TEST_F(StreamReaderTest, readsNullableRows) {
+  const auto presence = encodeChunk<bool>(
+      std::array<bool, 6>{true, false, true, true, true, true},
+      EncodingType::Trivial);
+  const auto values = encodeChunk<int64_t>(
+      std::array<int64_t, 5>{10, 12, 13, 14, 15}, EncodingType::Trivial);
   const auto type = std::make_shared<const RowType>(
       StreamDescriptor{0, ScalarKind::Bool},
       std::vector<std::string>{"value"},
@@ -479,14 +496,204 @@ TEST_F(StreamReaderTest, rejectsNullableRowStream) {
               StreamDescriptor{1, ScalarKind::Int64}),
       });
   StreamReader reader{type, pool_.get(), {}};
-  const std::array<std::string_view, 2> streams{rowStream, valueStream};
+  const std::array<std::string_view, 2> streams{presence, values};
   auto output = velox::BaseVector::create(
-      velox::ROW("value", velox::BIGINT()), 1, pool_.get());
-  const std::array<RowRange, 1> ranges{{{0, 1}}};
+      velox::ROW("value", velox::BIGINT()), 5, pool_.get());
+  const std::array<RowRange, 2> ranges{{{1, 4}, {5, 6}}};
 
-  NIMBLE_ASSERT_THROW(
-      runRead(reader, streams, ranges, /*outputOffset=*/0, output),
-      "Selective row decoding does not support nullable row streams");
+  runRead(reader, streams, ranges, /*outputOffset=*/1, output);
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  const auto* child = row->childAt(0)->asFlatVector<int64_t>();
+  ASSERT_NE(child, nullptr);
+  std::vector<std::optional<int64_t>> actual;
+  for (velox::vector_size_t i{1}; i < output->size(); ++i) {
+    actual.push_back(
+        row->isNullAt(i) ? std::nullopt
+                         : std::optional<int64_t>{child->valueAt(i)});
+  }
+  EXPECT_EQ(
+      actual, (std::vector<std::optional<int64_t>>{std::nullopt, 12, 13, 15}));
+}
+
+TEST_F(StreamReaderTest, readsAllNullRows) {
+  const auto presence = encodeChunk<bool>(
+      std::array<bool, 2>{false, false}, EncodingType::Trivial);
+  const auto values =
+      encodeChunk<int64_t>(std::array<int64_t, 0>{}, EncodingType::Trivial);
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"value"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::Int64}),
+      });
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<std::string_view, 2> streams{presence, values};
+  auto output = velox::BaseVector::create(
+      velox::ROW("value", velox::BIGINT()), 2, pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 2}}};
+
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  EXPECT_TRUE(row->isNullAt(0));
+  EXPECT_TRUE(row->isNullAt(1));
+}
+
+TEST_F(StreamReaderTest, readsNestedNullableRows) {
+  const auto innerPresence = encodeChunk<bool>(
+      std::array<bool, 4>{true, false, true, true}, EncodingType::Trivial);
+  const auto values = encodeChunk<int64_t>(
+      std::array<int64_t, 3>{10, 12, 13}, EncodingType::Trivial);
+  const auto innerType = std::make_shared<const RowType>(
+      StreamDescriptor{1, ScalarKind::Bool},
+      std::vector<std::string>{"value"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{2, ScalarKind::Int64}),
+      });
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"nested"},
+      std::vector<std::shared_ptr<const Type>>{innerType});
+  StreamReader reader{type, pool_.get(), {}};
+  const std::array<std::string_view, 3> streams{
+      std::string_view{}, innerPresence, values};
+  auto output = velox::BaseVector::create(
+      velox::ROW("nested", velox::ROW("value", velox::BIGINT())),
+      4,
+      pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 4}}};
+
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  const auto* outer = output->as<velox::RowVector>();
+  ASSERT_NE(outer, nullptr);
+  const auto* inner = outer->childAt(0)->as<velox::RowVector>();
+  ASSERT_NE(inner, nullptr);
+  const auto* child = inner->childAt(0)->asFlatVector<int64_t>();
+  ASSERT_NE(child, nullptr);
+  std::vector<std::optional<int64_t>> actual;
+  for (velox::vector_size_t i{0}; i < output->size(); ++i) {
+    actual.push_back(
+        inner->isNullAt(i) ? std::nullopt
+                           : std::optional<int64_t>{child->valueAt(i)});
+  }
+  EXPECT_EQ(
+      actual, (std::vector<std::optional<int64_t>>{10, std::nullopt, 12, 13}));
+}
+
+TEST_F(StreamReaderTest, readsRandomNullableRowsAndProjections) {
+  constexpr uint32_t kSeed{8'675'309};
+  std::mt19937 rng{kSeed};
+  for (uint32_t iteration{0}; iteration < 100; ++iteration) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "seed=" << kSeed << ", iteration=" << iteration);
+    const uint32_t rowCount{1 + static_cast<uint32_t>(rng() % 128)};
+    const uint32_t nullModulo{1 + static_cast<uint32_t>(rng() % 8)};
+    const uint32_t projectionMask{1 + static_cast<uint32_t>(rng() % 3)};
+    Vector<bool> isNonNull{pool_.get(), rowCount};
+    std::vector<int64_t> firstValues;
+    std::vector<int32_t> secondValues;
+    for (uint32_t row{0}; row < rowCount; ++row) {
+      isNonNull[row] = rng() % nullModulo != 0;
+      if (isNonNull[row]) {
+        firstValues.push_back(static_cast<int64_t>(row) * 10 + 1);
+        secondValues.push_back(static_cast<int32_t>(row) * 10 + 2);
+      }
+    }
+
+    std::vector<std::string> names;
+    std::vector<std::shared_ptr<const Type>> childTypes;
+    std::vector<velox::TypePtr> outputTypes;
+    std::vector<std::string> encodedStreams;
+    encodedStreams.push_back(
+        encodeChunk<bool>(
+            std::span<const bool>{isNonNull.data(), isNonNull.size()},
+            EncodingType::Trivial));
+    if (projectionMask & 1) {
+      names.emplace_back("first");
+      childTypes.push_back(
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::Int64}));
+      outputTypes.push_back(velox::BIGINT());
+      encodedStreams.push_back(
+          encodeChunk<int64_t>(firstValues, EncodingType::Trivial));
+    }
+    if (projectionMask & 2) {
+      names.emplace_back("second");
+      childTypes.push_back(
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{2, ScalarKind::Int32}));
+      outputTypes.push_back(velox::INTEGER());
+      encodedStreams.push_back(
+          encodeChunk<int32_t>(secondValues, EncodingType::Trivial));
+    }
+    const auto type = std::make_shared<const RowType>(
+        StreamDescriptor{0, ScalarKind::Bool}, names, childTypes);
+    StreamReader reader{type, pool_.get(), {}};
+    std::vector<std::string_view> streams;
+    streams.reserve(encodedStreams.size());
+    for (const auto& stream : encodedStreams) {
+      streams.push_back(stream);
+    }
+    const auto ranges = makeRandomRanges(rowCount, rng);
+    velox::vector_size_t numSelectedRows{0};
+    for (const auto& range : ranges) {
+      numSelectedRows += static_cast<velox::vector_size_t>(range.numRows());
+    }
+    const auto outputOffset = static_cast<velox::vector_size_t>(rng() % 4);
+    auto output = velox::BaseVector::create(
+        velox::ROW(names, outputTypes),
+        outputOffset + numSelectedRows,
+        pool_.get());
+
+    runRead(reader, streams, ranges, outputOffset, output);
+
+    const auto* row = output->as<velox::RowVector>();
+    ASSERT_NE(row, nullptr);
+    std::vector<std::optional<int64_t>> actualFirst;
+    std::vector<std::optional<int32_t>> actualSecond;
+    std::vector<std::optional<int64_t>> expectedFirst;
+    std::vector<std::optional<int32_t>> expectedSecond;
+    velox::vector_size_t outputRow{outputOffset};
+    for (const auto& range : ranges) {
+      for (uint32_t sourceRow{range.startRow}; sourceRow < range.endRow;
+           ++sourceRow, ++outputRow) {
+        if (projectionMask & 1) {
+          expectedFirst.push_back(
+              isNonNull[sourceRow]
+                  ? std::optional<
+                        int64_t>{static_cast<int64_t>(sourceRow) * 10 + 1}
+                  : std::nullopt);
+          const auto* child = row->childAt(0)->asFlatVector<int64_t>();
+          actualFirst.push_back(
+              row->isNullAt(outputRow)
+                  ? std::nullopt
+                  : std::optional<int64_t>{child->valueAt(outputRow)});
+        }
+        if (projectionMask & 2) {
+          expectedSecond.push_back(
+              isNonNull[sourceRow]
+                  ? std::optional<
+                        int32_t>{static_cast<int32_t>(sourceRow) * 10 + 2}
+                  : std::nullopt);
+          const auto childIndex = projectionMask & 1 ? 1 : 0;
+          const auto* child = row->childAt(childIndex)->asFlatVector<int32_t>();
+          actualSecond.push_back(
+              row->isNullAt(outputRow)
+                  ? std::nullopt
+                  : std::optional<int32_t>{child->valueAt(outputRow)});
+        }
+      }
+    }
+    EXPECT_EQ(actualFirst, expectedFirst);
+    EXPECT_EQ(actualSecond, expectedSecond);
+  }
 }
 
 TEST_F(StreamReaderTest, writesNullForAbsentScalarStream) {
