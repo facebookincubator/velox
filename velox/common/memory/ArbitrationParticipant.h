@@ -331,6 +331,14 @@ class ArbitrationParticipant
   // Aborts the query memory pool and returns the reclaimed bytes after abort.
   uint64_t abortLocked(const std::exception_ptr& error) noexcept;
 
+  // Removes 'op' only while it is still queued behind runningOp_.
+  // Returns false if it has already been promoted to running.
+  bool cancelWaitingArbitration(ArbitrationOperation* op);
+
+  // Removes an operation whose start failed, including if it was promoted
+  // concurrently, and wakes the next queued operation.
+  void cleanupFailedArbitrationStart(ArbitrationOperation* op);
+
   uint64_t shrinkLocked(bool reclaimAll);
 
   const uint64_t id_;
