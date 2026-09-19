@@ -23,6 +23,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <vector>
 #include "velox/common/time/CpuWallTimer.h"
 
@@ -261,7 +262,7 @@ class AsyncSource {
     return state_.load(std::memory_order_acquire);
   }
 
-  static std::string stateName(State state) {
+  static std::string_view stateName(State state) {
     switch (state) {
       case State::kInit:
         return "INIT";
