@@ -15,8 +15,14 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -34,6 +40,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/reduction.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
@@ -279,6 +286,74 @@ class CudfDecimalTest : public exec::test::OperatorTestBase {
       }
     }
   }
+
+  RowVectorPtr runDecimalOperators(
+      const core::PlanNodePtr& plan,
+      CudfVectorPtr input,
+      const std::vector<cudf::size_type>& resultChannels) {
+    core::PlanFragment fragment;
+    fragment.planNode = plan;
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    queryCtx->testingOverrideMemoryPool(
+        memory::memoryManager()->addRootPool("compactDecimals"));
+    auto task = exec::Task::create(
+        "compactDecimals",
+        std::move(fragment),
+        0,
+        std::move(queryCtx),
+        exec::Task::ExecutionMode::kParallel);
+    exec::DriverCtx driverCtx(task, 0, 0, 0, 0);
+    std::vector<core::PlanNodePtr> nodes;
+    for (auto node = plan; !node->sources().empty();
+         node = node->sources()[0]) {
+      nodes.push_back(node);
+    }
+    std::vector<std::unique_ptr<exec::Operator>> operators;
+    for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+      const auto operatorId = static_cast<int32_t>(operators.size());
+      if (auto aggregation =
+              std::dynamic_pointer_cast<const core::AggregationNode>(*it)) {
+        if (aggregation->groupingKeys().empty()) {
+          operators.push_back(
+              std::make_unique<CudfReduce>(
+                  operatorId, &driverCtx, aggregation));
+        } else {
+          operators.push_back(
+              std::make_unique<CudfGroupby>(
+                  operatorId, &driverCtx, aggregation));
+        }
+      } else {
+        auto window = std::dynamic_pointer_cast<const core::WindowNode>(*it);
+        VELOX_CHECK_NOT_NULL(window);
+        operators.push_back(
+            std::make_unique<CudfWindow>(operatorId, &driverCtx, window));
+      }
+      auto& current = operators.back();
+      current->initialize();
+      current->addInput(input);
+      current->noMoreInput();
+      input = std::dynamic_pointer_cast<CudfVector>(current->getOutput());
+      VELOX_CHECK_NOT_NULL(input);
+    }
+    for (auto channel : resultChannels) {
+      EXPECT_EQ(
+          input->getTableView().column(channel).type(),
+          veloxToCudfDataType(plan->outputType()->childAt(channel)));
+    }
+    // Select only aggregate results so window pass-through DECIMAL32 columns
+    // do not require decimal32 Arrow import support.
+    auto result = with_arrow::toVeloxColumn(
+        input->getTableView().select(resultChannels),
+        pool(),
+        "",
+        input->stream(),
+        cudf::get_current_device_resource_ref());
+    input->stream().sync();
+    for (auto& op : operators) {
+      op->close();
+    }
+    return result;
+  }
 };
 
 TEST_F(CudfDecimalTest, compactDecimalArithmetic) {
@@ -478,6 +553,147 @@ TEST_F(CudfDecimalTest, compactDecimalGreatestLeast) {
         inputs,
         {100, 100, -300, 100, 100},
         stream);
+  }
+}
+
+TEST_F(CudfDecimalTest, compactDecimalInputWidenedBeforeSum) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+  const std::vector<bool> valid{true, true, true, false};
+  auto input = makeDecimalColumn<int32_t>(
+      {900'000'000, 900'000'000, 900'000'000, 0}, 2, &valid, stream);
+  std::unique_ptr<cudf::column> owner;
+  auto widened = castDecimalInputToDecimal128(input->view(), owner, stream);
+  ASSERT_EQ(widened.type().id(), cudf::type_id::DECIMAL128);
+  EXPECT_EQ(widened.type().scale(), input->type().scale());
+  EXPECT_EQ(widened.null_count(), 1);
+
+  auto aggregation = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto sum = cudf::reduce(widened, *aggregation, widened.type(), stream, mr);
+  auto result = cudf::make_column_from_scalar(*sum, 1, stream, mr);
+  EXPECT_EQ(
+      copyColumnData<int128_t>(result->view(), stream),
+      (std::vector<int128_t>{2'700'000'000}));
+}
+
+TEST_F(CudfDecimalTest, compactDecimalAggregations) {
+  const auto decimalType = DECIMAL(9, 2);
+  const auto sumType = DECIMAL(38, 2);
+  auto logicalInput = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 0, 1, 1, 2, 2}),
+      makeNullableFlatVector<int64_t>(
+          {900'000'000,
+           900'000'000,
+           900'000'000,
+           std::nullopt,
+           -900'000'000,
+           900'000'000,
+           std::nullopt,
+           std::nullopt},
+          decimalType),
+      makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7}),
+  });
+  auto stream = cudfGlobalStreamPool().get_stream();
+  const std::vector<bool> valid{
+      true, true, true, false, true, true, false, false};
+  auto makeInput = [&](bool compact) {
+    auto table = with_arrow::toCudfTable(
+        logicalInput, pool(), stream, cudf::get_current_device_resource_ref());
+    if (compact) {
+      auto columns = table->release();
+      columns[1] = makeDecimalColumn<int32_t>(
+          {900'000'000,
+           900'000'000,
+           900'000'000,
+           0,
+           -900'000'000,
+           900'000'000,
+           0,
+           0},
+          2,
+          &valid,
+          stream);
+      table = std::make_unique<cudf::table>(std::move(columns));
+    }
+    return std::make_shared<CudfVector>(
+        pool(),
+        logicalInput->type(),
+        logicalInput->size(),
+        std::move(table),
+        stream);
+  };
+
+  for (bool compact : {true, false}) {
+    SCOPED_TRACE(compact);
+    for (bool grouped : {true, false}) {
+      SCOPED_TRACE(grouped);
+      const std::vector<std::string> keys =
+          grouped ? std::vector<std::string>{"c0"} : std::vector<std::string>{};
+      const std::vector<cudf::size_type> channels = grouped
+          ? std::vector<cudf::size_type>{0, 1, 2}
+          : std::vector<cudf::size_type>{0, 1};
+      RowVectorPtr expected;
+      if (grouped) {
+        expected = makeRowVector({
+            makeFlatVector<int64_t>({0, 1, 2}),
+            makeNullableFlatVector<int128_t>(
+                {2'700'000'000, 0, std::nullopt}, sumType),
+            makeNullableFlatVector<int64_t>(
+                {900'000'000, 0, std::nullopt}, decimalType),
+        });
+      } else {
+        expected = makeRowVector({
+            makeFlatVector<int128_t>({2'700'000'000}, sumType),
+            makeFlatVector<int64_t>({540'000'000}, decimalType),
+        });
+      }
+      for (bool partial : {true, false}) {
+        SCOPED_TRACE(partial);
+        auto builder = exec::test::PlanBuilder().values({logicalInput});
+        if (partial) {
+          builder.partialAggregation(keys, {"sum(c1)", "avg(c1)"})
+              .finalAggregation();
+        } else {
+          builder.singleAggregation(keys, {"sum(c1)", "avg(c1)"});
+        }
+        auto result = runDecimalOperators(
+            builder.planNode(), makeInput(compact), channels);
+        ASSERT_TRUE(exec::test::assertEqualResults({expected}, {result}));
+      }
+    }
+
+    auto plan =
+        exec::test::PlanBuilder()
+            .values({logicalInput})
+            .window({
+                "sum(c1) over (partition by c0 order by c2 rows between unbounded preceding and unbounded following)",
+                "sum(c1) over (partition by c0 order by c2 rows between unbounded preceding and current row)",
+            })
+            .planNode();
+    auto result = runDecimalOperators(plan, makeInput(compact), {3, 4});
+    auto expected = makeRowVector({
+        makeNullableFlatVector<int128_t>(
+            {2'700'000'000,
+             2'700'000'000,
+             2'700'000'000,
+             2'700'000'000,
+             0,
+             0,
+             std::nullopt,
+             std::nullopt},
+            sumType),
+        makeNullableFlatVector<int128_t>(
+            {900'000'000,
+             1'800'000'000,
+             2'700'000'000,
+             2'700'000'000,
+             -900'000'000,
+             0,
+             std::nullopt,
+             std::nullopt},
+            sumType),
+    });
+    ASSERT_TRUE(exec::test::assertEqualResults({expected}, {result}));
   }
 }
 
