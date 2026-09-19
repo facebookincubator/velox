@@ -45,6 +45,10 @@ struct SubfieldFilterDecimalType {
 using SubfieldFilterDecimalTypes =
     std::unordered_map<std::string, SubfieldFilterDecimalType>;
 
+bool hasDecimalSubfieldFilter(
+    const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& inputRowSchema);
+
 // Convert subfield filters to cudf AST
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,

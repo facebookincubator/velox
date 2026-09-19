@@ -685,6 +685,22 @@ TEST_F(SubfieldFilterAstTest, smallIntTypeBounds) {
   testFilterExecution(rowType, columnName, *filter, vec, expr);
 }
 
+TEST_F(SubfieldFilterAstTest, detectsDecimalFilters) {
+  const auto rowType = ROW({{"integer", BIGINT()}, {"decimal", DECIMAL(7, 2)}});
+  auto filters =
+      common::test::SubfieldFiltersBuilder()
+          .add("integer", std::make_unique<common::BigintRange>(0, 1, false))
+          .build();
+  EXPECT_FALSE(hasDecimalSubfieldFilter(filters, rowType));
+
+  filters =
+      common::test::SubfieldFiltersBuilder()
+          .add("integer", std::make_unique<common::BigintRange>(0, 1, false))
+          .add("decimal", std::make_unique<common::BigintRange>(0, 100, false))
+          .build();
+  EXPECT_TRUE(hasDecimalSubfieldFilter(filters, rowType));
+}
+
 TEST_F(SubfieldFilterAstTest, physicalPushdownAndLogicalDeferredDecimals) {
   namespace iceberg = cudf_velox::connector::hive::iceberg;
   using Op = cudf::ast::ast_operator;
