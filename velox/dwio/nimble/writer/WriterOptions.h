@@ -426,6 +426,13 @@ struct WriterOptions {
 
   bool enableStreamDeduplication{true};
 
+  /// When true, records a checksum of each stream's on-disk bytes in the
+  /// stripe group, so a reader can verify an individual stream without reading
+  /// the whole file. Costs 4 bytes per stream per stripe in the footer, and
+  /// the checksums do not compress. The whole-file checksum in the postscript
+  /// is written either way.
+  bool enableStreamChecksums{false};
+
   /// When true, string fields use per-field buffers instead of a shared buffer.
   /// This enables incremental memory reclamation during chunking.
   bool disableSharedStringBuffers{false};
