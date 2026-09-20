@@ -437,6 +437,14 @@ uint32_t ClusterIndex::resolvePartitionRow(
   return partitionRows_[partition->id] + partitionRow;
 }
 
+folly::Range<const uint32_t*> ClusterIndex::partitionChunkRows(
+    uint32_t partitionId) const {
+  const auto* partition = loadPartition(partitionId);
+  const auto* chunkRows = partition->index->chunk_rows();
+  NIMBLE_CHECK_NOT_NULL(chunkRows, "Index partition has no chunk rows");
+  return {chunkRows->data(), chunkRows->size()};
+}
+
 MetadataSection ClusterIndex::partitionSection(uint32_t partitionId) const {
   NIMBLE_CHECK_LT(partitionId, numPartitions_);
   const auto* indexPartitions = indexRoot_->index_partitions();
