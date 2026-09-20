@@ -216,7 +216,8 @@ CudfSplitReader::CudfSplitReader(
               connectorQueryCtx_->sessionProperties())),
       baseReaderOpts_(pool_),
       subfieldFilterAst_(subfieldFilterAst),
-      pushdownFilterExpr_(subfieldFilterAst) {
+      pushdownFilterExpr_(subfieldFilterAst),
+      postReadFilterExpr_(subfieldFilterAst) {
   VELOX_CHECK_GE(
       readColumnNames_.size(),
       readColumnTypes_.size(),
@@ -416,6 +417,7 @@ void CudfSplitReader::resetSplit() {
   dataSource_.reset();
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
+  postReadFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
 }
 
@@ -425,6 +427,10 @@ cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
 
 const cudf::ast::expression* CudfSplitReader::subfieldFilterAst() const {
   return subfieldFilterAst_;
+}
+
+const cudf::ast::expression* CudfSplitReader::postReadFilter() const {
+  return postReadFilterExpr_;
 }
 
 bool CudfSplitReader::isSplitSkipped() const {
@@ -603,6 +609,16 @@ void CudfSplitReader::fileMetaDatas() {
         pushdownFilterExpr_,
         "Split-specific pushdown filter builder must return an expression");
     hasSplitSpecificPushdownFilter_ = true;
+  }
+  if (postReadFilterBuilder_) {
+    VELOX_CHECK_EQ(
+        fileMetaData_.size(),
+        1,
+        "Split-specific post-read filters require exactly one Parquet metadata");
+    postReadFilterExpr_ = postReadFilterBuilder_(fileMetaData_.front());
+    VELOX_CHECK_NOT_NULL(
+        postReadFilterExpr_,
+        "Split-specific post-read filter builder must return an expression");
   }
 }
 

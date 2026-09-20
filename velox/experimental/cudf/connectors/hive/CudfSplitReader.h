@@ -78,15 +78,21 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
-  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
+  using SplitFilterBuilder = std::function<cudf::ast::expression const*(
       const cudf::io::parquet::FileMetaData&)>;
 
   /// Sets a builder for a split-specific pushdown filter. The builder is
   /// invoked after the Parquet footer is read and before reader options are
   /// configured. The returned expression must remain alive while the split is
   /// being read.
-  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
+  void setPushdownFilterBuilder(SplitFilterBuilder builder) {
     pushdownFilterBuilder_ = std::move(builder);
+  }
+
+  /// Sets a builder for a filter matching the physical decimal types after
+  /// reader normalization or compact preservation.
+  void setPostReadFilterBuilder(SplitFilterBuilder builder) {
+    postReadFilterBuilder_ = std::move(builder);
   }
 
   /// Prepare the split: open cudf reader, set up data source and options.
@@ -123,6 +129,9 @@ class CudfSplitReader : public NvtxHelper {
 
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
+
+  // Return the filter matching post-read physical decimal types.
+  const cudf::ast::expression* postReadFilter() const;
 
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
@@ -236,7 +245,9 @@ class CudfSplitReader : public NvtxHelper {
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
-  PushdownFilterBuilder pushdownFilterBuilder_;
+  SplitFilterBuilder pushdownFilterBuilder_;
+  SplitFilterBuilder postReadFilterBuilder_;
+  const cudf::ast::expression* postReadFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
 
   struct TotalScanTimeCallbackData {

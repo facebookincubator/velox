@@ -125,7 +125,8 @@ std::optional<SubfieldFilterDecimalType> parquetDecimalType(
 
 SubfieldFilterDecimalTypes parquetDecimalTypes(
     std::span<const cudf::io::parquet::SchemaElement> metadataSchema,
-    const RowTypePtr& readerSchema) {
+    const RowTypePtr& readerSchema,
+    bool preservedOutputOnly = false) {
   VELOX_CHECK(
       !metadataSchema.empty(), "Cannot build a filter from an empty schema");
 
@@ -142,7 +143,12 @@ SubfieldFilterDecimalTypes parquetDecimalTypes(
     const auto& logicalType = readerSchema->findChild(child.name);
     if (logicalType->isDecimal()) {
       if (auto decimalType = parquetDecimalType(child)) {
-        decimalTypes.emplace(child.name, *decimalType);
+        const auto logicalScale = getDecimalPrecisionScale(*logicalType).second;
+        if (!preservedOutputOnly ||
+            (decimalType->type == cudf::type_id::DECIMAL32 &&
+             decimalType->isDecimal && decimalType->scale == logicalScale)) {
+          decimalTypes.emplace(child.name, *decimalType);
+        }
       }
     }
   }
@@ -343,6 +349,24 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
               readerFilterType,
               &decimalTypes);
         });
+    if (cudfHiveConfig_->preserveCompactDecimalsSession(
+            connectorQueryCtx_->sessionProperties())) {
+      cudfSplitReader_->setPostReadFilterBuilder(
+          [this,
+           readerFilterType](const cudf::io::parquet::FileMetaData& metadata)
+              -> cudf::ast::expression const* {
+            postReadFilterTree_ = cudf::ast::tree{};
+            postReadFilterScalars_.clear();
+            const auto decimalTypes = parquetDecimalTypes(
+                metadata.schema, readerFilterType, /*preservedOutputOnly=*/true);
+            return &createAstFromSubfieldFilters(
+                subfieldFilters_,
+                postReadFilterTree_,
+                postReadFilterScalars_,
+                readerFilterType,
+                &decimalTypes);
+          });
+    }
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);
 

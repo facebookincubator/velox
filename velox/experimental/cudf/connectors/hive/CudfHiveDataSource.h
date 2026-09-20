@@ -148,6 +148,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   cudf::ast::tree subfieldTree_;
   std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
   cudf::ast::tree pushdownFilterTree_;
+  std::vector<std::unique_ptr<cudf::scalar>> postReadFilterScalars_;
+  cudf::ast::tree postReadFilterTree_;
 
   // The table handle's subfield filters, merged with the ones extracted from
   // its remaining filter.

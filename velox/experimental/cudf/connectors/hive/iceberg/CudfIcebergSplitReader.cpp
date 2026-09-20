@@ -130,7 +130,7 @@ void CudfIcebergSplitReader::resetSplit() {
   syntheticTableProduced_ = false;
   skipSplit_ = false;
   transformedPushdownFilter_.reset();
-  transformedLogicalFilter_.reset();
+  transformedPostReadFilter_.reset();
   baseReadOffset_ = 0;
   deleteBitmap_ = nullptr;
   deviceBitmap_.reset();
@@ -172,13 +172,12 @@ const cudf::ast::expression* CudfIcebergSplitReader::deferredFilter() const {
   }
   // Nothing was pushed, so the whole filter runs after the read.
   if (deferEverything()) {
-    return subfieldFilterAst();
+    return postReadFilter();
   }
-  // The deferred filter runs over the assembled table, whose decimal columns
-  // hold their Velox logical types, so it must come from the transform of the
-  // logical filter whenever that differs from the pushed one.
-  const auto& transformed = transformedLogicalFilter_.has_value()
-      ? transformedLogicalFilter_
+  // The deferred filter runs over the assembled table and must match its
+  // post-read physical decimal widths.
+  const auto& transformed = transformedPostReadFilter_.has_value()
+      ? transformedPostReadFilter_
       : transformedPushdownFilter_;
   return transformed.has_value() ? transformed->deferredExpr : nullptr;
 }
@@ -288,17 +287,17 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
     return;
   }
 
-  // A `PushdownFilterBuilder` may have rebuilt the pushed filter against the
-  // split's physical decimal types. The deferred filter runs over the assembled
-  // table instead, so it has to come from the logical filter. Both are built
+  // The pushed filter uses the file's physical decimal types. The deferred
+  // filter runs over the assembled post-read table instead, so it must use the
+  // widths retained after normalization or compact preservation. Both are built
   // from the same subfield filters, so both fold the same way.
-  auto* logicalFilter = subfieldFilterAst();
-  if (logicalFilter != originalFilter) {
-    transformedLogicalFilter_ = transformFilterForInjectedColumns(
-        *logicalFilter, injectedColumnIndices, injectedColumnFolds);
+  auto* postRead = postReadFilter();
+  if (postRead != originalFilter) {
+    transformedPostReadFilter_ = transformFilterForInjectedColumns(
+        *postRead, injectedColumnIndices, injectedColumnFolds);
     VELOX_CHECK(
-        not transformedLogicalFilter_->skipSplit,
-        "Transformed logical and pushed filters disagree on rejecting the split");
+        not transformedPostReadFilter_->skipSplit,
+        "Transformed post-read and pushed filters disagree on rejecting the split");
   }
 }
 
