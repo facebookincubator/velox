@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "velox/dwio/nimble/common/Types.h"
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,7 +30,8 @@ class FileProperties {
   FileProperties(
       bool compactRowCountEncoding,
       bool clusterIndexKeyColumnStorageOmitted,
-      std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage);
+      std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
+      bool hasStreamChecksums = false);
 
   /// Returns whether encoded stream row counts use compact varint encoding.
   bool compactRowCountEncoding() const {
@@ -46,6 +49,12 @@ class FileProperties {
     return clusterIndexKeyColumnsWithOmittedStorage_;
   }
 
+  /// Returns whether stripe groups carry per-stream checksums. The algorithm
+  /// is the file's ChecksumType, from the postscript.
+  bool hasStreamChecksums() const {
+    return hasStreamChecksums_;
+  }
+
   /// Serializes file properties into the `columnar.properties` optional
   /// section.
   std::string serialize() const;
@@ -57,6 +66,7 @@ class FileProperties {
   bool compactRowCountEncoding_{false};
   bool clusterIndexKeyColumnStorageOmitted_{false};
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage_;
+  bool hasStreamChecksums_{false};
 };
 
 } // namespace facebook::nimble

@@ -1980,7 +1980,7 @@ TEST_F(WriterTest, featureReorderingStreamCollocation) {
 
     auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+    std::vector<nimble::TabletReader::StreamMetadata> streamLocations(
         streamCount);
     tablet->streamLocations(stripeId, streamLocations);
 
@@ -2144,7 +2144,7 @@ TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
 
     const auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+    std::vector<nimble::TabletReader::StreamMetadata> streamLocations(
         streamCount);
     tablet->streamLocations(stripeId, streamLocations);
 
@@ -2268,7 +2268,7 @@ TEST_F(
 
   auto stripeId = tablet->stripeIdentifier(0);
   const auto streamCount = tablet->streamCount(stripeId);
-  std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+  std::vector<nimble::TabletReader::StreamMetadata> streamLocations(
       streamCount);
   tablet->streamLocations(stripeId, streamLocations);
 
@@ -7083,7 +7083,7 @@ class WriterIndexTest : public WriterTest,
          ++stripeIndex) {
       const auto stripeIdentifier = tablet.stripeIdentifier(stripeIndex);
       const auto streamCount = tablet.streamCount(stripeIdentifier);
-      std::vector<nimble::TabletReader::StreamLocation> streamLocations(
+      std::vector<nimble::TabletReader::StreamMetadata> streamLocations(
           streamCount);
       tablet.streamLocations(stripeIdentifier, streamLocations);
 
