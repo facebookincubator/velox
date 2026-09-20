@@ -187,6 +187,7 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
       cudf::io::read_parquet(options, stream, mr).tbl,
       equalityColumnTypes,
       /*numPrependedColumns=*/0,
+      /*preserveCompactDecimals=*/false,
       stream,
       mr);
   stream.sync();

@@ -48,12 +48,15 @@ using CudfParquetReader =
 using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 
 /// Normalizes decimal columns, recursively, to their logical Velox types.
-/// columnTypes must describe every column after numPrependedColumns, which
-/// are left unchanged. Casts and buffer releases use the supplied stream.
+/// If preserveCompactDecimals is true, matching-scale DECIMAL32 columns are
+/// left unchanged. columnTypes must describe every column after
+/// numPrependedColumns, which are left unchanged. Casts and buffer releases
+/// use the supplied stream.
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
+    bool preserveCompactDecimals,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
@@ -125,11 +128,10 @@ class CudfSplitReader : public NvtxHelper {
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
   // Read the next table chunk from the parquet reader. Returns nullopt when no
-  // more data. All read decimals, including nested,filter-only and
-  // equality-delete key columns, have their logical Velox scale and storage
-  // width (DECIMAL64 for short decimals, DECIMAL128 for long decimals) before
-  // deferred filters or equality deletes consume the table. A prepended
-  // row-index column is not part of the logical read schema.
+  // more data. By default, all decimals have their logical Velox scale and
+  // storage width before downstream processing. When compact preservation is
+  // enabled, matching-scale DECIMAL32 columns remain compact. A prepended
+  // row-index column is not part of the logical schema.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
 
   // Setup the cuDF data source
@@ -229,6 +231,7 @@ class CudfSplitReader : public NvtxHelper {
   // created.
   std::size_t chunkReadLimit_{0};
   std::size_t passReadLimit_{0};
+  bool preserveCompactDecimals_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;

@@ -21,7 +21,11 @@
 #include "velox/common/config/Config.h"
 
 #include <cudf/ast/expressions.hpp>
+#include <cudf/column/column_factories.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/utilities/default_stream.hpp>
 
+#include <array>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -56,6 +60,45 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 
 class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
                                 CudfHiveConnectorTestBase {};
+
+TEST_F(CudfSplitReaderTest, preservesMatchingCompactDecimals) {
+  auto stream = cudf::get_default_stream();
+  auto makeTable = [&](cudf::type_id type, int32_t scale) {
+    auto column = cudf::make_fixed_width_column(
+        cudf::data_type{type, -scale},
+        1,
+        cudf::mask_state::UNALLOCATED,
+        stream);
+    std::vector<std::unique_ptr<cudf::column>> columns;
+    columns.push_back(std::move(column));
+    return std::make_unique<cudf::table>(std::move(columns));
+  };
+  const std::array<TypePtr, 1> logicalType{DECIMAL(7, 2)};
+  auto normalize = [&](cudf::type_id type,
+                       int32_t scale,
+                       bool preserveCompactDecimals) {
+    return castDecimalColumnsToVeloxTypes(
+        makeTable(type, scale),
+        logicalType,
+        /*numPrependedColumns=*/0,
+        preserveCompactDecimals,
+        stream,
+        cudf::get_current_device_resource_ref());
+  };
+
+  EXPECT_EQ(
+      normalize(cudf::type_id::DECIMAL32, 2, false)->view().column(0).type(),
+      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+  EXPECT_EQ(
+      normalize(cudf::type_id::DECIMAL32, 2, true)->view().column(0).type(),
+      (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
+  EXPECT_EQ(
+      normalize(cudf::type_id::DECIMAL32, 4, true)->view().column(0).type(),
+      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+  EXPECT_EQ(
+      normalize(cudf::type_id::DECIMAL64, 2, true)->view().column(0).type(),
+      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+}
 
 TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   auto rowType = ROW({"c0"}, {BIGINT()});

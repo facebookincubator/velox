@@ -96,11 +96,17 @@ std::unique_ptr<cudf::column> rebuildWithTransformedChildren(
 std::unique_ptr<cudf::column> castDecimalColumns(
     std::unique_ptr<cudf::column> col,
     const TypePtr& veloxType,
+    bool preserveCompactDecimals,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Decimal type (base case)
   if (veloxType->isDecimal()) {
     auto const targetType = veloxToCudfDataType(veloxType);
+    if (preserveCompactDecimals &&
+        col->type().id() == cudf::type_id::DECIMAL32 &&
+        col->type().scale() == targetType.scale()) {
+      return col;
+    }
     if (col->type() != targetType) {
       return cudf::cast(col->view(), targetType, stream, mr);
     }
@@ -120,7 +126,11 @@ std::unique_ptr<cudf::column> castDecimalColumns(
     return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
       for (size_t i = 0; i < numChildren; ++i) {
         children[i] = castDecimalColumns(
-            std::move(children[i]), rowType.childAt(i), stream, mr);
+            std::move(children[i]),
+            rowType.childAt(i),
+            preserveCompactDecimals,
+            stream,
+            mr);
       }
     });
   }
@@ -136,7 +146,11 @@ std::unique_ptr<cudf::column> castDecimalColumns(
     return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
       auto const childIdx = cudf::lists_column_view::child_column_index;
       children[childIdx] = castDecimalColumns(
-          std::move(children[childIdx]), veloxType->childAt(0), stream, mr);
+          std::move(children[childIdx]),
+          veloxType->childAt(0),
+          preserveCompactDecimals,
+          stream,
+          mr);
     });
   }
 
@@ -149,6 +163,7 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
+    bool preserveCompactDecimals,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_EQ(
@@ -159,7 +174,11 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
   for (size_t i = 0; i < columnTypes.size(); ++i) {
     const auto columnIndex = numPrependedColumns + i;
     columns[columnIndex] = castDecimalColumns(
-        std::move(columns[columnIndex]), columnTypes[i], stream, mr);
+        std::move(columns[columnIndex]),
+        columnTypes[i],
+        preserveCompactDecimals,
+        stream,
+        mr);
   }
   return std::make_unique<cudf::table>(std::move(columns));
 }
@@ -192,6 +211,9 @@ CudfSplitReader::CudfSplitReader(
       ioStats_(ioStats),
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
+      preserveCompactDecimals_(
+          cudfHiveConfig_->preserveCompactDecimalsSession(
+              connectorQueryCtx_->sessionProperties())),
       baseReaderOpts_(pool_),
       subfieldFilterAst_(subfieldFilterAst),
       pushdownFilterExpr_(subfieldFilterAst) {
@@ -326,6 +348,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
       std::move(tableWithMetadata.tbl),
       readColumnTypes_,
       prependRowIndex_ ? 1 : 0,
+      preserveCompactDecimals_,
       stream_,
       outputMr);
 }

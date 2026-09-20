@@ -96,6 +96,11 @@ class CudfHiveConfig {
   static constexpr const char* kSerializeIoRequestsSession =
       "cudf.hive.serialize_io_requests";
 
+  static constexpr const char* kPreserveCompactDecimals =
+      "cudf.hive.preserve-compact-decimals";
+  static constexpr const char* kPreserveCompactDecimalsSession =
+      "cudf.hive.preserve_compact_decimals";
+
   // Writer config options
 
   /// Whether new data can be inserted into a CudfHive file
@@ -168,6 +173,10 @@ class CudfHiveConfig {
 
   bool serializeIoRequests() const;
   bool serializeIoRequestsSession(const config::ConfigBase* session) const;
+
+  bool preserveCompactDecimals() const;
+  bool preserveCompactDecimalsSession(
+      const config::ConfigBase* session) const;
 
   bool immutableFiles() const;
 
