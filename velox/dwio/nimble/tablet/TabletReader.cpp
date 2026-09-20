@@ -90,6 +90,7 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.loadChunkStats = options.loadChunkStats();
   if (tabletOptions.loadChunkStats) {
     tabletOptions.preloadOptionalSections.emplace_back(kChunkStatsSection);
+    tabletOptions.preloadOptionalSections.emplace_back(kChunkStatsV2Section);
   }
   tabletOptions.pinMetadata = options.pinMetadata();
   tabletOptions.cacheMetadata = options.cacheMetadata();
@@ -538,7 +539,10 @@ void TabletReader::cacheMetadata(
   }
 
   if (chunkStats_ != nullptr) {
-    auto chunkStatsIt = optionalSections_.find(std::string{kChunkStatsSection});
+    const auto sectionName = chunkStatsVersion_ == ChunkStatsVersion::kV2
+        ? kChunkStatsV2Section
+        : kChunkStatsSection;
+    auto chunkStatsIt = optionalSections_.find(std::string{sectionName});
     NIMBLE_CHECK(chunkStatsIt != optionalSections_.end());
     cacheSection(chunkStatsIt->second);
 
@@ -577,6 +581,7 @@ void TabletReader::loadStripes(
   }
   if (options.loadChunkStats) {
     updateOffset(kChunkStatsSection);
+    updateOffset(kChunkStatsV2Section);
   }
   const uint64_t requiredSize = fileSize_ - requiredOffset;
   if (requiredSize > footerIoSize) {
@@ -910,6 +915,18 @@ std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
   return stripeGroupCache_.getOrCreate(stripeGroupIndex);
 }
 
+std::shared_ptr<ChunkStatsGroup> TabletReader::createChunkStatsGroup(
+    uint32_t firstStripe,
+    uint32_t stripeCount,
+    std::unique_ptr<MetadataBuffer> metadata) const {
+  return ChunkStatsGroup::create(
+      chunkStatsVersion_,
+      firstStripe,
+      stripeCount,
+      std::move(metadata),
+      *pool_);
+}
+
 TabletReader::StripeGroupMetadata TabletReader::loadStripeGroupMetadata(
     uint32_t stripeGroupIndex) const {
   const auto* footer = footerRoot(*footer_);
@@ -934,7 +951,7 @@ TabletReader::StripeGroupMetadata TabletReader::loadStripeGroupMetadata(
   if (hasChunkStats) {
     auto chunkStatsMetadata =
         std::make_unique<MetadataBuffer>(std::move(*results[1]));
-    result.chunkStats = ChunkStatsGroup::create(
+    result.chunkStats = createChunkStatsGroup(
         result.stripeGroup->firstStripe(),
         result.stripeGroup->stripeCount(),
         std::move(chunkStatsMetadata));
@@ -1197,7 +1214,8 @@ std::optional<Section> TabletReader::loadOptionalSection(
 }
 
 bool TabletReader::hasChunkStatsSection() const {
-  return hasOptionalSection(std::string{kChunkStatsSection});
+  return hasOptionalSection(std::string{kChunkStatsV2Section}) ||
+      hasOptionalSection(std::string{kChunkStatsSection});
 }
 
 bool TabletReader::hasIndexSection() const {
@@ -1355,12 +1373,19 @@ void TabletReader::initChunkStats(
   if (!loadChunkStats_) {
     return;
   }
-  if (!hasChunkStatsSection()) {
+  // Prefer V2 (Nimble-encoded) over V1 (raw uint32).
+  std::string sectionName;
+  if (hasOptionalSection(std::string{kChunkStatsV2Section})) {
+    sectionName = kChunkStatsV2Section;
+    chunkStatsVersion_ = ChunkStatsVersion::kV2;
+  } else if (hasChunkStatsSection()) {
+    sectionName = kChunkStatsSection;
+    chunkStatsVersion_ = ChunkStatsVersion::kV1;
+  } else {
     return;
   }
 
-  auto section =
-      loadOptionalSection(std::string{kChunkStatsSection}, /*keepCache=*/false);
+  auto section = loadOptionalSection(sectionName, /*keepCache=*/false);
   NIMBLE_CHECK(section.has_value(), "Failed to load chunk stats section.");
 
   auto chunkStats = ChunkStats::create(std::move(section.value()));
@@ -1378,7 +1403,7 @@ void TabletReader::initChunkStats(
       if (metadataBuffer != nullptr) {
         chunkStatsCache_.pin(
             0,
-            ChunkStatsGroup::create(
+            createChunkStatsGroup(
                 firstStripe(0), stripeCount(0), std::move(metadataBuffer)));
       }
     }
@@ -1449,10 +1474,11 @@ std::shared_ptr<ChunkStatsGroup> TabletReader::loadChunkStatsGroup(
     return nullptr;
   }
 
-  return ChunkStatsGroup::create(
+  auto metadata = readMetadata(section);
+  return createChunkStatsGroup(
       this->firstStripe(stripeGroupIndex),
       this->stripeCount(stripeGroupIndex),
-      readMetadata(section));
+      std::move(metadata));
 }
 
 } // namespace facebook::nimble

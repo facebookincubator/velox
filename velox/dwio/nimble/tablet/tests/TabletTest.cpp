@@ -1527,6 +1527,52 @@ TEST_P(TabletTest, chunkStatsV2WritePath) {
       decode(group->stream_chunk_null_counts()), testing::ElementsAre(1, 2, 3));
 }
 
+TEST_P(TabletTest, prefersV2ChunkStatsWhenBothSectionsExist) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::Buffer buffer{*pool_};
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {
+          .streamDeduplicationEnabled = false,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+          .closeCallback =
+              [](const nimble::WriteDataFn&,
+                 const nimble::CreateMetadataSectionFn&,
+                 const nimble::WriteOptionalSectionFn& writeOptionalSection) {
+                writeOptionalSection(
+                    std::string{nimble::kChunkStatsSection}, "invalid");
+              },
+      });
+  tabletWriter->writeStripe(
+      100,
+      {nimble::index::test::createStream(
+          buffer,
+          {.offset = 0,
+           .chunks = {
+               {.rowCount = 50, .size = 10},
+               {.rowCount = 50, .size = 12},
+           }})});
+  tabletWriter->close();
+  writeFile.close();
+
+  auto tablet = createTabletReader(file);
+  EXPECT_TRUE(
+      tablet->hasOptionalSection(std::string{nimble::kChunkStatsSection}));
+  EXPECT_TRUE(
+      tablet->hasOptionalSection(std::string{nimble::kChunkStatsV2Section}));
+
+  auto stripe = tablet->stripeIdentifier(0);
+  ASSERT_NE(stripe.chunkStats(), nullptr);
+  auto streamIndex = stripe.chunkStats()->createStreamIndex(
+      0, 0, tablet->streamSize(stripe, 0));
+  ASSERT_NE(streamIndex, nullptr);
+  EXPECT_EQ(streamIndex->lookupChunk(50).chunkOffset, 10);
+}
+
 TEST_P(TabletTest, streamSize) {
   // Write a file with 2 stripes and verify streamSize API.
   std::string file;
@@ -6115,6 +6161,97 @@ TEST_P(TabletCacheTest, cacheWarmPath) {
   EXPECT_EQ(warmCacheStats.numEvict, 0);
 }
 
+TEST_P(TabletCacheTest, cacheMetadataWithChunkStats) {
+  for (const auto version : {ChunkStatsVersion::kV1, ChunkStatsVersion::kV2}) {
+    SCOPED_TRACE(
+        version == ChunkStatsVersion::kV1 ? "V1 chunk stats"
+                                          : "V2 chunk stats");
+    dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    metadataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    readerOptions_.reset();
+
+    std::string file;
+    velox::InMemoryWriteFile writeFile(&file);
+    nimble::Buffer buffer(*pool_);
+
+    auto tabletWriter = nimble::TabletWriter::create(
+        &writeFile,
+        *pool_,
+        {
+            .metadataFlushThreshold = 1,
+            .streamDeduplicationEnabled = false,
+            .enableChunkStats = true,
+            .chunkStatsVersion = version,
+            .chunkStatsMinAvgChunks = 0,
+        });
+    for (uint32_t stripe = 0; stripe < 3; ++stripe) {
+      tabletWriter->writeStripe(
+          100,
+          {nimble::index::test::createStream(
+              buffer,
+              {.offset = 0,
+               .chunks = {
+                   {.rowCount = 50, .size = 10 + stripe},
+                   {.rowCount = 50, .size = 20 + stripe},
+               }})});
+    }
+    tabletWriter->close();
+    writeFile.close();
+
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    nimble::TabletReader::Options options;
+    options.maxFooterIoBytes = 0;
+
+    {
+      auto coldReader = createTabletReader(readFile, options);
+      nimble::test::TabletReaderTestHelper helper{coldReader.get()};
+      EXPECT_EQ(helper.numStripeGroups(), 3);
+      EXPECT_FALSE(helper.hasChunkStatsGroupCached(1));
+      EXPECT_FALSE(helper.hasChunkStatsGroupCached(2));
+
+      auto stripe = coldReader->stripeIdentifier(1);
+      ASSERT_NE(stripe.chunkStats(), nullptr);
+      auto streamIndex = stripe.chunkStats()->createStreamIndex(
+          1, 0, coldReader->streamSize(stripe, 0));
+      ASSERT_NE(streamIndex, nullptr);
+      const auto location = streamIndex->lookupChunk(50);
+      EXPECT_EQ(location.chunkOffset, 11);
+      EXPECT_EQ(location.chunkSize, 21);
+      EXPECT_TRUE(helper.hasChunkStatsGroupCached(1));
+      EXPECT_FALSE(helper.hasChunkStatsGroupCached(2));
+    }
+
+    dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    metadataIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
+    readerOptions_.reset();
+
+    auto warmReader = createTabletReader(readFile, options);
+    nimble::test::TabletReaderTestHelper helper{warmReader.get()};
+    const auto rawBytesBeforeWarmLookup = metadataIoStats_->rawBytesRead();
+    const auto ramHitsBeforeWarmLookup = metadataIoStats_->ramHit().count();
+
+    auto warmStripe = warmReader->stripeIdentifier(1);
+    ASSERT_NE(warmStripe.chunkStats(), nullptr);
+    auto warmStreamIndex = warmStripe.chunkStats()->createStreamIndex(
+        1, 0, warmReader->streamSize(warmStripe, 0));
+    ASSERT_NE(warmStreamIndex, nullptr);
+    EXPECT_EQ(warmStreamIndex->lookupChunk(50).chunkOffset, 11);
+    EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBeforeWarmLookup);
+    EXPECT_GT(metadataIoStats_->ramHit().count(), ramHitsBeforeWarmLookup);
+
+    const auto rawBytesBeforeColdLookup = metadataIoStats_->rawBytesRead();
+    auto coldStripe = warmReader->stripeIdentifier(2);
+    ASSERT_NE(coldStripe.chunkStats(), nullptr);
+    auto coldStreamIndex = coldStripe.chunkStats()->createStreamIndex(
+        2, 0, warmReader->streamSize(coldStripe, 0));
+    ASSERT_NE(coldStreamIndex, nullptr);
+    EXPECT_EQ(coldStreamIndex->lookupChunk(50).chunkOffset, 12);
+    EXPECT_GT(metadataIoStats_->rawBytesRead(), rawBytesBeforeColdLookup);
+  }
+}
+
 // Verifies that cacheMetadata() stores decompressed metadata in the cache,
 // even when the on-disk metadata is Zstd-compressed. Before the fix,
 // cacheMetadata() stored compressed bytes, causing size mismatches on
@@ -6124,26 +6261,30 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
   velox::InMemoryWriteFile writeFile(&file);
   nimble::Buffer buffer(*pool_);
 
-  // Write a file with enough streams that stripe group metadata exceeds
-  // the 64KB compression threshold, triggering Zstd compression.
+  // Write enough chunk stats that both stripe-group and chunk-stats metadata
+  // exceed the 64KB compression threshold.
   constexpr int kNumStripes = 5;
   constexpr int kNumStreams = 500;
+  constexpr int kNumChunks = 20;
   auto tabletWriter = nimble::TabletWriter::create(
       &writeFile,
       *pool_,
-      {.metadataFlushThreshold = 1024 * 1024 * 1024,
-       .streamDeduplicationEnabled = false});
+      {
+          .metadataFlushThreshold = 1024 * 1024 * 1024,
+          .streamDeduplicationEnabled = false,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+      });
 
   for (int i = 0; i < kNumStripes; ++i) {
     std::vector<nimble::Stream> streams;
     for (int s = 0; s < kNumStreams; ++s) {
-      const auto size = 50;
-      auto* pos = buffer.reserve(size);
-      std::memset(pos, (i * kNumStreams + s) & 0xFF, size);
+      const std::vector<nimble::index::test::ChunkSpec> chunks(
+          kNumChunks, {.rowCount = 5, .size = 5});
       streams.push_back(
-          {.offset = static_cast<uint32_t>(s),
-           .chunks = {
-               {.rowCount = 100, .content = {std::string_view(pos, size)}}}});
+          nimble::index::test::createStream(
+              buffer, {.offset = static_cast<uint32_t>(s), .chunks = chunks}));
     }
     tabletWriter->writeStripe(100, std::move(streams));
   }
@@ -6160,10 +6301,19 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
   // Cold path: first reader populates the cache via cacheMetadata().
   {
     auto coldReader = createTabletReader(readFile);
+    nimble::test::TabletReaderTestHelper helper{coldReader.get()};
     EXPECT_EQ(coldReader->stripeCount(), kNumStripes);
+    EXPECT_EQ(
+        helper.chunkStatsGroupCompressionType(0),
+        nimble::CompressionType::Zstd);
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = coldReader->stripeIdentifier(i);
       EXPECT_NE(stripeId.stripeGroup(), nullptr);
+      ASSERT_NE(stripeId.chunkStats(), nullptr);
+      auto streamIndex = stripeId.chunkStats()->createStreamIndex(
+          i, 0, coldReader->streamSize(stripeId, 0));
+      ASSERT_NE(streamIndex, nullptr);
+      EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
   }
 
@@ -6191,7 +6341,13 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedRoundtrip) {
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
       EXPECT_NE(stripeId.stripeGroup(), nullptr);
+      ASSERT_NE(stripeId.chunkStats(), nullptr);
+      auto streamIndex = stripeId.chunkStats()->createStreamIndex(
+          i, 0, warmReader->streamSize(stripeId, 0));
+      ASSERT_NE(streamIndex, nullptr);
+      EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
+    EXPECT_EQ(metadataIoStats_->rawBytesRead(), 0);
   }
 
   // No evictions — entries should be correct size from cacheMetadata().
@@ -6210,22 +6366,26 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
 
   constexpr int kNumStripes = 5;
   constexpr int kNumStreams = 500;
+  constexpr int kNumChunks = 20;
   auto tabletWriter = nimble::TabletWriter::create(
       &writeFile,
       *pool_,
-      {.metadataFlushThreshold = 1024 * 1024 * 1024,
-       .streamDeduplicationEnabled = false});
+      {
+          .metadataFlushThreshold = 1024 * 1024 * 1024,
+          .streamDeduplicationEnabled = false,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+      });
 
   for (int i = 0; i < kNumStripes; ++i) {
     std::vector<nimble::Stream> streams;
     for (int s = 0; s < kNumStreams; ++s) {
-      const auto size = 50;
-      auto* pos = buffer.reserve(size);
-      std::memset(pos, (i * kNumStreams + s) & 0xFF, size);
+      const std::vector<nimble::index::test::ChunkSpec> chunks(
+          kNumChunks, {.rowCount = 5, .size = 5});
       streams.push_back(
-          {.offset = static_cast<uint32_t>(s),
-           .chunks = {
-               {.rowCount = 100, .content = {std::string_view(pos, size)}}}});
+          nimble::index::test::createStream(
+              buffer, {.offset = static_cast<uint32_t>(s), .chunks = chunks}));
     }
     tabletWriter->writeStripe(100, std::move(streams));
   }
@@ -6233,6 +6393,8 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
   writeFile.close();
 
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::TabletReader::Options options;
+  options.maxFooterIoBytes = 0;
 
   // Set up cache with SSD backing and small RAM to force eviction.
   velox::filesystems::registerLocalFileSystem();
@@ -6254,39 +6416,27 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
 
   // Cold path: populate cache.
   {
-    auto coldReader = createTabletReader(readFile);
+    auto coldReader = createTabletReader(readFile, options);
+    nimble::test::TabletReaderTestHelper helper{coldReader.get()};
     EXPECT_EQ(coldReader->stripeCount(), kNumStripes);
+    EXPECT_EQ(
+        helper.chunkStatsGroupCompressionType(0),
+        nimble::CompressionType::Zstd);
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = coldReader->stripeIdentifier(i);
       EXPECT_NE(stripeId.stripeGroup(), nullptr);
+      ASSERT_NE(stripeId.chunkStats(), nullptr);
+      auto streamIndex = stripeId.chunkStats()->createStreamIndex(
+          i, 0, coldReader->streamSize(stripeId, 0));
+      ASSERT_NE(streamIndex, nullptr);
+      EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
   }
 
-  // Force RAM eviction by filling with unrelated entries (>8MB).
-  // Use a separate file ID to avoid colliding with metadata entries.
-  auto& ids = velox::fileIds();
-  auto evictLease = velox::StringIdLease(ids, "evict_filler");
-  for (int i = 0; i < 256; ++i) {
-    folly::SemiFuture<bool> wait{false};
-    auto pin = cache_->findOrCreate(
-        {evictLease.id(), static_cast<uint64_t>(i) * 65536},
-        65536,
-        false,
-        &wait);
-    if (!pin.empty() && pin.checkedEntry()->isExclusive()) {
-      pin.checkedEntry()->setExclusiveToShared();
-    }
-  }
-
-  // Wait for SSD writes to complete (bounded to avoid infinite hang).
-  constexpr int kMaxWaitMs = 5000;
-  int waitedMs = 0;
-  while (cache_->ssdCache()->writeInProgress()) {
-    ASSERT_LT(waitedMs, kMaxWaitMs) << "SSD write did not complete in time";
-    /* sleep override */ std::this_thread::sleep_for(
-        std::chrono::milliseconds(10));
-    waitedMs += 10;
-  }
+  ASSERT_TRUE(cache_->ssdCache()->startWrite());
+  cache_->saveToSsd(/*saveAll=*/true);
+  cache_->ssdCache()->waitForWriteToFinish();
+  cache_->clear();
 
   // Reset IO stats.
   dataIoStats_ = std::make_shared<velox::io::IoStatistics>();
@@ -6295,14 +6445,23 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedSsdRoundtrip) {
   readerOptions_.reset();
 
   // Warm path: should load from SSD without crash.
+  const auto ssdReadsBefore = metadataIoStats_->ssdRead().count();
   {
-    auto warmReader = createTabletReader(readFile);
+    auto warmReader = createTabletReader(readFile, options);
     EXPECT_EQ(warmReader->stripeCount(), kNumStripes);
     EXPECT_EQ(warmReader->tabletRowCount(), kNumStripes * 100);
+    EXPECT_GT(metadataIoStats_->ssdRead().count(), ssdReadsBefore);
+    const auto rawBytesBeforeLookups = metadataIoStats_->rawBytesRead();
     for (uint32_t i = 0; i < kNumStripes; ++i) {
       auto stripeId = warmReader->stripeIdentifier(i);
       EXPECT_NE(stripeId.stripeGroup(), nullptr);
+      ASSERT_NE(stripeId.chunkStats(), nullptr);
+      auto streamIndex = stripeId.chunkStats()->createStreamIndex(
+          i, 0, warmReader->streamSize(stripeId, 0));
+      ASSERT_NE(streamIndex, nullptr);
+      EXPECT_EQ(streamIndex->lookupChunk(5).chunkOffset, 5);
     }
+    EXPECT_EQ(metadataIoStats_->rawBytesRead(), rawBytesBeforeLookups);
   }
 }
 
