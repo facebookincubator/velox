@@ -1426,6 +1426,28 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
          std::nullopt});
   }
 
+  void testImportDecimal32() {
+    const auto type = DECIMAL(9, 2);
+    const std::vector<std::vector<std::optional<int32_t>>> inputs = {
+        {},
+        {0, 1, -1, 999'999'999, -999'999'999},
+        {12'345, std::nullopt, -12'345},
+        {std::nullopt, std::nullopt}};
+    for (const auto& input : inputs) {
+      ArrowContextHolder holder;
+      auto array = fillArrowArray(input, holder);
+      if (array.null_count == array.length) {
+        holder.buffers[1] = nullptr;
+      }
+      auto schema = makeArrowSchema("d:9,2,32");
+      auto actual = importFromArrow(schema, array, pool_.get());
+      std::vector<std::optional<int64_t>> expectedValues(
+          input.begin(), input.end());
+      auto expected = vectorMaker_.flatVectorNullable(expectedValues, type);
+      facebook::velox::test::assertEqualVectors(expected, actual);
+    }
+  }
+
   void testTimestampUtcRoundtrip() {
     auto roundtripVector = [&](const VectorPtr& input) {
       ArrowSchema schema;
@@ -2154,6 +2176,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, decimal32) {
+  testImportDecimal32();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
@@ -2271,6 +2297,10 @@ class ArrowBridgeArrayImportAsOwnerTest
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
   testImportScalar();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, decimal32) {
+  testImportDecimal32();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
