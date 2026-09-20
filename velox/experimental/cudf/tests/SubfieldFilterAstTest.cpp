@@ -24,6 +24,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
+#include "velox/type/tests/SubfieldFiltersBuilder.h"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table.hpp>
