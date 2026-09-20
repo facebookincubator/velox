@@ -2005,6 +2005,9 @@ Writer::Writer(
           {.layoutPlanner = std::make_unique<DefaultLayoutPlanner>(
                &context_->schemaBuilder(),
                context_->options().featureReordering),
+           .metadataFlushThreshold =
+               context_->options().metadataFlushThreshold.value_or(
+                   kMetadataFlushThreshold),
            .metadataCompressionThreshold =
                context_->options().metadataCompressionThreshold.value_or(
                    kMetadataCompressionThreshold),
