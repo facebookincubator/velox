@@ -15,98 +15,124 @@
  */
 #include "velox/dwio/nimble/index/BloomFilter.h"
 
-#include <algorithm>
-#include <cmath>
 #include <cstring>
 
+#include "folly/Synchronized.h"
+#include "folly/container/F14Map.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-
-#define XXH_INLINE_ALL
-#include <xxhash.h>
-
-#include "velox/common/base/BitUtil.h"
+#include "velox/dwio/nimble/index/BlockedBloomFilter.h"
 
 namespace facebook::nimble::index {
 
 namespace {
 
-// Computes the number of 256-bit blocks needed for the bloom filter based on
-// the expected number of entries and the desired bits per key.
-uint32_t computeNumBlocks(uint64_t numEntries, float bitsPerKey) {
-  NIMBLE_USER_CHECK(
-      std::isfinite(bitsPerKey) && bitsPerKey > 0,
-      "Bloom filter bits per key must be finite and positive, but got: {}",
-      bitsPerKey);
-  // Total bits needed, rounded up to block boundaries.
-  const uint64_t totalBits = std::max(
-      static_cast<uint64_t>(numEntries * bitsPerKey),
-      uint64_t{BloomFilter::kBlockSizeBits});
-  const uint32_t numBlocks = static_cast<uint32_t>(
-      velox::bits::divRoundUp(totalBits, BloomFilter::kBlockSizeBits));
-  // Always allocate at least one block to avoid degenerate cases.
-  return std::max(numBlocks, uint32_t{1});
+using FactoryMap = folly::
+    F14FastMap<BloomFilterType, std::shared_ptr<const BloomFilterFactory>>;
+
+folly::Synchronized<FactoryMap>& factoryRegistry() {
+  static folly::Synchronized<FactoryMap> registry;
+  return registry;
+}
+
+// Registers the layouts this library implements on first use. A function local
+// static rather than a static initializer, so registration cannot race other
+// static construction and the linker cannot drop it.
+void ensureBuiltInFactoriesRegistered() {
+  static const bool registered = [] {
+    factoryRegistry().wlock()->emplace(
+        BloomFilterType::kBlocked,
+        std::make_shared<const BlockedBloomFilterFactory>());
+    return true;
+  }();
+  (void)registered;
 }
 
 } // namespace
 
-BloomFilter::BloomFilter(
-    uint64_t numEntries,
-    float bitsPerKey,
-    velox::memory::MemoryPool* pool)
-    : numBlocks_{computeNumBlocks(numEntries, bitsPerKey)},
-      bitsPerKey_{bitsPerKey},
-      data_{velox::AlignedBuffer::allocate<uint8_t>(
-          numBlocks_ * kBlockSizeBytes,
-          pool,
-          0)} {}
-
-BloomFilter::BloomFilter(
-    uint32_t numBlocks,
-    const uint8_t* data,
-    size_t dataSize,
-    velox::memory::MemoryPool* pool)
-    : numBlocks_{numBlocks},
-      bitsPerKey_{0.0f},
-      data_{velox::AlignedBuffer::allocate<uint8_t>(dataSize, pool)} {
-  NIMBLE_CHECK_GT(numBlocks, 0u, "numBlocks must be positive");
-  NIMBLE_CHECK_EQ(
-      dataSize,
-      static_cast<size_t>(numBlocks_) * kBlockSizeBytes,
-      "data size mismatch");
-  std::memcpy(data_->asMutable<uint8_t>(), data, dataSize);
+void BloomFilterTrailer::write(char* destination, BloomFilterType type) {
+  destination[0] = static_cast<char>(type);
+  std::memset(destination + 1, 0, kSize - 1);
 }
 
-uint64_t BloomFilter::hashKey(std::string_view key) {
-  return XXH64(key.data(), key.size(), /*seed=*/0);
-}
-
-void BloomFilter::insert(std::string_view key) {
-  insertHash(hashKey(key));
-}
-
-bool BloomFilter::testKey(std::string_view key) const {
-  return testHash(hashKey(key));
-}
-
-void BloomFilter::insertHash(uint64_t hash) {
-  auto* words = mutableBlock(blockIndex(hash));
-  const auto key32 = static_cast<uint32_t>(hash);
-  for (uint32_t i = 0; i < kNumProbesPerBlock; ++i) {
-    const uint32_t bitIndex = (key32 * kSalts[i]) >> kBitShift;
-    words[i] |= (uint32_t{1} << bitIndex);
+std::optional<BloomFilterTrailer> BloomFilterTrailer::read(
+    std::string_view serialized) {
+  if (serialized.size() < kSize) {
+    return std::nullopt;
   }
-}
-
-bool BloomFilter::testHash(uint64_t hash) const {
-  const auto* words = block(blockIndex(hash));
-  const auto key32 = static_cast<uint32_t>(hash);
-  for (uint32_t i = 0; i < kNumProbesPerBlock; ++i) {
-    const uint32_t bitIndex = (key32 * kSalts[i]) >> kBitShift;
-    if ((words[i] & (uint32_t{1} << bitIndex)) == 0) {
-      return false;
+  // Read the trailer through an unsigned type. 'char' is signed here, so a
+  // type byte above 0x7f would arrive negative.
+  const auto* raw = reinterpret_cast<const uint8_t*>(serialized.data()) +
+      serialized.size() - kSize;
+  // Reject the filter if anything sits in the reserved bytes, even when the
+  // type byte is one this build knows. That is what lets a later revision
+  // repurpose an existing type: it sets a reserved byte, and every older
+  // reader declines the filter rather than interpreting a payload whose
+  // meaning has moved.
+  for (size_t i = 1; i < kSize; ++i) {
+    if (raw[i] != 0) {
+      return std::nullopt;
     }
   }
-  return true;
+  return BloomFilterTrailer{.type = static_cast<BloomFilterType>(raw[0])};
+}
+
+void registerBloomFilterFactory(
+    std::shared_ptr<const BloomFilterFactory> factory) {
+  NIMBLE_CHECK_NOT_NULL(factory);
+  ensureBuiltInFactoriesRegistered();
+  const auto type = factory->type();
+  auto factories = factoryRegistry().wlock();
+  const auto [_, inserted] = factories->emplace(type, std::move(factory));
+  NIMBLE_CHECK(
+      inserted,
+      "Bloom filter factory is already registered for type: {}",
+      static_cast<uint32_t>(type));
+}
+
+const BloomFilterFactory* bloomFilterFactory(BloomFilterType type) {
+  ensureBuiltInFactoriesRegistered();
+  auto factories = factoryRegistry().rlock();
+  const auto it = factories->find(type);
+  return it == factories->end() ? nullptr : it->second.get();
+}
+
+void BloomFilterReader::maybeContains(
+    std::span<const std::string_view> keys,
+    std::span<bool> out) const {
+  NIMBLE_CHECK_GE(out.size(), keys.size());
+  for (size_t i = 0; i < keys.size(); ++i) {
+    out[i] = maybeContains(keys[i]);
+  }
+}
+
+std::unique_ptr<BloomFilterBuilder> createBloomFilterBuilder(
+    const BloomFilterConfig& config,
+    uint64_t numKeys,
+    velox::memory::MemoryPool* pool) {
+  const auto* factory = bloomFilterFactory(config.type);
+  NIMBLE_USER_CHECK_NOT_NULL(
+      factory,
+      "No bloom filter factory is registered for type: {}",
+      static_cast<uint32_t>(config.type));
+  return factory->createBuilder(config, numKeys, pool);
+}
+
+std::unique_ptr<BloomFilterReader> createBloomFilterReader(
+    std::string_view serialized,
+    velox::memory::MemoryPool* pool) {
+  const auto trailer = BloomFilterTrailer::read(serialized);
+  NIMBLE_CHECK_FILE(
+      trailer.has_value(),
+      "Bloom filter trailer is unreadable. Filter bytes: {}",
+      serialized.size());
+  const auto* factory = bloomFilterFactory(trailer->type);
+  NIMBLE_USER_CHECK_NOT_NULL(
+      factory,
+      "No bloom filter factory is registered for type: {}",
+      static_cast<uint32_t>(trailer->type));
+  return factory->createReader(
+      serialized.substr(0, serialized.size() - BloomFilterTrailer::kSize),
+      pool);
 }
 
 } // namespace facebook::nimble::index

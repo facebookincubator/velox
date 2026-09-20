@@ -358,6 +358,43 @@ TEST_P(HashIndexParamTest, bloomFilterSkips) {
   }
 }
 
+TEST_P(HashIndexParamTest, bloomFilterSkipsWithinKeyRange) {
+  // Two runs of ids with a gap between them, so a probe into the gap falls
+  // inside [minKey, maxKey] and the min/max check cannot skip it. Without the
+  // gap every absent key is out of range and the bloom filter is never
+  // consulted, which hides a filter that silently matches everything.
+  std::vector<velox::VectorPtr> batches;
+  batches.push_back(makeBatch(0, 50));
+  batches.push_back(makeBatch(1'000, 50));
+
+  const auto filePath = tempFilePath("bloom_filter_in_range");
+  // High bitsPerKey drives the false positive rate low enough that every
+  // absent key is expected to be skipped.
+  writeFile(
+      filePath,
+      batches,
+      HashIndexConfigBuilder{}
+          .withKeyColumns(columns())
+          .withBloomFilter(40)
+          .build());
+
+  auto tablet = openTablet(filePath);
+  auto* hashIndex = tablet->denseIndex(columns());
+  ASSERT_NE(hashIndex, nullptr);
+
+  const int32_t kNumNonExistent = 100;
+  for (int32_t key = 500; key < 500 + kNumNonExistent; ++key) {
+    auto result = pointLookup(hashIndex, columns(), key);
+    ASSERT_EQ(result.size(), 1);
+    EXPECT_EQ(result[0].size(), 0);
+  }
+
+  const auto stats = hashIndex->stats();
+  EXPECT_EQ(stats.count(HashIndex::kNumMinMaxSkips), 0);
+  ASSERT_GT(stats.count(HashIndex::kNumBloomFilterSkips), 0);
+  EXPECT_EQ(stats.at(HashIndex::kNumBloomFilterSkips).sum, kNumNonExistent);
+}
+
 TEST_P(HashIndexParamTest, rangeScanThrows) {
   std::vector<velox::VectorPtr> batches;
   batches.push_back(makeBatch(0, 10));
