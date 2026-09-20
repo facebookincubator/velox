@@ -110,7 +110,10 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_split_reader_test
   SOURCES Main.cpp CudfSplitReaderTest.cpp
-  LIBS velox_cudf_exec_test_lib velox_cudf_hive_connector
+  LIBS
+    velox_cudf_exec_test_lib
+    velox_cudf_hive_connector
+    velox_dwio_parquet_writer
 )
 
 velox_add_cudf_test(

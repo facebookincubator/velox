@@ -19,6 +19,9 @@
 
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/config/Config.h"
+#include "velox/common/file/FileSystems.h"
+#include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/parquet/writer/Writer.h"
 
 #include <cudf/ast/expressions.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -59,7 +62,122 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
 };
 
 class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
-                                CudfHiveConnectorTestBase {};
+                                CudfHiveConnectorTestBase {
+ protected:
+  void writeCompactDecimalParquet(
+      const std::shared_ptr<common::testutil::TempFilePath>& filePath,
+      const RowVectorPtr& vector) {
+    auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+    auto writeFile = fs->openFileForWrite(
+        filePath->getPath(),
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), filePath->getPath());
+    auto writerPool = rootPool_->addAggregateChild(
+        "CudfSplitReaderTest.ParquetWriter");
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    auto parquetOptions = std::make_shared<parquet::ParquetWriterOptions>();
+    parquetOptions->enableStoreDecimalAsInteger = true;
+    options.formatSpecificOptions = std::move(parquetOptions);
+    parquet::Writer writer(
+        std::move(sink), options, writerPool, vector->rowType());
+    writer.write(vector);
+    writer.close();
+  }
+
+  cudf::data_type readPhysicalType(
+      const std::shared_ptr<common::testutil::TempFilePath>& filePath,
+      const RowTypePtr& rowType,
+      bool experimental,
+      bool preserveCompactDecimals) {
+    auto properties = std::make_shared<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {CudfHiveConfig::kPreserveCompactDecimalsSession,
+             preserveCompactDecimals ? "true" : "false"}});
+    ::facebook::velox::connector::ConnectorQueryCtx connectorQueryCtx(
+        pool_.get(),
+        pool_.get(),
+        properties.get(),
+        nullptr,
+        common::PrefixSortConfig{},
+        nullptr,
+        nullptr,
+        "query.CudfSplitReaderTest",
+        "task.CudfSplitReaderTest",
+        "plan.CudfSplitReaderTest",
+        0,
+        "");
+    FileHandleFactory fileHandleFactory(
+        std::make_unique<FileHandleCache>(1000),
+        std::make_unique<FileHandleGenerator>());
+    auto split = CudfHiveConnectorSplitBuilder(filePath->getPath()).build();
+    CudfSplitReader reader(
+        std::move(split),
+        makeTableHandle("parquet_table", rowType),
+        rowType,
+        rowType->names(),
+        &fileHandleFactory,
+        ioExecutor_.get(),
+        &connectorQueryCtx,
+        std::make_shared<CudfHiveConfig>(properties),
+        std::make_shared<io::IoStatistics>(),
+        std::make_shared<IoStats>(),
+        experimental,
+        nullptr);
+    dwio::common::RuntimeStats runtimeStats;
+    reader.prepareSplit(runtimeStats);
+    auto result = reader.next(1);
+    VELOX_CHECK(result.has_value());
+    return result.value()->view().column(0).type();
+  }
+};
+
+TEST_F(CudfSplitReaderTest, preservesCompactDecimalsFromBothReaders) {
+  auto fileType = ROW({"c0"}, {DECIMAL(7, 2)});
+  auto fileVector = makeRowVector(
+      {makeNullableFlatVector<int64_t>({123, -456, std::nullopt}, DECIMAL(7, 2))});
+  auto filePath = common::testutil::TempFilePath::create();
+  writeCompactDecimalParquet(filePath, fileVector);
+  auto decimal64Path = common::testutil::TempFilePath::create();
+  writeCompactDecimalParquet(
+      decimal64Path,
+      makeRowVector(
+          {makeFlatVector<int64_t>({123}, DECIMAL(18, 2))}));
+
+  for (const bool experimental : {false, true}) {
+    SCOPED_TRACE(experimental);
+    EXPECT_EQ(
+        readPhysicalType(
+            filePath,
+            fileType,
+            experimental,
+            /*preserveCompactDecimals=*/false),
+        (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+    EXPECT_EQ(
+        readPhysicalType(
+            filePath,
+            fileType,
+            experimental,
+            /*preserveCompactDecimals=*/true),
+        (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
+    EXPECT_EQ(
+        readPhysicalType(
+            filePath,
+            ROW({"c0"}, {DECIMAL(12, 4)}),
+            experimental,
+            /*preserveCompactDecimals=*/true),
+        (cudf::data_type{cudf::type_id::DECIMAL64, -4}));
+    EXPECT_EQ(
+        readPhysicalType(
+            decimal64Path,
+            ROW({"c0"}, {DECIMAL(18, 2)}),
+            experimental,
+            /*preserveCompactDecimals=*/true),
+        (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+  }
+}
 
 TEST_F(CudfSplitReaderTest, preservesMatchingCompactDecimals) {
   auto stream = cudf::get_default_stream();
