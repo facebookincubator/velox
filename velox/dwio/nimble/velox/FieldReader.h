@@ -148,6 +148,10 @@ class FieldReader {
   Decoder* const decoder_;
   folly::Executor* const decodeExecutor_;
   const uint32_t numDecodeTasks_;
+
+  // Reusable empty container satisfying the decoder API for non-string
+  // streams, which never retain a buffer. Avoids a heap allocation per call.
+  std::vector<velox::BufferPtr> stringBuffers_;
 };
 
 class FieldReaderFactory {
