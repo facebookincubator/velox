@@ -620,6 +620,28 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleDecimal64Overflow) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfDecimalTest, decimalAvgGlobalPartialDecimal64Overflow) {
+  constexpr int64_t kBig = 900'000'000'000'000'000;
+  constexpr int kNumRows = 12;
+  std::vector<int64_t> values(kNumRows, kBig);
+
+  auto input =
+      makeRowVector({"d"}, {makeFlatVector<int64_t>(values, DECIMAL(18, 0))});
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({input})
+                  .partialAggregation({}, {"avg(d) AS a"})
+                  .finalAggregation()
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"a"}, {makeFlatVector<int64_t>({kBig}, DECIMAL(18, 0))});
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
 TEST_F(CudfDecimalTest, decimalAvgGroupbySingleDecimal64Overflow) {
   // Same overflow within a single group, exercising the groupby raw sum path.
   constexpr int64_t kBig = 900'000'000'000'000'000;
@@ -1115,6 +1137,28 @@ TEST_F(CudfDecimalTest, decimalSumGroupbySingleDecimal64Overflow) {
           makeFlatVector<int32_t>({1}),
           makeFlatVector<int128_t>({expectedSum}, DECIMAL(38, 0)),
       });
+
+  auto result =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(expected, result);
+}
+
+TEST_F(CudfDecimalTest, decimalSumGlobalSingleDecimal64Overflow) {
+  constexpr int64_t kBig = 900'000'000'000'000'000;
+  constexpr int kNumRows = 12;
+  std::vector<int64_t> values(kNumRows, kBig);
+
+  auto input =
+      makeRowVector({"d"}, {makeFlatVector<int64_t>(values, DECIMAL(18, 0))});
+
+  const int128_t expectedSum = static_cast<int128_t>(kBig) * kNumRows;
+  auto plan = exec::test::PlanBuilder()
+                  .values({input})
+                  .singleAggregation({}, {"sum(d) AS s"})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"s"}, {makeFlatVector<int128_t>({expectedSum}, DECIMAL(38, 0))});
 
   auto result =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
