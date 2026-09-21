@@ -46,6 +46,8 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -101,11 +103,12 @@ std::unique_ptr<cudf::column> castDecimalColumns(
     rmm::device_async_resource_ref mr) {
   // Decimal type (base case)
   if (veloxType->isDecimal()) {
-    auto const targetType = veloxToCudfDataType(veloxType);
-    if (preserveCompactDecimals &&
-        col->type().id() == cudf::type_id::DECIMAL32 &&
-        col->type().scale() == targetType.scale()) {
-      return col;
+    auto targetType = veloxToCudfDataType(veloxType);
+    if (preserveCompactDecimals) {
+      const auto [precision, scale] = getDecimalPrecisionScale(*veloxType);
+      if (precision <= std::numeric_limits<int32_t>::digits10) {
+        targetType = cudf::data_type{cudf::type_id::DECIMAL32, -scale};
+      }
     }
     if (col->type() != targetType) {
       return cudf::cast(col->view(), targetType, stream, mr);

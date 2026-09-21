@@ -172,6 +172,13 @@ TEST_F(CudfSplitReaderTest, preservesCompactDecimalsFromBothReaders) {
     EXPECT_EQ(
         readPhysicalType(
             decimal64Path,
+            ROW({"c0"}, {DECIMAL(7, 2)}),
+            experimental,
+            /*preserveCompactDecimals=*/true),
+        (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
+    EXPECT_EQ(
+        readPhysicalType(
+            decimal64Path,
             ROW({"c0"}, {DECIMAL(18, 2)}),
             experimental,
             /*preserveCompactDecimals=*/true),
@@ -179,7 +186,7 @@ TEST_F(CudfSplitReaderTest, preservesCompactDecimalsFromBothReaders) {
   }
 }
 
-TEST_F(CudfSplitReaderTest, preservesMatchingCompactDecimals) {
+TEST_F(CudfSplitReaderTest, canonicalizesCompactDecimalsByPrecision) {
   auto stream = cudf::get_default_stream();
   auto makeTable = [&](cudf::type_id type, int32_t scale) {
     auto column = cudf::make_fixed_width_column(
@@ -212,10 +219,10 @@ TEST_F(CudfSplitReaderTest, preservesMatchingCompactDecimals) {
       (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
   EXPECT_EQ(
       normalize(cudf::type_id::DECIMAL32, 4, true)->view().column(0).type(),
-      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+      (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
   EXPECT_EQ(
       normalize(cudf::type_id::DECIMAL64, 2, true)->view().column(0).type(),
-      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+      (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
 }
 
 TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
