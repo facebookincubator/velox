@@ -1280,6 +1280,78 @@ TEST_F(StreamReaderTest, readsSelectedSlidingWindowMapsWithEmptyMaps) {
           NullableMap{MapEntries{{"d", 40}}}));
 }
 
+// Entry counting walks the rows each key was found present in, so a key that
+// no selected row carries, and a key whose value decoded as null, both have to
+// drop out of the entry layout.
+TEST_F(StreamReaderTest, readsSelectedFlatMapsWithSparseAndNullKeys) {
+  std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
+  for (offset_size offset : {2, 4, 6}) {
+    inMapDescriptors.push_back(
+        std::make_unique<StreamDescriptor>(offset, ScalarKind::Bool));
+  }
+  std::vector<std::shared_ptr<const Type>> valueTypes;
+  for (offset_size offset : {3, 5, 7}) {
+    valueTypes.push_back(
+        std::make_shared<const ScalarType>(
+            StreamDescriptor{offset, ScalarKind::Int64}));
+  }
+  const auto flatMapType = std::make_shared<const FlatMapType>(
+      StreamDescriptor{1, ScalarKind::Bool},
+      ScalarKind::String,
+      std::vector<std::string>{"a", "b", "c"},
+      std::move(inMapDescriptors),
+      std::move(valueTypes));
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"attributes"},
+      std::vector<std::shared_ptr<const Type>>{flatMapType});
+  const auto mapPresence = encodeChunk<bool>(
+      std::array<bool, 4>{true, true, true, true}, EncodingType::Trivial);
+  // "a" is present in rows 0 and 3, and its row 3 value decodes as null.
+  const auto inMapA = encodeChunk<bool>(
+      std::array<bool, 4>{true, false, false, true}, EncodingType::Trivial);
+  const auto valuesA =
+      encodeNullableChunk<int64_t>({10, std::nullopt}, EncodingType::Trivial);
+  // "b" is present only in row 1, which no range selects.
+  const auto inMapB = encodeChunk<bool>(
+      std::array<bool, 4>{false, true, false, false}, EncodingType::Trivial);
+  const auto valuesB =
+      encodeChunk<int64_t>(std::array<int64_t, 1>{21}, EncodingType::Trivial);
+  // "c" is present in rows 0 and 3.
+  const auto inMapC = encodeChunk<bool>(
+      std::array<bool, 4>{true, false, false, true}, EncodingType::Trivial);
+  const auto valuesC = encodeChunk<int64_t>(
+      std::array<int64_t, 2>{30, 33}, EncodingType::Trivial);
+  const std::array<std::string_view, 8> streams{
+      std::string_view{},
+      mapPresence,
+      inMapA,
+      inMapB,
+      inMapC,
+      valuesA,
+      valuesB,
+      valuesC};
+  StreamReader reader{type, pool_.get(), {}};
+  auto output = velox::BaseVector::create(
+      velox::ROW("attributes", velox::MAP(velox::VARCHAR(), velox::BIGINT())),
+      3,
+      pool_.get());
+  const std::array<RowRange, 2> ranges{{{0, 1}, {2, 4}}};
+
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  using MapEntries = std::vector<std::pair<std::string, int64_t>>;
+  using NullableMap = std::optional<MapEntries>;
+  EXPECT_THAT(
+      readMaps(row->childAt(0), /*offset=*/0, /*count=*/3),
+      ::testing::ElementsAre(
+          NullableMap{MapEntries{{"a", 10}, {"c", 30}}},
+          NullableMap{MapEntries{}},
+          NullableMap{MapEntries{{"c", 33}}}));
+}
+
 TEST_F(StreamReaderTest, readsSelectedFlatMaps) {
   std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
   inMapDescriptors.push_back(
