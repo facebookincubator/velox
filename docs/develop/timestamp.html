@@ -156,6 +156,13 @@ timezone ID or a tz::TimeZone pointer. Providing a tz::TimeZone is
 generally more efficient, but std::chrono does not handle time zone offsets
 such as <code class="docutils literal notranslate"><span class="pre">+09:00</span></code>.  Timezone offsets are only supported in the API version
 that takes a timezone ID.</p>
+<p>The two directions differ in safety. <code class="docutils literal notranslate"><span class="pre">toTimezone()</span></code> takes an absolute point in
+time and reports the wall clock read at a zone, and every point in time has one.
+<code class="docutils literal notranslate"><span class="pre">toGMT()</span></code> goes the other way, reading a wall clock as being at a zone and
+returning the point in time it names, and some wall clocks name none. On the day
+a zone springs forward the clock jumps past an hour, so a wall clock inside it
+names no point in time and the conversion fails. On the day it falls back the
+same wall clock occurs twice, and the earlier instant is used.</p>
 </section>
 <section id="timezone-database-lookup">
 <h2>Timezone Database Lookup<a class="headerlink" href="#timezone-database-lookup" title="Link to this heading">¶</a></h2>

@@ -155,6 +155,34 @@ negiative.</p>
 <section id="date-and-time-functions">
 <h2>Date and Time Functions<a class="headerlink" href="#date-and-time-functions" title="Link to this heading">¶</a></h2>
 <dl class="py function">
+<dt class="sig sig-object py" id="at_timezone">
+<span class="sig-name descname"><span class="pre">at_timezone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#at_timezone" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the same instant as <code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code>, tagged with
+<code class="docutils literal notranslate"><span class="pre">zone</span></code>.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">at_timezone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span></dt>
+<dd><p>Returns the same instant as <code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code>, tagged with <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
+<code class="docutils literal notranslate"><span class="pre">zone</span></code> must be a <code class="docutils literal notranslate"><span class="pre">+HH:mm</span></code> offset.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="at_timezone_convert">
+<span class="sig-name descname"><span class="pre">at_timezone_convert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#at_timezone_convert" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the wall clock that <code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code> shows in <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
+The zone the input carries is ignored; only its instant is used.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">at_timezone_convert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span></dt>
+<dd><p>Returns the same instant as <code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code>, tagged with <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
+<code class="docutils literal notranslate"><span class="pre">zone</span></code> must be a <code class="docutils literal notranslate"><span class="pre">+HH:mm</span></code> offset.</p>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="current_date">
 <span class="sig-name descname"><span class="pre">current_date</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">date</span></span></span><a class="headerlink" href="#current_date" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the current date.</p>
@@ -833,6 +861,8 @@ list of supported timezones follow the definition <a class="reference external" 
 </ul>
 </li>
 <li><a class="reference internal" href="#date-and-time-functions">Date and Time Functions</a><ul>
+<li><a class="reference internal" href="#at_timezone"><code class="docutils literal notranslate"><span class="pre">at_timezone()</span></code></a></li>
+<li><a class="reference internal" href="#at_timezone_convert"><code class="docutils literal notranslate"><span class="pre">at_timezone_convert()</span></code></a></li>
 <li><a class="reference internal" href="#current_date"><code class="docutils literal notranslate"><span class="pre">current_date()</span></code></a></li>
 <li><a class="reference internal" href="#date"><code class="docutils literal notranslate"><span class="pre">date()</span></code></a></li>
 <li><a class="reference internal" href="#from_iso8601_date"><code class="docutils literal notranslate"><span class="pre">from_iso8601_date()</span></code></a></li>
