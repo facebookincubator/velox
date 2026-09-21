@@ -42,6 +42,14 @@ FormatScopedConfigs makeFormatScopedConfigs(
     const config::ConfigBase& sessionProperties,
     dwio::common::FileFormat fileFormat);
 
+/// Whether the scan described by 'tableHandle' defers the prefetch of its
+/// lazily loaded columns: the table parameter
+/// dwio::common::TableParameter::kDeferLazyColumnPrefetch must ask for it,
+/// and the scan must have a filter. Without a filter every row survives, so
+/// every lazily loaded column will be read and deferring its prefetch could
+/// only delay it.
+bool deferLazyColumnPrefetch(const FileTableHandle& tableHandle);
+
 /// Configures reader options for reading a data file. This is the generic
 /// version that does not apply serde (serialization/deserialization) options.
 /// For Hive tables that need serde options, use the overload in

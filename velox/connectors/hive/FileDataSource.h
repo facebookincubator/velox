@@ -133,7 +133,8 @@ class FileDataSource : public DataSource {
   folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<FileConfig> fileConfig_;
-  // FileConfig::deferLazyColumnPrefetch for this query.
+  // Whether this scan defers the prefetch of its lazily loaded columns; see
+  // hive::deferLazyColumnPrefetch(). Decided per scan from the table handle.
   const bool deferLazyColumnPrefetch_;
   memory::MemoryPool* const pool_;
 

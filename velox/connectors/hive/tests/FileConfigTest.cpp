@@ -59,13 +59,6 @@ TEST(FileConfigTest, defaultConfig) {
       config.nimbleIntegerDictionaryAwareFiltering(emptySession.get()));
   EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
   EXPECT_FALSE(config.directBufferedInputSharedAllocation(emptySession.get()));
-  EXPECT_FALSE(config.deferLazyColumnPrefetch(emptySession.get()));
-
-  // Session property overrides the default.
-  const auto session = std::make_unique<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{
-          {FileConfig::kDeferLazyColumnPrefetchSession, "true"}});
-  EXPECT_TRUE(config.deferLazyColumnPrefetch(session.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
@@ -91,7 +84,6 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kNimbleIntegerDictionaryAwareFiltering, "true"},
       {FileConfig::kNimbleLazyColumnIo, "true"},
       {FileConfig::kDirectBufferedInputSharedAllocation, "true"},
-      {FileConfig::kDeferLazyColumnPrefetch, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)), "hive.");
@@ -113,7 +105,6 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.cacheIndex(emptySession.get()));
   EXPECT_TRUE(config.pinIndex(emptySession.get()));
   EXPECT_TRUE(config.useColumnNames(emptySession.get()));
-  EXPECT_TRUE(config.deferLazyColumnPrefetch(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
   EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));

@@ -25,6 +25,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
 #include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -213,8 +214,8 @@ FileDataSource::FileDataSource(
       ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       fileConfig_(fileConfig),
-      deferLazyColumnPrefetch_(fileConfig->deferLazyColumnPrefetch(
-          connectorQueryCtx->sessionProperties())),
+      deferLazyColumnPrefetch_(deferLazyColumnPrefetch(
+          *checkedPointerCast<const FileTableHandle>(tableHandle))),
       pool_(connectorQueryCtx->memoryPool()),
       outputType_(outputType),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
