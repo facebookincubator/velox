@@ -632,15 +632,16 @@ class CacheShard {
       : cache_(cache), maxWriteRatio_(maxWriteRatio) {}
 
   /// See AsyncDataCache::findOrCreate. If 'contiguous' is true, the
-  /// entry's data is allocated as a single contiguous region. With
-  /// kAllowSmaller, an existing shared entry that starts at 'key' but is
-  /// shorter than 'size' is returned as a valid prefix.
+  /// entry's data is allocated as a single contiguous region.
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
       bool contiguous = false,
       folly::SemiFuture<bool>* readyFuture = nullptr);
 
+  /// Same as above, with 'sizePolicy' deciding how an existing entry at 'key'
+  /// that is shorter than 'size' is treated. See
+  /// AsyncDataCache::findOrCreate for details.
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
@@ -910,9 +911,6 @@ class AsyncDataCache : public memory::Cache {
   /// nullptr and the pin is exclusive on some other pin, this is set to
   /// a future that is realized when the pin is no longer exclusive.
   /// When the future is realized, the caller may retry findOrCreate().
-  /// With kAllowSmaller, an existing shared entry that starts at 'key' but is
-  /// shorter than 'size' is returned as a valid prefix. The
-  /// caller is responsible for requesting the remaining suffix separately.
   /// runtime error with code kNoCacheSpace if there is no space to
   /// create the new entry after evicting any unpinned content.
   CachePin findOrCreate(
@@ -921,6 +919,15 @@ class AsyncDataCache : public memory::Cache {
       bool contiguous = false,
       folly::SemiFuture<bool>* waitFuture = nullptr);
 
+  /// Same as above, with 'sizePolicy' deciding how an existing shared entry
+  /// at 'key' that is shorter than 'size' is treated. With kRequireAtLeast
+  /// (the behavior of the overload above) the entry is stale: it is evicted
+  /// and a new exclusive entry of 'size' is created for the caller to fill.
+  /// With kAllowSmaller the shorter entry is returned as a valid prefix and
+  /// counted as a hit. The cache does not track the uncovered suffix. The
+  /// caller must read the returned entry's size(), and request
+  /// [key.offset + size(), key.offset + 'size') under a separate key, which
+  /// may in turn hit, miss, or return another shorter prefix.
   CachePin findOrCreate(
       RawFileCacheKey key,
       uint64_t size,
