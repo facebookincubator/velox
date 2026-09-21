@@ -4252,6 +4252,7 @@ class FlatMapKeyNode {
     // A missing in-map stream means this key is present in every row, so the
     // value reader sees the selection unchanged.
     if (inMapDecoder_ == nullptr) {
+      childOutputRanges_.assign(outputRanges.begin(), outputRanges.end());
       co_await valueReader_->co_read(sourceRanges, outputRanges, output);
       co_return;
     }
@@ -4288,6 +4289,12 @@ class FlatMapKeyNode {
           childSourceRanges_, childOutputRanges_, output);
     }
     co_return;
+  }
+
+  // Output rows the last co_readAsChild found this key present in. Rows
+  // outside these ranges hold no entry for the key.
+  const std::vector<velox::BaseVector::CopyRange>& presentOutputRanges() const {
+    return childOutputRanges_;
   }
 
   uint32_t readInMapData(uint32_t numValues) {
@@ -5171,24 +5178,35 @@ class MergedFlatMapFieldReader final
           this->parentSourceRanges_, this->parentOutputRanges_, nodeValue);
     }
 
+    // Count each row's entries by walking the rows each key was found present
+    // in, rather than asking every key about every row. A key present in a row
+    // still contributes no entry when its value decoded as null. The sizes of
+    // every selected row are already seeded to zero above, and the parent
+    // ranges only ever narrow that selection, so the counts accumulate onto
+    // zeros.
+    for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
+      const auto& nodeValue = this->nodeValues_[i];
+      for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
+        for (velox::vector_size_t row{0}; row < range.count; ++row) {
+          const auto outputRow = range.targetIndex + row;
+          rawSizes[outputRow] += !nodeValue->isNullAt(outputRow);
+        }
+      }
+    }
+
     nextElementOffsets_.resize(output->size());
     auto nextOutputElement = firstOutputElement;
     for (const auto& range : this->parentOutputRanges_) {
       for (velox::vector_size_t row{0}; row < range.count; ++row) {
         const auto outputRow = range.targetIndex + row;
-        rawOffsets[outputRow] = nextOutputElement;
-        nextElementOffsets_[outputRow] = nextOutputElement;
-        velox::vector_size_t numElements{0};
-        for (const auto& nodeValue : this->nodeValues_) {
-          numElements += !nodeValue->isNullAt(outputRow);
-        }
         NIMBLE_CHECK_LE(
-            numElements,
+            rawSizes[outputRow],
             std::numeric_limits<velox::vector_size_t>::max() -
                 nextOutputElement,
             "Selected FlatMap entries exceed the Velox vector row limit");
-        rawSizes[outputRow] = numElements;
-        nextOutputElement += numElements;
+        rawOffsets[outputRow] = nextOutputElement;
+        nextElementOffsets_[outputRow] = nextOutputElement;
+        nextOutputElement += rawSizes[outputRow];
       }
     }
 
@@ -5197,7 +5215,7 @@ class MergedFlatMapFieldReader final
 
     for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
       this->copyRanges_.clear();
-      for (const auto& range : this->parentOutputRanges_) {
+      for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
         for (velox::vector_size_t row{0}; row < range.count; ++row) {
           const auto outputRow = range.targetIndex + row;
           if (this->nodeValues_[i]->isNullAt(outputRow)) {
