@@ -1098,6 +1098,58 @@ TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
   }
 }
 
+TEST_F(TableScanTest, canonicalizesDecimalWidthAcrossSplits) {
+  auto rowType = ROW({{"c0", DECIMAL(7, 2)}, {"c1", BIGINT()}});
+  auto decimal32Vector = makeRowVector(
+      {makeFlatVector<int64_t>({100, -500, 300}, DECIMAL(7, 2)),
+       makeFlatVector<int64_t>({1, 2, 3})});
+  auto decimal64Vector = makeRowVector(
+      {makeFlatVector<int64_t>({200, -400, 600}, DECIMAL(18, 2)),
+       makeFlatVector<int64_t>({4, 5, 6})});
+
+  auto decimal32Path = TempFilePath::create();
+  auto decimal64Path = TempFilePath::create();
+  writeCompactDecimalParquet(decimal32Path, decimal32Vector);
+  writeCompactDecimalParquet(decimal64Path, decimal64Vector);
+  createDuckDbTable({decimal32Vector, makeRowVector(
+      {makeFlatVector<int64_t>({200, -400, 600}, DECIMAL(7, 2)),
+       makeFlatVector<int64_t>({4, 5, 6})})});
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .endTableScan()
+                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                  .planNode();
+  for (const bool experimental : {false, true}) {
+    for (const auto& paths :
+         {std::vector{decimal32Path, decimal64Path},
+          std::vector{decimal64Path, decimal32Path}}) {
+      SCOPED_TRACE(fmt::format(
+          "experimental={}, first={}", experimental, paths.front()->getPath()));
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kUseExperimentalCudfReaderSession,
+              experimental ? "true" : "false")
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kPreserveCompactDecimalsSession,
+              "true")
+          .maxDrivers(1)
+          .splits(makeCudfHiveConnectorSplits(paths))
+          .assertResults("SELECT c0, c1 FROM tmp ORDER BY c0");
+    }
+  }
+}
+
 TEST_F(TableScanTest, decimalFilterUsesSplitScale) {
   auto rowType = ROW({{"c0", DECIMAL(12, 4)}, {"c1", BIGINT()}});
   auto fileVector = makeRowVector(
