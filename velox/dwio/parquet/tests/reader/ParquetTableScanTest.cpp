@@ -2441,10 +2441,11 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
       .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
 }
 
-// With defer_lazy_column_prefetch, columns the reader produces as LazyVectors
-// (projected, no filter) are not prefetched with their row group until a row
-// passes the filters. Checks that results do not depend on the setting through
-// the connector (DirectBufferedInput, remaining filter, scan hint).
+// With the defer.lazy.column.prefetch table parameter, columns the reader
+// produces as LazyVectors (projected, no filter) are not prefetched with their
+// row group until a row passes the filters. Checks that results do not depend
+// on the setting through the connector (DirectBufferedInput, remaining filter,
+// scan hint).
 TEST_F(ParquetTableScanTest, deferLazyColumnPrefetch) {
   // The file must exceed the connector's file preload threshold (8 MB by
   // default), otherwise it is read whole and nothing is deferred.
@@ -2483,15 +2484,29 @@ TEST_F(ParquetTableScanTest, deferLazyColumnPrefetch) {
   createDuckDbTable(batches);
 
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
+  // An empty 'filter' builds a scan without any filter.
   auto run = [&](const std::string& filter, bool defer) {
-    auto plan = PlanBuilder().tableScan(rowType, {}, filter).planNode();
+    // The setting is a per-scan table parameter, so build the handle here.
+    auto tableHandle = makeTableHandle(
+        {},
+        filter.empty() ? nullptr : parseExpr(filter, rowType),
+        "hive_table",
+        rowType,
+        {},
+        {{dwio::common::TableParameter::kDeferLazyColumnPrefetch,
+          defer ? "true" : "false"}});
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .outputType(rowType)
+                    .tableHandle(tableHandle)
+                    .endTableScan()
+                    .planNode();
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kHiveConnectorId,
-            "defer_lazy_column_prefetch",
-            defer ? "true" : "false")
         .split(makeSplit(file->getPath()))
-        .assertResults(fmt::format("SELECT a, b FROM tmp WHERE {}", filter));
+        .assertResults(
+            filter.empty()
+                ? "SELECT a, b FROM tmp"
+                : fmt::format("SELECT a, b FROM tmp WHERE {}", filter));
   };
 
   // The filters are not convertible to subfield filters, so no row group is
@@ -2501,6 +2516,9 @@ TEST_F(ParquetTableScanTest, deferLazyColumnPrefetch) {
     run("a % 7 = 100", defer);
     run("a % 1000 = 0", defer);
     run("a >= 50000 AND a % 3 = 0", defer);
+    // No filter: every row survives, so the parameter is ignored and the scan
+    // stays eager. Results must be the whole table either way.
+    run("", defer);
   }
 }
 
