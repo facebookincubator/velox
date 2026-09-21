@@ -1656,6 +1656,76 @@ TEST_F(CudfIcebergReadTest, injectedColumnFoldsAgainstExtractedFilter) {
       .assertResults({expected});
 }
 
+TEST_F(CudfIcebergReadTest, compactDecimalWithRowDeletes) {
+  auto rowType = ROW({{"price", DECIMAL(5, 2)}, {"id", BIGINT()}});
+  auto data = makeRowVector(
+      {"price", "id"},
+      {makeFlatVector<int64_t>({100, -500, 300, -700}, DECIMAL(5, 2)),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto dataFile = TempFilePath::create();
+  writeCompactDecimalParquet(dataFile->getPath(), data);
+
+  auto positionalPath = TempFilePath::create();
+  writeDeleteFile(
+      DeleteFileFormat::DWRF,
+      positionalPath->getPath(),
+      {makeRowVector(
+          {IcebergMetadataColumn::icebergDeleteFilePathColumn()->name,
+           IcebergMetadataColumn::icebergDeletePosColumn()->name},
+          {makeFlatVector<std::string>({dataFile->getPath()}),
+           makeFlatVector<int64_t>({1})})});
+  IcebergDeleteFile positionalDelete(
+      FileContent::kPositionalDeletes,
+      positionalPath->getPath(),
+      dwio::common::FileFormat::DWRF,
+      1,
+      getFileSize(positionalPath->getPath()));
+
+  auto bitmapData = serializeRoaringBitmapNoRun<int64_t>({2});
+  auto dvFile = writeDvFile(bitmapData);
+  auto deletionVector =
+      makeDvDeleteFile(dvFile->getPath(), bitmapData.size(), 1);
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .endTableScan()
+                  .planNode();
+  for (const auto& [deleteFile, expected] :
+       {std::pair{
+            positionalDelete,
+            makeRowVector(
+                {makeFlatVector<int64_t>({100, 300, -700}, DECIMAL(5, 2)),
+                 makeFlatVector<int64_t>({1, 3, 4})})},
+        std::pair{
+            deletionVector,
+            makeRowVector(
+                {makeFlatVector<int64_t>({100, -500, -700}, DECIMAL(5, 2)),
+                 makeFlatVector<int64_t>({1, 2, 4})})}}) {
+    for (const bool experimental : {false, true}) {
+      SCOPED_TRACE(fmt::format(
+          "content={}, experimental={}",
+          static_cast<int>(deleteFile.content),
+          experimental));
+      AssertQueryBuilder(plan)
+          .connectorSessionProperty(
+              kCudfIcebergConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kUseExperimentalCudfReaderSession,
+              experimental ? "true" : "false")
+          .connectorSessionProperty(
+              kCudfIcebergConnectorId,
+              cudf_velox::connector::hive::CudfHiveConfig::
+                  kPreserveCompactDecimalsSession,
+              "true")
+          .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+          .assertResults({expected});
+    }
+  }
+}
+
 /// Verifies a deletion vector with an injected-only projection.
 TEST_F(CudfIcebergReadTest, deletionVectorWithInjectedOnlyProjection) {
   auto dataFile = TempFilePath::create();
