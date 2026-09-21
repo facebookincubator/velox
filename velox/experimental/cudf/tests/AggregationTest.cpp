@@ -1129,11 +1129,12 @@ DEBUG_ONLY_TEST_F(
       .maxDrivers(1)
       .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "4")
       .config(QueryConfig::kMaxPartialAggregationMemory, 1)
-      .plan(PlanBuilder()
-                .values(vectors)
-                .partialAggregation({"c0"}, {"sum(c0)", "count(*)"})
-                .finalAggregation()
-                .planNode())
+      .plan(
+          PlanBuilder()
+              .values(vectors)
+              .partialAggregation({"c0"}, {"sum(c0)", "count(*)"})
+              .finalAggregation()
+              .planNode())
       .assertResults("SELECT c0, sum(c0), count(*) FROM tmp GROUP BY 1");
 
   // Prevent a vacuous pass if batching changes and the merge path is skipped.
