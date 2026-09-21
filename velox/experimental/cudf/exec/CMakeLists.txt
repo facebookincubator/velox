@@ -45,6 +45,7 @@ add_library(
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
   SparkAggregateFunctions.cpp
+  NvtxTracing.cpp
   ToCudf.cpp
   Utilities.cpp
   VeloxCudfInterop.cpp
