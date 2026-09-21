@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -78,9 +79,7 @@ namespace facebook::velox::cudf_velox {
 // Implementation details in anonymous namespace
 namespace {
 
-bool decimalScalarIsZero(
-    const cudf::scalar& scalar,
-    rmm::cuda_stream_view stream) {
+bool decimalScalarIsZero(const cudf::scalar& scalar, cuda::stream_ref stream) {
   if (!scalar.is_valid(stream)) {
     return false;
   }
@@ -101,7 +100,7 @@ bool decimalScalarIsZero(
 
 bool hasDecimalZero(
     const cudf::column_view& col,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (col.is_empty()) {
     return false;
@@ -140,7 +139,7 @@ bool hasDecimalZero(
 std::unique_ptr<cudf::scalar> castDecimalScalar(
     const cudf::scalar& src,
     cudf::data_type targetType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (!src.is_valid(stream)) {
     VELOX_CHECK(
@@ -338,7 +337,7 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
 void checkAllTrue(
     cudf::column_view cond,
     std::string_view userMessage,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (cond.is_empty() || cond.null_count() == cond.size()) {
     return;
@@ -375,7 +374,7 @@ class SplitFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     cudf::string_scalar delimiterScalar(delimiter_, true, stream, mr);
@@ -405,7 +404,7 @@ class CastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::cast(inputCol, targetCudfType_, stream, mr);
@@ -426,7 +425,7 @@ class CardinalityFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::lists::count_elements(inputCol, stream, mr);
@@ -441,7 +440,7 @@ class IsNullFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
     return cudf::is_null(asView(inputColumns[0]), stream, mr);
@@ -456,7 +455,7 @@ class IsNotNullFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
     return cudf::is_valid(asView(inputColumns[0]), stream, mr);
@@ -491,7 +490,7 @@ class RoundFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     auto inputTypeId = inputCol.type().id();
@@ -546,17 +545,22 @@ __device__ void velox_round_double(
           cudf::scalar_column_view(decimalsView),
           cudf::scalar_column_view(factorView),
       };
-      return cudf::transform_extended(
-          transformInputs,
-          kUdf,
+      const cudf::transform_output transformOutputs[] = {{
           cudf::data_type{cudf::type_id::FLOAT64},
+          cudf::output_nullability::PRESERVE,
+      }};
+      auto transformed = cudf::transform(
+          kUdf,
           cudf::udf_source_type::CUDA,
-          std::nullopt,
           cudf::null_aware::NO,
           std::nullopt,
-          cudf::output_nullability::PRESERVE,
+          transformInputs,
+          transformOutputs,
+          {},
+          std::nullopt,
           stream,
           mr);
+      return std::move(transformed->release().front());
     }
 
     return cudf::round_decimal(
@@ -568,6 +572,32 @@ __device__ void velox_round_double(
   std::unique_ptr<cudf::numeric_scalar<int32_t>> decimalsScalar_;
   std::unique_ptr<cudf::numeric_scalar<double>> factorScalar_;
 };
+
+// A short-decimal result can still have a long-decimal operand. The divide
+// kernels require matching column widths and cannot write a DECIMAL64 result
+// from DECIMAL128 input.
+cudf::data_type decimalDivisionWorkingType(
+    cudf::data_type lhsType,
+    cudf::data_type rhsType,
+    cudf::data_type resultType) {
+  const auto typeId = lhsType.id() == cudf::type_id::DECIMAL128 ||
+          rhsType.id() == cudf::type_id::DECIMAL128 ||
+          resultType.id() == cudf::type_id::DECIMAL128
+      ? cudf::type_id::DECIMAL128
+      : cudf::type_id::DECIMAL64;
+  return cudf::data_type{typeId, resultType.scale()};
+}
+
+std::unique_ptr<cudf::column> finalizeDecimalDivision(
+    std::unique_ptr<cudf::column> result,
+    cudf::data_type resultType,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  if (result->type() == resultType) {
+    return result;
+  }
+  return cudf::cast(result->view(), resultType, stream, mr);
+}
 
 class BinaryFunction : public CudfFunction {
  public:
@@ -591,7 +621,7 @@ class BinaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto isComparisonOp = [](cudf::binary_operator op) {
       switch (op) {
@@ -612,7 +642,9 @@ class BinaryFunction : public CudfFunction {
         auto rhsView = asView(inputColumns[1]);
         std::unique_ptr<cudf::column> lhsCast;
         std::unique_ptr<cudf::column> rhsCast;
-        if (type_.id() == cudf::type_id::DECIMAL128) {
+        const auto workingType =
+            decimalDivisionWorkingType(lhsView.type(), rhsView.type(), type_);
+        if (workingType.id() == cudf::type_id::DECIMAL128) {
           if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
             auto castType = cudf::data_type{
                 cudf::type_id::DECIMAL128, lhsView.type().scale()};
@@ -630,7 +662,9 @@ class BinaryFunction : public CudfFunction {
         auto rhsScale = -rhsView.type().scale();
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
-        return decimalDivide(lhsView, rhsView, type_, aRescale, stream, mr);
+        auto result =
+            decimalDivide(lhsView, rhsView, workingType, aRescale, stream, mr);
+        return finalizeDecimalDivision(std::move(result), type_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       auto rhsView = asView(inputColumns[1]);
@@ -706,11 +740,24 @@ class BinaryFunction : public CudfFunction {
           VELOX_USER_FAIL("Division by zero");
         }
         auto lhsView = asView(inputColumns[0]);
+        const auto workingType =
+            decimalDivisionWorkingType(lhsView.type(), right_->type(), type_);
+        std::unique_ptr<cudf::column> lhsCast;
+        if (lhsView.type().id() != workingType.id()) {
+          lhsCast = cudf::cast(
+              lhsView,
+              cudf::data_type{workingType.id(), lhsView.type().scale()},
+              stream,
+              mr);
+          lhsView = lhsCast->view();
+        }
         auto lhsScale = -lhsView.type().scale();
         auto rhsScale = -right_->type().scale();
         auto outScale = -type_.scale();
         auto aRescale = outScale - lhsScale + rhsScale;
-        return decimalDivide(lhsView, *right_, type_, aRescale, stream, mr);
+        auto result =
+            decimalDivide(lhsView, *right_, workingType, aRescale, stream, mr);
+        return finalizeDecimalDivision(std::move(result), type_, stream, mr);
       }
       auto lhsView = asView(inputColumns[0]);
       if (isComparisonOp(op_) && cudf::is_fixed_point(lhsView.type()) &&
@@ -783,11 +830,24 @@ class BinaryFunction : public CudfFunction {
     }
     if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
       auto rhsView = asView(inputColumns[0]);
+      const auto workingType =
+          decimalDivisionWorkingType(left_->type(), rhsView.type(), type_);
+      std::unique_ptr<cudf::column> rhsCast;
+      if (rhsView.type().id() != workingType.id()) {
+        rhsCast = cudf::cast(
+            rhsView,
+            cudf::data_type{workingType.id(), rhsView.type().scale()},
+            stream,
+            mr);
+        rhsView = rhsCast->view();
+      }
       auto lhsScale = -left_->type().scale();
       auto rhsScale = -rhsView.type().scale();
       auto outScale = -type_.scale();
       auto aRescale = outScale - lhsScale + rhsScale;
-      return decimalDivide(*left_, rhsView, type_, aRescale, stream, mr);
+      auto result =
+          decimalDivide(*left_, rhsView, workingType, aRescale, stream, mr);
+      return finalizeDecimalDivision(std::move(result), type_, stream, mr);
     }
     auto rhsView = asView(inputColumns[0]);
     if (isComparisonOp(op_) && cudf::is_fixed_point(left_->type()) &&
@@ -903,7 +963,7 @@ class LogicalFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // If there are no input columns, the result is a scalar.
     const size_t rowCount =
@@ -1011,7 +1071,7 @@ class UnaryFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::unary_operation(asView(inputColumns[0]), op_, stream, mr);
   }
@@ -1042,7 +1102,7 @@ class BetweenFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // return (value >= min) && (value <= max)
     std::unique_ptr<cudf::column> geResultColumn, leResultColumn;
@@ -1074,7 +1134,7 @@ class BetweenFunction : public CudfFunction {
     } else {
       leResultColumn = cudf::binary_operation(
           asView(inputColumns[0]),
-          asView(inputColumns[2]),
+          asView(inputColumns[minLiteral_ ? 1 : 2]),
           cudf::binary_operator::LESS_EQUAL,
           kBoolType,
           stream,
@@ -1149,7 +1209,7 @@ class GreatestLeastFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // All inputs were constant -- return the pre-folded scalar as a column.
     if (order_.empty()) {
@@ -1184,28 +1244,38 @@ class GreatestLeastFunction : public CudfFunction {
 
 class SwitchFunction : public CudfFunction {
  public:
-  SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
-    VELOX_CHECK_EQ(
-        expr->inputs().size(), 3, "case when expects exactly 3 inputs");
+  SwitchFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool)
+      : resultType_(veloxToCudfDataType(expr->type())),
+        hasElseClause_(expr->inputs().size() == 3) {
+    VELOX_CHECK(
+        expr->inputs().size() == 2 || expr->inputs().size() == 3,
+        "Single-branch CASE expects 2 or 3 inputs");
     VELOX_CHECK_EQ(
         expr->inputs()[0]->type()->kind(),
         TypeKind::BOOLEAN,
         "The switch condition result type should be boolean");
     VELOX_CHECK(
-        !expr->isConstantKind(), "The condition should not be constant");
+        !expr->inputs()[0]->isConstantKind(),
+        "The condition should not be constant");
     if (expr->inputs()[1]->isConstantKind()) {
       left_ = makeScalarFromConstantExpr(expr->inputs()[1], pool);
     }
-    if (expr->inputs()[2]->isConstantKind()) {
+    if (hasElseClause_ && expr->inputs()[2]->isConstantKind()) {
       right_ = makeScalarFromConstantExpr(expr->inputs()[2], pool);
     }
   }
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
-    if (left_ == nullptr && right_ == nullptr) {
+    std::unique_ptr<cudf::scalar> nullElse;
+    const auto* right = right_.get();
+    if (!hasElseClause_) {
+      nullElse = cudf::make_default_constructed_scalar(resultType_, stream, mr);
+      right = nullElse.get();
+    }
+    if (left_ == nullptr && right == nullptr) {
       return cudf::copy_if_else(
           asView(inputColumns[1]),
           asView(inputColumns[2]),
@@ -1214,21 +1284,19 @@ class SwitchFunction : public CudfFunction {
           mr);
     } else if (left_ == nullptr) {
       return cudf::copy_if_else(
-          asView(inputColumns[1]),
-          *right_,
-          asView(inputColumns[0]),
-          stream,
-          mr);
-    } else if (right_ == nullptr) {
+          asView(inputColumns[1]), *right, asView(inputColumns[0]), stream, mr);
+    } else if (right == nullptr) {
       return cudf::copy_if_else(
           *left_, asView(inputColumns[1]), asView(inputColumns[0]), stream, mr);
     }
     // right != null and left != null
     return cudf::copy_if_else(
-        *left_, *right_, asView(inputColumns[0]), stream, mr);
+        *left_, *right, asView(inputColumns[0]), stream, mr);
   }
 
  private:
+  const cudf::data_type resultType_;
+  const bool hasElseClause_;
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
 };
@@ -1254,7 +1322,7 @@ class CoalesceFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // Coalesce is practically a cudf::replace_nulls over multiple columns.
     // Starting from first column, we keep calling replace nulls with
@@ -1311,7 +1379,7 @@ class ExtractComponentFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::datetime::extract_datetime_component(
@@ -1344,7 +1412,7 @@ class QuarterFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::datetime::extract_quarter(inputCol, stream, mr);
@@ -1360,7 +1428,7 @@ class DayOfYearFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::datetime::day_of_year(inputCol, stream, mr);
@@ -1376,7 +1444,7 @@ class WeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     auto weekStrings = cudf::strings::from_timestamps(
@@ -1400,7 +1468,7 @@ class YearOfWeekFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     auto yearStrings = cudf::strings::from_timestamps(
@@ -1422,7 +1490,7 @@ class LengthFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::strings::count_characters(inputCol, stream, mr);
@@ -1438,7 +1506,7 @@ class LowerFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::strings::to_lower(inputCol, stream, mr);
@@ -1454,11 +1522,85 @@ class UpperFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::strings::to_upper(inputCol, stream, mr);
   }
+};
+
+// replace(target_str, search_str[, replacement_str]): replaces every
+// occurrence of search_str in target_str with replacement_str. With only
+// search_str it removes search_str (i.e. an empty replacement). Backed by
+// cudf::strings::replace with a maxrepl of -1 so all occurrences are replaced.
+// Only a constant, non-empty search_str and constant replacement_str are
+// allowed.
+class ReplaceFunction : public CudfFunction {
+ public:
+  ReplaceFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
+    VELOX_CHECK(
+        expr->inputs().size() == 2 || expr->inputs().size() == 3,
+        "replace expects 2 or 3 inputs");
+
+    // Search is a constant per the registered signatures; read it once here.
+    // canEvaluate declines an empty search, so enforce that invariant here too
+    // rather than let it surface as a raw cudf error deeper in eval.
+    auto searchValue = toConstantVector(expr->inputs()[1], pool);
+    searchIsNull_ = searchValue->isNullAt(0);
+    if (!searchIsNull_) {
+      search_ = searchValue->toString(0);
+      VELOX_CHECK(!search_.empty(), "replace search must not be empty");
+    }
+
+    // The 3-argument form carries a constant replacement; the 2-argument form
+    // removes the search, which is an empty, non-null replacement.
+    if (expr->inputs().size() == 3) {
+      auto replacementValue = toConstantVector(expr->inputs()[2], pool);
+      replacementIsNull_ = replacementValue->isNullAt(0);
+      if (!replacementIsNull_) {
+        replacement_ = replacementValue->toString(0);
+      }
+    }
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const override {
+    VELOX_CHECK(
+        !inputColumns.empty(),
+        "replace requires at least one non-literal input column");
+    // inputColumns holds only non-literal children, so the string column is the
+    // first (and only) entry and determines the output row count.
+    auto inputCol = asView(inputColumns[0]);
+
+    // replace(x, NULL, y) and replace(x, s, NULL) are NULL for every row.
+    // Match Velox null propagation by producing an all-null varchar column.
+    if (searchIsNull_ || replacementIsNull_) {
+      cudf::string_scalar nullString("", false, stream, mr);
+      return cudf::make_column_from_scalar(
+          nullString, inputCol.size(), stream, mr);
+    }
+
+    const cudf::strings_column_view stringsView(inputCol);
+    cudf::string_scalar searchScalar(search_, true, stream, mr);
+    cudf::string_scalar replacementScalar(replacement_, true, stream, mr);
+    // maxrepl == -1 replaces all occurrences. Nulls in the input column
+    // propagate to a null result.
+    return cudf::strings::replace(
+        stringsView, searchScalar, replacementScalar, -1, stream, mr);
+  }
+
+ private:
+  // Constant search value, valid only when searchIsNull_ is false.
+  std::string search_;
+  // Constant replacement value; empty for the 2-argument form, valid only when
+  // replacementIsNull_ is false.
+  std::string replacement_;
+  // Set when the constant search argument is null.
+  bool searchIsNull_{false};
+  // Set when the constant replacement argument is null.
+  bool replacementIsNull_{false};
 };
 
 class LikeFunction : public CudfFunction {
@@ -1506,7 +1648,7 @@ class LikeFunction : public CudfFunction {
           // sequences for every batch, so cache those tiny helper columns once
           // here. Constant patterns are validated on the host and don't need
           // these columns.
-          auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+          auto stream = getDefaultStreamForCurrentThread();
           auto mr = get_temp_mr();
           targetsColumn_ = makeEscapeTargetsColumn(escape_[0], stream, mr);
           replacementsColumn_ = makeEscapeReplacementsColumn(stream, mr);
@@ -1517,7 +1659,7 @@ class LikeFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
     VELOX_CHECK(
@@ -1600,17 +1742,17 @@ class LikeFunction : public CudfFunction {
 
   static std::unique_ptr<cudf::column> makeEscapeTargetsColumn(
       char escape,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   static std::unique_ptr<cudf::column> makeEscapeReplacementsColumn(
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   void validatePatternColumn(
       cudf::column_view patternColumn,
       char escape,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   bool inputIsConstant_{false};
@@ -1650,7 +1792,7 @@ void LikeFunction::validateConstantPattern(
 
 std::unique_ptr<cudf::column> LikeFunction::makeEscapeTargetsColumn(
     char escape,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Build the three legal escape sequences so column-pattern LIKE ESCAPE can
   // strip them before checking whether any invalid escape usage remains. This
@@ -1675,26 +1817,26 @@ std::unique_ptr<cudf::column> LikeFunction::makeEscapeTargetsColumn(
       mr);
   // The temporary scalars and string_view array above back async work used to
   // build the output column, so wait for the stream before returning.
-  stream.synchronize();
+  stream.sync();
   return targetsColumn;
 }
 
 std::unique_ptr<cudf::column> LikeFunction::makeEscapeReplacementsColumn(
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   cudf::string_scalar emptyString("", true, stream, mr);
   auto replacementsColumn =
       cudf::make_column_from_scalar(emptyString, 1, stream, mr);
   // make_column_from_scalar(string_scalar) reads the scalar's device string
   // data asynchronously, so keep the scalar alive until the stream completes.
-  stream.synchronize();
+  stream.sync();
   return replacementsColumn;
 }
 
 void LikeFunction::validatePatternColumn(
     cudf::column_view patternColumn,
     char escape,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK_NOT_NULL(targetsColumn_);
   VELOX_CHECK_NOT_NULL(replacementsColumn_);
@@ -1772,7 +1914,7 @@ class StringPatternPredicateFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     size_t nextInput = 0;
     auto rowCount = inputColumns.empty() ? vector_size_t{1}
@@ -1813,13 +1955,13 @@ class StringPatternPredicateFunction : public CudfFunction {
   virtual std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const = 0;
 
   virtual std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const = 0;
 
   bool inputIsConstant_{false};
@@ -1839,7 +1981,7 @@ class StartswithFunction : public StringPatternPredicateFunction {
   std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::starts_with(inputCol, patternScalar, stream, mr);
   }
@@ -1847,7 +1989,7 @@ class StartswithFunction : public StringPatternPredicateFunction {
   std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::starts_with(inputCol, patternCol, stream, mr);
   }
@@ -1862,7 +2004,7 @@ class EndswithFunction : public StringPatternPredicateFunction {
   std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::ends_with(inputCol, patternScalar, stream, mr);
   }
@@ -1870,7 +2012,7 @@ class EndswithFunction : public StringPatternPredicateFunction {
   std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::ends_with(inputCol, patternCol, stream, mr);
   }
@@ -1885,7 +2027,7 @@ class ContainsFunction : public StringPatternPredicateFunction {
   std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::string_scalar const& patternScalar,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::contains(inputCol, patternScalar, stream, mr);
   }
@@ -1893,7 +2035,7 @@ class ContainsFunction : public StringPatternPredicateFunction {
   std::unique_ptr<cudf::column> evaluateMatch(
       cudf::column_view inputCol,
       cudf::column_view patternCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::contains(inputCol, patternCol, stream, mr);
   }
@@ -1915,7 +2057,7 @@ class ConcatFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     // Validate sizes.
     VELOX_CHECK_EQ(
@@ -1994,7 +2136,7 @@ class RowConstructorFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK(
         !inputColumns.empty(),
@@ -2024,7 +2166,7 @@ class RowConstructorFunction : public CudfFunction {
  private:
   static std::unique_ptr<cudf::column> makeOwnedColumn(
       ColumnOrView& holder,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   std::vector<std::unique_ptr<cudf::scalar>> literals_;
@@ -2033,7 +2175,7 @@ class RowConstructorFunction : public CudfFunction {
 
 std::unique_ptr<cudf::column> RowConstructorFunction::makeOwnedColumn(
     ColumnOrView& holder,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return std::visit(
       [&](auto& value) -> std::unique_ptr<cudf::column> {
@@ -2409,6 +2551,34 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .build()});
 
   registerCudfFunction(
+      prefix + "replace",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<ReplaceFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("varchar")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .build()},
+      /*overwrite=*/true,
+      /*canEvaluate=*/
+      [](const core::TypedExprPtr& expr) {
+        // Decline an empty constant search_str: the expected semantics insert
+        // the replacement_str around every character, i.e. replace('abc', '',
+        // 'X') → 'XaXbXcX', which cudf::strings::replace does not implement.
+        auto search = constantVarcharValue(expr->inputs()[1]);
+        return !(search.has_value() && search->empty());
+      });
+
+  registerCudfFunction(
       prefix + "like",
       [](const std::string&,
          const core::TypedExprPtr& expr,
@@ -2479,21 +2649,41 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .variableArity("varchar")
            .build()});
 
-  // No prefix because switch and if are special form
+  // No prefix because switch and if are special forms. Only the two-argument
+  // form needs a scalar for the implicit null ELSE.
+  auto switchFactory = [](const std::string&,
+                          const core::TypedExprPtr& expr,
+                          memory::MemoryPool* pool) {
+    return std::make_shared<SwitchFunction>(expr, pool);
+  };
   registerCudfFunctions(
       {"switch", "if"},
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool* pool) {
-        return std::make_shared<SwitchFunction>(expr, pool);
-      },
+      switchFactory,
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("T")
+           .argumentType("boolean")
+           .argumentType("T")
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[0]->isConstantKind() &&
+            canMakeCudfDefaultScalar(expr->type());
+      });
+  registerCudfFunctions(
+      {"switch", "if"},
+      switchFactory,
       {FunctionSignatureBuilder()
            .typeVariable("T")
            .returnType("T")
            .argumentType("boolean")
            .argumentType("T")
            .argumentType("T")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[0]->isConstantKind();
+      });
 
   registerCudfFunctions(
       // No signatures required for cast and try_cast. They are special forms.
@@ -2817,7 +3007,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
 std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
     ColumnOrView& structColumn,
     cudf::size_type childIndex,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return std::visit(
       [&](auto& value) -> std::unique_ptr<cudf::column> {
@@ -2854,7 +3044,7 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
 
 ColumnOrView FunctionExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
     bool finalize) {
   // Top-level field access (or chain of field accesses on input columns) maps

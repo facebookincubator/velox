@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/GpuResources.h"
-
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/exec/tests/utils/OperatorTestBase.h"

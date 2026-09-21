@@ -220,6 +220,14 @@ NimbleIndexProjector::NimbleIndexProjector(
       clusterIndex_, "NimbleIndexProjector requires a tablet with an index");
   NIMBLE_CHECK_GT(numStripes_, 0, "NimbleIndexProjector requires stripes");
 
+  // Left null for a file that records no checksums; only a request that asks
+  // to verify then fails. Per-stream checksums use the file's ChecksumType, the
+  // same one the postscript records for the whole-file checksum, so a type this
+  // binary cannot build is rejected outright by ChecksumFactory.
+  if (tablet_->properties().hasStreamChecksums()) {
+    streamChecksum_ = ChecksumFactory::create(tablet_->checksumType());
+  }
+
   // Rejects the whole file rather than only the projected streams: no cheap
   // per-stream binding query exists for file and external scopes, and
   // resolving an alphabet just to test for one would decode it.
@@ -568,6 +576,54 @@ void NimbleIndexProjector::lookupStripes() {
       "Stripe range offsets must have one entry per resolved stripe plus one");
 }
 
+void NimbleIndexProjector::verifyStreamChecksum(
+    uint32_t enqueueIndex,
+    std::string_view data) const {
+  // Checked rather than debug-checked: an index past the end would otherwise
+  // read out of bounds in opt builds, and this runs once per stream, not per
+  // byte.
+  NIMBLE_CHECK_LT(
+      enqueueIndex,
+      ctx_.expectedStreamChecksums.size(),
+      "Stream checksum index exceeds the enqueued stream count.");
+  const auto computed = streamChecksum_->computeChecksum32(data);
+  const auto expected = ctx_.expectedStreamChecksums[enqueueIndex];
+  if (FOLLY_LIKELY(computed == expected)) {
+    return;
+  }
+
+  // Cold path, so the scan costs nothing in the common case.
+  // dataInputIndices holds numPlannedStripes * numProjectedStreams entries,
+  // laid out as [stripeOffset * numProjectedStreams + projectedIndex], so
+  // locating the enqueue index recovers both coordinates by division.
+  constexpr auto kUnknown = std::numeric_limits<uint32_t>::max();
+  auto stripeIndex = kUnknown;
+  auto streamId = kUnknown;
+  auto projectedIndex = kUnknown;
+  const auto numProjectedStreams = projection_->streamOffsets.size();
+  for (size_t i = 0; i < ctx_.dataInputIndices.size(); ++i) {
+    if (ctx_.dataInputIndices[i] != enqueueIndex) {
+      continue;
+    }
+    const auto stripeOffset = i / numProjectedStreams;
+    stripeIndex = ctx_.plan.stripeIndices[stripeOffset];
+    projectedIndex = static_cast<uint32_t>(i % numProjectedStreams);
+    streamId = projection_->streamOffsets[projectedIndex];
+    break;
+  }
+  NIMBLE_CHECK_FILE(
+      false,
+      "Stream checksum mismatch in {}: stripe {}, stream {} (projected index {}), {} bytes. "
+      "Computed {:#x}, file records {:#x}. The bytes read from storage differ from those written.",
+      file_->getName(),
+      stripeIndex,
+      streamId,
+      projectedIndex,
+      data.size(),
+      computed,
+      expected);
+}
+
 void NimbleIndexProjector::loadStripes() {
   const auto numPlannedStripes = ctx_.plan.stripeIndices.size();
   if (numPlannedStripes == 0) {
@@ -583,6 +639,16 @@ void NimbleIndexProjector::loadStripes() {
 
   const auto numProjectedStreams = projection_->streamOffsets.size();
   ctx_.dataInputIndices.resize(numPlannedStripes * numProjectedStreams);
+  // Reported here rather than at create(), so opening a file that simply has
+  // no checksums never fails over a capability the caller may not use.
+  const bool verifyStreamChecksums = ctx_.options->verifyStreamChecksums;
+  NIMBLE_USER_CHECK(
+      !verifyStreamChecksums || streamChecksum_ != nullptr,
+      "Stream checksum verification requested, but the file carries no stream checksums.");
+  ctx_.expectedStreamChecksums.clear();
+  if (verifyStreamChecksums) {
+    ctx_.expectedStreamChecksums.reserve(totalStreams);
+  }
   for (size_t stripeOffset = 0; stripeOffset < numPlannedStripes;
        ++stripeOffset) {
     dataInput_->startGroup();
@@ -594,11 +660,29 @@ void NimbleIndexProjector::loadStripes() {
       if (stream.size == 0) {
         continue;
       }
-      ctx_.dataInputIndices[dataInputBase + streamIndex] = dataInput_->enqueue(
+      const auto enqueueIndex = dataInput_->enqueue(
           velox::common::Region{stripeFileOffset + stream.offset, stream.size});
+      ctx_.dataInputIndices[dataInputBase + streamIndex] = enqueueIndex;
+      if (verifyStreamChecksums) {
+        // enqueue() hands out indices densely in call order, so appending here
+        // keeps the vector indexable by the enqueue index.
+        NIMBLE_DCHECK_EQ(
+            enqueueIndex,
+            ctx_.expectedStreamChecksums.size(),
+            "Enqueue indices must be dense and in call order.");
+        ctx_.expectedStreamChecksums.push_back(stream.checksum);
+      }
     }
   }
-  ctx_.dataHandle = dataInput_->load();
+
+  if (!verifyStreamChecksums) {
+    ctx_.dataHandle = dataInput_->load();
+    return;
+  }
+  ctx_.dataHandle =
+      dataInput_->load([this](uint32_t enqueueIndex, std::string_view data) {
+        verifyStreamChecksum(enqueueIndex, data);
+      });
 }
 
 NimbleIndexProjector::Result NimbleIndexProjector::processStripes() {
@@ -732,7 +816,7 @@ void NimbleIndexProjector::appendStripePlan(
   plan.stripeRangeOffsets.push_back(rangeOffset);
 }
 
-std::span<const StripeGroup::StreamLocation>
+std::span<const StripeGroup::StreamMetadata>
 NimbleIndexProjector::stripeProjectedStreams(size_t stripeOffset) const {
   const auto numProjectedStreams = projection_->streamOffsets.size();
   const auto projectedStreamsOffset = stripeOffset * numProjectedStreams;
@@ -936,6 +1020,11 @@ NimbleIndexProjector::collectStripeStreamViews(
     loadedStreams.canonicalIndices.resize(numProjectedStreams);
   }
 
+  // Fetch the bufferRefs span once per stripe -- the alternative
+  // dataInput_->bufferRef(enqueueIndex) per iteration is a vtable dispatch
+  // plus a per-call state check, paid ~numProjectedStreams times per stripe.
+  const auto bufferRefs = dataInput_->bufferRefs();
+
   uint32_t streamEnqueueBase{0};
   const auto dataInputBase = stripeOffset * numProjectedStreams;
   for (size_t i = 0; i < numProjectedStreams; ++i) {
@@ -949,27 +1038,32 @@ NimbleIndexProjector::collectStripeStreamViews(
     if (loadedStreams.presentIndices.empty()) {
       streamEnqueueBase = enqueueIndex;
     }
+    // Extract the three BufferRef fields to registers up front. Otherwise the
+    // compiler is forced to re-load them across the intervening writes to
+    // loadedStreams.presentIndices/streams (opaque calls like emplace_back
+    // conservatively invalidate reference-into-heap loads).
     const auto& streamLocation = projectedStreams[i];
-    const auto& bufferRef = dataInput_->bufferRef(enqueueIndex);
+    const auto& bufferRef = bufferRefs[enqueueIndex];
+    const auto bufLen = bufferRef.length;
+    const auto* bufData = bufferRef.data;
+    const auto bufCanonical = bufferRef.canonicalIndex;
     NIMBLE_CHECK_EQ(
-        bufferRef.length,
+        bufLen,
         streamLocation.size,
         "Loaded stream length must match projected stream length");
-    loadedStreams.streams[i] =
-        std::string_view(bufferRef.data, bufferRef.length);
+    loadedStreams.streams[i] = std::string_view(bufData, bufLen);
     if (!resolveCanonicalStreams) {
       continue;
     }
     loadedStreams.presentIndices.emplace_back(i);
 
     size_t canonicalProjectedIndex = i;
-    if (bufferRef.canonicalIndex != enqueueIndex) {
+    if (bufCanonical != enqueueIndex) {
       NIMBLE_CHECK_GE(
-          bufferRef.canonicalIndex,
+          bufCanonical,
           streamEnqueueBase,
           "Duplicate stream must refer to the current stripe");
-      const auto canonicalIndexOffset =
-          bufferRef.canonicalIndex - streamEnqueueBase;
+      const auto canonicalIndexOffset = bufCanonical - streamEnqueueBase;
       NIMBLE_CHECK_LT(
           canonicalIndexOffset,
           loadedStreams.presentIndices.size(),

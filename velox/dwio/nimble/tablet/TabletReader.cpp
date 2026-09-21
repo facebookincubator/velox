@@ -82,12 +82,15 @@ TabletReader::Options TabletReader::configureOptions(
   Options tabletOptions;
   tabletOptions.maxFooterIoBytes = options.footerSpeculativeIoSize();
   tabletOptions.preloadOptionalSections = {
-      std::string(kSchemaSection), std::string(kVectorizedStatsSection)};
+      std::string(kSchemaSection),
+      std::string(kVectorizedStatsSection),
+      std::string(kStripeStatsSection)};
   tabletOptions.loadClusterIndex = options.loadClusterIndex();
   tabletOptions.preloadIndex = options.preloadIndex();
   tabletOptions.loadChunkStats = options.loadChunkStats();
   if (tabletOptions.loadChunkStats) {
     tabletOptions.preloadOptionalSections.emplace_back(kChunkStatsSection);
+    tabletOptions.preloadOptionalSections.emplace_back(kChunkStatsV2Section);
   }
   tabletOptions.pinMetadata = options.pinMetadata();
   tabletOptions.cacheMetadata = options.cacheMetadata();
@@ -536,7 +539,10 @@ void TabletReader::cacheMetadata(
   }
 
   if (chunkStats_ != nullptr) {
-    auto chunkStatsIt = optionalSections_.find(std::string{kChunkStatsSection});
+    const auto sectionName = chunkStatsVersion_ == ChunkStatsVersion::kV2
+        ? kChunkStatsV2Section
+        : kChunkStatsSection;
+    auto chunkStatsIt = optionalSections_.find(std::string{sectionName});
     NIMBLE_CHECK(chunkStatsIt != optionalSections_.end());
     cacheSection(chunkStatsIt->second);
 
@@ -575,6 +581,7 @@ void TabletReader::loadStripes(
   }
   if (options.loadChunkStats) {
     updateOffset(kChunkStatsSection);
+    updateOffset(kChunkStatsV2Section);
   }
   const uint64_t requiredSize = fileSize_ - requiredOffset;
   if (requiredSize > footerIoSize) {
@@ -822,7 +829,7 @@ uint64_t TabletReader::calculateChecksum(
     sizeToRead -= sizeOneRead;
     offset += sizeOneRead;
   }
-  return checksum->getChecksum();
+  return checksum->getChecksum64();
 }
 
 namespace {
@@ -908,6 +915,18 @@ std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
   return stripeGroupCache_.getOrCreate(stripeGroupIndex);
 }
 
+std::shared_ptr<ChunkStatsGroup> TabletReader::createChunkStatsGroup(
+    uint32_t firstStripe,
+    uint32_t stripeCount,
+    std::unique_ptr<MetadataBuffer> metadata) const {
+  return ChunkStatsGroup::create(
+      chunkStatsVersion_,
+      firstStripe,
+      stripeCount,
+      std::move(metadata),
+      *pool_);
+}
+
 TabletReader::StripeGroupMetadata TabletReader::loadStripeGroupMetadata(
     uint32_t stripeGroupIndex) const {
   const auto* footer = footerRoot(*footer_);
@@ -932,7 +951,7 @@ TabletReader::StripeGroupMetadata TabletReader::loadStripeGroupMetadata(
   if (hasChunkStats) {
     auto chunkStatsMetadata =
         std::make_unique<MetadataBuffer>(std::move(*results[1]));
-    result.chunkStats = ChunkStatsGroup::create(
+    result.chunkStats = createChunkStatsGroup(
         result.stripeGroup->firstStripe(),
         result.stripeGroup->stripeCount(),
         std::move(chunkStatsMetadata));
@@ -956,9 +975,16 @@ uint32_t TabletReader::streamSize(
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
 
+uint32_t TabletReader::streamChecksum(
+    const StripeIdentifier& stripe,
+    uint32_t streamId) const {
+  NIMBLE_CHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
+  return stripe.stripeGroup()->streamChecksum(stripe.stripeId(), streamId);
+}
+
 void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
-    std::span<StreamLocation> locations) const {
+    std::span<StreamMetadata> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
   stripe.stripeGroup()->streamLocations(stripe.stripeId(), locations);
 }
@@ -966,7 +992,7 @@ void TabletReader::streamLocations(
 void TabletReader::streamLocations(
     const StripeIdentifier& stripe,
     std::span<const uint32_t> streamIds,
-    std::span<StreamLocation> locations) const {
+    std::span<StreamMetadata> locations) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
   stripe.stripeGroup()->streamLocations(
       stripe.stripeId(), streamIds, locations);
@@ -993,9 +1019,11 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
   const bool allCached =
       stripeGroupCached && (!hasChunkStats || chunkStatsCached);
   if (allCached) {
+    auto cachedStripeGroup = stripeGroup(stripeGroupIndex);
+    checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
     return StripeIdentifier{
         stripeIndex,
-        stripeGroup(stripeGroupIndex),
+        std::move(cachedStripeGroup),
         hasChunkStats ? chunkStats(stripeGroupIndex) : nullptr};
   }
 
@@ -1015,8 +1043,28 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
         [&loaded](uint32_t) { return std::move(loaded.chunkStats); });
   }
 
+  checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
   return StripeIdentifier{
       stripeIndex, std::move(cachedStripeGroup), std::move(cachedChunkStats)};
+}
+
+void TabletReader::checkStreamChecksumsPresent(
+    const StripeGroup& stripeGroup,
+    uint32_t stripeGroupIndex) const {
+  if (!properties_.hasStreamChecksums()) {
+    // The file claims no checksums, so there is nothing to enforce. A group
+    // that carries an array anyway is inert: no reader resolves a checksum
+    // implementation for such a file, so the array is never read.
+    return;
+  }
+  if (stripeGroup.streamCount() == 0) {
+    // No streams, so no checksum array. Not a contradiction.
+    return;
+  }
+  NIMBLE_CHECK_FILE(
+      stripeGroup.hasStreamChecksums(),
+      "File properties record per-stream checksums, but stripe group {} carries none.",
+      stripeGroupIndex);
 }
 
 std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
@@ -1166,7 +1214,8 @@ std::optional<Section> TabletReader::loadOptionalSection(
 }
 
 bool TabletReader::hasChunkStatsSection() const {
-  return hasOptionalSection(std::string{kChunkStatsSection});
+  return hasOptionalSection(std::string{kChunkStatsV2Section}) ||
+      hasOptionalSection(std::string{kChunkStatsSection});
 }
 
 bool TabletReader::hasIndexSection() const {
@@ -1324,12 +1373,19 @@ void TabletReader::initChunkStats(
   if (!loadChunkStats_) {
     return;
   }
-  if (!hasChunkStatsSection()) {
+  // Prefer V2 (Nimble-encoded) over V1 (raw uint32).
+  std::string sectionName;
+  if (hasOptionalSection(std::string{kChunkStatsV2Section})) {
+    sectionName = kChunkStatsV2Section;
+    chunkStatsVersion_ = ChunkStatsVersion::kV2;
+  } else if (hasChunkStatsSection()) {
+    sectionName = kChunkStatsSection;
+    chunkStatsVersion_ = ChunkStatsVersion::kV1;
+  } else {
     return;
   }
 
-  auto section =
-      loadOptionalSection(std::string{kChunkStatsSection}, /*keepCache=*/false);
+  auto section = loadOptionalSection(sectionName, /*keepCache=*/false);
   NIMBLE_CHECK(section.has_value(), "Failed to load chunk stats section.");
 
   auto chunkStats = ChunkStats::create(std::move(section.value()));
@@ -1347,7 +1403,7 @@ void TabletReader::initChunkStats(
       if (metadataBuffer != nullptr) {
         chunkStatsCache_.pin(
             0,
-            ChunkStatsGroup::create(
+            createChunkStatsGroup(
                 firstStripe(0), stripeCount(0), std::move(metadataBuffer)));
       }
     }
@@ -1418,10 +1474,11 @@ std::shared_ptr<ChunkStatsGroup> TabletReader::loadChunkStatsGroup(
     return nullptr;
   }
 
-  return ChunkStatsGroup::create(
+  auto metadata = readMetadata(section);
+  return createChunkStatsGroup(
       this->firstStripe(stripeGroupIndex),
       this->stripeCount(stripeGroupIndex),
-      readMetadata(section));
+      std::move(metadata));
 }
 
 } // namespace facebook::nimble

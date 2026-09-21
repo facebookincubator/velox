@@ -16,128 +16,178 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <optional>
+#include <span>
 #include <string_view>
+#include <type_traits>
 
-#include "velox/buffer/Buffer.h"
+#include "velox/common/Casts.h"
 #include "velox/common/memory/Memory.h"
 
 namespace facebook::nimble::index {
 
-/// Split block bloom filter following the Parquet bloom filter design.
+/// Identifies the layout of a serialized bloom filter.
 ///
-/// Uses 256-bit (32-byte) blocks with multiple hash probes per block.
-/// Each lookup touches exactly one block, making it cache-friendly.
-/// The filter uses xxHash64 to generate hash values.
+/// Every serialized filter records its type, so a value that has been written
+/// to a file must never be reassigned to a different layout. Introduce a new
+/// value whenever the block geometry, the probe scheme, or the hash function
+/// changes. Reading a filter whose value this build does not recognize fails
+/// rather than guessing at the bytes.
 ///
-/// Design reference: "Cache-, Hash- and Space-Efficient Bloom Filters"
-/// (Putze, Sanders, Singler, 2007) and Apache Parquet format spec.
-class BloomFilter {
- public:
-  /// Number of hash probes per block. Each probe sets/tests one bit in a
-  /// separate uint32_t word, so the block has exactly this many words.
-  static constexpr uint32_t kNumProbesPerBlock{8};
-  /// Bytes per word used in each block.
-  static constexpr uint32_t kBytesPerWord{sizeof(uint32_t)};
-  /// Bits per word.
-  static constexpr uint32_t kBitsPerWord{kBytesPerWord * 8};
-  /// Block size in bytes (one word per probe).
-  static constexpr uint32_t kBlockSizeBytes{kNumProbesPerBlock * kBytesPerWord};
-  /// Block size in bits.
-  static constexpr uint32_t kBlockSizeBits{kNumProbesPerBlock * kBitsPerWord};
-
-  /// Constructs a bloom filter sized for the expected number of entries.
-  ///
-  /// @param numEntries Expected number of distinct entries.
-  /// @param bitsPerKey Target bits per key (controls false positive rate).
-  /// @param pool Memory pool for filter data allocation.
-  BloomFilter(
-      uint64_t numEntries,
-      float bitsPerKey,
-      velox::memory::MemoryPool* pool);
-
-  /// Constructs a bloom filter from pre-existing data (for reading).
-  ///
-  /// @param numBlocks Number of 256-bit blocks.
-  /// @param data Raw filter data. Must be numBlocks * kBlockSizeBytes bytes.
-  /// @param pool Memory pool for filter data allocation.
-  BloomFilter(
-      uint32_t numBlocks,
-      const uint8_t* data,
-      size_t dataSize,
-      velox::memory::MemoryPool* pool);
-
-  /// Inserts a key into the filter.
-  void insert(std::string_view key);
-
-  /// Tests whether a key might be in the filter.
-  /// Returns false if the key is definitely not present (no false negatives).
-  /// Returns true if the key might be present (possible false positives).
-  bool testKey(std::string_view key) const;
-
-  /// Returns the number of 256-bit blocks.
-  uint32_t numBlocks() const {
-    return numBlocks_;
-  }
-
-  /// Returns the raw filter data.
-  const uint8_t* data() const {
-    return data_->as<uint8_t>();
-  }
-
-  /// Returns the size of the raw filter data in bytes.
-  size_t dataSize() const {
-    return data_->size();
-  }
-
-  /// Returns the bits per key used during construction.
-  float bitsPerKey() const {
-    return bitsPerKey_;
-  }
-
- private:
-  // Right-shift to select a bit position within a word (top 5 bits of the
-  // salted 32-bit hash select one of 32 bit positions).
-  static constexpr uint32_t kBitShift{32 - 5};
-
-  // Salts for generating multiple hash probes from a single hash value.
-  // These are odd constants that provide good bit mixing when multiplied
-  // with the hash value.
-  static constexpr uint32_t kSalts[kNumProbesPerBlock] = {
-      0x47b6137bU,
-      0x44974d91U,
-      0x8824ad5bU,
-      0xa2b7289dU,
-      0x705495c7U,
-      0x2df1424bU,
-      0x9efc4947U,
-      0x5c6bfb31U,
-  };
-
-  // Maps hash to block index using the upper 32 bits.
-  uint32_t blockIndex(uint64_t hash) const {
-    return static_cast<uint32_t>((hash >> 32) % numBlocks_);
-  }
-
-  // Accesses the block words at the given block index.
-  uint32_t* mutableBlock(uint32_t index) {
-    return reinterpret_cast<uint32_t*>(
-        data_->asMutable<uint8_t>() +
-        static_cast<size_t>(index) * kBlockSizeBytes);
-  }
-
-  const uint32_t* block(uint32_t index) const {
-    return reinterpret_cast<const uint32_t*>(
-        data_->as<uint8_t>() + static_cast<size_t>(index) * kBlockSizeBytes);
-  }
-
-  void insertHash(uint64_t hash);
-  bool testHash(uint64_t hash) const;
-
-  static uint64_t hashKey(std::string_view key);
-
-  const uint32_t numBlocks_;
-  const float bitsPerKey_;
-  velox::BufferPtr data_;
+/// Values are allocated here even for implementations that live outside the
+/// open source build. The number is not the secret, the implementation is: a
+/// build with no factory registered for a value cannot read such a filter, and
+/// says so.
+enum class BloomFilterType : uint8_t {
+  /// Split-block layout: 256-bit blocks, eight probes per block, xxHash64.
+  kBlocked = 1,
 };
+
+/// Parameters controlling how a bloom filter is built. Readers ignore these
+/// and follow whatever the filter itself records.
+///
+/// Implementations needing their own knobs derive from this and are reached
+/// through checkedBloomFilterConfig. Bits per key stays in the base because
+/// every layout has to trade space against false positives somehow.
+struct BloomFilterConfig {
+  BloomFilterConfig(BloomFilterType type, float bitsPerKey)
+      : type{type}, bitsPerKey{bitsPerKey} {}
+
+  virtual ~BloomFilterConfig() = default;
+
+  /// Selects the registered factory that builds the filter.
+  BloomFilterType type;
+
+  /// Filter size per distinct key. Larger values trade memory for a lower
+  /// false positive rate; 10 bits per key gives roughly 1%.
+  float bitsPerKey;
+};
+
+/// Casts 'config' to the concrete type a factory expects, checking the cast.
+template <typename T>
+const T& checkedBloomFilterConfig(const BloomFilterConfig& config) {
+  static_assert(std::is_base_of_v<BloomFilterConfig, T>);
+  return *velox::checkedPointerCast<const T>(&config);
+}
+
+/// Accumulates keys and serializes them into a self-describing filter. Not
+/// safe for concurrent use.
+class BloomFilterBuilder {
+ public:
+  virtual ~BloomFilterBuilder() = default;
+
+  /// Adds 'key' to the filter. Repeated keys are allowed and leave the filter
+  /// unchanged after the first insert.
+  virtual void insert(std::string_view key) = 0;
+
+  /// Finalizes the filter and returns its serialized bytes, including the
+  /// trailer recording the layout. The returned view points into memory this
+  /// builder owns, so the caller must keep the builder alive for as long as it
+  /// uses the view. Call at most once, and do not insert afterwards.
+  virtual std::string_view finish() = 0;
+};
+
+/// Tests keys against a serialized filter. Immutable once created, so one
+/// reader can serve concurrent lookups.
+class BloomFilterReader {
+ public:
+  virtual ~BloomFilterReader() = default;
+
+  /// Returns false only if 'key' was definitely never inserted. A true result
+  /// may be a false positive, so the caller must still verify the key.
+  virtual bool maybeContains(std::string_view key) const = 0;
+
+  /// Tests every key in 'keys', writing the result for 'keys[i]' into
+  /// 'out[i]'. 'out' must be at least as long as 'keys'. Each probe is a
+  /// random access into a filter that is usually larger than the last-level
+  /// cache, so an implementation may hash a run of keys up front and prefetch
+  /// what they probe, overlapping the cache misses instead of paying them one
+  /// at a time. The default implementation tests the keys one by one.
+  virtual void maybeContains(
+      std::span<const std::string_view> keys,
+      std::span<bool> out) const;
+};
+
+/// Fixed-size record appended to every serialized filter so that a reader can
+/// pick the matching implementation with no help from the enclosing metadata.
+/// Keeping the discriminator inside the payload lets a caller store a filter as
+/// an opaque byte range, which matters where one filter per key chunk would
+/// make a per-filter metadata table more expensive than the filter itself.
+/// Normal callers go through the factories below rather than using this
+/// directly.
+///
+/// Layout: one byte of BloomFilterType followed by three reserved bytes that
+/// must be zero. The reserved bytes leave room for fields that later revisions
+/// may need without spending a new type value.
+struct BloomFilterTrailer {
+  static constexpr size_t kSize{4};
+
+  /// Writes the trailer for 'type' into the 'kSize' bytes at 'destination'.
+  static void write(char* destination, BloomFilterType type);
+
+  /// Returns the trailer occupying the last 'kSize' bytes of 'serialized', or
+  /// nullopt when 'serialized' is too short to hold one or its reserved bytes
+  /// are not zero. The filter body is everything preceding it.
+  static std::optional<BloomFilterTrailer> read(std::string_view serialized);
+
+  BloomFilterType type;
+};
+
+/// Builds and reads one bloom filter layout.
+class BloomFilterFactory {
+ public:
+  virtual ~BloomFilterFactory() = default;
+
+  /// Layout this factory handles, as recorded in the filter trailer.
+  virtual BloomFilterType type() const = 0;
+
+  /// Creates a builder sized for 'numKeys' expected distinct keys. 'config'
+  /// must be the concrete type this factory expects.
+  virtual std::unique_ptr<BloomFilterBuilder> createBuilder(
+      const BloomFilterConfig& config,
+      uint64_t numKeys,
+      velox::memory::MemoryPool* pool) const = 0;
+
+  /// Creates a reader over 'payload', the filter body with the trailer already
+  /// stripped.
+  virtual std::unique_ptr<BloomFilterReader> createReader(
+      std::string_view payload,
+      velox::memory::MemoryPool* pool) const = 0;
+};
+
+/// Registers 'factory' under the type it reports. Throws if that type already
+/// has one. Implementations outside the open source build register from their
+/// own library rather than being named here.
+void registerBloomFilterFactory(
+    std::shared_ptr<const BloomFilterFactory> factory);
+
+/// Returns the factory registered for 'type', or nullptr when this build has
+/// none. A returned factory stays alive for the rest of the process, since
+/// registration is permanent.
+const BloomFilterFactory* bloomFilterFactory(BloomFilterType type);
+
+/// Creates a builder for 'config', sized for 'numKeys' expected distinct keys.
+/// The count is a sizing hint: inserting more keys raises the false positive
+/// rate but stays correct. Throws if no factory is registered for the
+/// configured type, because a writer that cannot honor its own config should
+/// not silently produce a filter of some other shape.
+std::unique_ptr<BloomFilterBuilder> createBloomFilterBuilder(
+    const BloomFilterConfig& config,
+    uint64_t numKeys,
+    velox::memory::MemoryPool* pool);
+
+/// Creates a reader over 'serialized', which must come from
+/// BloomFilterBuilder::finish(). Copies the filter into 'pool', so the reader
+/// does not depend on 'serialized' outliving it.
+///
+/// Throws if the trailer is unreadable or names a layout this build has no
+/// factory for. A filter that cannot be interpreted is an error rather than
+/// something to read past: silently treating it as matching every key would
+/// turn a corrupt or unsupported file into a slow but plausible-looking
+/// lookup.
+std::unique_ptr<BloomFilterReader> createBloomFilterReader(
+    std::string_view serialized,
+    velox::memory::MemoryPool* pool);
 
 } // namespace facebook::nimble::index

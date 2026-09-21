@@ -133,6 +133,13 @@ class ReaderBase {
     return fileColumnStats_;
   }
 
+  /// Per-stripe column statistics from the stripe-stats optional section,
+  /// indexed as [stripe][columnId]. Empty if the section is absent.
+  const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
+  stripeColumnStats() const {
+    return stripeColumnStats_;
+  }
+
  private:
   ReaderBase(
       std::unique_ptr<velox::dwio::common::BufferedInput> input,
@@ -153,6 +160,12 @@ class ReaderBase {
   // File-level column statistics deserialized from the vectorized stats
   // optional section at construction.
   const std::vector<std::unique_ptr<ColumnStatistics>> fileColumnStats_;
+  // Per-stripe column statistics deserialized from the stripe-stats optional
+  // section at construction, indexed as [stripe][columnId]. Empty when the
+  // section is absent (older files), in which case the reader falls back to
+  // reading every stripe.
+  const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>
+      stripeColumnStats_;
   mutable std::shared_ptr<const velox::dwio::common::TypeWithId>
       fileSchemaWithId_;
 };

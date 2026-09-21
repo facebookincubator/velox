@@ -654,7 +654,7 @@ void NimbleDumpLib::emitStripes(bool noHeader) {
   // stripe groups. We must hold on to it across loop iterations in order to
   // maintain the items in the cache.
   std::optional<StripeIdentifier> stripeIdentifier;
-  std::vector<TabletReader::StreamLocation> locationsScratch;
+  std::vector<TabletReader::StreamMetadata> locationsScratch;
   for (auto i = 0; i < tabletReader->stripeCount(); ++i) {
     stripeIdentifier = tabletReader->stripeIdentifier(i);
     locationsScratch.resize(

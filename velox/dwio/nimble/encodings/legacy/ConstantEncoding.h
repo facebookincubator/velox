@@ -76,7 +76,8 @@ ConstantEncoding<T>::ConstantEncoding(
     : TypedEncoding<T, physicalType>(memoryPool, data) {
   const char* pos = data.data() + EncodingPrefix::kFixedPrefixSize;
   value_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected constant encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(), "Unexpected constant encoding end");
 }
 
 template <typename T>

@@ -69,13 +69,13 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   std::unique_ptr<cudf::packed_columns> makePackedColumns(std::size_t numRows) {
-    rmm::cuda_stream_view stream = rmm::cuda_stream_default;
+    cuda::stream_ref stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
     // Create table directly without going through pack/unpack
     auto table = facebook::velox::ucx_exchange::makeTable(
         numRows, UcxTestData::kTestRowType, stream);
     auto cols = std::make_unique<cudf::packed_columns>(
         cudf::pack(table->view(), stream));
-    stream.synchronize();
+    stream.sync();
     return cols;
   }
 

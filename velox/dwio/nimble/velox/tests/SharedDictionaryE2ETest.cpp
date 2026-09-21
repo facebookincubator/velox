@@ -36,6 +36,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/common/tests/ScopedFeatureGate.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -287,7 +288,7 @@ class SharedDictionaryE2ETest : public testing::Test {
 
   static void useSharedDictionarySelectionPolicy(WriterOptions& options) {
     test::configureSharedDictionarySelectionPolicy(
-        options, {.forceDictionaryForSharedTypes = false});
+        options, {.forceDictionaryForEligibleTypes = false});
   }
 
   std::shared_ptr<const ExternalDictionaryResolver> makeExternalResolver(
@@ -747,6 +748,55 @@ class SharedDictionaryE2ETest : public testing::Test {
     options.minStreamChunkRawSize = 1;
     useSharedDictionarySelectionPolicy(options);
     return options;
+  }
+
+  // Writes one stripe carrying a stripe-scoped shared dictionary and checks
+  // that the root column's rolled-up physical size covers every byte the
+  // tablet wrote. Callers install a FeatureGate first to exercise the
+  // stripe-stats write path, which reconstructs file stats from per-stripe
+  // snapshots rather than reading the live collectors.
+  void verifyStripeDictionaryPhysicalStatsCovered() {
+    auto options = makeSharedDictionaryWriterOptions();
+    addDictionary(
+        options,
+        InputType::FlatMapScalar,
+        sharedDictionaryConfig(
+            SharedDictionaryScope::Stripe, /*dictionaryId=*/0));
+
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    auto input =
+        makeStripe(InputType::FlatMapScalar, StripeValueType::Dictionary);
+    Writer writer{input->type(), std::move(writeFile), *rootPool_, options};
+    writer.write(input);
+    writer.close();
+
+    uint64_t reportedPhysicalSize{0};
+    for (const auto* stat : writer.columnStats()) {
+      reportedPhysicalSize =
+          std::max(reportedPhysicalSize, stat->getPhysicalSize());
+    }
+    ASSERT_GT(reportedPhysicalSize, 0);
+
+    // Total bytes actually written across every stream of every stripe.
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto tabletOptions = test::makeTestTabletOptions(leafPool_.get());
+    auto tablet =
+        TabletReader::create(readFile, leafPool_.get(), tabletOptions);
+    uint64_t writtenStreamBytes{0};
+    for (uint32_t stripe{0}; stripe < tablet->stripeCount(); ++stripe) {
+      const auto identifier = tablet->stripeIdentifier(stripe);
+      const auto streamCount = tablet->streamCount(identifier);
+      for (uint32_t streamId{0}; streamId < streamCount; ++streamId) {
+        writtenStreamBytes += tablet->streamSize(identifier, streamId);
+      }
+    }
+    ASSERT_GT(writtenStreamBytes, 0);
+
+    EXPECT_GE(reportedPhysicalSize, writtenStreamBytes)
+        << "root physical size " << reportedPhysicalSize
+        << " does not cover the " << writtenStreamBytes
+        << " bytes written; the shared dictionary alphabet is likely unaccounted";
   }
 
   std::string writeInput(
@@ -1356,6 +1406,35 @@ TEST_P(SharedDictionaryE2EInputTypeTest, stripeScopeRoundTrip) {
   verifyRoundTrip(file, inputType);
 }
 
+TEST_F(SharedDictionaryE2ETest, predefinedFlatMapKeyUsesSharedDictionary) {
+  const std::vector<StripeValueType> stripeValueTypes{
+      StripeValueType::Dictionary, StripeValueType::Direct};
+  auto options = makeSharedDictionaryWriterOptions();
+  options.flatMapColumns.emplace("features", std::set<std::string>{"10"});
+  addFlatmapDictionary(
+      options,
+      sharedDictionaryConfig(SharedDictionaryScope::File, /*dictionaryId=*/7));
+
+  std::vector<velox::RowVectorPtr> stripeInputs;
+  stripeInputs.reserve(stripeValueTypes.size());
+  for (const auto stripeValueType : stripeValueTypes) {
+    stripeInputs.push_back(
+        makeStripe(InputType::FlatMapScalar, stripeValueType));
+  }
+  const auto file = writeInput(stripeInputs, std::move(options));
+
+  auto tablet = openTablet(file);
+  const auto valueStreamIds =
+      sharedDictionaryValueStreamIds(*tablet, InputType::FlatMapScalar);
+  ASSERT_EQ(valueStreamIds.size(), 1);
+  expectDictionaryValueEncodingTypes(
+      *tablet,
+      valueStreamIds.front(),
+      SharedDictionaryScope::File,
+      stripeValueTypes);
+  verifyRoundTrip(file, InputType::FlatMapScalar, stripeValueTypes);
+}
+
 TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   const auto inputType = GetParam();
   const std::vector<StripeValueType> stripeValueTypes{
@@ -1387,46 +1466,57 @@ TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
 // the omission understated the column badly. Pin the invariant that the root
 // column's rolled-up physical size covers every byte the stripe wrote.
 TEST_F(SharedDictionaryE2ETest, sharedStripeDictionaryColumnPhysicalStats) {
+  verifyStripeDictionaryPhysicalStatsCovered();
+}
+
+// Same invariant with the stripe-stats write path on. File statistics are then
+// rebuilt by merging per-stripe snapshots, so the snapshot must be taken after
+// the stripe dictionary streams are written: snapshotting earlier shifts the
+// alphabet bytes into the next stripe and loses them outright for the last one.
+TEST_F(
+    SharedDictionaryE2ETest,
+    sharedStripeDictionaryColumnPhysicalStatsWithStripeStats) {
+  test::ScopedFeatureGate stripeStatsGate{
+      FeatureGate::FeatureSet::kStripeStatsWrite};
+  verifyStripeDictionaryPhysicalStatsCovered();
+}
+
+// A stripe whose values are all null never reaches encoding selection, so the
+// dictionary sits the stripe out. The stripe boundary visits every configured
+// dictionary regardless, so it must tolerate one that has nothing to encode.
+TEST_F(SharedDictionaryE2ETest, stripeScopeIdleStripe) {
   auto options = makeSharedDictionaryWriterOptions();
-  addDictionary(
+  addColumnDictionary(
       options,
-      InputType::FlatMapScalar,
-      sharedDictionaryConfig(
-          SharedDictionaryScope::Stripe, /*dictionaryId=*/0));
+      sharedDictionaryConfig(SharedDictionaryScope::Stripe, /*dictionaryId=*/0),
+      "value");
 
-  std::string file;
-  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
-  auto input =
-      makeStripe(InputType::FlatMapScalar, StripeValueType::Dictionary);
-  Writer writer{input->type(), std::move(writeFile), *rootPool_, options};
-  writer.write(input);
-  writer.close();
+  velox::test::VectorMaker maker{leafPool_.get()};
+  const auto valued = maker.rowVector(
+      {"value"}, {maker.flatVector<int32_t>(kStripeRows, [](auto row) {
+        return dictionaryStripeValue(row);
+      })});
+  const auto allNull = maker.rowVector(
+      {"value"},
+      {maker.flatVector<int32_t>(
+          kStripeRows,
+          [](auto row) { return dictionaryStripeValue(row); },
+          [](auto /*row*/) { return true; })});
 
-  uint64_t reportedPhysicalSize{0};
-  for (const auto* stat : writer.columnStats()) {
-    reportedPhysicalSize =
-        std::max(reportedPhysicalSize, stat->getPhysicalSize());
-  }
-  ASSERT_GT(reportedPhysicalSize, 0);
+  const std::vector<velox::RowVectorPtr> stripeInputs{valued, valued, allNull};
+  const auto file = writeInput(stripeInputs, std::move(options));
 
-  // Total bytes actually written across every stream of every stripe.
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-  auto tabletOptions = test::makeTestTabletOptions(leafPool_.get());
-  auto tablet = TabletReader::create(readFile, leafPool_.get(), tabletOptions);
-  uint64_t writtenStreamBytes{0};
-  for (uint32_t stripe{0}; stripe < tablet->stripeCount(); ++stripe) {
-    const auto identifier = tablet->stripeIdentifier(stripe);
-    const auto streamCount = tablet->streamCount(identifier);
-    for (uint32_t streamId{0}; streamId < streamCount; ++streamId) {
-      writtenStreamBytes += tablet->streamSize(identifier, streamId);
+  BatchReader reader{readFile, *leafPool_, nullptr, BatchReadParams{}};
+  velox::VectorPtr output;
+  for (const auto& expected : stripeInputs) {
+    ASSERT_TRUE(reader.next(kStripeRows, output));
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t i{0}; i < output->size(); ++i) {
+      ASSERT_TRUE(output->equalValueAt(expected.get(), i, i)) << "row " << i;
     }
   }
-  ASSERT_GT(writtenStreamBytes, 0);
-
-  EXPECT_GE(reportedPhysicalSize, writtenStreamBytes)
-      << "root physical size " << reportedPhysicalSize << " does not cover the "
-      << writtenStreamBytes
-      << " bytes written; the shared dictionary alphabet is likely unaccounted";
+  EXPECT_FALSE(reader.next(kStripeRows, output));
 }
 
 TEST_F(SharedDictionaryE2ETest, fileScopeCompactRowCountRoundTrip) {
