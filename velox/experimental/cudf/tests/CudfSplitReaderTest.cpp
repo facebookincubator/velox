@@ -90,7 +90,6 @@ class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
   cudf::data_type readPhysicalType(
       const std::shared_ptr<common::testutil::TempFilePath>& filePath,
       const RowTypePtr& rowType,
-      bool experimental,
       bool preserveCompactDecimals) {
     auto properties = std::make_shared<config::ConfigBase>(
         std::unordered_map<std::string, std::string>{
@@ -124,7 +123,6 @@ class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
         std::make_shared<CudfHiveConfig>(properties),
         std::make_shared<io::IoStatistics>(),
         std::make_shared<IoStats>(),
-        experimental,
         nullptr);
     dwio::common::RuntimeStats runtimeStats;
     reader.prepareSplit(runtimeStats);
@@ -134,7 +132,7 @@ class CudfSplitReaderTest : public ::facebook::velox::cudf_velox::exec::test::
   }
 };
 
-TEST_F(CudfSplitReaderTest, preservesCompactDecimalsFromBothReaders) {
+TEST_F(CudfSplitReaderTest, preservesCompactDecimalsFromReader) {
   auto fileType = ROW({"c0"}, {DECIMAL(7, 2)});
   auto fileVector = makeRowVector(
       {makeNullableFlatVector<int64_t>({123, -456, std::nullopt}, DECIMAL(7, 2))});
@@ -146,44 +144,31 @@ TEST_F(CudfSplitReaderTest, preservesCompactDecimalsFromBothReaders) {
       makeRowVector(
           {makeFlatVector<int64_t>({123}, DECIMAL(18, 2))}));
 
-  for (const bool experimental : {false, true}) {
-    SCOPED_TRACE(experimental);
-    EXPECT_EQ(
-        readPhysicalType(
-            filePath,
-            fileType,
-            experimental,
-            /*preserveCompactDecimals=*/false),
-        (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
-    EXPECT_EQ(
-        readPhysicalType(
-            filePath,
-            fileType,
-            experimental,
-            /*preserveCompactDecimals=*/true),
-        (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
-    EXPECT_EQ(
-        readPhysicalType(
-            filePath,
-            ROW({"c0"}, {DECIMAL(12, 4)}),
-            experimental,
-            /*preserveCompactDecimals=*/true),
-        (cudf::data_type{cudf::type_id::DECIMAL64, -4}));
-    EXPECT_EQ(
-        readPhysicalType(
-            decimal64Path,
-            ROW({"c0"}, {DECIMAL(7, 2)}),
-            experimental,
-            /*preserveCompactDecimals=*/true),
-        (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
-    EXPECT_EQ(
-        readPhysicalType(
-            decimal64Path,
-            ROW({"c0"}, {DECIMAL(18, 2)}),
-            experimental,
-            /*preserveCompactDecimals=*/true),
-        (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
-  }
+  EXPECT_EQ(
+      readPhysicalType(
+          filePath, fileType, /*preserveCompactDecimals=*/false),
+      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
+  EXPECT_EQ(
+      readPhysicalType(filePath, fileType, /*preserveCompactDecimals=*/true),
+      (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
+  EXPECT_EQ(
+      readPhysicalType(
+          filePath,
+          ROW({"c0"}, {DECIMAL(12, 4)}),
+          /*preserveCompactDecimals=*/true),
+      (cudf::data_type{cudf::type_id::DECIMAL64, -4}));
+  EXPECT_EQ(
+      readPhysicalType(
+          decimal64Path,
+          ROW({"c0"}, {DECIMAL(7, 2)}),
+          /*preserveCompactDecimals=*/true),
+      (cudf::data_type{cudf::type_id::DECIMAL32, -2}));
+  EXPECT_EQ(
+      readPhysicalType(
+          decimal64Path,
+          ROW({"c0"}, {DECIMAL(18, 2)}),
+          /*preserveCompactDecimals=*/true),
+      (cudf::data_type{cudf::type_id::DECIMAL64, -2}));
 }
 
 TEST_F(CudfSplitReaderTest, canonicalizesCompactDecimalsByPrecision) {
