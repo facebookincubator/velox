@@ -1094,6 +1094,52 @@ TEST_F(AggregationTest, finalAggregationStreamsOnAddInput) {
   EXPECT_GT(planStats.at(finalAggId).outputRows, 0);
 }
 
+DEBUG_ONLY_TEST_F(
+    AggregationTest,
+    finalAggregationReleasesPreviousResultBeforeAggregate) {
+  auto vectors = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 1, 3})}),
+      makeRowVector({makeFlatVector<int64_t>({2, 3, 4, 2})}),
+      makeRowVector({makeFlatVector<int64_t>({1, 4, 5, 5})}),
+  };
+  createDuckDbTable(vectors);
+
+  // Observe ownership without keeping the old GPU table alive ourselves.
+  std::weak_ptr<cudf_velox::CudfVector> previousResult;
+  size_t concatenations = 0;
+  size_t replacements = 0;
+  SCOPED_TESTVALUE_SET(
+      "CudfGroupby::computeFinalGroupbyIncrementally::beforeConcatenate",
+      std::function<void(cudf_velox::CudfVectorPtr*)>([&](auto* result) {
+        ASSERT_NE(*result, nullptr);
+        previousResult = *result;
+        ++concatenations;
+      }));
+  SCOPED_TESTVALUE_SET(
+      "CudfGroupby::computeFinalGroupbyIncrementally::beforeAggregate",
+      std::function<void(cudf_velox::CudfVectorPtr*)>([&](auto*) {
+        EXPECT_TRUE(previousResult.expired())
+            << "Old aggregation result must be released before allocating "
+               "the replacement aggregation's working buffers";
+        ++replacements;
+      }));
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .maxDrivers(1)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "4")
+      .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+      .plan(PlanBuilder()
+                .values(vectors)
+                .partialAggregation({"c0"}, {"sum(c0)", "count(*)"})
+                .finalAggregation()
+                .planNode())
+      .assertResults("SELECT c0, sum(c0), count(*) FROM tmp GROUP BY 1");
+
+  // Prevent a vacuous pass if batching changes and the merge path is skipped.
+  EXPECT_GE(concatenations, 2);
+  EXPECT_EQ(replacements, concatenations);
+}
+
 TEST_F(AggregationTest, finalAggregationStreamingMixedAggs) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);

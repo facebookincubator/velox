@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/HashAggregation.h"
@@ -1611,6 +1612,9 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
     return;
   }
 
+  common::testutil::TestValue::adjust(
+      "CudfGroupby::computeFinalGroupbyIncrementally::beforeConcatenate",
+      &bufferedResult_);
   std::vector<cudf::table_view> tablesToConcat;
   tablesToConcat.push_back(bufferedResult_->getTableView());
   tablesToConcat.push_back(permutedInputView);
@@ -1623,6 +1627,13 @@ void CudfGroupby::computeFinalGroupbyIncrementally(CudfVectorPtr tbl) {
       cudf::concatenate(tablesToConcat, finalStream, get_temp_mr());
   cudf::detail::join_streams(
       std::vector<cuda::stream_ref>{finalStream}, inputTableStream);
+  // The concatenation owns a replacement for the retained result. Release
+  // the old table before aggregation allocates its working/output buffers.
+  // Its deallocation is ordered after concatenation on finalStream.
+  bufferedResult_.reset();
+  common::testutil::TestValue::adjust(
+      "CudfGroupby::computeFinalGroupbyIncrementally::beforeAggregate",
+      &bufferedResult_);
   auto compactedOutput = doGroupByAggregation(
       concatenatedTable->view(),
       groupingKeyOutputChannels_,
