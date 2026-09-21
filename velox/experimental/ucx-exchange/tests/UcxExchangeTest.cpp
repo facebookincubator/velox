@@ -277,6 +277,8 @@ class UcxExchangeTest : public UcxExchangeTestBase,
   }
 };
 
+// Fixture for focused behavioral tests that should run once per process rather
+// than once for every ExchangeTestParams value.
 class UcxExchangeFocusedTest : public UcxExchangeTestBase {};
 
 INSTANTIATE_TEST_SUITE_P(
