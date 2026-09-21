@@ -43,6 +43,7 @@ velox_add_library(
   CastRule.h
   Conversions.h
   CppToType.h
+  DecimalArithmetic.h
   DecimalUtil.h
   FastDate.h
   Filter.h
@@ -54,6 +55,7 @@ velox_add_library(
   Subfield.h
   Time.h
   Timestamp.h
+  TimestampCalendar.h
   TimestampConversion.h
   Tokenizer.h
   Tree.h

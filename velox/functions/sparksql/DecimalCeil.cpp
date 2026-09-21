@@ -14,37 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/sparksql/DecimalCeilFunction.h"
 
 namespace facebook::velox::functions::sparksql {
-namespace {
-
-/// Ceil function to round up a decimal value of type decimal(p, s) to
-/// decimal(min(38, p - s + min(1, s)), 0).
-template <typename TExec>
-struct DecimalCeilFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/) {
-    rescaleFactor_ = velox::DecimalUtil::kPowersOfTen
-        [getDecimalPrecisionScale(*inputTypes[0]).second];
-  }
-
-  template <typename R, typename A>
-  void call(R& out, const A& a) {
-    const auto increment = (a % rescaleFactor_) > 0 ? 1 : 0;
-    out = a / rescaleFactor_ + increment;
-  }
-
- private:
-  int128_t rescaleFactor_;
-};
-} // namespace
 
 void registerDecimalCeil(const std::string& prefix) {
   std::vector<exec::SignatureVariable> constraints = {
