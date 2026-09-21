@@ -1079,22 +1079,13 @@ TEST_F(TableScanTest, decimalFilterUsesSplitPhysicalType) {
   const auto expected =
       "SELECT c0, c1 FROM tmp "
       "WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))";
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-
-    for (const auto& paths :
-         {std::vector{decimal32Path, decimal64Path},
-          std::vector{decimal64Path, decimal32Path}}) {
-      AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .maxDrivers(1)
-          .splits(makeCudfHiveConnectorSplits(paths))
-          .assertResults(expected);
-    }
+  for (const auto& paths :
+       {std::vector{decimal32Path, decimal64Path},
+        std::vector{decimal64Path, decimal32Path}}) {
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(1)
+        .splits(makeCudfHiveConnectorSplits(paths))
+        .assertResults(expected);
   }
 }
 
@@ -1128,32 +1119,24 @@ TEST_F(TableScanTest, canonicalizesDecimalWidthAcrossSplits) {
                   .orderBy({"c0 ASC NULLS LAST"}, false)
                   .capturePlanNodeId(orderById)
                   .planNode();
-  for (const bool experimental : {false, true}) {
-    for (const auto& paths :
-         {std::vector{decimal32Path, decimal64Path},
-          std::vector{decimal64Path, decimal32Path}}) {
-      SCOPED_TRACE(fmt::format(
-          "experimental={}, first={}", experimental, paths.front()->getPath()));
-      auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .connectorSessionProperty(
-              kCudfHiveConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kUseExperimentalCudfReaderSession,
-              experimental ? "true" : "false")
-          .connectorSessionProperty(
-              kCudfHiveConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kPreserveCompactDecimalsSession,
-              "true")
-          .maxDrivers(1)
-          .splits(makeCudfHiveConnectorSplits(paths))
-          .assertResults("SELECT c0, c1 FROM tmp ORDER BY c0");
-      EXPECT_EQ(
-          toPlanStats(task->taskStats())
-              .at(orderById)
-              .operatorStats.count("CudfToVelox"),
-          1);
-    }
+  for (const auto& paths :
+       {std::vector{decimal32Path, decimal64Path},
+        std::vector{decimal64Path, decimal32Path}}) {
+    SCOPED_TRACE(fmt::format("first={}", paths.front()->getPath()));
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kPreserveCompactDecimalsSession,
+                        "true")
+                    .maxDrivers(1)
+                    .splits(makeCudfHiveConnectorSplits(paths))
+                    .assertResults("SELECT c0, c1 FROM tmp ORDER BY c0");
+    EXPECT_EQ(
+        toPlanStats(task->taskStats())
+            .at(orderById)
+            .operatorStats.count("CudfToVelox"),
+        1);
   }
 }
 
@@ -1190,18 +1173,10 @@ TEST_F(TableScanTest, decimalFilterUsesSplitScale) {
                   .endTableScan()
                   .planNode();
 
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-    assertQuery(
-        plan,
-        {filePath},
-        "SELECT * FROM tmp WHERE c0 = CAST('300000.0000' AS DECIMAL(12, 4))");
-  }
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT * FROM tmp WHERE c0 = CAST('300000.0000' AS DECIMAL(12, 4))");
 }
 
 TEST_F(TableScanTest, decimalFilterUsesRawIntegerStorage) {
@@ -1234,18 +1209,10 @@ TEST_F(TableScanTest, decimalFilterUsesRawIntegerStorage) {
                   .endTableScan()
                   .planNode();
 
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-    assertQuery(
-        plan,
-        {filePath},
-        "SELECT * FROM tmp WHERE c0 = CAST(123 AS DECIMAL(10, 0))");
-  }
+  assertQuery(
+      plan,
+      {filePath},
+      "SELECT * FROM tmp WHERE c0 = CAST(123 AS DECIMAL(10, 0))");
 }
 
 TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
@@ -1276,15 +1243,7 @@ TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
           {makeFlatVector<int64_t>({100, -500, 200}, DECIMAL(5, 2)),
            makeFlatVector<int64_t>({7, 8, 9})}));
 
-  for (const bool useExperimentalReader : {false, true}) {
-    auto config = std::unordered_map<std::string, std::string>{
-        {facebook::velox::cudf_velox::connector::hive::CudfHiveConfig::
-             kUseExperimentalCudfReader,
-         useExperimentalReader ? "true" : "false"}};
-    resetCudfHiveConnector(
-        std::make_shared<config::ConfigBase>(std::move(config)));
-
-    for (const bool nullAllowed : {false, true}) {
+  for (const bool nullAllowed : {false, true}) {
       auto check = [&](std::unique_ptr<common::Filter> filter,
                        bool matchesNonNull) {
         SCOPED_TRACE(filter->toString());
@@ -1325,11 +1284,10 @@ TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
           false);
       check(
           common::createBigintValues({-500, 3'000'000'000}, nullAllowed), true);
-      check(
-          common::createBigintValues(
-              {3'000'000'000, 3'000'000'002}, nullAllowed),
-          false);
-    }
+    check(
+        common::createBigintValues(
+            {3'000'000'000, 3'000'000'002}, nullAllowed),
+        false);
   }
 }
 

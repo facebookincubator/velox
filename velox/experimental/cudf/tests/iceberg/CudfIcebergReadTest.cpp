@@ -1337,35 +1337,23 @@ TEST_F(CudfIcebergReadTest, compactDecimalFilterWithInjectedColumn) {
       {"country", "id"},
       {makeFlatVector<std::string>({}), makeFlatVector<int64_t>({})});
 
-  for (const bool useExperimentalReader : {false, true}) {
-    AssertQueryBuilder(plan)
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kUseExperimentalCudfReaderSession,
-            useExperimentalReader ? "true" : "false")
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kPreserveCompactDecimalsSession,
-            "true")
-        .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
-        .assertResults({expected});
-    AssertQueryBuilder(plan)
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kUseExperimentalCudfReaderSession,
-            useExperimentalReader ? "true" : "false")
-        .connectorSessionProperty(
-            kCudfIcebergConnectorId,
-            cudf_velox::connector::hive::CudfHiveConfig::
-                kPreserveCompactDecimalsSession,
-            "true")
-        .splits(
-            makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
-        .assertResults({deletedExpected});
-  }
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kCudfIcebergConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::
+              kPreserveCompactDecimalsSession,
+          "true")
+      .splits(makeIcebergSplits(dataFile->getPath(), {}, partitionKeys))
+      .assertResults({expected});
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kCudfIcebergConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::
+              kPreserveCompactDecimalsSession,
+          "true")
+      .splits(
+          makeIcebergSplits(dataFile->getPath(), {deleteFile}, partitionKeys))
+      .assertResults({deletedExpected});
 }
 
 /// A predicate on an injected column holds for the whole split or for none of
@@ -1704,25 +1692,16 @@ TEST_F(CudfIcebergReadTest, compactDecimalWithRowDeletes) {
             makeRowVector(
                 {makeFlatVector<int64_t>({100, -500, -700}, DECIMAL(5, 2)),
                  makeFlatVector<int64_t>({1, 2, 4})})}}) {
-    for (const bool experimental : {false, true}) {
-      SCOPED_TRACE(fmt::format(
-          "content={}, experimental={}",
-          static_cast<int>(deleteFile.content),
-          experimental));
-      AssertQueryBuilder(plan)
-          .connectorSessionProperty(
-              kCudfIcebergConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kUseExperimentalCudfReaderSession,
-              experimental ? "true" : "false")
-          .connectorSessionProperty(
-              kCudfIcebergConnectorId,
-              cudf_velox::connector::hive::CudfHiveConfig::
-                  kPreserveCompactDecimalsSession,
-              "true")
-          .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
-          .assertResults({expected});
-    }
+    SCOPED_TRACE(
+        fmt::format("content={}", static_cast<int>(deleteFile.content)));
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::
+                kPreserveCompactDecimalsSession,
+            "true")
+        .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+        .assertResults({expected});
   }
 }
 
