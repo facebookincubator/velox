@@ -32,17 +32,17 @@
 
 #include <gflags/gflags.h>
 
-#include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/AblationPolicy.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/BenchCommon.h"
 #include "velox/dwio/nimble/encodings/benchmarks/ml_id_compression/ElemType.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
 
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 
 namespace facebook::nimble::mlidc {
 namespace {
 
-using namespace facebook::nimble::detail::subintsplit;
+using namespace facebook::nimble::subintsplit;
 
 std::string encodingTypeName(EncodingType t) {
   switch (t) {
@@ -65,7 +65,7 @@ std::string encodingTypeName(EncodingType t) {
   }
 }
 
-std::string formatPlan(const std::vector<SegmentPlan>& segments) {
+std::string formatPlan(const std::vector<SectionPlan>& segments) {
   std::ostringstream oss;
   for (size_t i = 0; i < segments.size(); ++i) {
     if (i > 0)
@@ -86,7 +86,7 @@ namespace {
 // type from --mlidc_dtype and dispatches here.
 template <typename Elem>
 int runBenchmark() {
-  using namespace facebook::nimble::detail::subintsplit;
+  using namespace facebook::nimble::subintsplit;
 
   const uint32_t n = static_cast<uint32_t>(FLAGS_mlidc_rows);
   const uint64_t seed = static_cast<uint64_t>(FLAGS_mlidc_seed);
@@ -142,7 +142,7 @@ int runBenchmark() {
     auto data = ds.generate(n, seed);
 
     // Sample the physical bit pattern, not the logical value. sampleIntoU64
-    // names its parameter `physicalType` (SubIntSplitSampler.h:57), and that is
+    // names its parameter `physicalType` (subintsplit/Sampler.h), and that is
     // what SubIntSplit itself splits into bit ranges. Passing the logical type
     // is bit-preserving for the integer types but would be a *value*
     // conversion for float and double, which would analyse the wrong bits.
@@ -188,7 +188,7 @@ int runBenchmark() {
 
       AccessClass worst = AccessClass::PureRA;
       bool allRA = true;
-      for (const auto& seg : result.segments) {
+      for (const auto& seg : result.sections) {
         AccessClass ac = accessClassOf(seg.encoding);
         if (ac > worst)
           worst = ac;
@@ -196,7 +196,7 @@ int runBenchmark() {
           allRA = false;
       }
 
-      std::cout << "  " << rung.name << ": " << result.segments.size()
+      std::cout << "  " << rung.name << ": " << result.sections.size()
                 << " segments, " << std::fixed << std::setprecision(2) << bpe
                 << " bpe, allRA=" << allRA << "\n";
 
@@ -209,7 +209,7 @@ int runBenchmark() {
       csv.set("sample_size", static_cast<int64_t>(samples.size()));
       csv.set("rung_name", rung.name);
       csv.set("rung_index", static_cast<int64_t>(ri));
-      csv.set("segment_count", static_cast<int64_t>(result.segments.size()));
+      csv.set("segment_count", static_cast<int64_t>(result.sections.size()));
       csv.set("total_est_bits", result.totalCost);
       csv.set("bits_per_elem_est", bpe);
       csv.set("all_sections_ra", allRA ? int64_t{1} : int64_t{0});
@@ -217,7 +217,7 @@ int runBenchmark() {
       csv.set(
           "cost_model_consistent",
           rung.costModelConsistent ? int64_t{1} : int64_t{0});
-      csv.set("segment_plan", formatPlan(result.segments));
+      csv.set("segment_plan", formatPlan(result.sections));
       csv.set("skipped", int64_t{0});
       csv.endRow();
     }

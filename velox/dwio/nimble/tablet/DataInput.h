@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <fmt/core.h>
+#include <folly/Function.h>
 #include <folly/Range.h>
 
 #include "velox/common/file/File.h"
@@ -67,6 +68,17 @@ class DataInput {
   /// Callers must hold this until done with all BufferRefs.
   using Handle = std::shared_ptr<void>;
 
+  /// Invoked on one region once its bytes are loaded, given the region's
+  /// enqueue index and the bytes themselves. Throws to reject them.
+  ///
+  /// The caller decides what to do with a region; DataInput decides when it is
+  /// called, which is the part only it knows: after the bytes land, before
+  /// they become visible to anyone else, and never for a region served from
+  /// cache. Regions that are exact duplicates of an earlier one are passed
+  /// once, under the canonical index.
+  using LoadCallback =
+      folly::FunctionRef<void(uint32_t index, std::string_view data)>;
+
   virtual ~DataInput() = default;
 
   /// Pre-allocate internal storage for 'numRegions' enqueued reads.
@@ -86,7 +98,7 @@ class DataInput {
   /// Load all enqueued requests via coalesced I/O. Returns a handle
   /// that keeps the loaded data alive. Caller must hold this until
   /// done with all BufferRefs (e.g., capture in IOBuf destructors).
-  virtual Handle load() = 0;
+  virtual Handle load(LoadCallback loadCallback = {}) = 0;
 
   /// Get the loaded buffer for a previously enqueued request. The returned
   /// BufferRef::canonicalIndex identifies the stored copy when the region is an
@@ -134,7 +146,7 @@ class DirectDataInput : public DataInput {
 
   uint32_t enqueue(Region region) override;
 
-  Handle load() override;
+  Handle load(LoadCallback loadCallback = {}) override;
 
   const BufferRef& bufferRef(uint32_t index) const override;
 
@@ -191,6 +203,12 @@ class DirectDataInput : public DataInput {
   void populateBufferRefs(
       const std::vector<IoGroup>& ioGroups,
       const char* buffer);
+
+  // Runs `loadCallback`, when set, over every loaded region. Skips duplicates,
+  // which share an already-visited region's bytes. Must run after
+  // populateBufferRefs, which is what resolves a coalesced read into per-region
+  // byte ranges.
+  void invokeLoadCallback(LoadCallback loadCallback);
 
   // Allocates the shared aligned read buffer and returns a handle that frees
   // it.
@@ -273,7 +291,7 @@ class CachedDataInput final : public DataInput {
 
   /// Loads all groups and returns ownership of their cache pins. BufferRef
   /// pointers remain valid until the returned handle is released.
-  Handle load() override;
+  Handle load(LoadCallback loadCallback = {}) override;
 
   /// Returns the loaded bytes for a previously enqueued stream region.
   const BufferRef& bufferRef(uint32_t index) const override;
@@ -315,11 +333,21 @@ class CachedDataInput final : public DataInput {
       uint32_t endRegion,
       const char* buffer);
 
-  // Loads cache-miss groups in one positioned read batch.
+  // One past the last entry in regions_ belonging to groups_[groupIndex].
+  uint32_t groupEndRegion(size_t groupIndex) const;
+
+  // Runs `loadCallback`, when set, over the regions of groups_[groupIndex].
+  // Skips duplicates, which share an already-visited region's bytes.
+  void invokeLoadCallback(LoadCallback loadCallback, size_t groupIndex) const;
+
+  // Loads cache-miss groups in one positioned read batch. `loadCallback`, when
+  // set, runs on each group's regions after its entry is filled and before the
+  // entry is published, so a rejected group never becomes visible.
   void loadCacheMissGroups(
       std::span<const CacheMissGroup> cacheMissGroups,
       uint64_t stagingBufferSize,
-      const std::vector<velox::cache::CachePin>& cachePins);
+      const std::vector<velox::cache::CachePin>& cachePins,
+      LoadCallback loadCallback);
 
   // File to read from on a cache miss.
   velox::ReadFile* const file_;

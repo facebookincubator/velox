@@ -24,6 +24,7 @@
 #include "flatbuffers/flatbuffers.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/index/BloomFilter.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -107,7 +108,7 @@ class HashIndexWriter : public IndexWriter {
   struct Options {
     std::vector<std::string> columns;
     float loadFactor;
-    std::optional<float> bloomFilterBitsPerKey;
+    std::shared_ptr<const BloomFilterConfig> bloomFilter;
     uint64_t maxPartitionSizeBytes;
   };
 

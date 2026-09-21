@@ -22,6 +22,7 @@ add_executable(
   SerializationHeaderTest.cpp
   SerializerDeserializerTest.cpp
   StreamDataTest.cpp
+  StreamReaderTest.cpp
 )
 add_test(nimble_serializer_tests nimble_serializer_tests)
 
@@ -39,6 +40,7 @@ target_link_libraries(
   nimble_velox_schema_reader
   nimble_serializer_options
   nimble_projector
+  nimble_stream_reader
   nimble_tablet_reader
   nimble_common
   nimble_velox_common

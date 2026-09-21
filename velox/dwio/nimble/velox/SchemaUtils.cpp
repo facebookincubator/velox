@@ -15,9 +15,12 @@
  */
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 
+#include <functional>
 #include <set>
+#include <string>
 
 #include "folly/container/F14Map.h"
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 
@@ -118,6 +121,120 @@ std::shared_ptr<TypeBuilder> convertToNimbleType(
 }
 
 } // namespace
+
+//
+// Value-stream subfields.
+//
+
+namespace {
+
+// Resolves Velox's [*] path element to the value-bearing child: an array
+// element or a map value. Other types do not expose a value stream through
+// this path element.
+const velox::dwio::common::TypeWithId& allSubscriptValueType(
+    const velox::dwio::common::TypeWithId& type,
+    std::string_view fieldPath) {
+  switch (type.type()->kind()) {
+    case velox::TypeKind::ARRAY:
+      return *type.childAt(0);
+    case velox::TypeKind::MAP:
+      return *type.childAt(1);
+    case velox::TypeKind::BOOLEAN:
+    case velox::TypeKind::TINYINT:
+    case velox::TypeKind::SMALLINT:
+    case velox::TypeKind::INTEGER:
+    case velox::TypeKind::BIGINT:
+    case velox::TypeKind::REAL:
+    case velox::TypeKind::DOUBLE:
+    case velox::TypeKind::VARCHAR:
+    case velox::TypeKind::VARBINARY:
+    case velox::TypeKind::TIMESTAMP:
+    case velox::TypeKind::HUGEINT:
+    case velox::TypeKind::ROW:
+    case velox::TypeKind::UNKNOWN:
+    case velox::TypeKind::FUNCTION:
+    case velox::TypeKind::OPAQUE:
+    case velox::TypeKind::INVALID:
+      NIMBLE_USER_FAIL(
+          "Value stream subfield path cannot apply [*] to {}: '{}'.",
+          type.type()->toString(),
+          fieldPath);
+  }
+  VELOX_UNREACHABLE();
+}
+
+// TypeBuilder equivalent of the Velox schema traversal above. Flat maps are
+// already materialized as per-key children, so [*] cannot select one here.
+const TypeBuilder& allSubscriptValueType(
+    const TypeBuilder& type,
+    std::string_view fieldPath) {
+  switch (type.kind()) {
+    case Kind::Array:
+      return type.asArray().elements();
+    case Kind::ArrayWithOffsets:
+      return type.asArrayWithOffsets().elements();
+    case Kind::Map:
+      return type.asMap().values();
+    case Kind::SlidingWindowMap:
+      return type.asSlidingWindowMap().values();
+    case Kind::Scalar:
+    case Kind::TimestampMicroNano:
+    case Kind::Row:
+    case Kind::FlatMap:
+      NIMBLE_USER_FAIL(
+          "Value stream subfield path cannot apply [*] to {}: '{}'.",
+          type.kind(),
+          fieldPath);
+  }
+  NIMBLE_UNREACHABLE("Unknown schema kind: {}.", type.kind());
+}
+
+} // namespace
+
+velox::common::Subfield parseValueStreamSubfield(std::string_view fieldPath) {
+  return velox::common::Subfield{std::string{fieldPath}};
+}
+
+const velox::dwio::common::TypeWithId& resolveValueStreamSubfield(
+    const velox::dwio::common::TypeWithId& root,
+    const velox::common::Subfield& subfield) {
+  const auto fieldPath = subfield.toString();
+  std::reference_wrapper<const velox::dwio::common::TypeWithId> current{root};
+  for (const auto& pathElementPtr : subfield.path()) {
+    const auto& pathElement = *velox::checkedNotNull(pathElementPtr.get());
+    const auto& currentNode = current.get();
+    if (pathElement.is(velox::common::SubfieldKind::kAllSubscripts)) {
+      current = std::cref(allSubscriptValueType(currentNode, fieldPath));
+      continue;
+    }
+
+    const auto& fieldName =
+        pathElement.asChecked<velox::common::Subfield::NestedField>()->name();
+    current = std::cref(
+        *velox::checkedNotNull(currentNode.childByName(fieldName).get()));
+  }
+  return current.get();
+}
+
+const TypeBuilder& resolveValueStreamSubfield(
+    const TypeBuilder& root,
+    const velox::common::Subfield& subfield) {
+  const auto fieldPath = subfield.toString();
+  std::reference_wrapper<const TypeBuilder> current{root};
+  for (const auto& pathElementPtr : subfield.path()) {
+    const auto& pathElement = *velox::checkedNotNull(pathElementPtr.get());
+    const auto& currentNode = current.get();
+    if (pathElement.is(velox::common::SubfieldKind::kAllSubscripts)) {
+      current = std::cref(allSubscriptValueType(currentNode, fieldPath));
+      continue;
+    }
+
+    const auto& fieldName =
+        pathElement.asChecked<velox::common::Subfield::NestedField>()->name();
+    current = std::cref(currentNode.asRow().findChild(fieldName));
+  }
+  return current.get();
+}
 
 //
 // Simple type conversions.

@@ -18,10 +18,14 @@
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::velox::common {
 namespace {
+
+using testing::ElementsAre;
+using testing::Pointer;
 
 class ScanSpecTest : public testing::Test, public test::VectorTestBase {
  protected:
@@ -161,6 +165,56 @@ TEST_F(ScanSpecTest, testFilterOnConstant) {
         child.setFilter(std::make_shared<IsNotNull>());
       },
       false);
+}
+
+// A child added after a snapshot was taken appears at the end of the next one.
+TEST_F(ScanSpecTest, stableChildrenAfterAddingChild) {
+  ScanSpec scanSpec("<root>");
+  scanSpec.addField("c0", 0);
+  scanSpec.addField("c1", 1);
+
+  auto* first = scanSpec.childByName("c0");
+  auto* second = scanSpec.childByName("c1");
+  const auto beforeAdd = scanSpec.stableChildren();
+  EXPECT_THAT(*beforeAdd, ElementsAre(Pointer(first), Pointer(second)));
+
+  auto* third = scanSpec.addField("c2", 2);
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
+
+  // The snapshot a reader tree is walking is never mutated.
+  EXPECT_THAT(*beforeAdd, ElementsAre(Pointer(first), Pointer(second)));
+
+  // 'c2' is the only child with a filter, so it sorts to the front. The
+  // stable order must not follow.
+  scanSpec.childByName("c2")->setFilter(
+      std::make_shared<BigintRange>(10, 20, false));
+  scanSpec.resetCachedValues(true);
+  ASSERT_EQ(scanSpec.children().front().get(), third);
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
+}
+
+// An add drops the published snapshot. The next call republishes the whole
+// order, held or not.
+TEST_F(ScanSpecTest, stableChildrenRepublishedAfterAdd) {
+  ScanSpec scanSpec("<root>");
+  auto* first = scanSpec.addField("c0", 0);
+  // Published and dropped, so nothing holds it when 'c1' is added.
+  EXPECT_THAT(*scanSpec.stableChildren(), ElementsAre(Pointer(first)));
+
+  auto* second = scanSpec.addField("c1", 1);
+  const auto held = scanSpec.stableChildren();
+  EXPECT_THAT(*held, ElementsAre(Pointer(first), Pointer(second)));
+
+  // Held this time, so adding 'c2' must leave 'held' alone.
+  auto* third = scanSpec.addField("c2", 2);
+  EXPECT_THAT(*held, ElementsAre(Pointer(first), Pointer(second)));
+  EXPECT_THAT(
+      *scanSpec.stableChildren(),
+      ElementsAre(Pointer(first), Pointer(second), Pointer(third)));
 }
 
 class TypedScanSpecTest : public testing::TestWithParam<TypePtr>,

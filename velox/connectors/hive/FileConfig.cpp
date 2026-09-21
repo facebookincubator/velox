@@ -46,6 +46,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kCacheIndexSession);
     VELOX_HIVE_CONFIG_REGISTER(kPinIndexSession);
     VELOX_HIVE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
+    VELOX_HIVE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
     VELOX_HIVE_CONFIG_REGISTER(kDirectBufferedInputSharedAllocationSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
     VELOX_HIVE_CONFIG_REGISTER(kParallelUnitLoadCountSession);

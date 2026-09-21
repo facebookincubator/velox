@@ -150,6 +150,16 @@ uint32_t BatchedStreamDecoder::read(
       "BatchedStreamDecoder does not support selective row decoding");
 }
 
+uint32_t BatchedStreamDecoder::read(
+    std::span<const RowRange> /*ranges*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "BatchedStreamDecoder does not support range row decoding");
+}
+
 void BatchedStreamDecoder::skip(uint32_t count) {
   if (count == 0) {
     return;

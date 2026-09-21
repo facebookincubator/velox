@@ -804,7 +804,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
 
   // Create per-partition reference data by applying cudf::hash_partition
   // to the source data - same algorithm as UcxPartitionedOutput uses
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
   std::vector<std::shared_ptr<BaseTableGenerator>> partitionedDataToVerify(
       p.numPartitions);
 

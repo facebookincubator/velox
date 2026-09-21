@@ -409,7 +409,8 @@ bool SelectiveNimbleRowReader::skipStripe(uint32_t stripe) const {
   }
   const auto& rootType = *readerBase_->fileSchemaWithId();
   const auto& rowType = rootType.type()->asRow();
-  for (auto* childSpec : options_.scanSpec()->stableChildren()) {
+  const auto stableChildren = options_.scanSpec()->stableChildren();
+  for (const auto& childSpec : *stableChildren) {
     if (!childSpec->hasFilter() || childSpec->filter() == nullptr ||
         childSpec->isConstant() || !childSpec->readFromFile()) {
       continue;
@@ -543,7 +544,8 @@ folly::F14FastSet<std::string> SelectiveNimbleRowReader::computeLazyIoColumns(
   auto* scanSpec = options.scanSpec().get();
   VELOX_CHECK_NOT_NULL(scanSpec);
   const auto& remainingFilterColumns = options.remainingFilterColumns();
-  for (auto* childSpec : scanSpec->stableChildren()) {
+  const auto stableChildren = scanSpec->stableChildren();
+  for (const auto& childSpec : *stableChildren) {
     if (childSpec->isConstant() || !childSpec->readFromFile()) {
       continue;
     }

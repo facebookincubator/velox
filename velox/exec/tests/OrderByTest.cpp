@@ -1361,6 +1361,40 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {
   ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
 }
 
+// Reclaim can arrive after close(): the memory pool outlives the operator, and
+// ParallelMemoryReclaimer issues arbitration reclaims asynchronously.
+DEBUG_ONLY_TEST_F(OrderByTest, reclaimAfterClose) {
+  const std::vector<RowVectorPtr> vectors =
+      createVectors(8, rowType_, fuzzerOpts_);
+
+  const std::string errorMessage("reclaimAfterClose");
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "OrderBy") {
+          return;
+        }
+        // Reclaim after close(), as a late arbitration would.
+        op->close();
+        memory::MemoryReclaimer::Stats reclaimerStats;
+        op->reclaim(0, reclaimerStats);
+        VELOX_FAIL(errorMessage);
+      })));
+
+  const auto spillDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kOrderBySpillEnabled, true)
+          .copyResults(pool_.get()),
+      errorMessage);
+}
+
 DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
   auto nonLazyVector = createVectors(1, rowType_, fuzzerOpts_)[0];
 

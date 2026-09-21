@@ -167,7 +167,7 @@ class ClusterIndex : public IndexLookup {
   ///        When false, returns only root-level metadata (no I/O).
   Layout layout(bool detail = true) const;
 
- private:
+ protected:
   // Walks the index's keys a chunk at a time. Reached only through
   // keyCursor().
   class KeyIterator;
@@ -187,6 +187,32 @@ class ClusterIndex : public IndexLookup {
   // enforced).
   void preloadIndex();
 
+  // Builds the flat LookupResult from partitionRowRanges. Subclasses override
+  // this to apply their own narrowing. The base implementation rejects any
+  // lookup extension it is handed, because ignoring one would silently return
+  // a wider range than the caller asked for.
+  virtual LookupResult buildLookupResult(
+      const LookupOptions& options,
+      const std::vector<RowRange>& partitionRowRanges) const;
+
+  // Accumulated row counts of a partition's key chunks (prefix sum), so that
+  // a subclass can align per-chunk structures of its own to the key chunks.
+  // Loads the partition metadata on first access; the returned range stays
+  // valid for the lifetime of this index because partitions are never
+  // evicted.
+  folly::Range<const uint32_t*> partitionChunkRows(uint32_t partitionId) const;
+
+  // Start row of each partition. Size is numPartitions() + 1; the last entry
+  // is the file's total row count.
+  const std::vector<uint32_t>& partitionRows() const {
+    return partitionRows_;
+  }
+
+  uint32_t numRows() const {
+    return numRows_;
+  }
+
+ private:
   // Cached decoded chunk. The DecodedKeyChunk owns its own backing buffer
   // (decodeKeyChunk appends it to DecodedKeyChunk::stringBuffers when no
   // external reuse buffer is provided), so each cached entry is fully
@@ -312,11 +338,6 @@ class ClusterIndex : public IndexLookup {
   // Resolves all partition lookups grouped by partition.
   void resolvePartitionBounds(
       std::vector<PartitionLookup>& partitionLookups) const;
-
-  // Builds the flat LookupResult from partitionRowRanges.
-  LookupResult buildLookupResult(
-      const LookupOptions& options,
-      const std::vector<RowRange>& partitionRowRanges) const;
 
   // Binary searches chunk keys in the partition. The returned ChunkLocation
   // carries the chunkIndex for indexing into per-chunk arrays.

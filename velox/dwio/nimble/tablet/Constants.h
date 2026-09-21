@@ -15,9 +15,18 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 
 namespace facebook::nimble {
+
+/// Selects the on-disk representation for chunk statistics.
+enum class ChunkStatsVersion : uint8_t {
+  /// Stores statistics as raw FlatBuffer arrays.
+  kV1 = 1,
+  /// Stores statistics as Nimble-encoded arrays.
+  kV2 = 2,
+};
 
 constexpr uint16_t kMagicNumber = 0xA1FA;
 constexpr uint64_t kInitialFooterSize = 8 * 1024 * 1024; // 8MB

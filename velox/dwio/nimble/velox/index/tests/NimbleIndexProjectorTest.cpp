@@ -252,8 +252,13 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
       bool compactRowCountEncoding = false,
       CompressionType chunkCompressionType = CompressionType::Uncompressed,
       bool skipConstantFlatMapInMapStreams = false,
-      bool enableChunking = true) {
+      bool enableChunking = true,
+      bool enableStreamChecksums = false,
+      StripeGroup::EncodingLayout stripeGroupEncodingLayout =
+          StripeGroup::EncodingLayout::kRaw) {
     WriterOptions options;
+    options.enableStreamChecksums = enableStreamChecksums;
+    options.experimentalStripeGroupEncodingLayout = stripeGroupEncodingLayout;
     options.enableChunking = enableChunking;
     options.flatMapColumns = flatMapColumns;
     options.enableStreamDeduplication = enableStreamDeduplication;
@@ -320,6 +325,39 @@ class NimbleIndexProjectorTest : public ::testing::TestWithParam<TestParam> {
   }
 
  protected:
+  // Flips a byte inside every stream of stripe 0 of the file currently in
+  // sinkData_, so the damage lands in stream payload rather than metadata
+  // regardless of which streams a projection selects. Unprojected streams are
+  // never read, so corrupting them is inert.
+  void corruptProjectedStreams() {
+    auto readFile =
+        std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
+    dwio::common::ReaderOptions tabletReaderOptions(leafPool_.get());
+    tabletReaderOptions.setFileFormat(FileFormat::NIMBLE);
+    auto tablet = TabletReader::create(
+        readFile,
+        leafPool_.get(),
+        TabletReader::configureOptions(tabletReaderOptions));
+    const auto stripe = tablet->stripeIdentifier(0);
+    const auto streamCount = tablet->streamCount(stripe);
+    ASSERT_GT(streamCount, 0);
+    std::vector<TabletReader::StreamMetadata> locations(streamCount);
+    tablet->streamLocations(stripe, locations);
+
+    size_t corrupted = 0;
+    for (const auto& location : locations) {
+      if (location.size == 0) {
+        continue;
+      }
+      const auto byteOffset =
+          tablet->stripeOffset(0) + location.offset + location.size / 2;
+      ASSERT_LT(byteOffset, sinkData_.size());
+      sinkData_[byteOffset] = static_cast<char>(sinkData_[byteOffset] ^ 0xFF);
+      ++corrupted;
+    }
+    ASSERT_GT(corrupted, 0);
+  }
+
   velox::FileHandle makeFileHandle() {
     auto readFile =
         std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
@@ -4011,7 +4049,7 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
 
     auto stripeId = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripeId);
-    std::vector<TabletReader::StreamLocation> streamLocations(streamCount);
+    std::vector<TabletReader::StreamMetadata> streamLocations(streamCount);
     tablet->streamLocations(stripeId, streamLocations);
 
     BatchReader reader(readFile.get(), *leafPool_);
@@ -5588,6 +5626,427 @@ TEST_P(NimbleIndexProjectorTest, rejectsSharedDictionaryEncoding) {
         createProjector(subfields),
         "NimbleIndexProjector does not support shared dictionary encoding");
   }
+}
+
+namespace {
+// Two stripes of sorted keys, enough rows that each projected stream carries
+// real bytes to checksum.
+RowVectorPtr makeStreamChecksumBatch(
+    velox::test::VectorMaker& vectorMaker,
+    int numRows) {
+  std::vector<int64_t> keys(numRows);
+  std::vector<int32_t> values(numRows);
+  for (int i = 0; i < numRows; ++i) {
+    keys[i] = i * 10;
+    values[i] = i * 100;
+  }
+  return vectorMaker.rowVector(
+      {"key", "value"},
+      {vectorMaker.flatVector<int64_t>(keys),
+       vectorMaker.flatVector<int32_t>(values)});
+}
+
+// Globally ascending keys split across several batches. The flush policy is
+// evaluated between write() calls, so multiple batches are what actually
+// produces multiple stripes, and hence multiple stripe groups.
+std::vector<RowVectorPtr> makeStreamChecksumBatches(
+    velox::test::VectorMaker& vectorMaker,
+    int numBatches,
+    int rowsPerBatch) {
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(numBatches);
+  for (int batch = 0; batch < numBatches; ++batch) {
+    std::vector<int64_t> keys(rowsPerBatch);
+    std::vector<int32_t> values(rowsPerBatch);
+    for (int i = 0; i < rowsPerBatch; ++i) {
+      const int row = batch * rowsPerBatch + i;
+      keys[i] = row * 10;
+      values[i] = row * 100;
+    }
+    batches.push_back(vectorMaker.rowVector(
+        {"key", "value"},
+        {vectorMaker.flatVector<int64_t>(keys),
+         vectorMaker.flatVector<int32_t>(values)}));
+  }
+  return batches;
+}
+} // namespace
+
+TEST_P(NimbleIndexProjectorTest, streamChecksumVerificationPasses) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 200);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/4 << 10,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  auto result = projector->project(request, {.verifyStreamChecksums = true});
+
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_FALSE(result.responses[0].slices.empty());
+}
+
+// Flipping a byte inside a projected stream must surface as a checksum
+// mismatch rather than as decoded garbage.
+TEST_P(NimbleIndexProjectorTest, streamChecksumDetectsCorruptedStream) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 200);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  corruptProjectedStreams();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  NIMBLE_ASSERT_THROW(
+      projector->project(request, {.verifyStreamChecksums = true}),
+      "Stream checksum mismatch");
+}
+
+// Asking for verification against a file written without checksums must fail
+// when the projector is created, not part-way through a scan.
+// Opening a file that carries no checksums succeeds even when the reader asked
+// to verify: only a request that asks for verification fails, and it fails when
+// it is issued. Reads that do not ask for it keep working on the same
+// projector.
+TEST_P(NimbleIndexProjectorTest, streamChecksumVerificationRequiresChecksums) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 100);
+  writeData({batch}, {"key"});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+
+  NIMBLE_ASSERT_THROW(
+      projector->project(request, {.verifyStreamChecksums = true}),
+      "Stream checksum verification requested, but the file carries no stream checksums.");
+
+  auto result = projector->project(request, {});
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_FALSE(result.responses[0].slices.empty());
+}
+
+// Exercises the projector against a multi-stripe file in both stripe-group
+// layouts, with compressed chunks and more than one key range, rather than the
+// single-stripe uncompressed shape the other tests use. The metadata flush
+// threshold is not reachable from WriterOptions, so this stays within one
+// stripe group; TabletTest.streamChecksumsAcrossStripeGroups covers the
+// non-zero firstStripe_ index path.
+TEST_P(NimbleIndexProjectorTest, streamChecksumsAcrossStripeGroupsAndLayouts) {
+  for (const auto layout :
+       {StripeGroup::EncodingLayout::kRaw,
+        StripeGroup::EncodingLayout::kStreamMajor}) {
+    SCOPED_TRACE(fmt::format("layout={}", toString(layout)));
+    auto batches = makeStreamChecksumBatches(
+        *vectorMaker_, /*numBatches=*/16, /*rowsPerBatch=*/250);
+    writeData(
+        batches,
+        {"key"},
+        /*flatMapColumns=*/{},
+        /*stripeSize=*/1 << 10,
+        /*enableStreamDeduplication=*/true,
+        /*compactRowCountEncoding=*/false,
+        /*chunkCompressionType=*/CompressionType::Zstd,
+        /*skipConstantFlatMapInMapStreams=*/false,
+        /*enableChunking=*/true,
+        /*enableStreamChecksums=*/true,
+        layout);
+
+    {
+      auto readFile =
+          std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
+      dwio::common::ReaderOptions tabletReaderOptions(leafPool_.get());
+      tabletReaderOptions.setFileFormat(FileFormat::NIMBLE);
+      auto tablet = TabletReader::create(
+          readFile,
+          leafPool_.get(),
+          TabletReader::configureOptions(tabletReaderOptions));
+      ASSERT_GT(tablet->stripeCount(), 1);
+      ASSERT_TRUE(tablet->properties().hasStreamChecksums());
+    }
+
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    auto projector = createProjector(subfields);
+
+    // Span the whole key range so the projection crosses stripe groups.
+    auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makePointLookup(rowType, {"key"}, 10)};
+    request.keyBounds.push_back(makePointLookup(rowType, {"key"}, 39'990));
+    auto result = projector->project(request, {.verifyStreamChecksums = true});
+
+    ASSERT_EQ(result.responses.size(), 2);
+    for (const auto& response : result.responses) {
+      EXPECT_FALSE(response.slices.empty());
+    }
+  }
+}
+
+// DataInput hands out enqueue indices densely from 0 on every load, and the
+// expected-checksum vector is rebuilt to match. Both reset between project()
+// calls, so a reused projector must keep them aligned; a drift here compares a
+// stream against another stream's checksum.
+TEST_P(NimbleIndexProjectorTest, streamChecksumsAcrossRepeatedProjectCalls) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 400);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+
+  // Vary the number of requests per call so the enqueue count differs between
+  // iterations; a stale vector would survive a fixed-size loop unnoticed.
+  for (int call = 0; call < 3; ++call) {
+    SCOPED_TRACE(fmt::format("call={}", call));
+    NimbleIndexProjector::Request request;
+    for (int i = 0; i <= call; ++i) {
+      request.keyBounds.push_back(
+          makePointLookup(rowType, {"key"}, 10 * (i + 1)));
+    }
+    auto result = projector->project(request, {.verifyStreamChecksums = true});
+    ASSERT_EQ(result.responses.size(), call + 1);
+    for (const auto& response : result.responses) {
+      EXPECT_FALSE(response.slices.empty());
+    }
+  }
+}
+
+// A projector must stay usable after a verification failure: project() clears
+// its DataInput on the way out, so the next call starts from a clean index.
+TEST_P(NimbleIndexProjectorTest, streamChecksumFailureLeavesProjectorUsable) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 200);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+
+  // Reading without verification succeeds before and after the failure.
+  EXPECT_FALSE(projector->project(request, {}).responses[0].slices.empty());
+
+  corruptProjectedStreams();
+  NIMBLE_ASSERT_THROW(
+      projector->project(request, {.verifyStreamChecksums = true}),
+      "Stream checksum mismatch");
+
+  auto result = projector->project(request, {});
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_FALSE(result.responses[0].slices.empty());
+}
+
+// Two columns holding identical values produce byte-identical streams, which
+// the writer deduplicates: one copy on disk, both stream ids pointing at it and
+// sharing its checksum. The reader coalesces them into one region and checks it
+// once, under the canonical index.
+TEST_P(NimbleIndexProjectorTest, streamChecksumsWithDeduplicatedStreams) {
+  const int numRows = 300;
+  std::vector<int64_t> keys(numRows);
+  std::vector<int32_t> values(numRows);
+  for (int i = 0; i < numRows; ++i) {
+    keys[i] = i * 10;
+    values[i] = i * 100;
+  }
+  // valueA and valueB are identical, so their streams deduplicate.
+  auto batch = vectorMaker_->rowVector(
+      {"key", "valueA", "valueB"},
+      {vectorMaker_->flatVector<int64_t>(keys),
+       vectorMaker_->flatVector<int32_t>(values),
+       vectorMaker_->flatVector<int32_t>(values)});
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("valueA");
+  subfields.emplace_back("valueB");
+  auto projector = createProjector(subfields);
+
+  auto rowType =
+      ROW({"key", "valueA", "valueB"}, {BIGINT(), INTEGER(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  auto result = projector->project(request, {.verifyStreamChecksums = true});
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_FALSE(result.responses[0].slices.empty());
+}
+
+// Flat maps are the shape this feature ships against: one stream per key, so a
+// stripe carries many more streams than a flat schema, several of them
+// byte-identical in-map bitmaps that the writer deduplicates. Verification has
+// to hold across that whole topology, not just a two-column file.
+TEST_P(NimbleIndexProjectorTest, streamChecksumsWithFlatMapColumns) {
+  constexpr vector_size_t kRows{256};
+  constexpr int kKeysPerRow{3};
+  const folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns = {
+      {"features", {"a", "b", "c"}}};
+
+  std::vector<int64_t> keys(kRows);
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    keys[row] = row * 10;
+  }
+
+  auto offsets = allocateOffsets(kRows, leafPool_.get());
+  auto sizes = allocateSizes(kRows, leafPool_.get());
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  const vector_size_t numEntries = kRows * kKeysPerRow;
+  auto mapKeys = BaseVector::create<FlatVector<StringView>>(
+      VARCHAR(), numEntries, leafPool_.get());
+  auto mapValues = BaseVector::create<FlatVector<int64_t>>(
+      BIGINT(), numEntries, leafPool_.get());
+
+  // Every row carries all three keys, so the three in-map bitmaps are
+  // identical and deduplicate against each other, while the value streams
+  // differ.
+  static constexpr std::array<const char*, kKeysPerRow> kKeys{"a", "b", "c"};
+  vector_size_t entry{0};
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    rawOffsets[row] = entry;
+    rawSizes[row] = kKeysPerRow;
+    for (int k = 0; k < kKeysPerRow; ++k) {
+      mapKeys->set(entry, StringView{kKeys[k]});
+      mapValues->set(entry, row * 100 + k);
+      ++entry;
+    }
+  }
+  ASSERT_EQ(entry, numEntries);
+
+  auto features = std::make_shared<MapVector>(
+      leafPool_.get(),
+      MAP(VARCHAR(), BIGINT()),
+      nullptr,
+      kRows,
+      offsets,
+      sizes,
+      mapKeys,
+      mapValues);
+  auto batch = vectorMaker_->rowVector(
+      {"key", "features"}, {vectorMaker_->flatVector<int64_t>(keys), features});
+
+  writeData(
+      {batch},
+      {"key"},
+      flatMapColumns,
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  // A flat map is projected per key, which is what produces one stream per
+  // key on the read side.
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"a\"]");
+  subfields.emplace_back("features[\"b\"]");
+  subfields.emplace_back("features[\"c\"]");
+  auto projector = createProjector(subfields);
+
+  auto rowType = ROW({"key", "features"}, {BIGINT(), MAP(VARCHAR(), BIGINT())});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 500)};
+  auto result = projector->project(request, {.verifyStreamChecksums = true});
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_FALSE(result.responses[0].slices.empty());
+
+  // And a corrupted flat-map stream is still caught.
+  corruptProjectedStreams();
+  auto corruptedProjector = createProjector(subfields);
+  NIMBLE_ASSERT_THROW(
+      corruptedProjector->project(request, {.verifyStreamChecksums = true}),
+      "Stream checksum mismatch");
+}
+
+// Checksums present but verification off: reads proceed and corruption goes
+// undetected. Pins that the write-side option alone changes nothing on read.
+TEST_P(NimbleIndexProjectorTest, streamChecksumsUnusedWhenVerificationOff) {
+  auto batch = makeStreamChecksumBatch(*vectorMaker_, 100);
+  writeData(
+      {batch},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/true);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  auto result = projector->project(request, {});
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_FALSE(result.responses[0].slices.empty());
 }
 
 INSTANTIATE_TEST_CASE_P(

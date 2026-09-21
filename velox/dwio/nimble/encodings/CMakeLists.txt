@@ -42,6 +42,21 @@ add_library(
   SliceEncoding.cpp
   SparseBoolEncoding.cpp
   TrivialEncoding.cpp
+  subintsplit/CostModel.cpp
+  subintsplit/CostModel.h
+  subintsplit/BitSection.h
+  subintsplit/DeltaTransform.h
+  subintsplit/Format.h
+  subintsplit/Sampler.h
+  subintsplit/SectionAccumulator.h
+  subintsplit/SectionEncoder.h
+  subintsplit/SectionMetrics.cpp
+  subintsplit/SectionMetrics.h
+  subintsplit/SectionTable.h
+  subintsplit/SplitBoundaries.cpp
+  subintsplit/SplitBoundaries.h
+  subintsplit/SplitSelector.cpp
+  subintsplit/SplitSelector.h
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp
@@ -89,12 +104,7 @@ add_library(
   common/BufferedEncoding.h
   VarintEncoding.h
   TrivialEncoding.h
-  SubIntSplitSelector.h
-  SubIntSplitSampler.h
-  SubIntSplitMetrics.h
   SubIntSplitEncoding.h
-  SubIntSplitCostModels.h
-  SubIntSplitConfig.h
   SparseBoolEncoding.h
   SliceEncoding.h
   SimdForBitpackEncoding.h

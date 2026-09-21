@@ -26,11 +26,11 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitConfig.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 using namespace facebook;
 
@@ -63,7 +63,7 @@ std::vector<T> makeStructuredValues() {
 }
 
 template <typename T>
-std::vector<nimble::detail::subintsplit::SegmentPlan> makePreserveSegments() {
+std::vector<nimble::subintsplit::SectionPlan> makePreserveSegments() {
   if constexpr (sizeof(PhysicalType<T>) == 4) {
     return {{0, 7}, {8, 15}, {16, 31}};
   } else {
@@ -72,7 +72,7 @@ std::vector<nimble::detail::subintsplit::SegmentPlan> makePreserveSegments() {
 }
 
 template <typename T>
-std::vector<nimble::detail::subintsplit::SegmentPlan> makeFullWidthSegments() {
+std::vector<nimble::subintsplit::SectionPlan> makeFullWidthSegments() {
   return {{0, static_cast<int>(sizeof(PhysicalType<T>) * 8 - 1)}};
 }
 
@@ -198,20 +198,20 @@ void expectBitwiseEqual(
 
 template <typename T>
 nimble::EncodingLayout makePreserveLayout(
-    const std::vector<nimble::detail::subintsplit::SegmentPlan>& segments) {
+    const std::vector<nimble::subintsplit::SectionPlan>& segments) {
   std::vector<std::optional<const nimble::EncodingLayout>> children(
       segments.size());
   return nimble::EncodingLayout{
       nimble::EncodingType::SubIntSplit,
       nimble::EncodingLayout::Config{
-          nimble::detail::subintsplit::makePreserveSplitConfig(segments)},
+          nimble::subintsplit::makePreserveSplitConfig(segments)},
       nimble::CompressionType::Uncompressed,
       std::move(children)};
 }
 
 void expectSegmentsEqual(
-    const std::vector<nimble::detail::subintsplit::SegmentPlan>& expected,
-    const std::vector<nimble::detail::subintsplit::SegmentPlan>& actual) {
+    const std::vector<nimble::subintsplit::SectionPlan>& expected,
+    const std::vector<nimble::subintsplit::SectionPlan>& actual) {
   ASSERT_EQ(expected.size(), actual.size());
   for (size_t i = 0; i < expected.size(); ++i) {
     EXPECT_EQ(expected[i].bitStart, actual[i].bitStart) << "segment " << i;
@@ -241,31 +241,26 @@ void expectSameLayout(
 } // namespace
 
 TEST(SubIntSplitConfigTests, boundarySerializationAndParsing) {
-  const std::vector<nimble::detail::subintsplit::SegmentPlan> segments{
+  const std::vector<nimble::subintsplit::SectionPlan> segments{
       {.bitStart = 0, .bitEnd = 7},
       {.bitStart = 8, .bitEnd = 15},
       {.bitStart = 16, .bitEnd = 31}};
 
   const auto serialized =
-      nimble::detail::subintsplit::serializeSplitBoundaries(segments);
+      nimble::subintsplit::serializeSplitBoundaries(segments);
   EXPECT_EQ(serialized, "0-7;8-15;16-31");
 
-  auto parsed =
-      nimble::detail::subintsplit::parseSplitBoundaries(serialized, 32);
+  auto parsed = nimble::subintsplit::parseSplitBoundaries(serialized, 32);
   ASSERT_TRUE(parsed.has_value());
   expectSegmentsEqual(segments, *parsed);
 
+  EXPECT_FALSE(nimble::subintsplit::parseSplitBoundaries("", 32).has_value());
   EXPECT_FALSE(
-      nimble::detail::subintsplit::parseSplitBoundaries("", 32).has_value());
+      nimble::subintsplit::parseSplitBoundaries("0-7;9-15", 16).has_value());
   EXPECT_FALSE(
-      nimble::detail::subintsplit::parseSplitBoundaries("0-7;9-15", 16)
-          .has_value());
+      nimble::subintsplit::parseSplitBoundaries("0-7;8-16", 16).has_value());
   EXPECT_FALSE(
-      nimble::detail::subintsplit::parseSplitBoundaries("0-7;8-16", 16)
-          .has_value());
-  EXPECT_FALSE(
-      nimble::detail::subintsplit::parseSplitBoundaries("0-7;8-15", 8)
-          .has_value());
+      nimble::subintsplit::parseSplitBoundaries("0-7;8-15", 8).has_value());
 }
 
 template <typename T>
@@ -298,12 +293,12 @@ TYPED_TEST(SubIntSplitEncodingTest, recomputeRoundTripAndReplay) {
   ASSERT_GT(captured.childrenCount(), 1u);
 
   const auto capturedMode = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitModeConfigKey));
+      std::string(nimble::subintsplit::kSplitModeConfigKey));
   ASSERT_TRUE(capturedMode.has_value());
-  EXPECT_EQ(*capturedMode, nimble::detail::subintsplit::kSplitModePreserve);
+  EXPECT_EQ(*capturedMode, nimble::subintsplit::kSplitModePreserve);
 
   const auto capturedBoundaries = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey));
+      std::string(nimble::subintsplit::kSplitBoundariesConfigKey));
   ASSERT_TRUE(capturedBoundaries.has_value());
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
@@ -347,16 +342,16 @@ TYPED_TEST(SubIntSplitEncodingTest, preserveRoundTripExplicitBoundaries) {
   ASSERT_EQ(captured.childrenCount(), segments.size());
 
   const auto capturedMode = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitModeConfigKey));
+      std::string(nimble::subintsplit::kSplitModeConfigKey));
   ASSERT_TRUE(capturedMode.has_value());
-  EXPECT_EQ(*capturedMode, nimble::detail::subintsplit::kSplitModePreserve);
+  EXPECT_EQ(*capturedMode, nimble::subintsplit::kSplitModePreserve);
 
   const auto capturedBoundaries = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey));
+      std::string(nimble::subintsplit::kSplitBoundariesConfigKey));
   ASSERT_TRUE(capturedBoundaries.has_value());
   EXPECT_EQ(
       *capturedBoundaries,
-      nimble::detail::subintsplit::serializeSplitBoundaries(segments));
+      nimble::subintsplit::serializeSplitBoundaries(segments));
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
   expectBitwiseEqual(values, decoded);
@@ -369,8 +364,8 @@ TEST(SubIntSplitEncodingTests, preserveModeRequiresBoundaries) {
   nimble::EncodingLayout layout{
       nimble::EncodingType::SubIntSplit,
       nimble::EncodingLayout::Config{{
-          {std::string(nimble::detail::subintsplit::kSplitModeConfigKey),
-           std::string(nimble::detail::subintsplit::kSplitModePreserve)},
+          {std::string(nimble::subintsplit::kSplitModeConfigKey),
+           std::string(nimble::subintsplit::kSplitModePreserve)},
       }},
       nimble::CompressionType::Uncompressed};
 
@@ -404,11 +399,11 @@ TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
 
   ASSERT_EQ(captured.childrenCount(), 1u);
   const auto capturedBoundaries = captured.config().get(
-      std::string(nimble::detail::subintsplit::kSplitBoundariesConfigKey));
+      std::string(nimble::subintsplit::kSplitBoundariesConfigKey));
   ASSERT_TRUE(capturedBoundaries.has_value());
   EXPECT_EQ(
       *capturedBoundaries,
-      nimble::detail::subintsplit::serializeSplitBoundaries(segments));
+      nimble::subintsplit::serializeSplitBoundaries(segments));
 
   const auto decoded = decodeAll<uint64_t>(encoded, *pool);
   expectBitwiseEqual(values, decoded);

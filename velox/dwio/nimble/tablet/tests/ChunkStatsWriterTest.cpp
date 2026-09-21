@@ -19,9 +19,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <span>
+
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 
@@ -55,7 +60,10 @@ class ChunkStatsWriterTest : public ::testing::Test {
   static auto createMetadataSectionCallback(TestChunkFileIndex& fileIndex) {
     return [&fileIndex](std::string_view metadata) -> MetadataSection {
       fileIndex.groupMetadataSections.emplace_back(metadata);
-      return MetadataSection(0, metadata.size(), CompressionType::Uncompressed);
+      return MetadataSection(
+          0,
+          static_cast<uint32_t>(metadata.size()),
+          CompressionType::Uncompressed);
     };
   }
 
@@ -67,6 +75,11 @@ class ChunkStatsWriterTest : public ::testing::Test {
       EXPECT_EQ(name, expectedSectionName);
       fileIndex.rootIndexData = std::string(content);
     };
+  }
+
+  static std::string_view sectionName(ChunkStatsVersion version) {
+    return version == ChunkStatsVersion::kV1 ? nimble::kChunkStatsSection
+                                             : nimble::kChunkStatsV2Section;
   }
 
   std::vector<uint32_t> decode(
@@ -84,19 +97,80 @@ class ChunkStatsWriterTest : public ::testing::Test {
     return values;
   }
 
+  std::unique_ptr<MetadataBuffer> copyMetadata(const std::string& data) {
+    auto inputBuffer =
+        velox::AlignedBuffer::allocate<char>(data.size(), pool_.get());
+    std::memcpy(inputBuffer->asMutable<char>(), data.data(), data.size());
+    return std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
+        std::move(inputBuffer), CompressionType::Uncompressed, pool_.get()));
+  }
+
+  static std::vector<uint8_t> encodeTrivial(std::span<const uint32_t> values) {
+    std::vector<uint8_t> encoded(
+        EncodingPrefix::kFixedPrefixSize + sizeof(uint8_t) +
+        values.size_bytes());
+    auto* position = reinterpret_cast<char*>(encoded.data());
+    EncodingPrefix::serialize(
+        EncodingType::Trivial,
+        DataType::Uint32,
+        static_cast<uint32_t>(values.size()),
+        /*useVarint=*/false,
+        position);
+    encoding::writeChar(
+        static_cast<char>(CompressionType::Uncompressed), position);
+    for (const auto value : values) {
+      encoding::write(value, position);
+    }
+    return encoded;
+  }
+
+  static std::string createV2GroupDataFromEncoded(
+      std::span<const uint32_t> chunkCounts,
+      std::span<const uint8_t> chunkRows,
+      std::span<const uint8_t> chunkOffsets,
+      std::span<const uint8_t> chunkNullCounts,
+      uint32_t streamCount = 1) {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto createEncodedStream = [&](std::span<const uint8_t> encoded) {
+      return serialization::CreateEncodedStream(
+          builder, builder.CreateVector(encoded.data(), encoded.size()));
+    };
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            streamCount,
+            builder.CreateVector(chunkCounts.data(), chunkCounts.size()),
+            createEncodedStream(chunkRows),
+            createEncodedStream(chunkOffsets),
+            createEncodedStream(chunkNullCounts)));
+    return {
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+  }
+
+  static std::string createV2GroupData(
+      std::span<const uint32_t> chunkCounts,
+      std::span<const uint32_t> chunkRows,
+      std::span<const uint32_t> chunkOffsets,
+      std::span<const uint32_t> chunkNullCounts) {
+    const auto encodedRows = encodeTrivial(chunkRows);
+    const auto encodedOffsets = encodeTrivial(chunkOffsets);
+    const auto encodedNullCounts = encodeTrivial(chunkNullCounts);
+    return createV2GroupDataFromEncoded(
+        chunkCounts, encodedRows, encodedOffsets, encodedNullCounts);
+  }
+
   // Creates a ChunkStatsGroup reader from a serialized group metadata section.
   std::shared_ptr<index::ChunkStatsGroup> loadChunkStats(
       const std::string& groupData,
       uint32_t firstStripe,
       uint32_t stripeCount) {
-    auto inputBuffer =
-        velox::AlignedBuffer::allocate<char>(groupData.size(), pool_.get());
-    std::memcpy(
-        inputBuffer->asMutable<char>(), groupData.data(), groupData.size());
-    auto buffer = std::make_unique<MetadataBuffer>(MetadataBuffer::decompress(
-        std::move(inputBuffer), CompressionType::Uncompressed, pool_.get()));
     return index::ChunkStatsGroup::create(
-        firstStripe, stripeCount, std::move(buffer));
+        ChunkStatsVersion::kV1,
+        firstStripe,
+        stripeCount,
+        copyMetadata(groupData),
+        *pool_);
   }
 
   ChunkStatsWriter& createWriter() {
@@ -117,6 +191,167 @@ class ChunkStatsWriterTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<ChunkStatsWriter> writer_;
 };
+
+class ChunkStatsReaderVersionTest
+    : public ChunkStatsWriterTest,
+      public ::testing::WithParamInterface<ChunkStatsVersion> {};
+
+TEST_P(ChunkStatsReaderVersionTest, createRejectsNullMetadata) {
+  NIMBLE_ASSERT_THROW(
+      index::ChunkStatsGroup::create(
+          GetParam(),
+          /*firstStripe=*/0,
+          /*stripeCount=*/1,
+          std::unique_ptr<MetadataBuffer>{},
+          *pool_),
+      "must not be null");
+}
+
+TEST_P(ChunkStatsReaderVersionTest, readerContract) {
+  auto& writer = createWriter(GetParam(), 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(3);
+  writer.addStream(0, createChunks(buffer, {{10, 4, 1}, {20, 6, 2}}));
+  writer.addStream(1, createChunks(buffer, {{30, 5, 3}}));
+
+  writer.newStripe(3);
+  writer.addStream(0, createChunks(buffer, {{40, 7, 4}}));
+  writer.addStream(
+      1, createChunks(buffer, {{10, 2, 0}, {15, 3, 5}, {15, 4, 1}}));
+
+  writer.writeGroup(3, 2, createMetadataSectionCallback(fileIndex));
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      GetParam(),
+      /*firstStripe=*/5,
+      /*stripeCount=*/2,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+
+  auto firstStream = chunkStats->createStreamIndex(
+      /*stripe=*/5, /*streamId=*/0, /*streamSize=*/10);
+  ASSERT_NE(firstStream, nullptr);
+  EXPECT_EQ(firstStream->streamId(), 0);
+  const auto initialLocation = firstStream->lookupChunk(0);
+  EXPECT_EQ(initialLocation.chunkIndex, 0);
+  EXPECT_EQ(initialLocation.chunkOffset, 0);
+  EXPECT_EQ(initialLocation.chunkSize, 4);
+  EXPECT_EQ(initialLocation.rowOffset, 0);
+  EXPECT_EQ(firstStream->lookupChunk(9).chunkIndex, initialLocation.chunkIndex);
+  const auto firstLocation = firstStream->lookupChunk(10);
+  EXPECT_EQ(firstLocation.chunkIndex, 1);
+  EXPECT_EQ(firstLocation.chunkOffset, 4);
+  EXPECT_EQ(firstLocation.chunkSize, 6);
+  EXPECT_EQ(firstLocation.rowOffset, 10);
+  EXPECT_EQ(firstStream->chunkNullCount(firstLocation.chunkIndex), 2);
+  EXPECT_EQ(firstStream->rowCount(), 30);
+  const auto finalLocation = firstStream->lookupChunk(29);
+  EXPECT_EQ(finalLocation.chunkIndex, firstLocation.chunkIndex);
+  EXPECT_EQ(finalLocation.chunkOffset, firstLocation.chunkOffset);
+  EXPECT_EQ(finalLocation.chunkSize, firstLocation.chunkSize);
+  EXPECT_EQ(finalLocation.rowOffset, firstLocation.rowOffset);
+  NIMBLE_ASSERT_THROW(firstStream->lookupChunk(30), "beyond the last chunk");
+
+  EXPECT_EQ(
+      chunkStats->createStreamIndex(
+          /*stripe=*/5, /*streamId=*/1, /*streamSize=*/5),
+      nullptr);
+  EXPECT_EQ(
+      chunkStats->createStreamIndex(
+          /*stripe=*/6, /*streamId=*/0, /*streamSize=*/7),
+      nullptr);
+  EXPECT_EQ(
+      chunkStats->createStreamIndex(
+          /*stripe=*/5, /*streamId=*/2, /*streamSize=*/0),
+      nullptr);
+  EXPECT_EQ(
+      chunkStats->createStreamIndex(
+          /*stripe=*/5, /*streamId=*/3, /*streamSize=*/0),
+      nullptr);
+  NIMBLE_ASSERT_THROW(
+      chunkStats->createStreamIndex(
+          /*stripe=*/4, /*streamId=*/0, /*streamSize=*/10),
+      "Stripe index is before this group's range");
+  NIMBLE_ASSERT_THROW(
+      chunkStats->createStreamIndex(
+          /*stripe=*/7, /*streamId=*/0, /*streamSize=*/10),
+      "Stripe offset is out of range for this chunk stats group");
+
+  auto secondStream = chunkStats->createStreamIndex(
+      /*stripe=*/6, /*streamId=*/1, /*streamSize=*/9);
+  ASSERT_NE(secondStream, nullptr);
+  EXPECT_EQ(secondStream->streamId(), 1);
+  chunkStats.reset();
+
+  const auto secondLocation = secondStream->lookupChunk(25);
+  EXPECT_EQ(secondLocation.chunkIndex, 6);
+  EXPECT_EQ(secondLocation.chunkOffset, 5);
+  EXPECT_EQ(secondLocation.chunkSize, 4);
+  EXPECT_EQ(secondLocation.rowOffset, 25);
+  EXPECT_EQ(secondStream->chunkNullCount(secondLocation.chunkIndex), 1);
+  EXPECT_EQ(secondStream->rowCount(), 40);
+  NIMBLE_ASSERT_THROW(secondStream->lookupChunk(40), "beyond the last chunk");
+}
+
+TEST_P(ChunkStatsReaderVersionTest, multipleGroupsRoundTrip) {
+  auto& writer = createWriter(GetParam(), 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  writer.addStream(0, createChunks(buffer, {{50, 10}, {50, 12}}));
+  writer.newStripe(1);
+  writer.addStream(0, createChunks(buffer, {{40, 8}, {60, 14}, {50, 11}}));
+  writer.writeGroup(1, 2, createMetadataSectionCallback(fileIndex));
+
+  writer.newStripe(1);
+  writer.addStream(0, createChunks(buffer, {{30, 6}, {30, 7}, {40, 9}}));
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+  writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
+
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 2);
+  const auto* root = flatbuffers::GetRoot<serialization::ChunkStats>(
+      fileIndex.rootIndexData.data());
+  ASSERT_NE(root, nullptr);
+  ASSERT_NE(root->stripe_indexes(), nullptr);
+  EXPECT_EQ(root->stripe_indexes()->size(), 2);
+
+  auto firstGroup = index::ChunkStatsGroup::create(
+      GetParam(),
+      0,
+      2,
+      copyMetadata(fileIndex.groupMetadataSections[0]),
+      *pool_);
+  auto firstStripe = firstGroup->createStreamIndex(0, 0, 22);
+  ASSERT_NE(firstStripe, nullptr);
+  const auto firstLocation = firstStripe->lookupChunk(50);
+  EXPECT_EQ(firstLocation.chunkOffset, 10);
+  EXPECT_EQ(firstLocation.chunkSize, 12);
+  EXPECT_EQ(firstLocation.rowOffset, 50);
+
+  auto secondStripe = firstGroup->createStreamIndex(1, 0, 33);
+  ASSERT_NE(secondStripe, nullptr);
+  const auto secondLocation = secondStripe->lookupChunk(40);
+  EXPECT_EQ(secondLocation.chunkOffset, 8);
+  EXPECT_EQ(secondLocation.chunkSize, 14);
+  EXPECT_EQ(secondLocation.rowOffset, 40);
+
+  auto secondGroup = index::ChunkStatsGroup::create(
+      GetParam(),
+      2,
+      1,
+      copyMetadata(fileIndex.groupMetadataSections[1]),
+      *pool_);
+  auto thirdStripe = secondGroup->createStreamIndex(2, 0, 22);
+  ASSERT_NE(thirdStripe, nullptr);
+  const auto thirdLocation = thirdStripe->lookupChunk(60);
+  EXPECT_EQ(thirdLocation.chunkOffset, 13);
+  EXPECT_EQ(thirdLocation.chunkSize, 9);
+  EXPECT_EQ(thirdLocation.rowOffset, 60);
+}
 
 TEST_F(ChunkStatsWriterTest, singleStripe) {
   auto& writer = createWriter();
@@ -327,15 +562,33 @@ TEST_F(ChunkStatsWriterTest, v2MultipleStreamsAndStripes) {
   ASSERT_NE(group->stream_chunk_rows(), nullptr);
   ASSERT_NE(group->stream_chunk_offsets(), nullptr);
   ASSERT_NE(group->stream_chunk_null_counts(), nullptr);
-  EXPECT_THAT(
-      decode(*group->stream_chunk_rows()),
-      testing::ElementsAre(10, 30, 40, 30, 10, 25, 40));
+  const auto chunkRows = decode(*group->stream_chunk_rows());
+  EXPECT_THAT(chunkRows, testing::ElementsAre(10, 30, 40, 30, 10, 25, 40));
   EXPECT_THAT(
       decode(*group->stream_chunk_offsets()),
       testing::ElementsAre(0, 4, 0, 0, 0, 2, 5));
   EXPECT_THAT(
       decode(*group->stream_chunk_null_counts()),
       testing::ElementsAre(1, 2, 4, 3, 0, 5, 1));
+
+  // Binary search requires cumulative row ends to be non-decreasing within
+  // each stream and stripe.
+  uint32_t streamBaseOffset{0};
+  for (uint32_t streamId = 0; streamId < group->stream_count(); ++streamId) {
+    uint32_t previousChunkCount{0};
+    for (uint32_t stripeOffset = 0; stripeOffset < 2; ++stripeOffset) {
+      const auto chunkCount = chunkCounts[streamId * 2 + stripeOffset];
+      for (uint32_t chunkOffset = previousChunkCount + 1;
+           chunkOffset < chunkCount;
+           ++chunkOffset) {
+        EXPECT_LE(
+            chunkRows[streamBaseOffset + chunkOffset - 1],
+            chunkRows[streamBaseOffset + chunkOffset]);
+      }
+      previousChunkCount = chunkCount;
+    }
+    streamBaseOffset += previousChunkCount;
+  }
 }
 
 TEST_F(ChunkStatsWriterTest, v2EmptyStream) {
@@ -362,6 +615,237 @@ TEST_F(ChunkStatsWriterTest, v2EmptyStream) {
   EXPECT_THAT(decode(*group->stream_chunk_rows()), testing::IsEmpty());
   EXPECT_THAT(decode(*group->stream_chunk_offsets()), testing::IsEmpty());
   EXPECT_THAT(decode(*group->stream_chunk_null_counts()), testing::IsEmpty());
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+  EXPECT_EQ(
+      chunkStats->createStreamIndex(
+          /*stripe=*/0, /*streamId=*/0, /*streamSize=*/0),
+      nullptr);
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsMismatchedChunkCounts) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(1);
+  writer.addStream(0, createChunks(buffer, {{50, 10}, {50, 12}}));
+  writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
+
+  ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
+  auto& groupData = fileIndex.groupMetadataSections.front();
+  const auto* group =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(groupData.data());
+  ASSERT_NE(group->stream_chunk_counts(), nullptr);
+  auto* chunkCounts =
+      const_cast<flatbuffers::Vector<uint32_t>*>(group->stream_chunk_counts());
+  chunkCounts->Mutate(0, 3);
+
+  NIMBLE_ASSERT_THROW(
+      index::ChunkStatsGroup::create(
+          ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+      "row count");
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsDecreasingChunkCounts) {
+  const std::array<uint32_t, 2> chunkCounts{2, 1};
+  const std::array<uint32_t, 1> rows{10};
+  const std::array<uint32_t, 1> offsets{0};
+  const std::array<uint32_t, 1> nullCounts{0};
+  const auto groupData =
+      createV2GroupData(chunkCounts, rows, offsets, nullCounts);
+
+  NIMBLE_ASSERT_THROW(
+      index::ChunkStatsGroup::create(
+          ChunkStatsVersion::kV2,
+          /*firstStripe=*/0,
+          /*stripeCount=*/2,
+          copyMetadata(groupData),
+          *pool_),
+      "stream chunk counts must be non-decreasing");
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkOffsets) {
+  const std::array<uint32_t, 1> chunkCounts{2};
+  const std::array<uint32_t, 2> rows{10, 20};
+  const std::array<uint32_t, 2> nullCounts{0, 0};
+
+  {
+    const std::array<uint32_t, 2> offsets{5, 4};
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2,
+        /*firstStripe=*/0,
+        /*stripeCount=*/1,
+        copyMetadata(createV2GroupData(chunkCounts, rows, offsets, nullCounts)),
+        *pool_);
+    auto streamIndex = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+    ASSERT_NE(streamIndex, nullptr);
+    NIMBLE_ASSERT_THROW(streamIndex->lookupChunk(0), "(5 vs. 4)");
+  }
+
+  {
+    const std::array<uint32_t, 2> offsets{0, 11};
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2,
+        /*firstStripe=*/0,
+        /*stripeCount=*/1,
+        copyMetadata(createV2GroupData(chunkCounts, rows, offsets, nullCounts)),
+        *pool_);
+    auto streamIndex = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+    ASSERT_NE(streamIndex, nullptr);
+    NIMBLE_ASSERT_THROW(streamIndex->lookupChunk(0), "(11 vs. 10)");
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsInvalidRootShape) {
+  {
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata("invalid"), *pool_),
+        "Invalid V2 chunk stats metadata");
+  }
+
+  const std::array<uint32_t, 0> emptyValues{};
+  const auto emptyEncoded = encodeTrivial(emptyValues);
+  {
+    const auto groupData = createV2GroupDataFromEncoded(
+        emptyValues,
+        emptyEncoded,
+        emptyEncoded,
+        emptyEncoded,
+        /*streamCount=*/0);
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        "V2 chunk stats has no streams");
+  }
+
+  {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto encodedStream = serialization::CreateEncodedStream(
+        builder, builder.CreateVector(emptyEncoded));
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            /*stream_count=*/1,
+            {},
+            encodedStream,
+            encodedStream,
+            encodedStream));
+    const std::string groupData{
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        "Missing V2 stream chunk counts");
+  }
+
+  {
+    const std::array<uint32_t, 3> chunkCounts{0, 0, 0};
+    const auto groupData = createV2GroupDataFromEncoded(
+        chunkCounts,
+        emptyEncoded,
+        emptyEncoded,
+        emptyEncoded,
+        /*streamCount=*/2);
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 2, copyMetadata(groupData), *pool_),
+        "stream chunk count size does not match");
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2RequiresEncodedStreams) {
+  const std::array<uint32_t, 1> chunkCounts{2};
+  const std::array<uint32_t, 2> values{0, 1};
+  const auto encoded = encodeTrivial(values);
+
+  constexpr std::array<std::string_view, 3> kFieldNames{
+      "chunk rows", "chunk offsets", "chunk null counts"};
+  for (size_t missingIndex = 0; missingIndex < kFieldNames.size();
+       ++missingIndex) {
+    SCOPED_TRACE(kFieldNames[missingIndex]);
+    flatbuffers::FlatBufferBuilder builder;
+    const auto encodedStream = serialization::CreateEncodedStream(
+        builder, builder.CreateVector(encoded));
+    std::array<flatbuffers::Offset<serialization::EncodedStream>, 3>
+        encodedStreams{encodedStream, encodedStream, encodedStream};
+    encodedStreams[missingIndex] = {};
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            /*stream_count=*/1,
+            builder.CreateVector(chunkCounts.data(), chunkCounts.size()),
+            encodedStreams[0],
+            encodedStreams[1],
+            encodedStreams[2]));
+    const std::string groupData{
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        fmt::format("Missing encoded {}", kFieldNames[missingIndex]));
+  }
+
+  {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto missingDataStream = serialization::CreateEncodedStream(
+        builder, flatbuffers::Offset<flatbuffers::Vector<uint8_t>>{});
+    const auto validStream = serialization::CreateEncodedStream(
+        builder, builder.CreateVector(encoded));
+    builder.Finish(
+        serialization::CreateStripeChunkStatsV2(
+            builder,
+            /*stream_count=*/1,
+            builder.CreateVector(chunkCounts.data(), chunkCounts.size()),
+            missingDataStream,
+            validStream,
+            validStream));
+    const std::string groupData{
+        reinterpret_cast<const char*>(builder.GetBufferPointer()),
+        builder.GetSize()};
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        "Missing encoded chunk rows data");
+  }
+}
+
+TEST_F(ChunkStatsWriterTest, v2RejectsInvalidEncodedStreamPrefix) {
+  const std::array<uint32_t, 1> chunkCounts{2};
+  const std::array<uint32_t, 2> values{0, 1};
+  const auto validData = encodeTrivial(values);
+  const auto expectInvalidRows = [&](const std::vector<uint8_t>& rows,
+                                     std::string_view error) {
+    const auto groupData =
+        createV2GroupDataFromEncoded(chunkCounts, rows, validData, validData);
+    NIMBLE_ASSERT_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        error);
+  };
+
+  {
+    std::vector<uint8_t> tooSmall(EncodingPrefix::kFixedPrefixSize - 1);
+    expectInvalidRows(tooSmall, "Encoded chunk rows array is too small");
+  }
+
+  {
+    auto invalidDataType = validData;
+    invalidDataType[EncodingPrefix::kDataTypeOffset] =
+        static_cast<uint8_t>(DataType::Int32);
+    expectInvalidRows(invalidDataType, "invalid data type");
+  }
 }
 
 TEST_F(ChunkStatsWriterTest, multipleStripeGroups) {
@@ -481,26 +965,26 @@ TEST_F(ChunkStatsWriterTest, emptyStream) {
   EXPECT_EQ(chunkStats->createStreamIndex(0, 3, 0), nullptr);
 }
 
-TEST_F(ChunkStatsWriterTest, emptyFileNoStripeGroups) {
-  auto& writer = createWriter();
+TEST_P(ChunkStatsReaderVersionTest, emptyFileNoStripeGroups) {
+  auto& writer = createWriter(GetParam());
   TestChunkFileIndex fileIndex;
 
   // No stripes written — writeGroup() is never called.
-  writer.writeRoot(writeRootCallback(fileIndex));
+  writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
 
   // No chunk stats section should be written.
   EXPECT_TRUE(fileIndex.rootIndexData.empty());
 }
 
-TEST_F(ChunkStatsWriterTest, finalization) {
-  auto& writer = createWriter();
+TEST_P(ChunkStatsReaderVersionTest, finalization) {
+  auto& writer = createWriter(GetParam());
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
   writer.newStripe(1);
   writer.addStream(0, createChunks(buffer, {{50, 10}, {50, 10}}));
   writer.writeGroup(1, 1, createMetadataSectionCallback(fileIndex));
-  writer.writeRoot(writeRootCallback(fileIndex));
+  writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
 
   // After finalization, all mutation methods should throw.
   NIMBLE_ASSERT_THROW(
@@ -516,8 +1000,8 @@ TEST_F(ChunkStatsWriterTest, finalization) {
       "ChunkStatsWriter has been finalized");
 }
 
-TEST_F(ChunkStatsWriterTest, addStreamIndexValidation) {
-  auto& writer = createWriter();
+TEST_P(ChunkStatsReaderVersionTest, addStreamIndexValidation) {
+  auto& writer = createWriter(GetParam());
   Buffer buffer{*pool_};
 
   // addStream before newStripe should fail.
@@ -605,7 +1089,7 @@ TEST_F(ChunkStatsWriterTest, multipleStripesInMultipleGroups) {
   }
 }
 
-TEST_F(ChunkStatsWriterTest, minAvgChunksPerStream) {
+TEST_P(ChunkStatsReaderVersionTest, minAvgChunksPerStream) {
   // Test that minAvgChunksPerStream controls group-level skipping.
   // Setup: 3 groups with different average chunks per stream.
   //   Group 0: 1 stripe, 2 streams. Stream 0: 3 chunks, Stream 1: 1 chunk.
@@ -651,7 +1135,7 @@ TEST_F(ChunkStatsWriterTest, minAvgChunksPerStream) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    auto& writer = createWriter(testData.threshold);
+    auto& writer = createWriter(GetParam(), testData.threshold);
     Buffer buffer{*pool_};
     TestChunkFileIndex fileIndex;
 
@@ -673,7 +1157,7 @@ TEST_F(ChunkStatsWriterTest, minAvgChunksPerStream) {
     writer.addStream(1, createChunks(buffer, {{120, 35}}));
     writer.writeGroup(2, 1, createMetadataSectionCallback(fileIndex));
 
-    writer.writeRoot(writeRootCallback(fileIndex));
+    writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
 
     ASSERT_EQ(
         fileIndex.groupMetadataSections.size(), testData.expectedWrittenGroups);
@@ -704,8 +1188,8 @@ TEST_F(ChunkStatsWriterTest, minAvgChunksPerStream) {
   }
 }
 
-TEST_F(ChunkStatsWriterTest, uncompressedSizeRoundtrip) {
-  auto& writer = createWriter(/*minAvgChunksPerStream=*/0);
+TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeRoundtrip) {
+  auto& writer = createWriter(GetParam(), /*minAvgChunksPerStream=*/0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -731,7 +1215,7 @@ TEST_F(ChunkStatsWriterTest, uncompressedSizeRoundtrip) {
   writer.addStream(1, createChunks(buffer, {{50, 15}, {50, 18}}));
   writer.writeGroup(2, 1, compressedCallback);
 
-  writer.writeRoot(writeRootCallback(fileIndex));
+  writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
 
   ASSERT_EQ(fileIndex.groupMetadataSections.size(), 2);
   ASSERT_FALSE(fileIndex.rootIndexData.empty());
@@ -826,8 +1310,8 @@ TEST_F(ChunkStatsWriterTest, missingUncompressedSizeBackwardCompat) {
 
 // Verifies that uncompressed sections get uncompressedSize == size in the
 // FlatBuffer, and the reader correctly recovers it.
-TEST_F(ChunkStatsWriterTest, uncompressedSizeForUncompressedSections) {
-  auto& writer = createWriter(/*minAvgChunksPerStream=*/0);
+TEST_P(ChunkStatsReaderVersionTest, uncompressedSizeForUncompressedSections) {
+  auto& writer = createWriter(GetParam(), /*minAvgChunksPerStream=*/0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
 
@@ -836,7 +1320,7 @@ TEST_F(ChunkStatsWriterTest, uncompressedSizeForUncompressedSections) {
   writer.addStream(1, createChunks(buffer, {{60, 20}, {40, 12}}));
   writer.writeGroup(2, 1, createMetadataSectionCallback(fileIndex));
 
-  writer.writeRoot(writeRootCallback(fileIndex));
+  writer.writeRoot(writeRootCallback(fileIndex, sectionName(GetParam())));
 
   ASSERT_EQ(fileIndex.groupMetadataSections.size(), 1);
   ASSERT_FALSE(fileIndex.rootIndexData.empty());
@@ -871,5 +1355,13 @@ TEST_F(ChunkStatsWriterTest, uncompressedSizeForUncompressedSections) {
   EXPECT_TRUE(section.uncompressedSize().has_value());
   EXPECT_EQ(section.uncompressedSize().value(), section.size());
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ChunkStatsVersions,
+    ChunkStatsReaderVersionTest,
+    ::testing::Values(ChunkStatsVersion::kV1, ChunkStatsVersion::kV2),
+    [](const ::testing::TestParamInfo<ChunkStatsVersion>& info) {
+      return info.param == ChunkStatsVersion::kV1 ? "V1" : "V2";
+    });
 
 } // namespace facebook::nimble::test

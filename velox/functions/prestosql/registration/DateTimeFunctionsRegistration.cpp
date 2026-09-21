@@ -334,6 +334,18 @@ void registerSimpleFunctions(const std::string& prefix) {
       TimeWithTimezone,
       Varchar>({prefix + "at_timezone"});
 
+  registerFunction<
+      AtTimezoneConvertToTimestampFunction,
+      Timestamp,
+      TimestampWithTimezone,
+      Varchar>({prefix + "at_timezone_convert"});
+
+  registerFunction<
+      AtTimezoneTimeWithTimezoneFunction,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      Varchar>({prefix + "at_timezone_convert"});
+
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"});
 

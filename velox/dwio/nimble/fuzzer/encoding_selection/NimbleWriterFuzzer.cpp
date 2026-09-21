@@ -1596,7 +1596,7 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
       continue;
     }
 
-    std::vector<TabletReader::StreamLocation> locations(streamCount);
+    std::vector<TabletReader::StreamMetadata> locations(streamCount);
     tablet->streamLocations(stripeIdentifier, locations);
     const uint64_t stripeOffset = tablet->stripeOffset(stripe);
     const uint64_t stripeEnd = stripe + 1 < tablet->stripeCount()

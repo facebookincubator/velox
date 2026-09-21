@@ -71,7 +71,7 @@ FileLayout FileLayout::create(
   // Per-stripe info
   const auto stripeCount = tablet->stripeCount();
   layout.stripesInfo.reserve(stripeCount);
-  std::vector<TabletReader::StreamLocation> locationsScratch;
+  std::vector<TabletReader::StreamMetadata> locationsScratch;
   for (uint32_t i = 0; i < stripeCount; ++i) {
     auto stripeIdentifier = tablet->stripeIdentifier(i);
     locationsScratch.resize(tablet->streamCount(stripeIdentifier));

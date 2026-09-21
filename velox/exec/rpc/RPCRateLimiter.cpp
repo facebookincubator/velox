@@ -392,8 +392,11 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
 // --- RPCRateLimiterRegistry ---
 
 RPCRateLimiterRegistry& RPCRateLimiterRegistry::global() {
-  static RPCRateLimiterRegistry registry;
-  return registry;
+  // Intentionally leaked: tokens are captured into continuations that can be
+  // destroyed during process teardown, so the registry must outlive static
+  // destruction for the process-lifetime guarantee above to hold.
+  static auto* registry = new RPCRateLimiterRegistry();
+  return *registry;
 }
 
 RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& tierKey) {
