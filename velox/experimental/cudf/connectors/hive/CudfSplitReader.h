@@ -134,6 +134,10 @@ class CudfSplitReader : public NvtxHelper {
   // Return the filter matching post-read physical decimal types.
   const cudf::ast::expression* postReadFilter() const;
 
+  bool preserveCompactDecimals() const {
+    return preserveCompactDecimals_;
+  }
+
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 

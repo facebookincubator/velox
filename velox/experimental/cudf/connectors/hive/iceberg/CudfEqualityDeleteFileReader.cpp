@@ -51,8 +51,11 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
     const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
     ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
-    const std::string& connectorId)
-    : equalityColumnNames_(equalityColumnNames) {
+    const std::string& connectorId,
+    bool preserveCompactDecimals)
+    : equalityColumnNames_(equalityColumnNames),
+      equalityColumnTypes_(equalityColumnTypes),
+      preserveCompactDecimals_(preserveCompactDecimals) {
   VELOX_CHECK(
       deleteFile.content == velox_iceberg::FileContent::kEqualityDeletes,
       "Expected equality delete file but got content type: {}",
@@ -187,7 +190,7 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
       cudf::io::read_parquet(options, stream, mr).tbl,
       equalityColumnTypes,
       /*numPrependedColumns=*/0,
-      /*preserveCompactDecimals=*/false,
+      preserveCompactDecimals_,
       stream,
       mr);
   stream.sync();
@@ -204,8 +207,13 @@ void CudfEqualityDeleteFileReader::buildHashJoin(cuda::stream_ref stream) {
   // Convert host rows to a GPU table if we came through the non-Parquet path.
   if (!deleteKeyTable_) {
     VELOX_CHECK_NOT_NULL(deleteRows_);
-    deleteKeyTable_ =
-        with_arrow::toCudfTable(deleteRows_, pool_, stream, get_temp_mr());
+    deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
+        with_arrow::toCudfTable(deleteRows_, pool_, stream, get_temp_mr()),
+        equalityColumnTypes_,
+        /*numPrependedColumns=*/0,
+        preserveCompactDecimals_,
+        stream,
+        get_temp_mr());
     VELOX_CHECK_NOT_NULL(deleteKeyTable_);
     deleteRows_.reset();
   }
