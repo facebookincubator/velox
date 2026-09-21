@@ -146,11 +146,6 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Logical and split-specific physical AST storage for subfield filters.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
-  std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
-  cudf::ast::tree pushdownFilterTree_;
-  std::vector<std::unique_ptr<cudf::scalar>> postReadFilterScalars_;
-  cudf::ast::tree postReadFilterTree_;
-
   // The table handle's subfield filters, merged with the ones extracted from
   // its remaining filter.
   common::SubfieldFilters subfieldFilters_;

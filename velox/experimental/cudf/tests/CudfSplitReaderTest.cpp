@@ -265,7 +265,9 @@ TEST_F(CudfSplitReaderTest, buildsPushdownFilterForEachSplitPreparation) {
   size_t builderCalls = 0;
   std::vector<size_t> schemaSizes;
   reader.setPushdownFilterBuilder(
-      [&](const cudf::io::parquet::FileMetaData& metadata) {
+      [&](const cudf::io::parquet::FileMetaData& metadata,
+          cudf::ast::tree&,
+          std::vector<std::unique_ptr<cudf::scalar>>&) {
         schemaSizes.push_back(metadata.schema.size());
         return builderCalls++ == 0
             ? static_cast<cudf::ast::expression const*>(&firstSplitFilter)

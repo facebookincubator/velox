@@ -80,7 +80,9 @@ class CudfSplitReader : public NvtxHelper {
   virtual ~CudfSplitReader();
 
   using SplitFilterBuilder = std::function<cudf::ast::expression const*(
-      const cudf::io::parquet::FileMetaData&)>;
+      const cudf::io::parquet::FileMetaData&,
+      cudf::ast::tree&,
+      std::vector<std::unique_ptr<cudf::scalar>>&)>;
 
   /// Sets a builder for a split-specific pushdown filter. The builder is
   /// invoked after the Parquet footer is read and before reader options are
@@ -251,7 +253,11 @@ class CudfSplitReader : public NvtxHelper {
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
   SplitFilterBuilder pushdownFilterBuilder_;
+  std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
+  cudf::ast::tree pushdownFilterTree_;
   SplitFilterBuilder postReadFilterBuilder_;
+  std::vector<std::unique_ptr<cudf::scalar>> postReadFilterScalars_;
+  cudf::ast::tree postReadFilterTree_;
   const cudf::ast::expression* postReadFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
 

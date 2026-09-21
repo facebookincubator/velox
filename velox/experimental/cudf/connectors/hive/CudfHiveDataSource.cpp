@@ -329,28 +329,28 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   if (hasDecimalSubfieldFilter_) {
     const auto readerFilterType = getTableRowType();
     cudfSplitReader_->setPushdownFilterBuilder(
-        [this,
-         readerFilterType](const cudf::io::parquet::FileMetaData& metadata)
+        [this, readerFilterType](
+            const cudf::io::parquet::FileMetaData& metadata,
+            cudf::ast::tree& filterTree,
+            std::vector<std::unique_ptr<cudf::scalar>>& filterScalars)
             -> cudf::ast::expression const* {
-          pushdownFilterTree_ = cudf::ast::tree{};
-          pushdownFilterScalars_.clear();
           const auto decimalTypes =
               parquetDecimalTypes(metadata.schema, readerFilterType);
           return &createAstFromSubfieldFilters(
               subfieldFilters_,
-              pushdownFilterTree_,
-              pushdownFilterScalars_,
+              filterTree,
+              filterScalars,
               readerFilterType,
               &decimalTypes);
         });
     if (cudfHiveConfig_->preserveCompactDecimalsSession(
             connectorQueryCtx_->sessionProperties())) {
       cudfSplitReader_->setPostReadFilterBuilder(
-          [this,
-           readerFilterType](const cudf::io::parquet::FileMetaData& metadata)
+          [this, readerFilterType](
+              const cudf::io::parquet::FileMetaData& metadata,
+              cudf::ast::tree& filterTree,
+              std::vector<std::unique_ptr<cudf::scalar>>& filterScalars)
               -> cudf::ast::expression const* {
-            postReadFilterTree_ = cudf::ast::tree{};
-            postReadFilterScalars_.clear();
             SubfieldFilterDecimalTypes decimalTypes;
             for (const auto& [subfield, _] : subfieldFilters_) {
               const auto& fieldName = subfield.toString();
@@ -368,8 +368,8 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
             }
             return &createAstFromSubfieldFilters(
                 subfieldFilters_,
-                postReadFilterTree_,
-                postReadFilterScalars_,
+                filterTree,
+                filterScalars,
                 readerFilterType,
                 &decimalTypes);
           });
