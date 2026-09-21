@@ -39,11 +39,19 @@ using FunctionFactory = std::function<std::unique_ptr<Function>()>;
 struct FunctionEntry {
   FunctionEntry(
       const std::shared_ptr<const Metadata>& metadata,
-      const FunctionFactory& factory)
-      : metadata_{metadata}, factory_{factory} {}
+      const FunctionFactory& factory,
+      std::string_view resolvedOwner)
+      : metadata_{metadata}, factory_{factory}, owner_{resolvedOwner} {}
 
   const Metadata& getMetadata() const {
     return *metadata_;
+  }
+
+  /// The owner resolved when this entry was registered: the owner the UDF
+  /// declares, or the default passed by the caller. Metadata is shared by every
+  /// registration of a UDF type, so the owner cannot live there.
+  std::string_view owner() const {
+    return owner_;
   }
 
   std::unique_ptr<Function> createFunction() const {
@@ -53,6 +61,7 @@ struct FunctionEntry {
  private:
   const std::shared_ptr<const Metadata> metadata_;
   const FunctionFactory factory_;
+  const std::string_view owner_;
 };
 
 using SignatureMap = std::unordered_map<
@@ -68,24 +77,26 @@ class SimpleFunctionRegistry {
   /// 'overwrite' is false, the current UDF is not registered with this alias.
   /// This method returns true if all 'aliases' are registered successfully. It
   /// returns false if any alias in 'aliases' already exists in the registry and
-  /// is not overwritten.
+  /// is not overwritten. 'defaultOwner' is used only when the UDF does not
+  /// declare an owner of its own.
   template <typename UDF>
   bool registerFunction(
       const std::vector<std::string>& aliases,
       const std::vector<exec::SignatureVariable>& constraints,
-      bool overwrite) {
+      bool overwrite,
+      std::string_view defaultOwner = {}) {
     const auto& metadata = singletonUdfMetadata<typename UDF::Metadata>(
         UDF::is_default_null_behavior, constraints);
     const auto factory = []() { return std::make_unique<UDF>(); };
 
     if (aliases.empty()) {
       return registerFunctionInternal(
-          metadata->getName(), metadata, factory, overwrite);
+          metadata->getName(), metadata, factory, overwrite, defaultOwner);
     } else {
       bool registered = true;
       for (const auto& name : aliases) {
-        registered &=
-            registerFunctionInternal(name, metadata, factory, overwrite);
+        registered &= registerFunctionInternal(
+            name, metadata, factory, overwrite, defaultOwner);
       }
       return registered;
     }
@@ -147,7 +158,7 @@ class SimpleFunctionRegistry {
           functionEntry_.getMetadata().isDeterministic(),
           functionEntry_.getMetadata().defaultNullBehavior(),
           false,
-          functionEntry_.getMetadata().owner()};
+          functionEntry_.owner()};
     }
 
    private:
@@ -189,7 +200,8 @@ class SimpleFunctionRegistry {
       const std::string& name,
       const std::shared_ptr<const Metadata>& metadata,
       const FunctionFactory& factory,
-      bool overwrite);
+      bool overwrite,
+      std::string_view defaultOwner);
 
   folly::Synchronized<FunctionMap> registeredFunctions_;
 };
@@ -205,14 +217,17 @@ SimpleFunctionRegistry& mutableSimpleFunctions();
 /// scale for decimal result types.
 /// @param overwrite If true, overwrites existing entries in the function
 /// registry with the same names.
+/// @param defaultOwner Owner to record for the function when it does not
+/// declare an owner of its own.
 template <typename UDFHolder>
 bool registerSimpleFunction(
     const std::vector<std::string>& names,
     const std::vector<exec::SignatureVariable>& constraints,
-    bool overwrite) {
+    bool overwrite,
+    std::string_view defaultOwner = {}) {
   return mutableSimpleFunctions()
       .registerFunction<SimpleFunctionAdapterFactoryImpl<UDFHolder>>(
-          names, constraints, overwrite);
+          names, constraints, overwrite, defaultOwner);
 }
 
 } // namespace facebook::velox::exec
