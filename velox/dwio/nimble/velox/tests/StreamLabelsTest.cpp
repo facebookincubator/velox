@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/StreamLabels.h"
@@ -155,6 +156,34 @@ TEST(StreamLabelsTest, flatMap) {
   EXPECT_EQ(
       labels.streamLabel(fm.childAt(1)->asScalar().scalarDescriptor().offset()),
       "/0/key2");
+}
+
+TEST(StreamLabelsTest, hybridFlatMap) {
+  nimble::SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap =
+      builder.createHybridFlatMapTypeBuilder(nimble::ScalarKind::Int32);
+  auto groupValue = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
+  const auto groupValueOffset = groupValue->scalarDescriptor().offset();
+  const auto groupStreams = hybridMap->addGroup(0, {"1"}, groupValue);
+  auto defaultValue =
+      builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
+  const auto defaultStreams = hybridMap->addGroup(
+      nimble::HybridFlatMap::kDefaultGroupId, {}, defaultValue);
+  root->addChild("features", hybridMap);
+
+  auto labels = buildLabels(builder);
+  const auto schema = nimble::SchemaReader::getSchema(builder.schemaNodes());
+  const auto& hybridMapType = schema->asRow().childAt(0)->asHybridFlatMap();
+
+  EXPECT_EQ(labels.streamLabel(hybridMapType.nullsDescriptor().offset()), "/0");
+  EXPECT_EQ(labels.streamLabel(groupStreams.keyDescriptor.offset()), "/0");
+  EXPECT_EQ(labels.streamLabel(groupStreams.inMapDescriptor.offset()), "/0");
+  EXPECT_EQ(labels.streamLabel(groupValueOffset), "/0");
+  EXPECT_EQ(labels.streamLabel(defaultStreams.keyDescriptor.offset()), "/0");
+  EXPECT_EQ(labels.streamLabel(defaultStreams.inMapDescriptor.offset()), "/0");
+  EXPECT_EQ(
+      labels.streamLabel(defaultValue->scalarDescriptor().offset()), "/0");
 }
 
 TEST(StreamLabelsTest, timestampMicroNano) {

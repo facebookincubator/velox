@@ -59,6 +59,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       return 10;
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       return 1;
     case Kind::Array:
     case Kind::ArrayWithOffsets:
@@ -166,12 +167,12 @@ void BatchedStreamDecoder::skip(uint32_t count) {
   }
 
   // For non-in-map streams, an empty `streamSegments_` is only valid
-  // for Row/FlatMap null streams that the writer omitted (all-non-null).
+  // for complex-type null streams that the writer omitted (all-non-null).
   // Nothing decoded → nothing to advance; just bump the cursor.
   if (FOLLY_UNLIKELY(!isInMapStream() && streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap(),
-        "Empty streamSegments_ only valid for Row/FlatMap null streams");
+        type_->isRow() || type_->isFlatMap() || type_->isHybridFlatMap(),
+        "Empty streamSegments_ only valid for complex-type null streams");
     currentRow_ += count;
     return;
   }
@@ -381,12 +382,12 @@ uint32_t BatchedStreamDecoder::denseRead(
   const auto width = typeStorageWidth_;
   if (FOLLY_UNLIKELY(streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap(),
+        type_->isRow() || type_->isFlatMap() || type_->isHybridFlatMap(),
         "streamSegments_ is empty for unexpected stream type={}",
         type_->kind());
     NIMBLE_CHECK_EQ(
-        width, sizeof(bool), "Row/FlatMap null stream should be bool");
-    // All-non-null Row/FlatMap null streams are omitted on the wire and
+        width, sizeof(bool), "Complex-type null stream should be bool");
+    // All-non-null complex-type null streams are omitted on the wire and
     // reconstructed as all-true here (no null rows).
     std::fill_n(static_cast<bool*>(output), count, true);
     return count;

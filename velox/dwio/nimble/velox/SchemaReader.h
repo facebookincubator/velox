@@ -28,8 +28,9 @@
 // Schema reader provides a strongly typed, tree like, reader friendly facade on
 // top of a flat tablet schema.
 // Schema stored in a tablet footer is a DFS representation of a type tree.
-// Reconstructing a tree out of this flat representation require deep knowledge
-// of how each complex type (rows, arrays, maps and flat maps) are laid out.
+// Reconstructing a tree out of this flat representation requires deep
+// knowledge of how each complex type (rows, arrays, maps, FlatMaps, and Hybrid
+// FlatMaps) is laid out.
 // Using this class, it is possible to reconstruct an easy to use tree
 // representation on the logical type tree.
 // The main usage of this class is to allow efficient retrieval of subsets of
@@ -46,6 +47,7 @@ class ArrayType;
 class ArrayWithOffsetsType;
 class MapType;
 class FlatMapType;
+class HybridFlatMapType;
 class SlidingWindowMapType;
 
 class Type {
@@ -59,6 +61,7 @@ class Type {
   bool isArrayWithOffsets() const;
   bool isMap() const;
   bool isFlatMap() const;
+  bool isHybridFlatMap() const;
   bool isSlidingWindowMap() const;
 
   const ScalarType& asScalar() const;
@@ -68,6 +71,7 @@ class Type {
   const ArrayWithOffsetsType& asArrayWithOffsets() const;
   const MapType& asMap() const;
   const FlatMapType& asFlatMap() const;
+  const HybridFlatMapType& asHybridFlatMap() const;
   const SlidingWindowMapType& asSlidingWindowMap() const;
 
   /// Returns the per-type string-keyed attribute bag. Insertion order
@@ -238,6 +242,58 @@ class FlatMapType : public Type {
   std::vector<std::shared_ptr<const Type>> children_;
 };
 
+class HybridFlatMapType : public Type {
+ public:
+  struct Group {
+    /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
+    uint32_t groupId;
+    /// Feature keys assigned to this group. Empty only for Default.
+    std::vector<std::string> groupKeys;
+    /// Actual keys represented by the following in-map segments.
+    StreamDescriptor keyDescriptor;
+    /// Key-major row-presence stream.
+    StreamDescriptor inMapDescriptor;
+    /// Complete value subtree owned by this physical group.
+    std::shared_ptr<const Type> valueType;
+  };
+
+  HybridFlatMapType(
+      StreamDescriptor nullsDescriptor,
+      ScalarKind keyScalarKind,
+      std::vector<Group> groups,
+      std::vector<std::pair<std::string, std::string>> attributes = {});
+
+  /// Returns the map-level null stream descriptor.
+  const StreamDescriptor& nullsDescriptor() const;
+
+  /// Returns the scalar type used by map keys and group keys streams.
+  ScalarKind keyScalarKind() const;
+
+  /// Returns the number of physical groups, including Default.
+  size_t groupCount() const;
+
+  /// Returns the group at zero-based schema-order `index`. The index is an
+  /// ordinal, not a group ID; use `findGroup()` for group-key lookup and
+  /// `defaultGroup()` for Default.
+  const Group& groupAt(size_t index) const;
+
+  /// Returns the reserved Default group.
+  const Group& defaultGroup() const;
+
+  /// Returns the schema-order index of the configured group containing `key`.
+  /// Returns `std::nullopt` when no configured group contains it, including
+  /// both keys routed to Default and keys unknown to the schema.
+  std::optional<size_t> findGroup(std::string_view key) const;
+
+  /// Returns the common logical value type using Default's real subtree.
+  const Type& valueType() const;
+
+ private:
+  StreamDescriptor nullsDescriptor_;
+  const ScalarKind keyScalarKind_;
+  std::vector<Group> groups_;
+};
+
 class ArrayWithOffsetsType : public Type {
  public:
   ArrayWithOffsetsType(
@@ -381,6 +437,17 @@ bool visitValueStreamLeaves(const TypeT& type, Visitor& visit) {
       }
       return false;
     }
+    case Kind::HybridFlatMap: {
+      const auto& hybridFlatMap = type.asHybridFlatMap();
+      for (size_t i = 0; i < hybridFlatMap.groupCount(); ++i) {
+        if (visitValueStreamLeaves(
+                detail::derefChild(hybridFlatMap.groupAt(i).valueType),
+                visit)) {
+          return true;
+        }
+      }
+      return false;
+    }
     default:
       NIMBLE_UNREACHABLE("Unsupported type kind: {}", type.kind());
   }
@@ -448,6 +515,21 @@ bool visitPresenceStreamOffsets(const Type& type, Visitor& visit) {
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
         if (visit(flatMap.inMapDescriptorAt(i).offset()) ||
             visitPresenceStreamOffsets(*flatMap.childAt(i), visit)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    case Kind::HybridFlatMap: {
+      const auto& hybridFlatMap = type.asHybridFlatMap();
+      if (visit(hybridFlatMap.nullsDescriptor().offset())) {
+        return true;
+      }
+      for (size_t i = 0; i < hybridFlatMap.groupCount(); ++i) {
+        const auto& group = hybridFlatMap.groupAt(i);
+        if (visit(group.keyDescriptor.offset()) ||
+            visit(group.inMapDescriptor.offset()) ||
+            visitPresenceStreamOffsets(*group.valueType, visit)) {
           return true;
         }
       }
