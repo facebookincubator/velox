@@ -274,20 +274,22 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   /// Returns the token provider for planNodeId, falling back to the
   /// query-level default if no planNode-specific provider is set.
-  /// Pass an empty planNodeId (the default) to retrieve the query-level
-  /// provider directly.  Called from driver threads, concurrently with
+  /// Pass std::nullopt (the default) to retrieve the query-level provider
+  /// directly.  Called from driver threads, concurrently with
   /// setFsTokenProvider().
-  /// Returns nullptr if planNodeId is non-empty and no provider is set
-  /// for it.
+  /// Returns nullptr if planNodeId is set but no provider is found for it.
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider(
-      const std::string& planNodeId = "") const {
+      std::optional<std::string> planNodeId = std::nullopt) const {
+    if (!planNodeId.has_value()) {
+      return fsTokenProvider_;
+    }
     return planNodeTokenProviders_.withRLock(
         [&](const auto& providers)
             -> std::shared_ptr<filesystems::TokenProvider> {
-          if (providers.empty() || planNodeId.empty()) {
+          if (providers.empty()) {
             return fsTokenProvider_;
           }
-          auto it = providers.find(planNodeId);
+          auto it = providers.find(*planNodeId);
           if (it != providers.end()) {
             return it->second;
           }

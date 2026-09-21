@@ -167,28 +167,30 @@ TEST_F(QueryCtxTest, fsTokenProviderRouting) {
                       .tokenProvider(queryLevelProvider)
                       .build();
 
-  // No planNodeId (default "") returns the query-level provider.
+  // std::nullopt (default) returns the query-level provider.
   ASSERT_EQ(queryCtx->fsTokenProvider(), queryLevelProvider);
-  ASSERT_EQ(queryCtx->fsTokenProvider(""), queryLevelProvider);
+  ASSERT_EQ(queryCtx->fsTokenProvider(std::nullopt), queryLevelProvider);
 
   // Register a per-planNode provider and verify it is returned for that node.
   queryCtx->setFsTokenProvider("scan-1", nodeProvider);
   ASSERT_EQ(queryCtx->fsTokenProvider("scan-1"), nodeProvider);
 
-  // Empty planNodeId always returns the query-level provider, even after
-  // per-node providers have been set.
+  // std::nullopt still returns the query-level provider after per-node
+  // providers have been set.
   ASSERT_EQ(queryCtx->fsTokenProvider(), queryLevelProvider);
-  ASSERT_EQ(queryCtx->fsTokenProvider(""), queryLevelProvider);
+  ASSERT_EQ(queryCtx->fsTokenProvider(std::nullopt), queryLevelProvider);
 
-  // An unregistered planNodeId returns nullptr.
+  // Any planNodeId not in the map (including empty string) returns nullptr.
+  ASSERT_EQ(queryCtx->fsTokenProvider(""), nullptr);
   ASSERT_EQ(queryCtx->fsTokenProvider("scan-2"), nullptr);
 }
 
 TEST_F(QueryCtxTest, fsTokenProviderNullWhenUnset) {
   auto queryCtx = QueryCtx::Builder().queryId("test_query_id").build();
 
-  // No provider set — both overloads return nullptr.
+  // No provider set — query-level and per-node both return nullptr.
   ASSERT_EQ(queryCtx->fsTokenProvider(), nullptr);
+  ASSERT_EQ(queryCtx->fsTokenProvider(std::nullopt), nullptr);
   ASSERT_EQ(queryCtx->fsTokenProvider("scan-1"), nullptr);
 }
 
