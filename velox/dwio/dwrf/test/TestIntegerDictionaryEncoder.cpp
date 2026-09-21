@@ -61,7 +61,7 @@ TEST_F(TestIntegerDictionaryEncoder, addKey) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetCount) {
+TEST_F(TestIntegerDictionaryEncoder, getCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -86,14 +86,15 @@ TEST_F(TestIntegerDictionaryEncoder, GetCount) {
   for (const auto& testCase : testCases) {
     auto pool = memoryManager()->addLeafPool();
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
+    std::unordered_map<int64_t, uint32_t> keyIndices;
     for (const auto& key : testCase.addKeySequence) {
-      intDictEncoder.addKey(key);
+      keyIndices[key] = intDictEncoder.addKey(key);
     }
 
     std::vector<size_t> actualCountSequence{};
     for (const auto& key : testCase.getCountSequence) {
       actualCountSequence.push_back(
-          intDictEncoder.getCount(intDictEncoder.getIndex(key)));
+          intDictEncoder.getCount(keyIndices.at(key)));
     }
     EXPECT_EQ(testCase.countSequence, actualCountSequence);
   }
@@ -126,32 +127,24 @@ TEST_F(TestIntegerDictionaryEncoder, getTotalCount) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, Clear) {
+TEST_F(TestIntegerDictionaryEncoder, clear) {
   auto pool = memoryManager()->addLeafPool();
   {
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
-    EXPECT_EQ(1, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     for (size_t i = 0; i != 2500; ++i) {
       intDictEncoder.addKey(i);
     }
     EXPECT_EQ(2500, intDictEncoder.size());
-    EXPECT_EQ(2500, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(2500, intDictEncoder.keys_.size());
-    EXPECT_EQ(2500, intDictEncoder.counts_.size());
     EXPECT_EQ(2500, intDictEncoder.getTotalCount());
-    EXPECT_EQ(1, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     intDictEncoder.clear();
     EXPECT_EQ(0, intDictEncoder.size());
-    EXPECT_EQ(0, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.capacity());
-    EXPECT_EQ(0, intDictEncoder.counts_.size());
-    EXPECT_EQ(0, intDictEncoder.counts_.capacity());
     EXPECT_EQ(0, intDictEncoder.getTotalCount());
-    EXPECT_EQ(1, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
+    // Verify that clear resets the dictionary and allows it to be rebuilt.
+    const auto index = intDictEncoder.addKey(42);
+    EXPECT_EQ(0, index);
+    EXPECT_EQ(1, intDictEncoder.size());
+    EXPECT_EQ(1, intDictEncoder.getCount(index));
+    EXPECT_EQ(1, intDictEncoder.getTotalCount());
     // Folly's F14 map when compiled with ASAN, it re-allocates after
     // deallocating the memory. So the overall bytes allocated does not go
     // down. On test experiment it deallocated 4K and rellocated 64K.
@@ -164,40 +157,22 @@ TEST_F(TestIntegerDictionaryEncoder, Clear) {
     intDictEncoder.bumpRefCount();
     intDictEncoder.bumpRefCount();
     intDictEncoder.bumpRefCount();
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     for (size_t i = 0; i != 2500; ++i) {
       intDictEncoder.addKey(i);
     }
     EXPECT_EQ(2500, intDictEncoder.size());
-    EXPECT_EQ(2500, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(2500, intDictEncoder.keys_.size());
-    EXPECT_EQ(2500, intDictEncoder.counts_.size());
     EXPECT_EQ(2500, intDictEncoder.getTotalCount());
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
 
-    intDictEncoder.clear();
-    intDictEncoder.clear();
-    EXPECT_EQ(2500, intDictEncoder.size());
-    EXPECT_EQ(2500, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(2500, intDictEncoder.keys_.size());
-    EXPECT_EQ(2500, intDictEncoder.counts_.size());
-    EXPECT_EQ(2500, intDictEncoder.getTotalCount());
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(2, intDictEncoder.clearCount_);
-
-    intDictEncoder.clear();
+    // The initial reference plus three bumps require four clear calls before
+    // the dictionary is reset.
+    for (size_t i = 0; i < 3; ++i) {
+      intDictEncoder.clear();
+      EXPECT_EQ(2500, intDictEncoder.size());
+      EXPECT_EQ(2500, intDictEncoder.getTotalCount());
+    }
     intDictEncoder.clear();
     EXPECT_EQ(0, intDictEncoder.size());
-    EXPECT_EQ(0, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.capacity());
-    EXPECT_EQ(0, intDictEncoder.counts_.size());
-    EXPECT_EQ(0, intDictEncoder.counts_.capacity());
     EXPECT_EQ(0, intDictEncoder.getTotalCount());
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     // Folly's F14 map when compiled with ASAN, it re-allocates after
     // deallocating the memory. So the overall bytes allocated does not go
     // down. On test experiment it deallocated 4K and rellocated 64K.

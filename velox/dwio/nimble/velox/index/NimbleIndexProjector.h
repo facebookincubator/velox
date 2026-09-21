@@ -26,6 +26,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Checksum.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -74,6 +75,12 @@ using Subfield = velox::common::Subfield;
 ///       // cut-short response) the resume key embedded in the header.
 ///     }
 ///   }
+///
+/// Shared dictionary encoding is not supported. The output carries projected
+/// stream bytes only and has nowhere to put the alphabet a shared dictionary
+/// stream decodes against, so create() rejects any tablet that records shared
+/// dictionaries.
+///
 /// NOTE: NimbleIndexProjector is not thread-safe. Each thread must use its
 /// own instance.
 class NimbleIndexProjector {
@@ -129,6 +136,12 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// When set, every stream this call reads from storage is checked against
+    /// the checksum recorded in its stripe group, and a mismatch fails the
+    /// call. Asking for this on a file that records no checksums fails the
+    /// call; a file recording a checksum type this binary cannot build is
+    /// rejected earlier, when the projector is created.
+    bool verifyStreamChecksums{false};
   };
 
   /// Request for a batch of index lookups.
@@ -230,27 +243,37 @@ class NimbleIndexProjector {
   };
 
   // CSR (compressed sparse row) layout mapping stripes to request row ranges.
-  // All StripeRange entries are stored in a single flat vector (`entries`),
+  // All StripeRange entries are stored in a single flat vector (`ranges`),
   // with `offsets[i]` marking where stripe i's entries begin.
   struct StripeRanges {
-    uint32_t startStripe{0};
-    uint32_t numStripes{0};
-    // Flat storage of all per-stripe row ranges, grouped by stripe.
+    // Ascending tablet stripe indices that carry ranges. Everything else here
+    // is indexed by POSITION IN THIS VECTOR -- a "resolved stripe index" --
+    // not by tablet stripe index. Each request covers one contiguous stripe
+    // run, but the requests together only pin down an outer envelope, and for
+    // scattered lookups that envelope is far wider than the set of stripes
+    // that actually carry ranges -- 148k stripes between the first and last
+    // against ~250 that hold anything, for 128 random probes. Indexing by
+    // tablet stripe index would make the tables here scale with the envelope
+    // rather than with the work.
+    std::vector<uint32_t> resolvedStripes;
+    // Flat storage of all per-stripe row ranges, grouped by resolved stripe
+    // index.
     std::vector<StripeRange> ranges;
-    // offsets[i] = start index in ranges for stripe i (relative to
-    // startStripe). Size = numStripes + 1.
+    // offsets[i] = start index in ranges for resolvedStripes[i].
+    // Size = resolvedStripes.size() + 1.
     std::vector<uint32_t> offsets;
 
-    std::span<const StripeRange> getRanges(uint32_t stripeIndex) const {
-      NIMBLE_CHECK_LT(stripeIndex, numStripes);
+    /// @param resolvedStripeIndex Index into resolvedStripes, NOT a tablet
+    /// stripe index.
+    std::span<const StripeRange> getRanges(uint32_t resolvedStripeIndex) const {
+      NIMBLE_CHECK_LT(resolvedStripeIndex, resolvedStripes.size());
       return {
-          ranges.data() + offsets[stripeIndex],
-          offsets[stripeIndex + 1] - offsets[stripeIndex]};
+          ranges.data() + offsets[resolvedStripeIndex],
+          offsets[resolvedStripeIndex + 1] - offsets[resolvedStripeIndex]};
     }
 
     void clear() {
-      startStripe = 0;
-      numStripes = 0;
+      resolvedStripes.clear();
       ranges.clear();
       offsets.clear();
     }
@@ -286,7 +309,7 @@ class NimbleIndexProjector {
     std::vector<uint64_t> stripeFileOffsets;
     // Flat reusable storage for all per-stripe projected stream slots. Each
     // stripe occupies projection_->streamOffsets.size() consecutive entries.
-    std::vector<StripeGroup::StreamLocation> projectedStreams;
+    std::vector<StripeGroup::StreamMetadata> projectedStreams;
     // Start offsets into stripeRanges for each planned stripe. The last entry
     // is the total range count.
     std::vector<size_t> stripeRangeOffsets;
@@ -297,31 +320,51 @@ class NimbleIndexProjector {
 
   // Returns this stripe's projected stream slots from the flat ScanPlan
   // storage.
-  std::span<const StripeGroup::StreamLocation> stripeProjectedStreams(
+  std::span<const StripeGroup::StreamMetadata> stripeProjectedStreams(
       size_t stripeOffset) const;
 
   // Returns this stripe's request ranges from the flat ScanPlan storage.
   std::span<const StripeRange> plannedStripeRanges(size_t stripeOffset) const;
 
-  // Appends one stripe to the plan and returns its projected byte count.
-  uint64_t appendStripePlan(uint32_t stripeIndex, size_t rangeOffset);
+  // Projected stream totals for one stripe, computed by locateStripeStreams()
+  // before the stripe is known to be worth keeping.
+  struct StripeStreams {
+    uint32_t numStreams{0};
+    uint64_t projectedBytes{0};
+    bool requiresNullBarrier{false};
+  };
+
+  // Locates this stripe's projected streams, staging them at the tail of
+  // ScanPlan::projectedStreams. The stripe is not part of the plan until
+  // appendStripePlan() commits it; a stripe dropped in between leaves the
+  // staged slots to be overwritten by the next stripe, and prepareStripes()
+  // trims any left over.
+  StripeStreams locateStripeStreams(uint32_t stripeIndex);
+
+  // Appends one stripe to the plan using streams already staged for it by
+  // locateStripeStreams().
+  void appendStripePlan(
+      uint32_t stripeIndex,
+      size_t rangeOffset,
+      const StripeStreams& streams);
 
   // Computes the stripe-relative body range based on request row ranges and
   // Options::maxOverfetchRowsRatio.
   RowRange stripeRowRangeToPack(size_t stripeOffset) const;
 
   // Records the resume key for a request that reached its maxRowsPerRequest cap
-  // in the stripe at `stripeOffset` (index relative to
-  // stripeRanges.startStripe, not an absolute stripe index). `readEndRow` is
+  // in the stripe at `resolvedStripeIndex` (an index into
+  // stripeRanges.resolvedStripes, not a tablet stripe index). `readEndRow` is
   // the request's stripe-relative end row after clipping. When `partialRead` is
   // true the cap fell inside the stripe, so the key is the row-precise key at
   // `readEndRow`; otherwise the cap landed on the stripe boundary and the key
   // resumes from the next stripe still holding this request. The stripe's
-  // absolute start row is derived from `stripeOffset`. Idempotent (no-op once a
-  // key is recorded); callers gate on Options::needResumeKey.
+  // absolute start row is derived from `resolvedStripeIndex`.
+  // Idempotent (no-op once a key is recorded); callers gate on
+  // Options::needResumeKey.
   void setResumeKey(
       uint32_t requestIndex,
-      uint32_t stripeOffset,
+      uint32_t resolvedStripeIndex,
       uint32_t readEndRow,
       bool partialRead);
 
@@ -332,6 +375,12 @@ class NimbleIndexProjector {
   // Enqueues all projected streams from ctx_.plan into DataInput and issues a
   // single coalesced load() call.
   void loadStripes();
+
+  // Checks one loaded stream against the checksum its stripe group records,
+  // throwing when they differ. `enqueueIndex` is the index DataInput returned
+  // from enqueue(), which is also this stream's position in
+  // ctx_.expectedStreamChecksums.
+  void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Serializes each stripe's loaded streams, builds per-request results,
   // and finalizes the result.
@@ -426,8 +475,23 @@ class NimbleIndexProjector {
   const uint32_t numStripes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
+  // Verifies a stream read from storage against the checksum recorded in its
+  // stripe group. Built for any file that records a checksum type, and null
+  // only when the file records none; whether a given project() call uses it is
+  // Options::verifyStreamChecksums. Stateful, so it relies on this class being
+  // single-threaded.
+  std::unique_ptr<Checksum> streamChecksum_;
   // Reused across stripes; its raw input format is fixed by the tablet.
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
+
+  // One range tagged with the tablet stripe it falls in, before grouping.
+  // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is
+  // what produces the CSR grouping; the second key keeps each stripe's ranges
+  // in request order, which the grouped layout preserves.
+  struct ResolvedStripe {
+    uint32_t tabletStripeIndex{};
+    StripeRange range;
+  };
 
   // Per-project() call state. Set by initRequest(), populated through the
   // pipeline (lookupStripes → prepareStripes → loadStripes → processStripes),
@@ -441,9 +505,13 @@ class NimbleIndexProjector {
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true if the request has ranges in any planned stripe.
-    // Set by prepareStripes(), used by setResumeKeys().
-    std::vector<bool> hasStripeRanges;
+    // Per-request flag: true once planning has processed a stripe range for
+    // the request. Deliberately not "contributed a range to the plan": it is
+    // also set when the stripe is dropped for projecting no streams, because
+    // what setResumeKeys() needs to know is whether the request was reached
+    // before global truncation, not whether it produced output. Set by
+    // prepareStripes(), used by setResumeKeys().
+    std::vector<bool> hasProcessedStripeRange;
     // Per-request resume keys set when a request reaches maxRowsPerRequest and
     // Options::needResumeKey is enabled.
     std::vector<std::optional<std::string>> resumeKeys;
@@ -451,6 +519,10 @@ class NimbleIndexProjector {
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
     // streams. Populated by loadStripes().
     std::vector<std::optional<uint32_t>> dataInputIndices;
+    // Expected checksum of each enqueued stream, indexed by the enqueue index
+    // DataInput returns. Appended in enqueue order by loadStripes(). Empty
+    // when checksum verification is off.
+    std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated
@@ -461,6 +533,11 @@ class NimbleIndexProjector {
     std::vector<RowRange> stripePackRanges;
     // Reusable per-request vectors.
     std::vector<uint64_t> rowsPerRequest;
+    // Stripes resolved from the cluster index, collected before grouping into
+    // StripeRanges and reused across project() calls to keep the build
+    // alloc-free. Holds one entry per (request, stripe) pair, so a stripe
+    // repeats once per request that lands in it.
+    std::vector<ResolvedStripe> resolvedStripesScratch;
     std::vector<size_t> sliceCounts;
     std::vector<size_t> emittedSlices;
     // Shared arena for all sliced stream bytes produced by one project() call.

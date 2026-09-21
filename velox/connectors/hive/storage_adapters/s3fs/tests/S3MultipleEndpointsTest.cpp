@@ -48,10 +48,10 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
 
   void SetUp() override {
     S3Test::SetUp();
-    minioSecondServer_ = std::make_unique<MinioServer>();
-    minioSecondServer_->start();
-    minioServer_->addBucket(kBucketName.data());
-    minioSecondServer_->addBucket(kBucketName.data());
+    siloSecondServer_ = std::make_unique<SiloServer>();
+    siloSecondServer_->start();
+    siloServer_->addBucket(kBucketName.data());
+    siloSecondServer_->addBucket(kBucketName.data());
 
     filesystems::registerS3FileSystem();
     parquet::registerParquetReaderFactory();
@@ -66,11 +66,11 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
     connector::hive::HiveConnectorFactory factory;
     auto hiveConnector1 = factory.newConnector(
         std::string(connectorId1),
-        minioServer_->hiveConfig(config1Override),
+        siloServer_->s3Config(config1Override),
         ioExecutor_.get());
     auto hiveConnector2 = factory.newConnector(
         std::string(connectorId2),
-        minioSecondServer_->hiveConfig(config2Override),
+        siloSecondServer_->s3Config(config2Override),
         ioExecutor_.get());
     connector::ConnectorRegistry::global().insert(
         hiveConnector1->connectorId(), hiveConnector1);
@@ -182,7 +182,7 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
     assertEqualResults({input1}, {results});
   }
 
-  std::unique_ptr<MinioServer> minioSecondServer_;
+  std::unique_ptr<SiloServer> siloSecondServer_;
 };
 } // namespace
 
@@ -204,19 +204,19 @@ TEST_F(S3MultipleEndpoints, bucketEndpoints) {
 
   auto configOverride = [](std::shared_ptr<const config::ConfigBase> config) {
     return std::unordered_map<std::string, std::string>{
-        {"hive.s3.bucket.writedata.endpoint",
-         config->get<std::string>("hive.s3.endpoint").value()},
-        {"hive.s3.bucket.writedata.aws-access-key",
-         config->get<std::string>("hive.s3.aws-access-key").value()},
-        {"hive.s3.bucket.writedata.aws-secret-key",
-         config->get<std::string>("hive.s3.aws-secret-key").value()},
-        {"hive.s3.endpoint", "fail"},
-        {"hive.s3.aws-access-key", "fail"},
-        {"hive.s3.aws-secret-key", "fail"},
+        {"s3.bucket.writedata.endpoint",
+         config->get<std::string>("s3.endpoint").value()},
+        {"s3.bucket.writedata.aws-access-key",
+         config->get<std::string>("s3.aws-access-key").value()},
+        {"s3.bucket.writedata.aws-secret-key",
+         config->get<std::string>("s3.aws-secret-key").value()},
+        {"s3.endpoint", "fail"},
+        {"s3.aws-access-key", "fail"},
+        {"s3.aws-secret-key", "fail"},
     };
   };
-  auto config1 = configOverride(minioServer_->hiveConfig());
-  auto config2 = configOverride(minioSecondServer_->hiveConfig());
+  auto config1 = configOverride(siloServer_->s3Config());
+  auto config2 = configOverride(siloSecondServer_->s3Config());
   registerConnectors(kConnectorId1, kConnectorId2, config1, config2);
 
   testJoin(kExpectedRows, outputDirectory, kConnectorId1, kConnectorId2);

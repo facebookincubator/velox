@@ -16,16 +16,24 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
 
 #include <fmt/core.h>
+#include <folly/Function.h>
+#include <folly/Range.h>
 
 #include "velox/common/file/File.h"
 #include "velox/common/file/Region.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
+
+namespace facebook::velox::cache {
+class AsyncDataCache;
+class CachePin;
+} // namespace facebook::velox::cache
 
 namespace facebook::nimble {
 
@@ -36,15 +44,15 @@ namespace facebook::nimble {
 /// relative order is preserved (stripes are already in file order).
 /// After load(), bufferRef() provides zero-copy access to loaded data.
 ///
-/// Two planned implementations:
+/// Implementations:
 ///   - DirectDataInput: coalesced I/O, no caching
-///   - CachedDataInput: coalesced I/O + AsyncDataCache (future)
+///   - CachedDataInput: whole-group caching through AsyncDataCache
 class DataInput {
  public:
   using Region = velox::common::Region;
 
   /// Reference to a loaded buffer region. Points into a contiguous
-  /// aligned allocation.
+  /// allocation.
   struct BufferRef {
     const char* data{nullptr};
     uint64_t length{0};
@@ -60,15 +68,28 @@ class DataInput {
   /// Callers must hold this until done with all BufferRefs.
   using Handle = std::shared_ptr<void>;
 
+  /// Invoked on one region once its bytes are loaded, given the region's
+  /// enqueue index and the bytes themselves. Throws to reject them.
+  ///
+  /// The caller decides what to do with a region; DataInput decides when it is
+  /// called, which is the part only it knows: after the bytes land, before
+  /// they become visible to anyone else, and never for a region served from
+  /// cache. Regions that are exact duplicates of an earlier one are passed
+  /// once, under the canonical index.
+  using LoadCallback =
+      folly::FunctionRef<void(uint32_t index, std::string_view data)>;
+
   virtual ~DataInput() = default;
 
   /// Pre-allocate internal storage for 'numRegions' enqueued reads.
   /// Avoids reallocation during enqueue().
   virtual void reserve(uint32_t numRegions) = 0;
 
-  /// Start a new group (one per stripe). Reads within a group are
-  /// sorted by offset; across groups, relative order is preserved.
-  virtual void startGroup() = 0;
+  /// Starts a new group (one per stripe). Reads within a group are sorted by
+  /// offset; across groups, relative order is preserved. `groupRegion` is the
+  /// full physical region used by whole-group cache implementations. It is
+  /// required by CachedDataInput and ignored by DirectDataInput.
+  virtual void startGroup(std::optional<Region> groupRegion = std::nullopt) = 0;
 
   /// Enqueue a read in the current group. Returns an index for
   /// bufferRef() after load().
@@ -77,13 +98,21 @@ class DataInput {
   /// Load all enqueued requests via coalesced I/O. Returns a handle
   /// that keeps the loaded data alive. Caller must hold this until
   /// done with all BufferRefs (e.g., capture in IOBuf destructors).
-  virtual Handle load() = 0;
+  virtual Handle load(LoadCallback loadCallback = {}) = 0;
 
   /// Get the loaded buffer for a previously enqueued request. The returned
   /// BufferRef::canonicalIndex identifies the stored copy when the region is an
   /// exact duplicate of an earlier enqueued request (see BufferRef). Only valid
   /// after load().
   virtual const BufferRef& bufferRef(uint32_t index) const = 0;
+
+  /// All loaded BufferRefs as a random-access span, indexable by the
+  /// per-region indices returned by enqueue(). Only valid after load().
+  /// Hot-path callers (per-stream lookups inside a per-stripe loop) should
+  /// fetch this span once per stripe and index into it directly, avoiding
+  /// the vtable dispatch + per-call state check that bufferRef(index)
+  /// otherwise pays on every access.
+  virtual std::span<const BufferRef> bufferRefs() const = 0;
 
   /// Release all state (loaded buffers, enqueued requests).
   virtual void clear() = 0;
@@ -113,13 +142,15 @@ class DirectDataInput : public DataInput {
 
   void reserve(uint32_t numRegions) override;
 
-  void startGroup() override;
+  void startGroup(std::optional<Region> groupRegion = std::nullopt) override;
 
   uint32_t enqueue(Region region) override;
 
-  Handle load() override;
+  Handle load(LoadCallback loadCallback = {}) override;
 
   const BufferRef& bufferRef(uint32_t index) const override;
+
+  std::span<const BufferRef> bufferRefs() const override;
 
   void clear() override;
 
@@ -153,8 +184,9 @@ class DirectDataInput : public DataInput {
 
   // Coalesces sorted regions into physical IO groups. Exact duplicate ranges
   // can share one physical read when the caller maps them to the same bytes.
-  std::vector<IoGroup> computeIoGroups(
-      const std::vector<EnqueuedRegion>& sortedRegions);
+  // Populates ioGroups_ and reuses coalesceIoRanges_ so a per-load() alloc
+  // is not required.
+  void computeIoGroups(const std::vector<EnqueuedRegion>& sortedRegions);
 
   // Computes the unique payload size for a sorted span of regions. Exact
   // duplicate ranges do not add payload bytes. Returns {payloadSize, lastEnd}
@@ -172,6 +204,12 @@ class DirectDataInput : public DataInput {
       const std::vector<IoGroup>& ioGroups,
       const char* buffer);
 
+  // Runs `loadCallback`, when set, over every loaded region. Skips duplicates,
+  // which share an already-visited region's bytes. Must run after
+  // populateBufferRefs, which is what resolves a coalesced read into per-region
+  // byte ranges.
+  void invokeLoadCallback(LoadCallback loadCallback);
+
   // Allocates the shared aligned read buffer and returns a handle that frees
   // it.
   std::pair<char*, Handle> allocateBuffer(uint64_t bytes);
@@ -181,14 +219,6 @@ class DirectDataInput : public DataInput {
       std::vector<IoGroup>& ioGroups,
       char* buffer,
       uint64_t bufferSize);
-
-  uint64_t alignDown(uint64_t value) const {
-    return value & ~(alignment_ - 1);
-  }
-
-  uint64_t alignUp(uint64_t value) const {
-    return (value + alignment_ - 1) & ~(alignment_ - 1);
-  }
 
   // File to read from.
   velox::ReadFile* const file_;
@@ -216,6 +246,131 @@ class DirectDataInput : public DataInput {
   // Start index in regions_ for each group.
   std::vector<uint32_t> groupOffsets_;
   // Populated by load() with pointers into the aligned buffer.
+  std::vector<BufferRef> bufferRefs_;
+
+  // --- Reused across load() calls to avoid per-call allocation ---
+  // Coalescer inputs / outputs (populated by computeIoGroups).
+  std::vector<int32_t> coalesceIoRanges_;
+  std::vector<IoGroup> ioGroups_;
+  // preadv inputs (populated by executeIoGroups).
+  std::vector<velox::common::Region> readRegions_;
+  std::vector<folly::Range<char*>> readBuffers_;
+};
+
+/// Loads and caches one contiguous entry per group. Enqueued regions return
+/// zero-copy slices into their group's cached entry.
+///
+/// NOTE: CachedDataInput is not thread-safe. Each thread must use its own
+/// instance, while the underlying AsyncDataCache may be shared.
+class CachedDataInput final : public DataInput {
+ public:
+  /// Configures the cache, source-file identity, and memory accounting.
+  struct Options {
+    /// Pool used for direct-I/O staging buffers.
+    velox::memory::MemoryPool* pool{nullptr};
+    /// Shared cache receiving one entry for each loaded group.
+    velox::cache::AsyncDataCache* cache{nullptr};
+    /// Stable identity of the source file in the cache key space.
+    uint64_t fileId{0};
+    /// Statistics receiving storage-read and memory-hit counters.
+    std::shared_ptr<velox::io::IoStatistics> ioStats;
+  };
+
+  /// Constructs a grouped cache reader for `file`.
+  CachedDataInput(velox::ReadFile* file, const Options& options);
+
+  /// Reserves storage for the requested stream regions.
+  void reserve(uint32_t numRegions) override;
+
+  /// Starts a cache group. `groupRegion` must contain the complete physical
+  /// byte range to cache, including bytes not requested by enqueue().
+  void startGroup(std::optional<Region> groupRegion) override;
+
+  /// Adds a requested stream region to the current cache group.
+  uint32_t enqueue(Region region) override;
+
+  /// Loads all groups and returns ownership of their cache pins. BufferRef
+  /// pointers remain valid until the returned handle is released.
+  Handle load(LoadCallback loadCallback = {}) override;
+
+  /// Returns the loaded bytes for a previously enqueued stream region.
+  const BufferRef& bufferRef(uint32_t index) const override;
+
+  std::span<const BufferRef> bufferRefs() const override;
+
+  /// Clears request state without releasing pins owned by a returned handle.
+  void clear() override;
+
+ private:
+  struct EnqueuedRegion {
+    // Position of this request in bufferRefs_.
+    uint32_t enqueueIndex{0};
+    // Logical file range requested by the caller.
+    Region region;
+  };
+
+  struct Group {
+    // Complete physical region stored in one cache entry.
+    Region groupRegion;
+    // First request for this group in regions_.
+    uint32_t enqueuedRegionOffset{0};
+  };
+
+  struct CacheMissGroup {
+    // Position shared by groups_ and the vector of cache pins.
+    size_t groupIndex{0};
+    // Physical range submitted to storage, including direct-I/O alignment.
+    Region readRegion;
+    // Offset of this read's destination in the aligned staging allocation.
+    uint64_t stagingBufferOffset{0};
+    // Distinct bytes requested from this group by the caller.
+    uint64_t payloadBytes{0};
+  };
+
+  // Returns the number of distinct requested bytes in the group.
+  uint64_t populateBufferRefs(
+      const Group& group,
+      uint32_t endRegion,
+      const char* buffer);
+
+  // One past the last entry in regions_ belonging to groups_[groupIndex].
+  uint32_t groupEndRegion(size_t groupIndex) const;
+
+  // Runs `loadCallback`, when set, over the regions of groups_[groupIndex].
+  // Skips duplicates, which share an already-visited region's bytes.
+  void invokeLoadCallback(LoadCallback loadCallback, size_t groupIndex) const;
+
+  // Loads cache-miss groups in one positioned read batch. `loadCallback`, when
+  // set, runs on each group's regions after its entry is filled and before the
+  // entry is published, so a rejected group never becomes visible.
+  void loadCacheMissGroups(
+      std::span<const CacheMissGroup> cacheMissGroups,
+      uint64_t stagingBufferSize,
+      const std::vector<velox::cache::CachePin>& cachePins,
+      LoadCallback loadCallback);
+
+  // File to read from on a cache miss.
+  velox::ReadFile* const file_;
+  // Memory pool for allocating direct-I/O staging buffers.
+  velox::memory::MemoryPool* const pool_;
+  // Shared cache used for full-group entries.
+  velox::cache::AsyncDataCache* const cache_;
+  // Stable file identity used in cache keys.
+  const uint64_t fileId_;
+  // IO statistics for storage reads, cache hits, and logical bytes.
+  const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  // Required alignment for file offsets, read sizes, and destination buffers.
+  const uint64_t alignment_;
+  // Allocation alignment accepted by the memory pool.
+  const uint64_t allocationAlignment_;
+
+  // True between load() and clear().
+  bool loaded_{false};
+  // Requested stream regions in enqueue order.
+  std::vector<EnqueuedRegion> regions_;
+  // Cache groups in increasing physical file-offset order.
+  std::vector<Group> groups_;
+  // Loaded zero-copy slices corresponding to regions_.
   std::vector<BufferRef> bufferRefs_;
 };
 

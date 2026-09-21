@@ -93,10 +93,10 @@ struct PairCoverage {
 /// repairing both legacy tables by hand (D114295784); covering all four here
 /// turns that class of gap into a fuzzer failure.
 enum class ReaderPath {
-  /// nimble::VeloxReader with the default legacy::EncodingFactory.
+  /// nimble::BatchReader with the default legacy::EncodingFactory.
   kLegacyFactory,
 
-  /// nimble::VeloxReader with the non-legacy EncodingFactory.
+  /// nimble::BatchReader with the non-legacy EncodingFactory.
   kDefaultFactory,
 
   /// Selective reader, legacy::LegacyEncodingTrait visitor dispatch.

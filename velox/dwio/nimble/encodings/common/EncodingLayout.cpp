@@ -20,11 +20,13 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 namespace facebook::nimble {
 
@@ -183,11 +185,12 @@ EncodingLayout EncodingLayoutCapture::capture(
   if (encodingType == EncodingType::FixedBitWidth ||
       encodingType == EncodingType::Trivial ||
       encodingType == EncodingType::BlockBitPacking ||
-      encodingType == EncodingType::FOR) {
+      encodingType == EncodingType::FOR || encodingType == EncodingType::Fsst) {
     compressionType =
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
   }
 
+  EncodingLayout::Config encodingConfig;
   std::vector<std::optional<const EncodingLayout>> children;
   switch (encodingType) {
     case EncodingType::FixedBitWidth:
@@ -195,12 +198,63 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Constant:
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
+    case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
-    case EncodingType::SubIntSplit:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
       // Non nested encodings have zero children
       break;
+    case EncodingType::Slice:
+      // The wrapped encoding is carried verbatim rather than as a nested
+      // stream, and the layout tree describes how data is encoded, not how a
+      // slice was deferred. Reported as childless.
+      break;
+    case EncodingType::BitRangeSplit: {
+      using Base = detail::BitRangeSplitEncodingBase;
+      Base::captureLayout(
+          encoding,
+          options,
+          [&](NestedEncodingIdentifier /* sectionIndex */,
+              const Base::Section& section) {
+            const char* position = section.data;
+            captureChild(children, position, section.dataBytes, options);
+          },
+          encodingConfig);
+      break;
+    }
+    case EncodingType::SubIntSplit: {
+      const auto dataType = EncodingPrefix::dataType(encoding);
+      const auto physicalBits = detail::dataTypeSize(dataType) * 8;
+      const char* pos = encoding.data() + prefixSize;
+      const auto numSections = encoding::read<uint8_t>(pos);
+      // Skip the reserved section-order byte.
+      encoding::read<uint8_t>(pos);
+
+      std::vector<subintsplit::SectionPlan> segments;
+      std::vector<uint32_t> encodedSizes;
+      segments.reserve(numSections);
+      encodedSizes.reserve(numSections);
+      uint32_t expectedBitStart{0};
+      for (uint8_t section{0}; section < numSections; ++section) {
+        const auto bitStart = encoding::read<uint8_t>(pos);
+        const auto bitEnd = encoding::read<uint8_t>(pos);
+        NIMBLE_CHECK_EQ(bitStart, expectedBitStart);
+        NIMBLE_CHECK_GE(bitEnd, bitStart);
+        NIMBLE_CHECK_LT(bitEnd, physicalBits);
+        segments.push_back({.bitStart = bitStart, .bitEnd = bitEnd});
+        encodedSizes.push_back(encoding::readUint32(pos));
+        expectedBitStart = bitEnd + 1;
+      }
+      NIMBLE_CHECK_EQ(expectedBitStart, physicalBits);
+
+      children.reserve(numSections);
+      for (const auto encodedSize : encodedSizes) {
+        captureChild(children, pos, encodedSize, options);
+      }
+      encodingConfig = EncodingLayout::Config{
+          subintsplit::makePreserveSplitConfig(segments)};
+      break;
+    }
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;
       const auto header = detail::alp::readHeader(pos);
@@ -396,8 +450,7 @@ EncodingLayout EncodingLayoutCapture::capture(
 
   return {
       encodingType,
-      /*encodingConfig=*/
-      {},
+      std::move(encodingConfig),
       compressionType,
       std::move(children)};
 }

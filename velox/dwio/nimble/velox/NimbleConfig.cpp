@@ -36,6 +36,14 @@ DEFINE_bool(
     false,
     "Enable zstrong variable bit width compressor at write time. Transparent at read time.");
 
+DEFINE_bool(
+    nimble_subintsplit_delta_pretransform,
+    false,
+    "Let SubIntSplit zigzag-delta a stream before splitting it into bit ranges, "
+    "keeping whichever form encodes smaller. EXPERIMENTAL: delta streams are "
+    "sequential-only, so skip() and readWithVisitor() reject them. Do not "
+    "enable for production tables until restatement points are added.");
+
 DEFINE_string(
     nimble_writer_input_buffer_default_growth_config,
     "{\"32\":4.0,\"512\":1.414,\"4096\":1.189}",
@@ -261,14 +269,23 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.chunking.enabled",
     true);
 
-/// Enable chunk index for chunk-level seeking and per-chunk statistics
-/// for filter pushdown. When enabled, the chunk stats optional section is
-/// written alongside chunk position data in the file.
+/// Enable the legacy V1 chunk stats representation.
 // EXPERIMENTAL: Not production-ready. Do not enable for production tables
 // without consulting the Nimble team (oncall: dwios).
 /* static */ Config::Entry<bool> Config::ENABLE_CHUNK_INDEX(
     "nimble.chunk.index.enabled",
     false);
+
+/// Enable chunk stats for chunk-level seeking and filter pushdown.
+/* static */ Config::Entry<bool> Config::ENABLE_CHUNK_STATS(
+    "nimble.chunk.stats.enabled",
+    false);
+
+/// Select the chunk stats representation. Supported values are "v1" and
+/// "v2"; defaults to "v2".
+/* static */ Config::Entry<std::string> Config::CHUNK_STATS_VERSION(
+    "nimble.chunk.stats.version",
+    "v2");
 
 /// Threshold to trigger chunking to relieve memory pressure.
 /* static */ Config::Entry<uint64_t>
@@ -314,6 +331,14 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
         "nimble.chunking.writer.wide.schema.max.chunk.size",
         kChunkingWriterWideSchemaMaxChunkSize);
 
+/* static */ Config::Entry<const std::vector<std::string>> Config::FSST_COLUMNS(
+    "nimble.fsst.columns",
+    {},
+    [](const std::vector<std::string>& val) { return folly::join(",", val); },
+    [](const std::string& /* key */, const std::string& val) {
+      return parseVector<std::string>(val);
+    });
+
 /* static */ Config::Entry<std::string> Config::FLUSH_POLICY_CONFIG(
     "nimble.flush_policy_config",
     "");
@@ -324,6 +349,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<std::string> Config::ENCODING_SELECTION_CONFIG(
     "nimble.encoding_selection_config",
+    "");
+
+/* static */ Config::Entry<std::string> Config::COMPRESSION_TYPE(
+    "nimble.compression_type",
     "");
 
 // EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
@@ -387,5 +416,51 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<bool> Config::ENABLE_ENCODING_SELECTION_CACHE(
     "nimble.encoding.enable_selection_cache",
+    false);
+
+/* static */ Config::Entry<std::string> Config::FEATURE_ORDERING_OVERRIDE(
+    "feature.ordering.override",
+    "");
+
+// Defaults match the corresponding WriterOptions fields, so an absent key
+// leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD is the
+// exception: WriterOptions holds an optional and the writer substitutes its own
+// threshold when unset, so the builder applies this only when the key is
+// present rather than defaulting it here.
+/* static */ Config::Entry<uint32_t> Config::METADATA_COMPRESSION_THRESHOLD(
+    "nimble.metadata.compression.threshold",
+    0);
+
+/* static */ Config::Entry<std::string> Config::STRIPE_GROUP_ENCODING_LAYOUT(
+    "nimble.stripe_group.encoding_layout",
+    "raw");
+
+/* static */ Config::Entry<double> Config::CHUNK_STATS_MIN_AVG_CHUNKS(
+    "nimble.chunk.stats.min_avg_chunks",
+    2);
+
+/* static */ Config::Entry<uint32_t> Config::MAX_ENCODE_PARALLELISM(
+    "nimble.encoding.max_parallelism",
+    0);
+
+/* static */ Config::Entry<uint32_t> Config::MIN_STREAMS_PER_ENCODING_TASK(
+    "nimble.encoding.min_streams_per_task",
+    1);
+
+/* static */ Config::Entry<uint32_t>
+    Config::MAX_CACHED_ENCODING_SCRATCH_BUFFERS(
+        "nimble.encoding.max_cached_scratch_buffers",
+        0);
+
+/* static */ Config::Entry<uint32_t> Config::MAX_CACHED_NESTED_ENCODING_BUFFERS(
+    "nimble.encoding.max_cached_nested_buffers",
+    0);
+
+/* static */ Config::Entry<bool> Config::FIXED_BIT_WIDTH_USE_EXACT_BITS(
+    "nimble.fixedbitwidth.use_exact_bits",
+    false);
+
+/* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
+    "nimble.flatmap.skip_constant_in_map_streams",
     false);
 } // namespace facebook::nimble

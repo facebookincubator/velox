@@ -72,13 +72,22 @@ namespace facebook::nimble {
 /// independently, enabling random-access decompression without touching
 /// neighboring strings.
 ///
+/// Validates lengths and blob bounds lazily as rows are consumed, avoiding a
+/// scan of the stream during construction. Reports malformed unread rows only
+/// if a later read or skip reaches them.
+/// Callers requiring eager structural validation can call skip() in bounded
+/// batches on this encoding instance, then reset() before reading. Validating
+/// decompression itself requires materializing every row.
+///
 /// Binary layout:
 /// - Encoding::kPrefixSize bytes: standard Encoding prefix
+/// - 1 byte: compression type for the concatenated FSST output
 /// - varint: serialized FSST symbol table size
 /// - N bytes: serialized FSST symbol table (~2KB typical)
 /// - varint: lengths encoding size
 /// - M bytes: nested encoding of compressed string lengths
-/// - K bytes: compressed string blob (concatenated FSST-compressed strings)
+/// - K bytes: concatenated FSST output, optionally compressed by the normal
+///   Nimble encoding-layer compression policy
 ///
 /// Only supports std::string_view data type.
 class FsstEncoding final
@@ -92,6 +101,15 @@ class FsstEncoding final
       std::string_view data,
       std::function<void*(uint32_t)> stringBufferFactory,
       const Encoding::Options& options = {});
+
+  ~FsstEncoding() override {
+    this->releaseBuffer(uncompressedBlob_);
+  }
+
+  FsstEncoding(const FsstEncoding&) = delete;
+  FsstEncoding& operator=(const FsstEncoding&) = delete;
+  FsstEncoding(FsstEncoding&&) = delete;
+  FsstEncoding& operator=(FsstEncoding&&) = delete;
 
   void reset() final;
   void skip(uint32_t rowCount) final;
@@ -136,7 +154,7 @@ class FsstEncoding final
   // Approximate serialized symbol table size in bytes (~2KB typical).
   static constexpr uint32_t kSymbolTableOverhead = 2048;
 
-  // Maximum bytes a compressed FSST code can expand to.
+  // Maximum bytes represented by one FSST symbol.
   static constexpr size_t kMaxSymbolLength = 8;
 
   static constexpr size_t kStringPageSize = 256 * 1024;
@@ -149,20 +167,17 @@ class FsstEncoding final
   };
 
   struct Header {
-    // Serialized FSST symbol table byte length.
-    uint32_t symbolTableSize;
+    // Secondary compression applied to the concatenated FSST output.
+    CompressionType compressionType{CompressionType::Uncompressed};
 
-    // Start of the serialized FSST symbol table.
-    const char* symbolTable;
+    // Serialized FSST symbol table.
+    std::string_view symbolTable;
 
-    // Nested encoding byte length for per-row compressed string sizes.
-    uint32_t lengthsSize;
+    // Nested encoding for per-row compressed string sizes.
+    std::string_view lengths;
 
-    // Start of the nested compressed-lengths encoding.
-    const char* lengths;
-
-    // Start of the concatenated FSST-compressed string data.
-    const char* blob;
+    // Serialized blob, which may have secondary encoding-layer compression.
+    std::string_view blob;
   };
 
   struct CompressedValues {
@@ -186,12 +201,36 @@ class FsstEncoding final
   // Parses the serialized FSST header at offset within encoding.
   static Header parseHeader(std::string_view encoding, size_t offset);
 
+  // Validates the common prefix before the base Encoding constructor parses
+  // it using the unchecked EncodingPrefix helpers.
+  static std::string_view validateEncodedPrefix(
+      std::string_view encoding,
+      const Encoding::Options& options);
+
+  // Validates a serialized FSST symbol table before calling fsst_import(),
+  // whose upstream API does not accept an input-buffer length.
+  static void validateSymbolTable(std::string_view symbolTable);
+
+  // Validates compressed lengths against blob bounds and FSST escape framing.
+  // Returns the number of compressed bytes covered by lengths.
+  static size_t validateCompressedLengths(
+      std::span<const uint32_t> lengths,
+      std::string_view blob,
+      size_t blobOffset);
+
+  // Checks that a sequential read remains within the row range.
+  void checkReadRange(uint32_t rowCount, const char* operation) const;
+
+  // Verifies the blob cursor when all rows have been consumed.
+  void checkFinalBlobPosition() const;
+
   // Trains FSST and compresses each input string independently.
   static CompressedValues compressValues(
       std::span<const physicalType> values,
       velox::memory::MemoryPool* pool);
 
-  // Checks whether the final FSST encoding meets the compression target.
+  // Checks whether the native FSST representation meets the compression target
+  // before optional encoding-layer compression is applied.
   static bool meetsCompressionTarget(
       uint64_t uncompressedSize,
       uint64_t encodedSize,
@@ -212,13 +251,18 @@ class FsstEncoding final
       Buffer& buffer,
       const Encoding::Options& options);
 
-  // Decompresses a single compressed string and copies the result into the
-  // string buffer page. Returns a stable string_view.
-  std::string_view decompressToStringBuffer(
-      const char* compressedData,
-      uint32_t compressedLength);
+  // Decompresses a validated row payload into stable page storage, using
+  // scratch space when the page cannot hold the maximum possible expansion.
+  // The caller must first validate the containing range with
+  // validateCompressedLengths().
+  std::string_view decompressToStringBuffer(std::string_view compressed);
 
-  void ensurePage(size_t requiredBytes);
+  // Returns writable storage when the current page has enough room.
+  std::optional<std::span<char>> availablePageRange(size_t requiredBytes) const;
+
+  // Ensures at least requiredBytes remain in the current page and returns the
+  // first writable byte.
+  char* ensurePage(size_t requiredBytes);
 
   const std::function<void*(uint32_t)> stringBufferFactory_;
 
@@ -228,9 +272,10 @@ class FsstEncoding final
   // Nested encoding for compressed string lengths.
   std::unique_ptr<Encoding> lengths_;
 
-  // Pointer into the compressed string blob.
-  const char* blob_;
-  const char* pos_;
+  // Unwrapped FSST string blob and the current byte offset within it.
+  velox::BufferPtr uncompressedBlob_;
+  std::string_view blob_;
+  size_t blobOffset_{0};
 
   // Current row index.
   uint32_t row_{0};
@@ -247,12 +292,19 @@ class FsstEncoding final
   // Slot containing currentPage_.
   size_t currentPageIndex_{0};
 
-  // Scratch buffer for decompression output.
+  // Scratch buffer used when the remaining page capacity cannot hold the
+  // maximum possible expansion of a compressed string.
   Vector<char> decompressBuffer_;
 };
 
 template <typename V>
 void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
+  if (visitor.numRows() == 0) {
+    checkReadRange(0, "Reading past end of FSST encoding.");
+    checkFinalBlobPosition();
+    return;
+  }
+
   // Pre-materialize all compressed lengths needed for this read.
   const auto endRow = visitor.rowAt(visitor.numRows() - 1);
   auto numSelected = endRow + 1 - params.numScanned;
@@ -260,25 +312,34 @@ void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
     numSelected -= velox::bits::countNulls(
         nulls->template as<uint64_t>(), params.numScanned, endRow + 1);
   }
+  NIMBLE_CHECK_GE(numSelected, 0, "Invalid FSST visitor row range.");
+  checkReadRange(
+      static_cast<uint32_t>(numSelected), "Reading past end of FSST encoding.");
   lengthBuffer_.resize(numSelected);
   lengths_->materialize(numSelected, lengthBuffer_.data());
   auto* lengths = lengthBuffer_.data();
+  validateCompressedLengths(
+      {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
 
   detail::readWithVisitorSlow(
       visitor,
       params,
       [&](auto toSkip) {
+        const auto compressedBytes =
+            std::accumulate(lengths, lengths + toSkip, static_cast<size_t>(0));
         row_ += toSkip;
-        pos_ += std::accumulate(lengths, lengths + toSkip, 0ull);
+        blobOffset_ += compressedBytes;
         lengths += toSkip;
       },
       [&] {
         const auto compressedLen = *lengths++;
-        auto result = decompressToStringBuffer(pos_, compressedLen);
+        auto result =
+            decompressToStringBuffer(blob_.substr(blobOffset_, compressedLen));
         ++row_;
-        pos_ += compressedLen;
+        blobOffset_ += compressedLen;
         return result;
       });
+  checkFinalBlobPosition();
 }
 
 } // namespace facebook::nimble

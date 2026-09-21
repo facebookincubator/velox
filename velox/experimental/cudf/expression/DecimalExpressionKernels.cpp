@@ -31,7 +31,7 @@ namespace {
 
 __int128_t getDecimalScalarValue(
     const cudf::scalar& s,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (s.type().id() == cudf::type_id::DECIMAL64) {
     auto const& dec =
         static_cast<cudf::fixed_point_scalar<numeric::decimal64> const&>(s);
@@ -47,7 +47,7 @@ __int128_t getDecimalScalarValue(
 std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
     cudf::data_type outputType,
     cudf::size_type size,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::make_fixed_width_column(
       outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
@@ -69,9 +69,7 @@ void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
   }
 }
 
-void finalizeDivideOutputNullCount(
-    cudf::column& out,
-    rmm::cuda_stream_view stream) {
+void finalizeDivideOutputNullCount(cudf::column& out, cuda::stream_ref stream) {
   if (out.size() == 0) {
     return;
   }
@@ -87,7 +85,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_EQ(lhs.size(), rhs.size(), "Decimal divide requires equal sizes");
   // Use VELOX_CHECK (not _EQ) so failed checks do not pass cudf::type_id into
@@ -130,7 +128,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");
@@ -172,7 +170,7 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& rhs,
     cudf::data_type outputType,
     int32_t aRescale,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_GE(
       aRescale, 0, "Decimal divide requires non-negative rescale factor");

@@ -35,6 +35,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kSessionTimezone);
     VELOX_REGISTER_QUERY_CONFIG(kSessionStartTime);
     VELOX_REGISTER_QUERY_CONFIG(kAdjustTimestampToTimezone);
+    VELOX_REGISTER_QUERY_CONFIG(kLegacyTimestampWithTimezone);
 
     // Expression evaluation.
     VELOX_REGISTER_QUERY_CONFIG(kExprEvalSimplified);

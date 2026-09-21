@@ -566,7 +566,7 @@ void HashTable<ignoreNullKeys>::arrayGroupProbe(HashLookup& lookup) {
   auto hashes = lookup.hashes.data();
   auto groups = lookup.hits.data();
   int32_t i = 0;
-  if (process::hasAvx2() && simd::isDense(rows, numProbes)) {
+  if (process::hasSimd() && simd::isDense(rows, numProbes)) {
     auto allZero = xsimd::broadcast<int64_t>(0);
     constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
     auto start = rows[0];

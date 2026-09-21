@@ -179,6 +179,10 @@ class LocalExchange : public SourceOperator {
     return fmt::format("LocalExchange({})", partition_);
   }
 
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return core::PlanNode::Boundary::kOutput;
+  }
+
   bool startDrain() override {
     return false;
   }
@@ -212,6 +216,10 @@ class LocalPartition : public Operator {
 
   std::string toString() const override {
     return fmt::format("LocalPartition({})", numPartitions_);
+  }
+
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return core::PlanNode::Boundary::kInput;
   }
 
   void addInput(RowVectorPtr input) override;

@@ -98,8 +98,8 @@ class BatchedStreamDecoderTest : public ::testing::Test {
     for (const auto& batch : batches) {
       const std::string blob{
           serializer.serialize(batch, OrderedRanges::of(0, batch->size()))};
-      DeserializerOptions deserializerOptions{.hasHeader = true};
-      serde::StreamDataParser parser{pool_.get(), deserializerOptions};
+      DeserializerOptions deserializerOptions{};
+      serde::StreamDataParser parser{pool_.get()};
       SerializedBatch collected;
       collected.rowCount = parser.initialize(blob);
       collected.version = parser.version();
@@ -212,7 +212,6 @@ void addBatches(
       decoder.addBatch(
           startRow,
           batch.stream(streamOffset),
-          batch.version,
           batch.streamEncodingUsesVarintRowCount);
     }
     startRow += batch.rowCount;
@@ -222,7 +221,7 @@ void addBatches(
 std::vector<int32_t> readInts(BatchedStreamDecoder& decoder, uint32_t count) {
   std::vector<int32_t> output(count);
   std::vector<facebook::velox::BufferPtr> stringBuffers;
-  decoder.next(count, output.data(), stringBuffers);
+  decoder.next(count, output.data(), /*getOutputNulls=*/nullptr, stringBuffers);
   return output;
 }
 
@@ -235,6 +234,29 @@ std::vector<int32_t> expectedInts(int32_t firstValue, int32_t count) {
 }
 
 constexpr uint32_t kNoBufferPool = 0;
+
+TEST_F(BatchedStreamDecoderTest, rejectsSelectedReads) {
+  auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
+  auto input = serializeBatches(
+      rowType, {makeIntBatch(rowType, 0, 1)}, serializerOptions());
+  BatchedStreamDecoder decoder{
+      input.schema->asRow().childAt(0).get(),
+      /*isInMapStream=*/false,
+      kNoBufferPool,
+      pool_.get()};
+  const std::array<uint32_t, 1> rows{0};
+  std::array<int32_t, 1> output{};
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+
+  NIMBLE_ASSERT_THROW(
+      decoder.read(
+          rows,
+          DataType::Int32,
+          output.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      "BatchedStreamDecoder does not support selective row decoding");
+}
 
 TEST_F(BatchedStreamDecoderTest, nextStitchesSegmentsFromMultipleBatches) {
   auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
@@ -304,11 +326,7 @@ TEST_F(BatchedStreamDecoderTest, nextReadsStreamRowCountEncodingCombinations) {
               .useVarintRowCount = useVarintRowCount[i],
           });
       encodedBuffers.push_back(std::move(buffer));
-      decoder.addBatch(
-          startRow,
-          encodedSegments[i],
-          SerializationVersion::kTablet,
-          useVarintRowCount[i]);
+      decoder.addBatch(startRow, encodedSegments[i], useVarintRowCount[i]);
       startRow += static_cast<uint32_t>(batches[i].size());
     }
 
@@ -395,10 +413,11 @@ TEST_F(BatchedStreamDecoderTest, nextStitchesNullBitmapAcrossSegments) {
   std::vector<int32_t> output(kRows);
   std::vector<uint64_t> nulls(facebook::velox::bits::nwords(kRows), 0);
   std::vector<facebook::velox::BufferPtr> stringBuffers;
-  const auto nonNullCount =
-      decoder.next(kRows, output.data(), stringBuffers, [&]() -> void* {
-        return nulls.data();
-      });
+  const auto nonNullCount = decoder.next(
+      kRows,
+      output.data(),
+      [&]() -> void* { return nulls.data(); },
+      stringBuffers);
 
   // Rows 4 and 6 are the nulls contributed by batch 2.
   const std::vector<bool> expectedNonNull = {
@@ -428,7 +447,8 @@ TEST_F(BatchedStreamDecoderTest, denseReadReconstructsOmittedRowNullStream) {
   std::vector<bool> expected(kRows, true);
   std::vector<uint8_t> output(kRows, 0);
   std::vector<facebook::velox::BufferPtr> stringBuffers;
-  const auto nonNullCount = decoder.next(kRows, output.data(), stringBuffers);
+  const auto nonNullCount = decoder.next(
+      kRows, output.data(), /*getOutputNulls=*/nullptr, stringBuffers);
 
   std::vector<bool> actual(output.begin(), output.end());
   EXPECT_EQ(actual, expected);
@@ -450,7 +470,8 @@ TEST_F(BatchedStreamDecoderTest, skipOnOmittedRowNullStreamAdvancesCursor) {
   constexpr uint32_t kRows = 4;
   std::vector<uint8_t> output(kRows, 0);
   std::vector<facebook::velox::BufferPtr> stringBuffers;
-  const auto nonNullCount = decoder.next(kRows, output.data(), stringBuffers);
+  const auto nonNullCount = decoder.next(
+      kRows, output.data(), /*getOutputNulls=*/nullptr, stringBuffers);
 
   std::vector<bool> actual(output.begin(), output.end());
   EXPECT_EQ(actual, std::vector<bool>(kRows, true));
@@ -491,7 +512,8 @@ TEST_F(BatchedStreamDecoderTest, nextWithZeroCountDecodesNothing) {
   addBatches(decoder, input, valueOffset);
 
   std::vector<facebook::velox::BufferPtr> stringBuffers;
-  EXPECT_EQ(decoder.next(0, nullptr, stringBuffers), 0);
+  EXPECT_EQ(
+      decoder.next(0, nullptr, /*getOutputNulls=*/nullptr, stringBuffers), 0);
 
   // The segment cursor did not move.
   EXPECT_EQ(readInts(decoder, 4), expectedInts(0, 4));
@@ -512,7 +534,6 @@ TEST_F(BatchedStreamDecoderTest, addBatchRejectsEmptySegment) {
       decoder.addBatch(
           0,
           std::string_view{},
-          SerializationVersion::kSerialization,
           /*streamEncodingUsesVarintRowCount=*/true),
       "Physical stream segment must be non-empty");
 }
@@ -547,7 +568,8 @@ class BatchedStreamDecoderInMapTest : public BatchedStreamDecoderTest {
       uint32_t count) {
     std::vector<uint8_t> output(count, 0xFF);
     std::vector<facebook::velox::BufferPtr> stringBuffers;
-    decoder.next(count, output.data(), stringBuffers);
+    decoder.next(
+        count, output.data(), /*getOutputNulls=*/nullptr, stringBuffers);
     return std::vector<bool>(output.begin(), output.end());
   }
 };
@@ -625,7 +647,6 @@ TEST_F(
   decoder.addBatch(
       /*startRow=*/0,
       input.batches[0].stream(inMapOffsetB),
-      input.batches[0].version,
       input.batches[0].streamEncodingUsesVarintRowCount);
   decoder.addPresentInMapBatch(/*startRow=*/4, /*rowCount=*/3);
 

@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamDecoder.h"
@@ -98,6 +99,33 @@ class TestStreamLoader : public nimble::StreamLoader {
  private:
   const std::string stream_;
 };
+
+TEST(ChunkedStreamDecoderTest, rejectsSelectedReads) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const nimble::MetricsLogger logger;
+  nimble::ChunkedStreamDecoder decoder{
+      *pool,
+      /*stream=*/nullptr,
+      [](velox::memory::MemoryPool&,
+         std::string_view,
+         const std::function<void*(uint32_t)>&) {
+        return std::unique_ptr<nimble::Encoding>{};
+      },
+      /*stringDecoderZeroCopy=*/true,
+      logger};
+  const std::array<uint32_t, 1> rows{0};
+  std::array<int64_t, 1> output{};
+  std::vector<velox::BufferPtr> stringBuffers;
+
+  NIMBLE_ASSERT_THROW(
+      decoder.read(
+          rows,
+          nimble::DataType::Int64,
+          output.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      "ChunkedStreamDecoder does not support selective row decoding");
+}
 
 template <typename E>
 std::unique_ptr<nimble::StreamLoader> createStream(
@@ -279,11 +307,11 @@ void test(
             const auto nonNullCount = decoder.next(
                 outputSize,
                 output.data(),
-                stringBuffers,
                 [&]() {
                   ++count;
                   return outputNulls.data();
                 },
+                stringBuffers,
                 scatterBitmap.has_value() ? &scatterBitmap.value() : nullptr);
 
             LOG(INFO) << "offset: " << offset << ", batchSize: " << batchSize
@@ -352,9 +380,12 @@ void test(
             }
           } else {
             std::vector<T> output(outputSize);
-            const auto actualOutputSize =
-                decoder.next(outputSize, output.data(), stringBuffers);
-            EXPECT_EQ(outputSize, actualOutputSize);
+            const auto actualOutputSize = decoder.next(
+                static_cast<uint32_t>(outputSize),
+                output.data(),
+                /*getOutputNulls=*/nullptr,
+                stringBuffers);
+            EXPECT_EQ(static_cast<uint32_t>(outputSize), actualOutputSize);
 
             for (auto i = 0; i < outputSize; ++i) {
               EXPECT_EQ(getValue(data, offset + i), output[i])

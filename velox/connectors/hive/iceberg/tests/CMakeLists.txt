@@ -44,6 +44,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergPositionalDeleteTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
+    IcebergTableHandleTest.cpp
     IcebergTestBase.cpp
   )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
@@ -60,7 +61,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec
     velox_exec_test_lib
     Folly::folly
-    Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
   )

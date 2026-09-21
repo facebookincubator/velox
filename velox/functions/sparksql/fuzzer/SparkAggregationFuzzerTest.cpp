@@ -14,17 +14,15 @@
  * limitations under the License.
  */
 
-#include <folly/String.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
-#include <string_view>
 #include <unordered_set>
-#include <vector>
 
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -49,36 +47,9 @@ DEFINE_string(
     "this comma separated list of function names "
     "(e.g: --only \"min\" or --only \"sum,avg\").");
 
-namespace {
+DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
-bool onlyContainsSkippedFunctions(
-    const std::string& onlyFunctions,
-    const std::unordered_set<std::string>& skipFunctions) {
-  if (onlyFunctions.empty()) {
-    return false;
-  }
-
-  std::vector<std::string_view> requestedFunctions;
-  folly::split(',', onlyFunctions, requestedFunctions);
-
-  bool hasRequestedFunction = false;
-  for (auto requestedFunction : requestedFunctions) {
-    auto functionName = folly::trimWhitespace(requestedFunction).toString();
-    folly::toLowerAscii(functionName);
-    if (functionName.empty()) {
-      continue;
-    }
-
-    hasRequestedFunction = true;
-    if (!skipFunctions.count(functionName)) {
-      return false;
-    }
-  }
-
-  return hasRequestedFunction;
-}
-
-} // namespace
+DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
@@ -105,8 +76,13 @@ int main(int argc, char** argv) {
     facebook::velox::serializer::spark::UnsafeRowVectorSerde::
         registerNamedVectorSerde();
   }
-  facebook::velox::memory::MemoryManager::initialize(
-      facebook::velox::memory::MemoryManager::Options{});
+  // Must install a real arbitrator. With the default options the manager gets
+  // a NoopArbitrator, so the test-only spill hooks reach
+  // memory::testingRunArbitration() and reclaim nothing, which leaves hash
+  // aggregation -- the one operator here that spills only under arbitration --
+  // never spilling.
+  facebook::velox::exec::test::setupMemory(
+      FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
 
   // Spark reference execution uses gRPC and can be sensitive to large
   // payloads. Keep generated input sizes modest to reduce transport and
@@ -132,11 +108,6 @@ int main(int argc, char** argv) {
       // Correctness mismatches and OOM during KLL sketch operations.
       "approx_percentile",
   };
-
-  if (onlyContainsSkippedFunctions(FLAGS_only, skipFunctions)) {
-    LOG(INFO) << "All functions requested by --only are skipped.";
-    return 0;
-  }
 
   using facebook::velox::exec::test::TransformResultVerifier;
 

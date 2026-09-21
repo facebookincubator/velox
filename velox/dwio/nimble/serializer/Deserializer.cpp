@@ -17,6 +17,7 @@
 #include "folly/Likely.h"
 #include "folly/ScopeGuard.h"
 #include "folly/container/F14Set.h"
+#include "folly/coro/BlockingWait.h"
 #include "velox/buffer/Buffer.h"
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
@@ -106,8 +107,8 @@ bool checkColumnProjectionSubfield(
   return false;
 }
 
-// One reader operation. Executed as `reader_->skip(numRows)` when
-// `skip == true`, or `reader_->next(numRows, ...)` when `skip == false`.
+// One reader operation. Executed as `reader_->co_skip(numRows)` when
+// `skip == true`, or `reader_->co_next(numRows, ...)` when `skip == false`.
 struct DecodeOp {
   bool skip;
   uint32_t numRows;
@@ -235,7 +236,8 @@ FieldReaderParams Deserializer::createFieldReaderParams() const {
   params.flatMapFeatureSelector = flatMapFeatureSelector_;
   params.decodeExecutor = options_.decodeExecutor;
   params.maxDecodeParallelism = options_.maxDecodeParallelism;
-  params.minStreamsPerDecodeUnit = options_.minStreamsPerDecodeUnit;
+  params.minStreamsPerDecodeTask = options_.minStreamsPerDecodeTask;
+  params.decodePools = options_.decodePools;
   if (options_.outputType == nullptr) {
     return params;
   }
@@ -376,7 +378,7 @@ void Deserializer::initialize(
     const std::shared_ptr<const velox::dwio::common::TypeWithId>& schemaWithId,
     const std::function<bool(uint32_t)>& isSelected) {
   const auto params = createFieldReaderParams();
-  parser_ = std::make_unique<serde::StreamDataParser>(pool_, options_);
+  parser_ = std::make_unique<serde::StreamDataParser>(pool_);
 
   std::vector<uint32_t> offsets;
   rootFactory_ = FieldReaderFactory::create(
@@ -567,11 +569,11 @@ void Deserializer::decodeRun(DecodeRun& run, velox::VectorPtr& output) const {
   const auto ops = buildDecodeOps(runRanges_);
   for (const auto& op : ops) {
     if (op.skip) {
-      reader_->skip(op.numRows);
+      folly::coro::blockingWait(reader_->co_skip(op.numRows));
       continue;
     }
     velox::VectorPtr decoded;
-    reader_->next(op.numRows, decoded, nullptr);
+    folly::coro::blockingWait(reader_->co_next(op.numRows, decoded, nullptr));
     decoded = projectOutput(std::move(decoded));
     appendToOutput(std::move(decoded), output);
   }
@@ -585,7 +587,6 @@ void Deserializer::appendStreamSegments(
     uint32_t startRow,
     bool requiresBarrier) const {
   const auto maxStreamOffset = deserializers_.size() - 1;
-  const auto version = parser_->version();
   const auto streamEncodingUsesVarintRowCount =
       parser_->streamEncodingUsesVarintRowCount();
   const bool hasInMapChildren = !inMapChildTypes_.empty();
@@ -609,7 +610,7 @@ void Deserializer::appendStreamSegments(
     auto* decoder = deserializers_[offset];
     NIMBLE_CHECK_NOT_NULL(decoder, "Missing decoder for stream");
     BatchedStreamDecoder::as(decoder)->addBatch(
-        startRow, streamData, version, streamEncodingUsesVarintRowCount);
+        startRow, streamData, streamEncodingUsesVarintRowCount);
   });
 
   if (!hasInMapChildren) {

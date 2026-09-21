@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
@@ -27,6 +28,22 @@
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 #include "velox/vector/arrow/Abi.h"
+
+namespace {
+
+const auto& varTypeLayoutNames() {
+  static const folly::F14FastMap<ArrowOptions::VarTypeLayout, std::string_view>
+      kNames = {
+          {ArrowOptions::VarTypeLayout::kDefault, "Default"},
+          {ArrowOptions::VarTypeLayout::kStringView, "StringView"},
+          {ArrowOptions::VarTypeLayout::kLarge, "Large"},
+      };
+  return kNames;
+}
+
+} // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(ArrowOptions, VarTypeLayout, varTypeLayoutNames)
 
 namespace facebook::velox {
 
@@ -400,21 +417,20 @@ const char* exportArrowFormatStr(
       return "f"; // float32
     case TypeKind::DOUBLE:
       return "g"; // float64
-    // We always map VARCHAR and VARBINARY to the "small" version (lower case
-    // format string), which uses 32 bit offsets.
     case TypeKind::VARCHAR:
-      if (options.exportToStringView) {
-        return "vu";
+    case TypeKind::VARBINARY: {
+      const bool asString =
+          type->kind() == TypeKind::VARCHAR || options.exportVarbinaryAsString;
+      switch (options.varTypeLayout) {
+        case ArrowOptions::VarTypeLayout::kDefault:
+          return asString ? "u" : "z";
+        case ArrowOptions::VarTypeLayout::kStringView:
+          return asString ? "vu" : "vz";
+        case ArrowOptions::VarTypeLayout::kLarge:
+          return asString ? "U" : "Z";
       }
-      return "u"; // utf-8 string
-    case TypeKind::VARBINARY:
-      if (options.exportVarbinaryAsString) {
-        return "u"; // utf-8 string (binary payload)
-      }
-      if (options.exportToStringView) {
-        return "vz";
-      }
-      return "z"; // binary
+      VELOX_UNREACHABLE();
+    }
     case TypeKind::UNKNOWN:
       return "n"; // NullType
     case TypeKind::TIMESTAMP:
@@ -992,6 +1008,7 @@ void exportViews(
   });
 }
 
+template <typename TOffsets = int32_t>
 void exportStrings(
     const FlatVector<StringView>& vec,
     const Selection& rows,
@@ -1007,10 +1024,10 @@ void exportStrings(
   });
   holder.setBuffer(2, AlignedBuffer::allocate<char>(bufSize, pool));
   char* rawBuffer = holder.getBufferAs<char>(2);
-  VELOX_CHECK_LT(bufSize, std::numeric_limits<int32_t>::max());
+  VELOX_CHECK_LT(bufSize, std::numeric_limits<TOffsets>::max());
   auto offsetLen = checkedPlus<size_t>(out.length, 1);
-  holder.setBuffer(1, AlignedBuffer::allocate<int32_t>(offsetLen, pool));
-  auto* rawOffsets = holder.getBufferAs<int32_t>(1);
+  holder.setBuffer(1, AlignedBuffer::allocate<TOffsets>(offsetLen, pool));
+  auto* rawOffsets = holder.getBufferAs<TOffsets>(1);
   *rawOffsets = 0;
   rows.apply([&](vector_size_t i) {
     auto newOffset = *rawOffsets;
@@ -1050,23 +1067,22 @@ void exportFlat(
       // Keep out.n_children = 0 for UNKNOWN type.
       break;
     case TypeKind::VARCHAR:
-    case TypeKind::VARBINARY:
-      if (options.exportToStringView) {
-        exportValues(vec, rows, options, out, pool, holder);
-        exportViews(
-            *vec.asUnchecked<FlatVector<StringView>>(),
-            rows,
-            out,
-            pool,
-            holder);
-      } else
-        exportStrings(
-            *vec.asUnchecked<FlatVector<StringView>>(),
-            rows,
-            out,
-            pool,
-            holder);
+    case TypeKind::VARBINARY: {
+      const auto& stringVector = *vec.asUnchecked<FlatVector<StringView>>();
+      switch (options.varTypeLayout) {
+        case ArrowOptions::VarTypeLayout::kDefault:
+          exportStrings(stringVector, rows, out, pool, holder);
+          break;
+        case ArrowOptions::VarTypeLayout::kStringView:
+          exportValues(vec, rows, options, out, pool, holder);
+          exportViews(stringVector, rows, out, pool, holder);
+          break;
+        case ArrowOptions::VarTypeLayout::kLarge:
+          exportStrings<int64_t>(stringVector, rows, out, pool, holder);
+          break;
+      }
       break;
+    }
     default:
       VELOX_NYI(
           "Conversion of FlatVector of {} is not supported yet.",

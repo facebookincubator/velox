@@ -678,7 +678,7 @@ output rows with empty unnest values are not produced.
    * - unnestVariables
      - Input columns of type array or map to expand.
    * - unnestNames
-     - Names to use for expanded columns. One name per array column. Two names per map column.
+     - Names to use for expanded columns. One name per array column. Two names per map column. A name may be absent (null) to prune the corresponding expanded column, which is then neither emitted nor materialized.
    * - ordinalityName
      - Optional name for the ordinality column.
    * - emptyUnnestValueName
@@ -709,7 +709,7 @@ the written file paths on storage and the collected column stats.
    * - aggregationNode
      - Optional Aggregation plan node used to collect column stats for the data written to storage.
    * - insertTableHandle
-     - Connector-specific description of the destination table.
+     - Connector-specific description of the destination table. Its notNullColumns is a subset of columnNames; writing a null into one of them fails the query.
    * - outputType
      - A list of output columns containing the metadata of the data written storage.
 

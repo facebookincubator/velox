@@ -473,5 +473,18 @@ TEST(ExceptionTests, failMacros) {
   }
 }
 
+TEST(ExceptionTests, fileFail) {
+  try {
+    NIMBLE_FILE_FAIL("Corrupted data at offset: {}", 42);
+    FAIL() << "Should have thrown";
+  } catch (const nimble::NimbleUserError& exception) {
+    EXPECT_EQ(exception.errorCode(), "CORRUPTED_FILE");
+    EXPECT_EQ(exception.errorSource(), "USER");
+    EXPECT_FALSE(exception.retryable());
+    EXPECT_EQ(exception.failingExpression(), "");
+    EXPECT_EQ(exception.errorMessage(), "Corrupted data at offset: 42");
+  }
+}
+
 } // namespace
 } // namespace facebook

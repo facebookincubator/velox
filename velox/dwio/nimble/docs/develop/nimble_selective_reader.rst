@@ -35,12 +35,12 @@ selective_nimble_reader_enabled = true
         ├── FileSplitReader
             ├── SelectiveNimbleReader (dwio::common::Reader)
             │
-            │   createReader(): uses VeloxReader temporarily to extract schema/type
+            │   createReader(): uses BatchReader temporarily to extract schema/type
             │   createRowReader(): builds SelectiveNimbleRowReader
             │
             └── SelectiveNimbleRowReader (dwio::common::RowReader)
                   │   next() → own column reader tree
-                  └── TabletReader (direct, no VeloxReader in the loop)
+                  └── TabletReader (direct, no BatchReader in the loop)
 
 Batch Path
 
@@ -56,7 +56,7 @@ selective_nimble_reader_enabled = false
             │   createRowReader(): builds NimbleRowReader
             │
             └── NimbleRowReader (dwio::common::RowReader)
-                  ├── VeloxReader.next()
+                  ├── BatchReader.next()
                   │     ├── FieldReader tree
                   │     └── TabletReader
 
@@ -312,6 +312,26 @@ col4(StringColumnReader).read(0, [17,42,...]) — read() tries the dictionary pa
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 For string columns with nimble_preserve_dictionary_encoding=true , readWithDictionary() intercepts the read above the decoder . Instead of the visitor applying the filter per-row during decode, it bulk-reads raw dictionary indices and applies the filter post-hoc on the alphabet via SIMD filterDictionaryIndices() .
+
+Fuzzer-only runtime statistics
+""""""""""""""""""""""""""""""
+
+The ``nimble_table_evolution_fuzzer`` links a dedicated selective-reader
+build compiled with ``NIMBLE_READER_FUZZER_STATS_ENABLED``. In that build,
+``NimbleReaderFuzzerStats`` publishes the following operator runtime
+counters. The normal selective-reader build compiles the update functions as
+no-ops and does not pay for runtime-stat collection.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Counter
+     - Meaning
+   * - ``nimbleStringDictionaryEncodingPreserved``
+     - Number of reads completed while preserving dictionary encoding.
+   * - ``nimbleStringDictionaryEncodingAbandoned``
+     - Number of reads that fell back to flat decoding at entry or at a chunk
+       boundary.
 
 Flat path (default)
 """""""""""""""""""

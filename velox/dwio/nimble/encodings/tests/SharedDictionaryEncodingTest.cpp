@@ -892,6 +892,51 @@ TEST_F(SharedDictionaryEncodingTest, alphabetRoundTripsWithAndWithoutView) {
   }
 }
 
+DEBUG_ONLY_TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetRejectsOutOfRangeBatchIndicesWithAndWithoutView) {
+  struct TestCase {
+    std::string testName;
+    EncodingType encodingType;
+  };
+
+  const std::vector<TestCase> testCases{
+      {"view", EncodingType::FixedBitWidth},
+      {"decoded entries", EncodingType::Varint},
+  };
+  const std::vector<int32_t> values{10, 20, 30};
+  const std::vector<uint32_t> indices{0, static_cast<uint32_t>(values.size())};
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.testName);
+    const auto alphabet = test::createSharedDictionaryAlphabet<int32_t>(
+        values, std::array{testCase.encodingType}, pool_.get());
+    std::vector<TypeTraits<int32_t>::physicalType> output(indices.size());
+
+    NIMBLE_ASSERT_THROW(
+        alphabet->materialize<int32_t>(indices, output.data()),
+        "Shared dictionary index exceeds alphabet size.");
+  }
+}
+
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetMaterializesBlockBitPackingIndexedRuns) {
+  const auto values = sequentialAlphabet(/*size=*/2'051);
+  const auto alphabet = test::createSharedDictionaryAlphabet<int32_t>(
+      values, std::array{EncodingType::BlockBitPacking}, pool_.get());
+  EXPECT_EQ(alphabet->encodingType(), EncodingType::BlockBitPacking);
+
+  const std::vector<uint32_t> indices{
+      3, 3, 4, 5, 1'023, 1'024, 1'025, 2'050, 1};
+  std::vector<TypeTraits<int32_t>::physicalType> materialized(indices.size());
+  alphabet->materialize<int32_t>(indices, materialized.data());
+
+  const std::vector<TypeTraits<int32_t>::physicalType> expected{
+      3, 3, 4, 5, 1'023, 1'024, 1'025, 2'050, 1};
+  EXPECT_EQ(materialized, expected);
+}
+
 TEST_F(SharedDictionaryEncodingTest, materializeAllIntegerTypes) {
   auto verify = [this]<typename T>() {
     SCOPED_TRACE(fmt::format("dataType={}", TypeTraits<T>::dataType));

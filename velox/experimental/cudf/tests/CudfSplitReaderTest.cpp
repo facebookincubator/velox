@@ -34,7 +34,7 @@ class MetadataOnlySplitReader final : public CudfSplitReader {
   using CudfSplitReader::CudfSplitReader;
 
   cudf::ast::expression const* logicalFilter() const {
-    return subfieldFilter();
+    return subfieldFilterAst();
   }
 
   cudf::ast::expression const* splitFilter() const {

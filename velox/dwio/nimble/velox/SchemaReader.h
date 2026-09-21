@@ -317,8 +317,27 @@ std::ostream& operator<<(
 /// as a hotspot in the Deserializer's per-batch flatmap in-map detection
 /// over hundreds of keys. Concrete-typed callables remove that dispatch
 /// without forcing every caller to materialize an intermediate offset list.
-template <typename Visitor>
-bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
+namespace detail {
+
+// Normalizes the child accessors of the two schema representations: Type
+// exposes children as shared pointers, TypeBuilder as references. Lets
+// visitValueStreamLeaves run unchanged over both, so the writer decides
+// whether a value stream is observable using the exact walk the reader will
+// perform.
+template <typename T>
+const T& derefChild(const T& child) {
+  return child;
+}
+
+template <typename T>
+const T& derefChild(const std::shared_ptr<T>& child) {
+  return *child;
+}
+
+} // namespace detail
+
+template <typename TypeT, typename Visitor>
+bool visitValueStreamLeaves(const TypeT& type, Visitor& visit) {
   switch (type.kind()) {
     case Kind::Scalar:
       return visit(type.asScalar().scalarDescriptor().offset());
@@ -340,7 +359,7 @@ bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
       // the writer, so it is not a reliable anchor; children are. The
       // visitor's return value short-circuits the walk on the first hit.
       for (size_t i = 0; i < row.childrenCount(); ++i) {
-        if (visitValueStreamLeaves(*row.childAt(i), visit)) {
+        if (visitValueStreamLeaves(detail::derefChild(row.childAt(i)), visit)) {
           return true;
         }
       }
@@ -355,7 +374,8 @@ bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
       // FlatMap children are independent keys; each may or may not carry
       // data in the current stripe, so all must be visited.
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
-        if (visitValueStreamLeaves(*flatMap.childAt(i), visit)) {
+        if (visitValueStreamLeaves(
+                detail::derefChild(flatMap.childAt(i)), visit)) {
           return true;
         }
       }
@@ -366,8 +386,8 @@ bool visitValueStreamLeaves(const Type& type, Visitor& visit) {
   }
 }
 
-template <typename Visitor>
-bool visitValueStreamLeaves(const Type& type, Visitor&& visit) {
+template <typename TypeT, typename Visitor>
+bool visitValueStreamLeaves(const TypeT& type, Visitor&& visit) {
   auto&& visitRef = std::forward<Visitor>(visit);
   return visitValueStreamLeaves(type, visitRef);
 }
