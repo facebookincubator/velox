@@ -251,7 +251,8 @@ std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntryLocked() {
 std::optional<CachePin> CacheShard::lookupLocked(
     RawFileCacheKey key,
     uint64_t size,
-    folly::SemiFuture<bool>* wait) {
+    folly::SemiFuture<bool>* wait,
+    CacheEntrySizePolicy sizePolicy) {
   ++eventCounter_;
   auto it = entryMap_.find(key);
   if (it == entryMap_.end()) {
@@ -266,7 +267,8 @@ std::optional<CachePin> CacheShard::lookupLocked(
     return CachePin{};
   }
   // size=0 (from find()) always passes since entry size is non-negative.
-  if (foundEntry->size() < size) {
+  if (sizePolicy == CacheEntrySizePolicy::kRequireAtLeast &&
+      foundEntry->size() < size) {
     // This can happen if different load quanta apply to access via different
     // connectors. This is not an error but still worth logging.
     VELOX_CACHE_LOG_EVERY_MS(WARNING, 1'000)
@@ -297,10 +299,20 @@ CachePin CacheShard::findOrCreate(
     uint64_t size,
     bool contiguous,
     folly::SemiFuture<bool>* wait) {
+  return findOrCreate(
+      key, size, contiguous, wait, CacheEntrySizePolicy::kRequireAtLeast);
+}
+
+CachePin CacheShard::findOrCreate(
+    RawFileCacheKey key,
+    uint64_t size,
+    bool contiguous,
+    folly::SemiFuture<bool>* wait,
+    CacheEntrySizePolicy sizePolicy) {
   AsyncDataCacheEntry* entryToInit = nullptr;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    auto result = lookupLocked(key, size, wait);
+    auto result = lookupLocked(key, size, wait, sizePolicy);
     if (result.has_value()) {
       return std::move(result.value());
     }
@@ -875,8 +887,18 @@ CachePin AsyncDataCache::findOrCreate(
     uint64_t size,
     bool contiguous,
     folly::SemiFuture<bool>* wait) {
+  return findOrCreate(
+      key, size, contiguous, wait, CacheEntrySizePolicy::kRequireAtLeast);
+}
+
+CachePin AsyncDataCache::findOrCreate(
+    RawFileCacheKey key,
+    uint64_t size,
+    bool contiguous,
+    folly::SemiFuture<bool>* wait,
+    CacheEntrySizePolicy sizePolicy) {
   const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
-  return shards_[shard]->findOrCreate(key, size, contiguous, wait);
+  return shards_[shard]->findOrCreate(key, size, contiguous, wait, sizePolicy);
 }
 
 std::optional<CachePin> AsyncDataCache::find(
