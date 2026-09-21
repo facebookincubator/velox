@@ -25,9 +25,9 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <type_traits>
-#include <optional>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/testutil/TestValue.h"
@@ -648,6 +648,50 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   EXPECT_TRUE(callback1Nullptr);
 }
 
+TEST_F(UcxOutputQueueManagerTest, staleServerCleanupDoesNotDeleteReusedTask) {
+  const std::string taskId = "reusedTaskCleanup";
+  queueManager_->removeTask(taskId);
+
+  auto oldTask = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/false);
+
+  bool oldServerReceivedEndMarker = false;
+  auto oldQueue = queueManager_->getData(
+      taskId, 0, receiveEndMarker(0, oldServerReceivedEndMarker));
+  ASSERT_NE(oldQueue, nullptr);
+  EXPECT_FALSE(oldServerReceivedEndMarker);
+
+  oldTask->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  EXPECT_TRUE(oldServerReceivedEndMarker);
+
+  auto newTask = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/false);
+
+  bool newServerReceivedData = false;
+  auto newQueue =
+      queueManager_->getData(taskId, 0, receiveData(0, newServerReceivedData));
+  ASSERT_NE(newQueue, nullptr);
+  ASSERT_NE(newQueue, oldQueue);
+  EXPECT_FALSE(newServerReceivedData);
+
+  queueManager_->deleteResultsForQueue(oldQueue, 0);
+  EXPECT_FALSE(newServerReceivedData);
+
+  enqueue(taskId, 0, /*size=*/10);
+  EXPECT_TRUE(newServerReceivedData);
+
+  queueManager_->deleteResultsForQueue(newQueue, 0);
+  newTask->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
 TEST_F(
     UcxOutputQueueManagerTest,
     intraNodeEligibilityWaitsForPartitionedTaskInitialization) {
@@ -719,14 +763,11 @@ TEST_F(
 
   std::optional<bool> eligibility;
   std::optional<IntraNodeTransferResult> registryPollResult;
-  queueManager_->notifyOnIntraNodeEligibility(
-      taskId,
-      [&](bool value) {
-        eligibility = value;
-        registryPollResult = IntraNodeTransferRegistry::getInstance()->poll(
-            IntraNodeTransferKey{
-                taskId, /*destination=*/0, /*sequenceNumber=*/0});
-      });
+  queueManager_->notifyOnIntraNodeEligibility(taskId, [&](bool value) {
+    eligibility = value;
+    registryPollResult = IntraNodeTransferRegistry::getInstance()->poll(
+        IntraNodeTransferKey{taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  });
   EXPECT_FALSE(eligibility.has_value());
 
   auto task = initializeTask(
@@ -800,8 +841,7 @@ DEBUG_ONLY_TEST_F(
   remover.join();
 
   const auto result = IntraNodeTransferRegistry::getInstance()->poll(
-      IntraNodeTransferKey{
-          taskId, /*destination=*/0, /*sequenceNumber=*/0});
+      IntraNodeTransferKey{taskId, /*destination=*/0, /*sequenceNumber=*/0});
   ASSERT_TRUE(result.has_value());
   EXPECT_TRUE(result->atEnd);
 }

@@ -95,6 +95,14 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @brief
   void deleteResults(std::string_view taskId, int destination);
 
+  /// Deletes results from a specific queue incarnation. This is used by
+  /// exchange servers that registered a getData() callback against a queue and
+  /// must not mutate a newer queue if the task ID is reused before the stale
+  /// server finishes.
+  void deleteResultsForQueue(
+      const std::shared_ptr<UcxOutputQueue>& queue,
+      int destination);
+
   /// @brief Asynchronously returns the head of the queue. If data is available,
   /// the callback function is triggered immediately and true is returned.
   /// Otherwise, the callback function is registered and called once data is
@@ -104,7 +112,7 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
-  void getData(
+  std::shared_ptr<UcxOutputQueue> getData(
       std::string_view taskId,
       int destination,
       UcxDataAvailableCallback notify);

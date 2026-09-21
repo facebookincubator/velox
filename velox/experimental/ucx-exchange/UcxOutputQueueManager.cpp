@@ -122,7 +122,15 @@ void UcxOutputQueueManager::deleteResults(
   }
 }
 
-void UcxOutputQueueManager::getData(
+void UcxOutputQueueManager::deleteResultsForQueue(
+    const std::shared_ptr<UcxOutputQueue>& queue,
+    int destination) {
+  if (queue != nullptr) {
+    queue->deleteResults(destination);
+  }
+}
+
+std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getData(
     std::string_view taskId,
     int destination,
     UcxDataAvailableCallback notify) {
@@ -158,11 +166,12 @@ void UcxOutputQueueManager::getData(
   if (taskRemoved) {
     // Fire callback immediately with nullptr to signal end-of-stream.
     notify(nullptr, /*numRows=*/0, {});
-    return;
+    return nullptr;
   }
   // outside of lock. Queue must exist.
   // get the data or install the notify callback.
   outputQueue->getData(destination, notify);
+  return outputQueue;
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
@@ -212,8 +221,8 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::shared_ptr<UcxOutputQueue> queue;
   {
     std::lock_guard<std::mutex> lifecycleLock(taskLifecycleMutex_);
-    queue = queues_.withLock(
-        [&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
+    queue =
+        queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
           auto it = queues.find(taskIdStr);
           if (it == queues.end()) {
             // Already removed. Clear any stale "removed" state so the task ID
