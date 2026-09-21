@@ -144,15 +144,36 @@ struct ExchangeTestParamsPrinter {
   }
 };
 
-class UcxExchangeTestBase : public testing::Test {
+class UcxExchangeTestEnvironment : public testing::Environment {
  public:
-  static void setUpEnvironment() {
+  void SetUp() override {
+    initializeExchangeState();
+  }
+
+  void TearDown() override {
+    destroyExchangeState();
+  }
+
+  static const std::shared_ptr<UcxOutputQueueManager>& queueManager() {
+    return queueManager_;
+  }
+
+  static std::string nextTaskPrefix() {
+    return "t" + std::to_string(testCounter_.fetch_add(1)) + "_";
+  }
+
+  static int splitUrlPort() {
+    return communicatorPort_ - kSplitUrlPortOffset;
+  }
+
+ private:
+  static void initializeExchangeState() {
     VLOG(0) << "setting up UCX exchange test environment";
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
 
     // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
-    // remoteSplit() advertises communicatorPort_ - 3 to match, so the offset
-    // must stay below the chosen port.
+    // remoteSplit() advertises splitUrlPort() to match, so the offset must stay
+    // below the chosen port.
     const auto freePort = exec::test::getFreePort();
     ASSERT_GT(freePort, kSplitUrlPortOffset);
     ASSERT_LE(freePort, std::numeric_limits<uint16_t>::max());
@@ -172,25 +193,17 @@ class UcxExchangeTestBase : public testing::Test {
     future.wait();
   }
 
-  static void tearDownEnvironment() {
+  static void destroyExchangeState() {
     if (communicator_ == nullptr) {
       return;
     }
     communicator_->stop();
-    communicator_.reset();
     if (communicatorThread_ != nullptr && communicatorThread_->joinable()) {
       communicatorThread_->join();
     }
     communicatorThread_.reset();
+    communicator_.reset();
   }
-
- protected:
-  // Chosen once per process by UcxExchangeTestEnvironment rather than
-  // hardcoded. The communicator opens a listener on this port without address
-  // reuse, so two runs of this binary in quick succession fail the second with
-  // "bind(0.0.0.0:21346) failed: Address already in use" while the first port
-  // is still in TIME_WAIT.
-  static uint16_t communicatorPort_;
 
   // UcxExchangeSource computes the UCX port as the split URL's port + 3
   // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
@@ -200,15 +213,31 @@ class UcxExchangeTestBase : public testing::Test {
   static constexpr auto kUnusedCoordinatorUrl =
       std::string_view("http://localhost:12345/bla");
 
+  // Chosen once per process rather than hardcoded. The communicator opens a
+  // listener on this port without address reuse, so two runs of this binary in
+  // quick succession fail the second with "bind(0.0.0.0:21346) failed: Address
+  // already in use" while the first port is still in TIME_WAIT.
+  static uint16_t communicatorPort_;
+
   static std::shared_ptr<UcxOutputQueueManager> queueManager_;
   static std::shared_ptr<std::thread> communicatorThread_;
   static std::shared_ptr<Communicator> communicator_;
   static std::atomic<uint32_t> testCounter_;
+};
 
+[[maybe_unused]] const auto* kUcxExchangeTestEnvironment =
+    testing::AddGlobalTestEnvironment(new UcxExchangeTestEnvironment);
+
+class UcxExchangeTestBase : public testing::Test {
+ protected:
   // Generate a unique task ID prefix for this test run to avoid collisions
   // between parametrized tests
   std::string getUniqueTaskPrefix() {
-    return "t" + std::to_string(testCounter_.fetch_add(1)) + "_";
+    return UcxExchangeTestEnvironment::nextTaskPrefix();
+  }
+
+  const std::shared_ptr<UcxOutputQueueManager>& queueManager() {
+    return UcxExchangeTestEnvironment::queueManager();
   }
 
   // Get the row type based on the table type.
@@ -228,7 +257,7 @@ class UcxExchangeTestBase : public testing::Test {
   exec::Split remoteSplit(std::string_view taskId, int partitionId) {
     std::string remoteUrl = fmt::format(
         "http://127.0.0.1:{}/v1/task/{}/results/{}",
-        communicatorPort_ - kSplitUrlPortOffset,
+        UcxExchangeTestEnvironment::splitUrlPort(),
         taskId,
         partitionId);
     return exec::Split(
@@ -249,20 +278,6 @@ class UcxExchangeTest : public UcxExchangeTestBase,
 };
 
 class UcxExchangeFocusedTest : public UcxExchangeTestBase {};
-
-class UcxExchangeTestEnvironment : public testing::Environment {
- public:
-  void SetUp() override {
-    UcxExchangeTestBase::setUpEnvironment();
-  }
-
-  void TearDown() override {
-    UcxExchangeTestBase::tearDownEnvironment();
-  }
-};
-
-[[maybe_unused]] const auto* kUcxExchangeTestEnvironment =
-    testing::AddGlobalTestEnvironment(new UcxExchangeTestEnvironment);
 
 INSTANTIATE_TEST_SUITE_P(
     UcxExchangeTest,
@@ -352,7 +367,7 @@ TEST_P(UcxExchangeTest, basicTest) {
         createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
 
     // tell the queue manager that a new source task exists.
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         p.numPartitions,
@@ -423,7 +438,7 @@ TEST_P(UcxExchangeTest, basicTest) {
 
   // Remove the srcTasks from the queue manager, so queue get freed
   for (const auto& srcTaskId : srcTaskIds) {
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   VLOG(3) << "- UcxExchangeTest::basicTest";
@@ -461,7 +476,7 @@ TEST_P(UcxExchangeTest, dataIntegrityTest) {
         createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
 
     // tell the queue manager that a new source task exists.
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         p.numPartitions,
@@ -525,7 +540,7 @@ TEST_P(UcxExchangeTest, dataIntegrityTest) {
 
   // Remove the srcTasks from the queue manager, so queue get freed
   for (const auto& srcTaskId : srcTaskIds) {
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // Check data integrity across all partitions
@@ -581,7 +596,7 @@ TEST_P(UcxExchangeTest, bandwidthTest) {
     // block sending
     auto srcTask = createSourceTask(
         srcTaskId, pool_, UcxTestData::kTestRowType, FOUR_GBYTES * 10);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         p.numPartitions,
@@ -655,7 +670,7 @@ TEST_P(UcxExchangeTest, bandwidthTest) {
 
   // Remove the srcTasks from the queue manager, so queue get freed
   for (const auto& srcTaskId : srcTaskIds) {
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   VLOG(3) << "- UcxExchangeTest::bandwidth";
@@ -694,7 +709,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputTest) {
       srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       p.numPartitions,
@@ -761,7 +776,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputTest) {
   GTEST_ASSERT_EQ(expectedRows, totalReceivedRows);
 
   // Cleanup
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputTest";
 }
@@ -858,7 +873,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
       srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       p.numPartitions,
@@ -938,7 +953,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   }
 
   // Cleanup
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
 }
@@ -961,7 +976,7 @@ TEST_F(UcxExchangeFocusedTest, sharedClientSurvivesOneExchangeClose) {
 
   auto rowType = UcxTestData::kTestRowType;
   auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
@@ -1026,7 +1041,7 @@ TEST_F(UcxExchangeFocusedTest, sharedClientSurvivesOneExchangeClose) {
 
   EXPECT_EQ(rowsReceived, static_cast<uint64_t>(numChunks) * numRowsPerChunk);
 
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 }
 
 // Test that verifies intra-node exchange does not livelock when a producing
@@ -1042,7 +1057,7 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
   // 1. Create and initialize source task but never enqueue any data.
   //    This simulates a producer that gets cancelled before producing.
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
@@ -1073,7 +1088,7 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
   //    removal. After the fix, the consumer should detect this and stop
   //    polling.
   srcTask->requestAbort();
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   // 6. Wait for sink to complete with a timeout.
   auto future =
@@ -1114,13 +1129,13 @@ TEST_F(UcxExchangeFocusedTest, broadcastIntraNodeFallback) {
 
   // Create source task with broadcast mode.
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
   // Finalize destinations for broadcast.
-  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+  queueManager()->updateOutputBuffers(srcTaskId, numDestinations, true);
 
   // Create one sink per destination. Each connects to its own destination
   // index.
@@ -1166,7 +1181,7 @@ TEST_F(UcxExchangeFocusedTest, broadcastIntraNodeFallback) {
   }
 
   // Cleanup.
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
   config.intraNodeExchange = origIntraNode;
 }
 
@@ -1222,14 +1237,14 @@ TEST_F(UcxExchangeFocusedTest, broadcastIntraNodePlaceholderRace) {
   // Step 3: NOW initialize the task with broadcast mode.
   // This upgrades the placeholder queue to broadcast.
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
 
   // Step 4: Finalize destinations for broadcast.
-  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+  queueManager()->updateOutputBuffers(srcTaskId, numDestinations, true);
 
   // Step 5: Create and run the producer.
   auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
@@ -1251,7 +1266,7 @@ TEST_F(UcxExchangeFocusedTest, broadcastIntraNodePlaceholderRace) {
   }
 
   // Cleanup.
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
   config.intraNodeExchange = origIntraNode;
 }
 
@@ -1281,7 +1296,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
 
     auto srcTask =
         createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1335,7 +1350,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
     EXPECT_LT(sinkDriver->numChunksReceived(), static_cast<uint64_t>(numChunks))
         << "Accumulation should reduce chunk count";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // --- Scenario 2: Small chunks with a remainder (not evenly divisible) ---
@@ -1357,7 +1372,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
 
     auto srcTask =
         createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1402,7 +1417,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
     EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
         << "Remainder chunks should be flushed on noMoreInput";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // --- Scenario 3: Large chunks (>= threshold) should NOT be accumulated ---
@@ -1424,7 +1439,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
 
     auto srcTask =
         createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1466,7 +1481,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
     EXPECT_EQ(sinkDriver->numChunksReceived(), static_cast<uint64_t>(numChunks))
         << "Large chunks should not be accumulated";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // --- Scenario 4: Custom threshold via QueryConfig ---
@@ -1494,7 +1509,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
 
     auto srcTask = createPartitionedOutputTask(
         srcTaskId, pool_, rowType, numPartitions, {}, FOUR_GBYTES, extraConfig);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1540,7 +1555,7 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
     EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
         << "Custom threshold should control accumulation granularity";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 }
 
@@ -1570,7 +1585,7 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
 
   // 1. Create and initialize source task with data to send.
   auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
@@ -1602,7 +1617,7 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   //    and eventually UcxExchangeSource::cleanUp() which must defer
   //    the request (with its GPU buffer) to Communicator::deferredRequests_.
   srcTask->requestAbort();
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   // 6. Wait for the sink driver to complete (it should detect the abort
   //    and finish, not crash with cudaErrorIllegalAddress).
@@ -1629,10 +1644,11 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   config.intraNodeExchange = origIntraNode;
 }
 
-std::shared_ptr<UcxOutputQueueManager> UcxExchangeTestBase::queueManager_;
-std::shared_ptr<std::thread> UcxExchangeTestBase::communicatorThread_;
-std::shared_ptr<Communicator> UcxExchangeTestBase::communicator_;
-std::atomic<uint32_t> UcxExchangeTestBase::testCounter_{0};
-uint16_t UcxExchangeTestBase::communicatorPort_{0};
+std::shared_ptr<UcxOutputQueueManager>
+    UcxExchangeTestEnvironment::queueManager_;
+std::shared_ptr<std::thread> UcxExchangeTestEnvironment::communicatorThread_;
+std::shared_ptr<Communicator> UcxExchangeTestEnvironment::communicator_;
+std::atomic<uint32_t> UcxExchangeTestEnvironment::testCounter_{0};
+uint16_t UcxExchangeTestEnvironment::communicatorPort_{0};
 
 } // namespace facebook::velox::ucx_exchange
