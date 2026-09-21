@@ -192,18 +192,6 @@ class FileConfig {
   static constexpr const char* kLoadQuantum = "load-quantum";
 
   VELOX_HIVE_CONFIG(
-      kDeferLazyColumnPrefetchSession,
-      deferLazyColumnPrefetch,
-      "defer_lazy_column_prefetch",
-      bool,
-      false,
-      "Do not prefetch columns that are read lazily (projected, no filter) "
-      "with their row group until a row passes the filters or the column is "
-      "read. Saves the I/O of such columns on splits where no row passes.")
-  static constexpr const char* kDeferLazyColumnPrefetch =
-      "defer-lazy-column-prefetch";
-
-  VELOX_HIVE_CONFIG(
       kReadStatsBasedFilterReorderDisabledSession,
       readStatsBasedFilterReorderDisabled,
       "stats_based_filter_reorder_disabled",

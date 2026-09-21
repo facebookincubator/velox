@@ -39,7 +39,6 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_HIVE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
     VELOX_HIVE_CONFIG_REGISTER(kMaxCoalescedBytesSession);
     VELOX_HIVE_CONFIG_REGISTER(kLoadQuantumSession);
-    VELOX_HIVE_CONFIG_REGISTER(kDeferLazyColumnPrefetchSession);
     VELOX_HIVE_CONFIG_REGISTER(kReadStatsBasedFilterReorderDisabledSession);
     VELOX_HIVE_CONFIG_REGISTER(kIndexEnabledSession);
     VELOX_HIVE_CONFIG_REGISTER(kCacheMetadataSession);
