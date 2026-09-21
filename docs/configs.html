@@ -1985,73 +1985,79 @@ Reader options map to <a class="reference external" href="https://docs.rapids.ai
 <td><p>true</p></td>
 <td><p>Whether to use BufferedInput for CudfHiveDataSource (can use AsyncDataCache when HiveConfig file handle cache is enabled).</p></td>
 </tr>
-<tr class="row-odd"><td><p>cudf.hive.use-experimental-reader</p></td>
-<td><p>cudf.hive.use_experimental_reader</p></td>
+<tr class="row-odd"><td><p>cudf.hive.preload-column-chunks</p></td>
+<td><p>cudf.hive.preload_column_chunks</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
-<td><p>Whether to use the experimental cuDF Parquet reader (Hybrid Scan) for highly selective filters. When enabled, uses <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader">libcudf hybrid_scan_reader</a>.</p></td>
+<td><p>Whether background split preparation starts fetching the first column-chunk pass. Active splits always start fetching when activated. Enabling this can overlap I/O with the previous split, but retains one pass of device buffers per preloaded split.</p></td>
 </tr>
-<tr class="row-even"><td><p>parquet.reader.use-pandas-metadata</p></td>
+<tr class="row-even"><td><p>cudf.hive.serialize-io-requests</p></td>
+<td><p>cudf.hive.serialize_io_requests</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>Whether to serialize I/O submission batches to prevent requests from concurrent splits from interleaving.</p></td>
+</tr>
+<tr class="row-odd"><td><p>parquet.reader.use-pandas-metadata</p></td>
 <td><p>parquet.reader.use_pandas_metadata</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enable or disable use of pandas metadata while reading. Maps to <code class="docutils literal notranslate"><span class="pre">enable_use_pandas_metadata</span></code> in <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options">libcudf parquet_reader_options</a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>parquet.reader.use-arrow-schema</p></td>
+<tr class="row-even"><td><p>parquet.reader.use-arrow-schema</p></td>
 <td><p>parquet.reader.use_arrow_schema</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Enable or disable use of Arrow schema while reading. Maps to <code class="docutils literal notranslate"><span class="pre">enable_use_arrow_schema</span></code> in <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options">libcudf parquet_reader_options</a>.</p></td>
 </tr>
-<tr class="row-even"><td><p>parquet.reader.allow-mismatched-parquet-schemas</p></td>
+<tr class="row-odd"><td><p>parquet.reader.allow-mismatched-parquet-schemas</p></td>
 <td><p>parquet.reader.allow_mismatched_parquet_schemas</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Enable or disable reading matching projected and filter columns from mismatched Parquet sources. Maps to <code class="docutils literal notranslate"><span class="pre">enable_allow_mismatched_pq_schemas</span></code> in <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options">libcudf parquet_reader_options</a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>parquet.reader.timestamp-type</p></td>
+<tr class="row-even"><td><p>parquet.reader.timestamp-type</p></td>
 <td><p>parquet.reader.timestamp_type</p></td>
 <td><p>string</p></td>
 <td><p>TIMESTAMP_MILLISECONDS</p></td>
 <td><p>Timestamp type used to cast all timestamp columns (e.g. TIMESTAMP_DAYS, TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS, TIMESTAMP_MICROSECONDS, TIMESTAMP_NANOSECONDS). Maps to <code class="docutils literal notranslate"><span class="pre">set_timestamp_type</span></code> in <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet__reader__options">libcudf parquet_reader_options</a>.</p></td>
 </tr>
-<tr class="row-even"><td><p>parquet.reader.chunk-read-limit</p></td>
+<tr class="row-odd"><td><p>parquet.reader.chunk-read-limit</p></td>
 <td><p>parquet.reader.chunk_read_limit</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
-<td><p>Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to <code class="docutils literal notranslate"><span class="pre">chunk_read_limit</span></code> in <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader">libcudf hybrid_scan_reader</a> (e.g. <code class="docutils literal notranslate"><span class="pre">setup_chunking_for_filter_columns</span></code>, <code class="docutils literal notranslate"><span class="pre">setup_chunking_for_payload_columns</span></code>).</p></td>
+<td><p>Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to <code class="docutils literal notranslate"><span class="pre">chunk_read_limit</span></code> in <code class="docutils literal notranslate"><span class="pre">setup_chunking_for_all_columns</span></code> of <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile">libcudf hybrid_scan_multifile</a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>parquet.reader.pass-read-limit</p></td>
+<tr class="row-even"><td><p>parquet.reader.pass-read-limit</p></td>
 <td><p>parquet.reader.pass_read_limit</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
-<td><p>Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. Affects how many row groups can be read at a time by limiting decompression space. Maps to <code class="docutils literal notranslate"><span class="pre">pass_read_limit</span></code> in <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader">libcudf hybrid_scan_reader</a> (e.g. <code class="docutils literal notranslate"><span class="pre">setup_chunking_for_filter_columns</span></code>, <code class="docutils literal notranslate"><span class="pre">setup_chunking_for_payload_columns</span></code>).</p></td>
+<td><p>Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. When <code class="docutils literal notranslate"><span class="pre">cudf.hive.preload-column-chunks</span></code> is enabled, the first column chunk pass is fetched for up to <code class="docutils literal notranslate"><span class="pre">max_split_preload_per_driver</span></code> additional splits per driver. Budget this limit against the number of passes held at once rather than against a single pass. Maps to <code class="docutils literal notranslate"><span class="pre">pass_read_limit</span></code> in <code class="docutils literal notranslate"><span class="pre">construct_row_group_passes</span></code> and <code class="docutils literal notranslate"><span class="pre">setup_chunking_for_all_columns</span></code> of <a class="reference external" href="https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile">libcudf hybrid_scan_multifile</a>.</p></td>
 </tr>
-<tr class="row-even"><td><p>parquet.reader.convert-strings-to-categories</p></td>
+<tr class="row-odd"><td><p>parquet.reader.convert-strings-to-categories</p></td>
 <td><p>parquet.reader.convert_strings_to_categories</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to store string data as categorical type.</p></td>
 </tr>
-<tr class="row-odd"><td><p>parquet.writer.write-timestamps-as-utc</p></td>
+<tr class="row-even"><td><p>parquet.writer.write-timestamps-as-utc</p></td>
 <td><p>parquet.writer.write_timestamps_as_utc</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to write timestamps as UTC.</p></td>
 </tr>
-<tr class="row-even"><td><p>sort-writer_finish_time_slice_limit_ms</p></td>
+<tr class="row-odd"><td><p>sort-writer_finish_time_slice_limit_ms</p></td>
 <td><p>sort_writer_finish_time_slice_limit_ms</p></td>
 <td><p>integer</p></td>
 <td><p>5000</p></td>
 <td><p>Sort writer exits finish() after this many milliseconds even if work is not complete; 0 means no time limit.</p></td>
 </tr>
-<tr class="row-odd"><td><p>parquet.writer.write-arrow-schema</p></td>
+<tr class="row-even"><td><p>parquet.writer.write-arrow-schema</p></td>
 <td><p>parquet.writer.write_arrow_schema</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Whether to write ARROW schema.</p></td>
 </tr>
-<tr class="row-even"><td><p>parquet.writer.write-v2-page-headers</p></td>
+<tr class="row-odd"><td><p>parquet.writer.write-v2-page-headers</p></td>
 <td><p>parquet.writer.write_v2_page_headers</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
