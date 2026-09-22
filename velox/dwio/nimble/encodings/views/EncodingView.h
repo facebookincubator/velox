@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -26,15 +28,22 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/velox/RowRange.h"
 
 namespace facebook::nimble {
 
 class EncodingView {
  public:
-  virtual ~EncodingView() = default;
+  EncodingView(const EncodingView&) = delete;
+  EncodingView& operator=(const EncodingView&) = delete;
+  EncodingView(EncodingView&&) = delete;
+  EncodingView& operator=(EncodingView&&) = delete;
+
+  virtual ~EncodingView();
 
   /// Reads the physical value at the given row index into a typed output
   /// buffer.
@@ -46,6 +55,20 @@ class EncodingView {
 
   /// Reads physical values in the given row range into a typed output buffer.
   virtual void read(uint32_t offset, uint32_t length, void* output) const = 0;
+
+  /// Reads selected physical values densely and reports null output positions.
+  /// Non-nullable views ignore `setNull` and return `indices.size()`.
+  virtual uint32_t read(
+      std::span<const uint32_t> indices,
+      const std::function<void(uint32_t)>& setNull,
+      void* output) const;
+
+  /// Reads ordered, disjoint source ranges densely and reports null output
+  /// positions. Non-nullable views ignore `setNull`.
+  virtual uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& setNull,
+      void* output) const = 0;
 
   /// Returns the number of rows in the encoded stream.
   uint32_t rowCount() const {
@@ -100,6 +123,30 @@ class EncodingView {
     NIMBLE_CHECK_LE(length, rowCount_ - offset);
   }
 
+  uint32_t checkReadRanges(std::span<const RowRange> ranges) const {
+    uint32_t numRows{0};
+    for (size_t i{0}; i < ranges.size(); ++i) {
+      const auto& range = ranges[i];
+      NIMBLE_CHECK(!range.empty(), "Read range must not be empty");
+      checkReadRange(range.startRow, range.numRows());
+      if (i > 0) {
+        NIMBLE_CHECK_LE(
+            ranges[i - 1].endRow,
+            range.startRow,
+            "Read ranges must be ordered and disjoint");
+      }
+      numRows += range.numRows();
+    }
+    return numRows;
+  }
+
+  // Returns uncompressed bytes while retaining decompressed storage for the
+  // lifetime of the view. May be called at most once per view.
+  std::string_view decompressPayload(
+      CompressionType compressionType,
+      DataType dataType,
+      std::string_view payload);
+
   std::string_view data_;
   velox::memory::MemoryPool* pool_;
   Encoding::Options options_;
@@ -107,12 +154,15 @@ class EncodingView {
   DataType dataType_;
   uint32_t rowCount_;
   uint32_t dataOffset_;
+  // Keeps a codec-expanded payload alive for the lifetime of the view.
+  velox::BufferPtr decompressedPayload_;
 };
 
 template <typename T>
 class TypedEncodingView : public EncodingView {
  public:
   using physicalType = typename TypeTraits<T>::physicalType;
+  using EncodingView::read;
 
   T readAt(uint32_t index) const {
     return readTypedAt(index);
@@ -136,6 +186,20 @@ class TypedEncodingView : public EncodingView {
 
   void read(uint32_t offset, uint32_t length, void* output) const final {
     readPhysical(offset, length, static_cast<physicalType*>(output));
+  }
+
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& /*setNull*/,
+      void* output) const override {
+    const auto numRows = this->checkReadRanges(ranges);
+    auto* typedOutput = static_cast<physicalType*>(output);
+    uint32_t outputOffset{0};
+    for (const auto& range : ranges) {
+      readPhysical(range.startRow, range.numRows(), typedOutput + outputOffset);
+      outputOffset += range.numRows();
+    }
+    return numRows;
   }
 
  protected:

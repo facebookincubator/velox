@@ -129,6 +129,7 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
+  static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
   // Per-tier RPCRateLimiter observability (capacity trajectory), refreshed on
   // every stats() call. The rpcCongestion* stats above are the per-DRIVER
   // window; these are the capacity shared by every driver on the tier.
@@ -214,6 +215,18 @@ class RPCOperator : public exec::Operator {
   // type. Called once in initialize() so buildOutputVector() does not repeat
   // the name lookups per batch.
   void initOutputProjections();
+
+  // Binds the shared limiter after the function has resolved any
+  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  void initializeRateLimiter();
+
+  // Resolves an input whose selected rows all complete synchronously without a
+  // backend. The function's preparation result guarantees the futures are
+  // ready and lets these rows bypass admission and congestion accounting.
+  void resolveLocalOnlyInput(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& arguments,
+      std::vector<VectorPtr> flattenedColumns);
 
   // Increment the per-error-kind counter for a single response.
   void recordErrorKind(velox::rpc::RPCErrorKind kind);
@@ -309,15 +322,16 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<const core::RPCNode> rpcNode_;
   std::shared_ptr<RPCState> state_;
   std::shared_ptr<AsyncRPCFunction> function_;
+  bool requiresRowInspectionBeforeAdmission_{true};
 
   // Identifies the provisioned capacity this operator admits against: a
   // backend tier plus the credential used to reach it (from
   // function_->tierKey()). Everything sharing this key shares one quota.
   std::string tierKey_;
 
-  // Admission control for tierKey_, resolved once in initialize(). Points into
-  // the process-scoped RPCRateLimiterRegistry, which outlives every operator
-  // and every token captured into a continuation.
+  // Admission control for tierKey_, resolved before the first dispatch. Points
+  // into the process-scoped RPCRateLimiterRegistry, which outlives every
+  // operator and every token captured into a continuation.
   RPCRateLimiter* limiter_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
@@ -353,6 +367,10 @@ class RPCOperator : public exec::Operator {
   int64_t numErrorsRateLimited_{0};
   int64_t numErrorsTimeout_{0};
   int64_t numErrorsBackend_{0};
+  // Rows that failed because something here broke -- an invariant tripped, or
+  // a response was returned with no outcome set -- rather than because the
+  // backend refused. Tracked apart from the backend error count.
+  int64_t numErrorsInternal_{0};
 
   // Global row ID counter for unique IDs across all input batches.
   int64_t globalRowIdCounter_{0};
@@ -380,6 +398,9 @@ class RPCOperator : public exec::Operator {
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.
   std::vector<RPCState::ReadyRow> claimedRows_;
+  // Prevents a local-only claim from absorbing transport completions or
+  // feeding their synthetic zero RTT into congestion control.
+  bool claimedRowsAreLocalOnly_{false};
   std::optional<RPCState::ReadyBatch> claimedBatch_;
 
   // Whether we've detected the finish condition.

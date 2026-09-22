@@ -36,6 +36,13 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
 
+  BlockBitPackingEncodingView(const BlockBitPackingEncodingView&) = delete;
+  BlockBitPackingEncodingView& operator=(const BlockBitPackingEncodingView&) =
+      delete;
+  BlockBitPackingEncodingView(BlockBitPackingEncodingView&&) = delete;
+  BlockBitPackingEncodingView& operator=(BlockBitPackingEncodingView&&) =
+      delete;
+
   BlockBitPackingEncodingView(
       std::string_view data,
       velox::memory::MemoryPool* pool,
@@ -45,10 +52,6 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
         blockRowOffsets_{this->template getVectorBuffer<uint32_t>()} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::BlockBitPacking);
     const auto source = BlockBitPackingEncoding<T>::parseHeader(data, options);
-    NIMBLE_CHECK_EQ(
-        source.compressionType,
-        CompressionType::Uncompressed,
-        "EncodingView does not support compressed BlockBitPacking streams.");
     NIMBLE_CHECK_GT(source.blockSize, 0);
     NIMBLE_CHECK_GT(source.numBlocks, 0);
     blockSize_ = source.blockSize;
@@ -103,7 +106,23 @@ class BlockBitPackingEncodingView final : public TypedEncodingView<T> {
     this->releaseVectorBuffer(offsets);
     this->releaseVectorBuffer(bitWidths);
     this->releaseVectorBuffer(baselines);
-    packedData_ = source.packedData.data();
+    const auto packedData = this->decompressPayload(
+        source.compressionType, DataType::Undefined, source.packedData);
+#ifndef NDEBUG
+    for (const auto& block : blocks_) {
+      NIMBLE_CHECK_LE(
+          block.offset,
+          packedData.size(),
+          "BlockBitPacking block offset exceeds packed payload");
+      const auto blockBytes = BlockBitPackingEncoding<T>::getPackedSize(
+          block.rowCount, block.bitWidth);
+      NIMBLE_CHECK_LE(
+          blockBytes,
+          packedData.size() - block.offset,
+          "BlockBitPacking block payload exceeds packed payload");
+    }
+#endif
+    packedData_ = packedData.data();
   }
 
   ~BlockBitPackingEncodingView() override {

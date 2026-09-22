@@ -398,6 +398,9 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED(
+          "Nimble writer fuzzer does not support hybrid FlatMap.");
   }
   NIMBLE_UNREACHABLE("Unsupported schema kind: {}.", type.kind());
 }
@@ -1596,7 +1599,7 @@ void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
       continue;
     }
 
-    std::vector<TabletReader::StreamLocation> locations(streamCount);
+    std::vector<TabletReader::StreamMetadata> locations(streamCount);
     tablet->streamLocations(stripeIdentifier, locations);
     const uint64_t stripeOffset = tablet->stripeOffset(stripe);
     const uint64_t stripeEnd = stripe + 1 < tablet->stripeCount()

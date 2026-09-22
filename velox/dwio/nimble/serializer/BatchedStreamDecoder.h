@@ -50,9 +50,23 @@ class BatchedStreamDecoder : public Decoder {
   uint32_t next(
       uint32_t count,
       void* output,
+      std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers,
-      std::function<void*()> getOutputNulls = nullptr,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
+
+  uint32_t read(
+      std::span<const uint32_t> rows,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
+
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) override;
 
   void skip(uint32_t count) override;
 

@@ -16,6 +16,8 @@
 
 #include "velox/exec/rpc/RPCOperator.h"
 
+#include "velox/exec/rpc/RpcErrorClassification.h"
+
 #include <algorithm>
 
 #include "velox/common/time/CpuWallTimer.h"
@@ -106,19 +108,57 @@ void RPCOperator::initialize() {
 
   // Initialize the function with query config, argument types, and constants.
   // The function creates/caches its own transport and clients internally.
+  // The instruction goes in with everything else the function needs: it
+  // resolves its backend and how it will serve the instruction on that backend
+  // in one place, and the framework does not branch on the reported path.
+  auto* driverCtx = operatorCtx_->driverCtx();
+  VELOX_CHECK_NOT_NULL(driverCtx);
+  const auto& queryConfig = driverCtx->queryConfig();
   function_->initialize(
-      operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
-
-  tierKey_ = function_->tierKey();
-
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+      queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
+  requiresRowInspectionBeforeAdmission_ =
+      function_->requiresRowInspectionBeforeAdmission();
+  if (!requiresRowInspectionBeforeAdmission_) {
+    initializeRateLimiter();
+  }
 
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
+  *liveStatsSources_.wlock() =
+      LiveStatsSources{.state = state_, .limiter = limiter_};
+
+  RPC_OP_VLOG(1) << "Created operator for function '"
+                 << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
+                 << ", operatorId=" << operatorId() << ", streamingMode="
+                 << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
+                         ? "BATCH"
+                         : "PER_ROW");
+
+  if (!argumentSources_.empty()) {
+    RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()
+                   << " call arguments";
+  } else {
+    RPC_OP_VLOG(1) << "Initialized with no call arguments "
+                   << "(fallback to all input columns)";
+  }
+
+  // Precompute output column projections to avoid string lookups in
+  // buildOutputVector().
+  initOutputProjections();
+}
+
+void RPCOperator::initializeRateLimiter() {
+  if (limiter_ != nullptr) {
+    return;
+  }
+
+  tierKey_ = function_->tierKey();
   limiter_ = &RPCRateLimiterRegistry::global().get(tierKey_);
   *liveStatsSources_.wlock() =
       LiveStatsSources{.state = state_, .limiter = limiter_};
+
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   // A backend's configuration is fixed by the first query to reach it and is
   // shared by every query after. The limiter is a controller: its policy has
   // to hold still while it adapts, and the adaptation itself is learned from
@@ -141,25 +181,6 @@ void RPCOperator::initialize() {
       config.ceiling = rlMax;
     }
   });
-
-  RPC_OP_VLOG(1) << "Created operator for function '"
-                 << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
-                 << ", operatorId=" << operatorId() << ", streamingMode="
-                 << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
-                         ? "BATCH"
-                         : "PER_ROW");
-
-  if (!argumentSources_.empty()) {
-    RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()
-                   << " call arguments";
-  } else {
-    RPC_OP_VLOG(1) << "Initialized with no call arguments "
-                   << "(fallback to all input columns)";
-  }
-
-  // Precompute output column projections to avoid string lookups in
-  // buildOutputVector().
-  initOutputProjections();
 }
 
 bool RPCOperator::needsInput() const {
@@ -223,6 +244,26 @@ void RPCOperator::addInput(RowVectorPtr input) {
     }
   }
 
+  auto preparationResult =
+      AsyncRPCFunction::AdmissionPreparationResult::kRequiresAdmission;
+  if (requiresRowInspectionBeforeAdmission_) {
+    preparationResult =
+        function_->prepareInputForAdmissionAndDispatch(rows, arguments);
+  }
+  if (preparationResult ==
+          AsyncRPCFunction::AdmissionPreparationResult::kLocalOnly &&
+      state_->streamingMode() == RPCStreamingMode::kBatch &&
+      function_->pendingBatchSize() > 0) {
+    // This input will share a flush with rows already waiting for a backend.
+    // Keep the whole flush on the admitted path.
+    preparationResult =
+        AsyncRPCFunction::AdmissionPreparationResult::kRequiresAdmission;
+  }
+  if (preparationResult ==
+      AsyncRPCFunction::AdmissionPreparationResult::kRequiresAdmission) {
+    initializeRateLimiter();
+  }
+
   // Flatten/load all columns upfront to avoid issues with lazy vectors.
   std::vector<VectorPtr> flattenedColumns;
   flattenedColumns.reserve(input->childrenSize());
@@ -230,6 +271,12 @@ void RPCOperator::addInput(RowVectorPtr input) {
     auto column = BaseVector::loadedVectorShared(input->childAt(j));
     BaseVector::flattenVector(column);
     flattenedColumns.push_back(column);
+  }
+
+  if (preparationResult ==
+      AsyncRPCFunction::AdmissionPreparationResult::kLocalOnly) {
+    resolveLocalOnlyInput(rows, arguments, std::move(flattenedColumns));
+    return;
   }
 
   auto streamingMode = state_->streamingMode();
@@ -362,14 +409,17 @@ std::vector<RPCResponse> degradeBatchFailureToRowErrors(
   // since evaluateCongestion reads a batch failure as overload.
   RPC_OP_LOG(ERROR) << "RPC batch failed, " << rowIds.size()
                     << " rows will carry a per-row error: " << error.what();
+  const auto kind = errorKindFor(error);
+  const auto message = error.what().toStdString();
   std::vector<RPCResponse> errored(rowIds.size());
   for (size_t i = 0; i < rowIds.size(); ++i) {
     // Batch-position rowId, so the scatter stamps global ids the same way it
     // does on the success path.
-    errored[i].rowId = static_cast<int64_t>(i);
-    errored[i].error =
-        std::string("[RPC_BATCH] batch error: ") + error.what().toStdString();
-    errored[i].errorKind = velox::rpc::RPCErrorKind::kBackendError;
+    errored.at(i).rowId = static_cast<int64_t>(i);
+    // Preserve the cause so framework failures can be rejected before output,
+    // while backend failures still follow the function's row-error policy.
+    errored.at(i).setError(
+        kind, std::string("[RPC_BATCH] batch error: ") + message);
   }
   return errored;
 }
@@ -377,8 +427,8 @@ std::vector<RPCResponse> degradeBatchFailureToRowErrors(
 // Reorders responses into batch position using each response's
 // function-assigned rowId, then stamps the global rowIds. Functions may return
 // out of order, and pairing responses[i] with rowLocations[i] would silently
-// mis-map results onto the wrong passthrough rows. Invariant violations are
-// fatal by design.
+// mis-map results onto the wrong passthrough rows. A violated correlation
+// contract fails the query because the operator cannot safely recover it.
 std::vector<RPCResponse> scatterIntoBatchOrder(
     std::vector<RPCResponse> responses,
     const std::vector<int64_t>& rowIds) {
@@ -392,25 +442,118 @@ std::vector<RPCResponse> scatterIntoBatchOrder(
   std::vector<bool> seen(responses.size(), false);
   for (auto& response : responses) {
     const auto batchIndex = response.rowId;
-    VELOX_CHECK_GE(batchIndex, 0);
-    VELOX_CHECK_LT(
-        static_cast<size_t>(batchIndex),
-        rowIds.size(),
-        "RPC batch response rowId ({}) out of range (0-{})",
-        batchIndex,
-        rowIds.size() - 1);
     VELOX_CHECK(
-        !seen[static_cast<size_t>(batchIndex)],
-        "Duplicate batch response rowId ({})",
-        batchIndex);
-    seen[static_cast<size_t>(batchIndex)] = true;
-    response.rowId = rowIds[static_cast<size_t>(batchIndex)];
-    sorted[static_cast<size_t>(batchIndex)] = std::move(response);
+        batchIndex >= 0 && static_cast<size_t>(batchIndex) < rowIds.size(),
+        "RPC batch response rowId ({}) out of range [0, {})",
+        batchIndex,
+        rowIds.size());
+    const auto index = static_cast<size_t>(batchIndex);
+    VELOX_CHECK(
+        !seen.at(index), "RPC duplicate batch response rowId ({})", batchIndex);
+    seen.at(index) = true;
+    response.rowId = rowIds.at(index);
+    sorted.at(index) = std::move(response);
   }
   return sorted;
 }
 
+void checkNoFrameworkFailures(
+    const std::string& functionName,
+    const std::vector<RPCResponse>& responses) {
+  for (const auto& response : responses) {
+    VELOX_CHECK(
+        response.errorKind() != velox::rpc::RPCErrorKind::kUnset,
+        "RPC function '{}' returned an unset response for row {}",
+        functionName,
+        response.rowId);
+    if (response.errorKind() == velox::rpc::RPCErrorKind::kInternalError) {
+      VELOX_FAIL(
+          "RPC function failed internally: function '{}', row {}, error: {}",
+          functionName,
+          response.rowId,
+          response.error().message);
+    }
+  }
+}
+
 } // namespace
+
+void RPCOperator::resolveLocalOnlyInput(
+    const SelectivityVector& rows,
+    const std::vector<VectorPtr>& arguments,
+    std::vector<VectorPtr> flattenedColumns) {
+  if (state_->streamingMode() == RPCStreamingMode::kPerRow) {
+    const auto batchIndex = state_->storeInputBatch(
+        std::move(flattenedColumns), rows.countSelected());
+    auto futures = function_->dispatchPerRow(rows, arguments);
+    VELOX_CHECK_EQ(
+        futures.size(),
+        static_cast<size_t>(rows.countSelected()),
+        "dispatchPerRow returned {} futures for {} local-only rows",
+        futures.size(),
+        rows.countSelected());
+    numRequestsDispatched_.fetch_add(
+        static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
+    claimedRowsAreLocalOnly_ = true;
+    for (auto& [originalRowIndex, future] : futures) {
+      VELOX_CHECK(
+          future.isReady(),
+          "RPC function '{}' returned a pending future for local-only row {}",
+          function_->name(),
+          originalRowIndex);
+      const auto rowId = globalRowIdCounter_++;
+      auto response = std::move(future).get();
+      response.rowId = rowId;
+      claimedRows_.push_back(
+          RPCState::ReadyRow{
+              .rowId = rowId,
+              .location = {batchIndex, originalRowIndex},
+              .response = std::move(response),
+              .rttNs = 0,
+          });
+    }
+    return;
+  }
+
+  auto rowIndices = function_->accumulateBatch(rows, arguments);
+  VELOX_CHECK_EQ(
+      rowIndices.size(),
+      static_cast<size_t>(rows.countSelected()),
+      "accumulateBatch returned {} rows for {} local-only rows",
+      rowIndices.size(),
+      rows.countSelected());
+  numRequestsDispatched_.fetch_add(
+      static_cast<int64_t>(rowIndices.size()), std::memory_order_relaxed);
+  const auto batchIndex = state_->storeInputBatch(
+      std::move(flattenedColumns), static_cast<int64_t>(rowIndices.size()));
+  std::vector<RPCState::RowLocation> rowLocations;
+  std::vector<int64_t> rowIds;
+  rowLocations.reserve(rowIndices.size());
+  rowIds.reserve(rowIndices.size());
+  for (const auto originalRowIndex : rowIndices) {
+    rowLocations.push_back({batchIndex, originalRowIndex});
+    rowIds.push_back(globalRowIdCounter_++);
+  }
+
+  auto future = function_->flushBatch();
+  VELOX_CHECK(
+      future.isReady(),
+      "RPC function '{}' returned a pending batch for local-only input",
+      function_->name());
+  VELOX_CHECK_EQ(
+      function_->pendingBatchSize(),
+      0,
+      "RPC function '{}' retained rows after flushing local-only input",
+      function_->name());
+  claimedBatch_ = RPCState::ReadyBatch{
+      .batchId = 0,
+      .responses = scatterIntoBatchOrder(std::move(future).get(), rowIds),
+      .error = std::nullopt,
+      .admissionUnits = 0,
+      .rowLocations = std::move(rowLocations),
+      .rttNs = 0,
+  };
+}
 
 bool RPCOperator::flushBatchRequests(int32_t maxRows) {
   if (function_->pendingBatchSize() == 0) {
@@ -423,19 +566,42 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
     return false;
   }
 
-  // Reserve the tier slot before touching any state: the accumulator is only
-  // split and handed to flushBatch() once this flush is admitted. Checking
-  // available() and acquiring after the call is out lets concurrent drivers
-  // overshoot the cap.
-  auto reserved = limiter_->tryAcquireUpTo(1);
-  if (reserved.empty()) {
-    return false;
-  }
+  VELOX_CHECK_EQ(
+      function_->admissionUnitsForBatch(1),
+      1,
+      "A one-row batch must require exactly one admission unit");
 
   // Determine how many rows to flush.
   auto flushCount = maxRows > 0
       ? std::min(static_cast<int32_t>(batchRowLocations_.size()), maxRows)
       : static_cast<int32_t>(batchRowLocations_.size());
+
+  const auto requestedUnits = function_->admissionUnitsForBatch(flushCount);
+  VELOX_CHECK_GT(requestedUnits, 0);
+  auto reserved = limiter_->tryAcquireUpTo(requestedUnits);
+  if (reserved.empty()) {
+    return false;
+  }
+
+  // A function's admission demand is positive and nondecreasing with row
+  // count. Find the largest prefix covered by a partial grant before removing
+  // anything from the accumulator.
+  int32_t low = 0;
+  int32_t high = flushCount;
+  while (low < high) {
+    const auto mid = low + (high - low + 1) / 2;
+    if (function_->admissionUnitsForBatch(mid) <=
+        static_cast<int64_t>(reserved.size())) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  flushCount = low;
+  if (flushCount == 0) {
+    return false;
+  }
+  reserved.resize(function_->admissionUnitsForBatch(flushCount));
 
   RPC_OP_LOG(INFO) << "Flushing batch with " << flushCount << " of "
                    << function_->pendingBatchSize() << " accumulated rows";
@@ -449,38 +615,31 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
       batchRowLocations_.begin(), batchRowLocations_.begin() + flushCount);
   batchRowIds_.erase(batchRowIds_.begin(), batchRowIds_.begin() + flushCount);
 
-  auto future = function_->flushBatch(maxRows);
+  auto future = function_->flushBatch(flushCount);
 
-  // Each flushBatch() is 1 pending unit against tier capacity, reserved above.
-  auto token =
-      std::make_shared<RPCRateLimiter::Token>(std::move(reserved.front()));
+  const auto admissionUnits = static_cast<int64_t>(reserved.size());
+  auto tokens =
+      std::make_shared<std::vector<RPCRateLimiter::Token>>(std::move(reserved));
 
-  // Share rowIds across both continuations. Order matters: deferError runs
-  // BEFORE deferValue, so a whole-batch backend failure is first converted into
-  // one errored response per row (in batch-position order), and then flows
-  // through the same scatter as real responses. This keeps the scatter's
-  // invariant checks (below) FATAL for genuine function-contract violations
-  // (wrong response count / duplicate / out-of-range rowId) — those must still
-  // hard-fail the query, not be silently degraded to NULL rows.
+  // deferError runs before deferValue, so a failed batch becomes one
+  // position-tagged error per row and passes through the same scatter checks as
+  // a successful batch. Share row IDs and admission tokens across both
+  // continuations; retaining the tokens holds every backend slot until the
+  // chain settles.
   auto rowIdsPtr = std::make_shared<std::vector<int64_t>>(std::move(rowIds));
-  // Order matters: deferError runs BEFORE deferValue, so a whole-batch failure
-  // is first turned into one errored response per row and then flows through
-  // the same scatter as real responses. That keeps the scatter's invariant
-  // checks fatal for genuine function-contract violations -- wrong response
-  // count, duplicate or out-of-range rowId -- rather than degrading them to
-  // NULL rows. Both lambdas hold 'token' only to keep the tier slot reserved
-  // until the batch settles.
   auto wrapped =
       std::move(future)
           .within(kBatchRpcTimeout)
-          .deferError([rowIdsPtr, token](folly::exception_wrapper error) {
-            return degradeBatchFailureToRowErrors(*rowIdsPtr, error);
-          })
-          .deferValue([rowIdsPtr, token](std::vector<RPCResponse> responses) {
+          .deferError(
+              [rowIdsPtr, tokens](const folly::exception_wrapper& error) {
+                return degradeBatchFailureToRowErrors(*rowIdsPtr, error);
+              })
+          .deferValue([rowIdsPtr, tokens](std::vector<RPCResponse> responses) {
             return scatterIntoBatchOrder(std::move(responses), *rowIdsPtr);
           });
 
-  state_->addPendingBatch(state_, std::move(wrapped), std::move(rowLocations));
+  state_->addPendingBatch(
+      state_, std::move(wrapped), std::move(rowLocations), admissionUnits);
   return true;
 }
 
@@ -586,6 +745,9 @@ void RPCOperator::recordCongestion(
     AsyncRPCFunction::CongestionSignal signal,
     const std::vector<int64_t>& roundTripTimesNs,
     int64_t successUnits) {
+  if (limiter_ == nullptr) {
+    return;
+  }
   // Two AIMD controllers at different scopes, both driven by the function's
   // overload verdict (see RPCRateLimiter.h / CongestionController.h and the
   // function's CongestionPolicy):
@@ -619,7 +781,9 @@ RowVectorPtr RPCOperator::outputPerRow() {
 
   // Drain additional ready rows (non-blocking) for batched output. This
   // amortizes RowVector allocation across multiple completed rows.
-  state_->drainReadyRows(claimedRows_, outputBatchRows_);
+  if (!claimedRowsAreLocalOnly_) {
+    state_->drainReadyRows(claimedRows_, outputBatchRows_);
+  }
 
   // Materialize responses, locations and round-trip latencies once -- reused
   // for the congestion signal and the output vector (no extra copy).
@@ -634,7 +798,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
     const bool hasError = row.response.hasError();
     if (hasError) {
       numErrors_++;
-      recordErrorKind(row.response.errorKind);
+      recordErrorKind(row.response.errorKind());
     }
     // Only successful rows feed the gradient. Errored rows (e.g. null_input,
     // client-side rejections) complete without a real round trip, so their
@@ -647,14 +811,19 @@ RowVectorPtr RPCOperator::outputPerRow() {
     locations.emplace_back(row.location.batchIndex, row.location.rowIndex);
   }
 
-  recordCongestion(
-      function_->evaluateCongestion(responses),
-      roundTripTimesNs,
-      static_cast<int64_t>(roundTripTimesNs.size()));
+  checkNoFrameworkFailures(function_->name(), responses);
+
+  if (!claimedRowsAreLocalOnly_) {
+    recordCongestion(
+        function_->evaluateCongestion(responses),
+        roundTripTimesNs,
+        static_cast<int64_t>(roundTripTimesNs.size()));
+  }
 
   auto output = buildOutputVector(responses, locations);
   numResponsesReceived_ += numRows;
   claimedRows_.clear();
+  claimedRowsAreLocalOnly_ = false;
   return output;
 }
 
@@ -670,24 +839,26 @@ RowVectorPtr RPCOperator::outputBatch() {
     VELOX_FAIL("RPC batch failed: {}", error);
   }
 
+  checkNoFrameworkFailures(function_->name(), claimedBatch_->responses);
+
   const auto numRows = static_cast<int64_t>(claimedBatch_->responses.size());
   for (const auto& response : claimedBatch_->responses) {
     if (response.hasError()) {
       numErrors_++;
-      recordErrorKind(response.errorKind);
+      recordErrorKind(response.errorKind());
     }
   }
 
-  // One measured round trip for the whole batch, so the gradient gets a single
-  // sample. The cap recovers by one unit, not by the row count: BATCH reserves
-  // one slot per flushBatch() regardless of rows, and onSuccess() steps by
-  // units/capacity, so crediting rows against a batch-denominated capacity
-  // makes recovery accelerate as capacity shrinks.
+  // One measured round trip is recorded for the completed flush. Shared-cap
+  // recovery is credited by the exact backend units reserved: one for a
+  // native batch, or one per emitted RPC for a fan-out batch.
   const std::vector<int64_t> roundTripTimesNs{claimedBatch_->rttNs};
-  recordCongestion(
-      function_->evaluateCongestion(claimedBatch_->responses),
-      roundTripTimesNs,
-      /*successUnits=*/1);
+  if (claimedBatch_->admissionUnits > 0) {
+    recordCongestion(
+        function_->evaluateCongestion(claimedBatch_->responses),
+        roundTripTimesNs,
+        claimedBatch_->admissionUnits);
+  }
 
   auto output = buildOutputFromReadyBatch(*claimedBatch_);
   numResponsesReceived_ += numRows;
@@ -986,6 +1157,18 @@ void RPCOperator::initOutputProjections() {
     }
   }
 
+  // RPCNode checks the CALL expression against the declared column; neither
+  // knows what the registered function actually returns. This is where the
+  // two meet.
+  const auto& declaredType = outputType->childAt(rpcResultOutputChannel_);
+  VELOX_CHECK(
+      declaredType->equivalent(*function_->resultType()),
+      "RPC function '{}' returns {} but the plan declares column '{}' as {}",
+      function_->name(),
+      function_->resultType()->toString(),
+      outputColumn,
+      declaredType->toString());
+
   RPC_OP_VLOG(1) << "initOutputProjections: rpcResultChannel="
                  << rpcResultOutputChannel_ << ", passthroughProjections="
                  << passthroughProjections_.size();
@@ -1009,6 +1192,10 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
     // signal, so it is not counted among the overload kinds above (it is
     // tracked separately via a dedicated invalid-request counter).
     case velox::rpc::RPCErrorKind::kInvalidRequest:
+      break;
+    case velox::rpc::RPCErrorKind::kUnset:
+    case velox::rpc::RPCErrorKind::kInternalError:
+      ++numErrorsInternal_;
       break;
   }
 }
@@ -1136,6 +1323,10 @@ void RPCOperator::recordRuntimeStats() {
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
         kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
+  }
+  if (numErrorsInternal_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindInternal, RuntimeCounter(numErrorsInternal_));
   }
 }
 
