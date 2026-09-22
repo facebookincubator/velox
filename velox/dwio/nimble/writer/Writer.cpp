@@ -2561,6 +2561,23 @@ void Writer::abort() {
   setState(State::kAborted);
 }
 
+// Placeholders for the suspend and resume API, whose implementation lands
+// with the write path. Both throw, which is why clang-tidy reads suspend()
+// as never returning.
+
+// @lint-ignore CLANGTIDY clang-diagnostic-missing-noreturn
+void Writer::suspend() {
+  NIMBLE_NOT_IMPLEMENTED("Nimble writer suspend is not implemented yet.");
+}
+
+std::unique_ptr<Writer> Writer::resume(
+    const velox::TypePtr& /* type */,
+    std::string_view /* path */,
+    velox::memory::MemoryPool& /* pool */,
+    const WriterOptions& /* options */) {
+  NIMBLE_NOT_IMPLEMENTED("Nimble writer resume is not implemented yet.");
+}
+
 void Writer::flush() {
   checkRunning();
   if (lastException_) {

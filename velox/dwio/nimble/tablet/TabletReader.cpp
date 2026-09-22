@@ -1184,6 +1184,14 @@ bool TabletReader::hasOptionalSection(const std::string& name) const {
   return it != optionalSections_.end();
 }
 
+std::optional<Checkpoint> TabletReader::checkpoint() const {
+  auto section = loadOptionalSection(std::string{kCheckpointSection});
+  if (!section.has_value()) {
+    return std::nullopt;
+  }
+  return Checkpoint::deserialize(section->content());
+}
+
 std::optional<Section> TabletReader::loadOptionalSection(
     const std::string& name,
     bool keepCache) const {

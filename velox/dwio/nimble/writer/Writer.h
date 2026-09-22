@@ -79,6 +79,37 @@ class Writer : public velox::dwio::common::Writer {
   /// bytes for the caller (or the sink) to discard.
   void abort() override;
 
+  /// Flushes the in-flight stripe, writes a footer and postscript plus a
+  /// `columnar.checkpoint` optional section, and closes the underlying file
+  /// without finalizing it. The storage object is left unsealed so that
+  /// resume() can append to it, and the writer rejects further writes.
+  ///
+  /// The result has a valid footer and remains structurally inspectable. It
+  /// may omit serving artifacts that require the complete file, such as the
+  /// finalized index and shared-dictionary catalogs. See
+  /// TabletReader::suspended().
+  ///
+  /// Not implemented yet.
+  void suspend();
+
+  /// Reopens the suspended file at 'path' and rebuilds writer state from it,
+  /// so that writing continues where it left off. Opens the file for read to
+  /// consume the footer and the checkpoint section, then reopens it for
+  /// append at its end. Nearly all the state comes from sections a reader
+  /// already consumes; only the residue comes from the checkpoint.
+  ///
+  /// Fails when the file carries no checkpoint section, or when 'type' and
+  /// 'options' would lay streams out differently than the suspended file
+  /// did: the final footer holds a single schema that has to describe every
+  /// stripe.
+  ///
+  /// Not implemented yet.
+  static std::unique_ptr<Writer> resume(
+      const velox::TypePtr& type,
+      std::string_view path,
+      velox::memory::MemoryPool& pool,
+      const WriterOptions& options);
+
   /// Names the writer publishes its counters under. Consumers name a key
   /// instead of a struct field, so adding a counter no longer changes this
   /// class's API.

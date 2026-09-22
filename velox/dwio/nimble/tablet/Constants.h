@@ -52,5 +52,15 @@ constexpr std::string_view kChunkStatsV2Section = "columnar.chunk.stats.v2";
 constexpr std::string_view kPropertiesSection = "columnar.properties";
 constexpr std::string_view kDictionarySection = "columnar.dictionaries";
 constexpr std::string_view kVectorIndexSection = "columnar.vector.index";
+/// Present only in a suspended file, i.e. one closed without being finalized
+/// so that a later writer can reopen it and append. Its presence is the signal
+/// that the file is not final; a finalized file never carries it.
+constexpr std::string_view kCheckpointSection = "columnar.checkpoint";
+
+/// Version written into, and accepted from, the checkpoint section. Versions
+/// start at 1 so that a flatbuffers scalar left at its implicit default is
+/// recognizable as absent rather than read as version 0.
+constexpr uint32_t kCheckpointVersionMin = 1;
+constexpr uint32_t kCheckpointVersion = 1;
 
 } // namespace facebook::nimble
