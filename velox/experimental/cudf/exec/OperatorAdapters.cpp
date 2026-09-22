@@ -420,24 +420,6 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       }
     }
 
-    if (std::any_of(
-            joinPlanNode->leftKeys().begin(),
-            joinPlanNode->leftKeys().end(),
-            [](const auto& key) {
-              return containsCustomComparison(key->type());
-            }) ||
-        std::any_of(
-            joinPlanNode->rightKeys().begin(),
-            joinPlanNode->rightKeys().end(),
-            [](const auto& key) {
-              return containsCustomComparison(key->type());
-            })) {
-      LOG_FALLBACK(
-          "HashJoin key has custom comparison semantics, PlanNode id: {}",
-          planNode->id());
-      return false;
-    }
-
     // Reject if any join source has types that cuDF cannot represent.
     // The probe and build pipelines are compiled independently by ToCudf,
     // so one side may reject GPU execution (e.g. due to unsupported types)
