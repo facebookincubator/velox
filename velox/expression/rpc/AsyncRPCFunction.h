@@ -257,6 +257,20 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Returns the number of currently pending rows this function will accept in
+  /// one flush, up to `desired`. A function may return fewer when its backend
+  /// caps a request by serialized bytes, tokens, or protocol size; the
+  /// framework deals only in rows.
+  ///
+  /// `desired` is positive. The return value must be in [1, desired] so the
+  /// drain always makes progress without exceeding the operator's requested row
+  /// count. A row that cannot be sent at all is failed loudly inside
+  /// flushBatch() rather than stalling the loop. Rows are counted from the
+  /// front of the pending queue, matching flushBatch()'s order.
+  virtual int32_t maxRowsPerFlush(int32_t desired) const {
+    return desired;
+  }
+
   /// Returns the number of backend admission slots needed to flush 'numRows'.
   /// The result must be positive and nondecreasing with 'numRows', and one row
   /// must require exactly one unit. Native and asynchronous batch APIs consume
