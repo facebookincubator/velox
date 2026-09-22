@@ -109,7 +109,7 @@ namespace {
 
 std::unique_ptr<cudf::table> makeEmptyTable(
     const TypePtr& type,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<std::unique_ptr<cudf::column>> emptyColumns;
   emptyColumns.reserve(type->size());
@@ -341,7 +341,7 @@ void orderCudfVectorDeallocationsAfterStream(
 std::unique_ptr<cudf::column> makeAllNullColumn(
     const TypePtr& type,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   switch (type->kind()) {
     case TypeKind::ARRAY: {

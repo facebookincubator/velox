@@ -218,7 +218,7 @@ void orderCudfVectorDeallocationsAfterStream(
 std::unique_ptr<cudf::column> makeAllNullColumn(
     const TypePtr& type,
     cudf::size_type numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Extract the base function name from a possibly-prefixed name.
