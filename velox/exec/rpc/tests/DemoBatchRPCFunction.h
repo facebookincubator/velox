@@ -60,7 +60,8 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& queryConfig,
       const std::vector<TypePtr>& inputTypes,
-      const std::vector<VectorPtr>& constantInputs) override;
+      const std::vector<VectorPtr>& constantInputs,
+      RPCStreamingMode instruction) override;
 
   std::string name() const override {
     return "demo_batch_rpc";

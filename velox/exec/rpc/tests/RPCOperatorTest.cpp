@@ -39,6 +39,7 @@
 #include <folly/futures/Future.h>
 
 #include <chrono>
+#include <string>
 #include <thread>
 
 #include "velox/exec/Cursor.h"
@@ -143,6 +144,192 @@ class UnsetPerRowRPCFunction : public DemoAsyncRPCFunction {
     });
     return futures;
   }
+};
+
+class PreAdmissionTierRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static void reset() {
+    prepared_ = false;
+    dispatchedAfterPrepare_ = false;
+  }
+
+  static bool dispatchedAfterPrepare() {
+    return dispatchedAfterPrepare_;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/) override {
+    tierKey_ = "resolved-tier";
+    prepared_ = true;
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  std::string tierKey() const override {
+    return tierKey_;
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    dispatchedAfterPrepare_ = prepared_;
+    return DemoAsyncRPCFunction::dispatchPerRow(rows, args);
+  }
+
+ private:
+  std::string tierKey_{"provisional-tier"};
+  static inline bool prepared_{false};
+  static inline bool dispatchedAfterPrepare_{false};
+};
+
+class ConstantSetupRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static void reset() {
+    numPreparations_ = 0;
+  }
+
+  static int32_t numPreparations() {
+    return numPreparations_;
+  }
+
+  bool requiresRowInspectionBeforeAdmission() const override {
+    return false;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& /*rows*/,
+      const std::vector<VectorPtr>& /*args*/) override {
+    ++numPreparations_;
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+ private:
+  static inline int32_t numPreparations_{0};
+};
+
+class DeferredAdmissionRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static void reset() {
+    numCongestionEvaluations_ = 0;
+  }
+
+  static int32_t numCongestionEvaluations() {
+    return numCongestionEvaluations_;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    bool hasDispatchableRow = false;
+    rows.applyToSelected([&](vector_size_t row) {
+      hasDispatchableRow = hasDispatchableRow ||
+          (!prompts->isNullAt(row) &&
+           prompts->valueAt(row) != StringView("local error"));
+    });
+    if (!hasDispatchableRow) {
+      return AdmissionPreparationResult::kLocalOnly;
+    }
+    tierKey_ = "resolved-after-live-row";
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    SelectivityVector backendRows(rows.size(), false);
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        results;
+    rows.applyToSelected([&](vector_size_t row) {
+      if (prompts->isNullAt(row)) {
+        results.emplace_back(
+            row,
+            folly::makeSemiFuture(
+                RPCResponse::failed(
+                    0, velox::rpc::RPCErrorKind::kNullInput, "null_input")));
+      } else if (prompts->valueAt(row) == StringView("local error")) {
+        results.emplace_back(
+            row,
+            folly::makeSemiFuture(
+                RPCResponse::failed(
+                    0,
+                    velox::rpc::RPCErrorKind::kInvalidRequest,
+                    "local_error")));
+      } else {
+        backendRows.setValid(row, true);
+      }
+    });
+    backendRows.updateBounds();
+    auto backendResults =
+        DemoAsyncRPCFunction::dispatchPerRow(backendRows, args);
+    results.insert(
+        results.end(),
+        std::make_move_iterator(backendResults.begin()),
+        std::make_move_iterator(backendResults.end()));
+    return results;
+  }
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    ++numCongestionEvaluations_;
+    for (const auto& response : responses) {
+      if (response.hasError()) {
+        return CongestionSignal::kError;
+      }
+    }
+    return DemoAsyncRPCFunction::evaluateCongestion(responses);
+  }
+
+  std::string tierKey() const override {
+    return tierKey_;
+  }
+
+ private:
+  std::string tierKey_{"local-only-provisional-tier"};
+  static inline int32_t numCongestionEvaluations_{0};
+};
+
+class DeferredAdmissionBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  static void reset() {
+    numCongestionEvaluations_ = 0;
+  }
+
+  static int32_t numCongestionEvaluations() {
+    return numCongestionEvaluations_;
+  }
+
+  AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    bool hasDispatchableRow = false;
+    rows.applyToSelected([&](vector_size_t row) {
+      hasDispatchableRow = hasDispatchableRow || !prompts->isNullAt(row);
+    });
+    if (!hasDispatchableRow) {
+      return AdmissionPreparationResult::kLocalOnly;
+    }
+    tierKey_ = "resolved-batch-after-live-row";
+    return AdmissionPreparationResult::kRequiresAdmission;
+  }
+
+  std::string tierKey() const override {
+    return tierKey_;
+  }
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    ++numCongestionEvaluations_;
+    return DemoBatchRPCFunction::evaluateCongestion(responses);
+  }
+
+ private:
+  std::string tierKey_{"batch-local-only-provisional-tier"};
+  static inline int32_t numCongestionEvaluations_{0};
 };
 
 class RPCOperatorTest : public OperatorTestBase {
@@ -287,6 +474,22 @@ class RPCOperatorTest : public OperatorTestBase {
         "demo_rpc_unset_response",
         []() { return std::make_shared<UnsetPerRowRPCFunction>(); },
         DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "pre_admission_tier_rpc",
+        []() { return std::make_shared<PreAdmissionTierRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "constant_setup_rpc",
+        []() { return std::make_shared<ConstantSetupRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "deferred_admission_rpc",
+        []() { return std::make_shared<DeferredAdmissionRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "deferred_admission_batch_rpc",
+        []() { return std::make_shared<DeferredAdmissionBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
     // Fails asynchronous batch work with an internal error.
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc_whole_fail_fatal",
@@ -389,7 +592,13 @@ class RPCOperatorTest : public OperatorTestBase {
     auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
 
     return std::make_shared<core::RPCNode>(
-        "rpc-0", source, std::move(call), "__rpc_result", outputType);
+        "rpc-0",
+        source,
+        std::move(call),
+        "__rpc_result",
+        outputType,
+        RPCStreamingMode::kPerRow,
+        0);
   }
 };
 
@@ -566,6 +775,137 @@ TEST_F(RPCOperatorTest, backendIsConfiguredByTheFirstQueryOnly) {
   EXPECT_DOUBLE_EQ(config.decreaseFactor, 0.25);
 }
 
+TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
+  PreAdmissionTierRPCFunction::reset();
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"hello"})});
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "pre_admission_tier_rpc");
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 1);
+  EXPECT_TRUE(PreAdmissionTierRPCFunction::dispatchedAfterPrepare());
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("provisional-tier")
+          .stats()
+          .peakPending,
+      0);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global().get("resolved-tier").stats().peakPending,
+      1);
+}
+
+TEST_F(RPCOperatorTest, constantSetupSkipsInputPreparation) {
+  ConstantSetupRPCFunction::reset();
+  std::vector<RowVectorPtr> inputs{
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"first input"})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"second input"})}),
+  };
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "constant_setup_rpc");
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ(ConstantSetupRPCFunction::numPreparations(), 0);
+}
+
+TEST_F(RPCOperatorTest, localOnlyInputsBypassAdmissionAndCongestion) {
+  DeferredAdmissionRPCFunction::reset();
+  std::vector<RowVectorPtr> inputs{
+      makeRowVector(
+          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"local error"})}),
+  };
+
+  auto plan = makeRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "deferred_admission_rpc");
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* responses = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t row = 0; row < result->size(); ++row) {
+    if (prompts->isNullAt(row)) {
+      EXPECT_TRUE(responses->isNullAt(row));
+    } else if (prompts->valueAt(row) == StringView("live prompt")) {
+      EXPECT_EQ(prompts->valueAt(row).str(), "live prompt");
+      EXPECT_EQ(responses->valueAt(row).str(), "demo: live prompt");
+    } else {
+      EXPECT_EQ(prompts->valueAt(row).str(), "local error");
+      EXPECT_TRUE(responses->isNullAt(row));
+    }
+  }
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("local-only-provisional-tier")
+          .stats()
+          .peakPending,
+      0);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("resolved-after-live-row")
+          .stats()
+          .peakPending,
+      1);
+  EXPECT_EQ(DeferredAdmissionRPCFunction::numCongestionEvaluations(), 1);
+}
+
+TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
+  DeferredAdmissionBatchRPCFunction::reset();
+  std::vector<RowVectorPtr> inputs{
+      makeRowVector(
+          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"live prompt"})}),
+      makeRowVector(
+          {"prompt"}, {makeNullableFlatVector<StringView>({std::nullopt})}),
+  };
+
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values(inputs).planNode(),
+      {"prompt"},
+      "deferred_admission_batch_rpc");
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+
+  ASSERT_EQ(result->size(), 3);
+  auto* prompts = result->childAt(0)->asFlatVector<StringView>();
+  auto* responses = result->childAt(1)->asFlatVector<StringView>();
+  int32_t numNullInputs = 0;
+  for (vector_size_t row = 0; row < result->size(); ++row) {
+    if (prompts->isNullAt(row)) {
+      ++numNullInputs;
+      EXPECT_TRUE(responses->isNullAt(row));
+    } else {
+      EXPECT_EQ(prompts->valueAt(row).str(), "live prompt");
+      EXPECT_EQ(
+          responses->valueAt(row).str(), "Batch response for: live prompt");
+    }
+  }
+  EXPECT_EQ(numNullInputs, 2);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("batch-local-only-provisional-tier")
+          .stats()
+          .peakPending,
+      0);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("resolved-batch-after-live-row")
+          .stats()
+          .peakPending,
+      1);
+  EXPECT_EQ(DeferredAdmissionBatchRPCFunction::numCongestionEvaluations(), 1);
+}
+
 // Dispatch must respect the tier's admission cap, not only the per-driver
 // window. Other drivers can exhaust the tier while this driver's window is
 // still open, and an ungated flush loop then pushes pending past the cap.
@@ -711,7 +1051,8 @@ class MismatchedResultTypeRPCFunction : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig&,
       const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode) override {}
 
   std::string name() const override {
     return "mismatched_result_type_rpc";
@@ -1265,11 +1606,6 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       std::shared_ptr<folly::CPUThreadPoolExecutor> executor)
       : latency_(latency), executor_(std::move(executor)) {}
 
-  void initialize(
-      const core::QueryConfig&,
-      const std::vector<TypePtr>&,
-      const std::vector<VectorPtr>&) override {}
-
   std::string name() const override {
     return "slow_batch_rpc";
   }
@@ -1333,6 +1669,30 @@ class SlowBatchRPCFunction : public AsyncRPCFunction {
       memory::MemoryPool* pool) const override {
     return buildTextOutput(responses, pool);
   }
+};
+
+class ExecutionModeRecordingRPCFunction : public SlowBatchRPCFunction {
+ public:
+  using SlowBatchRPCFunction::SlowBatchRPCFunction;
+
+  std::string name() const override {
+    return "execution_mode_recording_rpc";
+  }
+
+  void initialize(
+      const core::QueryConfig&,
+      const std::vector<TypePtr>&,
+      const std::vector<VectorPtr>&,
+      RPCStreamingMode instruction) override {
+    receivedExecutionMode_ = instruction;
+  }
+
+  RPCStreamingMode receivedExecutionMode() const {
+    return receivedExecutionMode_;
+  }
+
+ private:
+  RPCStreamingMode receivedExecutionMode_{RPCStreamingMode::kPerRow};
 };
 
 } // namespace
@@ -1537,6 +1897,32 @@ TEST_F(RPCOperatorTest, perRowCongestionPath) {
   EXPECT_EQ(rows["OVERLOAD one"], "demo: OVERLOAD one");
   EXPECT_EQ(rows["OVERLOAD two"], "demo: OVERLOAD two");
   EXPECT_EQ(rows["normal three"], "demo: normal three");
+}
+
+TEST_F(RPCOperatorTest, batchExecutionModeReachesTheFunction) {
+  auto rpcExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(4);
+  std::shared_ptr<ExecutionModeRecordingRPCFunction> function;
+  AsyncRPCFunctionRegistry::registerFunction(
+      "execution_mode_recording_rpc",
+      [&function, rpcExecutor]() {
+        function = std::make_shared<ExecutionModeRecordingRPCFunction>(
+            std::chrono::milliseconds{0}, rpcExecutor);
+        return function;
+      },
+      DemoBatchRPCFunction::signatures());
+
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({StringView("hi")})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "execution_mode_recording_rpc");
+
+  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  ASSERT_NE(function, nullptr);
+  EXPECT_EQ(function->receivedExecutionMode(), RPCStreamingMode::kBatch);
 }
 
 } // namespace facebook::velox::exec::rpc

@@ -216,6 +216,18 @@ class RPCOperator : public exec::Operator {
   // the name lookups per batch.
   void initOutputProjections();
 
+  // Binds the shared limiter after the function has resolved any
+  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  void initializeRateLimiter();
+
+  // Resolves an input whose selected rows all complete synchronously without a
+  // backend. The function's preparation result guarantees the futures are
+  // ready and lets these rows bypass admission and congestion accounting.
+  void resolveLocalOnlyInput(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& arguments,
+      std::vector<VectorPtr> flattenedColumns);
+
   // Increment the per-error-kind counter for a single response.
   void recordErrorKind(velox::rpc::RPCErrorKind kind);
 
@@ -310,15 +322,16 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<const core::RPCNode> rpcNode_;
   std::shared_ptr<RPCState> state_;
   std::shared_ptr<AsyncRPCFunction> function_;
+  bool requiresRowInspectionBeforeAdmission_{true};
 
   // Identifies the provisioned capacity this operator admits against: a
   // backend tier plus the credential used to reach it (from
   // function_->tierKey()). Everything sharing this key shares one quota.
   std::string tierKey_;
 
-  // Admission control for tierKey_, resolved once in initialize(). Points into
-  // the process-scoped RPCRateLimiterRegistry, which outlives every operator
-  // and every token captured into a continuation.
+  // Admission control for tierKey_, resolved before the first dispatch. Points
+  // into the process-scoped RPCRateLimiterRegistry, which outlives every
+  // operator and every token captured into a continuation.
   RPCRateLimiter* limiter_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
@@ -385,6 +398,9 @@ class RPCOperator : public exec::Operator {
   // Claimed rows/batch from isBlocked() for use in getOutput().
   // State is derived from these: if non-empty, we have output ready.
   std::vector<RPCState::ReadyRow> claimedRows_;
+  // Prevents a local-only claim from absorbing transport completions or
+  // feeding their synthetic zero RTT into congestion control.
+  bool claimedRowsAreLocalOnly_{false};
   std::optional<RPCState::ReadyBatch> claimedBatch_;
 
   // Whether we've detected the finish condition.
