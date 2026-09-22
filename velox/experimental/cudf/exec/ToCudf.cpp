@@ -27,6 +27,9 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
+#endif
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
@@ -311,6 +314,16 @@ void registerCudf() {
   // Register operator adapters
   registerAllOperatorAdapters();
 
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Advertise the UCX transport only when this process is configured to run it.
+  // Whether a given node uses it is decided by the plan, not here. The
+  // registration lives in the transport's own module; cuDF only decides when to
+  // call it, because today cuDF is the only producer of UCX plans.
+  if (CudfConfig::getInstance().exchange) {
+    ucx_exchange::registerUcxTransports();
+  }
+#endif
+
   auto prefix = CudfConfig::getInstance().functionNamePrefix;
   registerBuiltinFunctions(prefix);
   registerPrestoAggregateFunctions(prefix);
@@ -369,6 +382,13 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+#ifdef VELOX_ENABLE_UCX_EXCHANGE
+  // Unconditionally, whether or not CudfConfig::exchange was set when
+  // registerCudf() ran: the registries are process-global and erase() is a
+  // no-op for an absent key, so this must not depend on config that may have
+  // changed in between.
+  ucx_exchange::unregisterUcxTransports();
+#endif
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
   output_mr_.reset();
