@@ -21,6 +21,7 @@
 
 #include <memory>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
@@ -93,6 +94,23 @@ void expectSameType(const Type& a, const Type& b, const std::string& path) {
         EXPECT_EQ(fa.nameAt(i), fb.nameAt(i));
         expectSameType(
             *fa.childAt(i), *fb.childAt(i), path + "[" + fa.nameAt(i) + "]");
+      }
+      break;
+    }
+    case Kind::HybridFlatMap: {
+      const auto& lhsMap = a.asHybridFlatMap();
+      const auto& rhsMap = b.asHybridFlatMap();
+      EXPECT_EQ(lhsMap.keyScalarKind(), rhsMap.keyScalarKind());
+      ASSERT_EQ(lhsMap.groupCount(), rhsMap.groupCount());
+      for (size_t i = 0; i < lhsMap.groupCount(); ++i) {
+        const auto& lhsGroup = lhsMap.groupAt(i);
+        const auto& rhsGroup = rhsMap.groupAt(i);
+        EXPECT_EQ(lhsGroup.groupId, rhsGroup.groupId);
+        EXPECT_EQ(lhsGroup.groupKeys, rhsGroup.groupKeys);
+        expectSameType(
+            *lhsGroup.valueType,
+            *rhsGroup.valueType,
+            path + ".group[" + std::to_string(i) + "]");
       }
       break;
     }
@@ -1050,6 +1068,50 @@ TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
   NIMBLE_ASSERT_THROW(
       buildProjectedNimbleType(sourceNimbleType.get(), subfields),
       "FlatMap projection is supported only for top-level columns");
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapRequiresGroupAwareProjection) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(1);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", features);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features");
+
+  NIMBLE_ASSERT_THROW(
+      buildProjectedNimbleType(schema.get(), subfields),
+      "Hybrid FlatMap projection requires group-aware projection");
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapConvertsToVeloxMap) {
+  SchemaBuilder builder;
+  const auto makeValue = [&]() {
+    auto array = builder.createArrayTypeBuilder();
+    array->setChildren(builder.createScalarTypeBuilder(ScalarKind::String));
+    return array;
+  };
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  hybridMap->addGroup(0, {"1"}, makeValue());
+  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValue());
+
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto veloxType = convertToVeloxType(*schema);
+  ASSERT_EQ(veloxType->kind(), velox::TypeKind::MAP);
+  EXPECT_EQ(veloxType->asMap().keyType()->kind(), velox::TypeKind::INTEGER);
+  ASSERT_EQ(veloxType->asMap().valueType()->kind(), velox::TypeKind::ARRAY);
+  EXPECT_EQ(
+      veloxType->asMap().valueType()->asArray().elementType()->kind(),
+      velox::TypeKind::VARCHAR);
 }
 
 TEST(SchemaUtilsTest, projectionEncodingHintsSlidingWindowMap) {

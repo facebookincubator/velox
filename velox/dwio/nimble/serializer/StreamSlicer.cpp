@@ -156,6 +156,8 @@ uint32_t maxStreamOffset(const Type& type) {
       }
       return offset;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED("Stream slicing does not support hybrid FlatMap.");
     case Kind::ArrayWithOffsets:
       return std::max(
           {maxStreamOffset(type.asArrayWithOffsets().offsetsDescriptor()),
@@ -607,6 +609,8 @@ void StreamSlicer::sliceType(
       }
       return;
     }
+    case Kind::HybridFlatMap:
+      NIMBLE_UNSUPPORTED("Stream slicing does not support hybrid FlatMap.");
     default:
       NIMBLE_UNSUPPORTED(
           "StreamSlicer does not support slicing {} yet", type.kind());

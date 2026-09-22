@@ -43,6 +43,8 @@
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/StreamSlicer.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
+#include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
@@ -1085,6 +1087,27 @@ TEST_F(StreamSlicerTest, rejectsZeroLengthSlice) {
   NIMBLE_ASSERT_THROW(
       slicer.slice(std::vector<std::string_view>{}, 1, 0),
       "Slice length must be positive");
+}
+
+TEST_F(StreamSlicerTest, rejectsHybridFlatMap) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(1);
+  auto hybridMap =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  hybridMap->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  NIMBLE_ASSERT_THROW(
+      StreamSlicer(schema, pool_.get(), StreamSlicer::Options{}),
+      "Stream slicing does not support hybrid FlatMap.");
 }
 
 TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
