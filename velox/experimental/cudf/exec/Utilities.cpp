@@ -342,11 +342,9 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
   switch (type->kind()) {
     case TypeKind::ARRAY: {
       // LIST: zeroed offsets (numRows + 1 zeros) + empty child + ALL_NULL mask.
-      auto zeroScalar = cudf::make_default_constructed_scalar(
-          cudf::data_type{cudf::type_id::INT32}, stream, get_temp_mr());
-      zeroScalar->set_valid_async(true, stream);
+      cudf::numeric_scalar<int32_t> zeroScalar{0, true, stream, get_temp_mr()};
       auto offsets =
-          cudf::make_column_from_scalar(*zeroScalar, numRows + 1, stream, mr);
+          cudf::make_column_from_scalar(zeroScalar, numRows + 1, stream, mr);
       auto child = makeAllNullColumn(type->childAt(0), 0, stream, mr);
       auto nullMask = cudf::create_null_mask(
           numRows, cudf::mask_state::ALL_NULL, stream, mr);
