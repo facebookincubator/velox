@@ -220,6 +220,34 @@ TEST_F(HashJoinTest, rightJoinNullPadsIntervalDayTime) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(HashJoinTest, rightJoinNullPadsRowWithArray) {
+  auto payload = makeRowVector(
+      {"x", "items"},
+      {makeFlatVector<int64_t>({10}), makeArrayVector<int32_t>({{1, 2}})});
+  auto probe = makeRowVector(
+      {"p_key", "payload"}, {makeFlatVector<int64_t>({1}), payload});
+  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"payload", "b_key"},
+                      core::JoinType::kRight)
+                  .planNode();
+  auto expectedPayload = makeRowVector(
+      {"x", "items"},
+      {makeFlatVector<int64_t>({0}), makeArrayVector<int32_t>({{}})},
+      [](auto /*row*/) { return true; });
+  auto expected = makeRowVector(
+      {"payload", "b_key"}, {expectedPayload, makeFlatVector<int64_t>({2})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
   auto probe = makeRowVector(
       {"p_key", "payload"},
