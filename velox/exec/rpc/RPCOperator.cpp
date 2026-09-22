@@ -388,9 +388,8 @@ namespace {
 std::vector<RPCResponse> degradeBatchFailureToRowErrors(
     const std::vector<int64_t>& rowIds,
     const folly::exception_wrapper& error) {
-  // Mirrors the client-layer fan-out but covers every backend and the
-  // operator-level timeout uniformly. Both AIMD controllers still back off,
-  // since evaluateCongestion reads a batch failure as overload.
+  // Preserves the typed cause so congestion policy backs off only for a
+  // timeout or rate limit; other failures still follow the row error policy.
   RPC_OP_LOG(ERROR) << "RPC batch failed, " << rowIds.size()
                     << " rows will carry a per-row error: " << error.what();
   const auto kind = errorKindFor(error);
@@ -728,11 +727,10 @@ void RPCOperator::recordCongestion(
   //    round trips to its latency gradient;
   //  - the backend's shared cap halves on overload and recovers additively on
   //    success.
-  // The policy classifies overload as rate-limit / timeout / majority error,
-  // ignoring null_input. Both scopes must back off on it: a rate-limit storm
-  // is LOW-latency, so the gradient alone is blind to it and the error verdict
-  // is what makes the window shrink.
-  if (signal == AsyncRPCFunction::CongestionSignal::kError) {
+  // Only the function's explicit overload verdict shrinks either window. Such
+  // failures can be low-latency, so the verdict, rather than RTT alone, must
+  // drive backoff. A non-overload error leaves both windows unchanged.
+  if (signal == AsyncRPCFunction::CongestionSignal::kOverloaded) {
     state_->onUnitError();
     limiter_->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
     return;
@@ -1253,6 +1251,11 @@ void RPCOperator::recordRuntimeStats() {
     if (snapshot.numShrinks > 0) {
       lockedStats->addRuntimeStat(
           kRpcCongestionShrinks, RuntimeCounter(snapshot.numShrinks));
+    }
+    if (snapshot.numOverloadShrinks > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCongestionOverloadShrinks,
+          RuntimeCounter(snapshot.numOverloadShrinks));
     }
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(

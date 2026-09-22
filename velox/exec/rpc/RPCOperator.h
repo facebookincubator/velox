@@ -118,6 +118,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionWindowFinal{
       "rpcCongestionWindowFinal"};
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
+  static inline const std::string kRpcCongestionOverloadShrinks{
+      "rpcCongestionOverloadShrinks"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};

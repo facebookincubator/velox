@@ -123,18 +123,26 @@ and continue through the function's configured error policy.
 ## Congestion
 
 `evaluateCongestion(responses)` is how a function tells the framework what a
-completed unit means on its backend. It returns one of three signals:
+completed unit means on its backend. It returns one of four signals:
 
 - `kSuccess` — feed the round trip to the latency gradient, and recover
   admission capacity.
-- `kError` — treat the unit as backend overload. Both scopes back off.
-- `kNone` — nothing to learn.
+- `kOverloaded` — the backend pushed back. Both scopes back off.
+- `kNonOverloadError` — the unit failed without explicit evidence of overload.
+  **Neither scope backs off.**
+- `kNone` — nothing to learn, including an all-null-input unit.
 
-One case this cannot yet express is a failure the backend is not responsible
-for — a malformed request, a bad key. It classifies as `kError` and so backs
-off, although a deterministic client error fails identically at any
-concurrency, and admission capacity is shared with every other query on that
-backend. Splitting the signal is a later change.
+The `kNonOverloadError` case is the one worth stating. A deterministic client
+error fails identically at any concurrency, so backing off cannot help — and
+because admission capacity is shared, treating it as overload degrades every
+other query on that backend. A drain that is mostly invalid requests must not
+shrink either window.
+
+Runtime stats distinguish the two backoff mechanisms.
+`rpcCongestionOverloadShrinks` counts observable per-driver window reductions
+caused by explicit overload. `rpcCongestionShrinks` also includes
+latency-gradient reductions. `rpcRateLimiterMinCap` records the shared
+controller's low-water capacity.
 
 ### Why admission has two scopes
 

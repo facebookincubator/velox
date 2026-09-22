@@ -282,20 +282,21 @@ class AsyncRPCFunction {
   enum class CongestionSignal {
     /// Unit completed cleanly — feed its latency to the gradient window.
     kSuccess,
-    /// Unit showed backend overload — shrink the window.
-    kError,
+    /// Backend shed load (rate limited, or timed out under pressure) — shrink
+    /// the window. Only this signal backs off.
+    kOverloaded,
+    /// Unit failed without explicit evidence of overload. Neither controller
+    /// reacts; reducing admission concurrency would not address this signal.
+    kNonOverloadError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
   };
 
-  /// Evaluate congestion from completed responses. Called by RPCOperator after
-  /// a unit (a drained set of PER_ROW rows, or one BATCH) completes. The
-  /// function inspects responses and returns a signal the operator maps to the
-  /// latency-gradient window: kSuccess feeds the unit's round-trip latency as a
-  /// gradient sample, kError applies a multiplicative decrease. User-data
-  /// errors (bad handle, null input) must classify as kNone so they never move
-  /// the window — only true backend overload should back off. Default: kNone
-  /// (no congestion control).
+  /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
+  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient;
+  /// kOverloaded applies a multiplicative decrease to both controllers;
+  /// kNonOverloadError reports a failure without moving either controller; and
+  /// kNone skips evaluation. Defaults to kNone (no congestion control).
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;
