@@ -103,7 +103,7 @@ std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
       }
       return cudf::data_type{cudf::type_id::LIST};
     case TypeKind::ROW:
-      for (auto i = 0; i < type->size(); ++i) {
+      for (size_t i = 0; i < type->size(); ++i) {
         if (!tryVeloxToCudfDataType(type->childAt(i))) {
           return std::nullopt;
         }

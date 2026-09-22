@@ -363,7 +363,7 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
       // STRUCT: recursively create all-null children + ALL_NULL mask.
       std::vector<std::unique_ptr<cudf::column>> children;
       children.reserve(type->size());
-      for (auto i = 0; i < type->size(); ++i) {
+      for (size_t i = 0; i < type->size(); ++i) {
         children.push_back(
             makeAllNullColumn(type->childAt(i), numRows, stream, mr));
       }
