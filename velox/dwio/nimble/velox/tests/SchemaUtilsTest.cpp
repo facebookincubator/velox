@@ -21,6 +21,7 @@
 
 #include <memory>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
@@ -96,12 +97,106 @@ void expectSameType(const Type& a, const Type& b, const std::string& path) {
       }
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& lhsMap = a.asHybridFlatMap();
+      const auto& rhsMap = b.asHybridFlatMap();
+      EXPECT_EQ(lhsMap.keyScalarKind(), rhsMap.keyScalarKind());
+      ASSERT_EQ(lhsMap.groupCount(), rhsMap.groupCount());
+      for (size_t i = 0; i < lhsMap.groupCount(); ++i) {
+        const auto& lhsGroup = lhsMap.groupAt(i);
+        const auto& rhsGroup = rhsMap.groupAt(i);
+        EXPECT_EQ(lhsGroup.groupId, rhsGroup.groupId);
+        EXPECT_EQ(lhsGroup.groupKeys, rhsGroup.groupKeys);
+        expectSameType(
+            *lhsGroup.valueType,
+            *rhsGroup.valueType,
+            path + ".group[" + std::to_string(i) + "]");
+      }
+      break;
+    }
     default:
       FAIL() << "Unexpected kind at " << path;
   }
 }
 
 } // namespace
+
+TEST(SchemaUtilsTest, resolvesValueStreamSubfields) {
+  const auto veloxType = velox::ROW({
+      {"top_level", velox::VARCHAR()},
+      {"nested", velox::ROW({{"target", velox::VARCHAR()}})},
+      {"items", velox::ARRAY(velox::VARCHAR())},
+      {"properties", velox::MAP(velox::INTEGER(), velox::VARCHAR())},
+  });
+  const auto typeWithId = velox::dwio::common::TypeWithId::create(veloxType);
+
+  SchemaBuilder schemaBuilder;
+  auto nested = test::row(
+      schemaBuilder,
+      {{"target", schemaBuilder.createScalarTypeBuilder(ScalarKind::String)}});
+  auto items = test::array(
+      schemaBuilder, schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  auto properties = test::map(
+      schemaBuilder,
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int32),
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  auto typeBuilder = test::row(
+      schemaBuilder,
+      {{"top_level", schemaBuilder.createScalarTypeBuilder(ScalarKind::String)},
+       {"nested", std::move(nested)},
+       {"items", std::move(items)},
+       {"properties", std::move(properties)}});
+
+  for (const auto path :
+       {"top_level", "nested.target", "items[*]", "properties[*]"}) {
+    SCOPED_TRACE(path);
+    const auto subfield = parseValueStreamSubfield(path);
+    EXPECT_TRUE(
+        resolveValueStreamSubfield(*typeWithId, subfield).type()->isVarchar());
+    const auto& builderNode =
+        resolveValueStreamSubfield(*typeBuilder, subfield);
+    EXPECT_EQ(builderNode.kind(), Kind::Scalar);
+    EXPECT_EQ(
+        builderNode.asScalar().scalarDescriptor().scalarKind(),
+        ScalarKind::String);
+  }
+}
+
+TEST(SchemaUtilsTest, rejectsAllSubscriptOnRowAndFlatMap) {
+  const auto veloxType = velox::ROW({
+      {"nested", velox::ROW({{"target", velox::VARCHAR()}})},
+  });
+  const auto typeWithId = velox::dwio::common::TypeWithId::create(veloxType);
+  NIMBLE_ASSERT_USER_THROW(
+      resolveValueStreamSubfield(
+          *typeWithId, parseValueStreamSubfield("nested[*]")),
+      "Value stream subfield path cannot apply [*]");
+
+  SchemaBuilder schemaBuilder;
+  test::FlatMapChildAdder flatMapChildAdder;
+  auto nested = test::row(
+      schemaBuilder,
+      {{"target", schemaBuilder.createScalarTypeBuilder(ScalarKind::String)}});
+  auto flatMap = test::flatMap(
+      schemaBuilder,
+      ScalarKind::Int32,
+      [](SchemaBuilder& builder) {
+        return builder.createScalarTypeBuilder(ScalarKind::String);
+      },
+      flatMapChildAdder);
+  auto typeBuilder = test::row(
+      schemaBuilder,
+      {{"nested", std::move(nested)}, {"flat_map", std::move(flatMap)}});
+  flatMapChildAdder.addChild("1");
+
+  for (const auto path : {"nested[*]", "flat_map[*]"}) {
+    SCOPED_TRACE(path);
+    NIMBLE_ASSERT_USER_THROW(
+        resolveValueStreamSubfield(
+            *typeBuilder, parseValueStreamSubfield(path)),
+        "Value stream subfield path cannot apply [*]");
+  }
+}
 
 // --- convertToVeloxType tests ---
 
@@ -973,6 +1068,50 @@ TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
   NIMBLE_ASSERT_THROW(
       buildProjectedNimbleType(sourceNimbleType.get(), subfields),
       "FlatMap projection is supported only for top-level columns");
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapRequiresGroupAwareProjection) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(1);
+  auto features =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  features->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  features->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", features);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features");
+
+  NIMBLE_ASSERT_THROW(
+      buildProjectedNimbleType(schema.get(), subfields),
+      "Hybrid FlatMap projection requires group-aware projection");
+}
+
+TEST(SchemaUtilsTest, hybridFlatMapConvertsToVeloxMap) {
+  SchemaBuilder builder;
+  const auto makeValue = [&]() {
+    auto array = builder.createArrayTypeBuilder();
+    array->setChildren(builder.createScalarTypeBuilder(ScalarKind::String));
+    return array;
+  };
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  hybridMap->addGroup(0, {"1"}, makeValue());
+  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValue());
+
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto veloxType = convertToVeloxType(*schema);
+  ASSERT_EQ(veloxType->kind(), velox::TypeKind::MAP);
+  EXPECT_EQ(veloxType->asMap().keyType()->kind(), velox::TypeKind::INTEGER);
+  ASSERT_EQ(veloxType->asMap().valueType()->kind(), velox::TypeKind::ARRAY);
+  EXPECT_EQ(
+      veloxType->asMap().valueType()->asArray().elementType()->kind(),
+      velox::TypeKind::VARCHAR);
 }
 
 TEST(SchemaUtilsTest, projectionEncodingHintsSlidingWindowMap) {

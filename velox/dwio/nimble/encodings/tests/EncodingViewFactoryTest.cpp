@@ -26,12 +26,12 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 using namespace facebook;
 
@@ -54,19 +54,20 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::PFOR,
       nimble::EncodingType::SimdForBitpack,
       nimble::EncodingType::BitRangeSplit,
-      nimble::EncodingType::BlockBitPacking};
+      nimble::EncodingType::BlockBitPacking,
+      nimble::EncodingType::SubIntSplit};
   for (const auto encodingType : supportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     EXPECT_TRUE(nimble::supportsEncodingView(encodingType));
   }
 
+  EXPECT_FALSE(nimble::supportsEncodingView(nimble::EncodingType::Nullable));
+
   const std::vector<nimble::EncodingType> unsupportedEncodings{
       nimble::EncodingType::Sentinel,
-      nimble::EncodingType::Nullable,
       nimble::EncodingType::Varint,
       nimble::EncodingType::Delta,
       nimble::EncodingType::Prefix,
-      nimble::EncodingType::SubIntSplit,
       nimble::EncodingType::FrequencyPartition,
       nimble::EncodingType::Fsst,
       nimble::EncodingType::SharedDictionary};
@@ -74,21 +75,6 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     EXPECT_FALSE(nimble::supportsEncodingView(encodingType));
   }
-}
-
-TEST_F(EncodingViewTest, rejectsCompressedTrivialEncoding) {
-  const nimble::Encoding::Options options;
-  nimble::Vector<int32_t> values{pool_.get()};
-  for (auto i = 0; i < 4096; ++i) {
-    values.push_back(i % 17);
-  }
-  auto serialized =
-      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
-          *buffer_, values, nimble::CompressionType::Zstd, options);
-
-  NIMBLE_ASSERT_THROW(
-      nimble::createEncodingView(serialized, pool_.get(), options),
-      "EncodingView does not support compressed Trivial streams");
 }
 
 TEST_F(EncodingViewTest, parsesArbitraryBitRangeSplitBoundaries) {
@@ -116,6 +102,73 @@ TEST_F(EncodingViewTest, parsesArbitraryBitRangeSplitBoundaries) {
       nimble::detail::BitRangeSplitEncodingBase::parseSections(
           "start-12;13-63", /*physicalBits=*/64),
       "Invalid BitRangeSplit range config");
+}
+
+TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
+  const std::vector<uint64_t> values{
+      0x299aff8ca62b0001,
+      0x299be75117820001,
+      0x0999c1e5b8460001,
+      0x299f100bfa830002,
+  };
+  const std::vector<nimble::subintsplit::SectionPlan> segments{
+      {.bitStart = 0, .bitEnd = 15},
+      {.bitStart = 16, .bitEnd = 58},
+      {.bitStart = 59, .bitEnd = 63},
+  };
+  std::vector<std::optional<const nimble::EncodingLayout>> children(
+      segments.size());
+  nimble::EncodingLayout layout{
+      nimble::EncodingType::SubIntSplit,
+      nimble::EncodingLayout::Config{
+          nimble::subintsplit::makePreserveSplitConfig(segments)},
+      nimble::CompressionType::Uncompressed,
+      std::move(children)};
+  const nimble::EncodingSelectionPolicyCreator leafPolicyCreator =
+      [](nimble::DataType dataType)
+      -> std::unique_ptr<nimble::EncodingSelectionPolicyBase> {
+    auto readFactors = nimble::ManualEncodingSelectionPolicyFactory::
+        defaultEncodingReadFactors();
+    readFactors.erase(
+        std::remove_if(
+            readFactors.begin(),
+            readFactors.end(),
+            [](const auto& factor) {
+              return factor.first == nimble::EncodingType::Varint;
+            }),
+        readFactors.end());
+    return nimble::ManualEncodingSelectionPolicyFactory{
+        std::move(readFactors), std::nullopt}
+        .createPolicy(dataType);
+  };
+  const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+      std::make_unique<nimble::ReplayedEncodingSelectionPolicy<uint64_t>>(
+          std::move(layout), std::nullopt, leafPolicyCreator),
+      values,
+      *buffer_);
+
+  const auto captured = nimble::EncodingLayoutCapture::capture(encoded, {});
+  EXPECT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
+  EXPECT_EQ(captured.childrenCount(), segments.size());
+  EXPECT_EQ(
+      captured.config().get(
+          std::string(nimble::subintsplit::kSplitBoundariesConfigKey)),
+      "0-15;16-58;59-63");
+
+  auto view = nimble::createEncodingView(encoded, pool_.get());
+  EXPECT_EQ(view->rowCount(), values.size());
+  for (uint32_t row{0}; row < values.size(); ++row) {
+    uint64_t actual{0};
+    view->readAt(row, &actual);
+    EXPECT_EQ(actual, values[row]);
+  }
+
+  const std::vector<uint32_t> indices{3, 0, 2, 2};
+  std::vector<uint64_t> actual(indices.size());
+  view->readAt(indices, actual.data());
+  EXPECT_EQ(
+      actual,
+      (std::vector<uint64_t>{values[3], values[0], values[2], values[2]}));
 }
 
 TEST_F(EncodingViewTest, readsConfigurableBitRangeSplitSections) {
@@ -287,10 +340,8 @@ TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
   const std::vector<std::pair<nimble::EncodingType, nimble::DataType>>
       unsupportedEncodings{
           {nimble::EncodingType::Sentinel, nimble::DataType::Int32},
-          {nimble::EncodingType::Nullable, nimble::DataType::Int32},
           {nimble::EncodingType::Delta, nimble::DataType::Int32},
           {nimble::EncodingType::Prefix, nimble::DataType::String},
-          {nimble::EncodingType::SubIntSplit, nimble::DataType::Uint32},
           {nimble::EncodingType::FrequencyPartition, nimble::DataType::Uint32},
           {nimble::EncodingType::Fsst, nimble::DataType::String},
       };

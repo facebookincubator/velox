@@ -13,6 +13,7 @@
 # limitations under the License.
 add_library(
   nimble_index
+  BlockedBloomFilter.cpp
   BloomFilter.cpp
   ChunkStats.cpp
   ChunkStatsGroup.cpp
@@ -62,6 +63,7 @@ add_library(
   ClusterIndex.h
   ChunkStatsGroup.h
   ChunkStats.h
+  BlockedBloomFilter.h
   BloomFilter.h
 )
 

@@ -41,6 +41,16 @@ class NestedLoopJoinBridge;
 class SpatialJoinBridge;
 class SplitListener;
 
+class FixedPointLoop;
+struct FixedPointOptions;
+
+/// Runs one plan fragment.  By default it compiles the fragment into a
+/// Driver/Operator pipeline and executes that.  A fragment containing a
+/// FixedPointNode instead gets a FixedPointLoop composed in, which runs
+/// the loop as a schedule of ordinary sub-tasks; Task delegates start(),
+/// next(), addSplit() and noMoreSplits() to it.  Task stays the execution
+/// unit and stays concrete -- nothing on it is virtual.
+
 class Task : public std::enable_shared_from_this<Task> {
  public:
   /// Threading mode the task is executed.
@@ -80,6 +90,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// and callback options. Default is std::nullopt (no spilling).
   /// @param onError Optional callback to receive an exception if task
   /// execution fails.
+  /// @param fixedPointOptions Coordinator-supplied hooks for a plan containing
+  /// a FixedPointNode, or nullptr for none.  Ignored for any other plan.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -89,7 +101,8 @@ class Task : public std::enable_shared_from_this<Task> {
       Consumer consumer = nullptr,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      const FixedPointOptions* fixedPointOptions = nullptr);
 
   static std::shared_ptr<Task> create(
       const std::string& taskId,
@@ -100,7 +113,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      const FixedPointOptions* fixedPointOptions = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
   /// in debugging messages and listings.
@@ -175,6 +189,20 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns ConsumerSupplier passed in the constructor.
   ConsumerSupplier consumerSupplier() const {
     return consumerSupplier_;
+  }
+
+  /// The fixed point whose schedule created this task as one of its
+  /// per-iteration sub-tasks, or nullptr when nothing did.  Set once at
+  /// construction from FixedPointOptions::nested, so a running task cannot be
+  /// re-pointed; the fixed-point state operators walk it outward to find the
+  /// loop that declares the entry they read.  It outlives this task.
+  FixedPointLoop* parentFixedPoint() const {
+    return parentFixedPoint_;
+  }
+
+  /// The threading mode this task was created with.
+  ExecutionMode executionMode() const {
+    return mode_;
   }
 
   bool isGroupedExecution() const;
@@ -833,6 +861,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns the list of running tasks from velox runtime.
   static std::vector<std::shared_ptr<Task>> getRunningTasks();
 
+  /// The fixed point running this fragment, or nullptr when it runs as an
+  /// ordinary Driver pipeline.  Test-only: nothing in production reaches past
+  /// the Task API, which already delegates to the loop.
+  FixedPointLoop* testingFixedPoint() const {
+    return fixedPoint_.get();
+  }
+
   void testingIncrementThreads() {
     std::lock_guard l(mutex_);
     ++numThreads_;
@@ -872,6 +907,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // Returns the lock that protects the system-wide running task list.
   FOLLY_EXPORT static folly::SharedMutex& taskListLock();
 
+ private:
   Task(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -880,7 +916,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ExecutionMode mode,
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
-      std::function<void(std::exception_ptr)> onError = nullptr);
+      std::function<void(std::exception_ptr)> onError = nullptr,
+      FixedPointLoop* parentFixedPoint = nullptr);
 
   // Invoked to do post-create initialization.
   void init(std::optional<common::SpillDiskOptions>&& spillDiskOpts);
@@ -1315,6 +1352,14 @@ class Task : public std::enable_shared_from_this<Task> {
       std::make_shared<std::atomic_int64_t>(0)};
 
   ConsumerSupplier consumerSupplier_;
+
+  // Runs this fragment instead of a Driver pipeline when it contains a
+  // FixedPointNode; null otherwise.  Destroyed early in ~Task, while the pool
+  // and query context it reaches through are still held.
+  std::unique_ptr<FixedPointLoop> fixedPoint_;
+
+  // The fixed point whose schedule created this task, if any.  Outlives it.
+  FixedPointLoop* const parentFixedPoint_;
 
   // The function that is executed when the task encounters its first error,
   // that is, setError() is called for the first time.

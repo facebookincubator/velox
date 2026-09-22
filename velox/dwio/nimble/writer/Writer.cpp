@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/StatsReporter.h"
@@ -37,6 +38,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
+#include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -58,10 +60,11 @@
 #include "velox/dwio/nimble/velox/FieldWriter.h"
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/MetadataGenerated.h"
-#include "velox/dwio/nimble/velox/RawSizeUtils.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
+#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/velox/StatsGenerated.h"
@@ -76,13 +79,32 @@ namespace facebook::nimble {
 
 using velox::dwio::common::TypeWithId;
 
+namespace {
+
+using FsstEncodingNodeIds = folly::F14FastSet<uint32_t>;
+
+} // namespace
+
 namespace detail {
 
 class WriterContext : public FieldWriterContext {
  public:
-  WriterContext(velox::memory::MemoryPool& memoryPool, WriterOptions options)
-      : FieldWriterContext{memoryPool, options.reclaimerFactory(), options.vectorDecoderVisitor},
-        options_{std::move(options)},
+  // Writer options normalized for the stored schema, plus resolved FSST stream
+  // node IDs owned by the context that consumes them.
+  struct Options {
+    WriterOptions writerOptions;
+    FsstEncodingNodeIds fsstEncodingNodeIds;
+  };
+
+  WriterContext(
+      velox::memory::MemoryPool& memoryPool,
+      Options options)
+      : FieldWriterContext{
+            memoryPool,
+            options.writerOptions.reclaimerFactory(),
+            options.writerOptions.vectorDecoderVisitor},
+        options_{std::move(options.writerOptions)},
+        fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         stripeStatsWriteEnabled_{featureGate()->enabled(
             FeatureGate::FeatureSet::kStripeStatsWrite,
@@ -100,6 +122,10 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
+  }
+
+  const FsstEncodingNodeIds& fsstEncodingNodeIds() const {
+    return fsstEncodingNodeIds_;
   }
 
   // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
@@ -253,6 +279,7 @@ class WriterContext : public FieldWriterContext {
   }
 
   const WriterOptions options_;
+  const FsstEncodingNodeIds fsstEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
   const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
@@ -453,16 +480,87 @@ void validateEncodingLayoutTree(const EncodingLayoutTree& tree) {
   }
 }
 
-WriterOptions storedWriterOptions(
+void normalizeChunkStatsOptions(WriterOptions& options) {
+  // Only the legacy alias requires conversion to canonical chunk stats options.
+  if (!options.enableChunkIndex) {
+    return;
+  }
+  NIMBLE_USER_CHECK(
+      !options.enableChunkStats ||
+          options.chunkStatsVersion == ChunkStatsVersion::kV1,
+      "enableChunkIndex requests chunk stats V1, but enableChunkStats requests V2.");
+  options.enableChunkIndex = false;
+  options.enableChunkStats = true;
+  options.chunkStatsVersion = ChunkStatsVersion::kV1;
+}
+
+detail::WriterContext::Options prepareWriterContextOptions(
     const velox::TypePtr& inputType,
     const velox::TypePtr& storedType,
     const std::vector<velox::column_index_t>& storedInputColumnIndices,
     WriterOptions options) {
+  normalizeChunkStatsOptions(options);
   if (options.encodingLayoutTree.has_value()) {
     validateEncodingLayoutTree(options.encodingLayoutTree.value());
   }
-  if (!omitClusterIndexKeyColumnStorage(options)) {
-    return options;
+
+  const bool omitsClusterIndexKeys = omitClusterIndexKeyColumnStorage(options);
+  FsstEncodingNodeIds fsstEncodingNodeIds;
+  if (!options.fsstEncodingSubfields.empty()) {
+    // Resolve against the schema used by field writers so node IDs remain
+    // correct when cluster-index key columns are omitted.
+    auto inputSchema = TypeWithId::create(inputType);
+    const auto storedSchema = omitsClusterIndexKeys
+        ? TypeWithId::create(storedType)
+        : std::move(inputSchema);
+
+    const std::vector<std::string>* clusterIndexKeyColumns{nullptr};
+    if (options.clusterIndexConfig != nullptr) {
+      const auto& config = *options.clusterIndexConfig;
+      NIMBLE_USER_CHECK_EQ(
+          config.family,
+          index::IndexFamily::Cluster,
+          "Cluster index configuration must use the cluster family: {}",
+          config.name);
+      const auto* builtInConfig =
+          dynamic_cast<const index::ClusterIndexConfig*>(&config);
+      NIMBLE_USER_CHECK_NOT_NULL(
+          builtInConfig,
+          "FSST subfields cannot be combined with custom cluster index "
+          "configuration '{}': key columns are unavailable.",
+          config.name);
+      clusterIndexKeyColumns = &builtInConfig->columns;
+    }
+
+    fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
+    for (const auto& fieldPath : options.fsstEncodingSubfields) {
+      const auto subfield = parseValueStreamSubfield(fieldPath);
+      if (clusterIndexKeyColumns != nullptr) {
+        NIMBLE_USER_CHECK(
+            std::find(
+                clusterIndexKeyColumns->begin(),
+                clusterIndexKeyColumns->end(),
+                subfield.baseName()) == clusterIndexKeyColumns->end(),
+            "FSST subfield '{}' cannot target cluster index key column '{}'.",
+            fieldPath,
+            subfield.baseName());
+      }
+      const auto& node = resolveValueStreamSubfield(*storedSchema, subfield);
+      NIMBLE_USER_CHECK(
+          node.type()->isVarchar(),
+          "FSST subfield '{}' must resolve to VARCHAR, got {}.",
+          fieldPath,
+          node.type()->toString());
+      NIMBLE_USER_CHECK(
+          fsstEncodingNodeIds.insert(node.id()).second,
+          "Duplicate FSST subfield configuration for schema node {}: '{}'.",
+          node.id(),
+          fieldPath);
+    }
+  }
+
+  if (!omitsClusterIndexKeys) {
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   if (!options.schemaAttributes.empty()) {
@@ -484,7 +582,7 @@ WriterOptions storedWriterOptions(
 
   const bool hasFeatureReordering = options.featureReordering.has_value();
   if (!hasFeatureReordering) {
-    return options;
+    return {std::move(options), std::move(fsstEncodingNodeIds)};
   }
 
   // Field writers and the layout planner are built from storedDataType().
@@ -511,7 +609,7 @@ WriterOptions storedWriterOptions(
   }
   options.featureReordering = std::move(remapped);
 
-  return options;
+  return {std::move(options), std::move(fsstEncodingNodeIds)};
 }
 
 void writeIndexSection(
@@ -613,6 +711,23 @@ class WriterStreamContext : public StreamContext {
     isInMapStream_ = value;
   }
 
+  // Offsets of the value streams the reader consults to decide whether this
+  // in-map stream's key had data in a stripe. Empty for every other stream.
+  //
+  // Built with visitValueStreamLeaves(), the readers' own traversal, so the
+  // two cannot drift. That matters more than it looks: a walk that merely
+  // collects "every stream under this subtree" is a different question and
+  // answers it differently -- it would count a Row's nulls stream, and recurse
+  // past an Array's or Map's lengths, none of which the reader treats as
+  // evidence.
+  //
+  // Fixed once at schema configure time. The value subtree of a flat map key
+  // is static, because flat map keys are the only thing discovered
+  // dynamically and flat maps are never nested.
+  const std::vector<offset_size>& flatMapValueStreamOffsets() const {
+    return flatMapValueStreamOffsets_;
+  }
+
   void setFlatMapValueStreamOffsets(std::vector<offset_size> offsets) {
     flatMapValueStreamOffsets_ = std::move(offsets);
   }
@@ -654,9 +769,6 @@ class WriterStreamContext : public StreamContext {
  private:
   bool isNullStream_{false};
   bool isInMapStream_{false};
-  // Value stream descriptor offsets for this in-map stream's flat-map field.
-  // Empty for non in-map streams and flat-map values with no reader-visible
-  // value stream.
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
@@ -888,57 +1000,12 @@ void configureDictionary(
     case Kind::TimestampMicroNano:
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       NIMBLE_USER_FAIL(
           "Shared dictionary value must resolve to an integer or string "
           "scalar, array element, or map value, got {}.",
           typeBuilder.kind());
   }
-}
-
-// Resolves [*] to the selected array element or map value type.
-const TypeBuilder& allSubscriptValueType(
-    const TypeBuilder& typeBuilder,
-    std::string_view subfield) {
-  switch (typeBuilder.kind()) {
-    case Kind::Array:
-      return typeBuilder.asArray().elements();
-    case Kind::ArrayWithOffsets:
-      return typeBuilder.asArrayWithOffsets().elements();
-    case Kind::Map:
-      return typeBuilder.asMap().values();
-    case Kind::SlidingWindowMap:
-      return typeBuilder.asSlidingWindowMap().values();
-    case Kind::Scalar:
-    case Kind::TimestampMicroNano:
-    case Kind::Row:
-    case Kind::FlatMap:
-      NIMBLE_USER_FAIL(
-          "Shared dictionary value subfield '{}' cannot apply [*] to {}.",
-          subfield,
-          typeBuilder.kind());
-  }
-  NIMBLE_UNREACHABLE("Unknown schema kind: {}.", typeBuilder.kind());
-}
-
-const TypeBuilder& resolveFieldPath(
-    const TypeBuilder& root,
-    const std::string& fieldPath) {
-  if (fieldPath.empty()) {
-    return root;
-  }
-  const velox::common::Subfield subfield{fieldPath};
-  const auto& path = subfield.path();
-  const TypeBuilder* current = &root;
-  for (const auto& pathElement : path) {
-    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
-      current = &allSubscriptValueType(*current, fieldPath);
-      continue;
-    }
-    const auto& childName =
-        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
-    current = &current->asRow().findChild(childName);
-  }
-  return *current;
 }
 
 void maybeAddFileDictionaryId(
@@ -953,56 +1020,6 @@ void maybeAddFileDictionaryId(
       "File shared dictionary ID {} is configured for multiple streams. "
       "Cross-stream domains are not supported yet.",
       config.dictionaryId);
-}
-
-// Resolves [*] to the selected array element or map value type.
-const TypeWithId& allSubscriptValueType(
-    const TypeWithId& type,
-    const std::string& fieldPath) {
-  switch (type.type()->kind()) {
-    case velox::TypeKind::ARRAY:
-      return *type.childAt(0);
-    case velox::TypeKind::MAP:
-      return *type.childAt(1);
-    case velox::TypeKind::BOOLEAN:
-    case velox::TypeKind::TINYINT:
-    case velox::TypeKind::SMALLINT:
-    case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-    case velox::TypeKind::REAL:
-    case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
-    case velox::TypeKind::TIMESTAMP:
-    case velox::TypeKind::HUGEINT:
-    case velox::TypeKind::ROW:
-    case velox::TypeKind::UNKNOWN:
-    case velox::TypeKind::FUNCTION:
-    case velox::TypeKind::OPAQUE:
-    case velox::TypeKind::INVALID:
-      NIMBLE_USER_FAIL(
-          "Shared dictionary path '{}' cannot apply [*] to {}.",
-          fieldPath,
-          type.type()->toString());
-  }
-  VELOX_UNREACHABLE();
-}
-
-const TypeWithId& resolveFieldPath(
-    const TypeWithId& root,
-    const std::string& fieldPath) {
-  const velox::common::Subfield subfield{fieldPath};
-  const TypeWithId* current = &root;
-  for (const auto& pathElement : subfield.path()) {
-    if (pathElement->is(velox::common::SubfieldKind::kAllSubscripts)) {
-      current = &allSubscriptValueType(*current, fieldPath);
-      continue;
-    }
-    const auto& childName =
-        pathElement->asChecked<velox::common::Subfield::NestedField>()->name();
-    current = current->childByName(childName).get();
-  }
-  return *current;
 }
 
 const TypeWithId& resolveDictionaryValueType(
@@ -1276,63 +1293,6 @@ void findNodeIds(
   }
 }
 
-void collectFlatMapValueStreamOffsets(
-    const TypeBuilder& type,
-    std::vector<offset_size>& offsets) {
-  switch (type.kind()) {
-    case Kind::Scalar:
-      offsets.push_back(type.asScalar().scalarDescriptor().offset());
-      return;
-    case Kind::TimestampMicroNano:
-      offsets.push_back(
-          type.asTimestampMicroNano().microsDescriptor().offset());
-      offsets.push_back(type.asTimestampMicroNano().nanosDescriptor().offset());
-      return;
-    case Kind::Array:
-      offsets.push_back(type.asArray().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asArray().elements(), offsets);
-      return;
-    case Kind::ArrayWithOffsets:
-      offsets.push_back(type.asArrayWithOffsets().offsetsDescriptor().offset());
-      offsets.push_back(type.asArrayWithOffsets().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asArrayWithOffsets().elements(), offsets);
-      return;
-    case Kind::Map:
-      offsets.push_back(type.asMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(type.asMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(type.asMap().values(), offsets);
-      return;
-    case Kind::SlidingWindowMap:
-      offsets.push_back(type.asSlidingWindowMap().offsetsDescriptor().offset());
-      offsets.push_back(type.asSlidingWindowMap().lengthsDescriptor().offset());
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().keys(), offsets);
-      collectFlatMapValueStreamOffsets(
-          type.asSlidingWindowMap().values(), offsets);
-      return;
-    case Kind::Row: {
-      const auto& row = type.asRow();
-      offsets.push_back(row.nullsDescriptor().offset());
-      for (size_t i = 0; i < row.childrenCount(); ++i) {
-        collectFlatMapValueStreamOffsets(row.childAt(i), offsets);
-      }
-      return;
-    }
-    case Kind::FlatMap: {
-      const auto& flatMap = type.asFlatMap();
-      offsets.push_back(flatMap.nullsDescriptor().offset());
-      for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
-        offsets.push_back(flatMap.inMapDescriptorAt(i).offset());
-        collectFlatMapValueStreamOffsets(flatMap.childAt(i), offsets);
-      }
-      return;
-    }
-    default:
-      NIMBLE_UNREACHABLE("Unsupported type kind {}", type.kind());
-  }
-}
-
 FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodingsForFlatMap(
     const EncodingLayoutTree& encodingLayoutTree) {
   FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodings;
@@ -1404,11 +1364,14 @@ DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
   DictionaryConfigs configs;
+  const auto& fsstEncodingNodeIds = context.fsstEncodingNodeIds();
   const auto& dictionaryEncodingConfig =
       context.options().experimentalSharedDictionaryEncoding;
   if (dictionaryEncodingConfig.empty()) {
     return configs;
   }
+  // TODO: Define targeted FSST/shared-dictionary coexistence, including
+  // writer-owned alphabet encoding, instead of rejecting exact overlaps.
 
   NIMBLE_USER_CHECK_EQ(
       type.type()->kind(),
@@ -1419,7 +1382,8 @@ DictionaryConfigs collectDictionaryConfigs(
   folly::F14FastSet<uint32_t> columnValueNodeIds;
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
   for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
-    const auto& fieldType = resolveFieldPath(type, columnDictionary.fieldPath);
+    const auto subfield = parseValueStreamSubfield(columnDictionary.fieldPath);
+    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
     const auto& valueType =
         resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
     const auto valueNodeId = static_cast<uint32_t>(valueType.id());
@@ -1436,6 +1400,12 @@ DictionaryConfigs collectDictionaryConfigs(
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
+    NIMBLE_USER_CHECK(
+        fsstEncodingNodeIds.find(valueNodeId) == fsstEncodingNodeIds.end(),
+        "Targeted FSST and shared dictionary column '{}' resolve to the same "
+        "value stream (schema node {}).",
+        columnDictionary.fieldPath,
+        valueNodeId);
     maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     const auto inserted =
@@ -1448,14 +1418,14 @@ DictionaryConfigs collectDictionaryConfigs(
 
   configs.flatMaps.reserve(dictionaryEncodingConfig.flatMaps.size());
   for (const auto& flatMap : dictionaryEncodingConfig.flatMaps) {
-    const velox::common::Subfield subfield{flatMap.fieldPath};
+    const auto subfield = parseValueStreamSubfield(flatMap.fieldPath);
     NIMBLE_USER_CHECK_EQ(
         subfield.path().size(),
         1,
         "Shared dictionary flat-map path '{}' must be a top-level writer input "
         "column.",
         flatMap.fieldPath);
-    const auto& fieldType = resolveFieldPath(type, flatMap.fieldPath);
+    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
     NIMBLE_USER_CHECK_EQ(
         fieldType.type()->kind(),
         velox::TypeKind::MAP,
@@ -1469,8 +1439,30 @@ DictionaryConfigs collectDictionaryConfigs(
 
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     auto& flatMapKeys = configs.flatMaps[nodeId];
+    const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
       const auto& config = flatMapKey.dictionary;
+      if (!fsstEncodingNodeIds.empty()) {
+        const TypeWithId* configuredType = &mapValueType;
+        if (!flatMapKey.valueSubfield.empty()) {
+          const auto valueSubfield =
+              parseValueStreamSubfield(flatMapKey.valueSubfield);
+          configuredType =
+              &resolveValueStreamSubfield(mapValueType, valueSubfield);
+        }
+        const auto& valueType =
+            resolveDictionaryValueType(*configuredType, flatMap.fieldPath);
+        NIMBLE_USER_CHECK(
+            fsstEncodingNodeIds.find(valueType.id()) ==
+                fsstEncodingNodeIds.end(),
+            "Targeted FSST and shared dictionary flat-map column '{}', key "
+            "{}, value subfield '{}' resolve to the same value stream "
+            "(schema node {}).",
+            flatMap.fieldPath,
+            flatMapKey.key,
+            flatMapKey.valueSubfield,
+            valueType.id());
+      }
       maybeAddFileDictionaryId(config, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
@@ -1487,6 +1479,40 @@ WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor) {
   }
   descriptor.setContext(std::make_unique<WriterStreamContext>());
   return *descriptor.context<WriterStreamContext>();
+}
+
+void initializeEncodingLayouts(
+    const TypeBuilder& typeBuilder,
+    const EncodingLayoutTree& encodingLayoutTree);
+
+// Keeps per-key layout replay and shared-dictionary setup on the same path so
+// predefined and dynamically discovered FlatMap keys cannot diverge.
+void configureFlatMapValueStreams(
+    detail::WriterContext& context,
+    const FlatmapEncodingLayoutContext& flatMapContext,
+    std::string_view fieldKey,
+    const TypeBuilder& fieldType) {
+  if (context.options().encodingLayoutTree.has_value()) {
+    auto it = flatMapContext.keyEncodings.find(fieldKey);
+    if (it != flatMapContext.keyEncodings.end()) {
+      initializeEncodingLayouts(fieldType, *it->second);
+    }
+  }
+
+  auto it = flatMapContext.valueDictionaries.find(std::string{fieldKey});
+  if (it == flatMapContext.valueDictionaries.end()) {
+    return;
+  }
+  for (const auto& valueDictionary : it->second) {
+    configureDictionary(
+        valueDictionary.valueSubfield.empty()
+            ? fieldType
+            : resolveValueStreamSubfield(
+                  fieldType,
+                  parseValueStreamSubfield(valueDictionary.valueSubfield)),
+        valueDictionary.dictionary,
+        context.schemaBuilder());
+  }
 }
 
 // Applies writer context that depends on the TypeBuilder node just created.
@@ -1514,10 +1540,37 @@ void configureAddedType(
     if (dictionaryIt != dictionaryConfigs.flatMaps.end()) {
       valueDictionaries = dictionaryIt->second;
     }
-    if (!keyEncodings.empty() || !valueDictionaries.empty()) {
+    const bool hasFlatMapValueEncoding =
+        !keyEncodings.empty() || !valueDictionaries.empty();
+    if (hasFlatMapValueEncoding) {
       type.setContext(
           std::make_unique<FlatmapEncodingLayoutContext>(
               std::move(keyEncodings), std::move(valueDictionaries)));
+    }
+    const auto* predefinedKeys = context.getFlatMapNodeKeys(nodeId);
+    if (predefinedKeys != nullptr && hasFlatMapValueEncoding) {
+      // Apply value encodings now because predefined keys are materialized
+      // before this parent context is installed. Dynamic keys use the key-add
+      // callback.
+      const auto* flatMapContext = type.context<FlatmapEncodingLayoutContext>();
+      NIMBLE_CHECK_NOT_NULL(flatMapContext);
+      const auto& flatMapBuilder = type.asFlatMap();
+      NIMBLE_CHECK_EQ(
+          flatMapBuilder.childrenCount(),
+          predefinedKeys->size(),
+          "Predefined FlatMap key count does not match materialized children.");
+      auto keyIt = predefinedKeys->begin();
+      for (size_t index = 0; index < flatMapBuilder.childrenCount(); ++index) {
+        const auto& fieldKey = flatMapBuilder.nameAt(index);
+        const auto& predefinedKey = *keyIt;
+        NIMBLE_CHECK_EQ(
+            fieldKey,
+            predefinedKey,
+            "Materialized FlatMap child does not match its predefined key.");
+        ++keyIt;
+        configureFlatMapValueStreams(
+            context, *flatMapContext, fieldKey, flatMapBuilder.childAt(index));
+      }
     }
   }
 
@@ -1595,6 +1648,22 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
             nodeId,
             _dictionaryConfigs,
             _flatMapKeyEncodingLayouts);
+        if (context.fsstEncodingNodeIds().find(nodeId) !=
+            context.fsstEncodingNodeIds().end()) {
+          auto& writerStreamContext =
+              streamContext(type.asScalar().scalarDescriptor());
+          // Target only the FSST parent. Its blob, nested streams, and Trivial
+          // fallback use the writer's normal encoding-selection settings. A
+          // caller-provided encodingLayoutTree is applied later and takes
+          // precedence when it configures the same stream.
+          writerStreamContext.setEncoding(
+              EncodingLayout{
+                  EncodingType::Fsst,
+                  {},
+                  context.options().compressionOptions.compressionType,
+                  {std::nullopt},
+              });
+        }
       });
 }
 
@@ -1622,7 +1691,6 @@ void initializeEncodingLayouts(
       SET_STREAM_CONTEXT(mapBuilder, nullsDescriptor, FlatMap::NullsStream);
       return;
     }
-
     switch (typeBuilder.kind()) {
       case Kind::Scalar: {
         NIMBLE_CHECK_EQ(
@@ -1752,6 +1820,10 @@ void initializeEncodingLayouts(
       case Kind::FlatMap: {
         NIMBLE_UNREACHABLE("Flatmap handled already");
       }
+      case Kind::HybridFlatMap: {
+        NIMBLE_UNSUPPORTED(
+            "Hybrid FlatMap is supported only by the serialized-value writer.");
+      }
     }
 #undef SET_STREAM_CONTEXT
   }
@@ -1767,31 +1839,18 @@ void configureAddedFlatMapField(
       flatmapBuilder.inMapDescriptorAt(flatmapBuilder.childrenCount() - 1));
   inMapContext.setIsInMapStream(true);
   std::vector<offset_size> valueStreamOffsets;
-  collectFlatMapValueStreamOffsets(fieldType, valueStreamOffsets);
+  visitValueStreamLeaves(fieldType, [&](offset_size offset) {
+    valueStreamOffsets.push_back(offset);
+    // Collect every leaf: the visitor's true short-circuits the walk.
+    return false;
+  });
   inMapContext.setFlatMapValueStreamOffsets(std::move(valueStreamOffsets));
 
   auto* flatMapContext = flatmap.context<FlatmapEncodingLayoutContext>();
   if (flatMapContext == nullptr) {
     return;
   }
-
-  if (context.options().encodingLayoutTree.has_value()) {
-    auto it = flatMapContext->keyEncodings.find(fieldKey);
-    if (it != flatMapContext->keyEncodings.end()) {
-      initializeEncodingLayouts(fieldType, *it->second);
-    }
-  }
-
-  auto it = flatMapContext->valueDictionaries.find(std::string{fieldKey});
-  if (it == flatMapContext->valueDictionaries.end()) {
-    return;
-  }
-  for (const auto& valueDictionary : it->second) {
-    configureDictionary(
-        resolveFieldPath(fieldType, valueDictionary.valueSubfield),
-        valueDictionary.dictionary,
-        context.schemaBuilder());
-  }
+  configureFlatMapValueStreams(context, *flatMapContext, fieldKey, fieldType);
 }
 
 // Returns nullptr when no vector index is configured. The implementation comes
@@ -1926,7 +1985,7 @@ Writer::Writer(
           })},
       context_{std::make_unique<detail::WriterContext>(
           *pool_,
-          storedWriterOptions(
+          prepareWriterContextOptions(
               type,
               storedDataType_,
               storedInputColumnIndices_,
@@ -1950,12 +2009,17 @@ Writer::Writer(
           {.layoutPlanner = std::make_unique<DefaultLayoutPlanner>(
                &context_->schemaBuilder(),
                context_->options().featureReordering),
+           .metadataFlushThreshold =
+               context_->options().metadataFlushThreshold.value_or(
+                   kMetadataFlushThreshold),
            .metadataCompressionThreshold =
                context_->options().metadataCompressionThreshold.value_or(
                    kMetadataCompressionThreshold),
+           .streamChecksumsEnabled = context_->options().enableStreamChecksums,
            .streamDeduplicationEnabled =
                context_->options().enableStreamDeduplication,
-           .enableChunkIndex = context_->options().enableChunkIndex,
+           .enableChunkStats = context_->options().enableChunkStats,
+           .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
@@ -1993,7 +2057,7 @@ Writer::Writer(
               : nullptr} {
   NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_USER_CHECK(
-      !context_->options().enableChunkIndex ||
+      !context_->options().enableChunkStats ||
           context_->options().enableChunking,
       "Chunk stats require chunking to be enabled.");
 
@@ -2088,27 +2152,6 @@ bool Writer::flushInputBuffers(bool finalize) {
 void Writer::writeBatch(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   const auto storedData = storedDataInput(input);
-  // When enableStatsConsistencyCheck is true, compute raw size using
-  // RawSizeUtils to verify consistency with column statistics.
-  // Otherwise, skip this computation as column statistics will provide
-  // the raw size.
-  // Skip entirely when stats collection is disabled — there is no
-  // writeColumnStats() call to consume this value.
-  if (context_->options().enableStatsCollection &&
-      context_->options().enableStatsConsistencyCheck) {
-    // Calculate raw size using schema information to correctly handle
-    // passthrough flatmaps.
-    RawSizeContext context;
-    const auto rawSize = nimble::getRawSizeFromVector(
-        storedData,
-        velox::common::Ranges::of(0, numRows),
-        context,
-        schema_.get(),
-        context_->flatMapNodeIds(),
-        context_->ignoreTopLevelNulls());
-    context_->updateFileRawSize(rawSize);
-  }
-
   {
     velox::CpuWallTimer ingestionTimer{context_->ingestionTiming()};
     rootWriter_->write(storedData, OrderedRanges::of(0, numRows));
@@ -2187,13 +2230,13 @@ void Writer::writeMetadata() {
 
 void Writer::writeColumnStats() {
   context_->finalizeFileStatsFromStripes();
-  // When enableStatsConsistencyCheck is true, verify that fileRawSize
-  // (accumulated via RawSizeUtils) matches the root column statistics.
-  if (context_->options().enableStatsConsistencyCheck) {
-    NIMBLE_CHECK_EQ(
-        context_->fileRawSize(),
-        context_->columnStats().front()->getLogicalSize(),
-        "Mismatched raw sizes!");
+  // Raw size now comes from the column statistics rather than a second pass
+  // over the input with RawSizeUtils. The consistency check that validated the
+  // two against each other has served its purpose and is gone, along with the
+  // duplicate computation it existed to justify.
+  if (!context_->columnStats().empty()) {
+    context_->updateFileRawSize(
+        context_->columnStats().front()->getLogicalSize());
   }
 
   if (context_->options().enableVectorizedStats) {
@@ -2361,7 +2404,12 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
     clusterIndexKeyColumnsWithOmittedStorage = indexOptions.columns;
   }
 
-  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted) {
+  // Read back from the tablet writer rather than from options, so the recorded
+  // flag cannot drift from what was actually written.
+  const bool hasStreamChecksums = tabletWriter_->streamChecksumsEnabled();
+
+  if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
+      !hasStreamChecksums) {
     return;
   }
 
@@ -2369,7 +2417,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
       FileProperties{
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
-          std::move(clusterIndexKeyColumnsWithOmittedStorage)}
+          std::move(clusterIndexKeyColumnsWithOmittedStorage),
+          hasStreamChecksums}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
@@ -2948,6 +2997,72 @@ void Writer::encodeStream(
   streamData.reset();
 }
 
+std::vector<const StreamDescriptorBuilder*>
+Writer::collectAllTrueInMapStreams() {
+  std::vector<const StreamDescriptorBuilder*> candidates;
+  if (!context_->options().skipConstantFlatMapInMapStreams) {
+    return candidates;
+  }
+
+  // Runs before the encode loop because all-true is only knowable from the raw
+  // stream. Afterwards compact() has consumed it, and the encoded form only
+  // answers the question by decoding, which is what this avoids.
+  for (const auto& [_, stream] : context_->streams()) {
+    const auto& descriptor = stream->descriptor();
+    auto* streamContext = descriptor.context<WriterStreamContext>();
+    if (streamContext == nullptr || !streamContext->isInMapStream()) {
+      continue;
+    }
+    const auto offset = descriptor.offset();
+    // Only streams that are still whole. One already chunked mid-stripe has
+    // part of itself encoded, so the raw data left here is just the tail and
+    // says nothing about the stripe.
+    //
+    // Declining costs the space saving, never correctness, and it is hard to
+    // reach. An in-map stream is one byte per row, so it must pass
+    // minStreamChunkRawSize (512KiB, ~524k rows for this one key) AND do so
+    // while the flush policy reports memory pressure, since mid-stripe
+    // chunking only runs under shouldChunk(). A table wide enough to want flat
+    // maps fills a 256MB raw stripe long before one key's in-map reaches half
+    // a megabyte.
+    NIMBLE_DCHECK_LT(
+        offset, encodedStreams_.size(), "Stream offset out of range.");
+    if (!encodedStreams_[offset].chunks.empty()) {
+      continue;
+    }
+    // In-map streams are ContentStreamData<bool> (FieldWriter.cpp), so data()
+    // is a plain view: no materialization, and none of the string value
+    // streams are touched.
+    if (isAllTrueBoolStream(stream->data())) {
+      candidates.push_back(&descriptor);
+    }
+  }
+  return candidates;
+}
+
+void Writer::suppressAllTrueInMapStreams(
+    const std::vector<const StreamDescriptorBuilder*>& candidates) {
+  // After the encode loop a value stream reached disk exactly when it has
+  // chunks. Nothing needs to be read from the streams themselves, so this
+  // costs no materialization and inspects no encoded bytes.
+  const auto reachedDisk = [this](offset_size offset) {
+    NIMBLE_DCHECK_LT(
+        offset, encodedStreams_.size(), "Stream offset out of range.");
+    return !encodedStreams_[offset].chunks.empty();
+  };
+
+  for (const auto* descriptor : candidates) {
+    // Drop the all-true in-map stream only while a value stream proves the key
+    // was present. The offsets were recorded with the reader's own traversal,
+    // so the writer cannot count bytes the reader will not look at.
+    const auto* streamContext = descriptor->context<WriterStreamContext>();
+    const auto& valueOffsets = streamContext->flatMapValueStreamOffsets();
+    if (std::any_of(valueOffsets.begin(), valueOffsets.end(), reachedDisk)) {
+      encodedStreams_[descriptor->offset()].chunks.clear();
+    }
+  }
+}
+
 void Writer::processStream(
     StreamData& streamData,
     velox::BufferPool* encodingScratchBufferPool,
@@ -2955,7 +3070,7 @@ void Writer::processStream(
     uint64_t& streamSize,
     std::atomic_uint64_t& chunkSize) {
   const auto offset = streamData.descriptor().offset();
-  const auto* context = streamData.descriptor().context<WriterStreamContext>();
+  auto* context = streamData.descriptor().context<WriterStreamContext>();
   NIMBLE_CHECK(encodedStreams_[offset].chunks.empty());
   if ((context != nullptr) && context->isNullStream()) {
     // For null streams we promote the null values to be written as
@@ -2972,15 +3087,23 @@ void Writer::processStream(
   } else if (
       (context != nullptr) && context->isInMapStream() &&
       context_->options().skipConstantFlatMapInMapStreams) {
-    // When enabled, skip encoding in-map streams that are all-true (every row
-    // has the key) or all-false (no row has the key). The reader distinguishes
-    // these by checking value stream presence: all-true keys have value
-    // streams, all-false keys do not.
+    // When enabled, skip encoding in-map streams that are constant, since the
+    // reader recovers the in-map state from value stream presence.
+    //
+    // All-false is dropped here: the key really is absent from this stripe,
+    // which is exactly what the reader concludes from two missing streams.
+    //
+    // All-true is still encoded here. collectAllTrueInMapStreams() has
+    // already noted it, and suppressAllTrueInMapStreams() drops the chunks
+    // after the stripe is encoded, once it is known whether a value stream
+    // survived to prove the key was present.
     //
     // NOTE: readers that don't infer missing in-map streams require
     // skipConstantFlatMapInMapStreams to remain false.
     streamData.materialize();
-    if (!isConstantBoolStream(streamData.data())) {
+    const auto data = streamData.data();
+    const bool allTrue = isAllTrueBoolStream(data);
+    if (allTrue || !isConstantBoolStream(data)) {
       encodeStream(
           streamData,
           encodingScratchBufferPool,
@@ -3220,6 +3343,13 @@ bool Writer::writeStripe() {
     return false;
   }
 
+  // Which in-map streams are all-true has to be read now, while the raw
+  // streams still hold their bytes; encoding consumes them. Whether each key's
+  // value stream reaches disk is only settled once encoding finishes, so the
+  // candidates are collected here and judged after the loop.
+  ensureWriteStreams();
+  const auto allTrueInMapStreams = collectAllTrueInMapStreams();
+
   if (context_->options().enableChunking) {
     // Chunk all streams.
     std::vector<uint32_t> streamIndices(context_->streams().size());
@@ -3241,6 +3371,8 @@ bool Writer::writeStripe() {
   uint64_t stripeSize{0};
   {
     LoggingScope scope{*context_->logger()};
+
+    suppressAllTrueInMapStreams(allTrueInMapStreams);
 
     size_t nonEmptyCount{0};
     for (auto i = 0; i < encodedStreams_.size(); ++i) {

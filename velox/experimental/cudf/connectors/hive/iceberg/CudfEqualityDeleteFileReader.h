@@ -20,6 +20,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -29,9 +30,10 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
 
 #include <folly/Executor.h>
 
@@ -115,7 +117,7 @@ class CudfEqualityDeleteFileReader {
       cudf::table_view table,
       const std::vector<std::string>& inputColumnNames,
       cudf::mutable_column_view const& rowMask,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   /// Returns the number of delete key tuples loaded from the file.
   size_t numDeleteKeys() const {
@@ -131,13 +133,14 @@ class CudfEqualityDeleteFileReader {
  private:
   // Lazily builds the distinct_hash_join on the first `applyDeletes` call.
   // Converts `deleteRows_` to a GPU table if needed.
-  void buildHashJoin(rmm::cuda_stream_view stream);
+  void buildHashJoin(cuda::stream_ref stream);
 
   // Eagerly reads the Parquet-format equality delete file into the
-  // deleteKeyTable_ cudf table.
+  // deleteKeyTable_ cudf table, normalizing decimals to the logical key types.
   void directReadEqualityDeleteFile(
       const velox_iceberg::IcebergDeleteFile& deleteFile,
-      std::shared_ptr<dwio::common::BufferedInput> bufferedInput);
+      std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
+      const std::vector<TypePtr>& equalityColumnTypes);
 
   // Lazily constructs the equality column indices in the input table
   // on the first call to applyDeletes().
