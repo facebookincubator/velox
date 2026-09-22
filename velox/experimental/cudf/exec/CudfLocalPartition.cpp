@@ -48,16 +48,16 @@ int64_t retainedBytes(const CudfVector& vector) {
 } // namespace
 
 bool CudfLocalPartition::shouldReplace(
-    const std::shared_ptr<const core::LocalPartitionNode>& planNode) {
+    const core::LocalPartitionNode& planNode) {
   // Only replace for Hash, Round Robin, and Round Robin Row-Wise Partitioning.
   if (isAnyOf<
           exec::HashPartitionFunctionSpec,
           exec::RoundRobinPartitionFunctionSpec,
           core::GatherPartitionFunctionSpec>(
-          &planNode->partitionFunctionSpec())) {
+          &planNode.partitionFunctionSpec())) {
     return true;
   }
-  std::string spec = planNode->partitionFunctionSpec().toString();
+  std::string spec = planNode.partitionFunctionSpec().toString();
   if (spec.find("ROUND ROBIN ROW") != std::string::npos) {
     return true;
   }
