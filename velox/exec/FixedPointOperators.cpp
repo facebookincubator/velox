@@ -36,7 +36,7 @@ using core::StateSourceNode;
 // body, the enclosing loops are that task's own ancestors, so the search walks
 // up the parent chain to the nearest one declaring 'name' -- innermost wins,
 // as lexical scoping of the state names in the plan implies.
-PersistentState* stateOf(
+std::shared_ptr<PersistentState> stateOf(
     const exec::OperatorCtx* operatorCtx,
     const std::string& name,
     bool hashTable) {
@@ -45,7 +45,7 @@ PersistentState* stateOf(
       parent, "Fixed point sub-task has no FixedPointLoop parent");
   for (auto* loop = parent; loop != nullptr;
        loop = loop->owner()->parentFixedPoint()) {
-    auto* state = loop->state();
+    const auto& state = loop->state();
     VELOX_CHECK_NOT_NULL(state, "FixedPointLoop has no persistent state");
     if (hashTable ? state->hasHashTable(name) : state->hasVector(name)) {
       return state;
@@ -80,9 +80,9 @@ class StateSourceOperator : public exec::SourceOperator {
 
   void initialize() override {
     Operator::initialize();
-    auto* state = stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/false);
+    state_ = stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/false);
     batches_ =
-        delta_ ? state->readVector(stateName_) : state->getVector(stateName_);
+        delta_ ? state_->readVector(stateName_) : state_->getVector(stateName_);
   }
 
   RowVectorPtr getOutput() override {
@@ -109,6 +109,10 @@ class StateSourceOperator : public exec::SourceOperator {
   // Whether to read the per-iteration delta (an append entry's frontier) or the
   // entry's full contents (the output).
   const bool delta_;
+
+  // Keeps the store, and with it the pool 'batches_' are allocated in, alive
+  // for as long as this operator holds them.
+  std::shared_ptr<PersistentState> state_;
 
   // Snapshot of the state entry taken in initialize().
   std::vector<RowVectorPtr> batches_;
@@ -138,8 +142,8 @@ class StateHashJoinOperator : public exec::Operator {
 
   void initialize() override {
     Operator::initialize();
-    auto entry = stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/true)
-                     ->getHashTable(stateName_);
+    state_ = stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/true);
+    auto entry = state_->getHashTable(stateName_);
     VELOX_CHECK(
         entry.has_value(), "No hash table state registered: {}", stateName_);
     entry_ = std::move(entry);
@@ -244,6 +248,10 @@ class StateHashJoinOperator : public exec::Operator {
 
   const std::string stateName_;
   const RowTypePtr probeType_;
+
+  // Keeps the store, and with it the pool the hash table is built in, alive for
+  // as long as this operator holds 'entry_'.
+  std::shared_ptr<PersistentState> state_;
 
   std::optional<HashTableEntry> entry_;
   exec::BaseHashTable* table_{nullptr};

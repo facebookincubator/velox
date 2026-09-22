@@ -266,13 +266,13 @@ class FixedPointLoop {
 
   /// This worker's persistent state, owned by this loop.  Its sub-tasks'
   /// StateSource/StateHashJoin operators reach it through
-  /// Task::parentFixedPoint(). Created
-  /// at the start of run() and held for the rest of the task's lifetime (it is
-  /// released in the destructor, not eagerly at loop end, so a sub-task driver
-  /// still tearing down asynchronously cannot outlive the state pool it
-  /// references).  Null before run().
-  PersistentState* state() const {
-    return state_.get();
+  /// Task::parentFixedPoint(). Created at the start of run().  Returned as a
+  /// shared_ptr because an operator that snapshots entries out of the store
+  /// holds vectors and hash tables allocated in the store's pool: a sub-task
+  /// driver tearing down asynchronously can outlive this loop, so the reader
+  /// must keep the store, and with it the pool, alive.  Null before run().
+  const std::shared_ptr<PersistentState>& state() const {
+    return state_;
   }
 
  private:
