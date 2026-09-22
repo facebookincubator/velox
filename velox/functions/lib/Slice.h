@@ -21,8 +21,12 @@
 namespace facebook::velox::functions {
 
 // BIGINT type for start and length (Presto's behavior).
-void registerBigintSliceFunction(const std::string& prefix);
+void registerBigintSliceFunction(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
 // INTEGER type for start and length (Spark's behavior).
-void registerIntegerSliceFunction(const std::string& prefix);
+void registerIntegerSliceFunction(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 } // namespace facebook::velox::functions
