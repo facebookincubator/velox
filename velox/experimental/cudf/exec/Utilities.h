@@ -213,7 +213,8 @@ void orderCudfVectorDeallocationsAfterStream(
     cuda::stream_ref stream);
 
 /// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
-/// Supports all types including nested LIST and STRUCT.
+/// Supports cuDF-compatible scalar types and nested Velox ARRAY and ROW types.
+/// Throws for unsupported types.
 std::unique_ptr<cudf::column> makeAllNullColumn(
     const TypePtr& type,
     cudf::size_type numRows,
