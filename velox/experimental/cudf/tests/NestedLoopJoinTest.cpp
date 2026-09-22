@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CudfCpuFallbackTest.h"
 
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -49,26 +50,8 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
   }
 };
 
-class CudfNestedLoopJoinCpuFallbackTest : public HiveConnectorTestBase {
- protected:
-  void SetUp() override {
-    HiveConnectorTestBase::SetUp();
-    previousAllowCpuFallback_ =
-        cudf_velox::CudfConfig::getInstance().allowCpuFallback;
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
-    cudf_velox::registerCudf();
-  }
-
-  void TearDown() override {
-    cudf_velox::unregisterCudf();
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback =
-        previousAllowCpuFallback_;
-    HiveConnectorTestBase::TearDown();
-  }
-
- private:
-  bool previousAllowCpuFallback_{false};
-};
+class CudfNestedLoopJoinCpuFallbackTest
+    : public cudf_velox::test::CudfCpuFallbackTest<CudfNestedLoopJoinTest> {};
 
 TEST_F(CudfNestedLoopJoinCpuFallbackTest, customComparisonConditionFallsBack) {
   const auto customType =

@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/tests/utils/CudfCpuFallbackTest.h"
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -71,26 +72,8 @@ class HashJoinTest : public HashJoinTestBase {
   }
 };
 
-class HashJoinCpuFallbackTest : public HashJoinTest {
- protected:
-  void SetUp() override {
-    HashJoinTestBase::SetUp();
-    previousAllowCpuFallback_ =
-        cudf_velox::CudfConfig::getInstance().allowCpuFallback;
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
-    cudf_velox::registerCudf();
-  }
-
-  void TearDown() override {
-    cudf_velox::unregisterCudf();
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback =
-        previousAllowCpuFallback_;
-    HashJoinTestBase::TearDown();
-  }
-
- private:
-  bool previousAllowCpuFallback_{false};
-};
+class HashJoinCpuFallbackTest
+    : public cudf_velox::test::CudfCpuFallbackTest<HashJoinTest> {};
 
 class MultiThreadedHashJoinTest
     : public HashJoinTest,

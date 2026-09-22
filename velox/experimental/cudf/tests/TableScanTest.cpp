@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
+#include "velox/experimental/cudf/tests/utils/CudfCpuFallbackTest.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/Fs.h"
@@ -1066,7 +1067,10 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
 }
 
-TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
+class TableScanCpuFallbackTest
+    : public cudf_velox::test::CudfCpuFallbackTest<TableScanTest> {};
+
+TEST_F(TableScanCpuFallbackTest, unsupportedScanColumnProjectedOut) {
   auto input = makeRowVector(
       {"k", "m"},
       {makeFlatVector<int64_t>({1, 2}),
@@ -1113,7 +1117,7 @@ TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
   EXPECT_EQ(operatorStats.count("FilterProject"), 1);
 }
 
-TEST_F(TableScanTest, unsupportedScanOutputFallsBack) {
+TEST_F(TableScanCpuFallbackTest, unsupportedScanOutputFallsBack) {
   auto input = makeRowVector(
       {"k", "m"},
       {makeFlatVector<int64_t>({1, 2}),
