@@ -17,14 +17,37 @@
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/UcxPartitionedOutput.h"
 
 namespace facebook::velox::ucx_exchange {
+
+namespace {
+
+// Both registries are process-global and seeded once from CudfConfig::exchange,
+// while operator conversion is decided per query from cudf.enabled. A query
+// that turns cuDF off therefore still resolves kUcx, but then gets neither the
+// CudfVector producers UcxPartitionedOutput requires nor the CudfOrderBy the
+// cuDF driver adapter splices behind a merge exchange. Reject that pairing
+// here, where a query-scoped config and the plan's transport are first known
+// together, so it fails as a named user error rather than as a vector-type
+// check or a lost ordering.
+void checkCudfEnabledForUcx(const core::QueryConfig& queryConfig) {
+  VELOX_USER_CHECK(
+      queryConfig.get<bool>(
+          cudf_velox::CudfConfig::kCudfEnabled,
+          cudf_velox::CudfConfig::getInstance().enabled),
+      "The UCX exchange transport requires cuDF for this query: {} is false",
+      cudf_velox::CudfConfig::kCudfEnabled);
+}
+
+} // namespace
 
 void registerUcxTransports() {
   exec::OutputTransportRegistry::global().insert(
@@ -37,6 +60,7 @@ void registerUcxTransports() {
              bool /*eagerFlush*/,
              const std::shared_ptr<UcxOutputQueueManager>& manager)
               -> std::unique_ptr<exec::Operator> {
+            checkCudfEnabledForUcx(ctx->queryConfig());
             // 'eagerFlush' is not honored: UcxPartitionedOutput batches by row
             // count (CudfConfig::kUcxPartitionedOutputBatchRows) because a
             // packed GPU table is the unit of transfer.
@@ -57,6 +81,7 @@ void registerUcxTransports() {
             // 'context.minExchangeOutputBatchBytes' have no meaning here.
             // UcxExchangeClient bounds its queue by the number of packed
             // tables instead.
+            checkCudfEnabledForUcx(context.queryConfig);
             return std::make_shared<UcxExchangeClient>(
                 context.taskId, context.destination, context.numberOfConsumers);
           },
