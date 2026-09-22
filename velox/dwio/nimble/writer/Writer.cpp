@@ -3330,6 +3330,7 @@ bool Writer::writeChunks(
 bool Writer::flushChunks(
     const std::vector<uint32_t>& indices,
     bool ensureFullChunks,
+    bool stopWhenPressureRelieved,
     FlushPolicy* flushPolicy) {
   const size_t indicesCount = indices.size();
   const auto batchSize = context_->options().chunkedStreamBatchSize;
@@ -3337,10 +3338,10 @@ bool Writer::flushChunks(
     const size_t currentBatchSize = std::min(batchSize, indicesCount - index);
     std::span<const uint32_t> batchIndices(
         indices.begin() + index, currentBatchSize);
-    // Stop attempting chunking once streams are too small to chunk or
-    // memory pressure is relieved.
+    // Stop attempting chunking once streams are too small to chunk or, when
+    // the caller is relieving memory pressure, once it is relieved.
     if (!writeChunks(batchIndices, ensureFullChunks) ||
-        !shouldChunk(flushPolicy)) {
+        (stopWhenPressureRelieved && !shouldChunk(flushPolicy))) {
       return false;
     }
   }
@@ -3431,45 +3432,68 @@ bool Writer::evaluateFlushPolicy() {
   // NOTE that flush policy factory is stateful, so we need to get a new
   // policy every time we check.
   auto flushPolicy = context_->options().flushPolicyFactory();
-  if (context_->options().enableChunking && shouldChunk(flushPolicy.get())) {
-    // Relieve memory pressure by chunking streams above max size.
+  const auto& options = context_->options();
+  if (options.enableChunking) {
     const auto& streams = context_->streams();
-    std::vector<uint32_t> streamIndices;
-    const auto streamCount = streams.size();
-    streamIndices.reserve(streamCount);
-
-    // Determine size threshold for soft chunking based on schema width.
-    const auto& options = context_->options();
-    const auto maxChunkSize = streamCount > options.largeSchemaThreshold
-        ? options.wideSchemaMaxStreamChunkRawSize
-        : options.maxStreamChunkRawSize;
-    for (auto streamIndex = 0; streamIndex < streams.size(); ++streamIndex) {
-      if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
-        streamIndices.push_back(streamIndex);
+    // O(numStreams) plus an allocation, so it is called only from a branch
+    // that will act on the result.
+    const auto oversizedStreams = [&] {
+      const auto streamCount = streams.size();
+      const auto maxChunkSize = streamCount > options.largeSchemaThreshold
+          ? options.wideSchemaMaxStreamChunkRawSize
+          : options.maxStreamChunkRawSize;
+      std::vector<uint32_t> indices;
+      indices.reserve(streamCount);
+      for (uint32_t streamIndex = 0; streamIndex < streamCount; ++streamIndex) {
+        if (streams[streamIndex].second->memoryUsed() >= maxChunkSize) {
+          indices.push_back(streamIndex);
+        }
       }
+      return indices;
+    };
+
+    if (options.eagerChunking) {
+      // An oversized stream is capped on its own account, without waiting for
+      // the writer's total to come under pressure. See
+      // WriterOptions::eagerChunking. Stopping once pressure cleared would
+      // leave the streams after that point above the cap, so this walks all
+      // of them.
+      flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/false,
+          flushPolicy.get());
     }
 
-    // Soft chunking.
-    const bool continueChunking = flushChunks(
-        streamIndices, /*ensureFullChunks=*/true, flushPolicy.get());
-    // Hard chunking when chunking streams above maxChunkSize fails to
-    // relieve memory pressure.
-    if (continueChunking) {
-      // Relieve memory pressure by chunking small streams.
-      // Sort streams for chunking based on raw memory usage.
-      // TODO(T240072104): Improve performance by bucketing the streams
-      // by size (by most significant bit) instead of sorting them.
-      // Only sort streams above minChunkSize.
-      streamIndices.resize(streams.size());
-      std::iota(streamIndices.begin(), streamIndices.end(), 0);
-      std::sort(
-          streamIndices.begin(),
-          streamIndices.end(),
-          [&](const uint32_t& a, const uint32_t& b) {
-            return streams[a].second->memoryUsed() >
-                streams[b].second->memoryUsed();
-          });
-      flushChunks(streamIndices, /*ensureFullChunks=*/false, flushPolicy.get());
+    if (shouldChunk(flushPolicy.get())) {
+      // Soft chunking, bounded by maxChunkSize.
+      const bool continueChunking = flushChunks(
+          oversizedStreams(),
+          /*ensureFullChunks=*/true,
+          /*stopWhenPressureRelieved=*/true,
+          flushPolicy.get());
+      // Hard chunking reaches below maxChunkSize: the escalation for when
+      // capping each stream was not enough.
+      if (continueChunking) {
+        // Sort streams for chunking based on raw memory usage.
+        // TODO(T240072104): Improve performance by bucketing the streams
+        // by size (by most significant bit) instead of sorting them.
+        // Only sort streams above minChunkSize.
+        std::vector<uint32_t> streamIndices(streams.size());
+        std::iota(streamIndices.begin(), streamIndices.end(), 0);
+        std::sort(
+            streamIndices.begin(),
+            streamIndices.end(),
+            [&](const uint32_t& a, const uint32_t& b) {
+              return streams[a].second->memoryUsed() >
+                  streams[b].second->memoryUsed();
+            });
+        flushChunks(
+            streamIndices,
+            /*ensureFullChunks=*/false,
+            /*stopWhenPressureRelieved=*/true,
+            flushPolicy.get());
+      }
     }
   }
 
