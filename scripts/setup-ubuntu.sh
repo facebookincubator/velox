@@ -126,8 +126,7 @@ function install_velox_deps_from_apt {
     flex \
     libfl-dev \
     tzdata \
-    libxxhash-dev \
-    libxml2-dev
+    libxxhash-dev
 }
 
 function install_conda {
