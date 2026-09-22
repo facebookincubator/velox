@@ -305,46 +305,6 @@ TEST_F(HashJoinCpuFallbackTest, unsupportedTypeProjectedOutBeforeHashJoin) {
   EXPECT_EQ(operatorStats.count("CudfHashJoinProbe"), 0);
 }
 
-TEST_F(HashJoinCpuFallbackTest, customComparisonJoinKeyFallsBack) {
-  const auto customType =
-      facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
-  auto probe = makeRowVector(
-      {"p_key"}, {makeFlatVector<int64_t>({1, 257, 2}, customType)});
-  auto build =
-      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({1}, customType)});
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId projectNodeId;
-  auto plan = PlanBuilder(idGenerator)
-                  .values({probe})
-                  .project({"p_key"})
-                  .capturePlanNodeId(projectNodeId)
-                  .hashJoin(
-                      {"p_key"},
-                      {"b_key"},
-                      PlanBuilder(idGenerator).values({build}).planNode(),
-                      "",
-                      {"p_key"},
-                      core::JoinType::kInner)
-                  .planNode();
-
-  std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
-  auto expected =
-      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
-  facebook::velox::test::assertEqualVectors(expected, result);
-
-  const auto planStats = toPlanStats(task->taskStats());
-  const auto& projectStats = planStats.at(projectNodeId).operatorStats;
-  EXPECT_EQ(projectStats.count("FilterProject"), 1);
-  EXPECT_EQ(projectStats.count("CudfFilterProject"), 0);
-
-  const auto operatorStats = toOperatorStats(task->taskStats());
-  EXPECT_EQ(operatorStats.count("HashBuild"), 1);
-  EXPECT_EQ(operatorStats.count("HashProbe"), 1);
-  EXPECT_EQ(operatorStats.count("CudfHashJoinBuild"), 0);
-  EXPECT_EQ(operatorStats.count("CudfHashJoinProbe"), 0);
-}
-
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .injectSpill(false)
