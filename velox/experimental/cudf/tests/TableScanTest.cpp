@@ -123,6 +123,30 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     return CudfHiveConnectorTestBase::makeVectors(inputs, count, rowsPerVector);
   }
 
+  std::shared_ptr<TempFilePath> writeUnsupportedMapInput() {
+    auto input = makeRowVector(
+        {"k", "m"},
+        {makeFlatVector<int64_t>({1, 2}),
+         makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
+    auto filePath = TempFilePath::create();
+    auto fs = filesystems::getFileSystem(filePath->getPath(), {});
+    auto writeFile = fs->openFileForWrite(
+        filePath->getPath(),
+        {.shouldCreateParentDirectories = true,
+         .shouldThrowOnFileAlreadyExists = false});
+    auto sink = std::make_unique<dwio::common::WriteFileSink>(
+        std::move(writeFile), filePath->getPath());
+    auto writerPool =
+        rootPool_->addAggregateChild("TableScanTest.UnsupportedMapWriter");
+    dwio::common::WriterOptions options;
+    options.memoryPool = writerPool.get();
+    parquet::Writer writer(
+        std::move(sink), options, writerPool, asRowType(input->type()));
+    writer.write(input);
+    writer.close();
+    return filePath;
+  }
+
   Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
     return Split(makeCudfHiveConnectorSplit(std::move(path), splitWeight));
   }
@@ -1071,26 +1095,8 @@ class TableScanCpuFallbackTest
     : public cudf_velox::test::CudfCpuFallbackTest<TableScanTest> {};
 
 TEST_F(TableScanCpuFallbackTest, unsupportedScanColumnProjectedOut) {
-  auto input = makeRowVector(
-      {"k", "m"},
-      {makeFlatVector<int64_t>({1, 2}),
-       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
-  auto rowType = asRowType(input->type());
-  auto filePath = TempFilePath::create();
-  auto fs = filesystems::getFileSystem(filePath->getPath(), {});
-  auto writeFile = fs->openFileForWrite(
-      filePath->getPath(),
-      {.shouldCreateParentDirectories = true,
-       .shouldThrowOnFileAlreadyExists = false});
-  auto sink = std::make_unique<dwio::common::WriteFileSink>(
-      std::move(writeFile), filePath->getPath());
-  auto writerPool =
-      rootPool_->addAggregateChild("TableScanTest.UnsupportedMapWriter");
-  dwio::common::WriterOptions options;
-  options.memoryPool = writerPool.get();
-  parquet::Writer writer(std::move(sink), options, writerPool, rowType);
-  writer.write(input);
-  writer.close();
+  auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
+  auto filePath = writeUnsupportedMapInput();
 
   auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
@@ -1118,26 +1124,8 @@ TEST_F(TableScanCpuFallbackTest, unsupportedScanColumnProjectedOut) {
 }
 
 TEST_F(TableScanCpuFallbackTest, unsupportedScanOutputFallsBack) {
-  auto input = makeRowVector(
-      {"k", "m"},
-      {makeFlatVector<int64_t>({1, 2}),
-       makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
-  auto rowType = asRowType(input->type());
-  auto filePath = TempFilePath::create();
-  auto fs = filesystems::getFileSystem(filePath->getPath(), {});
-  auto writeFile = fs->openFileForWrite(
-      filePath->getPath(),
-      {.shouldCreateParentDirectories = true,
-       .shouldThrowOnFileAlreadyExists = false});
-  auto sink = std::make_unique<dwio::common::WriteFileSink>(
-      std::move(writeFile), filePath->getPath());
-  auto writerPool =
-      rootPool_->addAggregateChild("TableScanTest.UnsupportedMapOutputWriter");
-  dwio::common::WriterOptions options;
-  options.memoryPool = writerPool.get();
-  parquet::Writer writer(std::move(sink), options, writerPool, rowType);
-  writer.write(input);
-  writer.close();
+  auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
+  auto filePath = writeUnsupportedMapInput();
 
   auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
