@@ -97,12 +97,14 @@ class UcxTransportRegistrationTest : public OperatorTestBase {
 
   std::shared_ptr<Task> makeTask(
       const std::string& taskId,
-      core::PlanFragment fragment) {
+      core::PlanFragment fragment,
+      std::unordered_map<std::string, std::string> queryConfig = {}) {
     return Task::create(
         taskId,
         std::move(fragment),
         0,
-        core::QueryCtx::create(),
+        core::QueryCtx::create(
+            nullptr, core::QueryConfig{std::move(queryConfig)}),
         Task::ExecutionMode::kParallel);
   }
 
@@ -246,6 +248,59 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxPartitionedOutput) {
   EXPECT_FALSE(properties.producesGpuOutput);
 
   outputOperator->close();
+}
+
+// Registration is process-wide, so a query that disables cuDF still resolves
+// kUcx. Both entries must reject it rather than build operators whose GPU
+// prerequisites the cuDF driver adapter will not have supplied.
+TEST_F(UcxTransportRegistrationTest, ucxEntriesRequireCudfEnabledForQuery) {
+  registerCudfWithExchange(true);
+
+  auto plan = makeExchangePlan(TransportKind::kUcx);
+  auto exchangeNode =
+      std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
+  ASSERT_NE(exchangeNode, nullptr);
+  auto task = makeTask(
+      "test-ucx-cudf-disabled-task",
+      std::move(plan),
+      {{std::string{cudf_velox::CudfConfig::kCudfEnabled}, "false"}});
+
+  auto entry = ExchangeTransportRegistry::tryGet(
+      *task->queryCtx(), exchangeNode->transportKind());
+  ASSERT_NE(entry, nullptr);
+
+  VELOX_ASSERT_USER_THROW(
+      entry->makeClient(
+          ExchangeClientContext{
+              .taskId = task->taskId(),
+              .destination = task->destination(),
+              .numberOfConsumers = 1,
+              .maxExchangeBufferSize = 1 << 20,
+              .minExchangeOutputBatchBytes = 0,
+              .pool = pool(),
+              .executor = executor_.get(),
+              .queryConfig = task->queryCtx()->queryConfig()}),
+      "The UCX exchange transport requires cuDF for this query");
+
+  auto outputPlan = makePartitionedOutputPlan(TransportKind::kUcx);
+  auto outputNode =
+      std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
+          outputPlan.planNode);
+  ASSERT_NE(outputNode, nullptr);
+  auto outputTask = makeTask(
+      "test-ucx-cudf-disabled-output-task",
+      std::move(outputPlan),
+      {{std::string{cudf_velox::CudfConfig::kCudfEnabled}, "false"}});
+  auto outputDriverCtx = makeDriverCtx(outputTask);
+
+  auto outputEntry = OutputTransportRegistry::tryGet(
+      *outputTask->queryCtx(), outputNode->transportKind());
+  ASSERT_NE(outputEntry, nullptr);
+
+  VELOX_ASSERT_USER_THROW(
+      outputEntry->makeOutputOperator(
+          0, outputDriverCtx.get(), outputNode, /*eagerFlush=*/false),
+      "The UCX exchange transport requires cuDF for this query");
 }
 
 TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
