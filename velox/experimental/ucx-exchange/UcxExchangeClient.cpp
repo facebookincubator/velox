@@ -20,12 +20,26 @@
 
 namespace facebook::velox::ucx_exchange {
 
-void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
+UcxExchangeClient::UcxExchangeClient(
+    std::string taskId,
+    int destination,
+    int32_t numberOfConsumers,
+    int32_t requestDataSizesMaxWaitSec)
+    : taskId_{std::move(taskId)},
+      destination_(destination),
+      maxQueuedColumns_(kDefaultMaxQueuedColumns),
+      requestDataSizesMaxWaitSec_(requestDataSizesMaxWaitSec),
+      queue_(std::make_shared<UcxExchangeQueue>(numberOfConsumers)) {
+  VELOX_CHECK_GE(
+      destination, 0, "Exchange client destination must not be negative");
+}
+
+void UcxExchangeClient::addRemoteTaskId(const std::string& remoteTaskId) {
   std::shared_ptr<UcxExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
 
-    bool duplicate = !remoteTaskIds_.insert(std::string{remoteTaskId}).second;
+    bool duplicate = !remoteTaskIds_.insert(remoteTaskId).second;
     if (duplicate) {
       // Do not add sources twice. Presto protocol may add duplicate sources
       // and the task updates have no guarantees of arriving in order.
@@ -75,7 +89,7 @@ void UcxExchangeClient::close() {
   queue_->close();
 }
 
-folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeClient::stats() const {
+folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeClient::stats() {
   // TODO: Implement stats collection.
   folly::F14FastMap<std::string, RuntimeMetric> stats;
   return stats;
