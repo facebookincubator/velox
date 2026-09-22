@@ -298,15 +298,6 @@ CachePin CacheShard::findOrCreate(
     RawFileCacheKey key,
     uint64_t size,
     bool contiguous,
-    folly::SemiFuture<bool>* wait) {
-  return findOrCreate(
-      key, size, contiguous, wait, CacheEntrySizePolicy::kRequireAtLeast);
-}
-
-CachePin CacheShard::findOrCreate(
-    RawFileCacheKey key,
-    uint64_t size,
-    bool contiguous,
     folly::SemiFuture<bool>* wait,
     CacheEntrySizePolicy sizePolicy) {
   AsyncDataCacheEntry* entryToInit = nullptr;
@@ -880,15 +871,6 @@ void CacheShard::shutdown() {
   entryMap_.clear();
   entries_.clear();
   freeEntries_.clear();
-}
-
-CachePin AsyncDataCache::findOrCreate(
-    RawFileCacheKey key,
-    uint64_t size,
-    bool contiguous,
-    folly::SemiFuture<bool>* wait) {
-  return findOrCreate(
-      key, size, contiguous, wait, CacheEntrySizePolicy::kRequireAtLeast);
 }
 
 CachePin AsyncDataCache::findOrCreate(
