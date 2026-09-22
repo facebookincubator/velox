@@ -1152,7 +1152,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
    * - ``writer.enable-page-index``
      - bool
-     - false
+     - true
      - Whether to write the Parquet page index (column index and offset index) when writing into
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
