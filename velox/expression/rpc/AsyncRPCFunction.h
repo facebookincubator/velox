@@ -146,8 +146,8 @@ class AsyncRPCFunction {
   /// Called once for each non-empty input vector before the operator binds or
   /// reserves backend capacity. Implementations may resolve and validate
   /// input-dependent transport/admission configuration and cache parsed row
-  /// state consumed by dispatchPerRow() or accumulateBatch(). tierKey() and
-  /// configuredCeiling() must remain stable after the first
+  /// state consumed by dispatchPerRow() or accumulateBatch(). admissionKey()
+  /// and configuredCeiling() must remain stable after the first
   /// kRequiresAdmission result. A kLocalOnly result promises that dispatch for
   /// every selected row returns an immediately ready, non-exceptional response
   /// without contacting a backend.
@@ -178,9 +178,10 @@ class AsyncRPCFunction {
     return 0;
   }
 
-  /// Returns the service tier key for rate limiting.
-  /// Empty string means "no tier configured — uses global default limit."
-  virtual std::string tierKey() const {
+  /// Identifies the shared admission bucket for this function.
+  /// Empty string uses the global default bucket. The key may include more
+  /// than a service tier, such as a credential discriminator or tenant.
+  virtual std::string admissionKey() const {
     return "";
   }
 
