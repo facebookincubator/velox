@@ -105,6 +105,8 @@ std::unique_ptr<cudf::table> concatenateTables(
   return cudf::concatenate(tableViews, stream, mr);
 }
 
+namespace {
+
 std::unique_ptr<cudf::table> makeEmptyTable(
     const TypePtr& type,
     rmm::cuda_stream_view stream,
@@ -116,6 +118,8 @@ std::unique_ptr<cudf::table> makeEmptyTable(
   }
   return std::make_unique<cudf::table>(std::move(emptyColumns));
 }
+
+} // namespace
 
 std::unique_ptr<cudf::table> getConcatenatedTable(
     std::vector<CudfVectorPtr>&& tables,
