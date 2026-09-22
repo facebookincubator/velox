@@ -13,6 +13,7 @@
 # limitations under the License.
 add_executable(
   nimble_tablet_tests
+  BlobMetadataTest.cpp
   CompressionTest.cpp
   FilePropertiesTest.cpp
   FileLayoutTest.cpp
