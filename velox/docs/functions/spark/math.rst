@@ -93,7 +93,7 @@ Mathematical Functions
     not an additional Spark SQL user-facing signature; it is not available for
     REAL, DOUBLE, or DECIMAL inputs.
 
-    Floating-point rounding uses the shortest decimal representation of the
+    Floating-point rounding uses Java's canonical decimal representation of the
     value, rather than rounding a binary multiplication by a power of ten.
     REAL values are widened to DOUBLE before this conversion, as in Spark.
     NaN and infinities are unchanged; rounded zero is positive zero.
@@ -480,9 +480,76 @@ Mathematical Functions
 
 .. spark:function:: round(x, d) -> [same as x]
 
-    Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode.
-    In HALF_UP rounding, the digit 5 is rounded up.
-    Supported types for ``x`` are integral and floating point types.
+    Rounds ``x`` to ``d`` decimal places, resolving exact halfway cases away
+    from zero (HALF_UP). Negative ``d`` rounds to a multiple of ``10 ** -d``.
+    Omitting ``d`` is equivalent to specifying zero.
+
+    Accepts TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, and DECIMAL.
+    The scale must be a constant INTEGER expression in ``[-400, 400]``, or
+    NULL. A null scale produces null without evaluating ``x``. At supported
+    scales, a null input produces null. Integral and floating-point inputs
+    retain their type. Integral overflow wraps in legacy mode and raises a
+    user error when ``spark.ansi_enabled`` is true.
+
+    Integrations may use ``round(x, d, ansiEnabled)`` for integral inputs.
+    The third argument is a constant BOOLEAN carrying the resolved
+    expression's ANSI mode; it overrides the query setting, including when
+    an analyzed or cached plan is evaluated after a session-mode change.
+    This native integration overload is not an additional Spark SQL signature
+    and is unavailable for REAL, DOUBLE, and DECIMAL.
+
+    Floating-point rounding uses Java's canonical decimal representation.
+    REAL is widened to DOUBLE before conversion; the rounded decimal is
+    converted directly back to the input type. NaN and infinities are
+    unchanged, and rounded zero is positive zero.
+
+    Nonzero floating-point scales target Spark on JDK21. JDK17 may select a
+    different decimal and produce different ROUND results; integrations on
+    JDK17 must fall back for these scales. Scale zero, including the unary
+    form, supports both JDK17 and JDK21. Integral and DECIMAL inputs are not
+    affected by this distinction.
+
+    DECIMAL uses :spark:func:`decimal_round` with an explicitly resolved
+    result type. Its type inference matches :spark:func:`bround`, but exact
+    halfway cases round away from zero rather than toward the even neighbor.
+
+    The scale interval is a native qualification limit, not a Spark limit.
+    Scales outside it are rejected, even when the numerical result would
+    otherwise be zero or unchanged. Integrations must fall back rather than
+    clamp unsupported scales.
+
+    **Integration capability contract:** ``spark_round`` and
+    ``decimal_spark_round`` are native integration names for these primitive
+    and decimal implementations, respectively. They are registered by
+    ``registerRoundFunctions(prefix)`` with the same prefix and use the same
+    implementation and signatures as ``round`` and ``decimal_round``.
+    They are not additional Spark SQL functions.
+
+    Integrations must validate and emit the exact capability-specific name,
+    argument types, arity, constants and resolved output type for every ROUND
+    expression they offload. Use ``spark_round(x, d, ansiEnabled)`` for
+    integral inputs, carrying the analyzed expression's mode;
+    ``spark_round(x, d)`` for REAL/DOUBLE; and
+    ``decimal_spark_round(x, d)`` with an explicitly resolved decimal result
+    type for DECIMAL. For unary Spark ROUND, materialize ``d = 0``; integral
+    calls must still carry the captured mode. Do not append an ignored Boolean
+    argument to floating-point or decimal calls.
+
+    An older dependency can already register ``round`` and ``decimal_round``
+    with different semantics. If validation of a capability-specific call
+    fails, the integration must fall back to Spark, never retry a bare name.
+    BROUND availability is not evidence of ROUND support. Decimal validation
+    must use the special-form path, not just the primitive signature registry.
+    The capability check is mandatory even when general native expression
+    validation is disabled; an unavailable check must also trigger fallback.
+    These names still require the scale and runtime-JDK gates described above.
+
+    ::
+
+        SELECT round(CAST(0.575 AS DOUBLE), 2); -- 0.58
+        SELECT round(CAST(-2.5 AS DOUBLE));    -- -3.0
+        SELECT round(25, -1);                 -- 30
+        SELECT bround(25, -1);                -- 20
 
 .. spark:function:: sec(x) -> double
 

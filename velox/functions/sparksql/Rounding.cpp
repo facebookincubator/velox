@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/functions/sparksql/BRound.h"
+#include "velox/functions/sparksql/Rounding.h"
 
 #include <array>
 #include <bit>
@@ -28,33 +28,44 @@
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/functions/sparksql/specialforms/DecimalRound.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// Distinguishes Spark ROUND's away-from-zero ties from BROUND's even ties.
+enum class RoundingMode { kHalfUp, kHalfEven };
+
+constexpr const char* roundingName(RoundingMode mode) {
+  return mode == RoundingMode::kHalfUp ? "round" : "bround";
+}
+
 // Keeps native support bounded without emulating JVM-specific extreme-scale
 // arithmetic and allocation failures.
-void validateScale(int32_t scale) {
+void validateScale(int32_t scale, const char* name) {
   VELOX_USER_CHECK(
       scale >= -400 && scale <= 400,
-      "The scale for bround must be between -400 and 400, got: {}.",
+      "The scale for {} must be between -400 and 400, got: {}.",
+      name,
       scale);
 }
 
 // Initialize errors are deferred until a non-null row is evaluated, so a
 // constant NULL scale still propagates NULL.
-void validateScaleArgument(const int32_t* scale) {
+void validateScaleArgument(const int32_t* scale, const char* name) {
   VELOX_USER_CHECK_NOT_NULL(
-      scale, "The second argument of bround must be a constant INTEGER.");
-  validateScale(*scale);
+      scale, "The second argument of {} must be a constant INTEGER.", name);
+  validateScale(*scale, name);
 }
 
-// Resolves an exact decimal midpoint toward the even quotient. Divisors are
+// Resolves exact decimal midpoints using the selected policy. Divisors are
 // powers of ten, so comparing with divisor / 2 cannot overflow.
-int128_t divideHalfEven(int128_t value, int128_t divisor) {
+template <RoundingMode mode>
+int128_t divideRounded(int128_t value, int128_t divisor) {
   const auto quotient = value / divisor;
   const auto remainder = value % divisor;
   if (remainder == 0) {
@@ -63,14 +74,15 @@ int128_t divideHalfEven(int128_t value, int128_t divisor) {
   const auto absoluteRemainder = remainder < 0 ? -remainder : remainder;
   const auto half = divisor / 2;
   if (absoluteRemainder > half ||
-      (absoluteRemainder == half && quotient % 2 != 0)) {
+      (absoluteRemainder == half &&
+       (mode == RoundingMode::kHalfUp || quotient % 2 != 0))) {
     return quotient + (value < 0 ? -1 : 1);
   }
   return quotient;
 }
 
 // Rounds in a wider domain before applying Spark's integral narrowing policy.
-template <typename T>
+template <RoundingMode mode, typename T>
 Status roundIntegral(T& result, T value, int32_t scale, bool ansiEnabled) {
   int128_t rounded = value;
   if (scale < 0) {
@@ -79,18 +91,18 @@ Status roundIntegral(T& result, T value, int32_t scale, bool ansiEnabled) {
       rounded = 0;
     } else {
       const auto divisor = DecimalUtil::kPowersOfTen[digitsToDrop];
-      rounded = divideHalfEven(value, divisor) * divisor;
+      rounded = divideRounded<mode>(value, divisor) * divisor;
     }
   }
   if (ansiEnabled &&
       (rounded < std::numeric_limits<T>::min() ||
        rounded > std::numeric_limits<T>::max())) {
-    return threadSkipErrorDetails()
-        ? Status::UserError()
-        : Status::UserError(
-              "Arithmetic overflow in bround({}, {})",
-              static_cast<int64_t>(value),
-              scale);
+    return threadSkipErrorDetails() ? Status::UserError()
+                                    : Status::UserError(
+                                          "Arithmetic overflow in {}({}, {})",
+                                          roundingName(mode),
+                                          static_cast<int64_t>(value),
+                                          scale);
   }
   // Conversion to an unsigned type is modulo 2^N; bit_cast preserves the
   // resulting Java two's-complement representation without signed overflow.
@@ -98,7 +110,7 @@ Status roundIntegral(T& result, T value, int32_t scale, bool ansiEnabled) {
   return Status::OK();
 }
 
-// Represents a shortest decimal as coefficient * 10^(-scale).
+// Represents a canonical decimal as coefficient * 10^(-scale).
 struct DecimalComponents {
   int64_t coefficient;
   int32_t scale;
@@ -106,14 +118,27 @@ struct DecimalComponents {
 
 // Converts a finite nonzero DOUBLE, including widened REAL values, without
 // depending on private formatting-library interfaces or the current locale.
-DecimalComponents shortestDecimal(double value) {
+DecimalComponents canonicalDecimal(double value) {
   std::array<char, 32> buffer;
-  const auto conversion = std::to_chars(
+  auto conversion = std::to_chars(
       buffer.data(),
       buffer.data() + buffer.size(),
       value,
       std::chars_format::scientific);
   VELOX_CHECK(conversion.ec == std::errc{});
+  const auto* firstDigit = buffer.data() + (value < 0);
+  if (firstDigit[1] == 'e') {
+    // Java's decimal selection considers both one- and two-digit decimals
+    // when a one-digit round-trip exists. For example, the minimum DOUBLE
+    // subnormal is represented by 4.9e-324, not 5e-324.
+    conversion = std::to_chars(
+        buffer.data(),
+        buffer.data() + buffer.size(),
+        value,
+        std::chars_format::scientific,
+        1);
+    VELOX_CHECK(conversion.ec == std::errc{});
+  }
   const char* current = buffer.data();
   const bool negative = *current == '-';
   current += negative;
@@ -172,20 +197,21 @@ T decimalToFloating(int64_t coefficient, int32_t scale) {
 
 // Avoids decimal conversion at scale zero. A nonzero fractional part implies
 // that the integral part is small enough to convert safely to int64_t.
-template <typename T>
+template <RoundingMode mode, typename T>
 T roundToInteger(T value) {
   const T integral = std::trunc(value);
   const T fraction = std::abs(value - integral);
   if (fraction < T{0.5} ||
-      (fraction == T{0.5} && static_cast<int64_t>(integral) % 2 == 0)) {
+      (mode == RoundingMode::kHalfEven && fraction == T{0.5} &&
+       static_cast<int64_t>(integral) % 2 == 0)) {
     return integral == 0 ? T{0} : integral;
   }
   return integral + std::copysign(T{1}, value);
 }
 
-// Applies decimal HALF_EVEN semantics rather than rounding value * 10^scale
+// Applies decimal rounding rather than rounding value * 10^scale
 // in binary, which would introduce additional rounding near decimal midpoints.
-template <typename T>
+template <RoundingMode mode, typename T>
 Status roundFloating(T& result, T value, int32_t scale) {
   if (!std::isfinite(value)) {
     result = value;
@@ -196,10 +222,10 @@ Status roundFloating(T& result, T value, int32_t scale) {
     return Status::OK();
   }
   if (scale == 0) {
-    result = roundToInteger(value);
+    result = roundToInteger<mode>(value);
     return Status::OK();
   }
-  const auto components = shortestDecimal(static_cast<double>(value));
+  const auto components = canonicalDecimal(static_cast<double>(value));
   const auto digitsToDrop =
       static_cast<int64_t>(components.scale) - static_cast<int64_t>(scale);
   if (digitsToDrop <= 0) {
@@ -207,16 +233,16 @@ Status roundFloating(T& result, T value, int32_t scale) {
   } else if (digitsToDrop > 17) {
     result = T{0};
   } else {
-    const auto coefficient = divideHalfEven(
+    const auto coefficient = divideRounded<mode>(
         components.coefficient, DecimalUtil::kPowersOfTen[digitsToDrop]);
     result = decimalToFloating<T>(static_cast<int64_t>(coefficient), scale);
   }
   return Status::OK();
 }
 
-// Adapts primitive HALF_EVEN rounding to the simple-function evaluator.
-template <typename TExec>
-struct BRoundFunction {
+// Adapts primitive rounding to the simple-function evaluator.
+template <typename TExec, RoundingMode mode>
+struct RoundingFunction {
   template <typename T>
   void initialize(
       const std::vector<TypePtr>&,
@@ -231,7 +257,7 @@ struct BRoundFunction {
       const core::QueryConfig& config,
       const T* value,
       const int32_t* scale) {
-    validateScaleArgument(scale);
+    validateScaleArgument(scale, roundingName(mode));
     initialize(types, config, value);
   }
 
@@ -242,10 +268,11 @@ struct BRoundFunction {
       const T*,
       const int32_t* scale,
       const bool* ansiEnabled) {
-    validateScaleArgument(scale);
+    validateScaleArgument(scale, roundingName(mode));
     VELOX_USER_CHECK_NOT_NULL(
         ansiEnabled,
-        "The third argument of bround must be a constant BOOLEAN.");
+        "The third argument of {} must be a constant BOOLEAN.",
+        roundingName(mode));
     ansiEnabled_ = *ansiEnabled;
   }
 
@@ -257,27 +284,27 @@ struct BRoundFunction {
   template <typename T>
   Status call(T& result, const T& value, int32_t scale) {
     if constexpr (std::is_integral_v<T>) {
-      return roundIntegral(result, value, scale, ansiEnabled_);
+      return roundIntegral<mode>(result, value, scale, ansiEnabled_);
     } else {
-      return roundFloating(result, value, scale);
+      return roundFloating<mode>(result, value, scale);
     }
   }
 
   template <typename T>
   Status call(T& result, const T& value, int32_t scale, bool /*ansiEnabled*/) {
     // The constant expression mode was validated and captured by initialize().
-    return roundIntegral(result, value, scale, ansiEnabled_);
+    return roundIntegral<mode>(result, value, scale, ansiEnabled_);
   }
 
  private:
   bool ansiEnabled_{false};
 };
 
-// Rounds decimal values without sharing or changing ROUND/ceil/floor policies.
-template <typename TInput, typename TResult>
-class DecimalBRoundFunction : public exec::VectorFunction {
+// Rounds decimal values with checked precision before narrowing or multiplying.
+template <RoundingMode mode, typename TInput, typename TResult>
+class DecimalRoundingFunction : public exec::VectorFunction {
  public:
-  DecimalBRoundFunction(
+  DecimalRoundingFunction(
       uint8_t inputScale,
       int32_t requestedScale,
       uint8_t resultPrecision)
@@ -310,14 +337,16 @@ class DecimalBRoundFunction : public exec::VectorFunction {
       int128_t rounded{0};
       if (!roundsToZero_) {
         const auto value = input.valueAt<TInput>(row);
-        rounded = digitsToDrop_ > 0 ? divideHalfEven(value, divisor_) : value;
+        rounded =
+            digitsToDrop_ > 0 ? divideRounded<mode>(value, divisor_) : value;
       }
       if (rounded > limitBeforeMultiply_ || rounded < -limitBeforeMultiply_) {
         context.setStatus(
             row,
             threadSkipErrorDetails()
                 ? Status::UserError()
-                : Status::UserError("Decimal overflow in bround."));
+                : Status::UserError(
+                      "Decimal overflow in {}.", roundingName(mode)));
         return;
       }
       values[row] = static_cast<TResult>(rounded * multiplier_);
@@ -353,9 +382,11 @@ TypePtr decimalResultType(const TypePtr& inputType, int32_t requestedScale) {
 // Requires an explicitly resolved output type because scale is a value rather
 // than a type parameter. A constant null scale bypasses evaluation of the
 // value.
-class DecimalBRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
+template <RoundingMode mode>
+class DecimalRoundingCallToSpecialForm
+    : public exec::FunctionCallToSpecialForm {
  public:
-  explicit DecimalBRoundCallToSpecialForm(std::string name)
+  explicit DecimalRoundingCallToSpecialForm(std::string name)
       : name_(std::move(name)) {}
 
   TypePtr resolveType(const std::vector<TypePtr>&) override {
@@ -393,7 +424,7 @@ class DecimalBRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       nullScale = constant->isNullAt(0);
       if (!nullScale) {
         scale = constant->valueAt(0);
-        validateScale(scale);
+        validateScale(scale, roundingName(mode));
       }
     }
     const auto expectedType = decimalResultType(args[0]->type(), scale);
@@ -413,18 +444,22 @@ class DecimalBRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
     std::shared_ptr<exec::VectorFunction> function;
     if (args[0]->type()->isShortDecimal()) {
       if (type->isShortDecimal()) {
-        function = std::make_shared<DecimalBRoundFunction<int64_t, int64_t>>(
-            inputScale, scale, resultPrecision);
+        function =
+            std::make_shared<DecimalRoundingFunction<mode, int64_t, int64_t>>(
+                inputScale, scale, resultPrecision);
       } else {
-        function = std::make_shared<DecimalBRoundFunction<int64_t, int128_t>>(
-            inputScale, scale, resultPrecision);
+        function =
+            std::make_shared<DecimalRoundingFunction<mode, int64_t, int128_t>>(
+                inputScale, scale, resultPrecision);
       }
     } else if (type->isShortDecimal()) {
-      function = std::make_shared<DecimalBRoundFunction<int128_t, int64_t>>(
-          inputScale, scale, resultPrecision);
+      function =
+          std::make_shared<DecimalRoundingFunction<mode, int128_t, int64_t>>(
+              inputScale, scale, resultPrecision);
     } else {
-      function = std::make_shared<DecimalBRoundFunction<int128_t, int128_t>>(
-          inputScale, scale, resultPrecision);
+      function =
+          std::make_shared<DecimalRoundingFunction<mode, int128_t, int128_t>>(
+              inputScale, scale, resultPrecision);
     }
     return std::make_shared<exec::Expr>(
         type,
@@ -439,50 +474,67 @@ class DecimalBRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
   const std::string name_;
 };
 
+template <typename TExec>
+using RoundFunction = RoundingFunction<TExec, RoundingMode::kHalfUp>;
+
+template <typename TExec>
+using BRoundFunction = RoundingFunction<TExec, RoundingMode::kHalfEven>;
+
+template <template <typename> class Function>
+void registerPrimitiveFunctions(const std::string& name) {
+  registerUnaryNumeric<Function>({name});
+  registerFunction<Function, int8_t, int8_t, Constant<int32_t>>({name});
+  registerFunction<Function, int16_t, int16_t, Constant<int32_t>>({name});
+  registerFunction<Function, int32_t, int32_t, Constant<int32_t>>({name});
+  registerFunction<Function, int64_t, int64_t, Constant<int32_t>>({name});
+  registerFunction<Function, int8_t, int8_t, Constant<int32_t>, Constant<bool>>(
+      {name});
+  registerFunction<
+      Function,
+      int16_t,
+      int16_t,
+      Constant<int32_t>,
+      Constant<bool>>({name});
+  registerFunction<
+      Function,
+      int32_t,
+      int32_t,
+      Constant<int32_t>,
+      Constant<bool>>({name});
+  registerFunction<
+      Function,
+      int64_t,
+      int64_t,
+      Constant<int32_t>,
+      Constant<bool>>({name});
+  registerFunction<Function, float, float, Constant<int32_t>>({name});
+  registerFunction<Function, double, double, Constant<int32_t>>({name});
+}
+
 } // namespace
 
 void registerBRoundFunctions(const std::string& prefix) {
-  registerUnaryNumeric<BRoundFunction>({prefix + "bround"});
-  registerFunction<BRoundFunction, int8_t, int8_t, Constant<int32_t>>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, int16_t, int16_t, Constant<int32_t>>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, int32_t, int32_t, Constant<int32_t>>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, int64_t, int64_t, Constant<int32_t>>(
-      {prefix + "bround"});
-  registerFunction<
-      BRoundFunction,
-      int8_t,
-      int8_t,
-      Constant<int32_t>,
-      Constant<bool>>({prefix + "bround"});
-  registerFunction<
-      BRoundFunction,
-      int16_t,
-      int16_t,
-      Constant<int32_t>,
-      Constant<bool>>({prefix + "bround"});
-  registerFunction<
-      BRoundFunction,
-      int32_t,
-      int32_t,
-      Constant<int32_t>,
-      Constant<bool>>({prefix + "bround"});
-  registerFunction<
-      BRoundFunction,
-      int64_t,
-      int64_t,
-      Constant<int32_t>,
-      Constant<bool>>({prefix + "bround"});
-  registerFunction<BRoundFunction, float, float, Constant<int32_t>>(
-      {prefix + "bround"});
-  registerFunction<BRoundFunction, double, double, Constant<int32_t>>(
-      {prefix + "bround"});
+  registerPrimitiveFunctions<BRoundFunction>(prefix + "bround");
   const auto decimalName = prefix + kBRoundDecimal;
   exec::registerFunctionCallToSpecialForm(
       decimalName,
-      std::make_unique<DecimalBRoundCallToSpecialForm>(decimalName));
+      std::make_unique<
+          DecimalRoundingCallToSpecialForm<RoundingMode::kHalfEven>>(
+          decimalName));
+}
+
+void registerDecimalRoundSpecialForm(const std::string& name) {
+  exec::registerFunctionCallToSpecialForm(
+      name,
+      std::make_unique<DecimalRoundingCallToSpecialForm<RoundingMode::kHalfUp>>(
+          name));
+}
+
+void registerRoundFunctions(const std::string& prefix) {
+  registerPrimitiveFunctions<RoundFunction>(prefix + "round");
+  registerPrimitiveFunctions<RoundFunction>(prefix + kSparkRound);
+  registerDecimalRoundSpecialForm(prefix + kRoundDecimal);
+  registerDecimalRoundSpecialForm(prefix + kSparkRoundDecimal);
 }
 
 } // namespace facebook::velox::functions::sparksql

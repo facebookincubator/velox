@@ -23,6 +23,7 @@
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/sparksql/Rounding.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -165,42 +166,6 @@ class DecimalRoundFunction : public exec::VectorFunction {
 
 namespace {
 
-// Half-up rounding (Spark's ROUND_HALF_UP). Never overflows because
-// the result type is guaranteed to accommodate the rounded value.
-template <typename TResult, typename TInput>
-struct RoundHalfUpPolicy {
-  static constexpr bool canOverflow = false;
-
-  explicit RoundHalfUpPolicy(const DecimalRoundOps::ScaleFactors& factors)
-      : factors_(factors) {}
-
-  std::optional<TResult> applyOne(const TInput& input) const {
-    if (factors_.scale >= 0) {
-      TResult rescaledValue;
-      const auto status = DecimalUtil::rescaleWithRoundUp<TInput, TResult>(
-          input,
-          factors_.inputPrecision,
-          factors_.inputScale,
-          factors_.resultPrecision,
-          factors_.resultScale,
-          rescaledValue);
-      VELOX_DCHECK(status.ok());
-      return rescaledValue;
-    }
-    // When scale < 0, divideFactor is always set (scale < inputScale holds).
-    // multiplyFactor is always set when scale < 0. Use value_or(1) as a
-    // defensive default matching the no-op identity.
-    TResult rescaledValue;
-    DecimalUtil::divideWithRoundUp<TResult, TInput, int128_t>(
-        rescaledValue, input, factors_.divideFactor.value_or(1), false, 0, 0);
-    rescaledValue *= factors_.multiplyFactor.value_or(1);
-    return rescaledValue;
-  }
-
- private:
-  const DecimalRoundOps::ScaleFactors factors_;
-};
-
 // Directional rounding (ceil toward +∞, floor toward -∞). May overflow
 // because rounding away from zero can push a value past the maximum
 // representable precision. The 'ceiling' parameter selects the direction:
@@ -264,22 +229,6 @@ struct FloorPolicy : DirectionalRoundPolicy<TResult, TInput, false> {
 
 } // namespace
 
-/// Spark decimal_round special form. Defined in .cpp because external callers
-/// only need registerDecimalRoundingForms().
-class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
- public:
-  TypePtr resolveType(const std::vector<TypePtr>& argTypes) override;
-
-  exec::ExprPtr constructSpecialForm(
-      const TypePtr& type,
-      std::vector<exec::ExprPtr>&& args,
-      bool trackCpuUsage,
-      const core::QueryConfig& config) override;
-
-  static std::pair<uint8_t, uint8_t>
-  getResultPrecisionScale(uint8_t precision, uint8_t scale, int32_t roundScale);
-};
-
 DecimalRoundOps::ScaleFactors DecimalRoundOps::computeFactors(
     int32_t scale,
     uint8_t inputPrecision,
@@ -335,75 +284,9 @@ int32_t DecimalRoundOps::extractConstantScaleArg(
   return constantVector->valueAt(0);
 }
 
-std::pair<uint8_t, uint8_t>
-DecimalRoundCallToSpecialForm::getResultPrecisionScale(
-    uint8_t precision,
-    uint8_t scale,
-    int32_t roundScale) {
-  const int32_t integralLeastNumDigits = precision - scale + 1;
-  if (roundScale < 0) {
-    const auto newPrecision = std::max(
-        integralLeastNumDigits,
-        -std::max(
-            roundScale, -static_cast<int32_t>(LongDecimalType::kMaxPrecision)) +
-            1);
-    return {
-        std::min(
-            newPrecision, static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
-        0};
-  }
-  const uint8_t newScale = std::min(static_cast<int32_t>(scale), roundScale);
-  return {
-      std::min(
-          integralLeastNumDigits + newScale,
-          static_cast<int32_t>(LongDecimalType::kMaxPrecision)),
-      newScale};
-}
-
-TypePtr DecimalRoundCallToSpecialForm::resolveType(
-    const std::vector<TypePtr>& /*argTypes*/) {
-  VELOX_FAIL("Decimal round function does not support type resolution.");
-}
-
-exec::ExprPtr DecimalRoundCallToSpecialForm::constructSpecialForm(
-    const TypePtr& type,
-    std::vector<exec::ExprPtr>&& args,
-    bool trackCpuUsage,
-    const core::QueryConfig& /*config*/) {
-  VELOX_USER_CHECK(
-      type->isDecimal(),
-      "The result type of {} must be decimal.",
-      kRoundDecimal);
-  VELOX_USER_CHECK(
-      args.size() >= 1 && args.size() <= 2,
-      "{} expects one or two arguments.",
-      kRoundDecimal);
-  VELOX_USER_CHECK(
-      args[0]->type()->isDecimal(),
-      "The first argument of {} must be decimal.",
-      kRoundDecimal);
-
-  int32_t scale = 0;
-  if (args.size() > 1) {
-    scale = DecimalRoundOps::extractConstantScaleArg(args[1], kRoundDecimal);
-  }
-
-  auto func = DecimalRoundOps::createFunction<RoundHalfUpPolicy>(
-      args[0]->type(), scale, type);
-
-  return std::make_shared<exec::Expr>(
-      type,
-      std::move(args),
-      std::move(func),
-      exec::VectorFunctionMetadata{},
-      std::string(kRoundDecimal),
-      trackCpuUsage);
-}
-
 namespace {
 
-// Special form for decimal_ceil and decimal_floor. Shares
-// getResultPrecisionScale and validation with decimal_round.
+// Special form for decimal_ceil and decimal_floor.
 class DecimalCeilFloorCallToSpecialForm
     : public exec::FunctionCallToSpecialForm {
  public:
@@ -456,8 +339,8 @@ class DecimalCeilFloorCallToSpecialForm
 } // namespace
 
 void registerDecimalRoundingForms() {
-  exec::registerFunctionCallToSpecialForm(
-      kRoundDecimal, std::make_unique<DecimalRoundCallToSpecialForm>());
+  registerDecimalRoundSpecialForm(kRoundDecimal);
+  registerDecimalRoundSpecialForm(kSparkRoundDecimal);
   exec::registerFunctionCallToSpecialForm(
       kCeilDecimal,
       std::make_unique<DecimalCeilFloorCallToSpecialForm>(true, kCeilDecimal));

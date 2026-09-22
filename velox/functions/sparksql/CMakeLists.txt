@@ -23,13 +23,26 @@ velox_add_library(
 )
 velox_link_libraries(velox_spark_query_config velox_config_property velox_core)
 
+velox_add_library(
+  velox_functions_spark_rounding
+  Rounding.cpp
+  HEADERS
+  BRound.h
+  Rounding.h
+)
+velox_link_libraries(
+  velox_functions_spark_rounding
+  velox_spark_query_config
+  velox_functions_lib
+  velox_expression
+)
+
 add_subdirectory(specialforms)
 velox_add_library(
   velox_functions_spark_impl
   ArrayGetFunction.cpp
   ArraySort.cpp
   AssertNotNull.cpp
-  BRound.cpp
   SequenceFunction.cpp
   Transform.cpp
   CharVarcharUtils.cpp
@@ -66,7 +79,6 @@ velox_add_library(
   AssertNotNull.h
   Base64Function.h
   Bitwise.h
-  BRound.h
   CharTypeWriteSideCheck.h
   CharVarcharUtils.h
   Comparisons.h
@@ -116,6 +128,7 @@ velox_link_libraries(
   velox_functions_lib
   velox_functions_prestosql_impl
   velox_functions_spark_specialforms
+  velox_functions_spark_rounding
   velox_functions_util
   Folly::folly
   simdjson::simdjson
