@@ -97,7 +97,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
   void initialize(
       const core::QueryConfig& /*queryConfig*/,
       const std::vector<TypePtr>& /*inputTypes*/,
-      const std::vector<VectorPtr>& /*constantInputs*/) override {
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) override {
     // Call ordinals are what pin the burst to rows [kWarmupRows,
     // kWarmupRows + kBurstRows). A second initialize() would install a fresh
     // client whose ordinals restart at 0 and silently move the burst, so

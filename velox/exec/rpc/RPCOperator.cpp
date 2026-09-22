@@ -108,19 +108,57 @@ void RPCOperator::initialize() {
 
   // Initialize the function with query config, argument types, and constants.
   // The function creates/caches its own transport and clients internally.
+  // The instruction goes in with everything else the function needs: it
+  // resolves its backend and how it will serve the instruction on that backend
+  // in one place, and the framework does not branch on the reported path.
+  auto* driverCtx = operatorCtx_->driverCtx();
+  VELOX_CHECK_NOT_NULL(driverCtx);
+  const auto& queryConfig = driverCtx->queryConfig();
   function_->initialize(
-      operatorCtx_->driverCtx()->queryConfig(), inputTypes, constantInputs);
-
-  tierKey_ = function_->tierKey();
-
-  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+      queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
+  requiresRowInspectionBeforeAdmission_ =
+      function_->requiresRowInspectionBeforeAdmission();
+  if (!requiresRowInspectionBeforeAdmission_) {
+    initializeRateLimiter();
+  }
 
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
 
+  *liveStatsSources_.wlock() =
+      LiveStatsSources{.state = state_, .limiter = limiter_};
+
+  RPC_OP_VLOG(1) << "Created operator for function '"
+                 << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
+                 << ", operatorId=" << operatorId() << ", streamingMode="
+                 << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
+                         ? "BATCH"
+                         : "PER_ROW");
+
+  if (!argumentSources_.empty()) {
+    RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()
+                   << " call arguments";
+  } else {
+    RPC_OP_VLOG(1) << "Initialized with no call arguments "
+                   << "(fallback to all input columns)";
+  }
+
+  // Precompute output column projections to avoid string lookups in
+  // buildOutputVector().
+  initOutputProjections();
+}
+
+void RPCOperator::initializeRateLimiter() {
+  if (limiter_ != nullptr) {
+    return;
+  }
+
+  tierKey_ = function_->tierKey();
   limiter_ = &RPCRateLimiterRegistry::global().get(tierKey_);
   *liveStatsSources_.wlock() =
       LiveStatsSources{.state = state_, .limiter = limiter_};
+
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   // A backend's configuration is fixed by the first query to reach it and is
   // shared by every query after. The limiter is a controller: its policy has
   // to hold still while it adapts, and the adaptation itself is learned from
@@ -143,25 +181,6 @@ void RPCOperator::initialize() {
       config.ceiling = rlMax;
     }
   });
-
-  RPC_OP_VLOG(1) << "Created operator for function '"
-                 << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
-                 << ", operatorId=" << operatorId() << ", streamingMode="
-                 << (rpcNode_->streamingMode() == RPCStreamingMode::kBatch
-                         ? "BATCH"
-                         : "PER_ROW");
-
-  if (!argumentSources_.empty()) {
-    RPC_OP_VLOG(1) << "Initialized with " << argumentSources_.size()
-                   << " call arguments";
-  } else {
-    RPC_OP_VLOG(1) << "Initialized with no call arguments "
-                   << "(fallback to all input columns)";
-  }
-
-  // Precompute output column projections to avoid string lookups in
-  // buildOutputVector().
-  initOutputProjections();
 }
 
 bool RPCOperator::needsInput() const {
@@ -225,6 +244,26 @@ void RPCOperator::addInput(RowVectorPtr input) {
     }
   }
 
+  auto preparationResult =
+      AsyncRPCFunction::AdmissionPreparationResult::kRequiresAdmission;
+  if (requiresRowInspectionBeforeAdmission_) {
+    preparationResult =
+        function_->prepareInputForAdmissionAndDispatch(rows, arguments);
+  }
+  if (preparationResult ==
+          AsyncRPCFunction::AdmissionPreparationResult::kLocalOnly &&
+      state_->streamingMode() == RPCStreamingMode::kBatch &&
+      function_->pendingBatchSize() > 0) {
+    // This input will share a flush with rows already waiting for a backend.
+    // Keep the whole flush on the admitted path.
+    preparationResult =
+        AsyncRPCFunction::AdmissionPreparationResult::kRequiresAdmission;
+  }
+  if (preparationResult ==
+      AsyncRPCFunction::AdmissionPreparationResult::kRequiresAdmission) {
+    initializeRateLimiter();
+  }
+
   // Flatten/load all columns upfront to avoid issues with lazy vectors.
   std::vector<VectorPtr> flattenedColumns;
   flattenedColumns.reserve(input->childrenSize());
@@ -232,6 +271,12 @@ void RPCOperator::addInput(RowVectorPtr input) {
     auto column = BaseVector::loadedVectorShared(input->childAt(j));
     BaseVector::flattenVector(column);
     flattenedColumns.push_back(column);
+  }
+
+  if (preparationResult ==
+      AsyncRPCFunction::AdmissionPreparationResult::kLocalOnly) {
+    resolveLocalOnlyInput(rows, arguments, std::move(flattenedColumns));
+    return;
   }
 
   auto streamingMode = state_->streamingMode();
@@ -433,6 +478,83 @@ void checkNoFrameworkFailures(
 
 } // namespace
 
+void RPCOperator::resolveLocalOnlyInput(
+    const SelectivityVector& rows,
+    const std::vector<VectorPtr>& arguments,
+    std::vector<VectorPtr> flattenedColumns) {
+  if (state_->streamingMode() == RPCStreamingMode::kPerRow) {
+    const auto batchIndex = state_->storeInputBatch(
+        std::move(flattenedColumns), rows.countSelected());
+    auto futures = function_->dispatchPerRow(rows, arguments);
+    VELOX_CHECK_EQ(
+        futures.size(),
+        static_cast<size_t>(rows.countSelected()),
+        "dispatchPerRow returned {} futures for {} local-only rows",
+        futures.size(),
+        rows.countSelected());
+    numRequestsDispatched_.fetch_add(
+        static_cast<int64_t>(futures.size()), std::memory_order_relaxed);
+    claimedRowsAreLocalOnly_ = true;
+    for (auto& [originalRowIndex, future] : futures) {
+      VELOX_CHECK(
+          future.isReady(),
+          "RPC function '{}' returned a pending future for local-only row {}",
+          function_->name(),
+          originalRowIndex);
+      const auto rowId = globalRowIdCounter_++;
+      auto response = std::move(future).get();
+      response.rowId = rowId;
+      claimedRows_.push_back(
+          RPCState::ReadyRow{
+              .rowId = rowId,
+              .location = {batchIndex, originalRowIndex},
+              .response = std::move(response),
+              .rttNs = 0,
+          });
+    }
+    return;
+  }
+
+  auto rowIndices = function_->accumulateBatch(rows, arguments);
+  VELOX_CHECK_EQ(
+      rowIndices.size(),
+      static_cast<size_t>(rows.countSelected()),
+      "accumulateBatch returned {} rows for {} local-only rows",
+      rowIndices.size(),
+      rows.countSelected());
+  numRequestsDispatched_.fetch_add(
+      static_cast<int64_t>(rowIndices.size()), std::memory_order_relaxed);
+  const auto batchIndex = state_->storeInputBatch(
+      std::move(flattenedColumns), static_cast<int64_t>(rowIndices.size()));
+  std::vector<RPCState::RowLocation> rowLocations;
+  std::vector<int64_t> rowIds;
+  rowLocations.reserve(rowIndices.size());
+  rowIds.reserve(rowIndices.size());
+  for (const auto originalRowIndex : rowIndices) {
+    rowLocations.push_back({batchIndex, originalRowIndex});
+    rowIds.push_back(globalRowIdCounter_++);
+  }
+
+  auto future = function_->flushBatch();
+  VELOX_CHECK(
+      future.isReady(),
+      "RPC function '{}' returned a pending batch for local-only input",
+      function_->name());
+  VELOX_CHECK_EQ(
+      function_->pendingBatchSize(),
+      0,
+      "RPC function '{}' retained rows after flushing local-only input",
+      function_->name());
+  claimedBatch_ = RPCState::ReadyBatch{
+      .batchId = 0,
+      .responses = scatterIntoBatchOrder(std::move(future).get(), rowIds),
+      .error = std::nullopt,
+      .admissionUnits = 0,
+      .rowLocations = std::move(rowLocations),
+      .rttNs = 0,
+  };
+}
+
 bool RPCOperator::flushBatchRequests(int32_t maxRows) {
   if (function_->pendingBatchSize() == 0) {
     VELOX_CHECK(
@@ -623,6 +745,9 @@ void RPCOperator::recordCongestion(
     AsyncRPCFunction::CongestionSignal signal,
     const std::vector<int64_t>& roundTripTimesNs,
     int64_t successUnits) {
+  if (limiter_ == nullptr) {
+    return;
+  }
   // Two AIMD controllers at different scopes, both driven by the function's
   // overload verdict (see RPCRateLimiter.h / CongestionController.h and the
   // function's CongestionPolicy):
@@ -656,7 +781,9 @@ RowVectorPtr RPCOperator::outputPerRow() {
 
   // Drain additional ready rows (non-blocking) for batched output. This
   // amortizes RowVector allocation across multiple completed rows.
-  state_->drainReadyRows(claimedRows_, outputBatchRows_);
+  if (!claimedRowsAreLocalOnly_) {
+    state_->drainReadyRows(claimedRows_, outputBatchRows_);
+  }
 
   // Materialize responses, locations and round-trip latencies once -- reused
   // for the congestion signal and the output vector (no extra copy).
@@ -686,14 +813,17 @@ RowVectorPtr RPCOperator::outputPerRow() {
 
   checkNoFrameworkFailures(function_->name(), responses);
 
-  recordCongestion(
-      function_->evaluateCongestion(responses),
-      roundTripTimesNs,
-      static_cast<int64_t>(roundTripTimesNs.size()));
+  if (!claimedRowsAreLocalOnly_) {
+    recordCongestion(
+        function_->evaluateCongestion(responses),
+        roundTripTimesNs,
+        static_cast<int64_t>(roundTripTimesNs.size()));
+  }
 
   auto output = buildOutputVector(responses, locations);
   numResponsesReceived_ += numRows;
   claimedRows_.clear();
+  claimedRowsAreLocalOnly_ = false;
   return output;
 }
 
@@ -723,10 +853,12 @@ RowVectorPtr RPCOperator::outputBatch() {
   // recovery is credited by the exact backend units reserved: one for a
   // native batch, or one per emitted RPC for a fan-out batch.
   const std::vector<int64_t> roundTripTimesNs{claimedBatch_->rttNs};
-  recordCongestion(
-      function_->evaluateCongestion(claimedBatch_->responses),
-      roundTripTimesNs,
-      claimedBatch_->admissionUnits);
+  if (claimedBatch_->admissionUnits > 0) {
+    recordCongestion(
+        function_->evaluateCongestion(claimedBatch_->responses),
+        roundTripTimesNs,
+        claimedBatch_->admissionUnits);
+  }
 
   auto output = buildOutputFromReadyBatch(*claimedBatch_);
   numResponsesReceived_ += numRows;
