@@ -76,7 +76,7 @@ bool containsCustomComparison(const TypePtr& type) {
   if (type->providesCustomComparison()) {
     return true;
   }
-  for (uint32_t i = 0; i < type->size(); ++i) {
+  for (size_t i = 0; i < type->size(); ++i) {
     if (containsCustomComparison(type->childAt(i))) {
       return true;
     }
