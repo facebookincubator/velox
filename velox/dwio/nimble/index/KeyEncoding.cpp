@@ -16,6 +16,8 @@
 #include "velox/dwio/nimble/index/KeyEncoding.h"
 
 #include <algorithm>
+#include <cstring>
+#include <memory>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -131,40 +133,63 @@ std::unique_ptr<KeyEncoding::Cursor> TrivialKeyEncoding::cursor(
 // PrefixKeyEncoding
 // ---------------------------------------------------------------------------
 
-namespace {
-
-// Decodes the entry at 'pos' into 'decoded', which must hold the preceding
-// entry's key so the shared prefix can be reused. Advances 'pos' past the
-// entry and increments 'row'.
-std::string_view
-decodeEntryAt(const char*& pos, uint32_t& row, std::string& decoded) {
-  const uint32_t sharedPrefixLen = encoding::readUint32(pos);
-  const uint32_t suffixLen = encoding::readUint32(pos);
-  const uint32_t fullLen = sharedPrefixLen + suffixLen;
-  NIMBLE_CHECK_LE(sharedPrefixLen, decoded.size());
-  decoded.resize(fullLen);
-  if (suffixLen > 0) {
-    std::memcpy(decoded.data() + sharedPrefixLen, pos, suffixLen);
-    pos += suffixLen;
+class PrefixKeyEncoding::KeyScratch {
+ public:
+  // Resizes to 'size' bytes, keeping the leading 'preserved' bytes that the
+  // next entry shares with its predecessor.
+  char* resize(uint32_t size, uint32_t preserved) {
+    if (size > capacity_) {
+      const uint32_t newCapacity = std::max<uint32_t>(size, capacity_ * 2);
+      // make_unique<char[]>() would zero-initialize bytes that the decoder
+      // immediately replaces.
+      auto newBuffer = std::make_unique_for_overwrite<char[]>(newCapacity);
+      if (preserved > 0) {
+        std::memcpy(newBuffer.get(), buffer_.get(), preserved);
+      }
+      buffer_ = std::move(newBuffer);
+      capacity_ = newCapacity;
+    }
+    size_ = size;
+    return buffer_.get();
   }
-  ++row;
-  return std::string_view(decoded.data(), fullLen);
-}
+
+  void clear() {
+    size_ = 0;
+  }
+
+  uint32_t size() const {
+    return size_;
+  }
+
+  std::string_view view() const {
+    return std::string_view{buffer_.get(), size_};
+  }
+
+ private:
+  std::unique_ptr<char[]> buffer_;
+  uint32_t capacity_{0};
+  uint32_t size_{0};
+};
 
 // Decodes prefix-compressed keys one row at a time, carrying the previous
 // key forward as the shared prefix instead of restarting from a restart
 // point on every row.
-class PrefixKeyCursor final : public KeyEncoding::Cursor {
+class PrefixKeyEncoding::PrefixKeyCursor final : public KeyEncoding::Cursor {
  public:
+  // Decodes forward from the restart point enclosing 'startRow', which leaves
+  // scratch_ holding the preceding key so the first next() has the right
+  // shared prefix to build on.
   PrefixKeyCursor(
       const char* position,
-      std::string decoded,
+      const char* end,
       uint32_t row,
+      uint32_t startRow,
       uint32_t rowCount)
-      : position_{position},
-        decoded_{std::move(decoded)},
-        row_{row},
-        rowCount_{rowCount} {}
+      : position_{position}, end_{end}, row_{row}, rowCount_{rowCount} {
+    while (row_ < startRow) {
+      decodeEntryAt(position_, end_, row_, scratch_);
+    }
+  }
 
   bool hasNext() const override {
     return row_ < rowCount_;
@@ -172,43 +197,57 @@ class PrefixKeyCursor final : public KeyEncoding::Cursor {
 
   std::string_view next() override {
     NIMBLE_CHECK(hasNext(), "Key cursor advanced past the last row");
-    return decodeEntryAt(position_, row_, decoded_);
+    return decodeEntryAt(position_, end_, row_, scratch_);
   }
 
  private:
   const char* position_;
+  const char* const end_;
 
-  // Key of the row the cursor last returned; the next key is decoded on top
-  // of it.
-  std::string decoded_;
+  // Holds the preceding key so the next key can reuse its shared prefix. Owned
+  // per cursor rather than shared through scanScratch(): a cursor keeps
+  // decoding through it between next() calls, so any seek() or get() on the
+  // same thread would otherwise clear it mid-walk.
+  KeyScratch scratch_;
 
   uint32_t row_;
   const uint32_t rowCount_;
 };
 
-// Where a cursor for 'startRow' begins. Returned rather than a built cursor
-// because KeyEncoding::Cursor declares a destructor and so has no move
-// constructor: moving a PrefixKeyCursor would copy its base, which is
-// deprecated. Callers construct the cursor in place instead.
-struct PrefixCursorStart {
-  const char* position;
-  std::string decoded;
-  uint32_t row;
-};
-
-// Decodes forward from the restart point enclosing 'startRow', leaving the
-// decoded buffer holding the preceding key so the first next() has the right
-// shared prefix to build on.
-PrefixCursorStart
-positionPrefixCursor(const char* position, uint32_t row, uint32_t startRow) {
-  std::string decoded;
-  while (row < startRow) {
-    decodeEntryAt(position, row, decoded);
-  }
-  return {position, std::move(decoded), row};
+PrefixKeyEncoding::KeyScratch& PrefixKeyEncoding::scanScratch() {
+  // PrefixKeyEncoding is immutable and safe for concurrent use. One scratch
+  // buffer per thread retains capacity without adding synchronization.
+  thread_local KeyScratch scratch;
+  scratch.clear();
+  return scratch;
 }
 
-} // namespace
+std::string_view PrefixKeyEncoding::decodeEntryAt(
+    const char*& position,
+    const char* end,
+    uint32_t& row,
+    KeyScratch& scratch) {
+  const uint32_t sharedPrefixLen = encoding::readUint32(position);
+  const uint32_t suffixLen = encoding::readUint32(position);
+  NIMBLE_CHECK_FILE_LE(
+      sharedPrefixLen,
+      scratch.size(),
+      "Prefix-compressed key shares more bytes than its predecessor holds");
+  // Bounding the suffix against the remaining bytes keeps a corrupt length
+  // from reading past the encoded data, and keeps the sum below from wrapping.
+  NIMBLE_CHECK_FILE_LE(
+      suffixLen,
+      static_cast<uint64_t>(end - position),
+      "Prefix-compressed key suffix runs past the encoded data");
+  const uint32_t fullLen = sharedPrefixLen + suffixLen;
+  char* data = scratch.resize(fullLen, sharedPrefixLen);
+  if (suffixLen > 0) {
+    std::memcpy(data + sharedPrefixLen, position, suffixLen);
+    position += suffixLen;
+  }
+  ++row;
+  return std::string_view{data, fullLen};
+}
 
 PrefixKeyEncoding::PrefixKeyEncoding(
     std::string_view encodedData,
@@ -221,7 +260,8 @@ PrefixKeyEncoding::PrefixKeyEncoding(
       }()},
       numRestarts_{velox::bits::divRoundUp(rowCount_, restartInterval_)},
       restartOffsets_{encodedData.data() + dataOffset + sizeof(uint32_t)},
-      dataStart_{restartOffsets_ + numRestarts_ * sizeof(uint32_t)} {}
+      dataStart_{restartOffsets_ + numRestarts_ * sizeof(uint32_t)},
+      dataEnd_{encodedData.data() + encodedData.size()} {}
 
 uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
   NIMBLE_CHECK_LT(restartIndex, numRestarts_, "Restart index out of bounds");
@@ -232,9 +272,9 @@ uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
 std::optional<uint32_t> PrefixKeyEncoding::seek(
     std::string_view targetValue,
     bool inclusive) const {
-  const char* pos = nullptr;
-  uint32_t row = 0;
-  std::string decoded;
+  auto& scratch = scanScratch();
+  const char* pos{nullptr};
+  uint32_t row{0};
 
   // Binary search among restart points to find the block containing the target.
   uint32_t left = 0;
@@ -245,8 +285,8 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
 
     pos = restartPosition(mid);
     row = mid * restartInterval_;
-    decoded.clear();
-    const auto restartValue = decodeEntryAt(pos, row, decoded);
+    scratch.clear();
+    const auto restartValue = decodeEntryAt(pos, dataEnd_, row, scratch);
 
     if (restartValue.compare(targetValue) < 0) {
       left = mid + 1;
@@ -255,26 +295,26 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
     }
   }
 
-  // 'left' is the first restart point whose value >= targetValue.
-  // Search from the previous restart point since the target might be
-  // within that block but after its restart value.
+  // 'left' is the first restart point whose value >= targetValue. Search from
+  // the previous restart point since the target might be within that block but
+  // after its restart value.
   if (left > 0) {
     --left;
   }
 
   pos = restartPosition(left);
   row = left * restartInterval_;
-  decoded.clear();
+  scratch.clear();
 
   if (inclusive) {
     while (row < rowCount_) {
-      if (decodeEntryAt(pos, row, decoded) >= targetValue) {
+      if (decodeEntryAt(pos, dataEnd_, row, scratch) >= targetValue) {
         return row - 1;
       }
     }
   } else {
     while (row < rowCount_) {
-      if (decodeEntryAt(pos, row, decoded) > targetValue) {
+      if (decodeEntryAt(pos, dataEnd_, row, scratch) > targetValue) {
         return row - 1;
       }
     }
@@ -288,19 +328,27 @@ std::unique_ptr<KeyEncoding::Cursor> PrefixKeyEncoding::cursor(
   NIMBLE_CHECK_LT(startRow, rowCount_);
 
   const uint32_t restartIndex = startRow / restartInterval_;
-  auto start = positionPrefixCursor(
-      restartPosition(restartIndex), restartIndex * restartInterval_, startRow);
   return std::make_unique<PrefixKeyCursor>(
-      start.position, std::move(start.decoded), start.row, rowCount_);
+      restartPosition(restartIndex),
+      dataEnd_,
+      restartIndex * restartInterval_,
+      startRow,
+      rowCount_);
 }
 
 std::string PrefixKeyEncoding::get(uint32_t row) const {
   NIMBLE_CHECK_LT(row, rowCount_);
 
   const uint32_t restartIndex = row / restartInterval_;
-  auto start = positionPrefixCursor(
-      restartPosition(restartIndex), restartIndex * restartInterval_, row + 1);
-  return std::move(start.decoded);
+  const char* pos = restartPosition(restartIndex);
+  uint32_t currentRow = restartIndex * restartInterval_;
+  auto& scratch = scanScratch();
+
+  while (currentRow <= row) {
+    decodeEntryAt(pos, dataEnd_, currentRow, scratch);
+  }
+
+  return std::string{scratch.view()};
 }
 
 std::vector<std::string> PrefixKeyEncoding::materialize(
@@ -316,14 +364,19 @@ std::vector<std::string> PrefixKeyEncoding::materialize(
   }
 
   const uint32_t restartIndex = startRow / restartInterval_;
-  auto start = positionPrefixCursor(
-      restartPosition(restartIndex), restartIndex * restartInterval_, startRow);
-  PrefixKeyCursor keyCursor{
-      start.position, std::move(start.decoded), start.row, rowCount_};
+  const char* pos = restartPosition(restartIndex);
+  uint32_t currentRow = restartIndex * restartInterval_;
+  auto& scratch = scanScratch();
+
+  // Skip to startRow.
+  while (currentRow < startRow) {
+    decodeEntryAt(pos, dataEnd_, currentRow, scratch);
+  }
   std::vector<std::string> result;
   result.reserve(count);
   for (uint32_t i = 0; i < count; ++i) {
-    result.emplace_back(keyCursor.next());
+    decodeEntryAt(pos, dataEnd_, currentRow, scratch);
+    result.emplace_back(scratch.view());
   }
   return result;
 }
