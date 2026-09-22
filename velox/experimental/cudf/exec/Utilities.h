@@ -212,12 +212,6 @@ void orderCudfVectorDeallocationsAfterStream(
     std::span<const cuda::stream_ref> inputStreams,
     cuda::stream_ref stream);
 
-/// Creates an empty cuDF table for the given Velox row type.
-std::unique_ptr<cudf::table> makeEmptyTable(
-    const TypePtr& type,
-    rmm::cuda_stream_view stream,
-    rmm::device_async_resource_ref mr);
-
 /// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
 /// Supports all types including nested LIST and STRUCT.
 std::unique_ptr<cudf::column> makeAllNullColumn(
