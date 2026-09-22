@@ -157,8 +157,8 @@ option(VELOX_ENABLE_PRESTO_FUNCTIONS "Build Presto SQL functions." ON)
 option(VELOX_ENABLE_SPARK_FUNCTIONS "Build Spark SQL functions." ON)
 option(
   VELOX_ENABLE_XPATH
-  "Build the Spark XPath functions (requires libxml2). Only takes effect when VELOX_ENABLE_SPARK_FUNCTIONS is ON."
-  ON
+  "Build the Spark XPath functions (requires libxml2). Only takes effect when VELOX_ENABLE_SPARK_FUNCTIONS is ON. Off by default: enable explicitly (e.g. by Spark consumers such as Gluten) so core / Presto builds and Velox CI do not take on libxml2."
+  OFF
 )
 option(VELOX_ENABLE_ICEBERG_FUNCTIONS "Build Iceberg functions." ON)
 option(VELOX_ENABLE_EXPRESSION "Build expression." ON)
