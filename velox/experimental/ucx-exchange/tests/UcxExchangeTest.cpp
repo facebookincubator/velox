@@ -1116,13 +1116,12 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderDefersHandshakeWithBusyWorker) {
     config.intraNodeExchange = origIntraNode;
   };
 
-  auto metricSum = [](
-                       const folly::F14FastMap<std::string, RuntimeMetric>&
-                           stats,
-                       std::string_view name) {
-    auto it = stats.find(std::string{name});
-    return it == stats.end() ? 0 : it->second.sum;
-  };
+  auto metricSum =
+      [](const folly::F14FastMap<std::string, RuntimeMetric>& stats,
+         std::string_view name) {
+        auto it = stats.find(std::string{name});
+        return it == stats.end() ? 0 : it->second.sum;
+      };
 
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string pollingSrcTaskId = taskPrefix + "pollingSrc";
@@ -1266,8 +1265,7 @@ TEST_P(UcxExchangeTest, partitionedPlaceholderDefersHandshakeWithBusyWorker) {
   EXPECT_EQ(
       metricSum(pollingSinkStats, "ucxExchangeSource.intraNodePackedColumns"),
       numChunks);
-  EXPECT_GT(
-      metricSum(pollingSinkStats, "ucxExchangeSource.intraNodeBytes"), 0);
+  EXPECT_GT(metricSum(pollingSinkStats, "ucxExchangeSource.intraNodeBytes"), 0);
   EXPECT_EQ(
       metricSum(pollingSinkStats, "ucxExchangeSource.remotePackedColumns"), 0);
   EXPECT_EQ(metricSum(pollingSinkStats, "ucxExchangeSource.remoteBytes"), 0);
