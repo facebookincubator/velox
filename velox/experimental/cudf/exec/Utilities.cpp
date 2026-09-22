@@ -343,7 +343,7 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
     case TypeKind::ARRAY: {
       // LIST: zeroed offsets (numRows + 1 zeros) + empty child + ALL_NULL mask.
       auto zeroScalar = cudf::make_default_constructed_scalar(
-          cudf::data_type{cudf::type_id::INT32}, stream, mr);
+          cudf::data_type{cudf::type_id::INT32}, stream, get_temp_mr());
       zeroScalar->set_valid_async(true, stream);
       auto offsets =
           cudf::make_column_from_scalar(*zeroScalar, numRows + 1, stream, mr);
@@ -378,8 +378,8 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
     default: {
       // Flat types (including STRING): use the scalar approach.
       auto cudfType = veloxToCudfDataType(type);
-      auto nullScalar =
-          cudf::make_default_constructed_scalar(cudfType, stream, mr);
+      auto nullScalar = cudf::make_default_constructed_scalar(
+          cudfType, stream, get_temp_mr());
       return cudf::make_column_from_scalar(*nullScalar, numRows, stream, mr);
     }
   }
