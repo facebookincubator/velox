@@ -126,6 +126,41 @@ void skipParquetSchemaNode(
   }
 }
 
+// A repeated group may be the row element itself or an intermediate LIST
+// wrapper. Pass the requested row type only when the group is the element.
+bool shouldUnwrapArrayOfRow(
+    const TypePtr& requestedType,
+    const thrift::SchemaElement& parent,
+    const thrift::SchemaElement& child,
+    bool parentIsRepeated) {
+  if (parentIsRepeated || !requestedType || !requestedType->isArray() ||
+      !requestedType->asArray().elementType()->isRow()) {
+    return false;
+  }
+  if (!child.repetition_type() ||
+      apache::thrift::can_throw(*child.repetition_type()) !=
+          thrift::FieldRepetitionType::REPEATED ||
+      (child.logicalType() &&
+       child.logicalType()->getType() == thrift::LogicalType::Type::LIST)) {
+    return false;
+  }
+
+  const bool parentIsList =
+      (parent.logicalType() &&
+       parent.logicalType()->getType() == thrift::LogicalType::Type::LIST) ||
+      (parent.converted_type() &&
+       *parent.converted_type() == thrift::ConvertedType::LIST);
+  if (!parentIsList) {
+    return true;
+  }
+
+  // Legacy two-level LISTs use a multi-field group, "array", or
+  // "<parent>_tuple" as the element. A single-field "list" wraps the element.
+  return child.num_children() &&
+      (*child.num_children() > 1 || *child.name() == "array" ||
+       *child.name() == *parent.name() + "_tuple");
+}
+
 // An unannotated array in Parquet is a repeated field that is not explicitly
 // marked as a LIST logical type. If current schema element is a repeated field
 // and the requested type is an array, we treat the current schema element as an
@@ -622,12 +657,14 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
         requestedRowType =
             std::dynamic_pointer_cast<const velox::RowType>(requestedType);
       } else if (
-          requestedType->isArray() && isRepeated &&
+          requestedType->isArray() &&
           requestedType->asArray().elementType()->isRow()) {
-        // Handle the case of unannotated array of structs (repeated group
-        // without LIST annotation).
-        requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
-            requestedType->asArray().elementType());
+        if (isRepeated) {
+          // Handle the case of unannotated array of structs (repeated group
+          // without LIST annotation).
+          requestedRowType = std::dynamic_pointer_cast<const velox::RowType>(
+              requestedType->asArray().elementType());
+        }
       }
     }
 
@@ -655,6 +692,11 @@ std::unique_ptr<ParquetTypeWithId> ReaderBase::getParquetColumnInfo(
       TypePtr childRequestedType = nullptr;
       const ParquetFieldId* childRequestedFieldIds = nullptr;
       bool followChild = true;
+
+      if (shouldUnwrapArrayOfRow(
+              requestedType, schemaElement, schema[schemaIdx], isRepeated)) {
+        childRequestedType = requestedType->asArray().elementType();
+      }
 
       if (requestedRowType) {
         if (mappingMode == dwio::common::ColumnMappingMode::kName) {
