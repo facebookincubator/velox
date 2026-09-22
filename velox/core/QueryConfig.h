@@ -521,6 +521,22 @@ class QueryConfig {
       0,
       "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
 
+  /// MergeJoin normally buffers both sides of an equal-key group before
+  /// emitting, so its memory is proportional to the sum of the two groups. For
+  /// inner and left joins the left group does not need to be resident: each
+  /// left row is joined against the whole right group and can then be
+  /// discarded. With this set, such joins retain only the left batch currently
+  /// being consumed and the one before it, kept to extend the group, bounding
+  /// left-side retention to two batches instead of the whole key group. Set to
+  /// false to restore buffering of the whole group.
+  VELOX_QUERY_CONFIG(
+      kMergeJoinStreamLeftSide,
+      mergeJoinStreamLeftSide,
+      "merge_join_stream_left_side",
+      bool,
+      true,
+      "Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group.")
+
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
   /// limit'.
