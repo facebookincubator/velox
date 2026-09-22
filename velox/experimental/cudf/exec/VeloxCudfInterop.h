@@ -33,8 +33,6 @@ std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type);
 /// Returns the cuDF data type for \p type.  Throws on unsupported types.
 cudf::data_type veloxToCudfDataType(const TypePtr& type);
 
-bool canMakeCudfDefaultScalar(const TypePtr& type);
-
 /// Returns true if every leaf type in \p type can be represented in cuDF.
 bool isTypeSupportedByCudf(const TypePtr& type);
 
