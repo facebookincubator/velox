@@ -16,6 +16,7 @@
 #include "velox/common/hyperloglog/SparseHll.h"
 
 #include "velox/common/base/XxHashInline.h"
+#include "velox/common/hyperloglog/HllUtils.h"
 
 #include <gtest/gtest-typed-test.h>
 #include <gtest/gtest.h>
@@ -376,4 +377,68 @@ TYPED_TEST(SparseHllToDenseTest, testNumberOfZeros) {
     sparseHll.toDense(denseHll);
     ASSERT_EQ(this->serialize(denseHll), this->serialize(expectedHll));
   }
+}
+
+TYPED_TEST(SparseHllTest, canDeserializeWithSize) {
+  // Serialized format: version (1 byte), index bit length (1 byte), number of
+  // entries (2 bytes, little-endian) and 4 bytes per entry.
+  auto makeSerialized = [](int8_t indexBitLength, int16_t numEntries) {
+    std::string serialized(4 + 4 * (numEntries > 0 ? numEntries : 0), '\0');
+    serialized[0] = kPrestoSparseV2;
+    serialized[1] = indexBitLength;
+    serialized[2] = static_cast<char>(numEntries & 0xFF);
+    serialized[3] = static_cast<char>((numEntries >> 8) & 0xFF);
+    return serialized;
+  };
+
+  auto empty = SparseHlls::serializeEmpty(11);
+  EXPECT_TRUE(SparseHlls::canDeserialize(empty.data(), empty.size()));
+  EXPECT_EQ(empty, makeSerialized(11, 0));
+
+  auto withEntries = makeSerialized(11, 3);
+  EXPECT_TRUE(
+      SparseHlls::canDeserialize(withEntries.data(), withEntries.size()));
+  // Extra trailing bytes are tolerated, like DenseHlls::canDeserialize.
+  auto withTrailing = withEntries + 'x';
+  EXPECT_TRUE(
+      SparseHlls::canDeserialize(withTrailing.data(), withTrailing.size()));
+
+  // Truncated header.
+  EXPECT_FALSE(SparseHlls::canDeserialize(empty.data(), 0));
+  EXPECT_FALSE(SparseHlls::canDeserialize(empty.data(), 3));
+
+  // Truncated entries.
+  EXPECT_FALSE(
+      SparseHlls::canDeserialize(withEntries.data(), withEntries.size() - 1));
+  EXPECT_FALSE(SparseHlls::canDeserialize(withEntries.data(), 4));
+
+  // Wrong version.
+  auto dense = empty;
+  dense[0] = kPrestoDenseV2;
+  EXPECT_FALSE(SparseHlls::canDeserialize(dense.data(), dense.size()));
+
+  // Index bit length out of range.
+  auto tooFewBits = makeSerialized(3, 0);
+  EXPECT_FALSE(
+      SparseHlls::canDeserialize(tooFewBits.data(), tooFewBits.size()));
+  auto tooManyBits = makeSerialized(17, 0);
+  EXPECT_FALSE(
+      SparseHlls::canDeserialize(tooManyBits.data(), tooManyBits.size()));
+
+  // Negative number of entries.
+  auto negative = makeSerialized(11, -1);
+  EXPECT_FALSE(SparseHlls::canDeserialize(negative.data(), negative.size()));
+
+  // A real serialization is accepted at its exact size and rejected when
+  // truncated.
+  SparseHll hll{this->allocator_};
+  for (int64_t i = 0; i < 10; ++i) {
+    hll.insertHash(hashOne(i));
+  }
+  std::string serialized(hll.serializedSize(), '\0');
+  hll.serialize(11, serialized.data());
+  EXPECT_TRUE(SparseHlls::canDeserialize(serialized.data(), serialized.size()));
+  EXPECT_FALSE(
+      SparseHlls::canDeserialize(serialized.data(), serialized.size() - 1));
+  EXPECT_EQ(SparseHlls::deserializeIndexBitLength(serialized.data()), 11);
 }

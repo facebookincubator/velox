@@ -18,17 +18,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/hyperloglog/DenseHll.h"
+#include "velox/common/hyperloglog/HllUtils.h"
 #include "velox/common/hyperloglog/SparseHll.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/VectorReaders.h"
 #include "velox/functions/lib/HllAccumulator.h"
+#include "velox/functions/sparksql/Hash.h"
 #include "velox/functions/sparksql/XxHash64.h"
 #include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
@@ -55,22 +59,18 @@ double decimalToDouble(T unscaledValue, int32_t scale) {
   return converted.value() / scaleFactor;
 }
 
-int8_t computeIndexBitLength(double relativeSD) {
+// Spark's DayTimeIntervalType holds microseconds while Velox's INTERVAL DAY TO
+// SECOND holds milliseconds. Intervals that do not fit Spark's range cannot
+// come from Spark, so they are rejected instead of silently overflowing.
+int64_t toSparkIntervalMicros(int64_t millis) {
+  int64_t micros;
   VELOX_USER_CHECK(
-      std::isfinite(relativeSD) && relativeSD > 0.0,
-      "relativeSD must be a positive finite value");
-  const int32_t p = static_cast<int32_t>(
-      std::ceil(2.0 * std::log(1.106 / relativeSD) / std::log(2.0)));
-  VELOX_USER_CHECK_GE(
-      p,
-      4,
-      "HLL++ requires at least 4 bits for addressing. Use a lower error, "
-      "at most 39%.");
-  VELOX_USER_CHECK_LE(
-      p,
-      16,
-      "HLL++ requires at most 16 bits for addressing. Use a higher error.");
-  return static_cast<int8_t>(p);
+      !__builtin_mul_overflow(
+          millis, Timestamp::kMicrosecondsInMillisecond, &micros),
+      "Interval value of {} milliseconds is out of range for Spark's "
+      "DayTimeIntervalType",
+      millis);
+  return micros;
 }
 
 template <TypeKind kind>
@@ -84,6 +84,8 @@ double toDoubleDispatch(const exec::GenericView& value, const TypePtr& type) {
         util::Converter<TypeKind::DOUBLE>::tryCast(value.template castTo<T>());
     VELOX_USER_CHECK(converted.hasValue(), "Failed to convert value to DOUBLE");
     return converted.value();
+  } else if constexpr (kind == TypeKind::TIMESTAMP) {
+    return static_cast<double>(value.template castTo<Timestamp>().toMicros());
   } else {
     VELOX_UNSUPPORTED(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
@@ -91,45 +93,26 @@ double toDoubleDispatch(const exec::GenericView& value, const TypePtr& type) {
   }
 }
 
-template <>
-double toDoubleDispatch<TypeKind::TIMESTAMP>(
-    const exec::GenericView& value,
-    const TypePtr& /*type*/) {
-  return static_cast<double>(value.castTo<Timestamp>().toMicros());
-}
-
+// Hashes a value the way Spark's HLL++ does, through the shared Spark xxhash64
+// dispatch. Integer-like logical types (DATE, INTERVAL YEAR TO MONTH and short
+// DECIMAL) hash their physical value, which matches Spark.
 template <TypeKind kind>
 uint64_t hashValueDispatch(
     const exec::GenericView& value,
     const TypePtr& type) {
-  using T = typename TypeTraits<kind>::NativeType;
-  if constexpr (kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT) {
-    return SparkXxHash64::hashInt32(
-        static_cast<int32_t>(value.template castTo<T>()), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::INTEGER) {
-    return SparkXxHash64::hashInt32(value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::BIGINT) {
-    return SparkXxHash64::hashInt64(value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::REAL) {
-    return SparkXxHash64::hashFloat(value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::DOUBLE) {
-    return SparkXxHash64::hashDouble(value.template castTo<T>(), kXxHash64Seed);
-  } else if constexpr (kind == TypeKind::TIMESTAMP) {
-    return SparkXxHash64::hashTimestamp(
+  if constexpr (
+      kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::HUGEINT || kind == TypeKind::REAL ||
+      kind == TypeKind::DOUBLE || kind == TypeKind::TIMESTAMP) {
+    using T = typename TypeTraits<kind>::NativeType;
+    return functions::sparksql::hashOne<SparkXxHash64>(
         value.template castTo<T>(), kXxHash64Seed);
   } else {
     VELOX_UNSUPPORTED(
         "Unsupported type for approx_count_distinct_for_intervals: {}",
         type->toString());
   }
-}
-
-template <>
-uint64_t hashValueDispatch<TypeKind::HUGEINT>(
-    const exec::GenericView& value,
-    const TypePtr& /*type*/) {
-  return SparkXxHash64::hashLongDecimal(
-      value.castTo<int128_t>(), kXxHash64Seed);
 }
 
 class ApproxCountDistinctForIntervalsAggregate {
@@ -153,15 +136,82 @@ class ApproxCountDistinctForIntervalsAggregate {
     }
   }
 
+  // Called once by the aggregation and window operators with the constant
+  // arguments of the function call, before any input is processed.
+  // Non-constant arguments are null.
   void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
     if (constantInputs.size() < 3) {
       return;
     }
+    SelectivityVector rows(1);
     if (constantInputs[1] != nullptr) {
-      ensureEndpointsFromConstantInput(*constantInputs[1]);
+      checkEndpointsArgument(*constantInputs[1], rows);
     }
     if (constantInputs[2] != nullptr) {
-      ensureRelativeSdFromConstantInput(*constantInputs[2]);
+      checkRelativeSdArgument(*constantInputs[2], rows);
+    }
+  }
+
+  // Called by the adapter for every raw input batch. The first endpoints seen
+  // initialize the intervals unless setConstantInputs() already did; every
+  // selected row must then carry the same endpoints. A constant-encoded
+  // argument is checked once, otherwise every selected row is checked, e.g.
+  // when the constant was materialized by an exchange or a table scan.
+  void checkEndpointsArgument(
+      const BaseVector& endpointsVector,
+      const SelectivityVector& rows) {
+    VELOX_CHECK_NOT_NULL(endpointsElementType_);
+    DecodedVector decodedEndpoints(endpointsVector, rows);
+    if (decodedEndpoints.isConstantMapping()) {
+      VELOX_USER_CHECK(
+          !decodedEndpoints.isNullAt(rows.begin()),
+          "Endpoints must not be null for approx_count_distinct_for_intervals");
+    }
+
+    const auto* arrayVector = decodedEndpoints.base()->as<ArrayVector>();
+    VELOX_CHECK_NOT_NULL(arrayVector);
+    DecodedVector decodedElements(*arrayVector->elements());
+    exec::VectorReader<Generic<T2>> elementReader(&decodedElements);
+
+    auto checkRow = [&](vector_size_t row) {
+      VELOX_USER_CHECK(
+          !decodedEndpoints.isNullAt(row),
+          "Endpoints must not be null for approx_count_distinct_for_intervals");
+      const auto arrayRow = decodedEndpoints.index(row);
+      const auto offset = arrayVector->offsetAt(arrayRow);
+      checkSetEndpoints(arrayVector->sizeAt(arrayRow), [&](vector_size_t i) {
+        const auto elementRow = offset + i;
+        VELOX_USER_CHECK(
+            !decodedElements.isNullAt(elementRow),
+            "Endpoints must not contain null values");
+        return endpointToDouble(
+            elementReader[elementRow], endpointsElementType_);
+      });
+    };
+
+    if (decodedEndpoints.isConstantMapping()) {
+      checkRow(rows.begin());
+    } else {
+      rows.applyToSelected(checkRow);
+    }
+  }
+
+  // Same as checkEndpointsArgument() for the relativeSD argument.
+  void checkRelativeSdArgument(
+      const BaseVector& relativeSdVector,
+      const SelectivityVector& rows) {
+    DecodedVector decodedRelativeSd(relativeSdVector, rows);
+    auto checkRow = [&](vector_size_t row) {
+      VELOX_USER_CHECK(
+          !decodedRelativeSd.isNullAt(row),
+          "relativeSD must not be null for approx_count_distinct_for_intervals");
+      checkSetRelativeSd(decodedRelativeSd.valueAt<double>(row));
+    };
+
+    if (decodedRelativeSd.isConstantMapping()) {
+      checkRow(rows.begin());
+    } else {
+      rows.applyToSelected(checkRow);
     }
   }
 
@@ -185,10 +235,14 @@ class ApproxCountDistinctForIntervalsAggregate {
     bool addInput(
         HashStringAllocator* allocator,
         exec::optional_arg_type<Generic<T1>> data,
-        exec::optional_arg_type<Array<Generic<T2>>> endpoints,
-        exec::optional_arg_type<double> relativeSd) {
-      fn->ensureRelativeSd(relativeSd);
-      fn->ensureEndpoints(endpoints);
+        exec::optional_arg_type<Array<Generic<T2>>> /*endpoints*/,
+        exec::optional_arg_type<double> /*relativeSd*/) {
+      // The constant endpoints and relativeSD arguments are validated and
+      // applied per batch by the adapter before any row is added.
+      VELOX_CHECK(
+          fn->endpointsSet_ && fn->indexBitLength_ >= 0,
+          "approx_count_distinct_for_intervals received input rows before "
+          "its constant arguments");
 
       if (!data.has_value()) {
         return false;
@@ -219,17 +273,21 @@ class ApproxCountDistinctForIntervalsAggregate {
       auto rowView = other.value();
       auto endpointsView = rowView.template at<0>();
       auto hllsView = rowView.template at<1>();
-      if (!endpointsView.has_value() || !hllsView.has_value()) {
-        return false;
-      }
+      VELOX_USER_CHECK(
+          endpointsView.has_value() && hllsView.has_value(),
+          "Malformed intermediate result for "
+          "approx_count_distinct_for_intervals: endpoints and HLLs must not "
+          "be null");
 
-      fn->ensureEndpointsFromIntermediate(endpointsView.value());
+      // Every intermediate row carries the endpoints it was built with. Verify
+      // they match, so that partial states of different calls are never merged.
+      fn->checkSetEndpoints(endpointsView.value());
 
       const auto& hllsArray = hllsView.value();
       VELOX_USER_CHECK_EQ(
           hllsArray.size(),
           fn->intervalCount_,
-          "HLL array size {} does not match endpoints size {}",
+          "HLL array size {} does not match the number of intervals {}",
           hllsArray.size(),
           fn->intervalCount_);
 
@@ -238,9 +296,9 @@ class ApproxCountDistinctForIntervalsAggregate {
             entry.has_value(),
             "Serialized HLL entries must not be null for "
             "approx_count_distinct_for_intervals");
+        fn->checkIntermediateHll(entry.value());
       }
 
-      fn->maybeSetIndexBitLengthFromSerialized(hllsArray[0].value());
       ensureSize(allocator, fn->intervalCount_, fn->indexBitLength_);
       for (size_t i = 0; i < hllsArray.size(); ++i) {
         hlls[i].mergeWith(hllsArray[i].value(), allocator);
@@ -255,7 +313,6 @@ class ApproxCountDistinctForIntervalsAggregate {
         return false;
       }
 
-      fn->ensureEmptyHll();
       std::vector<std::string> serializedHlls;
       serializedHlls.reserve(fn->intervalCount_);
       for (int32_t interval = 0; interval < fn->intervalCount_; ++interval) {
@@ -294,155 +351,118 @@ class ApproxCountDistinctForIntervalsAggregate {
     }
 
    private:
+    // Lazily creates one HLL per interval. Groups that never receive input
+    // keep an empty vector.
     void ensureSize(
         HashStringAllocator* allocator,
         int32_t targetSize,
         int8_t indexBitLength) {
-      if (hlls.empty()) {
-        hlls.reserve(targetSize);
-        for (int32_t i = 0; i < targetSize; ++i) {
-          if (indexBitLength >= 0) {
-            hlls.emplace_back(indexBitLength, allocator);
-          } else {
-            hlls.emplace_back(allocator);
-          }
-        }
+      if (!hlls.empty()) {
+        VELOX_CHECK_EQ(hlls.size(), static_cast<size_t>(targetSize));
         return;
       }
-      VELOX_USER_CHECK_EQ(hlls.size(), static_cast<size_t>(targetSize));
+      VELOX_CHECK_GE(indexBitLength, 0);
+      hlls.reserve(targetSize);
+      for (int32_t i = 0; i < targetSize; ++i) {
+        hlls.emplace_back(indexBitLength, allocator);
+      }
     }
   };
 
  private:
-  void ensureRelativeSd(exec::optional_arg_type<double> relativeSd) {
-    if (indexBitLength_ >= 0) {
+  // Initializes the HLL precision from relativeSD using the shared HLL
+  // utilities, or verifies that 'relativeSd' matches the value already seen.
+  void checkSetRelativeSd(double relativeSd) {
+    if (!std::isnan(relativeSd_)) {
+      VELOX_USER_CHECK_EQ(
+          relativeSd,
+          relativeSd_,
+          "relativeSD must be constant for all input rows of "
+          "approx_count_distinct_for_intervals");
       return;
     }
-    VELOX_USER_CHECK(
-        relativeSd.has_value(),
-        "relativeSD must not be null for approx_count_distinct_for_intervals");
-    indexBitLength_ = computeIndexBitLength(relativeSd.value());
-    ensureEmptyHll();
+
+    common::hll::checkMaxStandardError(relativeSd);
+    relativeSd_ = relativeSd;
+    checkSetIndexBitLength(common::hll::toIndexBitLength(relativeSd));
   }
 
-  void ensureRelativeSdFromConstantInput(const BaseVector& relativeSdVector) {
-    if (indexBitLength_ >= 0) {
+  // Sets the HLL precision, or verifies that 'indexBitLength' matches the
+  // precision already in use.
+  void checkSetIndexBitLength(int8_t indexBitLength) {
+    if (indexBitLength_ < 0) {
+      indexBitLength_ = indexBitLength;
+      emptyHll_ = common::hll::SparseHlls::serializeEmpty(indexBitLength);
       return;
     }
-    VELOX_USER_CHECK_GT(
-        relativeSdVector.size(),
-        0,
-        "relativeSD must not be empty for approx_count_distinct_for_intervals");
-
-    DecodedVector decodedRelativeSd(relativeSdVector);
-    VELOX_USER_CHECK(
-        !decodedRelativeSd.isNullAt(0),
-        "relativeSD must not be null for approx_count_distinct_for_intervals");
-    indexBitLength_ =
-        computeIndexBitLength(decodedRelativeSd.valueAt<double>(0));
-    ensureEmptyHll();
+    VELOX_USER_CHECK_EQ(
+        static_cast<int32_t>(indexBitLength),
+        static_cast<int32_t>(indexBitLength_),
+        "Cannot merge HLLs with different number of buckets in "
+        "approx_count_distinct_for_intervals");
   }
 
-  void ensureEndpoints(exec::optional_arg_type<Array<Generic<T2>>> endpoints) {
-    if (endpointsSet_) {
-      return;
-    }
+  // Validates a serialized HLL carried by an intermediate row, and verifies
+  // that its precision matches the precision in use.
+  void checkIntermediateHll(const StringView& serialized) {
+    checkSetIndexBitLength(
+        common::hll::checkSerializedHll(
+            serialized.data(), static_cast<int32_t>(serialized.size())));
+  }
 
-    VELOX_CHECK_NOT_NULL(endpointsElementType_);
-    VELOX_USER_CHECK(
-        endpoints.has_value(),
-        "Endpoints must not be null for approx_count_distinct_for_intervals");
-
-    const auto& endpointsView = endpoints.value();
-    VELOX_USER_CHECK_GE(
-        endpointsView.size(),
-        2,
-        "approx_count_distinct_for_intervals requires at least 2 endpoints");
-
-    std::vector<double> converted;
-    converted.reserve(endpointsView.size());
-    for (const auto& entry : endpointsView) {
+  // Applies the endpoints carried by an intermediate row.
+  void checkSetEndpoints(const exec::ArrayView<true, double>& endpointsView) {
+    checkSetEndpoints(endpointsView.size(), [&](vector_size_t i) {
+      const auto entry = endpointsView[i];
       VELOX_USER_CHECK(
           entry.has_value(), "Endpoints must not contain null values");
-      converted.push_back(toDouble(entry.value(), endpointsElementType_));
-    }
-    setEndpoints(converted);
+      return entry.value();
+    });
   }
 
-  void ensureEndpointsFromConstantInput(const BaseVector& endpointsVector) {
+  // Initializes the intervals from the 'size' endpoints returned by
+  // 'endpointAt', or verifies that they match the intervals already in use
+  // without materializing them.
+  template <typename TEndpointAt>
+  void checkSetEndpoints(vector_size_t size, TEndpointAt endpointAt) {
     if (endpointsSet_) {
-      return;
-    }
-
-    VELOX_CHECK_NOT_NULL(endpointsElementType_);
-    VELOX_USER_CHECK_GT(
-        endpointsVector.size(),
-        0,
-        "Endpoints must not be empty for approx_count_distinct_for_intervals");
-
-    DecodedVector decodedEndpoints(endpointsVector);
-    VELOX_USER_CHECK(
-        !decodedEndpoints.isNullAt(0),
-        "Endpoints must not be null for approx_count_distinct_for_intervals");
-
-    const auto* arrayVector = decodedEndpoints.base()->as<ArrayVector>();
-    const auto row = decodedEndpoints.index(0);
-    const auto size = arrayVector->sizeAt(row);
-    VELOX_USER_CHECK_GE(
-        size,
-        2,
-        "approx_count_distinct_for_intervals requires at least 2 endpoints");
-
-    DecodedVector decodedElements(*arrayVector->elements());
-    exec::VectorReader<Generic<T2>> elementReader(&decodedElements);
-    const auto offset = arrayVector->offsetAt(row);
-    std::vector<double> converted;
-    converted.reserve(size);
-    for (vector_size_t i = 0; i < size; ++i) {
-      const auto elementRow = offset + i;
-      VELOX_USER_CHECK(
-          !decodedElements.isNullAt(elementRow),
-          "Endpoints must not contain null values");
-      converted.push_back(
-          toDouble(elementReader[elementRow], endpointsElementType_));
-    }
-    setEndpoints(converted);
-  }
-
-  void ensureEndpointsFromIntermediate(
-      const exec::ArrayView<true, double>& endpointsView) {
-    if (endpointsSet_) {
-      return;
-    }
-
-    VELOX_USER_CHECK_GE(
-        endpointsView.size(),
-        2,
-        "approx_count_distinct_for_intervals requires at least 2 endpoints");
-
-    std::vector<double> converted;
-    converted.reserve(endpointsView.size());
-    for (const auto& entry : endpointsView) {
-      VELOX_USER_CHECK(
-          entry.has_value(), "Endpoints must not contain null values");
-      converted.push_back(entry.value());
-    }
-    setEndpoints(converted);
-  }
-
-  void setEndpoints(const std::vector<double>& endpoints) {
-    if (endpointsSet_) {
-      VELOX_USER_CHECK_EQ(endpoints_.size(), endpoints.size());
-      for (size_t i = 0; i < endpoints.size(); ++i) {
-        VELOX_USER_CHECK_EQ(endpoints_[i], endpoints[i]);
+      VELOX_USER_CHECK_EQ(
+          static_cast<size_t>(size),
+          endpoints_.size(),
+          "Endpoints must be constant for all input rows of "
+          "approx_count_distinct_for_intervals");
+      for (vector_size_t i = 0; i < size; ++i) {
+        const double endpoint = endpointAt(i);
+        VELOX_USER_CHECK_EQ(
+            endpoint,
+            endpoints_[i],
+            "Endpoints must be constant for all input rows of "
+            "approx_count_distinct_for_intervals");
       }
       return;
     }
 
+    std::vector<double> endpoints;
+    endpoints.reserve(size);
+    for (vector_size_t i = 0; i < size; ++i) {
+      endpoints.push_back(endpointAt(i));
+    }
+    setEndpoints(endpoints);
+  }
+
+  // Initializes the intervals from 'endpoints'.
+  void setEndpoints(const std::vector<double>& endpoints) {
+    VELOX_CHECK(!endpointsSet_);
+    VELOX_USER_CHECK_GE(
+        endpoints.size(),
+        2,
+        "approx_count_distinct_for_intervals requires at least 2 endpoints");
+    for (const auto endpoint : endpoints) {
+      VELOX_USER_CHECK(!std::isnan(endpoint), "Endpoints must not contain NaN");
+    }
     for (size_t i = 1; i < endpoints.size(); ++i) {
-      VELOX_USER_CHECK_LE(
-          endpoints[i - 1],
-          endpoints[i],
+      VELOX_USER_CHECK(
+          !lessThan(endpoints[i], endpoints[i - 1]),
           "Endpoints must be sorted in ascending order");
     }
 
@@ -457,29 +477,6 @@ class ApproxCountDistinctForIntervalsAggregate {
     endpointsSet_ = true;
   }
 
-  void ensureEmptyHll() {
-    if (emptyHll_.empty() && indexBitLength_ >= 0) {
-      emptyHll_ = common::hll::SparseHlls::serializeEmpty(indexBitLength_);
-    }
-  }
-
-  void maybeSetIndexBitLengthFromSerialized(const StringView& serialized) {
-    if (indexBitLength_ >= 0) {
-      return;
-    }
-
-    const char* data = serialized.data();
-    if (common::hll::SparseHlls::canDeserialize(data)) {
-      indexBitLength_ =
-          common::hll::SparseHlls::deserializeIndexBitLength(data);
-    } else if (common::hll::DenseHlls::canDeserialize(data)) {
-      indexBitLength_ = common::hll::DenseHlls::deserializeIndexBitLength(data);
-    } else {
-      VELOX_USER_FAIL("Unexpected type of HLL");
-    }
-    ensureEmptyHll();
-  }
-
   static double toDouble(const exec::GenericView& value, const TypePtr& type) {
     if (type->isShortDecimal()) {
       return decimalToDouble(
@@ -490,31 +487,55 @@ class ApproxCountDistinctForIntervalsAggregate {
           value.castTo<int128_t>(), type->asLongDecimal().scale());
     }
     if (type->isIntervalDayTime()) {
-      // Spark's DayTimeIntervalType holds microseconds while Velox's
-      // INTERVAL DAY TO SECOND holds milliseconds.
-      return static_cast<double>(value.castTo<int64_t>() * 1000);
+      return static_cast<double>(
+          toSparkIntervalMicros(value.castTo<int64_t>()));
     }
 
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         toDoubleDispatch, type->kind(), value, type);
   }
 
+  // Spark converts endpoints with 'toString.toDouble', so a REAL endpoint takes
+  // the value of its shortest decimal representation (0.1f becomes 0.1), not
+  // the widened float (0.10000000149011612). Input values are widened, which
+  // is what Spark does for them too.
+  static double endpointToDouble(
+      const exec::GenericView& value,
+      const TypePtr& type) {
+    if (type->kind() == TypeKind::REAL) {
+      const auto floatValue = value.castTo<float>();
+      if (!std::isfinite(floatValue)) {
+        return static_cast<double>(floatValue);
+      }
+      return folly::to<double>(fmt::format("{}", floatValue));
+    }
+    return toDouble(value, type);
+  }
+
   static uint64_t hashValue(
       const exec::GenericView& value,
       const TypePtr& type) {
     if (type->isIntervalDayTime()) {
-      // Spark hashes DayTimeIntervalType's microseconds; Velox's
-      // INTERVAL DAY TO SECOND holds milliseconds.
-      return SparkXxHash64::hashInt64(
-          value.castTo<int64_t>() * 1000, kXxHash64Seed);
+      // Spark hashes DayTimeIntervalType's microseconds.
+      return functions::sparksql::hashOne<SparkXxHash64>(
+          toSparkIntervalMicros(value.castTo<int64_t>()), kXxHash64Seed);
     }
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         hashValueDispatch, type->kind(), value, type);
   }
 
+  // Spark locates the interval with java.util.Arrays.binarySearch, which
+  // orders -0.0 before 0.0. NaN never reaches here.
+  static bool lessThan(double a, double b) {
+    return a < b || (a == b && std::signbit(a) && !std::signbit(b));
+  }
+
+  // Mirrors Spark's findHllppIndex: values equal to an endpoint go to the
+  // interval ending at the first endpoint with that value.
   int32_t findIntervalIndex(double value) const {
-    auto it = std::lower_bound(endpoints_.begin(), endpoints_.end(), value);
-    if (it != endpoints_.end() && *it == value) {
+    auto it =
+        std::lower_bound(endpoints_.begin(), endpoints_.end(), value, lessThan);
+    if (it != endpoints_.end() && !lessThan(value, *it)) {
       auto index = static_cast<int32_t>(it - endpoints_.begin());
       while (index > 0 && endpoints_[index - 1] == value) {
         --index;
@@ -534,6 +555,10 @@ class ApproxCountDistinctForIntervalsAggregate {
   int32_t intervalCount_{0};
   double endpointsMin_{0};
   double endpointsMax_{0};
+  // NaN until the constant relativeSD argument has been seen.
+  double relativeSd_{std::numeric_limits<double>::quiet_NaN()};
+  // -1 until the precision is known, either from relativeSD or from the
+  // serialized HLLs of an intermediate row.
   int8_t indexBitLength_{-1};
   std::string emptyHll_;
 
@@ -559,7 +584,7 @@ class ApproxCountDistinctForIntervalsAggregateAdapter final
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    validateRawArguments(rows, args);
+    checkConstantArguments(rows, args);
     Base::addRawInput(groups, rows, args, mayPushdown);
   }
 
@@ -568,12 +593,16 @@ class ApproxCountDistinctForIntervalsAggregateAdapter final
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool mayPushdown) override {
-    validateRawArguments(rows, args);
+    checkConstantArguments(rows, args);
     Base::addSingleGroupRawInput(group, rows, args, mayPushdown);
   }
 
  private:
-  static void validateRawArguments(
+  // Verifies that the endpoints and relativeSD arguments of every selected
+  // row match the values in use, initializing them from the first row when
+  // the plan did not provide them as literals. Constant-encoded arguments are
+  // checked once per batch.
+  void checkConstantArguments(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
     VELOX_USER_CHECK_EQ(
@@ -585,23 +614,8 @@ class ApproxCountDistinctForIntervalsAggregateAdapter final
       return;
     }
 
-    const auto firstRow = rows.begin();
-
-    DecodedVector decodedEndpoints(*args[1], rows);
-    VELOX_USER_CHECK(
-        decodedEndpoints.isConstantMapping(),
-        "Endpoints must be constant for approx_count_distinct_for_intervals");
-    VELOX_USER_CHECK(
-        !decodedEndpoints.isNullAt(firstRow),
-        "Endpoints must not be null for approx_count_distinct_for_intervals");
-
-    DecodedVector decodedRelativeSd(*args[2], rows);
-    VELOX_USER_CHECK(
-        decodedRelativeSd.isConstantMapping(),
-        "relativeSD must be constant for approx_count_distinct_for_intervals");
-    VELOX_USER_CHECK(
-        !decodedRelativeSd.isNullAt(firstRow),
-        "relativeSD must not be null for approx_count_distinct_for_intervals");
+    function().checkEndpointsArgument(*args[1], rows);
+    function().checkRelativeSdArgument(*args[2], rows);
   }
 };
 

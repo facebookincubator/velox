@@ -13,24 +13,35 @@ General Aggregate Functions
     Given an array of sorted endpoints (e1, e2, ..., eN), the result contains
     counts for intervals [e1, e2], (e2, e3], ..., (eN-1, eN].
     Values outside the overall range are ignored. Null inputs are ignored. NaN
-    inputs are rejected with an error, while Spark fails with an internal
-    ArrayIndexOutOfBoundsException for NaN inputs.
+    inputs and NaN endpoints are rejected with an error.
 
     Duplicate endpoints are allowed. For any interval with identical endpoints
     (e.g. (5, 5]), the result is 1.
     Empty or all-null input returns zero counts, with duplicate-endpoint
-    intervals set to 1.
+    intervals set to 1. This requires ``endpoints`` and ``relativeSD`` to be
+    literals; if they are only available as constant columns and no input
+    rows arrive, the result is NULL.
 
-    ``endpoints`` must be a constant (foldable) array with at least two values.
-    ``relativeSD`` must be constant as well.
+    ``endpoints`` must be a constant (foldable) array with at least two values;
+    at runtime every input row must carry the same endpoints.
+    ``relativeSD`` is the maximum relative standard deviation allowed for the
+    estimated counts, e.g. 0.05 means the estimates have a relative standard
+    error of at most 5%. Smaller values give more accurate estimates and use
+    more memory. It must be a constant DOUBLE in the range
+    ``[0.0040625, 0.26]``.
 
     Supported input types are numeric, date, timestamp, interval, and decimal.
     Endpoints can be any of these types and do not need to match the input type.
+    Like Spark, endpoints are converted through their decimal representation,
+    so a REAL endpoint takes the value of its shortest decimal form (0.1 rather
+    than 0.10000000149011612), while REAL input values are widened exactly.
     Interval membership is evaluated using DOUBLE comparisons across the input
     and endpoint types. This is exact for integer-like values within
     ``[-2^53, 2^53]`` and may lose precision for very large integers,
     timestamp microseconds outside that range, or high-scale decimals near
-    interval boundaries.
+    interval boundaries. Day-time intervals are evaluated and hashed as Spark
+    microseconds; values that do not fit Spark's ``DayTimeIntervalType`` range
+    are rejected with an error.
 
     Known limitations compared to Spark:
 
@@ -41,8 +52,12 @@ General Aggregate Functions
       aggregation) format is not interoperable with Spark's. Whole-aggregate
       offload produces valid approximate counts within the ``relativeSD``
       error bound; mixed Spark/Velox partial aggregation is not supported.
-    * ``relativeSD`` values requiring more than 16 index bits (roughly below
-      0.0043) are rejected, while Spark supports up to 18 bits.
+    * ``relativeSD`` is mapped to the HyperLogLog precision by the shared
+      Velox HyperLogLog utilities (the same mapping used by Presto's
+      ``approx_distinct``), so it must be in ``[0.0040625, 0.26]``. Spark's
+      HLL++ accepts any value below roughly 0.39 (at least 4 index bits) and
+      has no lower bound: values below about 0.0022 use 19 or more index bits
+      and fall back to plain HLL without bias correction.
 
 .. spark:function:: avg(x) -> double|decimal
 

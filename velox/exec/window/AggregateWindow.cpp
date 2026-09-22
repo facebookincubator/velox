@@ -67,6 +67,17 @@ class AggregateWindowFunction : public exec::WindowFunction {
         config);
     aggregate_->setAllocator(stringAllocator_);
 
+    // Forward the constant arguments the same way AggregateInfo does for
+    // aggregation operators, so aggregates that read them at initialization
+    // (e.g. to compute their empty-input result) see them before
+    // computeDefaultAggregateValue() below. Non-constant arguments are null.
+    std::vector<VectorPtr> constantInputs;
+    constantInputs.reserve(args.size());
+    for (const auto& arg : args) {
+      constantInputs.push_back(arg.constantValue);
+    }
+    aggregate_->setConstantInputs(constantInputs);
+
     // Aggregate initialization.
     // Row layout is:
     //  - null flags - one bit per aggregate.
