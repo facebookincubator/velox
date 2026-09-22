@@ -53,6 +53,37 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
 class CudfNestedLoopJoinCpuFallbackTest
     : public cudf_velox::test::CudfCpuFallbackTest<CudfNestedLoopJoinTest> {};
 
+TEST_F(
+    CudfNestedLoopJoinCpuFallbackTest,
+    unsupportedTypeProjectedOutBeforeNestedLoopJoin) {
+  auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto build = makeRowVector(
+      {"b_key", "marker"},
+      {makeFlatVector<int64_t>({2, 3, 4}),
+       makeMapVector<int64_t, int64_t>(
+           {{{20, 200}}, {{30, 300}}, {{40, 400}}})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildSource =
+      PlanBuilder(idGenerator).values({build}).project({"b_key"}).planNode();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .values({probe})
+          .nestedLoopJoin(
+              buildSource, "p_key = b_key", {"p_key"}, core::JoinType::kInner)
+          .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count("NestedLoopJoinBuild"), 1);
+  EXPECT_EQ(operatorStats.count("NestedLoopJoinProbe"), 1);
+  EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinBuild"), 0);
+  EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinProbe"), 0);
+}
+
 TEST_F(CudfNestedLoopJoinCpuFallbackTest, customComparisonConditionFallsBack) {
   const auto customType =
       facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
