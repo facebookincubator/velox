@@ -36,8 +36,6 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type);
 /// Returns true if every leaf type in \p type can be represented in cuDF.
 bool isTypeSupportedByCudf(const TypePtr& type);
 
-bool canMakeCudfDefaultScalar(const TypePtr& type);
-
 namespace with_arrow {
 
 std::unique_ptr<cudf::table> toCudfTable(
