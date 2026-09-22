@@ -198,6 +198,17 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests reading fixed-length binary UUID bytes as VARCHAR when the
   requested file schema asks for VARCHAR.
 
+### `uuid_logical.parquet`, `uuid_logical_dictionary.parquet`
+
+- Metadata: `created_by=parquet-mr-presto`, 6 rows, 1 row group, optional
+  `uuid_field: FIXED_LEN_BYTE_ARRAY(16) (UUID)`, uncompressed. The six values
+  (one of them null) are identical in both files; `uuid_logical.parquet` is
+  PLAIN encoded and `uuid_logical_dictionary.parquet` is RLE_DICTIONARY
+  encoded.
+- Purpose: Tests reading a UUID logical type into hugeint, covering both the
+  direct and the dictionary decode path. Written by Presto's Parquet writer,
+  so the bytes carry Presto's UUID byte order (see `UuidColumnReader`).
+
 ### `upper.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.12.2`, 2 rows, 1 row group,

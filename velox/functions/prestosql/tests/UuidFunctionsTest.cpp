@@ -19,12 +19,19 @@
 #include <boost/uuid/uuid_io.hpp>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/UuidType.h"
 
 namespace facebook::velox::functions::prestosql {
 
 namespace {
 
 class UuidFunctionsTest : public functions::test::FunctionBaseTest {};
+
+// Returns the hugeint whose big-endian byte image is the 16 bytes of the UUID,
+// which is how Velox and Presto represent a UUID in memory.
+int128_t uuidValue(uint64_t high, uint64_t low) {
+  return static_cast<int128_t>((static_cast<uint128_t>(high) << 64) | low);
+}
 
 TEST_F(UuidFunctionsTest, uuid) {
   auto result =
@@ -117,6 +124,39 @@ TEST_F(UuidFunctionsTest, castAsVarbinary) {
         uniqueUuids.insert(std::string(uuid.data(), uuid.size())).second);
   }
   ASSERT_EQ(size, uniqueUuids.size());
+}
+
+TEST_F(UuidFunctionsTest, castAsVarcharFromNullsAndEncodings) {
+  // A table scan hands the cast a lazy vector, and a uuid column may hold
+  // nulls, so the cast must handle both. It used to read the input as a
+  // SimpleVector<int128_t> without loading or decoding it first.
+  auto uuids = makeNullableFlatVector<int128_t>(
+      {uuidValue(0x33355449'2c7d43d7, 0x967af53c'd23215ad),
+       std::nullopt,
+       uuidValue(0xeed9f812'4b0c472f, 0x8a104ae7'bff79a47)},
+      UUID());
+  auto expected = makeNullableFlatVector<StringView>(
+      {"33355449-2c7d-43d7-967a-f53cd23215ad",
+       std::nullopt,
+       "eed9f812-4b0c-472f-8a10-4ae7bff79a47"});
+
+  auto assertCast = [&](const VectorPtr& input) {
+    velox::test::assertEqualVectors(
+        expected, evaluate("cast(c0 as varchar)", makeRowVector({input})));
+  };
+
+  assertCast(uuids);
+  assertCast(
+      std::make_shared<LazyVector>(
+          pool(),
+          UUID(),
+          uuids->size(),
+          std::make_unique<velox::test::SimpleVectorLoader>(
+              [uuids](RowSet /*rows*/) -> VectorPtr { return uuids; })));
+  assertCast(wrapInDictionary(
+      makeIndices(uuids->size(), [](auto row) { return row; }),
+      uuids->size(),
+      uuids));
 }
 
 TEST_F(UuidFunctionsTest, varcharCastRoundTrip) {
