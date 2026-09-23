@@ -1641,24 +1641,37 @@ RowVectorPtr TableEvolutionFuzzer::readInputFileSample(
   // one that already reached the end of its splits is a no-op.
   cursor->task()->requestCancel().wait();
 
-  VELOX_CHECK(!batches.empty(), "Input file {} has no rows", inputFile.path);
+  if (batches.empty()) {
+    return nullptr;
+  }
   return fuzzer::mergeRowVectors(batches, config_.pool);
 }
 
-void TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
+bool TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
   inputFile_ = &inputFile;
   SCOPE_EXIT {
     inputFile_ = nullptr;
   };
 
   const auto schema = readInputFileSchema(inputFile);
-  VELOX_CHECK_GT(
-      schema->size(), 0, "Input file {} has no columns", inputFile.path);
+  // A sampled warehouse file can hold no columns, or no rows, and neither is a
+  // fuzzer finding: there is no query shape to build and nothing for the two
+  // plans to disagree about. Report it as skipped so the caller stops rather
+  // than failing the sample or re-reading the same empty file until its
+  // deadline.
+  if (schema->size() == 0) {
+    LOG(WARNING) << "Skipping input file with no columns: " << inputFile.path;
+    return false;
+  }
   LOG(INFO) << "Input file " << inputFile.path << " schema "
             << schema->toString();
 
   const RowVectorPtr finalExpectedData =
       readInputFileSample(inputFile, schema, FLAGS_input_file_sample_rows);
+  if (finalExpectedData == nullptr) {
+    LOG(WARNING) << "Skipping input file with no rows: " << inputFile.path;
+    return false;
+  }
 
   // One setup, matching the file: no evolution, no bucketing. Both plans then
   // read the same splits and the comparison isolates the plan difference.
@@ -1694,6 +1707,7 @@ void TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
         noColumnNameMapping,
         *executor);
   }
+  return true;
 }
 
 void TableEvolutionFuzzer::runQueryShape(
