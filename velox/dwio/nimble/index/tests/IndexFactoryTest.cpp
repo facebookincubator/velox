@@ -170,7 +170,7 @@ class HashDelegatingDenseIndexFactory final : public DenseIndexFactory {
               std::string{kDenseHashIndexName},
               std::vector<std::string>{options.column},
               0.7f,
-              std::nullopt,
+              nullptr,
               0));
     }
     std::vector<const IndexConfig*> builtInConfigPtrs;

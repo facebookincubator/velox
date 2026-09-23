@@ -43,7 +43,8 @@ class DemoRPCFunctionTest : public testing::Test {
     pool_ = memory::memoryManager()->addLeafPool();
 
     // Follow the lifecycle: initialize() before any dispatch.
-    function_->initialize(core::QueryConfig{{}}, {}, {});
+    function_->initialize(
+        core::QueryConfig{{}}, {}, {}, RPCStreamingMode::kPerRow);
   }
 
   std::shared_ptr<DemoAsyncRPCFunction> function_;
@@ -84,9 +85,10 @@ TEST_F(DemoRPCFunctionTest, endToEnd) {
   auto* flat = result->asFlatVector<StringView>();
   EXPECT_FALSE(flat->isNullAt(0));
   EXPECT_FALSE(flat->isNullAt(1));
-  // MockRPCClient returns "Response for: <payload>".
-  EXPECT_EQ(flat->valueAt(0).str(), "Response for: hello world");
-  EXPECT_EQ(flat->valueAt(1).str(), "Response for: test prompt");
+  // Output must depend on the input: a dispatch that dropped or misrouted a
+  // row cannot produce these.
+  EXPECT_EQ(flat->valueAt(0).str(), "demo: hello world");
+  EXPECT_EQ(flat->valueAt(1).str(), "demo: test prompt");
 }
 
 TEST_F(DemoRPCFunctionTest, nullInput) {
@@ -108,10 +110,11 @@ TEST_F(DemoRPCFunctionTest, nullInput) {
   auto resp0 = std::move(futures[0].second).get();
   EXPECT_FALSE(resp0.hasError());
 
-  // Null row should get error="null_input".
+  // A null row carries the typed null-input outcome.
   auto resp1 = std::move(futures[1].second).get();
   EXPECT_TRUE(resp1.hasError());
-  EXPECT_EQ(resp1.error.value(), "null_input");
+  EXPECT_EQ(resp1.errorKind(), velox::rpc::RPCErrorKind::kNullInput);
+  EXPECT_EQ(resp1.error().message, "null_input");
 }
 
 TEST_F(DemoRPCFunctionTest, errorResponse) {
@@ -119,12 +122,12 @@ TEST_F(DemoRPCFunctionTest, errorResponse) {
   std::vector<RPCResponse> responses;
   RPCResponse ok;
   ok.rowId = 0;
-  ok.result = "good result";
+  ok.setPayload(makeTextPayload("good result"));
   responses.push_back(std::move(ok));
 
   RPCResponse err;
   err.rowId = 1;
-  err.error = "RPC failed";
+  err.setError(velox::rpc::RPCErrorKind::kBackendError, "RPC failed");
   responses.push_back(std::move(err));
 
   auto result = function_->buildOutput(responses, pool_.get());
@@ -145,7 +148,18 @@ TEST_F(DemoRPCFunctionTest, signatures) {
 TEST_F(DemoRPCFunctionTest, metadata) {
   EXPECT_EQ(function_->name(), "demo_rpc");
   EXPECT_EQ(function_->resultType()->kind(), TypeKind::VARCHAR);
-  EXPECT_EQ(function_->tierKey(), "");
+  EXPECT_EQ(function_->admissionKey(), "");
+}
+
+TEST_F(DemoRPCFunctionTest, overloadSignal) {
+  std::vector<RPCResponse> responses;
+  RPCResponse response;
+  response.setPayload(makeTextPayload("demo: OVERLOAD"));
+  responses.push_back(std::move(response));
+
+  EXPECT_EQ(
+      function_->evaluateCongestion(responses),
+      AsyncRPCFunction::CongestionSignal::kOverloaded);
 }
 
 } // namespace

@@ -356,22 +356,53 @@ function install_aws_deps {
   cmake_install_dir aws-sdk-cpp -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DBUILD_SHARED_LIBS:BOOL=OFF -DMINIMIZE_SIZE:BOOL=ON -DENABLE_TESTING:BOOL=OFF -DBUILD_ONLY:STRING="s3;identity-management"
 }
 
-function install_minio {
-  local MINIO_OS=${1:-darwin}
-  local MINIO_ARCH
+function install_silo {
+  local SILO_OS=${1:-darwin}
+  local SILO_ARCH
 
-  if [[ $MACHINE == aarch64 ]]; then
-    MINIO_ARCH="arm64"
+  # Apple Silicon reports arm64 rather than aarch64.
+  if [[ $MACHINE == aarch64 || $MACHINE == arm64 ]]; then
+    SILO_ARCH="arm64"
   elif [[ $MACHINE == x86_64 ]]; then
-    MINIO_ARCH="amd64"
+    SILO_ARCH="amd64"
   else
-    echo "Unsupported Minio platform"
+    echo "Unsupported Silo platform: $MACHINE" >&2
+    return 1
   fi
 
-  wget "${WGET_OPTS[@]}" https://dl.min.io/server/minio/release/"${MINIO_OS}"-${MINIO_ARCH}/archive/minio.RELEASE."${MINIO_VERSION}" -O "${MINIO_BINARY_NAME}"
-  chmod +x ./"${MINIO_BINARY_NAME}"
-  mkdir -p "$INSTALL_PREFIX"/bin/
-  ${SUDO} mv ./"${MINIO_BINARY_NAME}" "$INSTALL_PREFIX"/bin/
+  # dl.min.io is gone; fetch the silo (MinIO fork) server tarball from
+  # GitHub releases instead. It is installed under SILO_BINARY_NAME so
+  # the S3 tests keep finding it; silo supports the same `server` CLI.
+  # Every fallible step below cleans up temp artifacts explicitly instead
+  # of relying on set -e, so aborted runs leave nothing behind.
+  local SILO_TARBALL="silo_${SILO_BUILD}_${SILO_OS}_${SILO_ARCH}.tar.gz"
+  local SILO_TMPDIR
+  SILO_TMPDIR=$(mktemp -d)
+  wget "${WGET_OPTS[@]}" https://github.com/pgsty/silo/releases/download/"${SILO_VERSION}"/"${SILO_TARBALL}" -O "${SILO_TARBALL}" || {
+    echo "failed to download ${SILO_TARBALL}" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  }
+  tar xzf "${SILO_TARBALL}" -C "${SILO_TMPDIR}" || {
+    echo "failed to extract ${SILO_TARBALL}" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  }
+  local SILO_BIN
+  SILO_BIN=$(find "${SILO_TMPDIR}" -maxdepth 2 -type f -name silo | head -n 1)
+  if [[ -z ${SILO_BIN} ]]; then
+    echo "silo binary not found in ${SILO_TARBALL}" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  fi
+  if ! chmod +x "${SILO_BIN}" ||
+    ! mkdir -p "$INSTALL_PREFIX"/bin/ ||
+    ! ${SUDO} mv "${SILO_BIN}" "$INSTALL_PREFIX"/bin/"${SILO_BINARY_NAME}"; then
+    echo "failed to install silo binary" >&2
+    rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
+    return 1
+  fi
+  rm -rf "${SILO_TMPDIR}" "${SILO_TARBALL}"
 }
 
 function install_gcs_sdk_cpp {

@@ -26,6 +26,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Checksum.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -135,6 +136,12 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// When set, every stream this call reads from storage is checked against
+    /// the checksum recorded in its stripe group, and a mismatch fails the
+    /// call. Asking for this on a file that records no checksums fails the
+    /// call; a file recording a checksum type this binary cannot build is
+    /// rejected earlier, when the projector is created.
+    bool verifyStreamChecksums{false};
   };
 
   /// Request for a batch of index lookups.
@@ -302,7 +309,7 @@ class NimbleIndexProjector {
     std::vector<uint64_t> stripeFileOffsets;
     // Flat reusable storage for all per-stripe projected stream slots. Each
     // stripe occupies projection_->streamOffsets.size() consecutive entries.
-    std::vector<StripeGroup::StreamLocation> projectedStreams;
+    std::vector<StripeGroup::StreamMetadata> projectedStreams;
     // Start offsets into stripeRanges for each planned stripe. The last entry
     // is the total range count.
     std::vector<size_t> stripeRangeOffsets;
@@ -313,7 +320,7 @@ class NimbleIndexProjector {
 
   // Returns this stripe's projected stream slots from the flat ScanPlan
   // storage.
-  std::span<const StripeGroup::StreamLocation> stripeProjectedStreams(
+  std::span<const StripeGroup::StreamMetadata> stripeProjectedStreams(
       size_t stripeOffset) const;
 
   // Returns this stripe's request ranges from the flat ScanPlan storage.
@@ -368,6 +375,12 @@ class NimbleIndexProjector {
   // Enqueues all projected streams from ctx_.plan into DataInput and issues a
   // single coalesced load() call.
   void loadStripes();
+
+  // Checks one loaded stream against the checksum its stripe group records,
+  // throwing when they differ. `enqueueIndex` is the index DataInput returned
+  // from enqueue(), which is also this stream's position in
+  // ctx_.expectedStreamChecksums.
+  void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Serializes each stripe's loaded streams, builds per-request results,
   // and finalizes the result.
@@ -462,6 +475,12 @@ class NimbleIndexProjector {
   const uint32_t numStripes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
+  // Verifies a stream read from storage against the checksum recorded in its
+  // stripe group. Built for any file that records a checksum type, and null
+  // only when the file records none; whether a given project() call uses it is
+  // Options::verifyStreamChecksums. Stateful, so it relies on this class being
+  // single-threaded.
+  std::unique_ptr<Checksum> streamChecksum_;
   // Reused across stripes; its raw input format is fixed by the tablet.
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
@@ -500,6 +519,10 @@ class NimbleIndexProjector {
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
     // streams. Populated by loadStripes().
     std::vector<std::optional<uint32_t>> dataInputIndices;
+    // Expected checksum of each enqueued stream, indexed by the enqueue index
+    // DataInput returns. Appended in enqueue order by loadStripes(). Empty
+    // when checksum verification is off.
+    std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated

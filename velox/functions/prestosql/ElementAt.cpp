@@ -41,7 +41,8 @@ class ElementAtFunction : public SubscriptImpl<
 
 void registerElementAtFunction(
     const std::string& name,
-    bool enableCaching = true) {
+    bool enableCaching = true,
+    std::string_view defaultOwner = {}) {
   exec::registerStatefulVectorFunction(
       name,
       ElementAtFunction::signatures(),
@@ -57,7 +58,8 @@ void registerElementAtFunction(
           return std::make_shared<ElementAtFunction>(
               enableCaching && config.isExpressionEvaluationCacheEnabled());
         }
-      });
+      },
+      exec::VectorFunctionMetadataBuilder().owner(defaultOwner).build());
 }
 
 } // namespace facebook::velox::functions

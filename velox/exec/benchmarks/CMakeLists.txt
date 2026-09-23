@@ -41,6 +41,16 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_merge_join_stream_left_benchmark MergeJoinStreamLeftBenchmark.cpp)
+
+target_link_libraries(
+  velox_merge_join_stream_left_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 add_executable(velox_merge_benchmark MergeBenchmark.cpp)
 
 target_link_libraries(
@@ -55,6 +65,15 @@ target_link_libraries(
 add_executable(velox_hash_rows_benchmark HashRowsBenchmark.cpp)
 
 target_link_libraries(velox_hash_rows_benchmark Folly::folly Folly::follybenchmark)
+
+add_executable(velox_row_container_list_rows_benchmark RowContainerListRowsBenchmark.cpp)
+
+target_link_libraries(
+  velox_row_container_list_rows_benchmark
+  velox_exec
+  Folly::folly
+  Folly::follybenchmark
+)
 
 add_executable(velox_hash_benchmark HashTableBenchmark.cpp)
 

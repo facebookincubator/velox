@@ -75,11 +75,10 @@ void bufferStringContent(
 uint32_t ChunkedStreamDecoder::next(
     uint32_t count,
     void* output,
-    std::vector<velox::BufferPtr>& stringBuffers,
     std::function<void*()> getOutputNulls,
+    std::vector<velox::BufferPtr>& stringBuffers,
     const velox::bits::Bitmap* scatterOutputBitmap) {
   NIMBLE_DCHECK(stringBuffers.empty());
-
   if (count == 0) {
     if (getOutputNulls && scatterOutputBitmap) {
       auto nullsPtr = getOutputNulls();
@@ -88,6 +87,7 @@ uint32_t ChunkedStreamDecoder::next(
     }
     return 0;
   }
+  NIMBLE_CHECK_NOT_NULL(output);
 
   LoggingScope scope{logger_};
 
@@ -139,8 +139,8 @@ uint32_t ChunkedStreamDecoder::next(
       builder.set(offset, endOffset);
     }
 
-    if (encoding_->dataType() == DataType::String &&
-        !optimizeStringBufferHandling_ && rowsToRead != count) {
+    if (encoding_->dataType() == DataType::String && !stringDecoderZeroCopy_ &&
+        rowsToRead != count) {
       // We are going to load a new chunk.
       // For string values, this means that the memory pointed by the
       // string_views is going to be freed. Before we do so, we copy all
@@ -152,7 +152,7 @@ uint32_t ChunkedStreamDecoder::next(
       // NOTE2: We perform an additional copy of the strings later on, into the
       // string buffers of the Velox Vector. Later diff will change this logic
       // to directly copy the strings into the Velox string buffers directly.
-      auto& buffer = stringBuffers_.emplace_back(&pool_);
+      auto& buffer = stringBuffers_.emplace_back(pool_);
       bufferStringContent(
           buffer, output, nullsPtr, offset, (endOffset - offset));
     }
@@ -175,6 +175,26 @@ uint32_t ChunkedStreamDecoder::next(
   return nonNullCount;
 }
 
+uint32_t ChunkedStreamDecoder::read(
+    std::span<const uint32_t> /*rows*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "ChunkedStreamDecoder does not support selective row decoding");
+}
+
+uint32_t ChunkedStreamDecoder::read(
+    std::span<const RowRange> /*ranges*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "ChunkedStreamDecoder does not support range row decoding");
+}
+
 void ChunkedStreamDecoder::skip(uint32_t count) {
   while (count > 0) {
     ensureLoaded();
@@ -194,12 +214,14 @@ void ChunkedStreamDecoder::ensureLoaded() {
   if (UNLIKELY(remaining_ == 0)) {
     currentStringBuffers_.clear();
     encoding_ = encodingFactory_(
-        pool_, stream_->nextChunk(), [&](uint32_t totalLength) {
+        *pool_, stream_->nextChunk(), [&](uint32_t totalLength) {
           auto& buffer = currentStringBuffers_.emplace_back(
-              velox::AlignedBuffer::allocate<char>(totalLength, &pool_));
+              velox::AlignedBuffer::allocate<char>(totalLength, pool_));
           return buffer->asMutable<void>();
         });
-    remaining_ = encoding_->rowCount();
+    NIMBLE_CHECK_NOT_NULL(encoding_);
+    auto* const encoding = encoding_.get();
+    remaining_ = encoding->rowCount();
     NIMBLE_CHECK_GT(remaining_, 0, "Empty chunk");
   }
 }

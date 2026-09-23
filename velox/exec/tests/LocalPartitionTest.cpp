@@ -289,9 +289,8 @@ TEST_F(LocalPartitionTest, planNodeStats) {
   EXPECT_EQ(exchange.inputRows, 100);
   EXPECT_EQ(exchange.outputRows, 100);
 
-  // Wrong: should be 100.
-  EXPECT_EQ(stats.inputRows, 200);
-  EXPECT_EQ(stats.outputRows, 200);
+  EXPECT_EQ(stats.inputRows, 100);
+  EXPECT_EQ(stats.outputRows, 100);
 }
 
 TEST_F(LocalPartitionTest, partitionBuffering) {

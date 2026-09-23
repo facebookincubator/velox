@@ -86,7 +86,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_aggregation_selection_test
   SOURCES Main.cpp AggregationSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(
@@ -142,7 +142,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_expression_selection_test
   SOURCES Main.cpp ExpressionEvaluatorSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(
@@ -215,7 +215,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_null_mask_test
   SOURCES Main.cpp NullMaskTest.cpp
-  LIBS velox_cudf_expression cudf::cudf
+  LIBS velox_cudf_expression cudf::cudf Folly::folly
 )
 
 velox_add_cudf_test(
@@ -263,6 +263,7 @@ velox_add_cudf_test(
   LIBS
     velox_cudf_exec_test_lib
     velox_cudf_hive_connector
+    velox_dwio_parquet_writer
     velox_exec
     velox_exec_test_lib
     velox_test_util

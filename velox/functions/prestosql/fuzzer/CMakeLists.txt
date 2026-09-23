@@ -48,6 +48,7 @@ target_link_libraries(
   velox_aggregation_fuzzer
   velox_aggregation_fuzzer_base
   velox_aggregation_result_verifier
+  velox_fuzzer_util
   velox_aggregates
   velox_window
   velox_vector_fuzzer

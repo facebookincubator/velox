@@ -19,35 +19,37 @@
 
 namespace facebook::velox::functions {
 template <typename T>
-void registerMapSubsetPrimitive(const std::string& name) {
+void registerMapSubsetPrimitive(
+    const std::string& name,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<MapSubsetPrimitiveFunction, T>,
       Map<T, Generic<T1>>,
       Map<T, Generic<T1>>,
-      Array<T>>({name});
+      Array<T>>({name}, true, defaultOwner);
 }
 
-void registerMapSubset(const std::string& name) {
-  registerMapSubsetPrimitive<bool>(name);
-  registerMapSubsetPrimitive<int8_t>(name);
-  registerMapSubsetPrimitive<int16_t>(name);
-  registerMapSubsetPrimitive<int32_t>(name);
-  registerMapSubsetPrimitive<int64_t>(name);
-  registerMapSubsetPrimitive<float>(name);
-  registerMapSubsetPrimitive<double>(name);
-  registerMapSubsetPrimitive<Timestamp>(name);
-  registerMapSubsetPrimitive<Date>(name);
+void registerMapSubset(const std::string& name, std::string_view defaultOwner) {
+  registerMapSubsetPrimitive<bool>(name, defaultOwner);
+  registerMapSubsetPrimitive<int8_t>(name, defaultOwner);
+  registerMapSubsetPrimitive<int16_t>(name, defaultOwner);
+  registerMapSubsetPrimitive<int32_t>(name, defaultOwner);
+  registerMapSubsetPrimitive<int64_t>(name, defaultOwner);
+  registerMapSubsetPrimitive<float>(name, defaultOwner);
+  registerMapSubsetPrimitive<double>(name, defaultOwner);
+  registerMapSubsetPrimitive<Timestamp>(name, defaultOwner);
+  registerMapSubsetPrimitive<Date>(name, defaultOwner);
 
   registerFunction<
       MapSubsetVarcharFunction,
       Map<Varchar, Generic<T1>>,
       Map<Varchar, Generic<T1>>,
-      Array<Varchar>>({name});
+      Array<Varchar>>({name}, {}, true, defaultOwner);
 
   registerFunction<
       MapSubsetFunction,
       Map<Generic<T1>, Generic<T2>>,
       Map<Generic<T1>, Generic<T2>>,
-      Array<Generic<T1>>>({name});
+      Array<Generic<T1>>>({name}, {}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions

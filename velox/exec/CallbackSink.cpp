@@ -19,6 +19,7 @@
 namespace facebook::velox::exec {
 void CallbackSink::addInput(RowVectorPtr input) {
   loadColumns(input, *operatorCtx_->execCtx());
+  stats_.wlock()->addOutputVector(input->estimateFlatSize(), input->size());
   blockingReason_ = consumeCb_(std::move(input), false, &future_);
 }
 

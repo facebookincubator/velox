@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -31,6 +32,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include <atomic>
 #include <limits>
 
 using namespace facebook::velox;
@@ -513,6 +515,39 @@ class CudfFilterProjectTest : public OperatorTestBase {
     runTest(
         plan,
         "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
+  }
+
+  // Asserts that 'c0 IN <inListConstant>' evaluates to NULL on every input
+  // row. Built directly via TypedExpr because DuckDB cannot serve as the
+  // reference for either an in-list of `CAST(NULL AS INTEGER)` or a null
+  // array literal.
+  void assertInListYieldsAllNull(
+      const std::vector<RowVectorPtr>& input,
+      const VectorPtr& inListConstant) {
+    auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+    auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+    auto inExpr = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .addNode([&](auto id, auto source) {
+                      return std::make_shared<core::ProjectNode>(
+                          id,
+                          std::vector<std::string>{"result"},
+                          std::vector<core::TypedExprPtr>{inExpr},
+                          source);
+                    })
+                    .planNode();
+
+    vector_size_t totalRows = 0;
+    for (const auto& batch : input) {
+      totalRows += batch->size();
+    }
+    auto expected = makeRowVector(
+        {"result"},
+        {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+    AssertQueryBuilder(plan).assertResults(expected);
   }
 
   void testStringLiteralExpansion(const std::vector<RowVectorPtr>& input) {
@@ -1558,6 +1593,65 @@ TEST_F(CudfFilterProjectTest, betweenOperation) {
   testBetweenOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
+  auto input = makeRowVector(
+      {"value", "lower_bound", "upper_bound"},
+      {makeNullableFlatVector<double>({0, 1, 5, 9, 10, std::nullopt, 5, 5}),
+       makeNullableFlatVector<double>({1, 1, 1, 1, 1, 1, std::nullopt, 1}),
+       makeNullableFlatVector<double>({9, 9, 9, 9, 9, 9, 9, std::nullopt})});
+  // Exercise BetweenFunction rather than the AST or JIT evaluator.
+  cudf_velox::ensureBuiltinExpressionEvaluatorsRegistered();
+  auto& registry = cudf_velox::getCudfExpressionEvaluatorRegistry();
+  auto& functionEntry = registry.at("function");
+  const auto previousEntry = functionEntry;
+  std::atomic<size_t> betweenCreations{0};
+  SCOPE_EXIT {
+    functionEntry = previousEntry;
+  };
+  functionEntry.create = [create = previousEntry.create, &betweenCreations](
+                             const core::TypedExprPtr& expr,
+                             const RowTypePtr& rowType,
+                             memory::MemoryPool* pool) {
+    auto evaluator = create(expr, rowType, pool);
+    if (expr->isCallKind() &&
+        expr->asUnchecked<core::CallTypedExpr>()->name() == "between") {
+      ++betweenCreations;
+    }
+    return evaluator;
+  };
+  auto highestPriority = functionEntry.priority;
+  for (const auto& [name, entry] : registry) {
+    if (entry.priority > highestPriority) {
+      highestPriority = entry.priority;
+    }
+  }
+  ASSERT_LT(highestPriority, std::numeric_limits<int>::max());
+  functionEntry.priority = highestPriority + 1;
+
+  for (const bool literalLower : {true, false}) {
+    for (const bool literalUpper : {true, false}) {
+      const auto sql = fmt::format(
+          "value BETWEEN {} AND {}",
+          literalLower ? "1.0" : "lower_bound",
+          literalUpper ? "9.0" : "upper_bound");
+      SCOPED_TRACE(sql);
+      auto plan = PlanBuilder().values({input}).project({sql}).planNode();
+      std::vector<std::optional<bool>> expected{
+          false, true, true, true, false, std::nullopt, true, true};
+      if (!literalLower) {
+        expected[6] = std::nullopt;
+      }
+      if (!literalUpper) {
+        expected[7] = std::nullopt;
+      }
+      betweenCreations = 0;
+      AssertQueryBuilder(plan).assertResults(
+          makeRowVector({makeNullableFlatVector<bool>(expected)}));
+      ASSERT_GT(betweenCreations.load(), 0);
+    }
+  }
+}
+
 TEST_F(CudfFilterProjectTest, multiInputAndOperation) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
@@ -1604,6 +1698,99 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   createDuckDbTable(vectors);
 
   testMixedInOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, nullOnlyInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  auto elements = makeNullableFlatVector<int32_t>(
+      std::vector<std::optional<int32_t>>{std::nullopt});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, elements));
+  assertInListYieldsAllNull(vectors, inListConstant);
+}
+
+TEST_F(CudfFilterProjectTest, nullArrayInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  assertInListYieldsAllNull(
+      vectors, BaseVector::createNullConstant(ARRAY(INTEGER()), 1, pool()));
+}
+
+TEST_F(CudfFilterProjectTest, nullInListDownstreamAggregation) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+
+  auto elements = makeNullableFlatVector<int32_t>(
+      std::vector<std::optional<int32_t>>{std::nullopt});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, elements));
+  auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto inExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .addNode([&](auto id, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        id,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{inExpr},
+                        source);
+                  })
+                  .singleAggregation({}, {"count(result)"})
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"a0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, untypedNullInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  // `c0 IN (NULL)` parses to an in-list of type ARRAY<UNKNOWN> because the NULL
+  // is untyped. This is a null-only list and must yield NULL on every row, the
+  // same as an explicitly typed all-null list.
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .project({"c0 IN (NULL) AS result"})
+                  .planNode();
+
+  vector_size_t totalRows = 0;
+  for (const auto& batch : vectors) {
+    totalRows += batch->size();
+  }
+  auto expected = makeRowVector(
+      {"result"},
+      {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, emptyInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  // A genuinely empty in-list is a user error on the CPU path
+  // (InPredicate::create). The cuDF path must reject it the same way rather
+  // than silently returning NULL.
+  auto emptyElements = makeFlatVector<int32_t>(std::vector<int32_t>{});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, emptyElements));
+  auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto inExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .addNode([&](auto id, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        id,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{inExpr},
+                        source);
+                  })
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "IN list must not be empty");
 }
 
 TEST_F(CudfFilterProjectTest, round) {
@@ -1890,6 +2077,93 @@ TEST_F(CudfFilterProjectTest, stringUpperOperation) {
   testStringUpperOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
+  // Column string with constant search and replacement, including the
+  // replace(s, '-', '') shape: matches present, absent, repeated, an empty
+  // string row, and a null string row.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"2021-01-31",
+           "no dashes here",
+           "a-b-c-d",
+           "-leading-and-trailing-",
+           "",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, '-', '') AS removed",
+      "replace(s, '-', '/') AS slashed",
+      "replace(s, 'zzz', 'x') AS absent"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
+  // The 2-argument form removes every occurrence of the search.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"a-b-c", "abc", "---", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"replace(s, '-') AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
+  // A null constant search or replacement yields an all-null result.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, CAST(NULL AS VARCHAR), 'x') AS null_search",
+      "replace(s, '-', CAST(NULL AS VARCHAR)) AS null_replacement",
+      "replace(s, CAST(NULL AS VARCHAR)) AS null_search_two_arg"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
+  // Multi-byte (UTF-8) search and replacement, including a replacement that
+  // changes the byte length and a null string row.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"café-au-lait",
+           "a€b€c",
+           "naïve",
+           "no multibyte here",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, 'é', 'e') AS deaccent",
+      "replace(s, '€', 'EUR') AS money",
+      "replace(s, 'ï', 'i') AS naive"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceReplacementContainsSearch) {
+  // The replacement contains the search: a single left-to-right pass must not
+  // re-scan the inserted text.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"aaa", "banana", "a", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, 'a', 'aa') AS doubled", "replace(s, 'ana', 'anana') AS grow"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);
@@ -2109,7 +2383,7 @@ TEST_F(CudfFilterProjectTest, coalesceStopsAtFirstLiteral) {
   // ignored.
   auto rowType = ROW({{"c0", INTEGER()}, {"c1", INTEGER()}});
   auto vectors = makeVectors(rowType, 1, 50);
-  // Make some c0 nulls so fallback engages.
+  // Make some c0 nulls to exercise the GPU replace_nulls path.
   auto& vec = vectors[0];
   auto c0 = vec->childAt(0)->asFlatVector<int32_t>();
   for (vector_size_t i = 1; i < vec->size(); i += 4) {
@@ -2213,6 +2487,118 @@ TEST_F(CudfFilterProjectTest, switchExpr) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
+TEST_F(CudfFilterProjectTest, switchWithoutElse) {
+  // The fixture disables CPU fallback, so these projections must run on GPU.
+  auto data = makeRowVector(
+      {"flag", "value", "string_value", "decimal_value"},
+      {makeNullableFlatVector<bool>({true, false, std::nullopt, true}),
+       makeNullableFlatVector<int64_t>({10, 20, 30, std::nullopt}),
+       makeNullableFlatVector<std::string>(
+           {"one", "two", "three", std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {123, 456, 789, std::nullopt}, DECIMAL(7, 2))});
+  auto assertWithoutElse =
+      [&](const std::string& thenSql,
+          const core::TypedExprPtr& thenExpr,
+          const std::vector<std::optional<int64_t>>& values) {
+        SCOPED_TRACE(thenSql);
+        auto expected =
+            makeRowVector({makeNullableFlatVector<int64_t>(values)});
+        auto casePlan =
+            PlanBuilder()
+                .values({data})
+                .project({fmt::format("CASE WHEN flag THEN {} END", thenSql)})
+                .planNode();
+        AssertQueryBuilder(casePlan).assertResults(expected);
+
+        // DuckDB's SQL parser rejects two-argument IF; construct the typed
+        // call.
+        auto ifExpr = std::make_shared<core::CallTypedExpr>(
+            BIGINT(),
+            std::vector<core::TypedExprPtr>{
+                std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "flag"),
+                thenExpr},
+            "if");
+        auto ifPlan = PlanBuilder()
+                          .values({data})
+                          .addNode([&](auto nodeId, auto source) {
+                            return std::make_shared<core::ProjectNode>(
+                                nodeId,
+                                std::vector<std::string>{"result"},
+                                std::vector<core::TypedExprPtr>{ifExpr},
+                                source);
+                          })
+                          .planNode();
+        AssertQueryBuilder(ifPlan).assertResults(expected);
+      };
+
+  assertWithoutElse(
+      "value",
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "value"),
+      {10, std::nullopt, std::nullopt, std::nullopt});
+  assertWithoutElse(
+      "CAST(7 AS BIGINT)",
+      std::make_shared<core::ConstantTypedExpr>(BIGINT(), variant(int64_t{7})),
+      {7, std::nullopt, std::nullopt, 7});
+  assertWithoutElse(
+      "CAST(NULL AS BIGINT)",
+      std::make_shared<core::ConstantTypedExpr>(
+          BIGINT(), variant::null(TypeKind::BIGINT)),
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  auto typedPlan = PlanBuilder()
+                       .values({data})
+                       .project({
+                           "CASE WHEN flag THEN string_value END",
+                           "CASE WHEN flag THEN decimal_value END",
+                       })
+                       .planNode();
+  auto typedExpected = makeRowVector({
+      makeNullableFlatVector<std::string>(
+          {"one", std::nullopt, std::nullopt, std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {123, std::nullopt, std::nullopt, std::nullopt}, DECIMAL(7, 2)),
+  });
+  AssertQueryBuilder(typedPlan).assertResults(typedExpected);
+
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project({"CASE WHEN flag THEN value ELSE CAST(NULL AS BIGINT) END"})
+          .planNode();
+  auto expected = makeRowVector({makeNullableFlatVector<int64_t>(
+      {10, std::nullopt, std::nullopt, std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, switchWithoutElseNestedTypes) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    config.allowCpuFallback = previousFallback;
+  };
+  config.allowCpuFallback = true;
+
+  auto data = makeRowVector(
+      {"flag", "values", "pair"},
+      {makeNullableFlatVector<bool>({true, false, std::nullopt}),
+       makeArrayVector<int64_t>({{1, 2}, {3}, {}}),
+       makeRowVector({makeFlatVector<int64_t>({10, 20, 30})})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({
+                      "CASE WHEN flag THEN values END AS a",
+                      "CASE WHEN flag THEN pair END AS r",
+                  })
+                  .planNode();
+
+  cudf_velox::unregisterCudf();
+  auto cpuResult = AssertQueryBuilder(plan).copyResults(pool());
+  cudf_velox::registerCudf();
+  auto fallbackResult = AssertQueryBuilder(plan).copyResults(pool());
+  facebook::velox::test::assertEqualVectors(cpuResult, fallbackResult);
+}
+
 TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
   auto data = makeRowVector({
       makeFlatVector<double>({1.0, 5.0, -3.0}),
@@ -2292,6 +2678,7 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     functions::prestosql::registerAllScalarFunctions();
     aggregate::prestosql::registerAllAggregateFunctions();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

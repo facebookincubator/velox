@@ -974,7 +974,9 @@ void TopNRowNumber::reclaim(
   VELOX_CHECK(canReclaim());
   VELOX_CHECK(!nonReclaimableSection_);
 
-  if (data_->numRows() == 0) {
+  // The memory pool outlives the operator, so an arbitration reclaim can
+  // arrive after close() has reset 'data_'.
+  if (data_ == nullptr || data_->numRows() == 0) {
     // Nothing to spill.
     return;
   }

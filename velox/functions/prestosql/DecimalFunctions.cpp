@@ -362,45 +362,48 @@ struct DecimalTruncateFunction {
 template <template <class> typename Func>
 void registerDecimalBinary(
     const std::string& name,
-    const std::vector<exec::SignatureVariable>& constraints) {
+    const std::vector<exec::SignatureVariable>& constraints,
+    std::string_view defaultOwner) {
   // (long, long) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({name}, constraints);
+      LongDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (short, short) -> short
   registerFunction<
       Func,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({name}, constraints);
+      ShortDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (short, short) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({name}, constraints);
+      ShortDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (short, long) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({name}, constraints);
+      LongDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (long, short) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({name}, constraints);
+      ShortDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 }
 
 template <template <class> typename Func>
-void registerDecimalPlusMinus(const std::string& name) {
+void registerDecimalPlusMinus(
+    const std::string& name,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -420,20 +423,27 @@ void registerDecimalPlusMinus(const std::string& name) {
           exec::ParameterType::kIntegerParameter),
   };
 
-  registerDecimalBinary<Func>(name, constraints);
+  registerDecimalBinary<Func>(name, constraints, defaultOwner);
 }
 
 } // namespace
 
-void registerDecimalPlus(const std::string& prefix) {
-  registerDecimalPlusMinus<DecimalPlusFunction>(prefix + "plus");
+void registerDecimalPlus(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalPlusMinus<DecimalPlusFunction>(prefix + "plus", defaultOwner);
 }
 
-void registerDecimalMinus(const std::string& prefix) {
-  registerDecimalPlusMinus<DecimalMinusFunction>(prefix + "minus");
+void registerDecimalMinus(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalPlusMinus<DecimalMinusFunction>(
+      prefix + "minus", defaultOwner);
 }
 
-void registerDecimalMultiply(const std::string& prefix) {
+void registerDecimalMultiply(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -453,10 +463,12 @@ void registerDecimalMultiply(const std::string& prefix) {
   };
 
   registerDecimalBinary<DecimalMultiplyFunction>(
-      prefix + "multiply", constraints);
+      prefix + "multiply", constraints, defaultOwner);
 }
 
-void registerDecimalDivide(const std::string& prefix) {
+void registerDecimalDivide(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -475,24 +487,29 @@ void registerDecimalDivide(const std::string& prefix) {
           exec::ParameterType::kIntegerParameter),
   };
 
-  registerDecimalBinary<DecimalDivideFunction>(prefix + "divide", constraints);
+  registerDecimalBinary<DecimalDivideFunction>(
+      prefix + "divide", constraints, defaultOwner);
 
   // (short, long) -> short
   registerFunction<
       DecimalDivideFunction,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "divide"}, constraints);
+      LongDecimal<P2, S2>>(
+      {prefix + "divide"}, constraints, true, defaultOwner);
 
   // (long, short) -> short
   registerFunction<
       DecimalDivideFunction,
       ShortDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "divide"}, constraints);
+      ShortDecimal<P2, S2>>(
+      {prefix + "divide"}, constraints, true, defaultOwner);
 }
 
-void registerDecimalModulus(const std::string& prefix) {
+void registerDecimalModulus(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -517,48 +534,49 @@ void registerDecimalModulus(const std::string& prefix) {
       DecimalModulusFunction,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (short, long) -> short
   registerFunction<
       DecimalModulusFunction,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (long, short) -> short
   registerFunction<
       DecimalModulusFunction,
       ShortDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (short, long) -> long
   registerFunction<
       DecimalModulusFunction,
       LongDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (long, short) -> long
   registerFunction<
       DecimalModulusFunction,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (long, long) -> long
   registerFunction<
       DecimalModulusFunction,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 }
 
 template <template <class> typename TFunc>
 void registerDecimalFloorOrCeil(
     const std::string& prefix,
-    const std::string& functionName) {
+    const std::string& functionName,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
@@ -572,24 +590,31 @@ void registerDecimalFloorOrCeil(
   };
 
   registerFunction<TFunc, LongDecimal<P2, S2>, LongDecimal<P1, S1>>(
-      {prefix + functionName}, constraints);
+      {prefix + functionName}, constraints, true, defaultOwner);
 
   registerFunction<TFunc, ShortDecimal<P2, S2>, LongDecimal<P1, S1>>(
-      {prefix + functionName}, constraints);
+      {prefix + functionName}, constraints, true, defaultOwner);
 
   registerFunction<TFunc, ShortDecimal<P2, S2>, ShortDecimal<P1, S1>>(
-      {prefix + functionName}, constraints);
+      {prefix + functionName}, constraints, true, defaultOwner);
 }
 
-void registerDecimalFloor(const std::string& prefix) {
-  registerDecimalFloorOrCeil<DecimalFloorFunction>(prefix, "floor");
+void registerDecimalFloor(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalFloorOrCeil<DecimalFloorFunction>(
+      prefix, "floor", defaultOwner);
 }
 
-void registerDecimalCeil(const std::string& prefix) {
-  registerDecimalFloorOrCeil<DecimalCeilFunction>(prefix, "ceil");
+void registerDecimalCeil(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalFloorOrCeil<DecimalCeilFunction>(prefix, "ceil", defaultOwner);
 }
 
-void registerDecimalRound(const std::string& prefix) {
+void registerDecimalRound(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   // round(decimal) -> decimal
   {
     std::vector<exec::SignatureVariable> constraints = {
@@ -607,17 +632,20 @@ void registerDecimalRound(const std::string& prefix) {
     registerFunction<
         DecimalRoundFunction,
         LongDecimal<P2, S2>,
-        LongDecimal<P1, S1>>({prefix + "round"}, constraints);
+        LongDecimal<P1, S1>>(
+        {prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         ShortDecimal<P2, S2>,
-        LongDecimal<P1, S1>>({prefix + "round"}, constraints);
+        LongDecimal<P1, S1>>(
+        {prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         ShortDecimal<P2, S2>,
-        ShortDecimal<P1, S1>>({prefix + "round"}, constraints);
+        ShortDecimal<P1, S1>>(
+        {prefix + "round"}, constraints, true, defaultOwner);
   }
 
   // round(decimal, n) -> decimal
@@ -633,23 +661,25 @@ void registerDecimalRound(const std::string& prefix) {
         DecimalRoundFunction,
         LongDecimal<P2, S1>,
         LongDecimal<P1, S1>,
-        int32_t>({prefix + "round"}, constraints);
+        int32_t>({prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         ShortDecimal<P2, S1>,
         ShortDecimal<P1, S1>,
-        int32_t>({prefix + "round"}, constraints);
+        int32_t>({prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         LongDecimal<P2, S1>,
         ShortDecimal<P1, S1>,
-        int32_t>({prefix + "round"}, constraints);
+        int32_t>({prefix + "round"}, constraints, true, defaultOwner);
   }
 }
 
-void registerDecimalTruncate(const std::string& prefix) {
+void registerDecimalTruncate(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   // truncate(decimal) -> decimal
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
@@ -666,30 +696,33 @@ void registerDecimalTruncate(const std::string& prefix) {
   registerFunction<
       DecimalTruncateFunction,
       ShortDecimal<P2, S2>,
-      ShortDecimal<P1, S1>>({prefix + "truncate"}, constraints);
+      ShortDecimal<P1, S1>>(
+      {prefix + "truncate"}, constraints, true, defaultOwner);
 
   registerFunction<
       DecimalTruncateFunction,
       LongDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "truncate"}, constraints);
+      LongDecimal<P1, S1>>(
+      {prefix + "truncate"}, constraints, true, defaultOwner);
 
   registerFunction<
       DecimalTruncateFunction,
       ShortDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "truncate"}, constraints);
+      LongDecimal<P1, S1>>(
+      {prefix + "truncate"}, constraints, true, defaultOwner);
 
   // truncate(decimal, n) -> decimal
   registerFunction<
       DecimalTruncateFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>,
-      int32_t>({prefix + "truncate"});
+      int32_t>({prefix + "truncate"}, {}, true, defaultOwner);
 
   registerFunction<
       DecimalTruncateFunction,
       LongDecimal<P1, S1>,
       LongDecimal<P1, S1>,
-      int32_t>({prefix + "truncate"});
+      int32_t>({prefix + "truncate"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

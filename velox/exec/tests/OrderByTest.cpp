@@ -1361,6 +1361,40 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {
   ASSERT_EQ(stats[0].operatorStats[1].spilledPartitions, 0);
 }
 
+// Reclaim can arrive after close(): the memory pool outlives the operator, and
+// ParallelMemoryReclaimer issues arbitration reclaims asynchronously.
+DEBUG_ONLY_TEST_F(OrderByTest, reclaimAfterClose) {
+  const std::vector<RowVectorPtr> vectors =
+      createVectors(8, rowType_, fuzzerOpts_);
+
+  const std::string errorMessage("reclaimAfterClose");
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "OrderBy") {
+          return;
+        }
+        // Reclaim after close(), as a late arbitration would.
+        op->close();
+        memory::MemoryReclaimer::Stats reclaimerStats;
+        op->reclaim(0, reclaimerStats);
+        VELOX_FAIL(errorMessage);
+      })));
+
+  const auto spillDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .orderBy({"c0 ASC NULLS LAST"}, false)
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kOrderBySpillEnabled, true)
+          .copyResults(pool_.get()),
+      errorMessage);
+}
+
 DEBUG_ONLY_TEST_F(OrderByTest, orderByWithLazyInput) {
   auto nonLazyVector = createVectors(1, rowType_, fuzzerOpts_)[0];
 
@@ -1428,14 +1462,12 @@ TEST_F(OrderByTest, planNodeStats) {
   // Two operators implement this one plan node.
   ASSERT_EQ(stats.operatorStats.size(), 2);
   const auto& merge = stats.operatorStatsFor(OperatorType::kLocalMerge);
-  // Wrong: should equal outputRows.
-  EXPECT_EQ(merge.inputRows, 0);
+  EXPECT_EQ(merge.inputRows, 200);
   EXPECT_EQ(merge.outputRows, 200);
 
   const auto& sink = stats.operatorStatsFor(OperatorType::kCallbackSink);
   EXPECT_EQ(sink.inputRows, 200);
-  // Wrong: should equal inputRows.
-  EXPECT_EQ(sink.outputRows, 0);
+  EXPECT_EQ(sink.outputRows, 200);
 
   EXPECT_EQ(stats.inputRows, 200);
   EXPECT_EQ(stats.outputRows, 200);
