@@ -16,8 +16,12 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
+#include <functional>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <random>
@@ -38,6 +42,124 @@
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 namespace facebook::nimble::test {
+
+/// Process-wide wall-clock budget shared by every typed test in a fuzzer
+/// binary.
+///
+/// An iteration count cannot self-limit. If per-iteration cost grows, the
+/// binary overruns the Cogwheel `execution_timeout_seconds` and the job is
+/// killed, which reads as a failed run rather than a short one -- and the only
+/// way to notice is a wave of TIMEOUTs. A deadline started once, at the first
+/// test, bounds the whole binary no matter how many typed tests it
+/// instantiates; a per-test deadline would multiply by the number of tests.
+///
+/// The completed-iteration total then becomes the measurement that the
+/// iteration count used to be a guess at: a drop in it means per-iteration
+/// cost regressed, which is exactly what silently broke the tuning before.
+class FuzzerBudget {
+ public:
+  /// Zero means no deadline, which is the default so existing callers and
+  /// local runs keep their iteration-count behaviour unchanged.
+  static void start(uint32_t durationSec) {
+    deadline() = durationSec == 0
+        ? std::chrono::steady_clock::time_point::max()
+        : std::chrono::steady_clock::now() + std::chrono::seconds(durationSec);
+  }
+
+  static bool expired() {
+    return std::chrono::steady_clock::now() >= deadline();
+  }
+
+  static void recordIteration() {
+    completed().fetch_add(1, std::memory_order_relaxed);
+  }
+
+  static uint64_t completedIterations() {
+    return completed().load(std::memory_order_relaxed);
+  }
+
+  /// Parsed by the Cogwheel test, which reports it as result metadata. Keep the
+  /// key stable.
+  static void report() {
+    std::cout << "FUZZER_ITERATIONS_COMPLETED=" << completedIterations()
+              << std::endl;
+  }
+
+ private:
+  static std::chrono::steady_clock::time_point& deadline() {
+    static std::chrono::steady_clock::time_point value =
+        std::chrono::steady_clock::time_point::max();
+    return value;
+  }
+
+  static std::atomic<uint64_t>& completed() {
+    static std::atomic<uint64_t> value{0};
+    return value;
+  }
+};
+
+/// Names the seed of a failing test on stdout, next to the iteration total.
+///
+/// Seeds are already logged at INFO, one line per typed test, but a Cogwheel
+/// result row carries no logs -- so without this, replaying a failure means
+/// opening the job log and matching the failing test back to its seed by
+/// encoding and dtype.
+///
+/// This is a listener rather than a check at the end of the fuzzer loop because
+/// an `ASSERT_*` failure returns from the fuzzer function immediately, so any
+/// reporting placed after the loop is exactly what a hard failure skips.
+class FuzzerSeedReporter : public ::testing::EmptyTestEventListener {
+ public:
+  static void setCurrentSeed(uint32_t seed) {
+    current().store(seed, std::memory_order_relaxed);
+  }
+
+  void OnTestEnd(const ::testing::TestInfo& testInfo) override {
+    if (testInfo.result() == nullptr || !testInfo.result()->Failed()) {
+      return;
+    }
+
+    // Parsed by the Cogwheel test, which reports it as result metadata. Keep
+    // the key stable.
+    std::cout << "FUZZER_FAILED_SEED=" << testInfo.test_suite_name() << "."
+              << testInfo.name() << ":"
+              << current().load(std::memory_order_relaxed) << std::endl;
+  }
+
+ private:
+  static std::atomic<uint32_t>& current() {
+    static std::atomic<uint32_t> value{0};
+    return value;
+  }
+};
+
+/// Starts the budget before the first test and prints the total after the last.
+class FuzzerBudgetEnvironment : public ::testing::Environment {
+ public:
+  /// Takes a getter rather than a value: registration happens during static
+  /// initialization, before gflags has parsed the command line, so reading the
+  /// flag here would always see its default. SetUp runs after parsing.
+  explicit FuzzerBudgetEnvironment(std::function<uint32_t()> durationSec)
+      : durationSec_{std::move(durationSec)} {}
+
+  void SetUp() override {
+    FuzzerBudget::start(durationSec_());
+
+    // Appended here rather than at static initialization because gtest owns the
+    // listener list only once InitGoogleTest has run. SetUp is inside
+    // RUN_ALL_TESTS but before any test dispatches an event, so no listener
+    // iteration is in flight.
+    ::testing::UnitTest::GetInstance()->listeners().Append(
+        new FuzzerSeedReporter());
+  }
+
+  void TearDown() override {
+    FuzzerBudget::report();
+  }
+
+ private:
+  const std::function<uint32_t()> durationSec_;
+};
 
 // ============================================================================
 // Data generators
@@ -498,9 +620,14 @@ class EncodingFuzzer {
               << toString(Encoder<EncodingClass>::encodingType())
               << " dtype: " << toString(TypeTraits<T>::dataType)
               << " iterations: " << iterations_ << " maxRows: " << maxRows_;
+    FuzzerSeedReporter::setCurrentSeed(seed);
     std::mt19937 rng(seed);
 
     for (uint32_t iter = 0; iter < iterations_; ++iter) {
+      if (FuzzerBudget::expired()) {
+        break;
+      }
+      FuzzerBudget::recordIteration();
       buffer_ = std::make_unique<Buffer>(*pool_);
       auto datasets = generateDatasets(rng);
 
