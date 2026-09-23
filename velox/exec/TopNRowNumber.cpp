@@ -761,7 +761,7 @@ bool TopNRowNumber::compareSpillRowColumns(
   for (auto i = startColumn; i < endColumn; ++i) {
     if (!output->childAt(inputChannels_[i])
              ->equalValueAt(
-                 next->current().childAt(i).get(),
+                 next->current()->childAt(i).get(),
                  index - 1,
                  next->currentIndex())) {
       return true;
@@ -897,7 +897,7 @@ RowVectorPtr TopNRowNumber::getOutputFromSpill() {
       for (auto i = 0; i < inputChannels_.size(); ++i) {
         output->childAt(inputChannels_[i])
             ->copy(
-                next->current().childAt(i).get(),
+                next->current()->childAt(i).get(),
                 index,
                 next->currentIndex(),
                 1);
