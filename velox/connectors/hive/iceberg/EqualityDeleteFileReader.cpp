@@ -339,7 +339,8 @@ void EqualityDeleteFileReader::applyDeletes(
 
   // For each row in the output, compute its hash and probe the delete set.
   for (vector_size_t i = 0; i < output->size(); ++i) {
-    // Skip rows already deleted by positional/DV deletes.
+    // Skip rows already removed by a post-read filter or an earlier delete
+    // file.
     if (bits::isBitSet(bitmap, i)) {
       continue;
     }

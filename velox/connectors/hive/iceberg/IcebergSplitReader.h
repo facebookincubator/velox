@@ -137,6 +137,37 @@ class IcebergSplitReader : public FileSplitReader {
   std::pair<std::vector<std::string>, std::vector<TypePtr>>
   resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
 
+  // A column next() fills in, whose filters run after the read.
+  struct PostReadFilter {
+    // Owned by 'scanSpec_'.
+    common::ScanSpec* scanSpec;
+    // Index of the column in the reader output.
+    column_index_t outputIndex;
+  };
+
+  // Appends the filled-in columns that are filtered but not projected, so
+  // next() has a slot to fill.
+  void projectFilterOnlyFilledColumns();
+
+  // Disables the filters on the filled-in columns in the reader, which sees
+  // the values before the fill-in, and records the columns in
+  // 'postReadFilters_' for next() to filter. A disabled filter prunes no files
+  // or row groups and drops no rows in the reader, so a split filtered only on
+  // filled-in columns reads every row: the file statistics do not describe the
+  // filled-in values.
+  void configurePostReadFilters();
+
+  // Sets the bit in 'rowsToRemove' of every row failing 'postReadFilters_'.
+  void markRowsFailingPostReadFilters(
+      const RowVector& output,
+      uint64_t* rowsToRemove);
+
+  // Appends 'names' and 'types' to 'readerOutputType_' and returns their
+  // projected scan spec children.
+  std::vector<common::ScanSpec*> appendProjectedColumns(
+      const std::vector<std::string>& names,
+      const std::vector<TypePtr>& types);
+
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
   // read and made available in the output RowVector. When the split proves
@@ -216,6 +247,16 @@ class IcebergSplitReader : public FileSplitReader {
   // (set when filters, random-skip, or positional deletes make output
   // positions non-contiguous).
   bool useRowNumberColumn_{false};
+
+  // Filled-in columns of the current split, with or without a filter yet: a
+  // dynamic filter can arrive later.
+  std::vector<PostReadFilter> postReadFilters_;
+  // Rows of the current batch passing 'postReadFilters_'. Reused across
+  // batches.
+  BufferPtr passingRows_;
+  // Rows to drop from the current batch, shared by the post-read filters and
+  // the equality deletes. Reused across batches.
+  BufferPtr rowsToRemove_;
 
   /// Readers for Iceberg V3 deletion vectors (Puffin-encoded roaring bitmaps).
   std::list<std::unique_ptr<DeletionVectorReader>> deletionVectorReaders_;
