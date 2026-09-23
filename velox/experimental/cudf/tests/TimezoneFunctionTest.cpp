@@ -47,7 +47,10 @@
 // not register a with_timezone scalar function, so it cannot be compiled on CPU
 // and is out of scope for a GPU-vs-CPU gap.
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/TimezoneConversion.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 
@@ -65,6 +68,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 
 #include <algorithm>
@@ -2329,13 +2333,130 @@ TEST_F(TimezoneFunctionTest, betweenUsesInstantNotZoneKey) {
 // (cases/o_tswtz_function_surface.yaml); what a unit test can show is that
 // nothing on the GPU path claims the expression.
 //
-// Comparisons must NOT be declined -- masking the zone key off both operands
-// makes them correct, which is what 6b0c57b75 does.
+// Comparisons must not be declined by GPU dispatch -- masking the zone key off
+// both operands makes them correct, which is what 6b0c57b75 does. The function
+// evaluator must decline them because it compares the packed INT64 values
+// directly; AST/JIT remain eligible and perform the normalization.
 // comparisonUsesInstantNotZoneKey and betweenUsesInstantNotZoneKey above are
 // the positive controls for a guard drawn too wide, and
 // comparisonsAreStillEvaluatedOnGpuAfterTheArithmeticGuard below asserts the
 // stronger property those two cannot: that the comparison still runs on the GPU
 // rather than merely agreeing with CPU from a silent fallback.
+
+TEST_F(TimezoneFunctionTest, comparisonFunctionsDeclineTimestampWithTimeZone) {
+  auto setAstAndJitPriorities = [](int astPriority, int jitPriority) {
+    registerCudfExpressionEvaluator(
+        kAstEvaluatorName,
+        astPriority,
+        [](const core::TypedExprPtr& expr) {
+          return ASTExpression::canEvaluate(expr);
+        },
+        [](const core::TypedExprPtr& expr,
+           const RowTypePtr& row,
+           memory::MemoryPool* pool,
+           const CudfDateTimeContext& context) {
+          return std::make_shared<ASTExpression>(expr, row, pool, context);
+        },
+        /*overwrite=*/true);
+    registerCudfExpressionEvaluator(
+        kJitEvaluatorName,
+        jitPriority,
+        [](const core::TypedExprPtr& expr) {
+          return JitExpression::canEvaluate(expr);
+        },
+        [](const core::TypedExprPtr& expr,
+           const RowTypePtr& row,
+           memory::MemoryPool* pool,
+           const CudfDateTimeContext& context) {
+          return std::make_shared<JitExpression>(expr, row, pool, context);
+        },
+        /*overwrite=*/true);
+  };
+
+  const auto& config = CudfConfig::getInstance();
+  SCOPE_EXIT {
+    setAstAndJitPriorities(
+        config.astExpressionPriority, config.jitExpressionPriority);
+  };
+
+  // Reproduce the evaluator priorities used by LogicalFunctionsTest. Function
+  // has priority 50, so it would win if signature matching admitted TSWTZ.
+  setAstAndJitPriorities(/*astPriority=*/0, /*jitPriority=*/0);
+
+  const auto bigintRowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
+  auto bigintComparison = expression::optimize(
+      makeTypedExpr("c0 = c1", bigintRowType),
+      execCtx_.queryCtx(),
+      execCtx_.pool());
+  EXPECT_TRUE(FunctionExpression::canEvaluate(bigintComparison));
+  EXPECT_NE(
+      dynamic_cast<FunctionExpression*>(
+          createCudfExpression(bigintComparison, bigintRowType, pool_.get())
+              .get()),
+      nullptr);
+
+  const auto doubleRowType =
+      ROW({"c0", "c1", "c2"}, {DOUBLE(), DOUBLE(), DOUBLE()});
+  auto doubleBetween = expression::optimize(
+      makeTypedExpr("c0 between c1 and c2", doubleRowType),
+      execCtx_.queryCtx(),
+      execCtx_.pool());
+  EXPECT_TRUE(FunctionExpression::canEvaluate(doubleBetween));
+  EXPECT_NE(
+      dynamic_cast<FunctionExpression*>(
+          createCudfExpression(doubleBetween, doubleRowType, pool_.get())
+              .get()),
+      nullptr);
+
+  const int64_t millis = 1'623'758'400'000;
+  const auto kiritimati = tz::getTimeZoneID("Pacific/Kiritimati");
+  const auto midway = tz::getTimeZoneID("Pacific/Midway");
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          {pack(millis, kiritimati), pack(millis, midway)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(millis, midway), pack(millis, kiritimati)},
+          TIMESTAMP_WITH_TIME_ZONE()),
+  });
+  const auto rowType = asRowType(input->type());
+
+  for (const auto* expression : {
+           "c0 = c1",
+           "c0 <> c1",
+           "c0 < c1",
+           "c0 <= c1",
+           "c0 > c1",
+           "c0 >= c1",
+           "c0 between c1 and c2",
+       }) {
+    SCOPED_TRACE(expression);
+    auto optimized = expression::optimize(
+        makeTypedExpr(expression, rowType),
+        execCtx_.queryCtx(),
+        execCtx_.pool());
+
+    EXPECT_FALSE(FunctionExpression::canEvaluate(optimized));
+    EXPECT_TRUE(canExprRunOnGpu(optimized, queryCtx_.get(), pool_.get()));
+
+    auto evaluator = createCudfExpression(
+        optimized,
+        rowType,
+        pool_.get(),
+        contextFromConfig(execCtx_.queryCtx()->queryConfig()));
+    EXPECT_EQ(dynamic_cast<FunctionExpression*>(evaluator.get()), nullptr);
+    EXPECT_TRUE(
+        dynamic_cast<ASTExpression*>(evaluator.get()) != nullptr ||
+        dynamic_cast<JitExpression*>(evaluator.get()) != nullptr);
+  }
+
+  // Equal instants with different zone keys expose a raw packed comparison.
+  assertMatchesCpu("c0 = c1", input);
+  assertMatchesCpu("c0 between c1 and c2", input);
+}
 
 TEST_F(TimezoneFunctionTest, subtractingTwoTimestampWithTimeZonesIsDeclined) {
   const int64_t millis = 1'623'758'400'000;

@@ -2812,6 +2812,20 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // regular binary operators
   //
 
+  // TIMESTAMP WITH TIME ZONE is represented physically as a packed INT64.
+  // Function evaluators operate on that physical representation and must not
+  // apply arithmetic or comparisons to it directly. AST/JIT normalize TSWTZ
+  // comparison operands before comparing them and remain eligible.
+  auto hasNoTimestampWithTimeZoneInput = [](const core::TypedExprPtr& expr) {
+    for (const auto& input : expr->inputs()) {
+      if (input != nullptr && input->type() != nullptr &&
+          isTimestampWithTimeZoneType(input->type())) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   auto registerBinaryOp = [&](const std::vector<std::string>& aliases,
                               cudf::binary_operator op) {
     auto decimalBinarySignature = [&]() {
@@ -2843,25 +2857,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
              .build(),
          decimalBinarySignature()},
         /*overwrite=*/true,
-        // Never arithmetic over a packed TIMESTAMP WITH TIME ZONE. The AST gate
-        // in isAstExprSupported declines this shape too, and this is the second
-        // half of the same guard rather than a duplicate: signature matching
-        // runs through SignatureBinder with TypeCoercer::defaults(), so it
-        // cannot be assumed to reject a BIGINT-backed custom type against a
-        // `double` argument. If it bound, BinaryFunction would difference the
-        // packed values in floating point
-        // -- a different wrong answer from the one the AST gate removes, and
-        // just as silent. Declining here sends the expression to CPU, which is
-        // correct.
-        [](const core::TypedExprPtr& expr) {
-          for (const auto& input : expr->inputs()) {
-            if (input != nullptr && input->type() != nullptr &&
-                isTimestampWithTimeZoneType(input->type())) {
-              return false;
-            }
-          }
-          return true;
-        });
+        // The AST gate in isAstExprSupported declines TSWTZ arithmetic too.
+        // This is the corresponding guard for the function evaluator.
+        hasNoTimestampWithTimeZoneInput);
   };
 
   registerBinaryOp(
@@ -2917,7 +2915,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
             memory::MemoryPool* pool) {
           return std::make_shared<BinaryFunction>(expr, op, pool);
         },
-        comparisonSignatures);
+        comparisonSignatures,
+        /*overwrite=*/true,
+        hasNoTimestampWithTimeZoneInput);
   };
 
   registerComparisonOp(
@@ -3011,7 +3011,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
          memory::MemoryPool* pool) {
         return std::make_shared<BetweenFunction>(expr, pool);
       },
-      betweenSignatures);
+      betweenSignatures,
+      /*overwrite=*/true,
+      hasNoTimestampWithTimeZoneInput);
 
   //
   // greatest & least
