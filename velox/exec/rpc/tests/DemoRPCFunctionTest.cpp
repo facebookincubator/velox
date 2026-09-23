@@ -148,7 +148,18 @@ TEST_F(DemoRPCFunctionTest, signatures) {
 TEST_F(DemoRPCFunctionTest, metadata) {
   EXPECT_EQ(function_->name(), "demo_rpc");
   EXPECT_EQ(function_->resultType()->kind(), TypeKind::VARCHAR);
-  EXPECT_EQ(function_->tierKey(), "");
+  EXPECT_EQ(function_->admissionKey(), "");
+}
+
+TEST_F(DemoRPCFunctionTest, overloadSignal) {
+  std::vector<RPCResponse> responses;
+  RPCResponse response;
+  response.setPayload(makeTextPayload("demo: OVERLOAD"));
+  responses.push_back(std::move(response));
+
+  EXPECT_EQ(
+      function_->evaluateCongestion(responses),
+      AsyncRPCFunction::CongestionSignal::kOverloaded);
 }
 
 } // namespace

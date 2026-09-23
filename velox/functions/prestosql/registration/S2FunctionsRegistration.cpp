@@ -22,29 +22,31 @@ namespace facebook::velox::functions {
 
 using namespace facebook::velox;
 
-void registerS2Functions(const std::string& prefix) {
+void registerS2Functions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<S2CellAreaSqKmFunction, double, int64_t>(
-      {prefix + "s2_cell_area_sq_km"});
+      {prefix + "s2_cell_area_sq_km"}, {}, true, defaultOwner);
   registerFunction<S2CellContainsFunction, bool, int64_t, int64_t>(
-      {prefix + "s2_cell_contains"});
+      {prefix + "s2_cell_contains"}, {}, true, defaultOwner);
   registerFunction<S2CellFromTokenFunction, int64_t, Varchar>(
-      {prefix + "s2_cell_from_token"});
+      {prefix + "s2_cell_from_token"}, {}, true, defaultOwner);
   registerFunction<S2CellLevelFunction, int32_t, int64_t>(
-      {prefix + "s2_cell_level"});
+      {prefix + "s2_cell_level"}, {}, true, defaultOwner);
   registerFunction<S2CellParentFunction, int64_t, int64_t, int32_t>(
-      {prefix + "s2_cell_parent"});
+      {prefix + "s2_cell_parent"}, {}, true, defaultOwner);
   registerFunction<S2CellToTokenFunction, Varchar, int64_t>(
-      {prefix + "s2_cell_to_token"});
+      {prefix + "s2_cell_to_token"}, {}, true, defaultOwner);
   // Two overloads of s2_cells: fixed-level and dissolved (mixed-level).
   registerFunction<S2CellsFunction, Array<int64_t>, Geometry, int32_t>(
-      {prefix + "s2_cells"});
+      {prefix + "s2_cells"}, {}, true, defaultOwner);
   registerFunction<
       S2CellsDissolvedFunction,
       Array<int64_t>,
       Geometry,
       int32_t,
       int32_t,
-      int32_t>({prefix + "s2_cells"});
+      int32_t>({prefix + "s2_cells"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

@@ -135,12 +135,16 @@ TEST(HybridFlatMapTest, rejectsMalformedMetadata) {
       HybridFlatMap::deserialize(encodeRawMetadata({0, 1}, {1}, {})),
       "Hybrid FlatMap group IDs and key counts must have the same size");
   NIMBLE_ASSERT_THROW(
-      HybridFlatMap::deserialize(encodeRawMetadata({0, 1}, {1, 0}, {})),
+      HybridFlatMap::deserialize(encodeRawMetadata({0, 1}, {1, 1}, {"a"})),
       "Hybrid FlatMap group key counts must match group keys size");
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(
           encodeRawMetadata({0, 1}, {0, 0}, {"unexpected"})),
       "Hybrid FlatMap group key counts must match group keys size");
+  NIMBLE_ASSERT_THROW(
+      HybridFlatMap::deserialize(encodeRawMetadata(
+          {0, 1, HybridFlatMap::kDefaultGroupId}, {0, 0, 0}, {})),
+      "Hybrid FlatMap group count must not exceed group key count plus one");
 }
 
 TEST(HybridFlatMapTest, deserializeEnforcesGroupContract) {
@@ -157,7 +161,7 @@ TEST(HybridFlatMapTest, deserializeEnforcesGroupContract) {
       "Duplicate Hybrid FlatMap group ID: 0");
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(
-          encodeRawMetadata({defaultGroupId, defaultGroupId}, {0, 0}, {})),
+          encodeRawMetadata({defaultGroupId, defaultGroupId}, {0, 1}, {"a"})),
       "Duplicate Hybrid FlatMap group ID: 4294967295");
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(encodeRawMetadata({0, 1}, {1, 1}, {"a", "b"})),
@@ -168,7 +172,7 @@ TEST(HybridFlatMapTest, deserializeEnforcesGroupContract) {
       "Hybrid FlatMap Default group cannot contain group keys");
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(
-          encodeRawMetadata({0, defaultGroupId}, {0, 0}, {})),
+          encodeRawMetadata({0, defaultGroupId}, {0, 1}, {"a"})),
       "Hybrid FlatMap group must contain at least one key: 0");
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(

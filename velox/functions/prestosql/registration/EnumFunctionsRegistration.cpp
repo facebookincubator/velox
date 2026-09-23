@@ -22,17 +22,19 @@
 
 namespace facebook::velox::functions {
 
-void registerEnumFunctions(const std::string& prefix) {
+void registerEnumFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerBigintEnumType();
   registerVarcharEnumType();
 
   registerFunction<
       ParameterBinder<EnumKeyFunction, BigintEnumTypePtr>,
       Varchar,
-      BigintEnum<E1>>({prefix + "enum_key"});
+      BigintEnum<E1>>({prefix + "enum_key"}, true, defaultOwner);
   registerFunction<
       ParameterBinder<EnumKeyFunction, VarcharEnumTypePtr>,
       Varchar,
-      VarcharEnum<E1>>({prefix + "enum_key"});
+      VarcharEnum<E1>>({prefix + "enum_key"}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions

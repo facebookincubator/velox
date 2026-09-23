@@ -60,6 +60,8 @@ MergeJoin::MergeJoin(
           driverCtx->queryConfig().preferredOutputBatchRows()},
       dynamicOutputBatchSizeEnabled_{
           driverCtx->queryConfig().mergeJoinOutputBatchStartSize() != 0},
+      streamLeftSideEnabled_{
+          driverCtx->queryConfig().mergeJoinStreamLeftSide()},
       joinType_{joinNode->joinType()},
       numKeys_{joinNode->leftKeys().size()},
       rightNodeId_{joinNode->sources()[1]->id()},
@@ -778,6 +780,22 @@ bool MergeJoin::addToOutputImpl() {
       }
       matchedRightRowIds_.clear();
     }
+
+    if (!leftMatch_->complete && canStreamLeftSide()) {
+      // Every left row buffered so far has been emitted, but the group runs on
+      // into batches not read yet. Drop what was consumed and keep the right
+      // group, which the rest of the left rows still join against. The cursors
+      // are normally discarded along with the matches by the reset below; here
+      // the matches survive, so retire them by hand.
+      leftMatch_->cursor.reset();
+      rightMatch_->cursor.reset();
+      releaseConsumedLeftMatchInputs();
+      // outputSize_ is only reset when a new output_ is allocated, so it still
+      // holds the count of a batch already handed off. Without output_ there is
+      // nothing to report as full. doGetOutput() stops on the open group rather
+      // than continuing into the single-side paths.
+      return output_ != nullptr && outputSize_ == outputBatchSize_;
+    }
   }
 
   leftMatch_.reset();
@@ -1078,7 +1096,9 @@ RowVectorPtr MergeJoin::doGetOutput() {
   // match.
   if (leftMatch_ && leftMatch_->cursor) {
     VELOX_CHECK(rightMatch_ && rightMatch_->cursor);
-    VELOX_CHECK(leftMatch_->complete);
+    // When streaming the left side the output batch can fill part-way through
+    // a group whose remaining left rows have not been read yet.
+    VELOX_CHECK(leftMatch_->complete || canStreamLeftSide());
     VELOX_CHECK(rightMatch_->complete);
 
     // Not all rows from the last match fit in the output. Continue producing
@@ -1093,20 +1113,36 @@ RowVectorPtr MergeJoin::doGetOutput() {
   if (leftMatch_) {
     VELOX_CHECK(rightMatch_);
     if (!advanceMatch()) {
-      return nullptr;
+      // When streaming the left side the group is emitted in installments, so
+      // an incomplete left match with a complete right one still has output to
+      // produce. Anything else needs more input first.
+      if (!canStreamLeftSide() || !rightMatch_->complete ||
+          leftMatch_->complete) {
+        return nullptr;
+      }
+    } else {
+      VELOX_CHECK(leftMatch_->complete);
+      VELOX_CHECK(rightMatch_->complete);
     }
-    VELOX_CHECK(leftMatch_->complete);
-    VELOX_CHECK(rightMatch_->complete);
   }
 
   // There is no output-in-progress match, but there can be a complete match
   // ready for output.
   if (leftMatch_) {
-    VELOX_CHECK(leftMatch_->complete);
+    VELOX_CHECK(leftMatch_->complete || canStreamLeftSide());
     VELOX_CHECK(rightMatch_ && rightMatch_->complete);
 
     if (addToOutput()) {
       return std::move(output_);
+    }
+
+    // Only a streamed group survives addToOutput(); the buffered path resets
+    // both matches. It still has left rows that have not been read, so the
+    // single-side paths below must not run: leftHasNoInput() is noMoreInput_
+    // rather than an empty input_, so the inner join branch would reach
+    // clearLeftInput() and drop a batch this group still needs.
+    if (leftMatch_) {
+      return nullptr;
     }
   }
 
@@ -1384,14 +1420,42 @@ RowVectorPtr MergeJoin::handleSingleSideOutput() {
   return nullptr;
 }
 
+bool MergeJoin::canStreamLeftSide() const {
+  return streamLeftSideEnabled_ && filter_ == nullptr &&
+      (isInnerJoin(joinType_) || isLeftJoin(joinType_));
+}
+
+void MergeJoin::releaseConsumedLeftMatchInputs() {
+  auto& inputs = leftMatch_->inputs;
+  // The anchor plus the one batch appended since. This bound is what streaming
+  // buys; nothing else here would notice if it were lost.
+  VELOX_CHECK_LE(inputs.size(), 2);
+  // An open group ran to the end of its last batch: both findEndOfMatch() and
+  // the Match constructor leave endRowIndex at the batch size when they report
+  // incomplete, which is what makes the assignment below land past the retained
+  // batch rather than inside it.
+  VELOX_CHECK_EQ(leftMatch_->endRowIndex, inputs.back()->size());
+  if (inputs.size() > 1) {
+    inputs.erase(inputs.begin(), inputs.end() - 1);
+    auto& batchIds = leftMatch_->inputBatchIds;
+    batchIds.erase(batchIds.begin(), batchIds.end() - 1);
+    ++streamedLeftBatches_;
+  }
+  // The retained batch is consumed whether or not earlier ones were dropped.
+  leftMatch_->startRowIndex = leftMatch_->endRowIndex;
+}
+
 bool MergeJoin::advanceMatch() {
   VELOX_CHECK(leftMatch_);
   VELOX_CHECK(rightMatch_);
 
-  if (!advanceLeftMatch()) {
-    return false;
+  if (canStreamLeftSide()) {
+    // Right first: streaming the left replays the right group for every left
+    // row, so it has to be whole before any output is produced. The buffered
+    // order below advances the right only once the left is complete.
+    return advanceRightMatch() && advanceLeftMatch();
   }
-  return advanceRightMatch();
+  return advanceLeftMatch() && advanceRightMatch();
 }
 
 // Template implementation for advancing left or right match completion.
@@ -1680,6 +1744,9 @@ void MergeJoin::close() {
     lockedStats->addRuntimeStat(
         std::string(MergeJoin::kMatchedRightRows),
         RuntimeCounter(matchedRightRows_));
+    lockedStats->addRuntimeStat(
+        std::string(MergeJoin::kStreamedLeftBatches),
+        RuntimeCounter(streamedLeftBatches_));
   }
   if (rightSource_) {
     rightSource_->close();

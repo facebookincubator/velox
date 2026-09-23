@@ -363,12 +363,7 @@ HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
       keyScalarKind_{keyScalarKind},
       nullsDescriptor_{
           schemaBuilder_.allocateStreamOffset(),
-          ScalarKind::Bool} {
-  NIMBLE_USER_CHECK(
-      HybridFlatMap::supportedKeyKind(keyScalarKind_),
-      "Hybrid FlatMap key kind is unsupported: {}.",
-      keyScalarKind_);
-}
+          ScalarKind::Bool} {}
 
 const StreamDescriptorBuilder& HybridFlatMapTypeBuilder::nullsDescriptor()
     const {
@@ -532,6 +527,10 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
 
 std::shared_ptr<HybridFlatMapTypeBuilder>
 SchemaBuilder::createHybridFlatMapTypeBuilder(ScalarKind keyScalarKind) {
+  NIMBLE_USER_CHECK(
+      HybridFlatMap::supportedKeyKind(keyScalarKind),
+      "Hybrid FlatMap key kind is unsupported: {}.",
+      keyScalarKind);
   struct MakeSharedEnabler : public HybridFlatMapTypeBuilder {
     MakeSharedEnabler(SchemaBuilder& schemaBuilder, ScalarKind keyScalarKind)
         : HybridFlatMapTypeBuilder(schemaBuilder, keyScalarKind) {}

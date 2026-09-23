@@ -197,12 +197,19 @@ AsyncRPCFunction::CongestionSignal DemoBatchRPCFunction::evaluateCongestion(
   if (responses.empty()) {
     return CongestionSignal::kNone;
   }
+  bool hasNonOverloadError{false};
   for (const auto& response : responses) {
-    if (response.hasError()) {
-      return CongestionSignal::kError;
+    if (!response.hasError()) {
+      continue;
     }
+    if (response.errorKind() == velox::rpc::RPCErrorKind::kRateLimited ||
+        response.errorKind() == velox::rpc::RPCErrorKind::kTimeout) {
+      return CongestionSignal::kOverloaded;
+    }
+    hasNonOverloadError = true;
   }
-  return CongestionSignal::kSuccess;
+  return hasNonOverloadError ? CongestionSignal::kNonOverloadError
+                             : CongestionSignal::kSuccess;
 }
 
 std::vector<std::shared_ptr<exec::FunctionSignature>>

@@ -199,19 +199,21 @@ bool sameLogicalType(const TypeLike& lhs, const TypeLike& rhs) {
     case Kind::FlatMap: {
       const auto& lhsMap = lhs.asFlatMap();
       const auto& rhsMap = rhs.asFlatMap();
-      NIMBLE_CHECK_GT(
-          lhsMap.childrenCount(), 0, "FlatMap must have at least one child.");
-      NIMBLE_CHECK_GT(
-          rhsMap.childrenCount(), 0, "FlatMap must have at least one child.");
+      const auto lhsChildrenCount = lhsMap.childrenCount();
+      const auto rhsChildrenCount = rhsMap.childrenCount();
+      if (lhsChildrenCount == 0 || rhsChildrenCount == 0) {
+        return lhsChildrenCount == rhsChildrenCount &&
+            lhsMap.keyScalarKind() == rhsMap.keyScalarKind();
+      }
       const auto& lhsValueType = dereferenceType(lhsMap.childAt(0));
-      for (size_t i = 1; i < lhsMap.childrenCount(); ++i) {
+      for (size_t i = 1; i < lhsChildrenCount; ++i) {
         if (!sameLogicalType(
                 lhsValueType, dereferenceType(lhsMap.childAt(i)))) {
           return false;
         }
       }
       const auto& rhsValueType = dereferenceType(rhsMap.childAt(0));
-      for (size_t i = 1; i < rhsMap.childrenCount(); ++i) {
+      for (size_t i = 1; i < rhsChildrenCount; ++i) {
         if (!sameLogicalType(
                 rhsValueType, dereferenceType(rhsMap.childAt(i)))) {
           return false;

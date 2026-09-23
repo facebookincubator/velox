@@ -10392,4 +10392,24 @@ TEST_F(WriterTest, randomEncodingSelectionDeterministic) {
   EXPECT_TRUE(anyDifferent)
       << "no alternate seed produced a different layout for seed " << seed;
 }
+
+// The suspend and resume API is declared ahead of the write path that fills it
+// in. Pin the surface, so that a caller reaching it today gets a clear error
+// rather than a link failure.
+TEST_F(WriterTest, suspendAndResumeAreNotImplemented) {
+  const auto type = velox::ROW({{"a", velox::BIGINT()}});
+  std::string file;
+  nimble::Writer writer{
+      type,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      nimble::WriterOptions{}};
+
+  NIMBLE_ASSERT_THROW(
+      writer.suspend(), "Nimble writer suspend is not implemented yet.");
+  NIMBLE_ASSERT_THROW(
+      nimble::Writer::resume(
+          type, "/tmp/suspended.nimble", *rootPool_, nimble::WriterOptions{}),
+      "Nimble writer resume is not implemented yet.");
+}
 } // namespace facebook

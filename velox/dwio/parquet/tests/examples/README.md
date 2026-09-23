@@ -344,6 +344,33 @@ annotation, definition level, repetition level, and compression when useful.
 
 - Purpose: Protobuf-style repeated string field read as an array of strings.
 
+### `legacy_array_of_struct_of_array.parquet`
+
+- Metadata: `created_by=parquet-mr version 1.13.1`, 1 row, 1 row group, and
+  four uncompressed INT64 leaves: `ads_id` and `shop_id` (definition level 1,
+  repetition level 1), plus `streamer_cat_ids` and `items` (definition level
+  2, repetition level 2). The Protobuf writer metadata identifies
+  `com.test.parquet.proto.AdsProto$AdRecord` and sets
+  `parquet.proto.writeSpecsCompliant=false`.
+- Parquet schema:
+
+  ```text
+  message com.test.parquet.proto.AdRecord {
+    repeated group ads {
+      required int64 ads_id;
+      required int64 shop_id;
+      repeated int64 streamer_cat_ids;
+      repeated int64 items;
+    }
+  }
+  ```
+
+- Purpose: Regression fixture for the legacy Protobuf encoding of
+  `ARRAY<ROW<ads_id: BIGINT, shop_id: BIGINT, streamer_cat_ids: ARRAY(BIGINT),
+  items: ARRAY(BIGINT)>>`. It verifies that Velox computes definition and
+  repetition levels correctly for arrays nested inside repeated struct elements,
+  including an empty `streamer_cat_ids` array.
+
 ### `nested_array_struct.parquet`
 
 - Metadata: `created_by=parquet-mr`, 3 rows, 1 row group, leaves

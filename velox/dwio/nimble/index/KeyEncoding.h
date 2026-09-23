@@ -169,6 +169,22 @@ class PrefixKeyEncoding final : public KeyEncoding {
   }
 
  private:
+  // Reconstructs prefix-compressed keys while retaining capacity across rows.
+  class KeyScratch;
+  class PrefixKeyCursor;
+
+  // Returns a cleared thread-local scratch buffer for non-cursor reads.
+  static KeyScratch& scanScratch();
+
+  // Decodes the entry at 'position' and advances both it and 'row'. 'end'
+  // bounds the encoded data so a corrupt length cannot read past it. The
+  // returned view aliases 'scratch' and is invalidated by the next call.
+  static std::string_view decodeEntryAt(
+      const char*& position,
+      const char* end,
+      uint32_t& row,
+      KeyScratch& scratch);
+
   uint32_t restartOffset(uint32_t restartIndex) const;
 
   const char* restartPosition(uint32_t restartIndex) const {
@@ -180,6 +196,7 @@ class PrefixKeyEncoding final : public KeyEncoding {
   const uint32_t numRestarts_;
   const char* const restartOffsets_;
   const char* const dataStart_;
+  const char* const dataEnd_;
 };
 
 } // namespace facebook::nimble::index
