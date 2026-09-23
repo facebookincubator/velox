@@ -234,6 +234,7 @@ TEST_F(HashJoinTest, rightJoinNullPadsRowWithArray) {
                       {"payload", "b_key"},
                       core::JoinType::kRight)
                   .planNode();
+  // Child values are placeholders; only the null parent ROW is compared.
   auto expectedPayload = makeRowVector(
       {"x", "items"},
       {makeFlatVector<int64_t>({0}), makeArrayVector<int32_t>({{}})},
