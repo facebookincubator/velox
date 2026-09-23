@@ -1223,7 +1223,12 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
       }
       createDriverFactoriesLocked(maxDrivers);
     }
-    initializePartitionOutput();
+    if (!initializePartitionOutput()) {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      LOG(WARNING) << "Task " << taskId_ << " was terminated while starting: "
+                   << errorMessageLocked();
+      return;
+    }
     createAndStartDrivers(concurrentSplitGroups);
   } catch (const std::exception&) {
     if (isRunning()) {
@@ -1354,18 +1359,23 @@ void Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
   }
 }
 
-void Task::initializePartitionOutput() {
-  VELOX_CHECK(
-      isRunningLocked(),
-      "Task {} has already been terminated before start: {}",
-      taskId_,
-      errorMessageLocked());
-
+bool Task::initializePartitionOutput() {
   std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
       nullptr};
   int numOutputDrivers{0};
+  struct ExchangeClientSpec {
+    int32_t pipelineId;
+    core::PlanNodePtr planNode;
+    int32_t numberOfConsumers;
+  };
+  std::vector<ExchangeClientSpec> exchangeClientsToCreate;
   {
     std::unique_lock<std::timed_mutex> l(mutex_);
+    VELOX_CHECK(
+        isRunningLocked(),
+        "Task {} has already been terminated before start: {}",
+        taskId_,
+        errorMessageLocked());
     const auto numPipelines = driverFactories_.size();
     exchangeClients_.resize(numPipelines);
     exchangeTransportEntries_.resize(numPipelines);
@@ -1396,9 +1406,18 @@ void Task::initializePartitionOutput() {
       // exchange client for each merge source to fetch data as we can't mix
       // the data from different sources for merging.
       if (factory->needsExchangeClient().has_value()) {
-        createExchangeClientLocked(
-            pipeline, factory->planNodes.front(), factory->numDrivers);
+        exchangeClientsToCreate.push_back(
+            {pipeline,
+             factory->planNodes.front(),
+             folly::to<int32_t>(factory->numDrivers)});
       }
+    }
+  }
+
+  for (const auto& spec : exchangeClientsToCreate) {
+    if (!createExchangeClient(
+            spec.pipelineId, spec.planNode, spec.numberOfConsumers)) {
+      return false;
     }
   }
 
@@ -1426,6 +1445,7 @@ void Task::initializePartitionOutput() {
         numOutputDrivers,
         partitionedOutputNode->transportOptions());
   }
+  return true;
 }
 
 std::weak_ptr<OutputBufferManager> Task::outputBufferManager() const {
@@ -1737,8 +1757,12 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
 }
 
 void Task::ensureSplitGroupsAreBeingProcessedLocked() {
-  // Only try creating more drivers if we are running.
-  if (not isRunningLocked() or (numDriversPerSplitGroup_ == 0)) {
+  // Splits may arrive while start() is initializing pipeline-global state.
+  // createAndStartDrivers() allocates driver slots only after exchange clients
+  // and output state are ready, then calls this method to process queued split
+  // groups.
+  if (not isRunningLocked() or (numDriversPerSplitGroup_ == 0) or
+      drivers_.empty()) {
     return;
   }
 
@@ -2780,6 +2804,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   EventCompletionNotifier stateChangeNotifier;
   std::vector<ContinuePromise> barrierPromises;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
+  std::vector<std::shared_ptr<ExchangeTransportEntry>> exchangeTransportEntries;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
@@ -2841,6 +2866,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     exchangeClients.swap(exchangeClients_);
+    exchangeTransportEntries.swap(exchangeTransportEntries_);
 
     barrierPromises.swap(barrierFinishPromises_);
     // Clear the barrier flag to ensure underBarrier() returns false after task
@@ -2942,6 +2968,10 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       client->noMoreRemoteTasks();
     }
   }
+
+  // Transport entries can own state used by their clients. Keep that state
+  // alive until all remaining remote splits have been delivered.
+  exchangeTransportEntries.clear();
 
   for (auto& splitGroupState : splitGroupStates) {
     splitGroupState.clear();
@@ -3864,11 +3894,16 @@ std::string exchangeTransportKindOf(const core::PlanNodePtr& planNode) {
 }
 } // namespace
 
-void Task::createExchangeClientLocked(
+bool Task::createExchangeClient(
     int32_t pipelineId,
     const core::PlanNodePtr& planNode,
     int32_t numberOfConsumers) {
-  const auto& planNodeId = planNode->id();
+  std::unique_lock<std::timed_mutex> l(mutex_);
+  if (!isRunningLocked()) {
+    return false;
+  }
+
+  const auto planNodeId = planNode->id();
   VELOX_CHECK_NULL(
       getExchangeClientLocked(pipelineId),
       "Exchange client has been created at pipeline: {} for planNode: {}",
@@ -3898,25 +3933,33 @@ void Task::createExchangeClientLocked(
   // from the session config. Low-water mark for filling the exchange queue is
   // 1/2 of the per worker buffer size of the producers.
   const auto& queryConfig = queryCtx()->queryConfig();
-  auto client = entry->makeClient(
-      ExchangeClientContext{
-          .taskId = taskId_,
-          .destination = destination_,
-          .numberOfConsumers = numberOfConsumers,
-          .maxExchangeBufferSize = queryConfig.maxExchangeBufferSize(),
-          .minExchangeOutputBatchBytes =
-              queryConfig.minExchangeOutputBatchBytes(),
-          .pool = addExchangeClientPool(planNodeId, pipelineId),
-          .executor = queryCtx()->executor(),
-          .queryConfig = queryConfig});
+  ExchangeClientContext context{
+      .taskId = taskId_,
+      .destination = destination_,
+      .numberOfConsumers = numberOfConsumers,
+      .maxExchangeBufferSize = queryConfig.maxExchangeBufferSize(),
+      .minExchangeOutputBatchBytes = queryConfig.minExchangeOutputBatchBytes(),
+      .pool = addExchangeClientPool(planNodeId, pipelineId),
+      .executor = queryCtx()->executor(),
+      .queryConfig = queryConfig};
+  l.unlock();
+
+  auto client = entry->makeClient(context);
   VELOX_CHECK_NOT_NULL(
       client,
       "Exchange transport created a null exchange client for transport '{}'",
       transport);
 
+  l.lock();
+  if (!isRunningLocked()) {
+    l.unlock();
+    client->close();
+    return false;
+  }
   exchangeClients_[pipelineId] = std::move(client);
   exchangeTransportEntries_[pipelineId] = std::move(entry);
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  return true;
 }
 
 std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
