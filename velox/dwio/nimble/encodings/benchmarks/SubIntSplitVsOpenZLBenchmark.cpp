@@ -78,6 +78,28 @@ DEFINE_double(
     0.0,
     "SubIntSplit planner decode cost per extra section, in bits per value; "
     "0 keeps the storage-only split.");
+DEFINE_int32(
+    planner_samples,
+    0,
+    "SubIntSplit planner sample count; 0 keeps the built-in default (2048).");
+DEFINE_double(
+    prune_threshold,
+    -1.0,
+    "SubIntSplit planner boundary prune threshold; negative keeps the default "
+    "(0.001).");
+DEFINE_int32(
+    max_boundaries,
+    0,
+    "SubIntSplit planner candidate boundary cap; 0 is unlimited.");
+DEFINE_int32(
+    max_section_width,
+    0,
+    "SubIntSplit planner widest scored section; 0 is unlimited.");
+DEFINE_int32(
+    freq_max_width,
+    0,
+    "SubIntSplit planner widest section given frequency metrics; 0 is "
+    "unlimited.");
 DEFINE_bool(
     layout,
     false,
@@ -412,6 +434,15 @@ Encoded encodeSubIntSplitWith(
       factory.createPolicy(DataType::Uint64)};
   Encoding::Options encodeOptions;
   encodeOptions.subIntSplitDecodeCostBitsPerValue = FLAGS_decode_cost_bits;
+  encodeOptions.subIntSplitPlannerMaxSamples =
+      static_cast<uint32_t>(FLAGS_planner_samples);
+  encodeOptions.subIntSplitBoundaryPruneThreshold = FLAGS_prune_threshold;
+  encodeOptions.subIntSplitMaxCandidateBoundaries =
+      static_cast<uint32_t>(FLAGS_max_boundaries);
+  encodeOptions.subIntSplitMaxSectionWidth =
+      static_cast<uint32_t>(FLAGS_max_section_width);
+  encodeOptions.subIntSplitFrequencyMetricsMaxWidth =
+      static_cast<uint32_t>(FLAGS_freq_max_width);
   auto encoded = SubIntSplitEncoding<uint64_t>::encode(
       selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
