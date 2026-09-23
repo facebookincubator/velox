@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -176,6 +177,27 @@ TEST_F(ExchangeTransportRegistryTest, defaultTransportResolves) {
   EXPECT_TRUE(defaultEntry->makeClient != nullptr);
   EXPECT_TRUE(defaultEntry->makeExchangeOperator != nullptr);
   EXPECT_TRUE(defaultEntry->makeMergeExchangeOperator != nullptr);
+}
+
+TEST_F(ExchangeTransportRegistryTest, defaultTransportRejectsOversizedBuffer) {
+  auto defaultEntry = ExchangeTransportRegistry::tryGet(
+      std::string(core::TransportKind::kInMemory));
+  ASSERT_NE(defaultEntry, nullptr);
+  const core::QueryConfig queryConfig{
+      std::unordered_map<std::string, std::string>{}};
+
+  VELOX_ASSERT_USER_THROW(
+      defaultEntry->makeClient(
+          ExchangeClientContext{
+              .taskId = "task",
+              .destination = 0,
+              .numberOfConsumers = 1,
+              .maxExchangeBufferSize = std::numeric_limits<uint64_t>::max(),
+              .minExchangeOutputBatchBytes = 0,
+              .pool = nullptr,
+              .executor = nullptr,
+              .queryConfig = queryConfig}),
+      core::QueryConfig::kMaxExchangeBufferSize);
 }
 
 TEST_F(ExchangeTransportRegistryTest, defaultTransportSurvivesReset) {

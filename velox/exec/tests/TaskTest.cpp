@@ -845,23 +845,17 @@ TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
   const std::string transportKind{"no-merge-transport"};
   ExchangeTransportRegistry::global().insert(
       transportKind,
-      ExchangeTransportEntry::make<InMemoryExchangeClient>(
-          [](const ExchangeClientContext& context) {
-            return std::make_shared<InMemoryExchangeClient>(
-                context.taskId,
-                context.destination,
-                context.maxExchangeBufferSize,
-                context.numberOfConsumers,
-                context.minExchangeOutputBatchBytes,
-                context.pool,
-                context.executor);
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
           },
           [](int32_t operatorId,
              DriverCtx* ctx,
              const std::shared_ptr<const core::ExchangeNode>& node,
-             const std::shared_ptr<InMemoryExchangeClient>& client)
+             const std::shared_ptr<TestExchangeClient>&)
               -> std::unique_ptr<Operator> {
-            return std::make_unique<Exchange>(operatorId, ctx, node, client);
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
           }),
       /*overwrite=*/true);
   SCOPE_EXIT {

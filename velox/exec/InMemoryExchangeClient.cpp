@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <ostream>
@@ -91,10 +92,16 @@ InMemoryExchangeClient::makeDefaultTransportEntry() {
         // The two byte limits come from the Task-supplied context rather than
         // being re-derived by the transport.
         const auto& queryConfig = context.queryConfig;
+        VELOX_USER_CHECK_LE(
+            context.maxExchangeBufferSize,
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+            "{} must not exceed {} bytes",
+            core::QueryConfig::kMaxExchangeBufferSize,
+            std::numeric_limits<int64_t>::max());
         return std::make_shared<InMemoryExchangeClient>(
             context.taskId,
             context.destination,
-            context.maxExchangeBufferSize,
+            static_cast<int64_t>(context.maxExchangeBufferSize),
             context.numberOfConsumers,
             context.minExchangeOutputBatchBytes,
             context.pool,

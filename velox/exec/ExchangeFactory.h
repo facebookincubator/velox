@@ -70,7 +70,7 @@ struct ExchangeClientContext {
   int32_t numberOfConsumers;
 
   /// Bytes the client may buffer before applying backpressure.
-  int64_t maxExchangeBufferSize;
+  uint64_t maxExchangeBufferSize;
 
   /// Bytes to accumulate before unblocking a consumer; zero delivers each page
   /// as it arrives.

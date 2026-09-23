@@ -21,6 +21,8 @@
 #include <exception>
 #include <string>
 
+#include <folly/Conv.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/file/FileSystems.h"
@@ -3901,8 +3903,7 @@ void Task::createExchangeClientLocked(
           .taskId = taskId_,
           .destination = destination_,
           .numberOfConsumers = numberOfConsumers,
-          .maxExchangeBufferSize =
-              static_cast<int64_t>(queryConfig.maxExchangeBufferSize()),
+          .maxExchangeBufferSize = queryConfig.maxExchangeBufferSize(),
           .minExchangeOutputBatchBytes =
               queryConfig.minExchangeOutputBatchBytes(),
           .pool = addExchangeClientPool(planNodeId, pipelineId),
