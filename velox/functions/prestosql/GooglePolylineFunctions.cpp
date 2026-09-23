@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#ifdef VELOX_ENABLE_GEO
 #include "velox/functions/prestosql/GooglePolylineFunctions.h"
 
 namespace facebook::velox::functions {
@@ -89,3 +90,5 @@ Status validateAndComputePrecision(
 } // namespace detail
 
 } // namespace facebook::velox::functions
+
+#endif // VELOX_ENABLE_GEO
