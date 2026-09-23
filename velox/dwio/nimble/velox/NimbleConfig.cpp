@@ -331,6 +331,14 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
         "nimble.chunking.writer.wide.schema.max.chunk.size",
         kChunkingWriterWideSchemaMaxChunkSize);
 
+/* static */ Config::Entry<const std::vector<std::string>> Config::FSST_COLUMNS(
+    "nimble.fsst.columns",
+    {},
+    [](const std::vector<std::string>& val) { return folly::join(",", val); },
+    [](const std::string& /* key */, const std::string& val) {
+      return parseVector<std::string>(val);
+    });
+
 /* static */ Config::Entry<std::string> Config::FLUSH_POLICY_CONFIG(
     "nimble.flush_policy_config",
     "");
@@ -341,6 +349,10 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<std::string> Config::ENCODING_SELECTION_CONFIG(
     "nimble.encoding_selection_config",
+    "");
+
+/* static */ Config::Entry<std::string> Config::COMPRESSION_TYPE(
+    "nimble.compression_type",
     "");
 
 // EXPERIMENTAL: Cluster index is not production-ready. Do not enable for

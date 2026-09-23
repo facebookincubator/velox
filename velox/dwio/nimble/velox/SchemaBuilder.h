@@ -29,7 +29,7 @@
 // streams stored in the file. Each stream has a unique offset assigned to it,
 // which is later used when storing stream related data in the tablet footer.
 // The class supports primitive types (scalar types) and complex types: rows,
-// arrays, maps and flat maps.
+// arrays, maps, FlatMaps, and Hybrid FlatMaps.
 //
 // This class serves two purposes:
 // 1. Allow constructing parent schema nodes, before creating their children,
@@ -56,6 +56,7 @@ class ArrayTypeBuilder;
 class MapTypeBuilder;
 class RowTypeBuilder;
 class FlatMapTypeBuilder;
+class HybridFlatMapTypeBuilder;
 class ArrayWithOffsetsTypeBuilder;
 class SlidingWindowMapTypeBuilder;
 
@@ -122,16 +123,16 @@ class TypeBuilder {
 
   Kind kind() const;
 
-  // Sets the per-type string-keyed attribute bag. Insertion order is
-  // preserved end-to-end through schema serialization. Overwrites any
-  // previously set attributes. Intended for writer-side callers that annotate
-  // nodes with format-specific metadata.
+  /// Sets the per-type string-keyed attribute bag. Insertion order is
+  /// preserved end-to-end through schema serialization. Overwrites any
+  /// previously set attributes. Intended for writer-side callers that annotate
+  /// nodes with format-specific metadata.
   void setAttributes(
       std::vector<std::pair<std::string, std::string>> attributes) {
     attributes_ = std::move(attributes);
   }
 
-  // Returns the per-type string-keyed attribute bag. Empty by default.
+  /// Returns the per-type string-keyed attribute bag. Empty by default.
   const std::vector<std::pair<std::string, std::string>>& attributes() const {
     return attributes_;
   }
@@ -143,6 +144,7 @@ class TypeBuilder {
   SlidingWindowMapTypeBuilder& asSlidingWindowMap();
   RowTypeBuilder& asRow();
   FlatMapTypeBuilder& asFlatMap();
+  HybridFlatMapTypeBuilder& asHybridFlatMap();
   ArrayWithOffsetsTypeBuilder& asArrayWithOffsets();
   const ScalarTypeBuilder& asScalar() const;
   const TimestampMicroNanoTypeBuilder& asTimestampMicroNano() const;
@@ -151,6 +153,7 @@ class TypeBuilder {
   const SlidingWindowMapTypeBuilder& asSlidingWindowMap() const;
   const RowTypeBuilder& asRow() const;
   const FlatMapTypeBuilder& asFlatMap() const;
+  const HybridFlatMapTypeBuilder& asHybridFlatMap() const;
   const ArrayWithOffsetsTypeBuilder& asArrayWithOffsets() const;
 
  protected:
@@ -309,6 +312,64 @@ class FlatMapTypeBuilder : public TypeBuilder {
   friend class SchemaBuilder;
 };
 
+class HybridFlatMapTypeBuilder : public TypeBuilder {
+ public:
+  /// References the key and row-presence streams for one physical group.
+  struct GroupDescriptor {
+    /// Stores the actual keys represented by the following in-map segments.
+    const StreamDescriptorBuilder& keyDescriptor;
+    /// Stores key-major row-presence bits for the observed keys.
+    const StreamDescriptorBuilder& inMapDescriptor;
+  };
+
+  /// Provides a read-only view of one physical group.
+  struct Group {
+    uint32_t groupId;
+    const std::vector<std::string>& groupKeys;
+    const StreamDescriptorBuilder& keyDescriptor;
+    const StreamDescriptorBuilder& inMapDescriptor;
+    const TypeBuilder& valueType;
+  };
+
+  /// Returns the map-level null stream descriptor.
+  const StreamDescriptorBuilder& nullsDescriptor() const;
+
+  /// Returns the scalar type used by map keys and group keys streams.
+  ScalarKind keyScalarKind() const;
+
+  /// Registers one physical group and its complete value subtree.
+  GroupDescriptor addGroup(
+      uint32_t groupId,
+      std::vector<std::string> groupKeys,
+      std::shared_ptr<TypeBuilder> valueType);
+
+  /// Returns the number of physical groups, including Default.
+  size_t groupCount() const;
+
+  /// Returns the group at zero-based schema-order `index`. The returned
+  /// non-owning view is invalidated by a subsequent call to addGroup().
+  Group groupAt(size_t index) const;
+
+ private:
+  struct StoredGroup {
+    uint32_t groupId;
+    std::vector<std::string> groupKeys;
+    std::unique_ptr<StreamDescriptorBuilder> keyDescriptor;
+    std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
+    std::shared_ptr<const TypeBuilder> valueType;
+  };
+
+  HybridFlatMapTypeBuilder(
+      SchemaBuilder& schemaBuilder,
+      ScalarKind keyScalarKind);
+
+  const ScalarKind keyScalarKind_;
+  StreamDescriptorBuilder nullsDescriptor_;
+  std::vector<StoredGroup> groups_;
+
+  friend class SchemaBuilder;
+};
+
 class ArrayWithOffsetsTypeBuilder : public TypeBuilder {
  public:
   const StreamDescriptorBuilder& offsetsDescriptor() const;
@@ -358,6 +419,11 @@ class SchemaBuilder {
   // Create a flat map builder. |keyScalarKind| captures the type of the map
   // key.
   std::shared_ptr<FlatMapTypeBuilder> createFlatMapTypeBuilder(
+      ScalarKind keyScalarKind);
+
+  /// Creates a hybrid flat map builder. Every physical group owns a complete
+  /// value subtree, following FlatMap's child-type model.
+  std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind);
 
   // Retrieves all the nodes CURRENTLY known to the schema builder.
@@ -410,6 +476,7 @@ class SchemaBuilder {
   friend class RowTypeBuilder;
   friend class MapTypeBuilder;
   friend class FlatMapTypeBuilder;
+  friend class HybridFlatMapTypeBuilder;
   friend class SlidingWindowMapTypeBuilder;
   friend std::ostream& operator<<(
       std::ostream& out,

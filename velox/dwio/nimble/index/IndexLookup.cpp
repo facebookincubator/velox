@@ -24,6 +24,12 @@
 
 namespace facebook::nimble::index {
 
+const std::shared_ptr<const IndexLookup::LookupRequest::Options>&
+IndexLookup::LookupRequest::defaultOptions() {
+  static const auto kDefaultOptions = std::make_shared<const Options>();
+  return kDefaultOptions;
+}
+
 void IndexLookup::Options::validate() const {
   NIMBLE_CHECK_NOT_NULL(file.get());
   NIMBLE_CHECK_NOT_NULL(ioOptions);

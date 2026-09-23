@@ -126,5 +126,35 @@ TEST(FilePropertiesTest, rejectsOmittedStorageWithoutColumns) {
   }
 }
 
+TEST(FilePropertiesTest, roundTripStreamChecksums) {
+  FileProperties absent{/*compactRowCountEncoding=*/false,
+                        /*clusterIndexKeyColumnStorageOmitted=*/false,
+                        /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
+  EXPECT_FALSE(
+      FileProperties::deserialize(absent.serialize()).hasStreamChecksums());
+
+  FileProperties present{/*compactRowCountEncoding=*/false,
+                         /*clusterIndexKeyColumnStorageOmitted=*/false,
+                         /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
+                         /*hasStreamChecksums=*/true};
+  EXPECT_TRUE(
+      FileProperties::deserialize(present.serialize()).hasStreamChecksums());
+}
+
+// A file whose properties section exists only to record stream checksums must
+// still round trip; the writer skips the section entirely when nothing is set.
+TEST(FilePropertiesTest, streamChecksumsCoexistWithOtherProperties) {
+  FileProperties properties{
+      /*compactRowCountEncoding=*/true,
+      /*clusterIndexKeyColumnStorageOmitted=*/true,
+      /*clusterIndexKeyColumnsWithOmittedStorage=*/{"key0"},
+      /*hasStreamChecksums=*/true};
+
+  const auto decoded = FileProperties::deserialize(properties.serialize());
+  EXPECT_TRUE(decoded.compactRowCountEncoding());
+  EXPECT_TRUE(decoded.clusterIndexKeyColumnStorageOmitted());
+  EXPECT_TRUE(decoded.hasStreamChecksums());
+}
+
 } // namespace
 } // namespace facebook::nimble

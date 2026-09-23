@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
 
@@ -51,6 +53,10 @@ FlatMapTypeBuilder& TypeBuilder::asFlatMap() {
   return dynamic_cast<FlatMapTypeBuilder&>(*this);
 }
 
+HybridFlatMapTypeBuilder& TypeBuilder::asHybridFlatMap() {
+  return dynamic_cast<HybridFlatMapTypeBuilder&>(*this);
+}
+
 ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() {
   return dynamic_cast<ArrayWithOffsetsTypeBuilder&>(*this);
 }
@@ -81,6 +87,10 @@ const RowTypeBuilder& TypeBuilder::asRow() const {
 
 const FlatMapTypeBuilder& TypeBuilder::asFlatMap() const {
   return dynamic_cast<const FlatMapTypeBuilder&>(*this);
+}
+
+const HybridFlatMapTypeBuilder& TypeBuilder::asHybridFlatMap() const {
+  return dynamic_cast<const HybridFlatMapTypeBuilder&>(*this);
 }
 
 const ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() const {
@@ -346,6 +356,62 @@ const StreamDescriptorBuilder& FlatMapTypeBuilder::addChild(
   return *inMapDescriptor;
 }
 
+HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
+    SchemaBuilder& schemaBuilder,
+    ScalarKind keyScalarKind)
+    : TypeBuilder{schemaBuilder, Kind::HybridFlatMap},
+      keyScalarKind_{keyScalarKind},
+      nullsDescriptor_{
+          schemaBuilder_.allocateStreamOffset(),
+          ScalarKind::Bool} {}
+
+const StreamDescriptorBuilder& HybridFlatMapTypeBuilder::nullsDescriptor()
+    const {
+  return nullsDescriptor_;
+}
+
+ScalarKind HybridFlatMapTypeBuilder::keyScalarKind() const {
+  return keyScalarKind_;
+}
+
+HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
+    uint32_t groupId,
+    std::vector<std::string> groupKeys,
+    std::shared_ptr<TypeBuilder> valueType) {
+  schemaBuilder_.registerChild(valueType);
+  auto& group = groups_.emplace_back(
+      StoredGroup{
+          .groupId = groupId,
+          .groupKeys = std::move(groupKeys),
+          .keyDescriptor = std::make_unique<StreamDescriptorBuilder>(
+              schemaBuilder_.allocateStreamOffset(), keyScalarKind_),
+          .inMapDescriptor = std::make_unique<StreamDescriptorBuilder>(
+              schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
+          .valueType = std::move(valueType),
+      });
+  return {
+      .keyDescriptor = *group.keyDescriptor,
+      .inMapDescriptor = *group.inMapDescriptor,
+  };
+}
+
+size_t HybridFlatMapTypeBuilder::groupCount() const {
+  return groups_.size();
+}
+
+HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::groupAt(
+    size_t index) const {
+  NIMBLE_CHECK_LT(index, groups_.size(), "Index out of range.");
+  const auto& group = groups_[index];
+  return {
+      .groupId = group.groupId,
+      .groupKeys = group.groupKeys,
+      .keyDescriptor = *group.keyDescriptor,
+      .inMapDescriptor = *group.inMapDescriptor,
+      .valueType = *group.valueType,
+  };
+}
+
 std::shared_ptr<ScalarTypeBuilder> SchemaBuilder::createScalarTypeBuilder(
     ScalarKind scalarKind) {
   struct MakeSharedEnabler : public ScalarTypeBuilder {
@@ -459,6 +525,21 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
   return type;
 }
 
+std::shared_ptr<HybridFlatMapTypeBuilder>
+SchemaBuilder::createHybridFlatMapTypeBuilder(ScalarKind keyScalarKind) {
+  NIMBLE_USER_CHECK(
+      HybridFlatMap::supportedKeyKind(keyScalarKind),
+      "Hybrid FlatMap key kind is unsupported: {}.",
+      keyScalarKind);
+  struct MakeSharedEnabler : public HybridFlatMapTypeBuilder {
+    MakeSharedEnabler(SchemaBuilder& schemaBuilder, ScalarKind keyScalarKind)
+        : HybridFlatMapTypeBuilder(schemaBuilder, keyScalarKind) {}
+  };
+  auto type = std::make_shared<MakeSharedEnabler>(*this, keyScalarKind);
+  roots_.insert(type);
+  return type;
+}
+
 offset_size SchemaBuilder::nodeCount() const {
   return currentOffset_;
 }
@@ -533,6 +614,27 @@ const TypeBuilder& schemaChild(const TypeBuilder& type) {
 const Type& schemaChild(const std::shared_ptr<const Type>& type) {
   return *type;
 }
+
+void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
+  HybridFlatMap::validate(
+      hybridMap.groupCount(),
+      [&hybridMap](size_t index) { return hybridMap.groupAt(index).groupId; },
+      [&hybridMap](size_t index) -> const auto& {
+        return hybridMap.groupAt(index).groupKeys;
+      });
+
+  const auto& expectedValueType = hybridMap.groupAt(0).valueType;
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto& valueType = hybridMap.groupAt(i).valueType;
+    const bool hasSameLogicalType =
+        detail::sameLogicalType(expectedValueType, valueType);
+    NIMBLE_CHECK(
+        hasSameLogicalType,
+        "Hybrid FlatMap groups must have the same logical value type.");
+  }
+}
+
+void validateForSerialization(const HybridFlatMapType&) {}
 
 template <typename TypeLike>
 void addSchemaNode(
@@ -673,6 +775,44 @@ void addSchemaNode(
 
       break;
     }
+    case Kind::HybridFlatMap: {
+      const auto& hybridMap = type.asHybridFlatMap();
+      validateForSerialization(hybridMap);
+      HybridFlatMap metadata;
+      metadata.groups.reserve(hybridMap.groupCount());
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto& group = hybridMap.groupAt(i);
+        metadata.groups.push_back(
+            HybridFlatMap::Group{
+                .groupId = group.groupId,
+                .groupKeys = group.groupKeys,
+            });
+      }
+      auto attributes = type.attributes();
+      metadata.setAttribute(attributes);
+      nodes.emplace_back(
+          type.kind(),
+          hybridMap.nullsDescriptor().offset(),
+          hybridMap.keyScalarKind(),
+          std::move(name),
+          hybridMap.groupCount(),
+          std::move(attributes));
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto& group = hybridMap.groupAt(i);
+        nodes.emplace_back(
+            Kind::Scalar,
+            group.keyDescriptor.offset(),
+            group.keyDescriptor.scalarKind(),
+            std::nullopt);
+        nodes.emplace_back(
+            Kind::Scalar,
+            group.inMapDescriptor.offset(),
+            group.inMapDescriptor.scalarKind(),
+            std::nullopt);
+        addSchemaNode(nodes, schemaChild(group.valueType));
+      }
+      break;
+    }
 
     default:
       NIMBLE_UNREACHABLE("Unknown type kind: {}.", toString(type.kind()));
@@ -760,6 +900,20 @@ void printType(
             indentation + 2,
             // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
             map.nameAt(i));
+      }
+      out << "\n";
+      break;
+    }
+    case Kind::HybridFlatMap: {
+      const auto& hybridMap = builder.asHybridFlatMap();
+      out << "[" << hybridMap.nullsDescriptor().offset() << "]HYBRIDFLATMAP\n";
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto group = hybridMap.groupAt(i);
+        printType(
+            out,
+            group.valueType,
+            indentation + 2,
+            "group" + std::to_string(group.groupId));
       }
       out << "\n";
       break;

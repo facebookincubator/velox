@@ -657,6 +657,57 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, doubleClose) {
   VELOX_ASSERT_THROW(assertQuery(plan, sql), errorMessage);
 }
 
+// Reclaim can arrive after close(): the memory pool outlives the operator, and
+// ParallelMemoryReclaimer issues arbitration reclaims asynchronously.
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, reclaimAfterClose) {
+  const std::string errorMessage("reclaimAfterClose");
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "TopNRowNumber") {
+          return;
+        }
+        // Reclaim after close(), as a late arbitration would.
+        op->close();
+        memory::MemoryReclaimer::Stats reclaimerStats;
+        op->reclaim(0, reclaimerStats);
+        VELOX_FAIL(errorMessage);
+      })));
+
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row; }, nullEvery(11)),
+              // Sorting key.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (size - row) * 10; },
+                  [](auto row) { return row == 123; }),
+              // Partitioning key.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5'000; }, nullEvery(7)),
+          }),
+      10);
+
+  auto spillDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1'000, true)
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .spillDirectory(spillDirectory->getPath())
+          .copyResults(pool_.get()),
+      errorMessage);
+}
+
 // This test verifies that TopNRowNumber operator handles OOM that occurs in the
 // middle of groupProbe, after inserting some new rows into the row container.
 DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {

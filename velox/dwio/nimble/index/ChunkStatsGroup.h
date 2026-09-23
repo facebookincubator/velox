@@ -20,6 +20,12 @@
 #include <optional>
 
 #include "velox/dwio/nimble/index/IndexTypes.h"
+#include "velox/dwio/nimble/tablet/Chunk.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+
+namespace facebook::velox::memory {
+class MemoryPool;
+} // namespace facebook::velox::memory
 
 namespace facebook::nimble {
 class MetadataBuffer;
@@ -33,19 +39,18 @@ class StreamIndex;
 /// Implementations supply version-specific storage and stream indexes.
 class ChunkStatsGroup : public std::enable_shared_from_this<ChunkStatsGroup> {
  public:
-  /// Creates a V1 group and takes ownership of its decompressed metadata.
-  /// @param firstStripe First stripe index in the group.
-  /// @param stripeCount Number of stripes in the group.
-  /// @param metadata Decompressed V1 chunk-statistics metadata.
+  /// Creates the requested version over decompressed metadata.
   static std::shared_ptr<ChunkStatsGroup> create(
+      ChunkStatsVersion version,
       uint32_t firstStripe,
       uint32_t stripeCount,
-      std::unique_ptr<MetadataBuffer> metadata);
+      std::unique_ptr<MetadataBuffer> metadata,
+      velox::memory::MemoryPool& pool);
 
   virtual ~ChunkStatsGroup();
 
   /// Creates a StreamIndex for the specified stripe and stream ID.
-  /// Returns nullptr if the stream is not indexed (has ≤1 chunk).
+  /// Returns nullptr when the stream has neither multiple chunks nor bounds.
   /// @param streamSize Total byte size of the stream in this stripe.
   virtual std::shared_ptr<StreamIndex> createStreamIndex(
       uint32_t stripe,
@@ -90,12 +95,22 @@ class StreamIndex {
   virtual ChunkLocation lookupChunk(uint32_t rowId) const = 0;
 
   /// Returns the per-chunk null-value count for the chunk at the given absolute
-  /// position (ChunkLocation::chunkIndex), or std::nullopt when per-chunk null
-  /// statistics are absent (files written before chunk statistics were added).
+  /// position (ChunkLocation::chunkIndex), or std::nullopt when the format
+  /// permits omitted null statistics.
   virtual std::optional<uint32_t> chunkNullCount(uint32_t chunkIndex) const = 0;
 
   /// Returns the total number of rows in this stream.
   virtual uint32_t rowCount() const = 0;
+
+  /// Returns the per-chunk min value at the absolute position reported by
+  /// ChunkLocation::chunkIndex, or std::nullopt when bounds are absent.
+  virtual std::optional<ChunkStatValue> chunkMinValue(
+      uint32_t chunkIndex) const;
+
+  /// Returns the per-chunk max value at the absolute position reported by
+  /// ChunkLocation::chunkIndex, or std::nullopt when bounds are absent.
+  virtual std::optional<ChunkStatValue> chunkMaxValue(
+      uint32_t chunkIndex) const;
 
   /// Returns the stream ID this index is for.
   uint32_t streamId() const {

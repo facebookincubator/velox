@@ -18,6 +18,7 @@
 
 #include <random>
 #include "folly/Random.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include "velox/dwio/nimble/velox/tests/SchemaUtils.h"
 
@@ -104,6 +105,24 @@ void addNamedTypes(
         addNamedTypes(
             flatmap.childAt(i),
             fmt::format("{}f.{}({}).", prefix, flatmap.nameAt(i), i),
+            result);
+      }
+      break;
+    }
+    case nimble::Kind::HybridFlatMap: {
+      const auto& hybridMap = node.asHybridFlatMap();
+      result.emplace_back(hybridMap.nullsDescriptor().offset(), prefix + "pf");
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto groupStreams = hybridMap.groupAt(i);
+        result.emplace_back(
+            groupStreams.keyDescriptor.offset(),
+            fmt::format("{}pf.g{}:kp", prefix, i));
+        result.emplace_back(
+            groupStreams.inMapDescriptor.offset(),
+            fmt::format("{}pf.g{}:im", prefix, i));
+        addNamedTypes(
+            groupStreams.valueType,
+            fmt::format("{}pf.g{}:", prefix, i),
             result);
       }
       break;
@@ -259,6 +278,43 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMap) {
   };
 
   testStreamLayout(rng, planner, std::move(streams), std::move(expected));
+}
+
+TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
+  nimble::SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap =
+      builder.createHybridFlatMapTypeBuilder(nimble::ScalarKind::Int32);
+  auto groupValue = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
+  const auto groupStreams = hybridMap->addGroup(0, {"1"}, groupValue);
+  auto defaultValue =
+      builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
+  const auto defaultStreams = hybridMap->addGroup(
+      nimble::HybridFlatMap::kDefaultGroupId, {}, defaultValue);
+  root->addChild("features", hybridMap);
+
+  const std::vector<uint32_t> expectedOffsets{
+      root->nullsDescriptor().offset(),
+      hybridMap->nullsDescriptor().offset(),
+      groupStreams.keyDescriptor.offset(),
+      groupStreams.inMapDescriptor.offset(),
+      groupValue->scalarDescriptor().offset(),
+      defaultStreams.keyDescriptor.offset(),
+      defaultStreams.inMapDescriptor.offset(),
+      defaultValue->scalarDescriptor().offset(),
+  };
+  std::vector<nimble::Stream> streams;
+  streams.reserve(expectedOffsets.size());
+  for (auto it = expectedOffsets.rbegin(); it != expectedOffsets.rend(); ++it) {
+    streams.push_back(nimble::Stream{.offset = *it});
+  }
+
+  nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
+  const auto layout = planner.getLayout(std::move(streams));
+  ASSERT_EQ(layout.size(), expectedOffsets.size());
+  for (size_t i = 0; i < layout.size(); ++i) {
+    EXPECT_EQ(layout[i].offset, expectedOffsets[i]);
+  }
 }
 
 TEST(DefaultLayoutPlannerTests, reorderFlatMapDynamicFeatures) {

@@ -966,6 +966,17 @@ void collectStreamOffsets(
       }
       break;
     }
+    case nimble::Kind::HybridFlatMap: {
+      const auto& hybridMap = type.asHybridFlatMap();
+      offsets.insert(hybridMap.nullsDescriptor().offset());
+      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+        const auto& group = hybridMap.groupAt(i);
+        offsets.insert(group.keyDescriptor.offset());
+        offsets.insert(group.inMapDescriptor.offset());
+        collectStreamOffsets(*group.valueType, offsets);
+      }
+      break;
+    }
     case nimble::Kind::SlidingWindowMap: {
       const auto& map = type.asSlidingWindowMap();
       offsets.insert(map.offsetsDescriptor().offset());

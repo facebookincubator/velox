@@ -20,7 +20,9 @@
 namespace facebook::velox::functions {
 namespace {
 
-void registerSimpleFunctions(const std::string& prefix) {
+void registerSimpleFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P1::name(), "38", exec::ParameterType::kIntegerParameter),
@@ -28,12 +30,14 @@ void registerSimpleFunctions(const std::string& prefix) {
           S1::name(), "0", exec::ParameterType::kIntegerParameter),
   };
   registerFunction<ParsePrestoDataSizeFunction, LongDecimal<P1, S1>, Varchar>(
-      {prefix + "parse_presto_data_size"}, constraints);
+      {prefix + "parse_presto_data_size"}, constraints, true, defaultOwner);
 }
 } // namespace
 
-void registerDataSizeFunctions(const std::string& prefix) {
-  registerSimpleFunctions(prefix);
+void registerDataSizeFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerSimpleFunctions(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

@@ -30,7 +30,7 @@
 
 namespace facebook::velox::exec::rpc {
 
-/// Admission control for one unit of provisioned capacity: a backend tier
+/// Admission control for one unit of provisioned capacity: a backend
 /// plus the credential used to reach it. Everything sharing that pair --
 /// every driver, every query, both streaming modes -- draws on one quota,
 /// because that is what the remote service actually provisions.
@@ -86,7 +86,9 @@ class RPCRateLimiter {
     kNone,
   };
 
-  /// A snapshot for per-query runtime stats, read once at operator close().
+  /// A snapshot for per-query runtime stats. Read at operator close() for the
+  /// final stats, and on every RPCOperator::stats() call so the admission
+  /// capacity trajectory is observable while the query is still running.
   struct Stats {
     /// Current capacity, after any adaptation.
     int64_t capacity{0};
@@ -141,7 +143,7 @@ class RPCRateLimiter {
     RPCRateLimiter* owner_{nullptr};
   };
 
-  explicit RPCRateLimiter(std::string tierKey);
+  explicit RPCRateLimiter(std::string admissionKey);
 
   /// Applies tuning. Last writer wins, matching the two independent writers
   /// that configure a backend today: the function's SQL option first, then the
@@ -278,7 +280,7 @@ class RPCRateLimiter {
   // Identifies the backend this limiter admits for. Composed by the transport
   // from whatever distinguishes one deployment from another, so two
   // deployments never share a limiter.
-  const std::string tierKey_;
+  const std::string admissionKey_;
 
   // Guards config_, capacity_, lowWater_ and waiters_. pending_ and
   // peakPending_ are atomic so the hot increment path stays lock-free, but
@@ -322,7 +324,7 @@ class RPCRateLimiter {
   std::deque<ContinuePromise> waiters_;
 };
 
-/// Process-scoped owner of one RPCRateLimiter per backend key.
+/// Owns one process-scoped RPCRateLimiter per admission key.
 ///
 /// A backend is shared across queries by definition, so the registry is a
 /// process singleton rather than something threaded through the operator.
@@ -333,7 +335,7 @@ class RPCRateLimiterRegistry {
   /// Returns the backend's admission control, creating it on first sight. The
   /// reference stays valid for the process lifetime: values are held by
   /// unique_ptr, so later insertions move only the map nodes.
-  RPCRateLimiter& get(const std::string& tierKey);
+  RPCRateLimiter& get(const std::string& admissionKey);
 
   /// Resets every backend in place and restores process-global defaults.
   /// Resets rather than drops: a Token releases through a back-pointer to its

@@ -519,6 +519,39 @@ class CudfFilterProjectTest : public OperatorTestBase {
         "SELECT c0 IN (1, 2, 3) OR c1 IN (1.5, 2.5) OR c2 IN ('test1', 'test2') AS result FROM tmp");
   }
 
+  // Asserts that 'c0 IN <inListConstant>' evaluates to NULL on every input
+  // row. Built directly via TypedExpr because DuckDB cannot serve as the
+  // reference for either an in-list of `CAST(NULL AS INTEGER)` or a null
+  // array literal.
+  void assertInListYieldsAllNull(
+      const std::vector<RowVectorPtr>& input,
+      const VectorPtr& inListConstant) {
+    auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+    auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+    auto inExpr = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+    auto plan = PlanBuilder(pool_.get())
+                    .values(input)
+                    .addNode([&](auto id, auto source) {
+                      return std::make_shared<core::ProjectNode>(
+                          id,
+                          std::vector<std::string>{"result"},
+                          std::vector<core::TypedExprPtr>{inExpr},
+                          source);
+                    })
+                    .planNode();
+
+    vector_size_t totalRows = 0;
+    for (const auto& batch : input) {
+      totalRows += batch->size();
+    }
+    auto expected = makeRowVector(
+        {"result"},
+        {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+    AssertQueryBuilder(plan).assertResults(expected);
+  }
+
   void testStringLiteralExpansion(const std::vector<RowVectorPtr>& input) {
     // Test VARCHAR literal as standalone expression (needs special handling)
     auto plan = PlanBuilder()
@@ -1733,6 +1766,99 @@ TEST_F(CudfFilterProjectTest, mixedInOperation) {
   testMixedInOperation(vectors);
 }
 
+TEST_F(CudfFilterProjectTest, nullOnlyInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  auto elements = makeNullableFlatVector<int32_t>(
+      std::vector<std::optional<int32_t>>{std::nullopt});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, elements));
+  assertInListYieldsAllNull(vectors, inListConstant);
+}
+
+TEST_F(CudfFilterProjectTest, nullArrayInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  assertInListYieldsAllNull(
+      vectors, BaseVector::createNullConstant(ARRAY(INTEGER()), 1, pool()));
+}
+
+TEST_F(CudfFilterProjectTest, nullInListDownstreamAggregation) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+
+  auto elements = makeNullableFlatVector<int32_t>(
+      std::vector<std::optional<int32_t>>{std::nullopt});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, elements));
+  auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto inExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .addNode([&](auto id, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        id,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{inExpr},
+                        source);
+                  })
+                  .singleAggregation({}, {"count(result)"})
+                  .planNode();
+
+  auto expected =
+      makeRowVector({"a0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, untypedNullInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  // `c0 IN (NULL)` parses to an in-list of type ARRAY<UNKNOWN> because the NULL
+  // is untyped. This is a null-only list and must yield NULL on every row, the
+  // same as an explicitly typed all-null list.
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .project({"c0 IN (NULL) AS result"})
+                  .planNode();
+
+  vector_size_t totalRows = 0;
+  for (const auto& batch : vectors) {
+    totalRows += batch->size();
+  }
+  auto expected = makeRowVector(
+      {"result"},
+      {BaseVector::createNullConstant(BOOLEAN(), totalRows, pool())});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, emptyInList) {
+  auto vectors = makeVectors(rowType_, 2, 1000);
+  // A genuinely empty in-list is a user error on the CPU path
+  // (InPredicate::create). The cuDF path must reject it the same way rather
+  // than silently returning NULL.
+  auto emptyElements = makeFlatVector<int32_t>(std::vector<int32_t>{});
+  auto inListConstant =
+      BaseVector::wrapInConstant(1, 0, makeArrayVector({0}, emptyElements));
+  auto inListExpr = std::make_shared<core::ConstantTypedExpr>(inListConstant);
+  auto field = std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c0");
+  auto inExpr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{field, inListExpr}, "in");
+
+  auto plan = PlanBuilder(pool_.get())
+                  .values(vectors)
+                  .addNode([&](auto id, auto source) {
+                    return std::make_shared<core::ProjectNode>(
+                        id,
+                        std::vector<std::string>{"result"},
+                        std::vector<core::TypedExprPtr>{inExpr},
+                        source);
+                  })
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "IN list must not be empty");
+}
+
 TEST_F(CudfFilterProjectTest, round) {
   auto data = makeRowVector({makeFlatVector<int64_t>({4123, 456789098})});
   parse::ParseOptions options;
@@ -2015,6 +2141,93 @@ TEST_F(CudfFilterProjectTest, stringUpperOperation) {
   createDuckDbTable(vectors);
 
   testStringUpperOperation(vectors);
+}
+
+TEST_F(CudfFilterProjectTest, replaceConstantSearchAndReplacement) {
+  // Column string with constant search and replacement, including the
+  // replace(s, '-', '') shape: matches present, absent, repeated, an empty
+  // string row, and a null string row.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"2021-01-31",
+           "no dashes here",
+           "a-b-c-d",
+           "-leading-and-trailing-",
+           "",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, '-', '') AS removed",
+      "replace(s, '-', '/') AS slashed",
+      "replace(s, 'zzz', 'x') AS absent"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceTwoArgumentRemovesSearch) {
+  // The 2-argument form removes every occurrence of the search.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"a-b-c", "abc", "---", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"replace(s, '-') AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceNullSearchOrReplacement) {
+  // A null constant search or replacement yields an all-null result.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>({"a-b-c", "abc", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, CAST(NULL AS VARCHAR), 'x') AS null_search",
+      "replace(s, '-', CAST(NULL AS VARCHAR)) AS null_replacement",
+      "replace(s, CAST(NULL AS VARCHAR)) AS null_search_two_arg"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceMultiByteUtf8) {
+  // Multi-byte (UTF-8) search and replacement, including a replacement that
+  // changes the byte length and a null string row.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"café-au-lait",
+           "a€b€c",
+           "naïve",
+           "no multibyte here",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, 'é', 'e') AS deaccent",
+      "replace(s, '€', 'EUR') AS money",
+      "replace(s, 'ï', 'i') AS naive"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, replaceReplacementContainsSearch) {
+  // The replacement contains the search: a single left-to-right pass must not
+  // re-scan the inserted text.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"aaa", "banana", "a", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "replace(s, 'a', 'aa') AS doubled", "replace(s, 'ana', 'anana') AS grow"};
+
+  assertProjectMatchesVelox(vectors, projections);
 }
 
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
