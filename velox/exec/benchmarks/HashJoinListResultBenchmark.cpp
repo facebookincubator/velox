@@ -63,8 +63,7 @@ struct HashTableBenchmarkParams {
       }
       buildSize += (hashTableSize * dist.first / 100) * (dist.second + 1);
       distSum += dist.first;
-      buildKeyRepeat.emplace_back(
-          std::make_pair(hashTableSize * distSum / 100, dist.second));
+      buildKeyRepeat.emplace_back(hashTableSize * distSum / 100, dist.second);
     }
     VELOX_CHECK_EQ(distSum, 100, "Sum of distributions should be 100");
 
@@ -579,8 +578,8 @@ int main(int argc, char** argv) {
   for (auto withErase : {false, true}) {
     for (auto mode : hashModes) {
       for (auto& dist : keyRepeatDists) {
-        params.emplace_back(HashTableBenchmarkParams(
-            mode, onlyKeyType, hashTableSize, probeRowSize, dist, withErase));
+        params.emplace_back(
+            mode, onlyKeyType, hashTableSize, probeRowSize, dist, withErase);
       }
     }
   }
