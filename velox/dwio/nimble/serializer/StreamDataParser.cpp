@@ -336,7 +336,14 @@ readTrailerStreamMetadata(const folly::IOBuf& input) {
 } // namespace detail
 
 StreamDataParser::StreamDataParser(velox::memory::MemoryPool* pool)
-    : pool_{pool}, strippedStreamBufferPool_{pool, /*maxCachedBuffers=*/1} {
+    : StreamDataParser{pool, /*legacyHeaderless=*/false} {}
+
+StreamDataParser::StreamDataParser(
+    velox::memory::MemoryPool* pool,
+    bool legacyHeaderless)
+    : legacyHeaderless_{legacyHeaderless},
+      pool_{pool},
+      strippedStreamBufferPool_{pool, /*maxCachedBuffers=*/1} {
   NIMBLE_CHECK_NOT_NULL(pool_);
 }
 
@@ -351,6 +358,11 @@ Buffer& StreamDataParser::ensureStrippedStreamBuffer() {
 uint32_t StreamDataParser::initialize(std::string_view data) {
   pos_ = data.data();
   end_ = data.data() + data.size();
+  if (legacyHeaderless_) {
+    NIMBLE_CHECK_GE(
+        data.size(), sizeof(uint32_t), "Truncated legacy headerless row count");
+    return encoding::readUint32(pos_);
+  }
   auto header = readSerializationHeader(pos_, end_);
   version_ = header.version;
   requiresNullBarrier_ = header.flags.requiresNullBarrier;

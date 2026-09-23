@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/Random.h>
+#include <folly/String.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -3235,6 +3236,197 @@ TEST_F(
     EXPECT_EQ(header.version, SerializationVersion::kSerialization);
     EXPECT_EQ(header.rowCount, 1);
   }
+}
+
+// The hex blobs were written by the removed kLegacy serializer: a u32 row
+// count followed by one u32 size and raw payload per stream.
+TEST_F(SerializationTest, legacyHeaderlessBlobs) {
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto verify = [&](const velox::TypePtr& type,
+                          std::string_view hex,
+                          const velox::VectorPtr& expected) {
+    const auto blob = folly::unhexlify(hex);
+    Deserializer deserializer{
+        convertToNimbleType(*type),
+        pool_.get(),
+        DeserializerOptions{.legacyHeaderless = true}};
+    velox::VectorPtr output;
+    deserializer.deserialize(blob, output);
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t i = 0; i < expected->size(); ++i) {
+      EXPECT_TRUE(vectorEquals(expected, output, i))
+          << "Expected: " << expected->toString(i)
+          << "\nActual: " << output->toString(i);
+    }
+  };
+
+  {
+    SCOPED_TRACE("uncompressed");
+    using MapEntries = std::vector<std::pair<int32_t, std::optional<double>>>;
+    const auto type = velox::ROW({
+        {"a", velox::INTEGER()},
+        {"b", velox::BIGINT()},
+        {"c", velox::VARCHAR()},
+        {"d", velox::ARRAY(velox::BIGINT())},
+        {"e", velox::MAP(velox::INTEGER(), velox::DOUBLE())},
+        {"f", velox::BOOLEAN()},
+    });
+    verify(
+        type,
+        "03000000000000000d0000000001000000feffffff0300000019000000000a0000"
+        "00000000001400000000000000e2ffffffffffffff0f00000001000000780200"
+        "00007979000000000d0000000002000000000000000100000019000000000100"
+        "000000000000020000000000000003000000000000000d000000000100000000"
+        "000000020000000d000000000100000002000000030000001900000000000000"
+        "000000f83f00000000000004400000000000000c400400000000010001",
+        maker.rowVector(
+            {"a", "b", "c", "d", "e", "f"},
+            {
+                maker.flatVector<int32_t>({1, -2, 3}),
+                maker.flatVector<int64_t>({10, 20, -30}),
+                maker.flatVector<std::string>({"x", "yy", ""}),
+                maker.arrayVector<int64_t>({{1, 2}, {}, {3}}),
+                maker.mapVector<int32_t, double>(std::vector<MapEntries>{
+                    {{1, 1.5}},
+                    {},
+                    {{2, 2.5}, {3, 3.5}},
+                }),
+                maker.flatVector<bool>({true, false, true}),
+            }));
+  }
+
+  const auto type = velox::ROW("a", velox::BIGINT());
+  const auto expected = maker.rowVector(
+      {"a"}, {maker.flatVector<int64_t>(64, [](auto row) { return row % 4; })});
+  {
+    SCOPED_TRACE("zstd");
+    verify(
+        type,
+        "4000000000000000220000000128b52ffd600001bd000040000001000200030005"
+        "00d543a900480c3006030f000b",
+        expected);
+  }
+  {
+    SCOPED_TRACE("lz4");
+    verify(
+        type,
+        "40000000000000002300000003000200001300010013010800130208001303"
+        "08000402000f2000ffc1500000000000",
+        expected);
+  }
+}
+
+// Event-based features are ARRAY(ARRAY(BIGINT)) blobs holding one row each,
+// so every headerless blob starts with row count 1.
+TEST_F(SerializationTest, legacyHeaderlessEventBasedFeatureBlobs) {
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto type = velox::ARRAY(velox::ARRAY(velox::BIGINT()));
+  const auto verify = [&](std::string_view hex,
+                          const std::vector<std::vector<int64_t>>& events) {
+    const auto blob = folly::unhexlify(hex);
+    Deserializer deserializer{
+        convertToNimbleType(*type),
+        pool_.get(),
+        DeserializerOptions{.legacyHeaderless = true}};
+    velox::VectorPtr output;
+    deserializer.deserialize(blob, output);
+    const auto expected = maker.arrayVector(
+        std::vector<velox::vector_size_t>{0},
+        maker.arrayVector<int64_t>(events));
+    ASSERT_EQ(output->size(), 1);
+    EXPECT_TRUE(vectorEquals(expected, output, 0))
+        << "Expected: " << expected->toString(0)
+        << "\nActual: " << output->toString(0);
+  };
+
+  {
+    SCOPED_TRACE("single-attribute events");
+    verify(
+        "0100000005000000000900000025000000000100000001000000010000000100"
+        "0000010000000100000001000000010000000100000049000000"
+        "00a34b67680000000049ea6668000000003ce86668000000004ae5666800000000"
+        "b2e3666800000000b0e3666800000000b8dd3e68000000009fd93e6800000000"
+        "9dd93e6800000000",
+        {
+            {1'751'600'035},
+            {1'751'575'113},
+            {1'751'574'588},
+            {1'751'573'834},
+            {1'751'573'426},
+            {1'751'573'424},
+            {1'748'950'456},
+            {1'748'949'407},
+            {1'748'949'405},
+        });
+  }
+  {
+    SCOPED_TRACE("zstd");
+    std::vector<std::vector<int64_t>> events;
+    events.reserve(70);
+    for (int64_t i = 0; i < 70; ++i) {
+      events.push_back({1'751'600'000 - 60 * i, i % 5, 7});
+    }
+    verify(
+        "01000000050000000046000000160000000128b52ffd6018005d000020030000"
+        "00010011ab8e08c70000000128b52ffd609005e505001409804b676800074401"
+        "0802cc4a03900454001801dc49a04964492849ec48b04874483848fc47c04784"
+        "4748470c47d046944658461c46e045a44568452c45f044b44478443c440044c4"
+        "4388434c431043d44298425c422042e441a8416c413041f440b8407c40404004"
+        "40c83f8c3f503f143fd83e9c3e603e243ee83dac3d703d343df83cbc3c803c44"
+        "3c083ccc3b903b543b4da81030be06e095c6112818411134c2fe000000000000"
+        "634762619bb16f18d834e7b172bf5611400a",
+        events);
+  }
+  {
+    SCOPED_TRACE("no events");
+    verify("010000000500000000000000000000000000000000", {});
+  }
+}
+
+TEST_F(SerializationTest, legacyHeaderlessBlobRejectedByVersionedReader) {
+  Deserializer deserializer{
+      convertToNimbleType(*velox::ARRAY(velox::ARRAY(velox::BIGINT()))),
+      pool_.get()};
+  const auto blob =
+      folly::unhexlify("010000000500000000000000000000000000000000");
+  velox::VectorPtr output;
+  NIMBLE_ASSERT_THROW(
+      deserializer.deserialize(blob, output), "Unsupported version 1");
+}
+
+TEST_F(SerializationTest, legacyHeaderlessMalformedBlobs) {
+  const auto deserialize = [&](const velox::TypePtr& type,
+                               std::string_view hex) {
+    Deserializer deserializer{
+        convertToNimbleType(*type),
+        pool_.get(),
+        DeserializerOptions{.legacyHeaderless = true}};
+    velox::VectorPtr output;
+    deserializer.deserialize(folly::unhexlify(hex), output);
+  };
+  const auto bigintRow = velox::ROW("a", velox::BIGINT());
+  const auto varcharRow = velox::ROW("a", velox::VARCHAR());
+
+  NIMBLE_ASSERT_THROW(
+      deserialize(bigintRow, "010000"),
+      "Truncated legacy headerless row count");
+  NIMBLE_ASSERT_THROW(
+      deserialize(bigintRow, "010000000000000009"),
+      "Truncated legacy headerless stream size");
+  NIMBLE_ASSERT_THROW(
+      deserialize(bigintRow, "01000000000000000a0000000001"),
+      "Legacy headerless stream exceeds serialized data");
+  // An LZ4 stream with only one byte after its compression type.
+  NIMBLE_ASSERT_THROW(
+      deserialize(bigintRow, "0100000000000000020000000300"),
+      "Truncated LZ4 uncompressed size");
+  NIMBLE_ASSERT_THROW(
+      deserialize(varcharRow, "0100000000000000020000000100"),
+      "Truncated legacy headerless string length");
+  // A 5-byte string with 1 byte of data.
+  NIMBLE_ASSERT_THROW(
+      deserialize(varcharRow, "0100000000000000050000000500000078"),
+      "Legacy headerless string exceeds stream data");
 }
 
 // Test encoding layout tree for non-FlatMap types.
