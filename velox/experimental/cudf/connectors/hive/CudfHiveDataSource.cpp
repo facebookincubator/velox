@@ -43,6 +43,26 @@ namespace facebook::velox::cudf_velox::connector::hive {
 using namespace facebook::velox::connector;
 using namespace facebook::velox::connector::hive;
 
+namespace {
+
+// Returns whether a constant-folded filter keeps every row. A null constant
+// keeps none, matching SQL three-valued logic.
+bool isTrueConstant(const core::ConstantTypedExpr& constant) {
+  VELOX_USER_CHECK_EQ(
+      constant.type()->kind(),
+      TypeKind::BOOLEAN,
+      "Remaining filter must be a boolean expression: {}",
+      constant.toString());
+  if (constant.hasValueVector()) {
+    const auto* vector = constant.valueVector()->as<ConstantVector<bool>>();
+    return !vector->isNullAt(0) && vector->valueAt(0);
+  }
+  const auto& value = constant.value();
+  return !value.isNull() && value.value<bool>();
+}
+
+} // namespace
+
 CudfHiveDataSource::CudfHiveDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
@@ -118,12 +138,27 @@ CudfHiveDataSource::CudfHiveDataSource(
   optimizedRemainingFilter_ = remainingFilter
       ? expression::optimize(remainingFilter, optimizeQueryCtx.get(), pool_)
       : nullptr;
+  if (const auto constantFilter =
+          std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
+              optimizedRemainingFilter_)) {
+    // A filter that folded to a constant keeps every row or none, so it needs
+    // no columns and no evaluation.
+    remainingFilterRejectsAllRows_ = !isTrueConstant(*constantFilter);
+    optimizedRemainingFilter_ = nullptr;
+  }
   if (optimizedRemainingFilter_) {
     // Add fields referenced by the filter to the columns to read. Collect from
     // the optimized expression since folding may drop branches and the columns
     // they reference. Read-column order does not affect results: the data
     // source projects its output to the requested output type.
-    for (const auto& name : referencedInputFields(optimizedRemainingFilter_)) {
+    const auto filterFields = referencedInputFields(optimizedRemainingFilter_);
+    // The filter is evaluated over the columns read for it, so a filter that
+    // reads none has no rows to be evaluated over.
+    VELOX_USER_CHECK(
+        !filterFields.empty(),
+        "Remaining filter that references no column is not supported: {}",
+        optimizedRemainingFilter_->toString());
+    for (const auto& name : filterFields) {
       if (readColumnSet_.count(name) == 0) {
         readColumnSet_.emplace(name);
         readColumnNames_.emplace_back(name);
@@ -216,6 +251,15 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   cudfSplitReader_ = createCudfSplitReader();
 
+  // No row of the split can pass the filter, so open nothing.
+  if (remainingFilterRejectsAllRows_) {
+    runtimeStats_.skippedSplits++;
+    if (split_->length != std::numeric_limits<uint64_t>::max()) {
+      runtimeStats_.skippedSplitBytes += static_cast<int64_t>(split_->length);
+    }
+    return;
+  }
+
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
   // Check if preloaded splits should start pre-fetching the first pass of
@@ -293,6 +337,10 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
+  if (remainingFilterRejectsAllRows_) {
+    cudfSplitReader_->resetSplit();
+    return nullptr;
+  }
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
     cudfSplitReader_->resetSplit();
@@ -306,12 +354,6 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
 
   uint64_t filterTimeUs{0};
   if (optimizedRemainingFilter_) {
-    // The expression evaluator assumes a single row for a column-less input, so
-    // it cannot produce a mask over a scan that read no columns.
-    VELOX_CHECK_GT(
-        cudfTable->num_columns(),
-        0,
-        "A remaining filter over a scan with no read columns is not supported");
     MicrosecondWallTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;

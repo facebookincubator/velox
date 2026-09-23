@@ -1063,6 +1063,60 @@ TEST_F(TableScanTest, countStarWithFilterOverSplits) {
       .assertResults(sql);
 }
 
+// A remaining filter that folds to a constant needs no column to decide, so it
+// keeps every row or skips the split without opening it.
+TEST_F(TableScanTest, constantRemainingFilter) {
+  auto vectors = makeVectors(10, 1'000);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+
+  using CountAndSkippedSplits = std::pair<int64_t, int64_t>;
+  const auto countRows = [&](const core::TypedExprPtr& remainingFilter) {
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(ROW({}, {}))
+                    .tableHandle(makeTableHandle(
+                        "parquet_table", rowType_, {}, remainingFilter))
+                    .endTableScan()
+                    .singleAggregation({}, {"count(1)"})
+                    .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .split(makeCudfHiveSplit(filePath->getPath()))
+                      .copyResults(pool_.get(), task);
+    EXPECT_EQ(result->size(), 1);
+    return CountAndSkippedSplits{
+        result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0),
+        getTableScanRuntimeStat(task, "skippedSplits")};
+  };
+
+  EXPECT_EQ(
+      countRows(std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true)),
+      CountAndSkippedSplits(10'000, 0));
+  EXPECT_EQ(
+      countRows(std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), false)),
+      CountAndSkippedSplits(0, 1));
+  EXPECT_EQ(
+      countRows(
+          std::make_shared<core::ConstantTypedExpr>(
+              BOOLEAN(), Variant::null(TypeKind::BOOLEAN))),
+      CountAndSkippedSplits(0, 1));
+
+  // A filter that references no column but does not fold cannot be evaluated
+  // over rows that were never read. `rand() > 0.5` is not the `rand() < rate`
+  // shape that the Hive connector treats as a sample rate.
+  auto randomFilter = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::CallTypedExpr>(
+              DOUBLE(), std::vector<core::TypedExprPtr>{}, "rand"),
+          std::make_shared<core::ConstantTypedExpr>(DOUBLE(), 0.5),
+      },
+      "gt");
+  VELOX_ASSERT_USER_THROW(
+      countRows(randomFilter), "references no column is not supported");
+}
+
 // Verify that extractFiltersFromRemainingFilter extracts simple single-column
 // filters from the remaining filter into subfield filters for pushdown.
 // When a filter like "c0 = 1" is fully extracted,
