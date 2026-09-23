@@ -196,6 +196,10 @@ of plan nodes can be located at the leaves of the plan tree. These are:</p>
 <td><p>MixedUnion</p></td>
 <td></td>
 </tr>
+<tr class="row-odd"><td><p>RPCNode</p></td>
+<td><p>RPC</p></td>
+<td></td>
+</tr>
 </tbody>
 </table>
 <section id="plan-nodes">
@@ -1408,6 +1412,61 @@ ALL.</p>
 <a class="reference internal image-reference" href="../_images/local-exchange.png"><img alt="../_images/local-exchange.png" class="align-center" src="../_images/local-exchange.png" style="width: 400px;" />
 </a>
 </section>
+<section id="rpcnode">
+<span id="id7"></span><h3>RPCNode<a class="headerlink" href="#rpcnode" title="Link to this heading">¶</a></h3>
+<p>The RPC operation calls an external service asynchronously and appends the
+response as a new column. <code class="docutils literal notranslate"><span class="pre">kPerRow</span></code> dispatches each row independently;
+<code class="docutils literal notranslate"><span class="pre">kBatch</span></code> accumulates rows and passes each flushed group to the function, which
+may issue one native or asynchronous batch request or fan out into per-row
+requests. It is used for remote inference such as LLM completion and text
+embeddings. The corresponding operator class is <code class="docutils literal notranslate"><span class="pre">RPCOperator</span></code>
+(<code class="docutils literal notranslate"><span class="pre">velox/exec/rpc/</span></code>); the business logic is provided by an
+<a class="reference internal" href="async-rpc-functions.html#asyncrpcfunction"><span class="std std-ref">AsyncRPCFunction</span></a> (see
+<a class="reference internal" href="async-rpc-functions.html"><span class="doc">How to add an async RPC function?</span></a>).</p>
+<p>An upstream <code class="docutils literal notranslate"><span class="pre">ProjectNode</span></code> computes argument expressions into columns before
+the RPC node reads them by name.</p>
+<table class="docutils align-left">
+<colgroup>
+<col style="width: 25.0%" />
+<col style="width: 75.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Property</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>call</p></td>
+<td><p>The registered function call. Its name identifies the
+<code class="docutils literal notranslate"><span class="pre">AsyncRPCFunction</span></code>, its type is the RPC result type, and its inputs are
+field accesses or constants in argument order.</p></td>
+</tr>
+<tr class="row-odd"><td><p>outputColumn</p></td>
+<td><p>Name of the result column appended to the output.</p></td>
+</tr>
+<tr class="row-even"><td><p>outputType</p></td>
+<td><p>Full output row type: the passed-through source columns plus the result
+column (stated explicitly to allow column pruning).</p></td>
+</tr>
+<tr class="row-odd"><td><p>streamingMode</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">kPerRow</span></code> (one RPC per row, dispatched concurrently) or <code class="docutils literal notranslate"><span class="pre">kBatch</span></code>
+(rows accumulated and flushed as groups). This is the concrete mode
+selected during planning; the function decides how to serve it on its
+own backend.</p></td>
+</tr>
+<tr class="row-even"><td><p>dispatchBatchSize</p></td>
+<td><p>In <code class="docutils literal notranslate"><span class="pre">kBatch</span></code> mode, sets the flush granularity. <code class="docutils literal notranslate"><span class="pre">0</span></code> waits until input
+closes, then flushes everything pending; <code class="docutils literal notranslate"><span class="pre">maxRowsPerFlush()</span></code> may split
+that backlog into smaller requests. Not used in <code class="docutils literal notranslate"><span class="pre">kPerRow</span></code> mode.</p></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code class="docutils literal notranslate"><span class="pre">streamingMode</span></code> is what the query asked for, not what the function will do
+about it — see <a class="reference internal" href="async-rpc-functions.html#rpcdispatchpath"><span class="std std-ref">Execution mode and dispatch path</span></a>.</p>
+</div>
+</section>
 </section>
 <section id="gpu-operators-cudf">
 <h2>GPU Operators (cuDF)<a class="headerlink" href="#gpu-operators-cudf" title="Link to this heading">¶</a></h2>
@@ -1492,6 +1551,7 @@ times.</p>
 <li><a class="reference internal" href="#examples">Examples</a><ul>
 <li><a class="reference internal" href="#join">Join</a></li>
 <li><a class="reference internal" href="#local-exchange">Local Exchange</a></li>
+<li><a class="reference internal" href="#rpcnode">RPCNode</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#gpu-operators-cudf">GPU Operators (cuDF)</a></li>
