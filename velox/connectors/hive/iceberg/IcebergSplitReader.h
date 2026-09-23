@@ -137,6 +137,37 @@ class IcebergSplitReader : public FileSplitReader {
   std::pair<std::vector<std::string>, std::vector<TypePtr>>
   resolveEqualityColumns(const IcebergDeleteFile& deleteFile) const;
 
+  // A column next() fills in. Its filters run after the read, alongside the
+  // equality deletes, instead of in the reader.
+  struct PostReadFilter {
+    // Scan spec child holding the filters. Owned by 'scanSpec_'.
+    common::ScanSpec* scanSpec;
+    // Index of the column in the reader output.
+    column_index_t outputIndex;
+  };
+
+  // Appends the columns next() fills in that are filtered but not projected,
+  // giving next() a slot to fill in and the post-read filter one to read from.
+  void projectFilterOnlyFilledColumns();
+
+  // Moves filtering of the columns next() fills in out of the reader and into
+  // 'postReadFilters_'. The reader only sees the values before the fill-in, so
+  // filtering or pruning on them drops the wrong rows.
+  void configurePostReadFilters();
+
+  // Sets the bit of every row of 'output' that fails 'postReadFilters_',
+  // leaving the other bits of 'rowsToRemove' alone.
+  void markRowsFailingPostReadFilters(
+      const RowVector& output,
+      uint64_t* rowsToRemove);
+
+  // Appends 'names' and 'types' to 'readerOutputType_', giving each a projected
+  // scan spec child pointing at its new position, and returns those specs in
+  // the order given.
+  std::vector<common::ScanSpec*> appendProjectedColumns(
+      const std::vector<std::string>& names,
+      const std::vector<TypePtr>& types);
+
   // Discovers equality-delete columns that are not in the user's projection
   // and augments 'scanSpec_' and 'readerOutputType_' so they are physically
   // read and made available in the output RowVector. When the split proves
@@ -206,10 +237,20 @@ class IcebergSplitReader : public FileSplitReader {
   // directly. row_position is computed in next() per row.
   std::optional<int32_t> targetTableSpecId_;
   std::optional<std::string> targetTablePartitionData_;
-  // Whether an implicit row-number column is needed for _row_id computation
-  // (set when filters, random-skip, or positional deletes make output
-  // positions non-contiguous).
+  // Whether the reader appends an implicit row-number column, requested for the
+  // splits that produce a column derived from the file row position.
   bool useRowNumberColumn_{false};
+
+  // Columns next() fills in for the current split, whether or not they carry a
+  // filter yet: dynamic filter pushdown can add one after the split starts.
+  std::vector<PostReadFilter> postReadFilters_;
+  // Bitmap of the rows in the current batch that pass 'postReadFilters_'.
+  // Retained across batches to save an allocation each.
+  BufferPtr passingRows_;
+  // Bitmap of the rows to drop from the current batch, shared by
+  // 'postReadFilters_' and the equality deletes so the batch is compacted
+  // once. Retained across batches to save an allocation each.
+  BufferPtr rowsToRemove_;
 
   /// Readers for Iceberg V3 deletion vectors (Puffin-encoded roaring bitmaps).
   std::list<std::unique_ptr<DeletionVectorReader>> deletionVectorReaders_;

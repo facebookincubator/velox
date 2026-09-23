@@ -80,6 +80,16 @@ class ScanSpec {
     filter_ = std::move(filter);
   }
 
+  /// Enables or disables filtering by 'this' and its descendants in the
+  /// readers, leaving the filters in place. While disabled, filter() and
+  /// numMetadataFilters() report none, so pruning and column readers skip
+  /// them, while applyFilter() still evaluates them. Does not reset the
+  /// memoized hasFilter() of the ancestors; call resetCachedValues() on the
+  /// root.
+  void setFilterEnabled(bool enabled) {
+    enableFilterInSubTree(enabled);
+  }
+
   void setMaxArrayElementsCount(vector_size_t count) {
     maxArrayElementsCount_ = count;
   }
