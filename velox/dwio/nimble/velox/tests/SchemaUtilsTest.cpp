@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <folly/Random.h>
@@ -470,6 +471,59 @@ TEST(SchemaUtilsTest, roundTripRow) {
   auto nimbleType = convertToNimbleType(*vType);
   auto roundTripped = convertToVeloxType(*nimbleType);
   EXPECT_TRUE(vType->equivalent(*roundTripped)) << roundTripped->toString();
+}
+
+TEST(SchemaUtilsTest, projectionStreamOffsets) {
+  SchemaBuilder schemaBuilder;
+  test::FlatMapChildAdder featuresAdder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id", NIMBLE_BIGINT()},
+          {"created_at", NIMBLE_TIMESTAMPMICRONANO()},
+          {"items", NIMBLE_ARRAY(NIMBLE_INTEGER())},
+          {"tags", NIMBLE_OFFSETARRAY(NIMBLE_STRING())},
+          {"attributes", NIMBLE_MAP(NIMBLE_STRING(), NIMBLE_BIGINT())},
+          {"properties",
+           NIMBLE_SLIDINGWINDOWMAP(NIMBLE_STRING(), NIMBLE_INTEGER())},
+          {"features", NIMBLE_FLATMAP(String, NIMBLE_DOUBLE(), featuresAdder)},
+      }));
+  featuresAdder.addChild("a");
+  featuresAdder.addChild("b");
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  const auto& root = schema->asRow();
+  const auto& id = root.childAt(0)->asScalar();
+  const auto& createdAt = root.childAt(1)->asTimestampMicroNano();
+  const auto& items = root.childAt(2)->asArray();
+  const auto& tags = root.childAt(3)->asArrayWithOffsets();
+  const auto& attributes = root.childAt(4)->asMap();
+  const auto& properties = root.childAt(5)->asSlidingWindowMap();
+  const auto& features = root.childAt(6)->asFlatMap();
+  EXPECT_THAT(
+      projectionStreamOffsets(*schema),
+      testing::ElementsAre(
+          root.nullsDescriptor().offset(),
+          id.scalarDescriptor().offset(),
+          createdAt.microsDescriptor().offset(),
+          createdAt.nanosDescriptor().offset(),
+          items.lengthsDescriptor().offset(),
+          items.elements()->asScalar().scalarDescriptor().offset(),
+          tags.offsetsDescriptor().offset(),
+          tags.lengthsDescriptor().offset(),
+          tags.elements()->asScalar().scalarDescriptor().offset(),
+          attributes.lengthsDescriptor().offset(),
+          attributes.keys()->asScalar().scalarDescriptor().offset(),
+          attributes.values()->asScalar().scalarDescriptor().offset(),
+          properties.offsetsDescriptor().offset(),
+          properties.lengthsDescriptor().offset(),
+          properties.keys()->asScalar().scalarDescriptor().offset(),
+          properties.values()->asScalar().scalarDescriptor().offset(),
+          features.nullsDescriptor().offset(),
+          features.childAt(0)->asScalar().scalarDescriptor().offset(),
+          features.inMapDescriptorAt(0).offset(),
+          features.childAt(1)->asScalar().scalarDescriptor().offset(),
+          features.inMapDescriptorAt(1).offset()));
 }
 
 // --- convertToNimbleType with projected subfields tests ---
