@@ -166,12 +166,6 @@ std::vector<std::string> getTaskIds(
 /// without learning its value.
 inline constexpr std::string_view kRedactedConfigValue{"<redacted>"};
 
-/// Returns true if 'key' names a query config or connector session property
-/// whose value is a credential and must therefore never be written to a trace
-/// file. Trace metadata outlives the query and is readable by anyone who can
-/// read the trace directory.
-bool isCredentialConfigKey(std::string_view key);
-
 /// Gets the metadata from a given task metadata file which includes query plan,
 /// configs and connector properties.
 folly::dynamic getTaskMetadata(
