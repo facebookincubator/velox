@@ -16,7 +16,6 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/tests/utils/CudfCpuFallbackTest.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -51,11 +50,8 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
   }
 };
 
-class CudfNestedLoopJoinCpuFallbackTest
-    : public cudf_velox::test::CudfCpuFallbackTest<CudfNestedLoopJoinTest> {};
-
 TEST_F(
-    CudfNestedLoopJoinCpuFallbackTest,
+    CudfNestedLoopJoinTest,
     unsupportedTypeProjectedOutBeforeNestedLoopJoin) {
   auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
   auto build = makeRowVector(
@@ -74,7 +70,9 @@ TEST_F(
           .planNode();
 
   std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
   auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
   facebook::velox::test::assertEqualVectors(expected, result);
 
@@ -85,7 +83,7 @@ TEST_F(
   EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinProbe"), 0);
 }
 
-TEST_F(CudfNestedLoopJoinCpuFallbackTest, customComparisonConditionFallsBack) {
+TEST_F(CudfNestedLoopJoinTest, customComparisonConditionFallsBack) {
   const auto customType =
       facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
   auto probe = makeRowVector(
@@ -103,7 +101,9 @@ TEST_F(CudfNestedLoopJoinCpuFallbackTest, customComparisonConditionFallsBack) {
                   .planNode();
 
   std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
   auto expected =
       makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
   facebook::velox::test::assertEqualVectors(expected, result);

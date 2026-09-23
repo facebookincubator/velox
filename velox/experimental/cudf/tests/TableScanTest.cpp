@@ -20,7 +20,6 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
-#include "velox/experimental/cudf/tests/utils/CudfCpuFallbackTest.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
 #include "velox/common/base/Fs.h"
@@ -1098,10 +1097,7 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
 }
 
-class TableScanCpuFallbackTest
-    : public cudf_velox::test::CudfCpuFallbackTest<TableScanTest> {};
-
-TEST_F(TableScanCpuFallbackTest, unsupportedScanColumnProjectedOut) {
+TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
   auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
   auto filePath = writeUnsupportedMapInput();
 
@@ -1120,6 +1116,7 @@ TEST_F(TableScanCpuFallbackTest, unsupportedScanColumnProjectedOut) {
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .split(makeCudfHiveConnectorSplit(filePath->getPath()))
                     .copyResults(pool(), task);
   auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
@@ -1130,7 +1127,7 @@ TEST_F(TableScanCpuFallbackTest, unsupportedScanColumnProjectedOut) {
   EXPECT_EQ(operatorStats.count("FilterProject"), 1);
 }
 
-TEST_F(TableScanCpuFallbackTest, unsupportedScanOutputFallsBack) {
+TEST_F(TableScanTest, unsupportedScanOutputFallsBack) {
   auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
   auto filePath = writeUnsupportedMapInput();
 
@@ -1151,6 +1148,7 @@ TEST_F(TableScanCpuFallbackTest, unsupportedScanOutputFallsBack) {
       {makeFlatVector<int64_t>({1, 2}),
        makeMapVector<int64_t, int64_t>({{{10, 100}}, {{20, 200}}})});
   AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
       .split(makeCudfHiveConnectorSplit(filePath->getPath()))
       .assertResults(expected);
 }

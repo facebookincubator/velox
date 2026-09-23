@@ -301,23 +301,20 @@ bool CompileState::compile(bool allowCpuFallback) {
 }
 
 struct CudfDriverAdapter {
-  CudfDriverAdapter(bool allowCpuFallback)
-      : allowCpuFallback_{allowCpuFallback} {}
-
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    if (!driver.driverCtx()->queryConfig().get<bool>(
+    const auto& queryConfig = driver.driverCtx()->queryConfig();
+    const auto allowCpuFallback = queryConfig.get<bool>(
+        CudfConfig::kCudfAllowCpuFallback,
+        CudfConfig::getInstance().allowCpuFallback);
+    if (!queryConfig.get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
-        allowCpuFallback_) {
+        allowCpuFallback) {
       return false;
     }
     auto state = CompileState(factory, driver);
-    auto res = state.compile(allowCpuFallback_);
-    return res;
+    return state.compile(allowCpuFallback);
   }
-
- private:
-  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
@@ -366,7 +363,7 @@ void registerCudf() {
       std::make_unique<CudfHashJoinBridgeTranslator>());
   exec::Operator::registerOperator(
       std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
-  CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
+  CudfDriverAdapter cda;
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
 
