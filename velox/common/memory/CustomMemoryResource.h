@@ -39,7 +39,8 @@ class MemoryReclaimer;
 
 /// Describes an externally-provided memory resource (e.g. a GPU or tiered
 /// memory backend) registered with the memory subsystem and referenced by
-/// 'tag' when building per-query memory pools. The constructor enforces
+/// 'tag' when building custom memory pool hierarchies. Roots need not belong to
+/// queries. Both constructors enforce
 /// non-empty tag and non-null allocator, arbitrator, and reclaimerFactory;
 /// once constructed, the resource is immutable.
 class CustomMemoryResource {
@@ -52,12 +53,14 @@ class CustomMemoryResource {
       int64_t /*priority*/,
       const std::string& /*resourceTag*/)>;
 
-  /// Optional execution-context-aware overrides. Missing factories retain the
-  /// legacy factory behavior at that level. A supplied factory's result is
+  /// Optional execution-context-aware factories. Query factories are invoked
+  /// explicitly through newQueryReclaimer(); their presence does not change
+  /// resource-based root creation. Task creation uses the task factory when
+  /// supplied, otherwise the legacy factory. A supplied factory's result is
   /// authoritative: nullptr means no reclaimer, never select a fallback.
-  /// Factories must not capture a particular query or task in this process-wide
-  /// resource. Each invocation receives the current execution context;
-  /// factories must support concurrent calls for different queries/tasks.
+  /// Factories on resources shared across queries must support concurrent calls
+  /// and should not capture a particular query/task. Each invocation receives
+  /// the current execution context.
   struct ExecutionReclaimerFactories {
     QueryReclaimerFactory query{};
     TaskReclaimerFactory task{};
@@ -84,7 +87,8 @@ class CustomMemoryResource {
     return tag_;
   }
 
-  /// Capacity of the per-query root pool created from this resource.
+  /// Maximum capacity of a root created through the resource-based overload.
+  /// The arbitrator determines its currently granted capacity.
   int64_t maxCapacity() const {
     return maxCapacity_;
   }
