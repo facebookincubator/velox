@@ -224,8 +224,8 @@ class MemoryManager {
       const std::optional<MemoryPool::DebugOptions>& poolDebugOpts =
           std::nullopt);
 
-  /// Creates a root memory pool backed by 'resource'. The pool's maximum capacity
-  /// comes from 'resource->maxCapacity'; its reclaimer comes from
+  /// Creates a root memory pool backed by 'resource'. The pool's maximum
+  /// capacity comes from 'resource->maxCapacity'; its reclaimer comes from
   /// 'resource->newReclaimer()', independently of any query/task factories.
   /// Its allocator and arbitrator are borrowed from 'resource->allocator' and
   /// 'resource->arbitrator'. The
