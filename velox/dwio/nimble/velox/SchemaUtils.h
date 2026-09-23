@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string_view>
+#include <vector>
 
 #include <folly/container/F14Set.h>
 
@@ -31,6 +32,10 @@ class TypeBuilder;
 velox::TypePtr convertToVeloxType(const Type& type);
 
 std::shared_ptr<const Type> convertToNimbleType(const velox::Type& type);
+
+/// Returns descriptor offsets in dense projected-stream order.
+/// FlatMap value streams precede their corresponding in-map stream.
+std::vector<uint32_t> projectionStreamOffsets(const Type& type);
 
 /// Parses a Velox subfield path used to identify a value stream.
 velox::common::Subfield parseValueStreamSubfield(std::string_view fieldPath);

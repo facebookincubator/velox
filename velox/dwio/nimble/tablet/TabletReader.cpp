@@ -693,6 +693,7 @@ void TabletReader::initStripes(
       stripes->group_indices()->size(),
       "Unexpected stripe count");
   stripeOffsets_ = stripes->offsets()->data();
+  stripeSizes_ = stripes->sizes()->data();
 
   // Build prefix sum for O(log n) rowToStripe lookup.
   const auto* rowCounts = stripes->row_counts()->data();

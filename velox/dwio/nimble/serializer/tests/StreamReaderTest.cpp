@@ -984,7 +984,7 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArrays) {
       std::make_shared<const ScalarType>(
           StreamDescriptor{2, ScalarKind::Int64}));
   StreamReader reader{type, pool_.get(), {}};
-  const std::array<std::string_view, 3> streams{lengths, offsets, elements};
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
   auto output =
       velox::BaseVector::create(velox::ARRAY(velox::BIGINT()), 2, pool_.get());
   const std::array<RowRange, 2> ranges{{{1, 2}, {4, 5}}};
@@ -1046,7 +1046,7 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArraysSharingOneRun) {
       std::make_shared<const ScalarType>(
           StreamDescriptor{2, ScalarKind::Int64}));
   StreamReader reader{type, pool_.get(), {}};
-  const std::array<std::string_view, 3> streams{lengths, offsets, elements};
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
   auto output =
       velox::BaseVector::create(velox::ARRAY(velox::BIGINT()), 3, pool_.get());
   // Rows 0 and 1 share a run; row 3 starts a later one.
@@ -1082,7 +1082,7 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArraysWithEmptyRun) {
       std::make_shared<const ScalarType>(
           StreamDescriptor{2, ScalarKind::Int64}));
   StreamReader reader{type, pool_.get(), {}};
-  const std::array<std::string_view, 3> streams{lengths, offsets, elements};
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
   auto output =
       velox::BaseVector::create(velox::ARRAY(velox::BIGINT()), 3, pool_.get());
   const std::array<RowRange, 1> ranges{{{0, 3}}};
@@ -1113,7 +1113,7 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArraysWithAllNullRows) {
       std::make_shared<const ScalarType>(
           StreamDescriptor{2, ScalarKind::Int64}));
   StreamReader reader{type, pool_.get(), {}};
-  const std::array<std::string_view, 3> streams{lengths, offsets, elements};
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
   auto output =
       velox::BaseVector::create(velox::ARRAY(velox::BIGINT()), 2, pool_.get());
   const std::array<RowRange, 1> ranges{{{1, 3}}};
@@ -1142,7 +1142,7 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArraysAtOutputOffset) {
       std::make_shared<const ScalarType>(
           StreamDescriptor{2, ScalarKind::Int64}));
   StreamReader reader{type, pool_.get(), {}};
-  const std::array<std::string_view, 3> streams{lengths, offsets, elements};
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
   auto output =
       velox::BaseVector::create(velox::ARRAY(velox::BIGINT()), 4, pool_.get());
 
@@ -1325,12 +1325,12 @@ TEST_F(StreamReaderTest, readsSelectedFlatMapsWithSparseAndNullKeys) {
   const std::array<std::string_view, 8> streams{
       std::string_view{},
       mapPresence,
-      inMapA,
-      inMapB,
-      inMapC,
       valuesA,
+      inMapA,
       valuesB,
-      valuesC};
+      inMapB,
+      valuesC,
+      inMapC};
   StreamReader reader{type, pool_.get(), {}};
   auto output = velox::BaseVector::create(
       velox::ROW("attributes", velox::MAP(velox::VARCHAR(), velox::BIGINT())),
@@ -1386,7 +1386,7 @@ TEST_F(StreamReaderTest, readsSelectedFlatMaps) {
   const auto valuesB =
       encodeChunk<int64_t>(std::array<int64_t, 1>{22}, EncodingType::Trivial);
   const std::array<std::string_view, 6> streams{
-      std::string_view{}, mapPresence, inMapA, inMapB, valuesA, valuesB};
+      std::string_view{}, mapPresence, valuesA, inMapA, valuesB, inMapB};
   StreamReader reader{type, pool_.get(), {}};
   auto output = velox::BaseVector::create(
       velox::ROW("attributes", velox::MAP(velox::VARCHAR(), velox::BIGINT())),
