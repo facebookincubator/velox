@@ -937,20 +937,14 @@ it remains alive. Registering a pool does not transfer ownership of the resource
   VELOX_USER_CHECK_NOT_NULL(resource, "Unknown resource tag: device");
   auto root = memory::memoryManager()->addCustomRootPool("query.q0.device", resource);
   auto queryCtx = core::QueryCtx::Builder().queryId("q0").build();
-  if (resource->hasQueryReclaimerFactory() && root->reclaimer() == nullptr) {
-    auto reclaimer = resource->newQueryReclaimer(queryCtx.get(), root.get());
-    if (reclaimer != nullptr) {
-      root->setReclaimer(std::move(reclaimer));
-    }
-  }
   queryCtx->addCustomPool(resource->tag(), std::move(root));
 
 *addCustomRootPool* uses *resource->maxCapacity()* as the pool capacity and backs
 the pool with *resource->allocator()* and *resource->arbitrator()*. With the
-original constructor, its reclaimer comes from the original factory. Existing
+resource-based overload, its reclaimer always comes from the original factory,
+even when query/task factories are configured. Existing
 *Builder::customPool(tag, pool)* and *addCustomPool(tag, pool)* calls retain their
-registration-only behavior. Extensions invoke and install configured query
-factories explicitly, as illustrated above.
+registration-only behavior.
 The root pool is exposed on *QueryCtx* keyed by tag:
 
 .. code-block:: c++
@@ -987,14 +981,35 @@ constructor overload:
           .query = core::QueryCtx::MemoryReclaimer::create,
           .task = exec::Task::MemoryReclaimer::create});
 
-The explicit query factory receives the query and completed root. When it is
-configured, *addCustomRootPool* defers root-reclaimer installation;
-the extension's query-setup function invokes and installs its result before
-registering the pool. Neither *QueryCtx* nor its
-builder invokes the factory. Preserve any already-installed reclaimer and
-complete setup before creating Tasks or allocating custom memory. Registering
-only after successful factory invocation leaves the pool unregistered if that
-invocation throws.
+Root pools are not necessarily query pools. To create a root without invoking
+any resource factory, use the component-based overload. It installs exactly the
+supplied reclaimer, defaulting to ``nullptr``. The non-null allocator and
+arbitrator are borrowed and must outlive the pool. This also supports standalone
+roots that never require a reclaimer.
+
+For a query-specific root, the extension can install a query reclaimer once it
+has both the query and the root:
+
+.. code-block:: c++
+
+  auto queryCtx = core::QueryCtx::Builder().queryId("q0").build();
+  auto root = memory::memoryManager()->addCustomRootPool(
+      "query.q0.device",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity()); // No reclaimer installed by default.
+  if (resource->hasQueryReclaimerFactory()) {
+    auto reclaimer = resource->newQueryReclaimer(queryCtx.get(), root.get());
+    if (reclaimer != nullptr) {
+      root->setReclaimer(std::move(reclaimer));
+    }
+  }
+  queryCtx->addCustomPool(resource->tag(), std::move(root));
+
+Neither MemoryManager nor QueryCtx invokes the query factory. Complete setup
+before creating Tasks or allocating custom memory. Registering only after
+successful factory invocation leaves the pool unregistered with QueryCtx if
+that invocation throws.
 
 The explicit task factory receives the task, reclamation priority and resource
 tag. The built-in Task reclaimer uses that tag to traverse only the selected

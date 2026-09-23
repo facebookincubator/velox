@@ -129,11 +129,15 @@ class CustomMemoryHierarchyTest : public testing::Test {
         kCustomMemoryResourceRegistryKey, registry);
     for (const auto& tag : tags) {
       auto resource = makeResource(tag, 1L << 30, useExecutionFactories);
-      addResourcePool(
-          *queryCtx,
-          *resource,
-          manager->addCustomRootPool(
-              fmt::format("{}.{}", queryId, tag), resource));
+      const auto name = fmt::format("{}.{}", queryId, tag);
+      auto root = useExecutionFactories
+          ? manager->addCustomRootPool(
+                name,
+                resource->allocator(),
+                resource->arbitrator(),
+                resource->maxCapacity())
+          : manager->addCustomRootPool(name, resource);
+      addResourcePool(*queryCtx, *resource, std::move(root));
       registry->insert(tag, std::move(resource));
     }
     return queryCtx;
@@ -263,7 +267,11 @@ TEST_F(
                 return std::make_unique<TestTaskReclaimer>(29);
               }});
   auto query = core::QueryCtx::Builder().queryId("mixed-factories").build();
-  auto root = memoryManager()->addCustomRootPool("mixed.device", resource);
+  auto root = memoryManager()->addCustomRootPool(
+      "mixed.device",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
   addResourcePool(*query, *resource, root);
   auto registry = CustomMemoryResourceRegistry::createRegistry(nullptr);
   registry->insert("device", resource);
@@ -306,7 +314,11 @@ TEST_F(CustomMemoryHierarchyTest, nullTaskFactoryResultDoesNotFallBack) {
             return std::unique_ptr<MemoryReclaimer>{};
           }});
   auto query = core::QueryCtx::Builder().queryId("null-task").build();
-  auto root = memoryManager()->addCustomRootPool("null.device", resource);
+  auto root = memoryManager()->addCustomRootPool(
+      "null.device",
+      resource->allocator(),
+      resource->arbitrator(),
+      resource->maxCapacity());
   addResourcePool(*query, *resource, root);
   auto registry = CustomMemoryResourceRegistry::createRegistry(nullptr);
   registry->insert("device", resource);
