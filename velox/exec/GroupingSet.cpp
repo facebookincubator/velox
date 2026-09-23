@@ -1404,37 +1404,46 @@ bool GroupingSet::mergeNextWithoutAggregates(
   // been output as distinct before we trigger spilling. A distinct stream id is
   // less than 'numDistinctSpillFilesPerPartition_'.
   bool newDistinct{true};
+  int32_t numOutputRows{0};
   int32_t outputSize{0};
+  bool endOfBatch{false};
   RowVectorPtr lastVector;
   vector_size_t lastIndex{0};
-  std::vector<RowVectorPtr> spillSourceVectors(maxOutputRows);
   prepareSpillResultWithoutAggregates(maxOutputRows, result);
 
-  auto addLastRow = [&]() {
-    spillSources_[outputSize] = lastVector.get();
-    spillSourceRows_[outputSize] = lastIndex;
-    spillSourceVectors[outputSize] = lastVector;
-    ++outputSize;
-  };
   auto flushOutput = [&]() {
+    if (outputSize == 0) {
+      return;
+    }
     gatherCopy(
         spillResultWithoutAggregates_.get(),
-        0,
+        numOutputRows,
         outputSize,
         spillSources_,
         spillSourceRows_);
-    spillResultWithoutAggregates_->resize(outputSize);
-    projectResult(result);
+    numOutputRows += outputSize;
+    outputSize = 0;
+  };
+  auto addLastRow = [&]() {
+    spillSources_[outputSize] = lastVector.get();
+    spillSourceRows_[outputSize] = lastIndex;
+    ++outputSize;
+    // Copy the last row separately if it is from a completed batch.
+    if (endOfBatch) {
+      flushOutput();
+    }
   };
 
-  while (outputSize < maxOutputRows) {
+  while (numOutputRows + outputSize < maxOutputRows) {
     auto* stream = merge_->next();
     if (stream == nullptr) {
       if (lastVector != nullptr && newDistinct) {
         addLastRow();
       }
-      if (outputSize != 0) {
-        flushOutput();
+      flushOutput();
+      if (numOutputRows != 0) {
+        spillResultWithoutAggregates_->resize(numOutputRows);
+        projectResult(result);
         return true;
       }
       if (!prepareNextSpillPartitionOutput()) {
@@ -1444,6 +1453,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
       VELOX_CHECK_NOT_NULL(merge_);
       newDistinct = true;
       lastVector.reset();
+      endOfBatch = false;
       continue;
     }
     const auto& currentVector = *stream->current();
@@ -1458,8 +1468,10 @@ bool GroupingSet::mergeNextWithoutAggregates(
     }
     if (!sameKey && lastVector != nullptr && newDistinct) {
       addLastRow();
-      if (outputSize == maxOutputRows) {
+      if (numOutputRows + outputSize == maxOutputRows) {
         flushOutput();
+        spillResultWithoutAggregates_->resize(numOutputRows);
+        projectResult(result);
         return true;
       }
     }
@@ -1470,8 +1482,17 @@ bool GroupingSet::mergeNextWithoutAggregates(
         numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
       newDistinct = false;
     }
+    // Update only after handling the previous run: until this point,
+    // endOfBatch describes the previous lastVector and determines whether its
+    // output must be copied before advancing past its batch.
     lastVector = stream->current();
     lastIndex = index;
+    endOfBatch = index == currentVector.size() - 1;
+    if (FOLLY_UNLIKELY(endOfBatch)) {
+      // The stream is at end of input batch. Need to copy out the rows before
+      // fetching next batch in 'pop'.
+      flushOutput();
+    }
     stream->pop();
   }
   VELOX_UNREACHABLE();
