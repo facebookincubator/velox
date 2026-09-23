@@ -414,16 +414,8 @@ void decodeNimble(const std::string& encoded, uint32_t n) {
   folly::doNotOptimizeAway(out);
 }
 
-// SubIntSplit is not wired into EncodingFactory dispatch, so decode it by
-// constructing the encoding directly. This is driver-only: the production
-// EncodingFactory is unchanged. Nested (possibly Zstd/OpenZL-compressed)
-// sections are still built through the constructor's internal factory.
 void decodeSubIntSplit(const std::string& encoded, uint32_t n) {
-  auto& pool = benchmarkPool();
-  std::vector<T> out(n);
-  SubIntSplitEncoding<T> enc{*pool, encoded, nullFactory()};
-  enc.materialize(n, out.data());
-  folly::doNotOptimizeAway(out);
+  decodeNimble(encoded, n);
 }
 
 std::vector<Method> makeMethods() {
