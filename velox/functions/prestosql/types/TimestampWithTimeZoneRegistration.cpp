@@ -146,6 +146,12 @@ void castToString(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  // Resolving under legacy could throw on a session zone this path ignores.
+  const auto* sessionTimeZone =
+      legacyTimestampWithTimezone ? nullptr : getTimeZoneFromConfig(config);
+
   auto* flatResult = result.as<FlatVector<StringView>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
@@ -160,8 +166,10 @@ void castToString(
     const auto timestampWithTimezone = timestamps->valueAt(row);
 
     const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    const auto timeZoneId = unpackZoneKeyId(timestampWithTimezone);
-    const auto* timezonePtr = tz::locateZone(tz::getTimeZoneName(timeZoneId));
+    const auto* timezonePtr = legacyTimestampWithTimezone
+        ? tz::locateZone(
+              tz::getTimeZoneName(unpackZoneKeyId(timestampWithTimezone)))
+        : sessionTimeZone;
 
     exec::StringWriter result(flatResult, row);
 
@@ -182,15 +190,25 @@ void castToTimestamp(
     BaseVector& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
   const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  // Only the non-legacy path with adjust off reads the session zone.
+  const auto* sessionTimeZone =
+      (legacyTimestampWithTimezone || adjustTimestampToTimezone)
+      ? nullptr
+      : getTimeZoneFromConfig(config);
   auto* flatResult = result.as<FlatVector<Timestamp>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto timestampWithTimezone = timestamps->valueAt(row);
     auto ts = unpackTimestampUtc(timestampWithTimezone);
+    // Under adjustTimestampToTimezone the result is the bare UTC instant,
+    // which already ignores the embedded zone.
     if (!adjustTimestampToTimezone) {
-      // Convert UTC to the given time zone.
-      ts.toTimezone(*tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+      const auto* timeZone = legacyTimestampWithTimezone
+          ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
+          : sessionTimeZone;
+      ts.toTimezone(*timeZone);
     }
     flatResult->set(row, ts);
   });
@@ -201,14 +219,21 @@ void castToDate(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  const auto* sessionTimeZone =
+      legacyTimestampWithTimezone ? nullptr : getTimeZoneFromConfig(config);
+
   auto* flatResult = result.as<FlatVector<int32_t>>();
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
 
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto timestampWithTimezone = timestampVector->valueAt(row);
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    timestamp.toTimezone(
-        *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+    const auto* timeZone = legacyTimestampWithTimezone
+        ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
+        : sessionTimeZone;
+    timestamp.toTimezone(*timeZone);
 
     const auto days = util::toDate(timestamp, nullptr);
     flatResult->set(row, days);
@@ -220,6 +245,11 @@ void castToTime(
     exec::EvalCtx& context,
     const SelectivityVector& rows,
     BaseVector& result) {
+  const auto& config = context.execCtx()->queryCtx()->queryConfig();
+  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
+  const auto* sessionTimeZone =
+      legacyTimestampWithTimezone ? nullptr : getTimeZoneFromConfig(config);
+
   auto* flatResult = result.as<FlatVector<int64_t>>();
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
 
@@ -227,9 +257,10 @@ void castToTime(
     auto timestampWithTimezone = timestampVector->valueAt(row);
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
 
-    // Convert the UTC timestamp to the timezone of the timestamp
-    timestamp.toTimezone(
-        *tz::locateZone(unpackZoneKeyId(timestampWithTimezone)));
+    const auto* timeZone = legacyTimestampWithTimezone
+        ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
+        : sessionTimeZone;
+    timestamp.toTimezone(*timeZone);
 
     // Extract time-of-day using std::chrono. floor() rounds towards
     // negative infinity, so this correctly handles negative timestamps.
