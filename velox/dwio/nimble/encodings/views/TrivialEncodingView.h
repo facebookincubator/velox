@@ -47,7 +47,7 @@ class TrivialEncodingView final : public TypedEncodingView<T> {
     values_ = reinterpret_cast<const physicalType*>(payload.data());
     NIMBLE_CHECK_EQ(
         reinterpret_cast<const char*>(values_ + this->rowCount_),
-        payload.end(),
+        payload.data() + payload.size(),
         "Unexpected Trivial view end.");
   }
 
@@ -85,7 +85,7 @@ class TrivialEncodingView<bool> final : public TypedEncodingView<bool> {
     bitmap_ = payload.data();
     NIMBLE_CHECK_EQ(
         bitmap_ + FixedBitArray::bufferSize(this->rowCount_, 1),
-        payload.end(),
+        payload.data() + payload.size(),
         "Unexpected Trivial bool view end.");
   }
 
