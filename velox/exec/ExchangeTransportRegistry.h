@@ -35,12 +35,11 @@ class QueryCtx;
 
 namespace facebook::velox::exec {
 
-/// Registry value pairing an exchange client factory with the factories that
-/// build its matching exchange operators, keyed by transport id. Registering
-/// them together ensures a transport's operators and client cannot diverge.
-/// Build entries with make(), which binds the operators to the concrete client
-/// type and rejects null halves; direct construction is for tests passing real
-/// values.
+/// Registry value pairing a Task-level exchange client factory with the
+/// factories that build operators for the same transport, keyed by transport
+/// id. Build entries with make(), which gives the operator builders the
+/// concrete Task-level client type and rejects null halves; direct construction
+/// is for tests passing real values.
 struct ExchangeTransportEntry {
   /// Creates this transport's exchange client for one pipeline of one task.
   ExchangeClientFactory makeClient;
@@ -49,9 +48,12 @@ struct ExchangeTransportEntry {
   /// 'makeClient'.
   ExchangeOperatorFactory makeExchangeOperator;
 
-  /// Builds this transport's MergeExchange operator, bound to a client from
-  /// 'makeClient'. Null when the transport does not support merge exchange;
-  /// Task fails fast if a MergeExchangeNode names such a transport.
+  /// Builds this transport's MergeExchange operator and receives the
+  /// Task-level client from 'makeClient'. The client may be used for data or
+  /// only for control, depending on the transport's merge implementation. The
+  /// built-in in-memory operator ignores it and creates one client per merge
+  /// source. Null when the transport does not support merge exchange; Task
+  /// fails fast if a MergeExchangeNode names such a transport.
   ExchangeOperatorFactory makeMergeExchangeOperator;
 
   /// Constructs an entry from a client factory and the operator builders bound
@@ -65,9 +67,8 @@ struct ExchangeTransportEntry {
         makeMergeExchangeOperator(std::move(makeMergeExchangeOperator)) {}
 
   /// Preferred way to build an entry: pairs a client factory with operator
-  /// builders that receive the concrete client type that factory produces, so
-  /// an operator can't be wired to a client from a different transport. Pass
-  /// 'buildMergeExchange' as nullptr when the transport cannot merge.
+  /// builders that receive the concrete client type that factory produces.
+  /// Pass 'buildMergeExchange' as nullptr when the transport cannot merge.
   template <typename TClient>
   static std::shared_ptr<ExchangeTransportEntry> make(
       std::function<std::shared_ptr<TClient>(

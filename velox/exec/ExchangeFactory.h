@@ -40,21 +40,22 @@ struct DriverCtx;
 class Operator;
 class ExchangeClient;
 
-/// Builds a pipeline's exchange operator (e.g. Exchange or MergeExchange),
-/// bound to the matching exchange client. The two are registered together in
-/// ExchangeTransportRegistry so they cannot diverge.
+/// Builds a pipeline's exchange operator (e.g. Exchange or MergeExchange) for
+/// the same transport as the Task-level exchange client. Plain exchange
+/// operators consume this client. A merge operator's use of it is
+/// transport-specific because the operator may create clients for individual
+/// sources.
 using ExchangeOperatorFactory = std::function<std::unique_ptr<Operator>(
     int32_t operatorId,
     DriverCtx* ctx,
     const std::shared_ptr<const core::ExchangeNode>& node,
     std::shared_ptr<ExchangeClient> client)>;
 
-/// Caller-supplied context for building one exchange client. Grouping the
-/// arguments lets the caller, not the transport, size the exchange buffer:
-/// Task's plain-exchange path fills 'maxExchangeBufferSize' and
-/// 'minExchangeOutputBatchBytes' from 'queryConfig', while a merge path can
-/// pass its per-source budget and zero (deliver each page as it arrives) --
-/// a distinction a single query-config-derived limit cannot express.
+/// Caller-supplied context for building one Task-level exchange client.
+/// Grouping the arguments lets the caller, not the transport, size the
+/// exchange buffer. Task fills 'maxExchangeBufferSize' and
+/// 'minExchangeOutputBatchBytes' from 'queryConfig'. These limits do not
+/// describe any per-source clients that a merge operator creates itself.
 ///
 /// Always construct with designated initialisers. Five of the fields are
 /// adjacent integers and pointers that a reorder would silently transpose.

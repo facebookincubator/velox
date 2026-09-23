@@ -88,9 +88,8 @@ std::shared_ptr<ExchangeTransportEntry>
 InMemoryExchangeClient::makeDefaultTransportEntry() {
   return ExchangeTransportEntry::make<InMemoryExchangeClient>(
       [](const ExchangeClientContext& context) {
-        // The two byte limits come from the context, not from 'queryConfig':
-        // the caller may be sizing a per-source merge budget rather than a
-        // whole-node one.
+        // The two byte limits come from the Task-supplied context rather than
+        // being re-derived by the transport.
         const auto& queryConfig = context.queryConfig;
         return std::make_shared<InMemoryExchangeClient>(
             context.taskId,
@@ -116,6 +115,10 @@ InMemoryExchangeClient::makeDefaultTransportEntry() {
          const std::shared_ptr<const core::ExchangeNode>& node,
          const std::shared_ptr<InMemoryExchangeClient>& /*client*/)
           -> std::unique_ptr<Operator> {
+        // The stock MergeExchange creates one InMemoryExchangeClient per
+        // source to preserve independently ordered inputs. The Task-level
+        // client is used only to abort late splits after the Task stops, so the
+        // operator intentionally does not consume it.
         const auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(node);
         VELOX_CHECK_NOT_NULL(

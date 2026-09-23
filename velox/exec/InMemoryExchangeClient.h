@@ -72,9 +72,11 @@ class InMemoryExchangeClient
 
   ~InMemoryExchangeClient() override;
 
-  /// Builds the registry entry for the built-in in-memory transport, pairing
-  /// this client with the stock Exchange and MergeExchange operators.
-  /// ExchangeTransportRegistry::global() registers it under kInMemory.
+  /// Builds the registry entry for the built-in in-memory transport. Exchange
+  /// consumes the Task-level client created by this entry. MergeExchange does
+  /// not: it creates one InMemoryExchangeClient per merge source and uses the
+  /// Task-level client only for late-split control after the Task stops.
+  /// ExchangeTransportRegistry::global() registers the entry under kInMemory.
   static std::shared_ptr<ExchangeTransportEntry> makeDefaultTransportEntry();
 
   /// Memory pool the received pages are allocated from.
