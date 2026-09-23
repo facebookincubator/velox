@@ -69,6 +69,15 @@ DEFINE_int64(
     only_size,
     0,
     "If >0, run the CSV sweep for only this element count (e.g. 100000000).");
+DEFINE_int32(
+    decode_chunk,
+    0,
+    "SubIntSplit decode chunk size in elements; 0 keeps the built-in default.");
+DEFINE_double(
+    decode_cost_bits,
+    0.0,
+    "SubIntSplit planner decode cost per extra section, in bits per value; "
+    "0 keeps the storage-only split.");
 DEFINE_bool(
     layout,
     false,
@@ -401,15 +410,21 @@ Encoded encodeSubIntSplitWith(
       std::move(result),
       Statistics<uint64_t>::create(values.subspan(0, 1)),
       factory.createPolicy(DataType::Uint64)};
-  auto encoded =
-      SubIntSplitEncoding<uint64_t>::encode(selection, values, buffer, {});
+  Encoding::Options encodeOptions;
+  encodeOptions.subIntSplitDecodeCostBitsPerValue = FLAGS_decode_cost_bits;
+  auto encoded = SubIntSplitEncoding<uint64_t>::encode(
+      selection, values, buffer, encodeOptions);
   return {std::string{encoded.data(), encoded.size()}, true};
 }
 
 void decodeNimble(const std::string& encoded, uint32_t n) {
   auto& pool = benchmarkPool();
   std::vector<T> out(n);
-  auto enc = EncodingFactory{}.create(*pool, encoded, nullFactory());
+  Encoding::Options options;
+  options.subIntSplitDecodeChunkSize =
+      static_cast<uint32_t>(FLAGS_decode_chunk);
+  auto enc =
+      EncodingFactory{options}.create(*pool, encoded, nullFactory(), options);
   enc->materialize(n, out.data());
   folly::doNotOptimizeAway(out);
 }

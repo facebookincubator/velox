@@ -154,7 +154,8 @@ DpSolution solveDp(
     int numBits,
     int lo,
     int hi,
-    const SelectorConfig& config) {
+    const SelectorConfig& config,
+    double sectionPenalty) {
   // cost[i] is the minimum cost to cover bits [lo, i).
   std::vector<double> cost(numBits + 1, kInfinity);
   DpSolution solution{
@@ -178,8 +179,9 @@ DpSolution solveDp(
       if (!std::isfinite(cell.cost)) {
         continue;
       }
-      // The first section is free; every later one pays for its header.
-      const double splitCost = (start == lo) ? 0.0 : config.splitPenalty;
+      // The first section is free; every later one pays for its header and,
+      // when the decode term is enabled, for its extra pass over the output.
+      const double splitCost = (start == lo) ? 0.0 : sectionPenalty;
       const double candidate = cost[start] + cell.cost + splitCost;
       if (candidate < cost[end]) {
         cost[end] = candidate;
@@ -322,8 +324,10 @@ SelectorResult selectSplits(
   CostGrid grid{numBits, boundaries};
   grid.score(samples, active.lo, active.hi, fullCount, costFn);
 
-  const DpSolution solution =
-      solveDp(grid, boundaries, numBits, active.lo, active.hi, config);
+  const double sectionPenalty = config.splitPenalty +
+      config.decodeCostBitsPerValue * static_cast<double>(fullCount);
+  const DpSolution solution = solveDp(
+      grid, boundaries, numBits, active.lo, active.hi, config, sectionPenalty);
 
   SelectorResult result;
   if (std::isfinite(solution.totalCost)) {
