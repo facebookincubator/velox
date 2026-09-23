@@ -53,6 +53,20 @@ struct SelectorConfig {
   /// Relative change in a bit plane's set-rate required for the position to be
   /// considered as a split boundary. 0.0 considers every position.
   double boundaryPruneThreshold{kBoundaryPruneThreshold};
+
+  /// Decode cost charged per additional section, in bits per value of the full
+  /// stream.
+  ///
+  /// Decoding makes one pass over the output per section, so throughput falls
+  /// roughly as 1/sections -- measured at ~8000 MB/s for two sections, ~1900
+  /// for four and ~950 for seven. `splitPenalty` alone cannot express that: it
+  /// is a flat handful of bits against a stream cost in the millions, so the DP
+  /// will buy a fourth section for a 0.1% storage win and pay 30% of decode for
+  /// it. Charging per value instead makes the DP add a section only when it
+  /// saves more than this many bits per value.
+  ///
+  /// 0.0 disables the term and reproduces the storage-only plan byte for byte.
+  double decodeCostBitsPerValue{0.0};
 };
 
 inline SelectorConfig defaultSelectorConfig() noexcept {
