@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
-#include "velox/experimental/cudf/tests/utils/CudfCpuFallbackTest.h"
 
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -71,9 +70,6 @@ class HashJoinTest : public HashJoinTestBase {
     HashJoinTestBase::TearDown();
   }
 };
-
-class HashJoinCpuFallbackTest
-    : public cudf_velox::test::CudfCpuFallbackTest<HashJoinTest> {};
 
 class MultiThreadedHashJoinTest
     : public HashJoinTest,
@@ -272,7 +268,7 @@ TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
-TEST_F(HashJoinCpuFallbackTest, unsupportedTypeProjectedOutBeforeHashJoin) {
+TEST_F(HashJoinTest, unsupportedTypeProjectedOutBeforeHashJoin) {
   auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
   auto build = makeRowVector(
       {"b_key", "marker"},
@@ -294,7 +290,9 @@ TEST_F(HashJoinCpuFallbackTest, unsupportedTypeProjectedOutBeforeHashJoin) {
                   .planNode();
 
   std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
   auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
   facebook::velox::test::assertEqualVectors(expected, result);
 
