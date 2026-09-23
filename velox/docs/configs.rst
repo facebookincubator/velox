@@ -86,10 +86,12 @@ Generic Configuration
      - true
      - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, each value renders in its own
        embedded time zone. If false, values render the UTC instant in the session time zone, so values that compare
-       equal produce equal results. Covers field extraction, formatting, date arithmetic, and ``CAST`` to ``VARCHAR``,
-       ``DATE`` and ``TIME``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
-       SECOND`` operates on milliseconds and never consults a time zone. ``CAST`` to ``TIMESTAMP`` is governed by
-       ``adjust_timestamp_to_session_timezone``.
+       equal produce equal results. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which
+       report the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``,
+       ``TIME`` and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL
+       DAY TO SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
+       ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false,
+       ``legacy_timestamp_with_timezone`` selects the embedded or session time zone.
    * - track_operator_cpu_usage
      - bool
      - true
