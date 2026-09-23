@@ -124,7 +124,8 @@ class CachedTabletReader {
 /// No entry may outlive the cache. Each TabletReader frees its metadata
 /// buffers back to a memory pool the cache owns, so destroying the cache while
 /// an entry is still held is a use-after-free. The process-wide instance is
-/// never destroyed, which is why this holds in production.
+/// destroyed at exit along with the other folly singletons, so readers must
+/// release their entries before then.
 class TabletReaderCache {
  public:
   struct Options {
@@ -185,12 +186,15 @@ class TabletReaderCache {
   /// Returns cache statistics (hits, misses, evictions, etc.).
   velox::SimpleLRUCacheStats stats();
 
-  /// Initializes the process-wide TabletReaderCache singleton. Must be called
-  /// once before getInstance(). Throws if called more than once.
+  /// Sets the options of the process-wide TabletReaderCache singleton, which
+  /// the first getInstance() creates. Must be called once before
+  /// getInstance(). Throws if called more than once or if the options are
+  /// invalid.
   static void initialize(const Options& options);
 
-  /// Returns the process-wide TabletReaderCache singleton. Must call
-  /// initialize() first.
+  /// Returns the process-wide TabletReaderCache singleton, creating it on the
+  /// first call. Must call initialize() first. Throws after folly has
+  /// destroyed its singletons, which it does at exit.
   static TabletReaderCache& getInstance();
 
   /// Resets the singleton to uninitialized state. Test-only.

@@ -17,6 +17,8 @@
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 
 #include <fmt/format.h>
+#include <folly/Singleton.h>
+#include <folly/Synchronized.h>
 #include <glog/logging.h>
 
 #include "velox/common/base/BitUtil.h"
@@ -26,6 +28,42 @@
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
+
+namespace {
+void checkOptions(const TabletReaderCache::Options& options) {
+  NIMBLE_CHECK_NOT_NULL(options.executor);
+  NIMBLE_CHECK(
+      velox::bits::isPowerOfTwo(options.numShards),
+      fmt::format(
+          "numShards must be a power of 2, but got: {}", options.numShards));
+  // An observer that is told about creation but never about release has no way
+  // to know an entry is gone. Anything it keyed on the entry -- a registry of
+  // live tablets, say -- is left holding a pointer to freed memory.
+  NIMBLE_CHECK(
+      (options.onCreate == nullptr) == (options.onRelease == nullptr),
+      "TabletReaderCache onCreate and onRelease must be set together");
+}
+
+folly::Synchronized<std::optional<TabletReaderCache::Options>>& savedOptions() {
+  static folly::Synchronized<std::optional<TabletReaderCache::Options>> options;
+  return options;
+}
+
+TabletReaderCache* createInstance() {
+  const auto options = savedOptions().copy();
+  NIMBLE_CHECK(
+      options.has_value(),
+      "TabletReaderCache::initialize() must be called before getInstance()");
+  return new TabletReaderCache(*options);
+}
+
+// Closing a file the cache holds can need another folly singleton. folly
+// destroys its singletons at exit in reverse creation order, so the cache
+// closes its files while every singleton created before it still exists.
+// Creating it on the first getInstance() rather than in initialize() extends
+// that to the singletons created in between.
+const folly::Singleton<TabletReaderCache> singleton{createInstance};
+} // namespace
 
 CachedTabletReader::CachedTabletReader(
     std::shared_ptr<TabletReader> tablet,
@@ -120,17 +158,7 @@ TabletReaderCache::Generator::operator()(
 
 TabletReaderCache::Factory TabletReaderCache::createFactory(
     const Options& opts) {
-  NIMBLE_CHECK_NOT_NULL(opts.executor);
-  NIMBLE_CHECK(
-      velox::bits::isPowerOfTwo(opts.numShards),
-      fmt::format(
-          "numShards must be a power of 2, but got: {}", opts.numShards));
-  // An observer that is told about creation but never about release has no way
-  // to know an entry is gone. Anything it keyed on the entry -- a registry of
-  // live tablets, say -- is left holding a pointer to freed memory.
-  NIMBLE_CHECK(
-      (opts.onCreate == nullptr) == (opts.onRelease == nullptr),
-      "TabletReaderCache onCreate and onRelease must be set together");
+  checkOptions(opts);
 
   std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools;
   pools.reserve(opts.numShards);
@@ -175,44 +203,25 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::testingGet(
   return *cached;
 }
 
-namespace {
-struct SingletonState {
-  ~SingletonState() {
-    delete instance.load(std::memory_order_acquire);
-  }
-
-  std::atomic<TabletReaderCache*> instance{nullptr};
-  std::mutex mutex;
-};
-
-SingletonState& singletonState() {
-  static SingletonState state;
-  return state;
-}
-} // namespace
-
 void TabletReaderCache::initialize(const Options& options) {
-  auto& state = singletonState();
-  std::lock_guard<std::mutex> lock(state.mutex);
-  NIMBLE_CHECK_NULL(
-      state.instance.load(std::memory_order_acquire),
+  checkOptions(options);
+  auto saved = savedOptions().wlock();
+  NIMBLE_CHECK(
+      !saved->has_value(),
       "TabletReaderCache::initialize() must only be called once");
-  state.instance.store(
-      new TabletReaderCache(options), std::memory_order_release);
+  *saved = options;
 }
 
 TabletReaderCache& TabletReaderCache::getInstance() {
-  auto* instance = singletonState().instance.load(std::memory_order_acquire);
+  const auto instance = folly::Singleton<TabletReaderCache>::try_get();
   NIMBLE_CHECK_NOT_NULL(
-      instance,
-      "TabletReaderCache::initialize() must be called before getInstance()");
+      instance, "TabletReaderCache was destroyed by the singleton teardown");
   return *instance;
 }
 
 void TabletReaderCache::testingReset() {
-  auto& state = singletonState();
-  std::lock_guard<std::mutex> lock(state.mutex);
-  delete state.instance.exchange(nullptr, std::memory_order_acq_rel);
+  folly::Singleton<TabletReaderCache>::make_mock(createInstance);
+  savedOptions().wlock()->reset();
 }
 
 } // namespace facebook::nimble
