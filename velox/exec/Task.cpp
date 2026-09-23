@@ -1761,13 +1761,12 @@ void Task::ensureSplitGroupsAreBeingProcessedLocked() {
   // createAndStartDrivers() allocates driver slots only after exchange clients
   // and output state are ready, then calls this method to process queued split
   // groups.
-  if (not isRunningLocked() or (numDriversPerSplitGroup_ == 0) or
-      drivers_.empty()) {
+  if (!isRunningLocked() || numDriversPerSplitGroup_ == 0 || drivers_.empty()) {
     return;
   }
 
-  while (numRunningSplitGroups_ < concurrentSplitGroups_ and
-         not queuedSplitGroups_.empty()) {
+  while (numRunningSplitGroups_ < concurrentSplitGroups_ &&
+         !queuedSplitGroups_.empty()) {
     const uint32_t splitGroupId = queuedSplitGroups_.front();
     queuedSplitGroups_.pop();
 

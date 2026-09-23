@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/LocalPlanner.h"
+
+#include <folly/Conv.h>
+
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -527,7 +530,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
   for (int32_t i = 0; i < planNodes.size(); ++i) {
     // Id of the Operator being made. This is not the same as 'i'
     // because some PlanNodes may get fused.
-    auto id = operators.size();
+    const auto id = folly::to<int32_t>(operators.size());
     auto planNode = planNodes[i];
     if (auto filterNode =
             std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {

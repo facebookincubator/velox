@@ -92,6 +92,11 @@ class BlockingDestructionState {
       : destructionStarted_{destructionStarted},
         continueDestruction_{continueDestruction} {}
 
+  BlockingDestructionState(const BlockingDestructionState&) = delete;
+  BlockingDestructionState& operator=(const BlockingDestructionState&) = delete;
+  BlockingDestructionState(BlockingDestructionState&&) = delete;
+  BlockingDestructionState& operator=(BlockingDestructionState&&) = delete;
+
   ~BlockingDestructionState() {
     destructionStarted_.post();
     continueDestruction_.wait();

@@ -51,7 +51,7 @@ void registerBuiltinDefault(ExchangeTransportRegistry::Registry& registry) {
 // ScopedRegistry's contract.
 ScopedRegistry<std::string, ExchangeTransportEntry>& exchangeTransports() {
   static ScopedRegistry<std::string, ExchangeTransportEntry> instance;
-  [[maybe_unused]] static const bool seeded = [] {
+  [[maybe_unused]] static const bool kSeeded = [] {
     registerBuiltinDefault(instance);
     return true;
   }();

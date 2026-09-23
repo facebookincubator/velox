@@ -99,6 +99,15 @@ class BlockingDestructionOutputBufferManager : public MockOutputBufferManager {
       : destructionStarted_{destructionStarted},
         continueDestruction_{continueDestruction} {}
 
+  BlockingDestructionOutputBufferManager(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      const BlockingDestructionOutputBufferManager&) = delete;
+  BlockingDestructionOutputBufferManager(
+      BlockingDestructionOutputBufferManager&&) = delete;
+  BlockingDestructionOutputBufferManager& operator=(
+      BlockingDestructionOutputBufferManager&&) = delete;
+
   ~BlockingDestructionOutputBufferManager() override {
     destructionStarted_.post();
     continueDestruction_.wait();
