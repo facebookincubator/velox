@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
@@ -27,6 +29,13 @@ namespace facebook::velox::row {
 namespace {
 
 using namespace facebook::velox::test;
+
+template <typename T>
+T readValue(const char* data) {
+  T value;
+  std::memcpy(&value, data, sizeof(T));
+  return value;
+}
 
 class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
  public:
@@ -213,6 +222,88 @@ TEST_F(UnsafeRowTest, nestedMaps) {
   auto keys = makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6});
   auto values = makeMapVector({0, 2, 2, 3, 4, 5}, keys, innerMaps, {1});
   auto data = makeRowVector({values});
+  testRoundTrip(data);
+}
+
+TEST_F(UnsafeRowTest, mapWithFixedWidthArraysUsesAlignedRowSize) {
+  auto keys = makeFlatVector<int32_t>({1});
+  auto values = makeFlatVector<int32_t>({10});
+  auto map = makeMapVector({0}, keys, values);
+  auto data = makeRowVector({map});
+
+  UnsafeRowFast row(data);
+  ASSERT_EQ(row.rowSize(0), 72);
+
+  std::vector<char> buffer(row.rowSize(0), 0);
+  EXPECT_EQ(row.serialize(0, buffer.data()), 72);
+
+  const auto fieldOffsetAndSize = readValue<uint64_t>(buffer.data() + 8);
+  const auto mapSize = static_cast<uint32_t>(fieldOffsetAndSize);
+  EXPECT_EQ(mapSize, 56);
+
+  testRoundTrip(data);
+}
+
+TEST_F(UnsafeRowTest, mapWithFixedWidthKeysPadsKeyArraySize) {
+  auto keys = makeFlatVector<int32_t>({1});
+  auto values = makeArrayVector<int64_t>({{10, 20}});
+  auto map = makeMapVector({0}, keys, values);
+  auto data = makeRowVector({map});
+
+  UnsafeRowFast row(data);
+  std::vector<char> buffer(row.rowSize(0), 0);
+  ASSERT_EQ(row.serialize(0, buffer.data()), row.rowSize(0));
+
+  const auto fieldOffsetAndSize = readValue<uint64_t>(buffer.data() + 8);
+  const auto mapOffset = static_cast<uint32_t>(fieldOffsetAndSize >> 32);
+  const auto mapSize = static_cast<uint32_t>(fieldOffsetAndSize);
+  ASSERT_EQ(mapOffset, 16);
+
+  const char* mapPayload = buffer.data() + mapOffset;
+  const auto keyArraySize = readValue<int64_t>(mapPayload);
+  EXPECT_EQ(keyArraySize, 24);
+  EXPECT_EQ(keyArraySize % 8, 0);
+  EXPECT_LE(sizeof(int64_t) + keyArraySize, mapSize);
+
+  const char* keyArray = mapPayload + sizeof(int64_t);
+  EXPECT_EQ(readValue<int64_t>(keyArray), 1);
+  EXPECT_EQ(readValue<int32_t>(keyArray + 16), 1);
+  EXPECT_EQ(readValue<int32_t>(keyArray + 20), 0);
+
+  const char* valueArray = mapPayload + sizeof(int64_t) + keyArraySize;
+  EXPECT_EQ(readValue<int64_t>(valueArray), 1);
+
+  testRoundTrip(data);
+}
+
+TEST_F(UnsafeRowTest, mapWithNonBulkFixedWidthKeysPadsKeyArraySize) {
+  auto keys = makeFlatVector<bool>({true});
+  auto values = makeArrayVector<int64_t>({{10, 20}});
+  auto map = makeMapVector({0}, keys, values);
+  auto data = makeRowVector({map});
+
+  UnsafeRowFast row(data);
+  std::vector<char> buffer(row.rowSize(0), 0);
+  ASSERT_EQ(row.serialize(0, buffer.data()), row.rowSize(0));
+
+  const auto fieldOffsetAndSize = readValue<uint64_t>(buffer.data() + 8);
+  const auto mapOffset = static_cast<uint32_t>(fieldOffsetAndSize >> 32);
+  const auto mapSize = static_cast<uint32_t>(fieldOffsetAndSize);
+  ASSERT_EQ(mapOffset, 16);
+
+  const char* mapPayload = buffer.data() + mapOffset;
+  const auto keyArraySize = readValue<int64_t>(mapPayload);
+  EXPECT_EQ(keyArraySize, 24);
+  EXPECT_EQ(keyArraySize % 8, 0);
+  EXPECT_LE(sizeof(int64_t) + keyArraySize, mapSize);
+
+  const char* keyArray = mapPayload + sizeof(int64_t);
+  EXPECT_EQ(readValue<int64_t>(keyArray), 1);
+  EXPECT_TRUE(readValue<bool>(keyArray + 16));
+
+  const char* valueArray = mapPayload + sizeof(int64_t) + keyArraySize;
+  EXPECT_EQ(readValue<int64_t>(valueArray), 1);
+
   testRoundTrip(data);
 }
 
