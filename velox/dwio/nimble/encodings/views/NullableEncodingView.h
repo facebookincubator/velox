@@ -54,17 +54,17 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     const char* position = data.data() + this->dataOffset_;
     NIMBLE_CHECK_LE(
         sizeof(uint32_t),
-        static_cast<size_t>(data.end() - position),
+        static_cast<size_t>(data.data() + data.size() - position),
         "Nullable encoding is missing its value-stream length");
     const auto nonNullBytes = encoding::readUint32(position);
     NIMBLE_CHECK_LE(
         nonNullBytes,
-        static_cast<size_t>(data.end() - position),
+        static_cast<size_t>(data.data() + data.size() - position),
         "Nullable value encoding exceeds payload bounds");
     const std::string_view nonNullValues{position, nonNullBytes};
     position += nonNullBytes;
     const std::string_view nulls{
-        position, static_cast<size_t>(data.end() - position)};
+        position, static_cast<size_t>(data.data() + data.size() - position)};
 
     nonNullValues_ =
         createTypedEncodingView<T>(nonNullValues, this->pool_, this->options_);
