@@ -54,7 +54,8 @@ std::shared_ptr<QueryCtx> QueryCtx::Builder::build() {
       spillExecutor_,
       std::move(queryId_),
       std::move(tokenProvider_),
-      std::move(traceCtxProvider_)));
+      std::move(traceCtxProvider_),
+      std::move(credentialConfigKeys_)));
   queryCtx->maybeSetReclaimer();
   for (auto& cb : releaseCallbacks_) {
     queryCtx->addReleaseCallback(std::move(cb));
@@ -75,7 +76,8 @@ QueryCtx::QueryCtx(
     folly::Executor* spillExecutor,
     const std::string& queryId,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider,
-    TraceCtxProvider traceCtxProvider)
+    TraceCtxProvider traceCtxProvider,
+    std::unordered_set<std::string> credentialConfigKeys)
     : queryId_(queryId),
       executor_(executor),
       spillExecutor_(spillExecutor),
@@ -84,6 +86,7 @@ QueryCtx::QueryCtx(
       pool_(std::move(pool)),
       queryConfig_{std::move(queryConfig)},
       fsTokenProvider_(std::move(tokenProvider)),
+      credentialConfigKeys_(std::move(credentialConfigKeys)),
       traceCtxProvider_(std::move(traceCtxProvider)) {
   initPool(queryId);
 }

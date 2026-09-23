@@ -34,8 +34,11 @@ namespace {
 // Returns the value to record for a config entry, replacing credentials with a
 // placeholder. The trace file is written once and kept, so a secret copied
 // here outlives the query that supplied it.
-std::string redactIfCredential(std::string_view key, std::string_view value) {
-  if (isCredentialConfigKey(key)) {
+std::string redactIfCredential(
+    const std::unordered_set<std::string>& credentialKeys,
+    const std::string& key,
+    std::string_view value) {
+  if (credentialKeys.contains(key)) {
     return std::string(kRedactedConfigValue);
   }
   return std::string(value);
@@ -52,11 +55,11 @@ constexpr std::string_view kSessionCredentialKeysConfig =
     "hive.session-credential-keys";
 
 // Returns the session property names that 'connectorId' treats as delegated
-// credentials. These cannot be enumerated the way isCredentialConfigKey()
-// enumerates the LLM keys: the names are deployment-specific, so the
-// connector's own config is the only place that knows them. Returns empty for
-// an unregistered connector, which is not an error -- session properties may
-// name one.
+// credentials. These do not travel with the query the way the config-entry
+// credentials do: a connector's credential-bearing property names come from
+// its own build-time config, so the connector is the only place that knows
+// them. Returns empty for an unregistered connector, which is not an error --
+// session properties may name one.
 folly::F14FastSet<std::string> delegatedCredentialKeys(
     const core::QueryCtx& queryCtx,
     const std::string& connectorId) {
@@ -83,26 +86,98 @@ folly::F14FastSet<std::string> delegatedCredentialKeys(
   return credentialKeys;
 }
 
+// Returns the writable string node holding a serialized VARCHAR constant's
+// value, or nullptr for anything else. ConstantTypedExpr::serialize() nests
+// the literal one level down, under a Variant carrying its own type tag.
+folly::dynamic* constantVarcharValue(folly::dynamic& expr) {
+  if (!expr.isObject()) {
+    return nullptr;
+  }
+  auto* variant = expr.get_ptr("value");
+  if (variant == nullptr || !variant->isObject()) {
+    return nullptr;
+  }
+  const auto* kind = variant->get_ptr("type");
+  if (kind == nullptr || !kind->isString() || kind->asString() != "VARCHAR") {
+    return nullptr;
+  }
+  auto* literal = variant->get_ptr("value");
+  return (literal != nullptr && literal->isString()) ? literal : nullptr;
+}
+
+// Returns true if 'fragment' is the tail of a JSON object up to and including
+// a credential field's opening quote, as in `{"metagen_key":"`. Whatever the
+// expression concatenates next is that field's value.
+bool opensCredentialField(
+    const std::unordered_set<std::string>& credentialConfigKeys,
+    std::string_view fragment) {
+  for (const auto& key : credentialConfigKeys) {
+    const auto opener = fmt::format("\"{}\":\"", key);
+    if (fragment.size() >= opener.size() &&
+        fragment.compare(
+            fragment.size() - opener.size(), opener.size(), opener) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Replaces every VARCHAR constant in 'expr' and below with the placeholder.
+void redactConstantsIn(folly::dynamic& expr) {
+  if (auto* literal = constantVarcharValue(expr)) {
+    *literal = std::string(kRedactedConfigValue);
+  }
+  if (expr.isObject()) {
+    for (const auto& key : expr.keys()) {
+      redactConstantsIn(expr[key]);
+    }
+  } else if (expr.isArray()) {
+    for (auto& element : expr) {
+      redactConstantsIn(element);
+    }
+  }
+}
+
 // Replaces credential values carried inside a serialized plan with the
 // placeholder. Query configs are not the only way a key reaches the trace
-// file: the AI function rewriter passes LLM options as one JSON object in a
-// ConstantTypedExpr, and ConstantTypedExpr::serialize() writes that string
-// verbatim, so a key supplied in SQL lands in the plan block. Rewrites only
-// the trace file's copy -- ConstantTypedExpr::serialize() itself must stay
-// faithful, since the same serialization carries real plans between workers.
+// file: an AI function's options object is built in the plan, and
+// ConstantTypedExpr::serialize() writes its constants verbatim, so a key
+// supplied in SQL lands in the plan block. Rewrites only the trace file's copy
+// -- ConstantTypedExpr::serialize() itself must stay faithful, since the same
+// serialization carries real plans between workers.
+//
+// Two shapes reach here. The options object may arrive already assembled, as
+// one constant holding whole JSON. It may instead arrive as a concatenation,
+// which is what the Presto rewriter emits: the field opener, the key, and the
+// closing quote are separate arguments, so the secret is a bare constant with
+// nothing in it to recognize. The fragment in front of it is what identifies
+// it, which is why the argument list is walked pairwise rather than leaf by
+// leaf.
 //
 // The plan block is deserialized back into a core::PlanNode on replay, so the
 // placeholder has to leave the value a valid JSON string, which it does.
-void redactPlanCredentials(folly::dynamic& planObj) {
+void redactPlanCredentials(
+    const std::unordered_set<std::string>& credentialConfigKeys,
+    folly::dynamic& planObj) {
   if (planObj.isObject()) {
+    auto* inputs = planObj.get_ptr("inputs");
+    if (inputs != nullptr && inputs->isArray()) {
+      for (size_t i = 0; i + 1 < inputs->size(); ++i) {
+        auto* fragment = constantVarcharValue((*inputs)[i]);
+        if (fragment != nullptr &&
+            opensCredentialField(credentialConfigKeys, fragment->asString())) {
+          redactConstantsIn((*inputs)[i + 1]);
+        }
+      }
+    }
     for (const auto& key : planObj.keys()) {
-      redactPlanCredentials(planObj[key]);
+      redactPlanCredentials(credentialConfigKeys, planObj[key]);
     }
     return;
   }
   if (planObj.isArray()) {
     for (auto& element : planObj) {
-      redactPlanCredentials(element);
+      redactPlanCredentials(credentialConfigKeys, element);
     }
     return;
   }
@@ -129,7 +204,7 @@ void redactPlanCredentials(folly::dynamic& planObj) {
   std::vector<std::string> credentialKeys;
   for (const auto& [key, optionValue] : options.items()) {
     if (key.isString() && optionValue.isString() &&
-        isCredentialConfigKey(key.asString())) {
+        credentialConfigKeys.contains(key.asString())) {
       credentialKeys.push_back(key.asString());
     }
   }
@@ -166,10 +241,12 @@ void TaskTraceMetadataWriter::write(
 
   auto traceNode = trace::getTraceNode(planNode, traceNodeId_);
 
+  const auto& credentialConfigKeys = queryCtx.credentialConfigKeys();
+
   folly::dynamic queryConfigObj = folly::dynamic::object;
   const auto configValues = queryCtx.queryConfig().rawConfigsCopy();
   for (const auto& [key, value] : configValues) {
-    queryConfigObj[key] = redactIfCredential(key, value);
+    queryConfigObj[key] = redactIfCredential(credentialConfigKeys, key, value);
   }
 
   folly::dynamic connectorPropertiesObj = folly::dynamic::object;
@@ -180,13 +257,13 @@ void TaskTraceMetadataWriter::write(
     for (const auto& [key, value] : configs->rawConfigsCopy()) {
       obj[key] = credentialKeys.contains(key)
           ? std::string(kRedactedConfigValue)
-          : redactIfCredential(key, value);
+          : redactIfCredential(credentialConfigKeys, key, value);
     }
     connectorPropertiesObj[connectorId] = obj;
   }
 
   auto planNodeObj = traceNode->serialize();
-  redactPlanCredentials(planNodeObj);
+  redactPlanCredentials(credentialConfigKeys, planNodeObj);
 
   folly::dynamic metaObj = folly::dynamic::object;
   metaObj[TraceTraits::kQueryConfigKey] = queryConfigObj;

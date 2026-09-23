@@ -366,23 +366,30 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
   // A value distinctive enough that a substring search over the trace file
   // cannot match it by accident.
   const std::string secret{"mg-api-key-do-not-leak-3f8a1c"};
-  const auto queryCtx = core::QueryCtx::create(
-      executor_.get(),
-      core::QueryConfig(
-          std::unordered_map<std::string, std::string>{
-              {"metagen_key", secret},
-              {"model_api_key", secret},
-              {"crypto_auth_tokens_metagen", secret},
-              {core::QueryConfig::kSpillEnabled, "true"},
-              {core::QueryConfig::kSpillNumPartitionBits, "17"},
-          }),
-      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
-          {"test_trace",
-           std::make_shared<config::ConfigBase>(
-               std::unordered_map<std::string, std::string>{
-                   {"metagen_key", secret},
-                   {"cKey1", "cVal1"},
-               })}});
+  const std::string credentialKey{"test_credential_token"};
+
+  const auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(executor_.get())
+          .queryConfig(
+              core::QueryConfig(
+                  std::unordered_map<std::string, std::string>{
+                      {credentialKey, secret},
+                      {core::QueryConfig::kSpillEnabled, "true"},
+                      {core::QueryConfig::kSpillNumPartitionBits, "17"},
+                  }))
+          .connectorConfigs(
+              std::unordered_map<
+                  std::string,
+                  std::shared_ptr<config::ConfigBase>>{
+                  {"test_trace",
+                   std::make_shared<config::ConfigBase>(
+                       std::unordered_map<std::string, std::string>{
+                           {credentialKey, secret},
+                           {"cKey1", "cVal1"},
+                       })}})
+          .credentialConfigKeys({credentialKey})
+          .build();
 
   trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
       .write(*queryCtx, *planNode);
@@ -400,11 +407,7 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       actualQueryConfigs,
       testing::IsSupersetOf({
           std::pair<const std::string, std::string>{
-              "metagen_key", std::string(kRedactedConfigValue)},
-          std::pair<const std::string, std::string>{
-              "model_api_key", std::string(kRedactedConfigValue)},
-          std::pair<const std::string, std::string>{
-              "crypto_auth_tokens_metagen", std::string(kRedactedConfigValue)},
+              credentialKey, std::string(kRedactedConfigValue)},
           // Non-credential entries stay verbatim; replay parses them back into
           // a typed QueryConfig and would throw on a placeholder.
           std::pair<const std::string, std::string>{
@@ -415,7 +418,7 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       reader.connectorProperties().at("test_trace"),
       testing::UnorderedElementsAre(
           std::pair<const std::string, std::string>{
-              "metagen_key", std::string(kRedactedConfigValue)},
+              credentialKey, std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{"cKey1", "cVal1"}));
 }
 
@@ -489,7 +492,7 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   // the serialized plan rather than as a config entry.
   const std::string secret{"sql-options-key-do-not-leak-4c7f1a"};
   const auto optionsJson = fmt::format(
-      R"({{"metagen_key":"{}","inference_backend":"metagen","max_tokens":64}})",
+      R"({{"test_credential_token":"{}","inference_backend":"metagen","max_tokens":64}})",
       secret);
 
   const auto rowType = ROW({"c0", "c1"}, BIGINT());
@@ -503,9 +506,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
           .capturePlanNodeId(traceNodeId)
           .planNode();
 
-  const auto queryCtx = core::QueryCtx::create(
-      executor_.get(),
-      core::QueryConfig(std::unordered_map<std::string, std::string>{}));
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .credentialConfigKeys({"test_credential_token"})
+                            .build();
 
   trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
       .write(*queryCtx, *planNode);
@@ -528,6 +532,51 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   ASSERT_NE(replayedPlan, nullptr);
   EXPECT_EQ(replayedPlan->id(), traceNodeId);
   // The secret does not come back on a round trip either.
+  EXPECT_THAT(
+      folly::toJson(replayedPlan->serialize()),
+      testing::Not(testing::HasSubstr(secret)));
+}
+
+TEST_F(OperatorTraceTest, traceMetadataRedactsConcatenatedPlanCredentials) {
+  // The rewriter does not hand the options over as one finished string. It
+  // concatenates an opening fragment, the key, and a closing quote, so the
+  // secret arrives as its own constant with no key name attached to it and no
+  // JSON around it. Whoever reads a leaf in isolation cannot tell it is a
+  // credential; the fragment in front of it is what says so.
+  const std::string secret{"concat-key-do-not-leak-9e2b7d"};
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
+  const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
+  const auto outputDir = TempDirectoryPath::create();
+  core::PlanNodeId traceNodeId;
+  const auto planNode =
+      PlanBuilder()
+          .values(rows, false)
+          .project({fmt::format(
+              R"(concat('{{"test_credential_token":"', '{}', '","inference_backend":"metagen"}}') AS options)",
+              secret)})
+          .capturePlanNodeId(traceNodeId)
+          .planNode();
+
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .credentialConfigKeys({"test_credential_token"})
+                            .build();
+
+  trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
+      .write(*queryCtx, *planNode);
+
+  const auto metaFilePath = getTaskTraceMetaFilePath(outputDir->getPath());
+  const auto fileSystem = filesystems::getFileSystem(metaFilePath, nullptr);
+  const auto metaFile = fileSystem->openFileForRead(metaFilePath);
+  const auto rawMetadata = metaFile->pread(0, metaFile->size());
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(rawMetadata, testing::HasSubstr("inference_backend"));
+
+  // The plan still deserializes: a constant was replaced, not removed.
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  const auto replayedPlan = reader.queryPlan();
+  ASSERT_NE(replayedPlan, nullptr);
   EXPECT_THAT(
       folly::toJson(replayedPlan->serialize()),
       testing::Not(testing::HasSubstr(secret)));

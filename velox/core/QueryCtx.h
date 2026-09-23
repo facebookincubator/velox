@@ -23,6 +23,7 @@
 #include <functional>
 #include <string_view>
 #include <typeindex>
+#include <unordered_set>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
@@ -180,6 +181,11 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return *this;
     }
 
+    Builder& credentialConfigKeys(std::unordered_set<std::string> keys) {
+      credentialConfigKeys_ = std::move(keys);
+      return *this;
+    }
+
     /// Registers a caller-built root pool under 'tag' on the resulting
     /// QueryCtx. Throws if 'tag' is already present or 'pool' is null. The
     /// pool is typically built through MemoryManager::addCustomRootPool.
@@ -220,6 +226,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     folly::Executor* spillExecutor_{nullptr};
     std::string queryId_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+    std::unordered_set<std::string> credentialConfigKeys_;
     std::deque<ReleaseCallback> releaseCallbacks_;
     TraceCtxProvider traceCtxProvider_;
     std::unordered_map<std::string, std::shared_ptr<memory::MemoryPool>>
@@ -274,6 +281,19 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider() const {
     return fsTokenProvider_;
+  }
+
+  /// Names the query config entries whose values are credentials. The set
+  /// comes from whoever supplied those entries -- the request that carried
+  /// them knows which they are, and that provenance is otherwise lost once
+  /// they are flattened into the config. Fixed for the life of the query, so
+  /// readers need no synchronization.
+  ///
+  /// A trace redacts exactly these entries. Anything absent is written
+  /// verbatim, which is why the producer, and not the consumer, has to name
+  /// them.
+  const std::unordered_set<std::string>& credentialConfigKeys() const {
+    return credentialConfigKeys_;
   }
 
   /// Registers a callback to be invoked when this QueryCtx is destroyed.
@@ -436,7 +456,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       folly::Executor* spillExecutor = nullptr,
       const std::string& queryId = "",
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
-      TraceCtxProvider traceCtxProvider = nullptr);
+      TraceCtxProvider traceCtxProvider = nullptr,
+      std::unordered_set<std::string> credentialConfigKeys = {});
 
   class MemoryReclaimer : public memory::MemoryReclaimer {
    public:
@@ -514,6 +535,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::atomic_bool underArbitration_{false};
   std::vector<ContinuePromise> arbitrationPromises_;
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  const std::unordered_set<std::string> credentialConfigKeys_;
   // Callbacks invoked before destruction to clean up external resources.
   std::deque<ReleaseCallback> releaseCallbacks_;
 
