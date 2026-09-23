@@ -124,9 +124,13 @@ void ExchangeTransportRegistry::unregisterAll() {
   // Reset to baseline: drop user registrations and restore the built-in
   // in-memory default. The re-seed is part of the backward-compat shim (see
   // registerBuiltinDefault); with init-time registration this reduces to a
-  // plain clear().
-  global().clear();
-  registerBuiltinDefault(global());
+  // plain clear(). Replace the contents under one lock so readers cannot
+  // observe the default transport as temporarily unregistered.
+  Registry::Map entries;
+  entries.emplace(
+      std::string{core::TransportKind::kInMemory},
+      InMemoryExchangeClient::makeDefaultTransportEntry());
+  global().replaceAll(std::move(entries));
 }
 
 // static

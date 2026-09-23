@@ -38,8 +38,7 @@ namespace facebook::velox::exec {
 /// Registry value pairing a Task-level exchange client factory with the
 /// factories that build operators for the same transport, keyed by transport
 /// id. Build entries with make(), which gives the operator builders the
-/// concrete Task-level client type and rejects null halves; direct construction
-/// is for tests passing real values.
+/// concrete Task-level client type and rejects null halves.
 struct ExchangeTransportEntry {
   /// Creates this transport's exchange client for one pipeline of one task.
   ExchangeClientFactory makeClient;
@@ -55,16 +54,6 @@ struct ExchangeTransportEntry {
   /// source. Null when the transport does not support merge exchange; Task
   /// fails fast if a MergeExchangeNode names such a transport.
   ExchangeOperatorFactory makeMergeExchangeOperator;
-
-  /// Constructs an entry from a client factory and the operator builders bound
-  /// to it.
-  ExchangeTransportEntry(
-      ExchangeClientFactory makeClient,
-      ExchangeOperatorFactory makeExchangeOperator,
-      ExchangeOperatorFactory makeMergeExchangeOperator = nullptr)
-      : makeClient(std::move(makeClient)),
-        makeExchangeOperator(std::move(makeExchangeOperator)),
-        makeMergeExchangeOperator(std::move(makeMergeExchangeOperator)) {}
 
   /// Preferred way to build an entry: pairs a client factory with operator
   /// builders that receive the concrete client type that factory produces.
@@ -127,11 +116,20 @@ struct ExchangeTransportEntry {
       };
     }
 
-    return std::make_shared<ExchangeTransportEntry>(
+    return std::shared_ptr<ExchangeTransportEntry>(new ExchangeTransportEntry(
         std::move(clientFactory),
         std::move(exchangeOperatorFactory),
-        std::move(mergeExchangeOperatorFactory));
+        std::move(mergeExchangeOperatorFactory)));
   }
+
+ private:
+  ExchangeTransportEntry(
+      ExchangeClientFactory makeClient,
+      ExchangeOperatorFactory makeExchangeOperator,
+      ExchangeOperatorFactory makeMergeExchangeOperator)
+      : makeClient(std::move(makeClient)),
+        makeExchangeOperator(std::move(makeExchangeOperator)),
+        makeMergeExchangeOperator(std::move(makeMergeExchangeOperator)) {}
 };
 
 /// Manages exchange transport registration and lookup, keyed by transport id.

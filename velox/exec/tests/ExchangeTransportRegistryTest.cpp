@@ -17,7 +17,9 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 
+#include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -79,6 +81,24 @@ class UnrelatedExchangeClient : public ExchangeClient {
   folly::dynamic toJson() const override {
     return folly::dynamic::object;
   }
+};
+
+class BlockingDestructionState {
+ public:
+  BlockingDestructionState(
+      folly::Baton<>& destructionStarted,
+      folly::Baton<>& continueDestruction)
+      : destructionStarted_{destructionStarted},
+        continueDestruction_{continueDestruction} {}
+
+  ~BlockingDestructionState() {
+    destructionStarted_.post();
+    continueDestruction_.wait();
+  }
+
+ private:
+  folly::Baton<>& destructionStarted_;
+  folly::Baton<>& continueDestruction_;
 };
 
 std::shared_ptr<MockExchangeClient> makeMockClient(
@@ -156,6 +176,34 @@ TEST_F(ExchangeTransportRegistryTest, defaultTransportResolves) {
   EXPECT_TRUE(defaultEntry->makeClient != nullptr);
   EXPECT_TRUE(defaultEntry->makeExchangeOperator != nullptr);
   EXPECT_TRUE(defaultEntry->makeMergeExchangeOperator != nullptr);
+}
+
+TEST_F(ExchangeTransportRegistryTest, defaultTransportSurvivesReset) {
+  ExchangeTransportRegistry::unregisterAll();
+
+  const std::string inMemory{core::TransportKind::kInMemory};
+  folly::Baton<> destructionStarted;
+  folly::Baton<> continueDestruction;
+  auto state = std::make_shared<BlockingDestructionState>(
+      destructionStarted, continueDestruction);
+  auto entry = ExchangeTransportEntry::make<MockExchangeClient>(
+      [state](const ExchangeClientContext&) {
+        return std::make_shared<MockExchangeClient>();
+      },
+      buildNoOperator);
+  ExchangeTransportRegistry::global().insert("blocking", entry);
+  state.reset();
+  entry.reset();
+
+  std::thread reset([] { ExchangeTransportRegistry::unregisterAll(); });
+  destructionStarted.wait();
+  auto defaultEntry = ExchangeTransportRegistry::tryGet(inMemory);
+  continueDestruction.post();
+  reset.join();
+
+  EXPECT_NE(defaultEntry, nullptr);
+  EXPECT_THAT(
+      ExchangeTransportRegistry::getAll(), UnorderedElementsAre(Key(inMemory)));
 }
 
 TEST_F(ExchangeTransportRegistryTest, entryMakeRejectsNullHalves) {
