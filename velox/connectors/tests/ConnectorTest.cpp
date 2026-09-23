@@ -80,6 +80,67 @@ class ConnectorRegistryTest : public testing::Test {
   }
 };
 
+class ConnectorQueryCtxTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(ConnectorQueryCtxTest, noCustomMemoryPoolsByDefault) {
+  auto pool = memory::memoryManager()->addLeafPool("operator");
+  config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  ConnectorQueryCtx context(
+      pool.get(),
+      nullptr,
+      &config,
+      nullptr,
+      {},
+      nullptr,
+      nullptr,
+      "query",
+      "task",
+      "scan",
+      0,
+      "");
+
+  EXPECT_EQ(context.memoryPool(), pool.get());
+  EXPECT_EQ(context.customMemoryPool("gpu"), nullptr);
+  EXPECT_EQ(context.customMemoryPool("cxl"), nullptr);
+}
+
+TEST_F(ConnectorQueryCtxTest, customMemoryPoolsByTag) {
+  auto pool = memory::memoryManager()->addLeafPool("operator");
+  auto gpu = memory::memoryManager()->addLeafPool("gpu");
+  auto cxl = memory::memoryManager()->addLeafPool("cxl");
+  config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  std::unordered_map<std::string, memory::MemoryPool*> customPools{
+      {"gpu", gpu.get()}, {"cxl", cxl.get()}};
+  ConnectorQueryCtx context(
+      pool.get(),
+      nullptr,
+      &config,
+      nullptr,
+      {},
+      nullptr,
+      nullptr,
+      "query",
+      "task",
+      "scan",
+      0,
+      "",
+      false,
+      {},
+      nullptr,
+      customPools);
+  customPools.clear();
+
+  EXPECT_EQ(context.memoryPool(), pool.get());
+  EXPECT_EQ(context.customMemoryPool("gpu"), gpu.get());
+  EXPECT_EQ(context.customMemoryPool("cxl"), cxl.get());
+  EXPECT_EQ(context.customMemoryPool("missing"), nullptr);
+}
+
 TEST_F(ConnectorRegistryTest, queryScopedOverride) {
   auto globalConnector = std::make_shared<TestConnector>("global");
   ConnectorRegistry::global().insert("catalog", globalConnector);

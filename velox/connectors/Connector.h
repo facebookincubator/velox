@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <string_view>
+#include <unordered_map>
+
 #include "folly/CancellationToken.h"
 #include "velox/common/Casts.h"
 #include "velox/common/EnumDeclare.h"
@@ -545,7 +548,8 @@ class ConnectorQueryCtx {
       const std::string& sessionTimezone,
       bool adjustTimestampToTimezone = false,
       folly::CancellationToken cancellationToken = {},
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {})
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
+      std::unordered_map<std::string, memory::MemoryPool*> customPools = {})
       : operatorPool_(operatorPool),
         connectorPool_(connectorPool),
         sessionProperties_(sessionProperties),
@@ -561,7 +565,8 @@ class ConnectorQueryCtx {
         sessionTimezone_(sessionTimezone),
         adjustTimestampToTimezone_(adjustTimestampToTimezone),
         cancellationToken_(std::move(cancellationToken)),
-        fsTokenProvider_(std::move(tokenProvider)) {
+        fsTokenProvider_(std::move(tokenProvider)),
+        customPools_(std::move(customPools)) {
     VELOX_CHECK_NOT_NULL(sessionProperties);
   }
 
@@ -663,6 +668,14 @@ class ConnectorQueryCtx {
     return fsTokenProvider_;
   }
 
+  /// Returns the associated operator's custom leaf pool for 'tag', or nullptr
+  /// if none is registered. The pools are borrowed and must outlive this
+  /// context.
+  memory::MemoryPool* customMemoryPool(std::string_view tag) const {
+    auto it = customPools_.find(std::string(tag));
+    return it == customPools_.end() ? nullptr : it->second;
+  }
+
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
@@ -680,6 +693,7 @@ class ConnectorQueryCtx {
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
       core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
