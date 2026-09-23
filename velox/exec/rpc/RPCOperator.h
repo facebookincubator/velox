@@ -400,10 +400,9 @@ class RPCOperator : public exec::Operator {
   // Whether we've detected the finish condition.
   bool finished_{false};
 
-  // Timeout for batch RPC calls (30 minutes).
-  // This is a ceiling — the operator returns as soon as results are ready.
-  // Batch LLM inference can take many minutes due to MetaGen queuing
-  // and GPU scheduling, so the timeout needs generous headroom.
+  // Ceiling for batch RPC calls; the operator returns as soon as results are
+  // ready. An offline batch job can take many minutes in backend queueing and
+  // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats.

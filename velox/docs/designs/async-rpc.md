@@ -123,10 +123,12 @@ and continue through the function's configured error policy.
 ## Congestion
 
 `evaluateCongestion(responses)` is how a function tells the framework what a
-completed unit means on its backend. It returns one of four signals:
+completed unit means on its backend. It returns one of five signals:
 
 - `kSuccess` — feed the round trip to the latency gradient, and recover
   admission capacity.
+- `kSuccessNoLatency` — recover admission capacity without feeding the round
+  trip to the latency gradient.
 - `kOverloaded` — the backend pushed back. Both scopes back off.
 - `kNonOverloadError` — the unit failed without explicit evidence of overload.
   **Neither scope backs off.**
@@ -143,6 +145,10 @@ Runtime stats distinguish the two backoff mechanisms.
 caused by explicit overload. `rpcCongestionShrinks` also includes
 latency-gradient reductions. `rpcRateLimiterMinCap` records the shared
 controller's low-water capacity.
+
+An async-job path returns `kSuccessNoLatency` after a successful unit: its round
+trip is queue and scheduling time, which says nothing about backend load, but
+the success must still recover shared admission capacity.
 
 ### Why admission has two scopes
 
