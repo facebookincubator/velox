@@ -578,6 +578,8 @@ FileDataSource::getRuntimeStats() {
     // DWIO-level estimate (IoStatistics).
     if (key == kStorageReadBytes) {
       res[std::string(key)] = value;
+      res[std::string(key)].aggregation =
+          RuntimeCounter::AggregationKind::kPerOperator;
     } else {
       res.emplace(key, value);
     }

@@ -506,9 +506,7 @@ struct ColumnRuntimeStats {
   std::optional<DecodingStats> decodingStats;
 
   /// Adds one sample to a format-specific column metric.
-  void accumulateStat(
-      const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
-      int64_t value);
+  void accumulateStat(const RuntimeMetricDefinition& stat, int64_t value);
 
   /// Merges all stats from another ColumnRuntimeStats instance.
   void mergeFrom(const ColumnRuntimeStats& other);
@@ -551,9 +549,7 @@ struct SplitStats {
       const RowReaderOptions& options);
 
   /// Adds one sample to a split-level format-specific metric.
-  void accumulateStat(
-      const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
-      int64_t value);
+  void accumulateStat(const RuntimeMetricDefinition& stat, int64_t value);
 
  private:
   void registerColumnStats(const TypeWithId& node, bool collectDecodingStats);

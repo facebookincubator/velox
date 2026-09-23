@@ -196,14 +196,12 @@ void DecodingStats::toRuntimeMetrics(
 }
 
 void ColumnRuntimeStats::accumulateStat(
-    const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+    const RuntimeMetricDefinition& stat,
     int64_t value) {
-  auto [it, inserted] = columnMetrics.try_emplace(stat.first);
-  if (inserted) {
-    it->second.unit = stat.second;
-  } else {
-    VELOX_CHECK_EQ(it->second.unit, stat.second);
-  }
+  auto it =
+      columnMetrics.try_emplace(stat.name, stat.unit, stat.aggregation).first;
+  VELOX_CHECK_EQ(it->second.unit, stat.unit);
+  VELOX_CHECK_EQ(it->second.aggregation, stat.aggregation);
   it->second.addValue(value);
 }
 
@@ -263,14 +261,12 @@ void ColumnRuntimeStats::toRuntimeMetrics(
 }
 
 void SplitStats::accumulateStat(
-    const std::pair<std::string_view, RuntimeCounter::Unit>& stat,
+    const RuntimeMetricDefinition& stat,
     int64_t value) {
-  auto [it, inserted] = splitMetrics.try_emplace(stat.first);
-  if (inserted) {
-    it->second.unit = stat.second;
-  } else {
-    VELOX_CHECK_EQ(it->second.unit, stat.second);
-  }
+  auto it =
+      splitMetrics.try_emplace(stat.name, stat.unit, stat.aggregation).first;
+  VELOX_CHECK_EQ(it->second.unit, stat.unit);
+  VELOX_CHECK_EQ(it->second.aggregation, stat.aggregation);
   it->second.addValue(value);
 }
 
@@ -308,7 +304,8 @@ std::unordered_map<std::string, RuntimeMetric>
 RuntimeStats::toRuntimeMetricMap() const {
   std::unordered_map<std::string, RuntimeMetric> result;
   for (const auto& [name, metric] : unitLoaderStats.stats()) {
-    result.emplace(name, RuntimeMetric(metric.sum, metric.unit));
+    result.emplace(
+        name, RuntimeMetric(metric.sum, metric.unit, metric.aggregation));
   }
   if (skippedSplits > 0) {
     result.emplace("skippedSplits", RuntimeMetric(skippedSplits));

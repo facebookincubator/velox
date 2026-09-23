@@ -359,7 +359,9 @@ CudfHiveDataSource::getRuntimeStats() {
       it != result.end()) {
     // Preserve the DWIO value before a ReadFile-layer value overrides it.
     // Overread bytes are defined relative to this counter.
-    result.emplace(kDwioStorageReadBytes, it->second);
+    auto metric = it->second;
+    metric.aggregation = RuntimeCounter::AggregationKind::kPerEvent;
+    result.emplace(kDwioStorageReadBytes, metric);
   }
   // Preserve a zero-valued totalScanTime before scan timing is recorded.
   result.insert({
@@ -376,6 +378,8 @@ CudfHiveDataSource::getRuntimeStats() {
     // Keep the ReadFile-layer value under the established key.
     if (key == io::kStorageReadBytes) {
       result[std::string(key)] = value;
+      result[std::string(key)].aggregation =
+          RuntimeCounter::AggregationKind::kPerOperator;
     } else {
       result.emplace(key, value);
     }

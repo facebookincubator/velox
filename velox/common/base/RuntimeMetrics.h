@@ -34,37 +34,71 @@ inline int64_t saturateCast(uint64_t value) {
 
 struct RuntimeCounter {
   enum class Unit { kNone, kNanos, kBytes };
+  enum class AggregationKind { kPerEvent, kPerOperator };
   int64_t value;
   Unit unit{Unit::kNone};
+  AggregationKind aggregation{AggregationKind::kPerEvent};
 
-  explicit RuntimeCounter(int64_t _value, Unit _unit = Unit::kNone)
-      : value(_value), unit(_unit) {}
+  explicit RuntimeCounter(
+      int64_t _value,
+      Unit _unit = Unit::kNone,
+      AggregationKind _aggregation = AggregationKind::kPerEvent)
+      : value(_value), unit(_unit), aggregation(_aggregation) {}
+};
+
+struct RuntimeMetricDefinition {
+  constexpr RuntimeMetricDefinition(
+      std::string_view _name,
+      RuntimeCounter::Unit _unit,
+      RuntimeCounter::AggregationKind _aggregation)
+      : name(_name), unit(_unit), aggregation(_aggregation) {}
+
+  std::string_view name;
+  RuntimeCounter::Unit unit;
+  RuntimeCounter::AggregationKind aggregation;
 };
 
 struct RuntimeMetric {
   // Sum, min, max have the same unit, count has kNone.
   RuntimeCounter::Unit unit;
+  RuntimeCounter::AggregationKind aggregation;
   int64_t sum{0};
   uint64_t count{0};
   int64_t min{std::numeric_limits<int64_t>::max()};
   int64_t max{std::numeric_limits<int64_t>::min()};
 
   explicit RuntimeMetric(
-      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
-      : unit(_unit) {}
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone,
+      RuntimeCounter::AggregationKind _aggregation =
+          RuntimeCounter::AggregationKind::kPerEvent)
+      : unit(_unit), aggregation(_aggregation) {}
 
   explicit RuntimeMetric(
       int64_t value,
-      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
-      : unit(_unit), sum{value}, count{1}, min{value}, max{value} {}
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone,
+      RuntimeCounter::AggregationKind _aggregation =
+          RuntimeCounter::AggregationKind::kPerEvent)
+      : unit(_unit),
+        aggregation(_aggregation),
+        sum{value},
+        count{1},
+        min{value},
+        max{value} {}
 
   explicit RuntimeMetric(
       int64_t _sum,
       uint64_t _count,
       int64_t _min,
       int64_t _max,
-      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone)
-      : unit(_unit), sum{_sum}, count{_count}, min{_min}, max{_max} {}
+      RuntimeCounter::Unit _unit = RuntimeCounter::Unit::kNone,
+      RuntimeCounter::AggregationKind _aggregation =
+          RuntimeCounter::AggregationKind::kPerEvent)
+      : unit(_unit),
+        aggregation(_aggregation),
+        sum{_sum},
+        count{_count},
+        min{_min},
+        max{_max} {}
 
   void addValue(int64_t value);
 
@@ -161,5 +195,15 @@ struct fmt::formatter<facebook::velox::RuntimeCounter::Unit> : formatter<int> {
   auto format(facebook::velox::RuntimeCounter::Unit s, format_context& ctx)
       const {
     return formatter<int>::format(static_cast<int>(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::velox::RuntimeCounter::AggregationKind>
+    : formatter<int> {
+  auto format(
+      facebook::velox::RuntimeCounter::AggregationKind kind,
+      format_context& ctx) const {
+    return formatter<int>::format(static_cast<int>(kind), ctx);
   }
 };

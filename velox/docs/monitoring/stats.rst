@@ -14,7 +14,11 @@ in nanoseconds and kBytes used to record memory or storage size in bytes. It
 records the count of events, and the min/max/sum of the event values. The stats
 are stored in OperatorStats structure. The query system can aggregate the
 operator level stats collected from each driver by pipeline and task for
-analysis.
+analysis. Each RuntimeCounter also specifies an aggregation kind. Per-event
+metrics count individual events, with min and max over event values.
+Per-operator metrics combine events within each operator instance first, so
+count is the number of contributing operator instances and min and max are
+over their totals. Both kinds sum all event values.
 
 Memory Arbitration
 ------------------

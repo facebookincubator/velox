@@ -36,16 +36,24 @@ class LazyIoStatsRecorder {
     auto cpuDelta = timer_.elapsed();
     addThreadLocalRuntimeStat(
         LazyVector::kWallNanos,
-        RuntimeCounter(cpuDelta.wallNanos, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            cpuDelta.wallNanos,
+            RuntimeCounter::Unit::kNanos,
+            RuntimeCounter::AggregationKind::kPerOperator));
     addThreadLocalRuntimeStat(
         LazyVector::kCpuNanos,
-        RuntimeCounter(cpuDelta.cpuNanos, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            cpuDelta.cpuNanos,
+            RuntimeCounter::Unit::kNanos,
+            RuntimeCounter::AggregationKind::kPerOperator));
 
     if (*vector_) {
       addThreadLocalRuntimeStat(
           LazyVector::kInputBytes,
           RuntimeCounter(
-              (*vector_)->estimateFlatSize(), RuntimeCounter::Unit::kBytes));
+              (*vector_)->estimateFlatSize(),
+              RuntimeCounter::Unit::kBytes,
+              RuntimeCounter::AggregationKind::kPerOperator));
     }
   }
 

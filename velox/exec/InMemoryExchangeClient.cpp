@@ -185,7 +185,8 @@ InMemoryExchangeClient::collectStatsLocked() const {
   for (const auto& source : sources_) {
     if (source->supportsMetrics()) {
       for (const auto& [name, value] : source->metrics()) {
-        auto [iter, inserted] = stats.try_emplace(name, value.unit);
+        auto [iter, inserted] =
+            stats.try_emplace(name, value.unit, value.aggregation);
         iter->second.merge(value);
       }
     } else {

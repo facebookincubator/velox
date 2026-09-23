@@ -123,51 +123,6 @@ void gatherCopy(
   }
 }
 
-// We want to aggregate some operator runtime metrics per operator rather than
-// per event. This function returns true for such metrics.
-bool shouldAggregateRuntimeMetric(const std::string& name) {
-  static const folly::F14FastSet<std::string> metricNames{
-      "cacheWaitWallNanos",
-      "coalescedSsdLoadWallNanos",
-      "coalescedStorageLoadWallNanos",
-      "dataSourceAddSplitWallNanos",
-      "dataSourceLazyCpuNanos",
-      "dataSourceLazyWallNanos",
-      "dataSourceLazyInputBytes",
-      "dataSourceReadWallNanos",
-      "driverCpuTimeNanos",
-      "flushTimes",
-      "ioWaitWallNanos",
-      "prefetchBytes",
-      "preloadSplitPrepareTimeNanos",
-      "preloadedSplits",
-      "ramReadBytes",
-      "readyPreloadedSplits",
-      "rpcCongestionWindowFinal",
-      "rpcPeakInFlight",
-      "rpcBaselineRttNanos",
-      "rpcRttMinWallNanos",
-      "rpcRttMaxWallNanos",
-      "rpcStreamingMode",
-      "queuedWallNanos",
-      "storageReadWallNanos",
-      "storageReadBytes",
-      "ssdCacheReadWallNanos",
-      "waitForPreloadSplitNanos",
-      "parquet.pageLoadTimeNanos",
-  };
-  if (metricNames.contains(name)) {
-    return true;
-  }
-
-  // 'blocked*WallNanos'
-  if (name.size() > 16 and strncmp(name.c_str(), "blocked", 7) == 0) {
-    return true;
-  }
-
-  return false;
-}
-
 } // namespace
 
 void deselectRowsWithNulls(
@@ -491,8 +446,8 @@ void setOperatorRuntimeStats(
     std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  auto [it, _] =
-      stats.insert_or_assign(std::string(name), RuntimeMetric(value.unit));
+  auto [it, _] = stats.insert_or_assign(
+      std::string(name), RuntimeMetric(value.unit, value.aggregation));
   it->second.addValue(value.value);
 }
 
@@ -500,7 +455,8 @@ void addOperatorRuntimeStats(
     std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  auto [statIt, unused] = stats.try_emplace(std::string(name), value.unit);
+  auto [statIt, unused] =
+      stats.try_emplace(std::string(name), value.unit, value.aggregation);
   statIt->second.merge(value);
 }
 
@@ -514,7 +470,8 @@ void setOperatorRuntimeStats(
 void aggregateOperatorRuntimeStats(
     std::unordered_map<std::string, RuntimeMetric>& stats) {
   for (auto& runtimeMetric : stats) {
-    if (shouldAggregateRuntimeMetric(runtimeMetric.first)) {
+    if (runtimeMetric.second.aggregation ==
+        RuntimeCounter::AggregationKind::kPerOperator) {
       runtimeMetric.second.aggregate();
     }
   }

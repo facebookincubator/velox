@@ -369,7 +369,10 @@ void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
   lockedStats->blockedWallNanos += wallNanos;
   lockedStats->addRuntimeStat(
       fmt::format("blocked{}WallNanos", blockReason),
-      RuntimeCounter(wallNanos, RuntimeCounter::Unit::kNanos));
+      RuntimeCounter(
+          wallNanos,
+          RuntimeCounter::Unit::kNanos,
+          RuntimeCounter::AggregationKind::kPerOperator));
   lockedStats->addRuntimeStat(
       fmt::format("blocked{}Times", blockReason), RuntimeCounter(1));
 }
@@ -486,7 +489,8 @@ void Operator::recordSpillStats() {
   const auto ioStatsMap = spillStats_->ioStats.stats();
   for (const auto& [statName, statValue] : ioStatsMap) {
     lockedStats->addRuntimeStat(
-        statName, RuntimeCounter(statValue.sum, statValue.unit));
+        statName,
+        RuntimeCounter(statValue.sum, statValue.unit, statValue.aggregation));
   }
 
   spillStats_->reset();
