@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/writer/Writer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -2030,6 +2031,7 @@ Writer::Writer(
            .enableChunkStats = context_->options().enableChunkStats,
            .chunkStatsVersion = context_->options().chunkStatsVersion,
            .chunkStatsMinAvgChunks = context_->options().chunkStatsMinAvgChunks,
+           .maxChunkStringStatSize = context_->options().maxChunkStringStatSize,
            .stripeGroupEncodingLayout =
                context_->options().experimentalStripeGroupEncodingLayout,
            .stripeGroupEncodingLayoutReadFactors =
@@ -3186,6 +3188,78 @@ bool Writer::encodeStreamChunk(
   return writtenChunk;
 }
 
+namespace {
+
+template <typename T>
+void populateTypedChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    uint32_t maxStringStatSize) {
+  const std::span<const T> values{
+      reinterpret_cast<const T*>(chunkView.data().data()),
+      chunkView.data().size() / sizeof(T)};
+  if (values.empty()) {
+    return;
+  }
+  if constexpr (std::is_floating_point_v<T>) {
+    if (std::any_of(values.begin(), values.end(), [](T value) {
+          return std::isnan(value);
+        })) {
+      return;
+    }
+  }
+  const auto [min, max] = std::minmax_element(values.begin(), values.end());
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      return;
+    }
+    chunk.minValue = std::string{*min};
+    chunk.maxValue = std::string{*max};
+  } else {
+    chunk.minValue = *min;
+    chunk.maxValue = *max;
+  }
+}
+
+void populateChunkBounds(
+    const StreamData& chunkView,
+    Chunk& chunk,
+    const WriterOptions& options) {
+  if (!options.enableChunkStats ||
+      options.chunkStatsVersion != ChunkStatsVersion::kV2) {
+    return;
+  }
+#define POPULATE_CHUNK_BOUNDS(scalarKind, Type)            \
+  case ScalarKind::scalarKind:                             \
+    populateTypedChunkBounds<Type>(                        \
+        chunkView, chunk, options.maxChunkStringStatSize); \
+    return
+
+  switch (chunkView.descriptor().scalarKind()) {
+    POPULATE_CHUNK_BOUNDS(Bool, bool);
+    POPULATE_CHUNK_BOUNDS(Int8, int8_t);
+    POPULATE_CHUNK_BOUNDS(UInt8, uint8_t);
+    POPULATE_CHUNK_BOUNDS(Int16, int16_t);
+    POPULATE_CHUNK_BOUNDS(UInt16, uint16_t);
+    POPULATE_CHUNK_BOUNDS(Int32, int32_t);
+    POPULATE_CHUNK_BOUNDS(UInt32, uint32_t);
+    POPULATE_CHUNK_BOUNDS(Int64, int64_t);
+    POPULATE_CHUNK_BOUNDS(UInt64, uint64_t);
+    POPULATE_CHUNK_BOUNDS(Float, float);
+    POPULATE_CHUNK_BOUNDS(Double, double);
+    case ScalarKind::String:
+    case ScalarKind::Binary:
+      populateTypedChunkBounds<std::string_view>(
+          chunkView, chunk, options.maxChunkStringStatSize);
+      return;
+    case ScalarKind::Undefined:
+      return;
+  }
+#undef POPULATE_CHUNK_BOUNDS
+}
+
+} // namespace
+
 uint32_t Writer::encodeChunk(
     const StreamData& chunkView,
     Chunk& chunk,
@@ -3205,6 +3279,7 @@ uint32_t Writer::encodeChunk(
   chunk.rowCount = chunkView.rowCount();
   // Per-chunk null count, precomputed by the chunker.
   chunk.nullCount = static_cast<uint32_t>(chunkView.numNulls());
+  populateChunkBounds(chunkView, chunk, context_->options());
   ChunkedStreamWriter chunkWriter{
       *encodingBuffer_, context_->options().chunkCompression};
   for (auto& buffer : chunkWriter.encode(encoded)) {
