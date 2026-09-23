@@ -576,7 +576,10 @@ StopReason Driver::runInternal(
   if (curOperatorId_ < operators_.size()) {
     operators_[curOperatorId_]->addRuntimeStat(
         std::string(DriverStats::kQueuedWallNanos),
-        RuntimeCounter(queuedTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            queuedTimeUs * 1'000,
+            RuntimeCounter::Unit::kNanos,
+            RuntimeCounter::AggregationKind::kPerOperator));
     RECORD_HISTOGRAM_METRIC_VALUE(
         kMetricDriverQueueTimeMs, queuedTimeUs / 1'000);
   }
@@ -963,7 +966,10 @@ void Driver::closeOperators() {
 
     if (operatorCpuNanos > 0) {
       stats.runtimeStats[std::string(OperatorStats::kDriverCpuTime)] =
-          RuntimeMetric(operatorCpuNanos, RuntimeCounter::Unit::kNanos);
+          RuntimeMetric(
+              operatorCpuNanos,
+              RuntimeCounter::Unit::kNanos,
+              RuntimeCounter::AggregationKind::kPerOperator);
     }
 
     task()->addOperatorStats(stats);

@@ -227,7 +227,10 @@ RowVectorPtr TableScan::getOutput() {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
           std::string(TableScan::kDataSourceReadWallNanos),
-          RuntimeCounter(ioTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
+          RuntimeCounter(
+              ioTimeUs * 1'000,
+              RuntimeCounter::Unit::kNanos,
+              RuntimeCounter::AggregationKind::kPerOperator));
 
       if (!dataOptional.has_value()) {
         blockingReason_ = BlockingReason::kWaitForConnector;
@@ -283,13 +286,19 @@ RowVectorPtr TableScan::getOutput() {
       if (numPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
             std::string(TableScan::kPreloadedSplits),
-            RuntimeCounter(numPreloadedSplits_));
+            RuntimeCounter(
+                numPreloadedSplits_,
+                RuntimeCounter::Unit::kNone,
+                RuntimeCounter::AggregationKind::kPerOperator));
         numPreloadedSplits_ = 0;
       }
       if (numReadyPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
             std::string(TableScan::kReadyPreloadedSplits),
-            RuntimeCounter(numReadyPreloadedSplits_));
+            RuntimeCounter(
+                numReadyPreloadedSplits_,
+                RuntimeCounter::Unit::kNone,
+                RuntimeCounter::AggregationKind::kPerOperator));
         numReadyPreloadedSplits_ = 0;
       }
       copyConnectorRuntimeStatsLocked(dataSource_.get(), *lockedStats);
@@ -399,7 +408,10 @@ bool TableScan::getSplit() {
     auto endTimeNs = getCurrentTimeNano();
     stats_.wlock()->addRuntimeStat(
         std::string(TableScan::kWaitForPreloadSplitNanos),
-        RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            endTimeNs - startTimeNs,
+            RuntimeCounter::Unit::kNanos,
+            RuntimeCounter::AggregationKind::kPerOperator));
     if (preparedDataSource == nullptr) {
       // There must be a cancellation.
       VELOX_CHECK(operatorCtx_->task()->isCancelled());
@@ -409,7 +421,8 @@ bool TableScan::getSplit() {
         std::string(TableScan::kPreloadSplitPrepareTimeNanos),
         RuntimeCounter(
             connectorSplit->dataSource->prepareTiming().wallNanos,
-            RuntimeCounter::Unit::kNanos));
+            RuntimeCounter::Unit::kNanos,
+            RuntimeCounter::AggregationKind::kPerOperator));
     dataSource_->setFromDataSource(std::move(preparedDataSource));
   } else {
     uint64_t addSplitTimeUs{0};
@@ -420,7 +433,10 @@ bool TableScan::getSplit() {
     }
     stats_.wlock()->addRuntimeStat(
         std::string(TableScan::kDataSourceAddSplitWallNanos),
-        RuntimeCounter(addSplitTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            addSplitTimeUs * 1'000,
+            RuntimeCounter::Unit::kNanos,
+            RuntimeCounter::AggregationKind::kPerOperator));
   }
   ++stats_.wlock()->numSplits;
   return true;

@@ -29,10 +29,10 @@ namespace {
 
 constexpr std::string_view kExampleFormatMetricName = "exampleFormatMetric";
 
-constexpr std::pair<std::string_view, facebook::velox::RuntimeCounter::Unit>
-    kExampleFormatMetric = {
-        kExampleFormatMetricName,
-        facebook::velox::RuntimeCounter::Unit::kNone};
+constexpr facebook::velox::RuntimeMetricDefinition kExampleFormatMetric = {
+    kExampleFormatMetricName,
+    facebook::velox::RuntimeCounter::Unit::kNone,
+    facebook::velox::RuntimeCounter::AggregationKind::kPerOperator};
 
 constexpr auto kExampleFormat = FileFormat::PARQUET;
 } // namespace
@@ -194,6 +194,9 @@ TEST(RuntimeStatsTest, toRuntimeMetricMap) {
   EXPECT_EQ(result[prefix + "decodeCPUTimeNanos"].max, 12'000);
   const auto& column1Metric = result
       [prefix + "column_1.BIGINT." + std::string(kExampleFormatMetricName)];
+  EXPECT_EQ(
+      column1Metric.aggregation,
+      facebook::velox::RuntimeCounter::AggregationKind::kPerOperator);
   EXPECT_EQ(column1Metric.sum, 1'000);
   EXPECT_EQ(column1Metric.count, 1);
   EXPECT_EQ(column1Metric.min, 1'000);

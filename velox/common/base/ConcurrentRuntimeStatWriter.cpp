@@ -24,7 +24,8 @@ void ConcurrentRuntimeStatWriter::addRuntimeStat(
     std::string_view name,
     const RuntimeCounter& value) {
   auto lockedStats = runtimeStats_.wlock();
-  auto [it, unused] = lockedStats->try_emplace(std::string(name), value.unit);
+  auto [it, unused] = lockedStats->try_emplace(
+      std::string(name), value.unit, value.aggregation);
   it->second.merge(value);
 }
 

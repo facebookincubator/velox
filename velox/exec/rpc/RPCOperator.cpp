@@ -1302,9 +1302,17 @@ void RPCOperator::recordRuntimeStats() {
   if (state_) {
     auto snapshot = state_->operatorSnapshot();
     lockedStats->addRuntimeStat(
-        kRpcCongestionWindowFinal, RuntimeCounter(snapshot.windowLimit));
+        kRpcCongestionWindowFinal,
+        RuntimeCounter(
+            snapshot.windowLimit,
+            RuntimeCounter::Unit::kNone,
+            RuntimeCounter::AggregationKind::kPerOperator));
     lockedStats->addRuntimeStat(
-        kRpcPeakInFlight, RuntimeCounter(snapshot.peakInFlight));
+        kRpcPeakInFlight,
+        RuntimeCounter(
+            snapshot.peakInFlight,
+            RuntimeCounter::Unit::kNone,
+            RuntimeCounter::AggregationKind::kPerOperator));
     if (snapshot.numShrinks > 0) {
       lockedStats->addRuntimeStat(
           kRpcCongestionShrinks, RuntimeCounter(snapshot.numShrinks));
@@ -1317,16 +1325,25 @@ void RPCOperator::recordRuntimeStats() {
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(
           kRpcBaselineRttNanos,
-          RuntimeCounter(snapshot.baselineRttNs, RuntimeCounter::Unit::kNanos));
+          RuntimeCounter(
+              snapshot.baselineRttNs,
+              RuntimeCounter::Unit::kNanos,
+              RuntimeCounter::AggregationKind::kPerOperator));
     }
 
     if (snapshot.numRttSamples > 0) {
       lockedStats->addRuntimeStat(
           kRpcRttMinWallNanos,
-          RuntimeCounter(snapshot.rttMinNs, RuntimeCounter::Unit::kNanos));
+          RuntimeCounter(
+              snapshot.rttMinNs,
+              RuntimeCounter::Unit::kNanos,
+              RuntimeCounter::AggregationKind::kPerOperator));
       lockedStats->addRuntimeStat(
           kRpcRttMaxWallNanos,
-          RuntimeCounter(snapshot.rttMaxNs, RuntimeCounter::Unit::kNanos));
+          RuntimeCounter(
+              snapshot.rttMaxNs,
+              RuntimeCounter::Unit::kNanos,
+              RuntimeCounter::AggregationKind::kPerOperator));
       lockedStats->addRuntimeStat(
           kRpcRttCount, RuntimeCounter(snapshot.numRttSamples));
     }
@@ -1334,7 +1351,9 @@ void RPCOperator::recordRuntimeStats() {
     lockedStats->addRuntimeStat(
         kRpcStreamingMode,
         RuntimeCounter(
-            snapshot.streamingMode == RPCStreamingMode::kBatch ? 1 : 0));
+            snapshot.streamingMode == RPCStreamingMode::kBatch ? 1 : 0,
+            RuntimeCounter::Unit::kNone,
+            RuntimeCounter::AggregationKind::kPerOperator));
   }
 
   if (numErrorsRateLimited_ > 0) {

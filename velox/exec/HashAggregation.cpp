@@ -303,7 +303,11 @@ void HashAggregation::resetPartialOutputIfNeed() {
         std::string(HashAggregation::kFlushRowCount),
         RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+        std::string(HashAggregation::kFlushTimes),
+        RuntimeCounter(
+            1,
+            RuntimeCounter::Unit::kNone,
+            RuntimeCounter::AggregationKind::kPerOperator));
     lockedStats->addRuntimeStat(
         std::string(HashAggregation::kPartialAggregationPct),
         RuntimeCounter(saturateCast(aggregationPct)));
