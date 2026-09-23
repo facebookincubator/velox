@@ -37,8 +37,11 @@ bool SimpleFunctionRegistry::registerFunctionInternal(
     const std::string& name,
     const std::shared_ptr<const Metadata>& metadata,
     const FunctionFactory& factory,
-    bool overwrite) {
+    bool overwrite,
+    std::string_view defaultOwner) {
   const auto sanitizedName = sanitizeName(name);
+  const auto resolvedOwner =
+      metadata->owner().empty() ? defaultOwner : metadata->owner();
   return registeredFunctions_.withWLock([&](auto& map) {
     SignatureMap& signatureMap = map[sanitizedName];
     auto& functions = signatureMap[*metadata->signature()];
@@ -63,7 +66,8 @@ bool SimpleFunctionRegistry::registerFunctionInternal(
     }
 
     functions.emplace_back(
-        std::make_unique<const FunctionEntry>(metadata, factory));
+        std::make_unique<const FunctionEntry>(
+            metadata, factory, resolvedOwner));
     return true;
   });
 }
@@ -134,7 +138,7 @@ SimpleFunctionRegistry::getFunctionSignaturesAndMetadata(
             .defaultNullBehavior =
                 functions[0]->getMetadata().defaultNullBehavior(),
             .companionFunction = false,
-            .owner = functions[0]->getMetadata().owner()};
+            .owner = functions[0]->owner()};
         result.emplace_back(
             std::pair<VectorFunctionMetadata, const FunctionSignature*>{
                 metadata, &signature});

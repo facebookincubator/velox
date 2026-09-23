@@ -232,6 +232,23 @@ TEST(SchemaBuilderTest, hybridFlatMapSupportsComplexGroupValueTypes) {
   EXPECT_TRUE(value.childAt(5)->isFlatMap());
 }
 
+TEST(SchemaBuilderTest, hybridFlatMapSupportsEmptyFlatMapGroupValueTypes) {
+  SchemaBuilder builder;
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  hybridMap->addGroup(
+      0, {"a"}, builder.createFlatMapTypeBuilder(ScalarKind::String));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createFlatMapTypeBuilder(ScalarKind::String));
+
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto& result = schema->asHybridFlatMap();
+  ASSERT_EQ(result.groupCount(), 2);
+  EXPECT_EQ(result.groupAt(0).valueType->asFlatMap().childrenCount(), 0);
+  EXPECT_EQ(result.defaultGroup().valueType->asFlatMap().childrenCount(), 0);
+}
+
 TEST(SchemaBuilderTest, hybridFlatMapStreamVisitorsShortCircuit) {
   SchemaBuilder builder;
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::String);
@@ -493,7 +510,9 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsUnsupportedKeyKinds) {
     const auto error =
         "Hybrid FlatMap key kind is unsupported: " + toString(keyKind);
     SchemaBuilder builder;
+    const auto nodeCount = builder.nodeCount();
     NIMBLE_ASSERT_THROW(builder.createHybridFlatMapTypeBuilder(keyKind), error);
+    EXPECT_EQ(builder.nodeCount(), nodeCount);
     NIMBLE_ASSERT_THROW(
         std::make_shared<HybridFlatMapType>(
             StreamDescriptor{0, ScalarKind::Bool},
@@ -691,6 +710,11 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
       return value;
     };
   };
+  const auto emptyFlatMap = [](ScalarKind keyKind) -> ValueFactory {
+    return [keyKind](SchemaBuilder& builder) {
+      return builder.createFlatMapTypeBuilder(keyKind);
+    };
+  };
   struct MismatchCase {
     std::string_view name;
     ValueFactory configured;
@@ -710,6 +734,12 @@ TEST(SchemaBuilderTest, hybridFlatMapValidatesGroupContract) {
       {"FlatMap key kind",
        flatMap(ScalarKind::String),
        flatMap(ScalarKind::Int32)},
+      {"FlatMap arity",
+       flatMap(ScalarKind::String),
+       emptyFlatMap(ScalarKind::String)},
+      {"empty FlatMap key kind",
+       emptyFlatMap(ScalarKind::String),
+       emptyFlatMap(ScalarKind::Int32)},
   };
   for (const auto& mismatch : mismatches) {
     SCOPED_TRACE(mismatch.name);
@@ -766,7 +796,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderValidatesGroupMetadata) {
                       {.groupId = HybridFlatMap::kDefaultGroupId,
                        .groupKeys = {}},
                       {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
+                       .groupKeys = {"a"}},
                   },
           })),
       "Duplicate Hybrid FlatMap group ID: 4294967295");
@@ -816,7 +846,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderValidatesGroupMetadata) {
                   {
                       {.groupId = 0, .groupKeys = {}},
                       {.groupId = HybridFlatMap::kDefaultGroupId,
-                       .groupKeys = {}},
+                       .groupKeys = {"a"}},
                   },
           })),
       "Hybrid FlatMap group must contain at least one key: 0");

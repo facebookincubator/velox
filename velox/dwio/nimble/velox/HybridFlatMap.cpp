@@ -95,6 +95,10 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
       numGroupIds,
       groupKeyCounts->size(),
       "Hybrid FlatMap group IDs and key counts must have the same size");
+  NIMBLE_CHECK_LE(
+      static_cast<uint64_t>(numGroupIds),
+      static_cast<uint64_t>(numKeys) + 1,
+      "Hybrid FlatMap group count must not exceed group key count plus one");
 
   HybridFlatMap hybridMap;
   hybridMap.groups.reserve(numGroupIds);
@@ -109,8 +113,11 @@ HybridFlatMap HybridFlatMap::deserialize(std::string_view serialized) {
         numGroupKeys,
         numKeys - groupKeyIndex,
         "Hybrid FlatMap group key counts must match group keys size");
-    auto& group =
-        hybridMap.groups.emplace_back(Group{.groupId = groupIds->Get(i)});
+    auto& group = hybridMap.groups.emplace_back(
+        Group{
+            .groupId = groupIds->Get(i),
+            .groupKeys = {},
+        });
     group.groupKeys.reserve(numGroupKeys);
     for (uint32_t j = 0; j < numGroupKeys; ++j) {
       const auto* key = groupKeys->Get(groupKeyIndex++);

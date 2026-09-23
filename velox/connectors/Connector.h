@@ -27,6 +27,7 @@
 #include "velox/common/config/ConfigProvider.h"
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/core/ExpressionEvaluator.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/core/ScanBatchEvent.h"
@@ -842,27 +843,28 @@ class Connector {
 
   /// Total time spent waiting for synchronously issued IO or for an in-progress
   /// read-ahead to finish.
-  static constexpr std::string_view kIoWaitWallNanos{"ioWaitWallNanos"};
+  static constexpr std::string_view kIoWaitWallNanos{io::kIoWaitWallNanos};
 
   /// Time spent waiting for remote storage reads (S3, HDFS, etc.)
   static constexpr std::string_view kStorageReadWallNanos{
-      "storageReadWallNanos"};
+      io::kStorageReadWallNanos};
 
   /// Time spent waiting for SSD cache reads.
   static constexpr std::string_view kSsdCacheReadWallNanos{
-      "ssdCacheReadWallNanos"};
+      io::kSsdCacheReadWallNanos};
 
   /// Time spent waiting for EXCLUSIVE cache entries (another thread is
   /// loading).
-  static constexpr std::string_view kCacheWaitWallNanos{"cacheWaitWallNanos"};
+  static constexpr std::string_view kCacheWaitWallNanos{
+      io::kCacheWaitWallNanos};
 
   /// Time spent waiting for coalesced loads from SSD cache.
   static constexpr std::string_view kCoalescedSsdLoadWallNanos{
-      "coalescedSsdLoadWallNanos"};
+      io::kCoalescedSsdLoadWallNanos};
 
   /// Time spent waiting for coalesced loads from remote storage.
   static constexpr std::string_view kCoalescedStorageLoadWallNanos{
-      "coalescedStorageLoadWallNanos"};
+      io::kCoalescedStorageLoadWallNanos};
 
  private:
   static void unregisterTracker(cache::ScanTracker* tracker);

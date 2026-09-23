@@ -28,6 +28,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/tests/FaultyFile.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
@@ -208,9 +209,22 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   static std::unordered_map<std::string, RuntimeMetric>
   getTableScanRuntimeStats(const std::shared_ptr<Task>& task) {
-    VELOX_NYI(
-        "RuntimeStats not yet implemented for the cudf CudfHiveConnector");
-    // return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+    return task->taskStats().pipelineStats[0].operatorStats[0].runtimeStats;
+  }
+
+  // Verifies I/O is bounded by one footer and one data read of the unique file.
+  static void assertStorageReadStats(
+      const std::unordered_map<std::string, RuntimeMetric>& runtimeStats,
+      int64_t fileSize) {
+    for (const auto key : {
+             io::kStorageReadBytes,
+             cudf_velox::connector::hive::CudfHiveDataSource::
+                 kDwioStorageReadBytes,
+         }) {
+      const auto& metric = runtimeStats.at(std::string(key));
+      EXPECT_GT(metric.sum, 0);
+      EXPECT_LE(metric.sum, 2 * fileSize);
+    }
   }
 
   static int64_t getSkippedStridesStat(const std::shared_ptr<Task>& task) {
@@ -651,17 +665,10 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   // files.
   ASSERT_GE(rawInputBytes, 400);
 
-  // TableScan runtime stats not available with CudfHive connector yet
-#if 0
-  auto overreadBytes =
-  getTableScanRuntimeStats(task).at("overreadBytes").sum;
-  ASSERT_EQ(overreadBytes, 13);
-  ASSERT_EQ(
-      getTableScanRuntimeStats(task).at("storageReadBytes").sum,
-      rawInputBytes + overreadBytes);
-  ASSERT_GT(getTableScanRuntimeStats(task)["totalScanTime"].sum, 0);
-  ASSERT_GT(getTableScanRuntimeStats(task)["ioWaitWallNanos"].sum, 0);
-#endif
+  const auto runtimeStats = getTableScanRuntimeStats(task);
+  assertStorageReadStats(runtimeStats, filePath->fileSize());
+  ASSERT_GT(runtimeStats.at("totalScanTime").sum, 0);
+  ASSERT_GT(runtimeStats.at("ioWaitWallNanos").sum, 0);
 }
 
 TEST_F(TableScanTest, columnAliases) {
