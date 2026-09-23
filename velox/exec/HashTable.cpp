@@ -481,78 +481,38 @@ void HashTable<ignoreNullKeys>::groupProbe(
   checkSize(lookup.rows.size(), false, spillInputStartPartitionBit);
   if (hashMode_ == HashMode::kNormalizedKey) {
     populateNormalizedKeys(lookup, sizeBits_);
-    groupNormalizedKeyProbe(lookup);
+    groupProbeWithPrefetch<true>(lookup);
     return;
   }
-  ProbeState state1;
-  ProbeState state2;
-  ProbeState state3;
-  ProbeState state4;
-  int32_t probeIndex = 0;
-  int32_t numProbes = lookup.rows.size();
-  auto rows = lookup.rows.data();
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 1];
-    state2.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 2];
-    state3.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 3];
-    state4.preProbe(*this, lookup.hashes[row], row);
-
-    state1.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-    state2.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-    state3.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-    state4.firstProbe<ProbeState::Operation::kInsert>(*this, 0);
-
-    fullProbe<false>(lookup, state1, false);
-    fullProbe<false>(lookup, state2, true);
-    fullProbe<false>(lookup, state3, true);
-    fullProbe<false>(lookup, state4, true);
-  }
-  for (; probeIndex < numProbes; ++probeIndex) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe(*this, 0);
-    fullProbe<false>(lookup, state1, false);
-  }
+  groupProbeWithPrefetch<false>(lookup);
 }
 
 template <bool ignoreNullKeys>
-void HashTable<ignoreNullKeys>::groupNormalizedKeyProbe(HashLookup& lookup) {
-  ProbeState state1;
-  ProbeState state2;
-  ProbeState state3;
-  ProbeState state4;
-  int32_t probeIndex = 0;
-  int32_t numProbes = lookup.rows.size();
-  auto rows = lookup.rows.data();
+template <bool isNormalizedKey>
+void HashTable<ignoreNullKeys>::groupProbeWithPrefetch(HashLookup& lookup) {
   constexpr int32_t kKeyOffset =
-      -static_cast<int32_t>(sizeof(normalized_key_t));
-  for (; probeIndex + 4 <= numProbes; probeIndex += 4) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 1];
-    state2.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 2];
-    state3.preProbe(*this, lookup.hashes[row], row);
-    row = rows[probeIndex + 3];
-    state4.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    state2.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    state3.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    state4.firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
-    fullProbe<false, true>(lookup, state1, false);
-    fullProbe<false, true>(lookup, state2, true);
-    fullProbe<false, true>(lookup, state3, true);
-    fullProbe<false, true>(lookup, state4, true);
-  }
-  for (; probeIndex < numProbes; ++probeIndex) {
-    int32_t row = rows[probeIndex];
-    state1.preProbe(*this, lookup.hashes[row], row);
-    state1.firstProbe(*this, kKeyOffset);
-    fullProbe<false, true>(lookup, state1, false);
+      isNormalizedKey ? -static_cast<int32_t>(sizeof(normalized_key_t)) : 0;
+  ProbeState states[kPrefetchSize];
+  const int32_t numProbes = lookup.rows.size();
+  const vector_size_t* rows = lookup.rows.data();
+  const uint64_t* hashes = lookup.hashes.data();
+  for (int32_t probeIndex = 0; probeIndex < numProbes;
+       probeIndex += kPrefetchSize) {
+    const int32_t numStates = std::min(kPrefetchSize, numProbes - probeIndex);
+    for (int32_t i = 0; i < numStates; ++i) {
+      const auto row = rows[probeIndex + i];
+      states[i].preProbe(*this, hashes[row], row);
+    }
+    for (int32_t i = 0; i < numStates; ++i) {
+      states[i].firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
+    }
+    // Tags loaded by firstProbe() go stale once an earlier state in this
+    // window inserts a new group, possibly with the same key.
+    const auto numDistinctBefore = numDistinct_;
+    for (int32_t i = 0; i < numStates; ++i) {
+      fullProbe<false, isNormalizedKey>(
+          lookup, states[i], numDistinct_ != numDistinctBefore);
+    }
   }
 }
 
