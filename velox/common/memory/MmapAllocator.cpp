@@ -204,10 +204,15 @@ bool MmapAllocator::allocateNonContiguousWithCapacity(
 bool MmapAllocator::ensureEnoughMappedPages(
     int32_t newMappedNeeded,
     MachinePageCount admissionCapacity) {
+  // Concurrent speculative reservations can transiently push numAllocated_
+  // above capacity_, so clamp the bound to keep numMapped_ within capacity_.
+  const auto currentEffectiveCapacity = [&]() {
+    return std::min<MachinePageCount>(
+        capacity_, std::max(admissionCapacity, numAllocated_.load()));
+  };
   if (newMappedNeeded == 0 &&
       (admissionCapacity == capacity_ ||
-       numMapped_.load() <=
-           std::max(admissionCapacity, numAllocated_.load()))) {
+       numMapped_.load() <= currentEffectiveCapacity())) {
     return true;
   }
   if (testingHasInjectedFailure(InjectedFailure::kMadvise)) {
@@ -216,11 +221,6 @@ bool MmapAllocator::ensureEnoughMappedPages(
   std::lock_guard<std::mutex> l(sizeClassBalanceMutex_);
   const auto totalMaps =
       numMapped_.fetch_add(newMappedNeeded) + newMappedNeeded;
-  const auto currentEffectiveCapacity = [&]() {
-    return admissionCapacity < capacity_
-        ? std::max(admissionCapacity, numAllocated_.load())
-        : capacity_;
-  };
   const auto effectiveCapacity = currentEffectiveCapacity();
   if (totalMaps <= effectiveCapacity) {
     // We are not at capacity. No need to advise away.

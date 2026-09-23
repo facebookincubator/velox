@@ -374,7 +374,8 @@ class MmapAllocator : public MemoryAllocator {
   // backing any existing allocation by advising away pages backing freed
   // size-class slots. Uses 'capacity_' as the mapped-page bound unless
   // 'admissionCapacity' is lower, in which case the bound is the greater of
-  // 'admissionCapacity' and the current allocated pages. If 'newMappedNeeded'
+  // 'admissionCapacity' and the current allocated pages, clamped to
+  // 'capacity_'. If 'newMappedNeeded'
   // is zero, reclamation is best effort and the call succeeds. Otherwise,
   // returns false if reclaim falls short and the current mapped-page count
   // still exceeds the freshly computed bound.

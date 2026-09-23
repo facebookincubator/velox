@@ -98,6 +98,10 @@ class TestingCacheAdmissionCapacityMmapAllocator
   using TestingAdmissionCapacityMmapAllocator::
       TestingAdmissionCapacityMmapAllocator;
 
+  // Not clamped to the configured capacity: this value only reports cache
+  // headroom and does not bound mapped pages, and it must not be less than
+  // numAllocated(), which concurrent reservations can transiently push above
+  // the configured capacity.
   size_t capacity() const override {
     return AllocationTraits::pageBytes(
         std::max(
@@ -180,24 +184,39 @@ TEST(DynamicMmapAllocatorTest, allowsNoGrowthAboveReducedCapacity) {
   allocator.freeContiguous(contiguous);
 }
 
-DEBUG_ONLY_TEST(
-    DynamicMmapAllocatorTest,
-    preservesConfiguredMappedCapacityDuringConcurrentFailure) {
-  MmapAllocator allocator(makeAllocatorOptions());
-
+// Pauses a within-admission contiguous allocation after its reservation while
+// a failing concurrent reservation pushes numAllocated() above the configured
+// capacity, then verifies that mapping the first allocation still keeps
+// numMapped() within the configured capacity. If 'admissionAllocator' is set,
+// its admission capacity is lowered to 'admissionCapacity' after mapping the
+// configured capacity.
+void testPreservesConfiguredMappedCapacityDuringConcurrentFailure(
+    MmapAllocator& allocator,
+    MachinePageCount admissionCapacity,
+    TestingAdmissionCapacityMmapAllocator* admissionAllocator = nullptr) {
   Allocation mapped;
-  Allocation mappedFree;
-  Allocation additionalMappedFree;
-  ASSERT_TRUE(
-      allocator.allocateNonContiguous(kConfiguredCapacityPages - 2, mapped));
-  ASSERT_TRUE(allocator.allocateNonContiguous(1, mappedFree));
-  ASSERT_TRUE(allocator.allocateNonContiguous(1, additionalMappedFree));
-  allocator.freeNonContiguous(mappedFree);
-  allocator.freeNonContiguous(additionalMappedFree);
-  ASSERT_EQ(allocator.numAllocated(), kConfiguredCapacityPages - 2);
-  ASSERT_EQ(allocator.numMapped(), kConfiguredCapacityPages);
   auto mappedGuard =
       folly::makeGuard([&]() { allocator.freeNonContiguous(mapped); });
+  ASSERT_TRUE(allocator.allocateNonContiguous(admissionCapacity - 2, mapped));
+  std::vector<Allocation> mappedFree(
+      kConfiguredCapacityPages - allocator.numAllocated());
+  auto mappedFreeGuard = folly::makeGuard([&]() {
+    for (auto& allocation : mappedFree) {
+      allocator.freeNonContiguous(allocation);
+    }
+  });
+  for (auto& allocation : mappedFree) {
+    ASSERT_TRUE(allocator.allocateNonContiguous(1, allocation));
+  }
+  mappedFreeGuard.dismiss();
+  for (auto& allocation : mappedFree) {
+    allocator.freeNonContiguous(allocation);
+  }
+  if (admissionAllocator != nullptr) {
+    admissionAllocator->setAdmissionCapacity(admissionCapacity);
+  }
+  ASSERT_EQ(allocator.numAllocated(), admissionCapacity - 2);
+  ASSERT_EQ(allocator.numMapped(), kConfiguredCapacityPages);
 
   folly::Baton<> withinCapacityReservation;
   folly::Baton<> overCapacityReservation;
@@ -257,7 +276,10 @@ DEBUG_ONLY_TEST(
   ASSERT_TRUE(withinCapacityReservation.try_wait_for(5s));
 
   overCapacityThread = launchAllocation(
-      1, overCapacityAllocation, overCapacitySucceeded, overCapacityError);
+      kConfiguredCapacityPages - admissionCapacity + 1,
+      overCapacityAllocation,
+      overCapacitySucceeded,
+      overCapacityError);
   ASSERT_TRUE(overCapacityReservation.try_wait_for(5s));
   ASSERT_EQ(allocator.numAllocated(), kConfiguredCapacityPages + 1);
 
@@ -284,6 +306,22 @@ DEBUG_ONLY_TEST(
   threadGuard.dismiss();
   EXPECT_EQ(allocator.numAllocated(), 0);
   EXPECT_TRUE(allocator.checkConsistency());
+}
+
+DEBUG_ONLY_TEST(
+    DynamicMmapAllocatorTest,
+    preservesConfiguredMappedCapacityDuringConcurrentFailure) {
+  MmapAllocator allocator(makeAllocatorOptions());
+  testPreservesConfiguredMappedCapacityDuringConcurrentFailure(
+      allocator, kConfiguredCapacityPages);
+}
+
+DEBUG_ONLY_TEST(
+    DynamicMmapAllocatorTest,
+    preservesConfiguredMappedCapacityDuringConcurrentFailureWithAdmissionCapacity) {
+  TestingAdmissionCapacityMmapAllocator allocator(kConfiguredCapacityPages);
+  testPreservesConfiguredMappedCapacityDuringConcurrentFailure(
+      allocator, kConfiguredCapacityPages - 1, &allocator);
 }
 
 TEST(DynamicMmapAllocatorTest, allowsMappedAllocationWhenBestEffortTrimFails) {
