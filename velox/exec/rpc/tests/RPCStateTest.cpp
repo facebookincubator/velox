@@ -42,13 +42,22 @@
 /// - drainReadyRows: Batched drain of multiple ready rows
 
 #include "velox/exec/rpc/RPCState.h"
+#include "velox/exec/rpc/RpcErrorClassification.h"
+#include "velox/expression/rpc/AsyncRPCFunction.h"
 
 #include <folly/futures/Promise.h>
+#include <folly/synchronization/CallOnce.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
+
+#include "velox/common/memory/Memory.h"
+
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <set>
+#include <string>
 #include <thread>
 
 namespace facebook::velox::exec::rpc {
@@ -90,7 +99,7 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   // Fulfill the promise
   RPCResponse response;
   response.rowId = 42;
-  response.result = "test result";
+  response.setPayload(makeTextPayload("test result"));
   promise.setValue(std::move(response));
 
   // Wait for async callback to move response into readyRows_
@@ -104,7 +113,7 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   ASSERT_EQ(result, RPCState::ClaimResult::kClaimed);
   ASSERT_TRUE(claimedRow.has_value());
   EXPECT_EQ(claimedRow->rowId, 42);
-  EXPECT_EQ(claimedRow->response.result, "test result");
+  EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
 }
 
 TEST_F(RPCStateTest, addAndClaimDirect) {
@@ -118,7 +127,7 @@ TEST_F(RPCStateTest, addAndClaimDirect) {
   // Fulfill the promise
   RPCResponse response;
   response.rowId = 42;
-  response.result = "test result";
+  response.setPayload(makeTextPayload("test result"));
   promise.setValue(std::move(response));
 
   // Wait for async callback to move response into readyRows_
@@ -132,7 +141,7 @@ TEST_F(RPCStateTest, addAndClaimDirect) {
   ASSERT_EQ(result, RPCState::ClaimResult::kClaimed);
   ASSERT_TRUE(claimedRow.has_value());
   EXPECT_EQ(claimedRow->rowId, 42);
-  EXPECT_EQ(claimedRow->response.result, "test result");
+  EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
   EXPECT_FALSE(claimedRow->response.hasError());
 }
 
@@ -168,7 +177,7 @@ TEST_F(RPCStateTest, claimOrWaitMustWait) {
   // Fulfill to clean up
   RPCResponse response;
   response.rowId = 1;
-  response.result = "done";
+  response.setPayload(makeTextPayload("done"));
   promise.setValue(std::move(response));
 }
 
@@ -191,7 +200,7 @@ TEST_F(RPCStateTest, pendingRowCount) {
   // Fulfill first
   RPCResponse r1;
   r1.rowId = 1;
-  r1.result = "r1";
+  r1.setPayload(makeTextPayload("r1"));
   promise1.setValue(std::move(r1));
 
   waitFor([&]() { return state_->numInFlight() == 1; });
@@ -200,7 +209,7 @@ TEST_F(RPCStateTest, pendingRowCount) {
   // Fulfill second
   RPCResponse r2;
   r2.rowId = 2;
-  r2.result = "r2";
+  r2.setPayload(makeTextPayload("r2"));
   promise2.setValue(std::move(r2));
 
   waitFor([&]() { return state_->numInFlight() == 0; });
@@ -215,13 +224,13 @@ TEST_F(RPCStateTest, basicAddAndPollBatch) {
   auto [promise, future] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
 
-  state_->addPendingBatch(state_, std::move(future), {});
+  state_->addPendingBatch(state_, std::move(future), {}, /*admissionUnits=*/7);
 
   // Fulfill the promise
   std::vector<RPCResponse> responses;
   RPCResponse batchResponse;
   batchResponse.rowId = 1;
-  batchResponse.result = "test";
+  batchResponse.setPayload(makeTextPayload("test"));
   responses.push_back(std::move(batchResponse));
   promise.setValue(std::move(responses));
 
@@ -233,6 +242,7 @@ TEST_F(RPCStateTest, basicAddAndPollBatch) {
     if (result == RPCState::BatchPollResult::kGotBatch) {
       // Verify row locations are empty (we passed empty).
       EXPECT_TRUE(readyBatch->rowLocations.empty());
+      EXPECT_EQ(readyBatch->admissionUnits, 7);
       return true;
     }
     return false;
@@ -258,7 +268,7 @@ TEST_F(RPCStateTest, pollBatchOrWaitMustWait) {
   // Add a pending batch that hasn't completed yet
   auto [promise, future] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
-  state_->addPendingBatch(state_, std::move(future), {});
+  state_->addPendingBatch(state_, std::move(future), {}, /*admissionUnits=*/1);
 
   // Try to poll — should return kMustWait
   ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
@@ -278,7 +288,7 @@ TEST_F(RPCStateTest, batchErrorHandling) {
   auto [promise, future] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
 
-  state_->addPendingBatch(state_, std::move(future), {});
+  state_->addPendingBatch(state_, std::move(future), {}, /*admissionUnits=*/1);
 
   // Set an exception
   promise.setException(std::runtime_error("RPC batch failed"));
@@ -322,7 +332,7 @@ TEST_F(RPCStateTest, isFinishedWithPendingRows) {
   // Fulfill and claim
   RPCResponse response;
   response.rowId = 1;
-  response.result = "done";
+  response.setPayload(makeTextPayload("done"));
   promise.setValue(std::move(response));
 
   waitFor([&]() { return state_->numInFlight() == 0; });
@@ -369,6 +379,42 @@ TEST_F(RPCStateTest, inputBatchStorageAndRelease) {
   state_->releaseRows(batchIdx2, 2);
 }
 
+// A crashed worker's stack: an abandoned AI query tears down the Task while an
+// RPC is still in flight; the callback holds a shared_ptr<RPCState>, so the
+// retained input vectors outlive the pools that allocated them. Either the
+// arbitrator's reservedBytes() == 0 check throws from ~MemoryPoolImpl() and
+// terminates the worker, or the late callback frees into pools already gone.
+// close() must therefore drop the vectors itself, on the driver thread, and
+// not rely on the reference count reaching zero in time.
+TEST_F(RPCStateTest, releaseAllInputBatchesDropsVectorsWhileStateIsStillHeld) {
+  // This binary does not stand up a MemoryManager; do it once for this test.
+  static folly::once_flag initOnce;
+  folly::call_once(initOnce, [] { memory::MemoryManager::initialize({}); });
+  auto pool = memory::memoryManager()->addLeafPool("releaseAllInputBatches");
+  VectorPtr vector = BaseVector::create(BIGINT(), 8, pool.get());
+
+  // Two batches, one still holding "active" rows: the abandoned-query case,
+  // where releaseRows() never runs because the rows are never output.
+  state_->storeInputBatch(std::vector<VectorPtr>{vector}, /*rowCount=*/4);
+  state_->storeInputBatch(std::vector<VectorPtr>{vector}, /*rowCount=*/4);
+  EXPECT_GT(vector.use_count(), 1);
+
+  // Stand in for an in-flight callback still holding the state alive.
+  auto callbackRef = state_;
+
+  state_->releaseAllInputBatches();
+
+  // The state object survives, but owns none of the pool-backed memory: this
+  // test holds the only remaining reference to the vector.
+  EXPECT_EQ(vector.use_count(), 1);
+  EXPECT_TRUE(state_->getInputBatchColumns(0).empty());
+  EXPECT_TRUE(state_->getInputBatchColumns(1).empty());
+
+  // Idempotent — close() may run after rows were already released.
+  state_->releaseAllInputBatches();
+  EXPECT_EQ(vector.use_count(), 1);
+}
+
 TEST_F(RPCStateTest, batchRowLocationsCarriedThrough) {
   state_->setStreamingMode(RPCStreamingMode::kBatch);
 
@@ -377,14 +423,15 @@ TEST_F(RPCStateTest, batchRowLocationsCarriedThrough) {
 
   // Pass row locations with the batch.
   std::vector<RPCState::RowLocation> locations = {{0, 5}, {0, 10}, {1, 3}};
-  state_->addPendingBatch(state_, std::move(future), locations);
+  state_->addPendingBatch(
+      state_, std::move(future), locations, /*admissionUnits=*/1);
 
   // Fulfill the promise.
   std::vector<RPCResponse> responses;
   for (int i = 0; i < 3; ++i) {
     RPCResponse r;
     r.rowId = i;
-    r.result = "result_" + std::to_string(i);
+    r.setPayload(makeTextPayload("result_" + std::to_string(i)));
     responses.push_back(std::move(r));
   }
   promise.setValue(std::move(responses));
@@ -428,7 +475,7 @@ TEST_F(RPCStateTest, drainReadyRows) {
   for (int i = 0; i < 3; ++i) {
     RPCResponse response;
     response.rowId = i;
-    response.result = "result_" + std::to_string(i);
+    response.setPayload(makeTextPayload("result_" + std::to_string(i)));
     promises[i].setValue(std::move(response));
   }
 
@@ -473,7 +520,7 @@ TEST_F(RPCStateTest, backpressure) {
   // Fulfill one to relieve backpressure
   RPCResponse r1;
   r1.rowId = 1;
-  r1.result = "r1";
+  r1.setPayload(makeTextPayload("r1"));
   promise1.setValue(std::move(r1));
 
   waitFor([&]() { return !state_->isUnderBackpressure(); });
@@ -482,7 +529,7 @@ TEST_F(RPCStateTest, backpressure) {
   // Clean up
   RPCResponse r2;
   r2.rowId = 2;
-  r2.result = "r2";
+  r2.setPayload(makeTextPayload("r2"));
   promise2.setValue(std::move(r2));
 }
 
@@ -494,12 +541,12 @@ TEST_F(RPCStateTest, batchBackpressureUsesWindow) {
 
   auto [promise1, future1] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
-  state_->addPendingBatch(state_, std::move(future1), {});
+  state_->addPendingBatch(state_, std::move(future1), {}, /*admissionUnits=*/1);
   EXPECT_FALSE(state_->isUnderBackpressure()); // 1 < 2
 
   auto [promise2, future2] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
-  state_->addPendingBatch(state_, std::move(future2), {});
+  state_->addPendingBatch(state_, std::move(future2), {}, /*admissionUnits=*/1);
   EXPECT_TRUE(state_->isUnderBackpressure()); // 2 >= 2
 
   // Clean up the pending batch futures.
@@ -534,7 +581,7 @@ TEST_F(RPCStateTest, perRowWindowShrinksOnOverload) {
   for (int i = 0; i < 4; ++i) {
     RPCResponse response;
     response.rowId = i;
-    response.result = "x";
+    response.setPayload(makeTextPayload("x"));
     promises[i].setValue(std::move(response));
   }
 }
@@ -569,7 +616,7 @@ TEST_F(RPCStateTest, perRowWindowRecoversViaSamples) {
   for (int i = 0; i < 4; ++i) {
     RPCResponse response;
     response.rowId = i;
-    response.result = "x";
+    response.setPayload(makeTextPayload("x"));
     promises[i].setValue(std::move(response));
   }
 }
@@ -584,7 +631,8 @@ TEST_F(RPCStateTest, batchInFlightTracksBatchCount) {
   for (int i = 0; i < 3; ++i) {
     auto [promise, future] =
         folly::makePromiseContract<std::vector<RPCResponse>>();
-    state_->addPendingBatch(state_, std::move(future), {});
+    state_->addPendingBatch(
+        state_, std::move(future), {}, /*admissionUnits=*/1);
     promises.push_back(std::move(promise));
   }
   EXPECT_EQ(state_->numInFlight(), 3);
@@ -612,7 +660,7 @@ TEST_F(RPCStateTest, batchIsFinishedWithInFlightBatch) {
 
   auto [promise, future] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
-  state_->addPendingBatch(state_, std::move(future), {});
+  state_->addPendingBatch(state_, std::move(future), {}, /*admissionUnits=*/1);
   state_->setNoMoreInput();
   EXPECT_FALSE(state_->isFinished());
 
@@ -639,7 +687,8 @@ TEST_F(RPCStateTest, batchWindowGrowsViaGradientSamples) {
   for (int i = 0; i < 2; ++i) {
     auto [promise, future] =
         folly::makePromiseContract<std::vector<RPCResponse>>();
-    state_->addPendingBatch(state_, std::move(future), {});
+    state_->addPendingBatch(
+        state_, std::move(future), {}, /*admissionUnits=*/1);
     promises.push_back(std::move(promise));
   }
   // 2 in-flight at the starting window of 2 -> backpressure.
@@ -667,14 +716,15 @@ TEST_F(RPCStateTest, setMaxWindowOverridesModeDefault) {
   for (int i = 0; i < 4; ++i) {
     auto [promise, future] =
         folly::makePromiseContract<std::vector<RPCResponse>>();
-    state_->addPendingBatch(state_, std::move(future), {});
+    state_->addPendingBatch(
+        state_, std::move(future), {}, /*admissionUnits=*/1);
     promises.push_back(std::move(promise));
   }
   EXPECT_FALSE(state_->isUnderBackpressure());
 
   auto [promise5, future5] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
-  state_->addPendingBatch(state_, std::move(future5), {});
+  state_->addPendingBatch(state_, std::move(future5), {}, /*admissionUnits=*/1);
   EXPECT_TRUE(state_->isUnderBackpressure()); // 5 >= 5
 
   for (auto& promise : promises) {
@@ -684,10 +734,6 @@ TEST_F(RPCStateTest, setMaxWindowOverridesModeDefault) {
 }
 
 TEST_F(RPCStateTest, perRowErrorDecrementsInFlight) {
-  // A row future that completes with an exception still routes through
-  // completeRow (the deferError path), so inFlight_ returns to 0 and the row is
-  // claimable with an error set — the PER_ROW counterpart of
-  // batchErrorHandling.
   state_->setStreamingMode(RPCStreamingMode::kPerRow);
 
   auto [promise, future] = folly::makePromiseContract<RPCResponse>();
@@ -703,7 +749,43 @@ TEST_F(RPCStateTest, perRowErrorDecrementsInFlight) {
   auto result = state_->tryClaimOrWait(&waitFuture, &claimedRow);
   ASSERT_EQ(result, RPCState::ClaimResult::kClaimed);
   ASSERT_TRUE(claimedRow.has_value());
-  EXPECT_TRUE(claimedRow->response.hasError());
+  EXPECT_EQ(
+      claimedRow->response.errorKind(),
+      velox::rpc::RPCErrorKind::kBackendError);
+  EXPECT_NE(
+      claimedRow->response.error().message.find("boom"), std::string::npos);
+}
+
+TEST_F(RPCStateTest, perRowClassifiedErrorWakesWaiter) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state_->addPendingRow(
+      state_, 7, RPCState::RowLocation{0, 0}, std::move(future));
+
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  EXPECT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kMustWait);
+  EXPECT_FALSE(waitFuture.isReady());
+
+  promise.setException(
+      RpcClassifiedError{
+          velox::rpc::RPCErrorKind::kRateLimited, "429 from backend"});
+  waitFor([&]() { return waitFuture.isReady(); });
+  EXPECT_EQ(state_->numInFlight(), 0);
+
+  ContinueFuture nextWaitFuture{ContinueFuture::makeEmpty()};
+  EXPECT_EQ(
+      state_->tryClaimOrWait(&nextWaitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  ASSERT_TRUE(claimedRow.has_value());
+  EXPECT_EQ(
+      claimedRow->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+  EXPECT_NE(
+      claimedRow->response.error().message.find("429 from backend"),
+      std::string::npos);
 }
 
 TEST_F(RPCStateTest, batchRttExcludesPollDelay) {
@@ -713,11 +795,11 @@ TEST_F(RPCStateTest, batchRttExcludesPollDelay) {
 
   auto [promise, future] =
       folly::makePromiseContract<std::vector<RPCResponse>>();
-  state_->addPendingBatch(state_, std::move(future), {});
+  state_->addPendingBatch(state_, std::move(future), {}, /*admissionUnits=*/1);
 
   // Complete immediately (dispatch->completion is ~microseconds here).
   std::vector<RPCResponse> responses(1);
-  responses[0].result = "ok";
+  responses[0].setPayload(makeTextPayload("ok"));
   promise.setValue(std::move(responses));
 
   // Simulate a long poll delay AFTER completion; this is excluded from rttNs.
@@ -738,6 +820,121 @@ TEST_F(RPCStateTest, batchRttExcludesPollDelay) {
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::milliseconds(kPollDelayMs))
           .count());
+}
+
+TEST_F(RPCStateTest, batchWaiterNotOrphanedByCompletionDrainRace) {
+  // Regression guard for the completion-drain race in tryPollBatchOrWait. The
+  // batch completion callback stamps completionTimeNs and drains the waiter
+  // list under mutex_ BEFORE the batch future becomes ready (the future readies
+  // only when the callback returns). A poller that registers a waiter in that
+  // window
+  // -- drain already passed, future not yet ready -- would be orphaned, and at
+  // a window of 1 (the completing batch is the last in flight) the
+  // single-consumer driver would park forever. Race a completing batch against
+  // a poller many times and assert every park is fulfilled promptly (self-woken
+  // via the completionTimeNs guard), never orphaned.
+  constexpr int kIterations = 500;
+  for (int iter = 0; iter < kIterations; ++iter) {
+    auto state = std::make_shared<RPCState>();
+    state->setStreamingMode(RPCStreamingMode::kBatch);
+    state->setMaxWindow(1); // the completing batch is the last in flight
+
+    auto [promise, future] =
+        folly::makePromiseContract<std::vector<RPCResponse>>();
+    state->addPendingBatch(state, std::move(future), {}, /*admissionUnits=*/1);
+
+    // Complete on another thread so its inline drain races the poller below;
+    // the atomic gate aligns the two so the interleaving is exercised.
+    std::atomic<bool> go{false};
+    std::thread completer([&go, p = std::move(promise)]() mutable {
+      while (!go.load(std::memory_order_acquire)) {
+      }
+      p.setValue(std::vector<RPCResponse>{});
+    });
+
+    go.store(true, std::memory_order_release);
+    bool claimed = false;
+    while (!claimed) {
+      ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+      std::optional<RPCState::ReadyBatch> readyBatch;
+      switch (state->tryPollBatchOrWait(&waitFuture, &readyBatch)) {
+        case RPCState::BatchPollResult::kGotBatch:
+          claimed = true;
+          break;
+        case RPCState::BatchPollResult::kMustWait: {
+          // A legitimately-registered or self-woken waiter is fulfilled
+          // promptly; an orphaned one never is. Bound the wait so a regression
+          // fails cleanly instead of hanging the test.
+          auto f = std::move(waitFuture);
+          auto deadline =
+              std::chrono::steady_clock::now() + std::chrono::seconds(10);
+          while (!f.isReady()) {
+            ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+                << "waiter orphaned by completion-drain race at iter " << iter;
+            /* sleep override */
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          }
+          break;
+        }
+        case RPCState::BatchPollResult::kFinished:
+          FAIL() << "unexpected kFinished while a batch is in flight";
+      }
+    }
+    completer.join();
+  }
+}
+
+// A row that completed but could not be queued is gone. Finishing normally
+// would hand the query fewer rows than it was given and call that success,
+// which nothing downstream can detect -- so the finish path must fail instead.
+TEST_F(RPCStateTest, droppedRowFailsRatherThanShorteningTheResult) {
+  auto state = std::make_shared<RPCState>();
+  state->testingDropCompletedRow();
+  state->setNoMoreInput();
+
+  ContinueFuture future{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimed;
+  VELOX_ASSERT_THROW(
+      state->tryClaimOrWait(&future, &claimed), "were dropped under memory");
+}
+
+// Both out-params are required. Stating the precondition keeps a null from
+// becoming a segfault deep inside the claim path.
+TEST_F(RPCStateTest, claimRejectsNullOutParams) {
+  auto state = std::make_shared<RPCState>();
+  ContinueFuture future{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimed;
+
+  VELOX_ASSERT_THROW(
+      state->tryClaimOrWait(nullptr, &claimed), "requires a future out-param");
+  VELOX_ASSERT_THROW(
+      state->tryClaimOrWait(&future, nullptr),
+      "requires a claimedRow out-param");
+}
+
+// The barrier drain asks isFinished() directly rather than going through
+// tryClaimOrWait(), so it would otherwise report a clean finish over a short
+// result. Both terminal paths have to answer the same way.
+TEST_F(RPCStateTest, droppedRowAlsoFailsTheDrainFinishCheck) {
+  auto state = std::make_shared<RPCState>();
+  state->testingDropCompletedRow();
+  state->setNoMoreInput();
+
+  VELOX_ASSERT_THROW(state->isFinished(), "were dropped under memory");
+}
+
+// Without a drop the same finish path is an ordinary completion, so the check
+// above cannot be satisfied by simply never finishing.
+TEST_F(RPCStateTest, finishesNormallyWhenNoRowWasDropped) {
+  auto state = std::make_shared<RPCState>();
+  state->setNoMoreInput();
+
+  ContinueFuture future{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimed;
+  EXPECT_EQ(
+      state->tryClaimOrWait(&future, &claimed),
+      RPCState::ClaimResult::kFinished);
+  EXPECT_TRUE(state->isFinished());
 }
 
 } // namespace

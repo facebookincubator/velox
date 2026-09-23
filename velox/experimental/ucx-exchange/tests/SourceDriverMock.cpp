@@ -53,12 +53,15 @@ SourceDriverMock::SourceDriverMock(
             exec::kUngroupedGroupId,
             kPartitionId));
 
+    // The operator normally gets its manager from the OutputTransportEntry
+    // registered under core::TransportKind::kUcx; these mocks drive the
+    // process-wide manager directly.
     partitionedOutputs_.emplace_back(
         std::make_unique<UcxPartitionedOutput>(
             operatorId,
             driverCtxs_.back().get(),
             partitionedOutputNode,
-            false /* eagerFlush */));
+            UcxOutputQueueManager::getInstanceRef()));
   }
 }
 

@@ -45,24 +45,24 @@ TypePtr resolveTypeInt(
       continue;
     }
 
-    if (allowedCoercions && coercer.coerce(argTypes[i], resultType)) {
-      coercions[i] = resultType;
-      continue;
-    }
+    // Inputs that coerce in neither direction, such as DECIMAL(8, 5) and
+    // INTEGER, still meet at a type that holds both.
+    const auto common = allowedCoercions
+        ? coercer.leastCommonSuperType(resultType, argTypes[i])
+        : nullptr;
 
-    if (allowedCoercions && coercer.coerce(resultType, argTypes[i])) {
-      resultType = argTypes[i];
-      for (auto j = 0; j < i; j++) {
-        coercions[j] = resultType;
-      }
-      continue;
-    }
-
-    VELOX_USER_CHECK(
-        *argTypes[0] == *argTypes[i],
+    VELOX_USER_CHECK_NOT_NULL(
+        common,
         "Inputs to coalesce must have the same type. Expected {}, but got {}.",
-        argTypes[0]->toString(),
+        resultType->toString(),
         argTypes[i]->toString());
+
+    resultType = common;
+
+    // An input already of the result type needs no coercion.
+    for (auto j = 0; j <= i; j++) {
+      coercions[j] = *argTypes[j] == *resultType ? nullptr : resultType;
+    }
   }
 
   return resultType;

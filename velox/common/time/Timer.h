@@ -19,11 +19,14 @@
 #include <folly/chrono/Hardware.h>
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include <optional>
 
 #include "velox/common/process/ProcessBase.h"
 
 namespace facebook::velox {
+
+struct CpuWallTiming;
 
 /// Measures wall time (steady_clock) between construction and destruction,
 /// incrementing a user-supplied counter in microseconds.
@@ -97,6 +100,32 @@ class NanosecondCPUTimer {
  private:
   uint64_t* timer_;
   uint64_t start_;
+};
+
+/// Adds process-wide CPU and wall time to a CpuWallTiming. Unlike
+/// CpuWallTimer, which measures CPU consumed by the calling thread, this timer
+/// includes user and system CPU consumed by all process threads. CPU time can
+/// exceed wall time when background thread pools run work concurrently.
+class ProcessCpuWallTimer {
+ public:
+  explicit ProcessCpuWallTimer(CpuWallTiming& timing);
+  ~ProcessCpuWallTimer();
+
+  ProcessCpuWallTimer(const ProcessCpuWallTimer&) = delete;
+  ProcessCpuWallTimer& operator=(const ProcessCpuWallTimer&) = delete;
+  ProcessCpuWallTimer(ProcessCpuWallTimer&&) = delete;
+  ProcessCpuWallTimer& operator=(ProcessCpuWallTimer&&) = delete;
+
+ private:
+  // Returns user and system CPU consumed across all process threads.
+  static uint64_t processCpuNanos() noexcept;
+
+  static constexpr uint64_t kUnavailableCpuTime{
+      std::numeric_limits<uint64_t>::max()};
+
+  const std::chrono::steady_clock::time_point wallTimeStart_;
+  const uint64_t cpuTimeStart_;
+  CpuWallTiming& timing_;
 };
 
 using MicrosecondTimer = MicrosecondWallTimer;

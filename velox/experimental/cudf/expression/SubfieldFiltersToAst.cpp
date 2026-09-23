@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/SubfieldFiltersToAst.h"
 
@@ -49,7 +50,7 @@ const cudf::ast::expression& createRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
@@ -65,7 +66,7 @@ const cudf::ast::expression& createRangeExpr(
 
   auto addLiteral = [&](auto value) -> const cudf::ast::expression& {
     scalars.emplace_back(std::make_unique<ScalarT>(value, true, stream, mr));
-    stream.synchronize();
+    stream.sync();
     return tree.push(
         cudf::ast::literal{*static_cast<ScalarT*>(scalars.back().get())});
   };
@@ -255,7 +256,7 @@ auto createFloatingPointRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) -> const cudf::ast::expression& {
   return createRangeExpr<
       facebook::velox::common::FloatingPointRange<T>,
@@ -267,7 +268,7 @@ const cudf::ast::expression& createBytesRangeExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return createRangeExpr<
       facebook::velox::common::BytesRange,
@@ -284,7 +285,7 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const cudf::ast::expression& columnRef,
-    rmm::cuda_stream_view /*stream*/,
+    cuda::stream_ref /*stream*/,
     rmm::device_async_resource_ref /*mr*/,
     const TypePtr& columnTypePtr) {
   using NativeT = typename TypeTraits<Kind>::NativeType;
@@ -333,10 +334,71 @@ std::reference_wrapper<const cudf::ast::expression> buildIntegerInListExpr(
   }
 }
 
-} // namespace
+// MultiRange child null policies are ignored. Flatten nested MultiRanges and
+// omit IsNull leaves before building the non-null value predicate.
+void collectValueFilters(
+    const common::Filter& filter,
+    std::vector<const common::Filter*>& filters) {
+  if (filter.kind() == common::FilterKind::kIsNull) {
+    return;
+  }
+  if (filter.kind() != common::FilterKind::kMultiRange) {
+    filters.push_back(&filter);
+    return;
+  }
+  const auto& children =
+      static_cast<const common::MultiRange&>(filter).filters();
+  VELOX_CHECK(!children.empty(), "MultiRange filter must not be empty");
+  for (const auto& child : children) {
+    collectValueFilters(*child, filters);
+  }
+}
 
-// Convert subfield filters to cudf AST
-cudf::ast::expression const& createAstFromSubfieldFilter(
+cudf::ast::expression const& createAlwaysFalseExpr(
+    const cudf::ast::column_reference& columnRef,
+    cudf::ast::tree& tree) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+  auto const& isNotNull = tree.push(Operation{Op::NOT, isNull});
+  return tree.push(Operation{Op::NULL_LOGICAL_AND, isNull, isNotNull});
+}
+
+cudf::ast::expression const& createAstFromSubfieldFilterImpl(
+    const common::Subfield& subfield,
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema);
+
+cudf::ast::expression const& createAstFromFiltersOr(
+    const common::Subfield& subfield,
+    const std::vector<const common::Filter*>& filters,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema) {
+  using Op = cudf::ast::ast_operator;
+  using Operation = cudf::ast::operation;
+
+  VELOX_CHECK(!filters.empty(), "Filters must not be empty");
+
+  std::vector<const cudf::ast::expression*> exprRefs;
+  exprRefs.reserve(filters.size());
+  for (const auto* subFilter : filters) {
+    auto const& subExpr = createAstFromSubfieldFilterImpl(
+        subfield, *subFilter, tree, scalars, inputRowSchema);
+    exprRefs.push_back(&subExpr);
+  }
+
+  const cudf::ast::expression* result = exprRefs[0];
+  for (size_t i = 1; i < exprRefs.size(); ++i) {
+    result = &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
+  }
+  return *result;
+}
+
+cudf::ast::expression const& createAstFromSubfieldFilterImpl(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
@@ -364,7 +426,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
   using Op = cudf::ast::ast_operator;
   using Operation = cudf::ast::operation;
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
 
   switch (filter.kind()) {
@@ -456,7 +518,7 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       scalars.emplace_back(
           std::make_unique<cudf::numeric_scalar<bool>>(
               matchesTrue, true, stream, mr));
-      stream.synchronize();
+      stream.sync();
       auto const& matchesBoolExpr = tree.push(
           cudf::ast::literal{
               *static_cast<cudf::numeric_scalar<bool>*>(scalars.back().get())});
@@ -473,38 +535,25 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
       return tree.push(Operation{Op::NOT, nullCheck});
     }
 
-    case common::FilterKind::kBigintMultiRange:
+    case common::FilterKind::kBigintMultiRange: {
+      auto* multiRange = static_cast<const common::BigintMultiRange*>(&filter);
+      std::vector<const common::Filter*> ranges;
+      ranges.reserve(multiRange->ranges().size());
+      for (const auto& range : multiRange->ranges()) {
+        ranges.push_back(range.get());
+      }
+      return createAstFromFiltersOr(
+          subfield, ranges, tree, scalars, inputRowSchema);
+    }
+
     case common::FilterKind::kMultiRange: {
-      // Both multi-range types recurse into sub-filters and combine with OR.
-      std::vector<const common::Filter*> subFilters;
-      if (filter.kind() == common::FilterKind::kBigintMultiRange) {
-        auto* multiRange =
-            static_cast<const common::BigintMultiRange*>(&filter);
-        for (const auto& range : multiRange->ranges()) {
-          subFilters.push_back(range.get());
-        }
-      } else {
-        auto* multiRange = static_cast<const common::MultiRange*>(&filter);
-        for (const auto& f : multiRange->filters()) {
-          subFilters.push_back(f.get());
-        }
+      std::vector<const common::Filter*> valueFilters;
+      collectValueFilters(filter, valueFilters);
+      if (valueFilters.empty()) {
+        return createAlwaysFalseExpr(columnRef, tree);
       }
-      VELOX_CHECK(!subFilters.empty(), "MultiRange filter must not be empty");
-
-      std::vector<const cudf::ast::expression*> exprRefs;
-      exprRefs.reserve(subFilters.size());
-      for (const auto* subFilter : subFilters) {
-        auto const& subExpr = createAstFromSubfieldFilter(
-            subfield, *subFilter, tree, scalars, inputRowSchema);
-        exprRefs.push_back(&subExpr);
-      }
-
-      const cudf::ast::expression* result = exprRefs[0];
-      for (size_t i = 1; i < exprRefs.size(); ++i) {
-        result =
-            &tree.push(Operation{Op::NULL_LOGICAL_OR, *result, *exprRefs[i]});
-      }
-      return *result;
+      return createAstFromFiltersOr(
+          subfield, valueFilters, tree, scalars, inputRowSchema);
     }
 
     case common::FilterKind::kNegatedBigintRange: {
@@ -535,6 +584,31 @@ cudf::ast::expression const& createAstFromSubfieldFilter(
           "Filter type {} not yet supported for subfield filter conversion",
           static_cast<int>(filter.kind()));
   }
+}
+
+} // namespace
+
+// Convert subfield filters to cudf AST
+cudf::ast::expression const& createAstFromSubfieldFilter(
+    const common::Subfield& subfield,
+    const common::Filter& filter,
+    cudf::ast::tree& tree,
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    const RowTypePtr& inputRowSchema) {
+  auto const& expression = createAstFromSubfieldFilterImpl(
+      subfield, filter, tree, scalars, inputRowSchema);
+  if (filter.testNull() && filter.kind() != common::FilterKind::kIsNull &&
+      filter.kind() != common::FilterKind::kIsNotNull) {
+    using Op = cudf::ast::ast_operator;
+    using Operation = cudf::ast::operation;
+
+    auto const& columnRef = tree.push(
+        cudf::ast::column_reference(
+            inputRowSchema->getChildIdx(subfield.toString())));
+    auto const& isNull = tree.push(Operation{Op::IS_NULL, columnRef});
+    return tree.push(Operation{Op::NULL_LOGICAL_OR, isNull, expression});
+  }
+  return expression;
 }
 
 // Create a combined AST from a set of subfield filters by chaining them with

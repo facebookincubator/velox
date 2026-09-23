@@ -12,13 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_executable(duck_query_runner_test DuckQueryRunnerTest.cpp)
+add_test(duck_query_runner_test duck_query_runner_test)
+
+target_link_libraries(
+  duck_query_runner_test
+  velox_fuzzer_util
+  velox_exec_test_lib
+  velox_aggregates
+  velox_functions_prestosql
+  velox_window
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+)
+
 add_executable(presto_sql_test PrestoSqlTest.cpp)
 add_test(presto_sql_test presto_sql_test)
 
 target_link_libraries(presto_sql_test velox_fuzzer_util velox_presto_types)
 
 # LocalRunnerService Test (requires FBThrift support)
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   add_executable(local_runner_service_test LocalRunnerServiceTest.cpp)
   add_test(local_runner_service_test local_runner_service_test)
 

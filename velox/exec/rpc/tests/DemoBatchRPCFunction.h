@@ -16,7 +16,12 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <memory>
 #include <unordered_set>
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
@@ -34,8 +39,8 @@ namespace facebook::velox::exec::rpc {
 ///     error where the flush future itself fails, not individual rows)
 ///
 /// Returns "Batch response for: <prompt>" for each non-null, non-failing row.
-/// Null inputs produce RPCResponse{.error = "null_input"}.
-/// Failing rows produce RPCResponse{.error = "simulated_failure"}.
+/// Null inputs produce a response tagged RPCErrorKind::kNullInput.
+/// Failing rows produce one tagged RPCErrorKind::kBackendError.
 /// With failWholeBatch=true, flushBatch() returns a FAILED future instead.
 class DemoBatchRPCFunction : public AsyncRPCFunction {
  public:
@@ -49,12 +54,14 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
       std::unordered_set<int32_t> failingRowIndices = {},
       bool failWholeBatch = false,
       bool failOnError = false,
-      bool dropOneResponse = false);
+      bool dropOneResponse = false,
+      bool failWholeBatchFatal = false);
 
   void initialize(
       const core::QueryConfig& queryConfig,
       const std::vector<TypePtr>& inputTypes,
-      const std::vector<VectorPtr>& constantInputs) override;
+      const std::vector<VectorPtr>& constantInputs,
+      RPCStreamingMode instruction) override;
 
   std::string name() const override {
     return "demo_batch_rpc";
@@ -85,7 +92,23 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   int32_t pendingBatchSize() const override;
 
+  /// Treats rate limits and timeouts as overload, other errors as non-overload
+  /// failures, an empty batch as neutral, and every other batch as successful.
+  /// Lets tests drive the operator's AIMD paths in BATCH mode; inert unless the
+  /// backend is configured adaptive, which is off by default.
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override;
+
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures();
+
+  /// Holds each flush open for 'holdMs' on a background thread instead of
+  /// completing it inline, so several flushes are genuinely in flight at once
+  /// and the operator's admission gating becomes observable.
+  ///
+  /// Must be called before the query starts: the members it sets are read
+  /// without synchronization by every subsequent flush, so changing them once
+  /// flushes are running is a data race.
+  void testingHoldFlushes(int32_t holdMs = 50, int32_t threads = 16);
 
  private:
   struct PendingRow {
@@ -93,12 +116,21 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
     bool isNull;
   };
 
+  // Set only by testingHoldFlushes() before the query starts, then read-only
+  // for the rest of the run; see the comment there.
+  bool holdFlushes_{false};
+  int32_t holdMs_{0};
+  std::shared_ptr<folly::CPUThreadPoolExecutor> holdExecutor_;
+
   std::vector<PendingRow> pendingRows_;
   ResponseOrder responseOrder_;
   std::unordered_set<int32_t> failingRowIndices_;
   bool failWholeBatch_{false};
   bool failOnError_{false};
   bool dropOneResponse_{false};
+  // Fails the flush with a framework invariant error so the operator can fail
+  // the query rather than apply the row-error policy.
+  bool failWholeBatchFatal_{false};
   int32_t totalAccumulatedCount_{0};
 };
 

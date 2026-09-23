@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+namespace facebook.nimble.serialization;
+
+enum Kind:uint8 {
+  Int8 = 0,
+  UInt8,
+  Int16,
+  UInt16,
+  Int32,
+  UInt32,
+  Int64,
+  UInt64,
+  Float,
+  Double,
+  Bool,
+  String,
+  Binary,
+  TimestampMicroNano,
+  Row = 50,
+  Array,
+  Map,
+  ArrayWithOffsets,
+  SlidingWindowMap,
+  FlatMapInt8 = 100,
+  FlatMapUInt8,
+  FlatMapInt16,
+  FlatMapUInt16,
+  FlatMapInt32,
+  FlatMapUInt32,
+  FlatMapInt64,
+  FlatMapUInt64,
+  FlatMapFloat,
+  FlatMapDouble,
+  FlatMapBool,
+  FlatMapString,
+  FlatMapBinary,
+  HybridFlatMapInt8 = 150,
+  HybridFlatMapUInt8,
+  HybridFlatMapInt16,
+  HybridFlatMapUInt16,
+  HybridFlatMapInt32,
+  HybridFlatMapUInt32,
+  HybridFlatMapInt64,
+  HybridFlatMapUInt64,
+  HybridFlatMapFloat,
+  HybridFlatMapDouble,
+  HybridFlatMapBool,
+  HybridFlatMapString,
+  HybridFlatMapBinary,
+}
+
+// A generic string-keyed attribute pair attached to a schema node.
+// Carries cross-format per-column metadata.
+// TODO: Rename to `Attribute` with `name` and `value` fields.
+table StringPair {
+  key:string;
+  value:string;
+}
+
+// Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
+// are represented by the group's child schema nodes, following FlatMap. The
+// parallel ID and count vectors describe consecutive slices in group_keys.
+// Default has a zero key count; its key identities are carried by its data
+// stream.
+table HybridFlatMap {
+  group_ids:[uint32];
+  group_key_counts:[uint32];
+  group_keys:[string];
+}
+
+table SchemaNode {
+  kind:Kind;
+  children:uint32;
+  name:string;
+  offset:uint32;
+  // Per-node string-keyed attribute bag. Appended at the end of the
+  // table for backward wire compatibility: older readers ignore unknown
+  // flatbuffer fields and existing files have no `attributes` set.
+  attributes:[StringPair];
+}
+
+table Schema {
+  nodes:[SchemaNode];
+}
+
+root_type Schema;

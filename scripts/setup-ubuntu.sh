@@ -197,8 +197,8 @@ function install_cuda {
 function install_s3 {
   install_aws_deps
 
-  local MINIO_OS="linux"
-  install_minio ${MINIO_OS}
+  local SILO_OS="linux"
+  install_silo ${SILO_OS}
 }
 
 function install_gcs {
@@ -240,6 +240,8 @@ function install_velox_deps {
   run_and_time install_grpc
   run_and_time install_boost
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle

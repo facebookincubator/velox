@@ -73,15 +73,22 @@ struct UuidFunction {
   boost::uuids::random_generator generator_;
 };
 
-inline void registerUuidFunctions(const std::string& prefix) {
+inline void registerUuidFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerUuidType();
-  registerFunction<UuidFunction, Uuid>({prefix + "uuid"});
-  registerFunction<LtFunctionUuid, bool, Uuid, Uuid>({prefix + "lt"});
-  registerFunction<GtFunctionUuid, bool, Uuid, Uuid>({prefix + "gt"});
-  registerFunction<LteFunctionUuid, bool, Uuid, Uuid>({prefix + "lte"});
-  registerFunction<GteFunctionUuid, bool, Uuid, Uuid>({prefix + "gte"});
+  registerFunction<UuidFunction, Uuid>(
+      {prefix + "uuid"}, {}, true, defaultOwner);
+  registerFunction<LtFunctionUuid, bool, Uuid, Uuid>(
+      {prefix + "lt"}, {}, true, defaultOwner);
+  registerFunction<GtFunctionUuid, bool, Uuid, Uuid>(
+      {prefix + "gt"}, {}, true, defaultOwner);
+  registerFunction<LteFunctionUuid, bool, Uuid, Uuid>(
+      {prefix + "lte"}, {}, true, defaultOwner);
+  registerFunction<GteFunctionUuid, bool, Uuid, Uuid>(
+      {prefix + "gte"}, {}, true, defaultOwner);
   registerFunction<BetweenFunctionUuid, bool, Uuid, Uuid, Uuid>(
-      {prefix + "between"});
+      {prefix + "between"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

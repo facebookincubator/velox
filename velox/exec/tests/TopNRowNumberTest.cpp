@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -36,6 +37,8 @@ class TopNRowNumberTest : public OperatorTestBase {
   void SetUp() override {
     exec::test::OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    velox::window::prestosql::registerAllWindowFunctions();
+    common::testutil::TestValue::enable();
   }
 
   const std::string functionName_;
@@ -654,6 +657,57 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, doubleClose) {
   VELOX_ASSERT_THROW(assertQuery(plan, sql), errorMessage);
 }
 
+// Reclaim can arrive after close(): the memory pool outlives the operator, and
+// ParallelMemoryReclaimer issues arbitration reclaims asynchronously.
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, reclaimAfterClose) {
+  const std::string errorMessage("reclaimAfterClose");
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "TopNRowNumber") {
+          return;
+        }
+        // Reclaim after close(), as a late arbitration would.
+        op->close();
+        memory::MemoryReclaimer::Stats reclaimerStats;
+        op->reclaim(0, reclaimerStats);
+        VELOX_FAIL(errorMessage);
+      })));
+
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row; }, nullEvery(11)),
+              // Sorting key.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (size - row) * 10; },
+                  [](auto row) { return row == 123; }),
+              // Partitioning key.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5'000; }, nullEvery(7)),
+          }),
+      10);
+
+  auto spillDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1'000, true)
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .spillDirectory(spillDirectory->getPath())
+          .copyResults(pool_.get()),
+      errorMessage);
+}
+
 // This test verifies that TopNRowNumber operator handles OOM that occurs in the
 // middle of groupProbe, after inserting some new rows into the row container.
 DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {
@@ -699,6 +753,80 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool_.get()), errorMessage);
+}
+
+TEST_P(MultiTopNRowNumberTest, windowVsTopNRowNumber) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({5, 3, 1, 4, 2}),
+  });
+
+  auto topNPlan = PlanBuilder()
+                      .values({data})
+                      .topNRank(functionName_, {}, {"c0"}, 5, true)
+                      .planNode();
+  auto windowPlan =
+      PlanBuilder()
+          .values({data})
+          .window({fmt::format("{}() over (order by c0) as rn", functionName_)})
+          .planNode();
+
+  auto topNResult =
+      AssertQueryBuilder(topNPlan).maxDrivers(1).copyResults(pool_.get());
+  auto windowResult =
+      AssertQueryBuilder(windowPlan).maxDrivers(1).copyResults(pool_.get());
+
+  assertEqualResults({windowResult}, {topNResult});
+}
+
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, inMemoryVsSpilled) {
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"s", "p"},
+          {
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return (size - row) * 10; }),
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5000; }),
+          }),
+      10);
+
+  core::PlanNodeId topNId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1000, true)
+                  .capturePlanNodeId(topNId)
+                  .planNode();
+
+  auto inMemoryResult =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool_.get());
+
+  auto spillDirectory = TempDirectoryPath::create();
+  std::atomic_int inputCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
+        if (op->operatorCtx()->operatorType() != "TopNRowNumber") {
+          return;
+        }
+        if (++inputCount == 3) {
+          testingRunArbitration(op->pool());
+        }
+      })));
+
+  std::shared_ptr<Task> task;
+  auto spilledResult =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .copyResults(pool_.get(), task);
+
+  auto planStats = exec::toPlanStats(task->taskStats());
+  ASSERT_GT(planStats.at(topNId).spilledRows, 0);
+
+  assertEqualResults({inMemoryResult}, {spilledResult});
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

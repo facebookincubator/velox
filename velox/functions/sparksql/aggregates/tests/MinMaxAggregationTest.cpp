@@ -13,9 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <limits>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -191,6 +195,140 @@ TEST_F(MinMaxAggregationTest, timestamp) {
       "date_trunc('microsecond', max(c1)) FROM tmp GROUP BY 1");
 }
 
+TEST_F(MinMaxAggregationTest, timestampUtc) {
+  const auto beforeEpoch = Timestamp::fromMicros(-1);
+  const auto afterEpoch = Timestamp::fromMicros(1);
+  const Timestamp earlier{1'704'067'200, 123'456'000};
+  const Timestamp later{1'704'067'200, 123'457'000};
+  // Keep the lower bound on a whole second to avoid overflow during truncation.
+  const Timestamp earliest{
+      std::numeric_limits<int64_t>::min() / Timestamp::kMicrosecondsInSecond,
+      0,
+  };
+  const auto latest =
+      Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
+  const std::vector<std::string> aggregates{min("c1"), max("c1")};
+
+  std::vector<RowVectorPtr> inputs;
+  RowVectorPtr expected;
+  const auto makeSource = [&](auto& builder) { builder.values(inputs); };
+  const auto assertResults = [&](auto& builder) {
+    std::shared_ptr<exec::Task> task;
+    auto actual = builder.copyResults(pool(), task);
+    // Compare logical types explicitly, since value comparisons only
+    // check the shared TypeKind::TIMESTAMP.
+    EXPECT_TRUE(expected->type()->equivalent(*actual->type()))
+        << actual->type()->toString();
+    assertEqualResults({expected}, {actual});
+    return task;
+  };
+
+  for (const auto* timeZone : {"UTC", "America/Los_Angeles", "Asia/Kolkata"}) {
+    SCOPED_TRACE(timeZone);
+    const std::unordered_map<std::string, std::string> config{
+        {core::QueryConfig::kSessionTimezone, timeZone},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    };
+
+    {
+      SCOPED_TRACE(
+          "Microsecond truncation, range boundaries, and all-null groups");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 3, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {
+                  Timestamp{1'704'067'200, 123'457'999},
+                  Timestamp{1'704'067'200, 123'456'789},
+                  std::nullopt,
+                  Timestamp{-1, 999'999'999},
+                  Timestamp{0, 1'999},
+                  std::nullopt,
+                  std::nullopt,
+                  earliest,
+                  latest,
+              },
+              TIMESTAMP_UTC()),
+          makeFlatVector<bool>(
+              {false, true, true, false, true, true, false, false, false}),
+      });
+      inputs = {data, data};
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({earliest}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({latest}, TIMESTAMP_UTC()),
+      });
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
+
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, beforeEpoch, std::nullopt, earliest}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {later, afterEpoch, std::nullopt, latest}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
+
+      const std::vector<std::string> maskedAggregates{
+          min("c1") + " FILTER (WHERE c2)",
+          max("c1") + " FILTER (WHERE c2)",
+      };
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({afterEpoch}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {}, maskedAggregates, {}, assertResults, config);
+
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, afterEpoch, std::nullopt, std::nullopt},
+              TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, afterEpoch, std::nullopt, std::nullopt},
+              TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, maskedAggregates, {}, assertResults, config);
+    }
+
+    {
+      SCOPED_TRACE("All-null and empty input");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 1}),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+      });
+      inputs = {data};
+      expected = makeRowVector({
+          makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+      });
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
+
+      auto emptyInput = makeRowVector(asRowType(data->type()), 0);
+      inputs = {emptyInput};
+      testAggregations(makeSource, {}, aggregates, {}, assertResults, config);
+
+      inputs = {data};
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1}),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+      });
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
+
+      inputs = {emptyInput};
+      expected = makeRowVector(asRowType(expected->type()), 0);
+      testAggregations(
+          makeSource, {"c0"}, aggregates, {}, assertResults, config);
+    }
+  }
+}
+
 TEST_F(MinMaxAggregationTest, array) {
   auto data = makeRowVector({
       makeNullableArrayVector<int64_t>({
@@ -302,6 +440,43 @@ TEST_F(MinMaxAggregationTest, failOnUnorderableType) {
           builder.singleAggregation({"c1"}, {expr}), kErrorMessage);
     }
   }
+}
+
+TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
+  constexpr vector_size_t kBatchSize = 100;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 3; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "v"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int64_t>(kBatchSize, folly::identity)}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation({"k"}, {"spark_min_partial(v)"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults("SELECT k, min(v) FROM tmp GROUP BY k");
+
+  const auto stats = exec::toPlanStats(task->taskStats());
+  EXPECT_LT(
+      0,
+      stats.at(partialNodeId)
+          .customStats.at("abandonedPartialAggregationRows")
+          .sum);
+  EXPECT_GT(
+      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      0);
 }
 
 } // namespace

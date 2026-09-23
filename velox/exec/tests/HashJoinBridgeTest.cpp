@@ -619,6 +619,75 @@ TEST(HashJoinBridgeTest, needRightSideJoin) {
   }
 }
 
+TEST_P(HashJoinBridgeTest, isLeftNullAwareJoinWithFilterHelper) {
+  EXPECT_TRUE(isLeftNullAwareJoinWithFilter(core::JoinType::kAnti, true, true));
+  EXPECT_TRUE(isLeftNullAwareJoinWithFilter(
+      core::JoinType::kLeftSemiProject, true, true));
+  EXPECT_TRUE(isLeftNullAwareJoinWithFilter(
+      core::JoinType::kLeftSemiFilter, true, true));
+
+  EXPECT_FALSE(
+      isLeftNullAwareJoinWithFilter(core::JoinType::kAnti, false, true));
+  EXPECT_FALSE(
+      isLeftNullAwareJoinWithFilter(core::JoinType::kAnti, true, false));
+  EXPECT_FALSE(
+      isLeftNullAwareJoinWithFilter(core::JoinType::kInner, true, true));
+
+  const auto buildSourceType = ROW({"b0", "b1"}, {BIGINT(), BIGINT()});
+  const auto probeSourceType = ROW({"p0"}, {BIGINT()});
+  const auto buildValueNode = std::make_shared<core::ValuesNode>(
+      "buildValueNode",
+      std::vector<RowVectorPtr>{std::make_shared<RowVector>(
+          pool_.get(), buildSourceType, nullptr, 0, std::vector<VectorPtr>{})});
+  const auto probeValueNode = std::make_shared<core::ValuesNode>(
+      "probeValueNode",
+      std::vector<RowVectorPtr>{std::make_shared<RowVector>(
+          pool_.get(), probeSourceType, nullptr, 0, std::vector<VectorPtr>{})});
+  const auto joinNode = std::make_shared<core::HashJoinNode>(
+      "join-bridge-test",
+      core::JoinType::kLeftSemiProject,
+      true,
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "p0")},
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b0")},
+      std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true),
+      probeValueNode,
+      buildValueNode,
+      ROW({"p0", "match"}, {BIGINT(), BOOLEAN()}));
+
+  EXPECT_EQ(
+      isLeftNullAwareJoinWithFilter(joinNode),
+      isLeftNullAwareJoinWithFilter(
+          joinNode->joinType(),
+          joinNode->isNullAware(),
+          joinNode->filter() != nullptr));
+}
+
+TEST_P(HashJoinBridgeTest, hashJoinTableTypeFromKeysAndInputType) {
+  const auto inputType =
+      ROW({"b0", "b1", "b2", "b3"}, {BIGINT(), INTEGER(), VARCHAR(), DOUBLE()});
+  const std::vector<core::FieldAccessTypedExprPtr> joinKeys{
+      std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "b1"),
+      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b0")};
+
+  auto keysOnlyType = hashJoinTableType(joinKeys, inputType, true);
+  ASSERT_EQ(keysOnlyType->size(), 2);
+  EXPECT_EQ(keysOnlyType->nameOf(0), "b1");
+  EXPECT_EQ(keysOnlyType->nameOf(1), "b0");
+  EXPECT_EQ(keysOnlyType->childAt(0), INTEGER());
+  EXPECT_EQ(keysOnlyType->childAt(1), BIGINT());
+
+  auto fullType = hashJoinTableType(joinKeys, inputType, false);
+  ASSERT_EQ(fullType->size(), inputType->size());
+  EXPECT_EQ(
+      fullType->names(), std::vector<std::string>({"b1", "b0", "b2", "b3"}));
+  EXPECT_EQ(fullType->childAt(0), INTEGER());
+  EXPECT_EQ(fullType->childAt(1), BIGINT());
+  EXPECT_EQ(fullType->childAt(2), VARCHAR());
+  EXPECT_EQ(fullType->childAt(3), DOUBLE());
+}
+
 TEST_P(HashJoinBridgeTest, hashJoinTableType) {
   core::TypedExprPtr filter{
       std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true)};

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <optional>
+
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/ContainerRowSerde.h"
 #include "velox/functions/lib/CheckNestedNulls.h"
@@ -118,9 +120,21 @@ class MinMaxByAggregateBase : public exec::Aggregate {
       bool throwOnNestedNulls = false)
       : exec::Aggregate(resultType), throwOnNestedNulls_(throwOnNestedNulls) {}
 
+  /// True when either accumulator stores its payload out of line in the
+  /// HashStringAllocator, i.e. when the value or comparison type is not
+  /// numeric. Such a group can hold arbitrarily more than
+  /// accumulatorFixedWidthSize().
+  static constexpr bool kUsesVariableWidthAccumulator =
+      std::is_same_v<ValueAccumulatorType, SingleValueAccumulator> ||
+      std::is_same_v<ComparisonAccumulatorType, SingleValueAccumulator>;
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(ValueAccumulatorType) + sizeof(ComparisonAccumulatorType) +
         sizeof(bool);
+  }
+
+  bool isFixedSize() const override {
+    return !kUsesVariableWidthAccumulator;
   }
 
   void addRawInput(
@@ -551,6 +565,16 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     if (mayUpdate(
             comparisonValue(group), decodedComparisons, index, isFirstValue)) {
       valueIsNull(group) = isValueNull;
+      // A SingleValueAccumulator writes the value into the HashStringAllocator
+      // and keeps only a Position in the row, so without this the row's
+      // variable-length size stays at zero however large the value is. That
+      // size feeds result-set caps and, in particular, the spill batch sizing
+      // in Spiller::extractSpillVector. Follows the same compile-time guarded
+      // shape as SimpleAggregateAdapter.
+      std::optional<RowSizeTracker<char, uint32_t>> tracker;
+      if constexpr (kUsesVariableWidthAccumulator) {
+        tracker.emplace(group[Aggregate::rowSizeOffset_], *allocator_);
+      }
       if (LIKELY(!isValueNull)) {
         store<T>(value(group), decodedValues, index, allocator_);
       }

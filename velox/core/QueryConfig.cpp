@@ -35,6 +35,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kSessionTimezone);
     VELOX_REGISTER_QUERY_CONFIG(kSessionStartTime);
     VELOX_REGISTER_QUERY_CONFIG(kAdjustTimestampToTimezone);
+    VELOX_REGISTER_QUERY_CONFIG(kLegacyTimestampWithTimezone);
 
     // Expression evaluation.
     VELOX_REGISTER_QUERY_CONFIG(kExprEvalSimplified);
@@ -98,6 +99,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kPreferredOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMaxOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMergeJoinOutputBatchStartSize);
+    VELOX_REGISTER_QUERY_CONFIG(kMergeJoinStreamLeftSide);
 
     // Table scan.
     VELOX_REGISTER_QUERY_CONFIG(kTableScanGetOutputTimeLimitMs);
@@ -150,6 +152,8 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeDynamicFilterPushdownEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeStringDynamicFilterPushdownEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeBloomFilterPushdownMaxSize);
+    VELOX_REGISTER_QUERY_CONFIG(kBypassHashProbeBloomFilterMinRows);
+    VELOX_REGISTER_QUERY_CONFIG(kBypassHashProbeBloomFilterMinPct);
     VELOX_REGISTER_QUERY_CONFIG(kMinTableRowsForParallelJoinBuild);
 
     // Debug and validation.

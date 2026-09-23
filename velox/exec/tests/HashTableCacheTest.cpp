@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 
+#include <set>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/memory/Memory.h"
@@ -53,6 +55,18 @@ class HashTableCacheTest : public testing::Test {
   // Helper to track keys for cleanup.
   void trackKey(const std::string& key) {
     createdKeys_.push_back(key);
+  }
+
+  // Number of cached-table leaf pools still attached to the query pool.
+  int numCachedTablePools() const {
+    int numPools{0};
+    queryCtx_->pool()->visitChildren([&](memory::MemoryPool* child) {
+      if (child->name().rfind("cached_table_", 0) == 0) {
+        ++numPools;
+      }
+      return true;
+    });
+    return numPools;
   }
 
   std::shared_ptr<memory::MemoryPool> pool_;
@@ -214,6 +228,65 @@ TEST_F(HashTableCacheTest, drop) {
 
   // Cleanup.
   cache->drop(key);
+}
+
+TEST_F(HashTableCacheTest, repeatedBuilderFailuresGetDistinctPools) {
+  // Successive tasks of one query share a query pool, so repeated failed builds
+  // of the same key all create leaf pools under it. A failed builder holds its
+  // entry past drop() -- Driver::close() calls closeOperators() but never
+  // destroys operators_ -- so the previous pool is still attached when the next
+  // entry is created, and addLeafChild() aborts on a duplicate name.
+  auto* cache = HashTableCache::instance();
+  const std::string key = "queryRetry:node1";
+  constexpr int kNumFailures = 5;
+
+  // Held across the whole loop, standing in for the failed builders' operators.
+  std::vector<std::shared_ptr<HashTableCacheEntry>> failedEntries;
+  std::set<std::string> poolNames;
+  for (int i = 0; i < kNumFailures; ++i) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    auto entry =
+        cache->get(key, fmt::format("task{}", i), queryCtx_.get(), &future);
+    ASSERT_NE(entry->tablePool, nullptr);
+    poolNames.insert(entry->tablePool->name());
+    cache->drop(key);
+    failedEntries.push_back(std::move(entry));
+  }
+
+  EXPECT_EQ(poolNames.size(), kNumFailures);
+
+  // Each pool lives exactly as long as the operators that hold its entry, which
+  // is what HashBuild::close() bounds by releasing 'cacheEntry_'.
+  failedEntries.clear();
+  EXPECT_EQ(numCachedTablePools(), 0);
+}
+
+TEST_F(HashTableCacheTest, tablePoolStaysUsableAfterItsEntryIsDropped) {
+  // HashBuild allocates 'table_' from tableMemoryPool() and destroys it in
+  // close(), where drop() also runs -- and a peer driver of the same builder
+  // task can run drop() earlier still. Dropping an entry must therefore leave
+  // the pool intact for whoever still holds it; 'tablePool' is const so that
+  // this needs no synchronisation between the two.
+  auto* cache = HashTableCache::instance();
+  const std::string key = "queryOutlive:node1";
+
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  auto entry = cache->get(key, "task1", queryCtx_.get(), &future);
+  ASSERT_NE(entry->tablePool, nullptr);
+  auto tablePool = entry->tablePool;
+  auto table = makeTestJoinHashTable(tablePool.get());
+  ASSERT_GT(tablePool->usedBytes(), 0);
+
+  cache->drop(key);
+
+  EXPECT_NE(entry->tablePool, nullptr);
+  EXPECT_GT(tablePool->usedBytes(), 0);
+  EXPECT_EQ(numCachedTablePools(), 1);
+
+  table.reset();
+  tablePool.reset();
+  entry.reset();
+  EXPECT_EQ(numCachedTablePools(), 0);
 }
 
 TEST_F(HashTableCacheTest, concurrentWaiters) {

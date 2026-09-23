@@ -27,6 +27,7 @@
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/prestosql/types/IPAddressRegistration.h"
 #include "velox/functions/prestosql/types/IPPrefixRegistration.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/tests/RegistryTestUtil.h"
@@ -91,6 +92,8 @@ class FunctionRegistryTest : public testing::Test {
   FunctionRegistryTest() {
     registerTestFunctions();
     exec::registerFunctionCallToSpecialForms();
+    registerIPAddressType();
+    registerIPPrefixType();
   }
 
   void testResolveVectorFunction(
@@ -755,6 +758,86 @@ TEST_F(FunctionRegistryTest, getFunctionSignaturesAndMetadata) {
   }
 }
 
+std::string simpleFunctionOwner(const std::string& name) {
+  const auto result =
+      exec::simpleFunctions().getFunctionSignaturesAndMetadata(name);
+  return result.size() == 1 ? std::string{result[0].first.owner}
+                            : std::string{"<not found>"};
+}
+
+TEST_F(FunctionRegistryTest, registerFunctionOwnerArgument) {
+  registerFunction<MetadataTestFuncDefaults, int32_t, int32_t>(
+      {"owner_arg_undeclared"}, {}, true, "passed-owner-team");
+  registerFunction<MetadataTestFuncAllSet, int32_t, int32_t>(
+      {"owner_arg_declared"}, {}, true, "passed-owner-team");
+  registerFunction<MetadataTestFuncDefaults, int32_t, int32_t>(
+      {"owner_arg_omitted"});
+
+  // A UDF that declares an owner keeps it; the argument only fills a hole.
+  EXPECT_EQ(simpleFunctionOwner("owner_arg_undeclared"), "passed-owner-team");
+  EXPECT_EQ(simpleFunctionOwner("owner_arg_declared"), "test-owner-team");
+  EXPECT_EQ(simpleFunctionOwner("owner_arg_omitted"), "");
+}
+
+// Metadata is shared by every registration of a UDF type, so the resolved
+// owner has to be stored per registration rather than on the metadata.
+TEST_F(FunctionRegistryTest, registerFunctionOwnerPerRegistration) {
+  registerFunction<MetadataTestFuncDefaults, int32_t, int32_t>(
+      {"owner_arg_first"}, {}, true, "first-team");
+  registerFunction<MetadataTestFuncDefaults, int32_t, int32_t>(
+      {"owner_arg_second"}, {}, true, "second-team");
+
+  EXPECT_EQ(simpleFunctionOwner("owner_arg_first"), "first-team");
+  EXPECT_EQ(simpleFunctionOwner("owner_arg_second"), "second-team");
+}
+
+TEST_F(FunctionRegistryTest, registerVectorFunctionOwnerArgument) {
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_vector_func_one, "owner_arg_vector_undeclared", "passed-vector-team");
+  // udf_vector_func_four declares its own metadata, but no owner.
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_vector_func_four, "owner_arg_vector_metadata", "passed-vector-team");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_vector_func_one, "owner_arg_vector_omitted");
+
+  EXPECT_EQ(
+      exec::getVectorFunctionMetadata("owner_arg_vector_undeclared")->owner,
+      "passed-vector-team");
+  EXPECT_EQ(
+      exec::getVectorFunctionMetadata("owner_arg_vector_metadata")->owner,
+      "passed-vector-team");
+  EXPECT_TRUE(
+      exec::getVectorFunctionMetadata("owner_arg_vector_omitted")
+          ->owner.empty());
+}
+
+TEST_F(FunctionRegistryTest, registerAllScalarFunctionsOwnerArgument) {
+  functions::prestosql::registerAllScalarFunctions(
+      /*prefix=*/"owner_arg_all.", "all-scalar-team");
+
+  // ceil has one signature per numeric type; every one carries the owner.
+  const auto ceil = exec::simpleFunctions().getFunctionSignaturesAndMetadata(
+      "owner_arg_all.ceil");
+  ASSERT_FALSE(ceil.empty());
+  for (const auto& [metadata, _] : ceil) {
+    EXPECT_EQ(metadata.owner, "all-scalar-team");
+  }
+
+  // Vector functions registered through the macro carry it too.
+  EXPECT_EQ(
+      exec::getVectorFunctionMetadata("owner_arg_all.transform")->owner,
+      "all-scalar-team");
+
+  // So do the ones registered by calling exec::registerStatefulVectorFunction
+  // directly instead of going through the macro.
+  EXPECT_EQ(
+      exec::getVectorFunctionMetadata("owner_arg_all.regexp_replace")->owner,
+      "all-scalar-team");
+  EXPECT_EQ(
+      exec::getVectorFunctionMetadata("owner_arg_all.array_sort")->owner,
+      "all-scalar-team");
+}
+
 template <typename T>
 struct TestFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1048,7 +1131,21 @@ TEST_F(FunctionRegistryTest, resolveIfWithCoercions) {
   testSpecialFormNoCoercions(
       "if", {BOOLEAN(), INTEGER(), INTEGER()}, INTEGER());
 
+  // Neither branch coerces to the other: INTEGER widens to DECIMAL(10, 0),
+  // which does not fit DECIMAL(8, 5). Both widen to a decimal that holds
+  // either.
+  testSpecialFormCoercions(
+      "if",
+      {BOOLEAN(), DECIMAL(8, 5), INTEGER()},
+      DECIMAL(15, 5),
+      {nullptr, DECIMAL(15, 5), DECIMAL(15, 5)});
+
   testSpecialFormCannotResolve("if", {BOOLEAN(), INTEGER(), VARCHAR()});
+
+  // Custom types do not reconcile implicitly, matching Presto, which rejects
+  // "Result types for IF must be the same: ipprefix vs ipaddress". IPADDRESS
+  // has a cast rule to IPPREFIX, but it is not implicitly allowed.
+  testSpecialFormCannotResolve("if", {BOOLEAN(), IPPREFIX(), IPADDRESS()});
 }
 
 TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
@@ -1087,6 +1184,66 @@ TEST_F(FunctionRegistryTest, resolveSwitchWithCoercions) {
        BIGINT()},
       BIGINT(),
       {nullptr, BIGINT(), nullptr, BIGINT(), nullptr, BIGINT(), nullptr});
+
+  // Branches that meet only at a common decimal, as Presto resolves them.
+  testSpecialFormCoercions(
+      "switch",
+      {BOOLEAN(), DECIMAL(8, 5), BOOLEAN(), DECIMAL(12, 2), INTEGER()},
+      DECIMAL(15, 5),
+      {nullptr, DECIMAL(15, 5), nullptr, DECIMAL(15, 5), DECIMAL(15, 5)});
+
+  // A null literal condition, which types as UNKNOWN, coerces to boolean.
+  testSpecialFormCoercions(
+      "switch",
+      {UNKNOWN(), BIGINT(), BOOLEAN(), BIGINT(), BIGINT()},
+      BIGINT(),
+      {BOOLEAN(), nullptr, nullptr, nullptr, nullptr});
+
+  // A condition of any other type does not.
+  testSpecialFormCannotResolve("switch", {INTEGER(), BIGINT(), BIGINT()});
+}
+
+TEST_F(FunctionRegistryTest, resolveConjunctWithCoercions) {
+  auto resolve = [](const std::string& name,
+                    const std::vector<TypePtr>& argTypes) {
+    std::vector<TypePtr> coercions;
+    auto type = resolveCallableSpecialFormWithCoercions(
+        name, argTypes, coercions, TypeCoercer::defaults());
+    return std::make_pair(type, coercions);
+  };
+
+  // A null literal argument, which types as UNKNOWN, coerces to boolean.
+  auto [andType, andCoercions] = resolve("and", {UNKNOWN(), BOOLEAN()});
+  VELOX_EXPECT_EQ_TYPES(andType, BOOLEAN());
+  EXPECT_THAT(andCoercions, testing::ElementsAre(BOOLEAN(), nullptr));
+
+  auto [orType, orCoercions] = resolve("or", {BOOLEAN(), UNKNOWN()});
+  VELOX_EXPECT_EQ_TYPES(orType, BOOLEAN());
+  EXPECT_THAT(orCoercions, testing::ElementsAre(nullptr, BOOLEAN()));
+
+  // An argument of any other type does not.
+  testSpecialFormCannotResolve("and", {BOOLEAN(), INTEGER()});
+  testSpecialFormCannotResolve("or", {VARCHAR(), BOOLEAN()});
+}
+
+TEST_F(FunctionRegistryTest, resolveCaseWithCoercions) {
+  // subject, WHEN, THEN, WHEN, THEN, ELSE. The THEN clauses coerce in neither
+  // direction, so they and the ELSE meet at a common decimal.
+  testSpecialFormCoercions(
+      "case",
+      {INTEGER(),
+       INTEGER(),
+       DECIMAL(8, 5),
+       INTEGER(),
+       DECIMAL(12, 2),
+       INTEGER()},
+      DECIMAL(15, 5),
+      {nullptr,
+       nullptr,
+       DECIMAL(15, 5),
+       nullptr,
+       DECIMAL(15, 5),
+       DECIMAL(15, 5)});
 }
 
 TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
@@ -1095,6 +1252,13 @@ TEST_F(FunctionRegistryTest, resolveCoalesceWithCoercions) {
 
   testSpecialFormCoercions(
       "coalesce", {BIGINT(), UNKNOWN()}, BIGINT(), {nullptr, BIGINT()});
+
+  // Inputs that coerce in neither direction meet at a common decimal.
+  testSpecialFormCoercions(
+      "coalesce",
+      {DECIMAL(8, 5), INTEGER()},
+      DECIMAL(15, 5),
+      {DECIMAL(15, 5), DECIMAL(15, 5)});
 
   testSpecialFormCoercions(
       "coalesce",
@@ -1274,7 +1438,6 @@ TEST_F(FunctionRegistryOverwriteTest, overwrite) {
 }
 
 TEST_F(FunctionRegistryTest, ipPrefixRegistration) {
-  registerIPPrefixType();
   registerFunction<IPPrefixFunc, IPPrefix, IPPrefix>({"ipprefix_func"});
 
   auto& simpleFunctions = exec::simpleFunctions();

@@ -52,6 +52,9 @@ RowSet read(
     effectiveRows = selectedRows;
   }
 
+  // Load any deferred input streams for this column before decoding. Done on
+  // the reader so it runs regardless of which loader subclass is used.
+  fieldReader->formatData().loadLazyInputStreams();
   structReader->advanceFieldReader(fieldReader, offset);
   fieldReader->scanSpec()->setValueHook(hook);
   fieldReader->readWithTiming(offset, effectiveRows, incomingNulls);

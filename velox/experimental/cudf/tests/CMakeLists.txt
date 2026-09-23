@@ -58,7 +58,7 @@ if(VELOX_ENABLE_ABFS)
     SOURCES
       Main.cpp
       AbfsReadTest.cpp
-      ${CMAKE_SOURCE_DIR}/velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../../../connectors/hive/storage_adapters/abfs/tests/AzuriteServer.cpp
     LIBS
       velox_cudf_exec_test_lib
       velox_cudf_hive_connector
@@ -86,7 +86,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_aggregation_selection_test
   SOURCES Main.cpp AggregationSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(
@@ -105,6 +105,12 @@ velox_add_cudf_test(
   NAME velox_cudf_config_test
   SOURCES Main.cpp ConfigTest.cpp
   LIBS velox_cudf_exec Folly::folly
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_split_reader_test
+  SOURCES Main.cpp CudfSplitReaderTest.cpp
+  LIBS velox_cudf_exec_test_lib velox_cudf_hive_connector
 )
 
 velox_add_cudf_test(
@@ -136,7 +142,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_expression_selection_test
   SOURCES Main.cpp ExpressionEvaluatorSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+  LIBS ${CUDF_TEST_DEFAULT_LIBS}
 )
 
 velox_add_cudf_test(
@@ -183,6 +189,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_local_merge_test
+  SOURCES Main.cpp LocalMergeTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_local_partition_test
   SOURCES Main.cpp LocalPartitionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
@@ -203,7 +215,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_null_mask_test
   SOURCES Main.cpp NullMaskTest.cpp
-  LIBS velox_cudf_expression cudf::cudf
+  LIBS velox_cudf_expression cudf::cudf Folly::folly
 )
 
 velox_add_cudf_test(
@@ -251,6 +263,7 @@ velox_add_cudf_test(
   LIBS
     velox_cudf_exec_test_lib
     velox_cudf_hive_connector
+    velox_dwio_parquet_writer
     velox_exec
     velox_exec_test_lib
     velox_test_util

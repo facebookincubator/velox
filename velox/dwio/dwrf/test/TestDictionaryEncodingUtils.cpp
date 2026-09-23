@@ -32,7 +32,7 @@ class DictionaryEncodingUtilsTest : public testing::Test {
   }
 };
 
-TEST_F(DictionaryEncodingUtilsTest, StringGetSortedIndexLookupTable) {
+TEST_F(DictionaryEncodingUtilsTest, stringGetSortedIndexLookupTable) {
   struct TestCase {
     explicit TestCase(
         bool sort,
@@ -146,7 +146,7 @@ TEST_F(DictionaryEncodingUtilsTest, StringGetSortedIndexLookupTable) {
   }
 }
 
-TEST_F(DictionaryEncodingUtilsTest, StringStrideDictOptimization) {
+TEST_F(DictionaryEncodingUtilsTest, stringStrideDictOptimization) {
   constexpr size_t kStrideSize{10};
   struct TestCase {
     explicit TestCase(

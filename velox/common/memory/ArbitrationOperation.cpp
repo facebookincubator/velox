@@ -20,13 +20,9 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
-using facebook::velox::common::testutil::TestValue;
-
 namespace facebook::velox::memory {
-using namespace facebook::velox::memory;
 
 ArbitrationOperation::ArbitrationOperation(
     ScopedArbitrationParticipant&& participant,

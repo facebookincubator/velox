@@ -82,6 +82,40 @@ __device__ void __copy(Tensor* source, T* dest, BlockInfo& block) {
   }
 }
 
+// __copy into a destination that may be strided. A concat hands an operand the
+// band of the result it occupies, and off the outermost axis that band is
+// pitched rather than a contiguous run, so the element the source holds at i
+// does not land at dest[i]. Both sides are decomposed independently: the source
+// is read at its own layout, as __copy already does, and the destination is
+// written through its strides. The contiguous case keeps the plain indexing --
+// indexToOffset returns i for a contiguous tensor, but only after the address
+// arithmetic, and this is the loop every wide cat's copies run.
+template <typename T>
+__device__ void __copyStrided(Tensor* source, Tensor* dest, BlockInfo& block) {
+  if (source->storage == nullptr) {
+    return;
+  }
+  auto n = source->numEl;
+  uint32_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  uint32_t stride = block.numBlocksInOp * blockDim.x;
+  auto* out = storage<T>(dest);
+  if (dest->contiguous) {
+    __copy<T>(source, out, block);
+    return;
+  }
+  if (source->contiguous) {
+    auto* src = storage<T>(source);
+    for (uint32_t i = start; i < n; i += stride) {
+      out[dest->indexToOffset(i)] = src[i];
+    }
+  } else {
+    for (uint32_t i = start; i < n; i += stride) {
+      out[dest->indexToOffset(i)] =
+          storage<T>(source)[source->indexToOffset(i)];
+    }
+  }
+}
+
 // Like __copy, but value-converts each element from SrcT to DstT (e.g. a cat of
 // mixed dtypes, where torch promotes an int64 element into a float output).
 template <typename SrcT, typename DstT>
@@ -104,6 +138,78 @@ __device__ void __copyConvert(Tensor* source, DstT* dest, BlockInfo& block) {
       dest[i] =
           static_cast<DstT>(storage<SrcT>(source)[source->indexToOffset(i)]);
     }
+  }
+}
+
+// Copies 'source' into the slice of the concatenation output 'dest' that starts
+// at 'offset' along dimension 'dim'. For a cat, source and dest have the same
+// rank and the slice spans source->dims[dim] positions; for a stack (kStack),
+// source has one dim fewer and the slice is the single position 'offset'. The
+// slice is strided whenever 'dim' is not the outermost dimension, so each
+// element's destination offset is recomputed from dest's strides.
+template <typename SrcT, typename DstT, bool kStack>
+__device__ void __concatCopy(
+    Tensor* source,
+    Tensor* dest,
+    int32_t dim,
+    int64_t offset,
+    BlockInfo& block) {
+  // See __copy: an empty operand arrives as an undefined tensor with null
+  // storage, yet init gives it numEl == 1 (the empty product).
+  if (source->storage == nullptr) {
+    return;
+  }
+  // A zero-extent dimension has nothing to copy, and because init reports
+  // numEl == 1 for it (that same empty product) the loops below would still run
+  // one iteration and divide by the zero extent.
+  for (int d = 0; d < source->rank; ++d) {
+    if (source->dims[d] == 0) {
+      return;
+    }
+  }
+  // All of the index arithmetic is 64-bit. numEl exceeds 32 bits for a large
+  // concat, so a 32-bit loop counter would wrap and silently skip elements, and
+  // the per-element offsets accumulated from strides can pass INT32_MAX on a
+  // wide multi-dim output and land in the wrong slice.
+  const int64_t n = source->numEl;
+  const int64_t start = block.blockInOp * blockDim.x + threadIdx.x;
+  const int64_t stride = block.numBlocksInOp * blockDim.x;
+  auto* dst = storage<DstT>(dest) + offset * dest->strides[dim];
+  // The operand already IS its slice of the result: the host handed its
+  // producer a view of exactly this region (a concat allocation group), so the
+  // data was written in place and there is nothing to move. The copy would be
+  // an element-for-element rewrite of the same addresses -- harmless, but the
+  // whole point of placing the operand there was not to pay for it. The
+  // addresses coincide only when the host built the view from 'dest', which
+  // also fixes the strides, so a match is proof and not a coincidence.
+  if (static_cast<const void*>(source->storage) ==
+      static_cast<const void*>(dst)) {
+    return;
+  }
+  // Joining on the outermost dimension leaves the slice contiguous in a
+  // contiguous output, so the source's row-major order maps straight onto it.
+  if (dim == 0 && source->contiguous && dest->contiguous) {
+    const auto* src = storage<SrcT>(source);
+    for (int64_t i = start; i < n; i += stride) {
+      dst[i] = static_cast<DstT>(src[i]);
+    }
+    return;
+  }
+  // Plain div/mod rather than the Tensor::sizes[] magic dividers: those are
+  // only populated for tensors the block prologue index-initializes, and a
+  // rank-1 contiguous operand takes init's fast path, which leaves them unset.
+  for (int64_t i = start; i < n; i += stride) {
+    int64_t rest = i;
+    int64_t sourceOffset = 0;
+    int64_t destOffset = 0;
+    for (int d = source->rank - 1; d >= 0; --d) {
+      const int64_t extent = source->dims[d];
+      const int64_t coord = rest % extent;
+      rest /= extent;
+      sourceOffset += coord * source->strides[d];
+      destOffset += coord * dest->strides[kStack && d >= dim ? d + 1 : d];
+    }
+    dst[destOffset] = static_cast<DstT>(storage<SrcT>(source)[sourceOffset]);
   }
 }
 
@@ -222,10 +328,12 @@ __device__ inline void opBarrier(BlockInfo& info, int32_t counterOffset) {
   __threadfence();
 }
 
-// Copies all elements from source to dest using grid-strided loop.
+// Copies all elements from source to dest using grid-strided loop. Goes through
+// the destination's strides, so a clone may be handed a pitched band of a
+// concat result to fill rather than a buffer of its own.
 template <typename T>
 __device__ void __copyTensor(Tensor* source, Tensor* dest, BlockInfo& block) {
-  __copy<T>(source, storage<T>(dest), block);
+  __copyStrided<T>(source, dest, block);
 }
 
 // Computes linear offset from scalar index values in registers.

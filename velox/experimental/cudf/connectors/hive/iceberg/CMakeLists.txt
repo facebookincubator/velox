@@ -19,6 +19,7 @@ add_library(
   CudfIcebergConnector.cpp
   CudfIcebergDataSource.cpp
   CudfIcebergDeletionHelpers.cu
+  CudfIcebergFilterTransform.cpp
   CudfIcebergSplitReader.cpp
 )
 

@@ -20,6 +20,7 @@ add_executable(
   BloomFilterTest.cpp
   CoalesceIoTest.cpp
   ConcurrentCounterTest.cpp
+  ConcurrentRuntimeStatWriterTest.cpp
   ExceptionTest.cpp
   FsTest.cpp
   IndexedPriorityQueueTest.cpp

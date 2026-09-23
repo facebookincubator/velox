@@ -20,80 +20,82 @@
 
 namespace facebook::velox::functions {
 
-void registerQDigestFunctions(const std::string& prefix) {
+void registerQDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   facebook::velox::registerQDigestType();
 
   registerFunction<
       ValueAtQuantileFunction,
       int64_t,
       SimpleQDigest<int64_t>,
-      double>({prefix + "value_at_quantile"});
+      double>({prefix + "value_at_quantile"}, {}, true, defaultOwner);
 
   registerFunction<
       ValueAtQuantileFunction,
       double,
       SimpleQDigest<double>,
-      double>({prefix + "value_at_quantile"});
+      double>({prefix + "value_at_quantile"}, {}, true, defaultOwner);
 
   registerFunction<
       ValueAtQuantileFunction,
       float,
       SimpleQDigest<float>,
-      double>({prefix + "value_at_quantile"});
+      double>({prefix + "value_at_quantile"}, {}, true, defaultOwner);
 
   registerFunction<
       ValuesAtQuantilesFunction,
       Array<int64_t>,
       SimpleQDigest<int64_t>,
-      Array<double>>({prefix + "values_at_quantiles"});
+      Array<double>>({prefix + "values_at_quantiles"}, {}, true, defaultOwner);
 
   registerFunction<
       ValuesAtQuantilesFunction,
       Array<double>,
       SimpleQDigest<double>,
-      Array<double>>({prefix + "values_at_quantiles"});
+      Array<double>>({prefix + "values_at_quantiles"}, {}, true, defaultOwner);
 
   registerFunction<
       ValuesAtQuantilesFunction,
       Array<float>,
       SimpleQDigest<float>,
-      Array<double>>({prefix + "values_at_quantiles"});
+      Array<double>>({prefix + "values_at_quantiles"}, {}, true, defaultOwner);
 
   registerFunction<
       QuantileAtValueFunction,
       double,
       SimpleQDigest<double>,
-      double>({prefix + "quantile_at_value"});
+      double>({prefix + "quantile_at_value"}, {}, true, defaultOwner);
 
   registerFunction<
       QuantileAtValueFunction,
       double,
       SimpleQDigest<int64_t>,
-      int64_t>({prefix + "quantile_at_value"});
+      int64_t>({prefix + "quantile_at_value"}, {}, true, defaultOwner);
 
   registerFunction<
       QuantileAtValueFunction,
       double,
       SimpleQDigest<float>,
-      float>({prefix + "quantile_at_value"});
+      float>({prefix + "quantile_at_value"}, {}, true, defaultOwner);
 
   registerFunction<
       ScaleQDigestDoubleFunction,
       SimpleQDigest<double>,
       SimpleQDigest<double>,
-      double>({prefix + "scale_qdigest"});
+      double>({prefix + "scale_qdigest"}, {}, true, defaultOwner);
 
   registerFunction<
       ScaleQDigestBigintFunction,
       SimpleQDigest<int64_t>,
       SimpleQDigest<int64_t>,
-      double>({prefix + "scale_qdigest"});
+      double>({prefix + "scale_qdigest"}, {}, true, defaultOwner);
 
   registerFunction<
       ScaleQDigestRealFunction,
       SimpleQDigest<float>,
       SimpleQDigest<float>,
-      double>({prefix + "scale_qdigest"});
+      double>({prefix + "scale_qdigest"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

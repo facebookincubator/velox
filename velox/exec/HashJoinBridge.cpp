@@ -23,26 +23,27 @@ static const char* kSpillProbedFlagColumnName = "__probedFlag";
 }
 
 RowTypePtr hashJoinTableType(
-    const std::shared_ptr<const core::HashJoinNode>& joinNode) {
-  const auto inputType = joinNode->sources()[1]->outputType();
-  const auto numKeys = joinNode->rightKeys().size();
+    const std::vector<core::FieldAccessTypedExprPtr>& joinKeys,
+    const RowTypePtr& inputType,
+    bool dropDuplicates) {
+  const auto numKeys = joinKeys.size();
 
   std::vector<std::string> names;
-  names.reserve(inputType->size());
+  names.reserve(dropDuplicates ? numKeys : inputType->size());
   std::vector<TypePtr> types;
-  types.reserve(inputType->size());
+  types.reserve(dropDuplicates ? numKeys : inputType->size());
   std::unordered_set<uint32_t> keyChannelSet;
   keyChannelSet.reserve(inputType->size());
 
   for (int i = 0; i < numKeys; ++i) {
-    auto& key = joinNode->rightKeys()[i];
+    auto& key = joinKeys[i];
     auto channel = exprToChannel(key.get(), inputType);
     keyChannelSet.insert(channel);
     names.emplace_back(inputType->nameOf(channel));
     types.emplace_back(inputType->childAt(channel));
   }
 
-  if (joinNode->canDropDuplicates()) {
+  if (dropDuplicates) {
     // For left semi and anti join with no extra filter, hash table does not
     // store dependent columns.
     return ROW(std::move(names), std::move(types));
@@ -55,6 +56,13 @@ RowTypePtr hashJoinTableType(
     }
   }
   return ROW(std::move(names), std::move(types));
+}
+
+RowTypePtr hashJoinTableType(
+    const std::shared_ptr<const core::HashJoinNode>& joinNode) {
+  const auto inputType = joinNode->sources()[1]->outputType();
+  return hashJoinTableType(
+      joinNode->rightKeys(), inputType, joinNode->canDropDuplicates());
 }
 
 void HashJoinBridge::start() {
@@ -402,10 +410,20 @@ bool HashJoinBridge::testingHasMoreSpilledPartitions() {
 }
 
 bool isLeftNullAwareJoinWithFilter(
+    core::JoinType joinType,
+    bool nullAware,
+    bool withFilter) {
+  return (isAntiJoin(joinType) || isLeftSemiProjectJoin(joinType) ||
+          isLeftSemiFilterJoin(joinType)) &&
+      nullAware && withFilter;
+}
+
+bool isLeftNullAwareJoinWithFilter(
     const std::shared_ptr<const core::HashJoinNode>& joinNode) {
-  return (joinNode->isAntiJoin() || joinNode->isLeftSemiProjectJoin() ||
-          joinNode->isLeftSemiFilterJoin()) &&
-      joinNode->isNullAware() && (joinNode->filter() != nullptr);
+  return isLeftNullAwareJoinWithFilter(
+      joinNode->joinType(),
+      joinNode->isNullAware(),
+      joinNode->filter() != nullptr);
 }
 
 uint64_t HashJoinMemoryReclaimer::reclaim(

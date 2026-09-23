@@ -46,7 +46,7 @@ constexpr int kItemsPerThread = 2;
 
 TYPED_TEST_SUITE(FunctionTest, TestTypes);
 
-TYPED_TEST(FunctionTest, RadixRank) {
+TYPED_TEST(FunctionTest, radixRank) {
   TypeParam src[] = {9,  33, 44, 32, 4,  1,  3,  31, 50, 43, 54, 29, 45, 8,  0,
                      56, 5,  39, 42, 11, 27, 63, 9,  2,  54, 33, 41, 3,  36, 43,
                      47, 3,  0,  14, 21, 18, 21, 18, 57, 40, 52, 3,  4,  21, 32,
@@ -77,7 +77,7 @@ TYPED_TEST(FunctionTest, RadixRank) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, RadixRankFewItems) {
+TYPED_TEST(FunctionTest, radixRankFewItems) {
   TypeParam src[] = {12, 5,  42, 42, 44, 49, 41, 32, 16, 21, 51, 54, 20, 27, 12,
                      16, 29, 1,  23, 24, 20, 51, 3,  55, 59, 61, 57, 45, 62, 57,
                      28, 48, 61, 49, 50, 34, 63, 40, 24, 58, 10, 53, 60, 57, 58,
@@ -103,7 +103,7 @@ TYPED_TEST(FunctionTest, RadixRankFewItems) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, RadixSort) {
+TYPED_TEST(FunctionTest, radixSort) {
   TypeParam src[] = {
       664706,   7283945,  30790572, 41729031, 58086583, 99033166, 74066752,
       45600109, 99632667, 211279,   42680291, 22703047, 30319982, 43100887,
@@ -145,7 +145,7 @@ TYPED_TEST(FunctionTest, RadixSort) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, RadixSortFewItems) {
+TYPED_TEST(FunctionTest, radixSortFewItems) {
   TypeParam src[] = {
       25529826, 61919686, 62330816, 15232051, 7849881,  43025218, 78752072,
       52136080, 19555696, 24060484, 87158662, 42535624, 9089185,  95542843,
@@ -183,7 +183,7 @@ TYPED_TEST(FunctionTest, RadixSortFewItems) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, RadixSortKeyValues) {
+TYPED_TEST(FunctionTest, radixSortKeyValues) {
   TypeParam src[] = {
       664706,   7283945,  30790572, 41729031, 58086583, 99033166, 74066752,
       45600109, 99632667, 211279,   42680291, 22703047, 30319982, 43100887,

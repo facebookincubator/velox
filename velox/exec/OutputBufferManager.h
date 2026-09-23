@@ -74,12 +74,14 @@ class OutputBufferManager {
   /// initial destination-buffer count (fixed for kPartitioned, a starting point
   /// updateOutputBuffers() grows for broadcast / arbitrary); 'numDrivers' is
   /// the producing-driver count whose completion marks the output done (see
-  /// updateNumDrivers()).
+  /// updateNumDrivers()). 'transportOptions' is opaque configuration from the
+  /// PartitionedOutputNode and is interpreted only by the selected transport.
   virtual void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers) = 0;
+      int numDrivers,
+      const std::string& transportOptions = {}) = 0;
 
   /// Publishes the destination-buffer count as consumers register, finalizing
   /// it when 'noMoreBuffers' is true. Returns false if the task has no output

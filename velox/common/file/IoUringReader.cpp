@@ -275,7 +275,17 @@ IoUringReader::Stats getIoUringReaderStats(uint64_t& numReaders) {
 #if FOLLY_HAS_LIBURING
 
 bool IoUringReader::available() {
-  return folly::IoUringBackend::isAvailable();
+  // folly::IoUringBackend::isAvailable() reports unavailability by returning
+  // false, except when ring setup fails with ENOMEM: that path throws
+  // std::runtime_error instead. ENOMEM here usually means the host ran out of
+  // RLIMIT_MEMLOCK rather than out of memory, which is a transient, host-wide
+  // condition. Report it as unavailable so callers can fall back.
+  try {
+    return folly::IoUringBackend::isAvailable();
+  } catch (const std::exception& e) {
+    LOG(WARNING) << "io_uring availability probe failed: " << e.what();
+    return false;
+  }
 }
 
 #else

@@ -27,7 +27,7 @@ StringWriter createStringWriter(const std::string& str) {
 }
 } // namespace
 
-TEST(String, StringWriter) {
+TEST(String, stringWriter) {
   // Default constructor & empty string copy.
   {
     const std::string emptyString;

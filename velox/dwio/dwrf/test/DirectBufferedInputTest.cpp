@@ -18,13 +18,19 @@
 #include <folly/Random.h>
 #include <folly/container/F14Map.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <deque>
+#include <exception>
+#include <fstream>
+#include "velox/common/file/LocalFile.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/common/testutil/TempFilePath.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio;
@@ -41,6 +47,42 @@ struct TestRegion {
   int32_t length;
   bool read = true;
 };
+
+class QueuedExecutor final : public folly::Executor {
+ public:
+  void add(folly::Func func) override {
+    functions_.push_back(std::move(func));
+  }
+
+  size_t size() const {
+    return functions_.size();
+  }
+
+  std::exception_ptr runNext() {
+    VELOX_CHECK(!functions_.empty());
+    auto func = std::move(functions_.front());
+    functions_.pop_front();
+    try {
+      func();
+      return nullptr;
+    } catch (...) {
+      return std::current_exception();
+    }
+  }
+
+ private:
+  std::deque<folly::Func> functions_;
+};
+
+std::string readAll(SeekableInputStream& stream) {
+  std::string result;
+  const void* buffer;
+  int32_t size;
+  while (stream.Next(&buffer, &size)) {
+    result.append(static_cast<const char*>(buffer), size);
+  }
+  return result;
+}
 
 class DirectBufferedInputTest : public testing::Test {
  protected:
@@ -225,4 +267,56 @@ TEST_F(DirectBufferedInputTest, ioStatsLifeTimeTest) {
     testLoads({{1000, 9000000}, {9010000, 1000000}}, 3, stats);
     t.join();
   }
+}
+
+TEST_F(DirectBufferedInputTest, cancelledLocalLoadFallsBackToSyncRead) {
+  constexpr int32_t kRegionSize = 1024;
+  std::string content(4 * kRegionSize, 0);
+  for (size_t i = 0; i < content.size(); ++i) {
+    content[i] = 'a' + (i % 26);
+  }
+
+  auto tempFile = facebook::velox::common::testutil::TempFilePath::create();
+  tempFile->append(content);
+  auto localFile = std::make_shared<LocalReadFile>(tempFile->getPath());
+  QueuedExecutor executor;
+  auto input = std::make_unique<DirectBufferedInput>(
+      localFile,
+      dwio::common::MetricsLog::voidLog(),
+      StringIdLease{},
+      tracker_,
+      StringIdLease{},
+      ioStatistics_,
+      ioStats_,
+      &executor,
+      *opts_);
+
+  auto first = input->enqueue({0, kRegionSize}, nullptr);
+  auto second = input->enqueue({kRegionSize, kRegionSize}, nullptr);
+  input->load(LogType::FILE);
+  ASSERT_EQ(executor.size(), 1);
+
+  // Keep the size cached by LocalReadFile, but truncate the backing file so
+  // preadv fills the first region and half of the second before returning a
+  // short read. ReadFileInputStream turns the short read into an exception and
+  // the coalesced load becomes cancelled.
+  ASSERT_EQ(
+      ::truncate(tempFile->getPath().c_str(), kRegionSize + kRegionSize / 2),
+      0);
+  ASSERT_NE(executor.runNext(), nullptr);
+
+  // Restore the file so the foreground synchronous fallback can succeed.
+  {
+    std::ofstream output(
+        tempFile->getPath(), std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output.good());
+    output.write(content.data(), content.size());
+    output.close();
+    ASSERT_TRUE(output.good());
+  }
+
+  EXPECT_EQ(readAll(*first), content.substr(0, kRegionSize));
+  EXPECT_EQ(readAll(*second), content.substr(kRegionSize, kRegionSize));
+  EXPECT_EQ(ioStatistics_->read().count(), 2);
+  EXPECT_EQ(ioStatistics_->read().sum(), 2 * kRegionSize);
 }

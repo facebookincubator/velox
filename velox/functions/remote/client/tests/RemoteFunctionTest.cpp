@@ -294,9 +294,11 @@ class MockRemoteFunctionTest : public functions::test::FunctionBaseTest {
   /// Registers a remote function with a mock client factory.
   void registerMockRemoteFunction(
       const std::string& name,
-      std::vector<exec::FunctionSignaturePtr> signatures) {
+      std::vector<exec::FunctionSignaturePtr> signatures,
+      bool preserveEncoding) {
     RemoteThriftVectorFunctionMetadata metadata;
     metadata.serdeFormat = remote::PageFormat::PRESTO_PAGE;
+    metadata.preserveEncoding = preserveEncoding;
     // Location doesn't matter since we're using a mock client.
     metadata.location = folly::SocketAddress("127.0.0.1", 12345);
 
@@ -340,13 +342,15 @@ class MockRemoteFunctionTest : public functions::test::FunctionBaseTest {
 
   /// Registers a mock remote function with signature (bigint, bigint) ->
   /// bigint.
-  void registerMockRemotePlusFunction(const std::string& name) {
+  void registerMockRemotePlusFunction(
+      const std::string& name,
+      bool preserveEncoding) {
     auto signatures = {exec::FunctionSignatureBuilder()
                            .returnType("bigint")
                            .argumentType("bigint")
                            .argumentType("bigint")
                            .build()};
-    registerMockRemoteFunction(name, std::move(signatures));
+    registerMockRemoteFunction(name, std::move(signatures), preserveEncoding);
   }
 
  protected:
@@ -360,7 +364,8 @@ TEST_F(MockRemoteFunctionTest, mockClientIsCalled) {
                          .argumentType("bigint")
                          .argumentType("bigint")
                          .build()};
-  registerMockRemoteFunction("mock_plus", signatures);
+  registerMockRemoteFunction(
+      "mock_plus", signatures, /*preserveEncoding=*/false);
 
   // Set up the mock to return a valid response.
   EXPECT_CALL(*mockClient_, invokeFunction)
@@ -381,13 +386,138 @@ TEST_F(MockRemoteFunctionTest, mockClientIsCalled) {
   assertEqualVectors(expected, results);
 }
 
+TEST_F(MockRemoteFunctionTest, serializesOnlyActiveRows) {
+  registerMockRemotePlusFunction(
+      "mock_plus_active_rows", /*preserveEncoding=*/false);
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([&](remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& request) {
+        // Only the two selected rows should be sent. Distinct values per row
+        // let the assertions below verify that each result lands back on the
+        // row it came from.
+        EXPECT_EQ(request.inputs()->rowCount().value(), 2);
+        setMockResponse(
+            response, makeRowVector({makeFlatVector<int64_t>({100, 101})}));
+      });
+
+  auto data =
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})});
+  exec::ExprSet exprSet(
+      {makeTypedExpr("mock_plus_active_rows(c0, c0)", asRowType(data->type()))},
+      &execCtx_);
+  exec::EvalCtx context(&execCtx_, &exprSet, data.get());
+  std::vector<VectorPtr> results(1);
+
+  // Select the first and last rows only: countSelected() is 2 while end() is
+  // 10, so serializing [0, end()) would ship 8 rows the expression did not ask
+  // for -- and the remote side evaluates every row it receives.
+  SelectivityVector rows(data->size(), false);
+  rows.setValid(0, true);
+  rows.setValid(9, true);
+  rows.updateBounds();
+
+  exprSet.eval(rows, context, results);
+
+  // Results must be scattered back onto the original row positions.
+  auto resultVector = results[0]->as<SimpleVector<int64_t>>();
+  ASSERT_TRUE(resultVector != nullptr);
+  EXPECT_EQ(resultVector->valueAt(0), 100);
+  EXPECT_EQ(resultVector->valueAt(9), 101);
+}
+
+TEST_F(MockRemoteFunctionTest, scattersErrorsBackToOriginalRows) {
+  registerMockRemotePlusFunction(
+      "mock_plus_active_row_errors", /*preserveEncoding=*/false);
+
+  // Fails the second serialized row. When only rows 0 and 9 are selected that
+  // is compacted position 1, which must surface as an error on row 9 -- not on
+  // row 1, which was never even sent.
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([&](remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& request) {
+        const auto rowCount = request.inputs()->rowCount().value();
+        std::vector<int64_t> values(rowCount);
+        std::iota(values.begin(), values.end(), 100);
+        setMockResponse(response, makeRowVector({makeFlatVector(values)}));
+
+        auto errors = makeNullableFlatVector<StringView>(
+            {std::nullopt, StringView("remote boom")});
+        auto serde = getSerde(remote::PageFormat::PRESTO_PAGE);
+        response.result()->errorPayload() =
+            rowVectorToIOBuf(makeRowVector({errors}), *pool(), serde.get());
+      });
+
+  auto data =
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})});
+  exec::ExprSet exprSet(
+      {makeTypedExpr(
+          "TRY(mock_plus_active_row_errors(c0, c0))", asRowType(data->type()))},
+      &execCtx_);
+  exec::EvalCtx context(&execCtx_, &exprSet, data.get());
+  std::vector<VectorPtr> results(1);
+
+  SelectivityVector rows(data->size(), false);
+  rows.setValid(0, true);
+  rows.setValid(9, true);
+  rows.updateBounds();
+
+  exprSet.eval(rows, context, results);
+
+  auto resultVector = results[0]->as<SimpleVector<int64_t>>();
+  ASSERT_TRUE(resultVector != nullptr);
+  EXPECT_FALSE(resultVector->isNullAt(0));
+  EXPECT_EQ(resultVector->valueAt(0), 100);
+  EXPECT_TRUE(resultVector->isNullAt(9));
+}
+
+TEST_F(MockRemoteFunctionTest, preserveEncodingSendsAllRows) {
+  registerMockRemotePlusFunction(
+      "mock_plus_preserve_encoding", /*preserveEncoding=*/true);
+
+  EXPECT_CALL(*mockClient_, invokeFunction)
+      .WillOnce([&](remote::RemoteFunctionResponse& response,
+                    const remote::RemoteFunctionRequest& request) {
+        // Rows are not compacted when the encoding is preserved, so all 10 are
+        // sent even though only 2 are selected: the dictionary wrap would
+        // still carry the full base vector across the wire.
+        EXPECT_EQ(request.inputs()->rowCount().value(), 10);
+        std::vector<int64_t> values(10);
+        std::iota(values.begin(), values.end(), 100);
+        setMockResponse(response, makeRowVector({makeFlatVector(values)}));
+      });
+
+  auto data =
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})});
+  exec::ExprSet exprSet(
+      {makeTypedExpr(
+          "mock_plus_preserve_encoding(c0, c0)", asRowType(data->type()))},
+      &execCtx_);
+  exec::EvalCtx context(&execCtx_, &exprSet, data.get());
+  std::vector<VectorPtr> results(1);
+
+  SelectivityVector rows(data->size(), false);
+  rows.setValid(0, true);
+  rows.setValid(9, true);
+  rows.updateBounds();
+
+  exprSet.eval(rows, context, results);
+
+  // Without compaction the result needs no scatter: row N holds position N.
+  auto resultVector = results[0]->as<SimpleVector<int64_t>>();
+  ASSERT_TRUE(resultVector != nullptr);
+  EXPECT_EQ(resultVector->valueAt(0), 100);
+  EXPECT_EQ(resultVector->valueAt(9), 109);
+}
+
 TEST_F(MockRemoteFunctionTest, mockClientThrowsException) {
   // Register a mock remote function.
   auto signatures = {exec::FunctionSignatureBuilder()
                          .returnType("bigint")
                          .argumentType("bigint")
                          .build()};
-  registerMockRemoteFunction("mock_throwing", signatures);
+  registerMockRemoteFunction(
+      "mock_throwing", signatures, /*preserveEncoding=*/false);
 
   // Set up the mock to throw an exception.
   EXPECT_CALL(*mockClient_, invokeFunction)
@@ -406,7 +536,7 @@ TEST_F(MockRemoteFunctionTest, mockClientThrowsException) {
 }
 
 TEST_F(MockRemoteFunctionTest, mockClientRepeatedCoroutineCalls) {
-  registerMockRemotePlusFunction("mock_repeated");
+  registerMockRemotePlusFunction("mock_repeated", /*preserveEncoding=*/false);
 
   EXPECT_CALL(*mockClient_, invokeFunction)
       .Times(3)
@@ -430,7 +560,7 @@ TEST_F(MockRemoteFunctionTest, mockClientRepeatedCoroutineCalls) {
 // Tests that exceptions thrown during the coroutine path don't leave the
 // function in a broken state.
 TEST_F(MockRemoteFunctionTest, coroutineExceptionThenRecovery) {
-  registerMockRemotePlusFunction("mock_recover");
+  registerMockRemotePlusFunction("mock_recover", /*preserveEncoding=*/false);
 
   // First call throws, second call succeeds.
   EXPECT_CALL(*mockClient_, invokeFunction)
@@ -466,7 +596,8 @@ TEST_F(MockRemoteFunctionTest, coroutineLargePayload) {
                          .returnType("bigint")
                          .argumentType("bigint")
                          .build()};
-  registerMockRemoteFunction("mock_large", signatures);
+  registerMockRemoteFunction(
+      "mock_large", signatures, /*preserveEncoding=*/false);
 
   constexpr int kSize = 1000;
   std::vector<int64_t> expectedValues(kSize);

@@ -82,6 +82,12 @@ void OrderBy::reclaim(
   VELOX_CHECK(canReclaim());
   VELOX_CHECK(!nonReclaimableSection_);
 
+  // The memory pool outlives the operator, so an arbitration reclaim can
+  // arrive after close() has reset 'sortBuffer_'.
+  if (sortBuffer_ == nullptr) {
+    return;
+  }
+
   // TODO: support fine-grain disk spilling based on 'targetBytes' after
   // having row container memory compaction support later.
   sortBuffer_->spill();

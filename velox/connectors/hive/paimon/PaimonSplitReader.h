@@ -65,7 +65,7 @@ class PaimonSplitReader : public FileSplitReader {
   /// ensureFileSplitReader(). File validation is done in the constructor.
   void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
-      dwio::common::RuntimeStatistics& runtimeStats,
+      dwio::common::RuntimeStats& runtimeStats,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {})
       override;
 
@@ -99,7 +99,7 @@ class PaimonSplitReader : public FileSplitReader {
 
   // Saved from prepareSplit() for re-use when advancing to subsequent files.
   std::shared_ptr<common::MetadataFilter> metadataFilter_;
-  dwio::common::RuntimeStatistics* runtimeStats_{nullptr};
+  dwio::common::RuntimeStats* runtimeStats_{nullptr};
 };
 
 } // namespace facebook::velox::connector::hive::paimon

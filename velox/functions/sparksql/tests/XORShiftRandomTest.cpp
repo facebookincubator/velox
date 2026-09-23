@@ -139,5 +139,45 @@ TEST_F(XORShiftRandomTest, nextDoubleDifferentSeeds) {
   EXPECT_NE(seq1, seq2);
 }
 
+// Test nextGaussian() matches java.util.Random.nextGaussian() over Spark's
+// XORShiftRandom. Golden values correspond to SELECT randn(0) on partition 0.
+TEST_F(XORShiftRandomTest, nextGaussianSparkCompatibility) {
+  XORShiftRandom rng;
+  rng.setSeed(0);
+  EXPECT_DOUBLE_EQ(rng.nextGaussian(), 1.6034991609278433);
+  EXPECT_DOUBLE_EQ(rng.nextGaussian(), 0.14416006165776865);
+  EXPECT_DOUBLE_EQ(rng.nextGaussian(), -0.62535644986277439);
+  EXPECT_DOUBLE_EQ(rng.nextGaussian(), -0.28385414448030416);
+  EXPECT_DOUBLE_EQ(rng.nextGaussian(), 0.93334950048846421);
+}
+
+// Test nextGaussian() determinism: same seed produces same sequence.
+TEST_F(XORShiftRandomTest, nextGaussianDeterminism) {
+  XORShiftRandom rng1, rng2;
+  rng1.setSeed(12345);
+  rng2.setSeed(12345);
+
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_EQ(rng1.nextGaussian(), rng2.nextGaussian());
+  }
+}
+
+// Test that setSeed() discards the value cached by nextGaussian(), matching
+// java.util.Random.setSeed(). A generator that drew one Gaussian (caching the
+// paired value) and is then re-seeded must reproduce a fresh generator's
+// sequence exactly; otherwise the stale cached value would leak.
+TEST_F(XORShiftRandomTest, setSeedResetsGaussianCache) {
+  XORShiftRandom rng;
+  rng.setSeed(0);
+  rng.nextGaussian(); // Leaves a cached second value.
+  rng.setSeed(0); // Must discard the cached value.
+
+  XORShiftRandom fresh;
+  fresh.setSeed(0);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(rng.nextGaussian(), fresh.nextGaussian());
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

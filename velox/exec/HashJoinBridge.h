@@ -205,6 +205,13 @@ class HashJoinBridge : public JoinBridge {
   friend test::HashJoinBridgeTestHelper;
 };
 
+// Indicates if join properties describe a null-aware anti or left semi join
+// with an extra filter.
+bool isLeftNullAwareJoinWithFilter(
+    core::JoinType joinType,
+    bool nullAware,
+    bool withFilter);
+
 // Indicates if 'joinNode' is null-aware anti or left semi project join type and
 // has filter set.
 bool isLeftNullAwareJoinWithFilter(
@@ -242,6 +249,14 @@ bool isHashBuildMemoryPool(const memory::MemoryPool& pool);
 bool isHashProbeMemoryPool(const memory::MemoryPool& pool);
 
 bool needRightSideJoin(core::JoinType joinType);
+
+/// Returns the hash table row type for the specified right-side join keys and
+/// input. If 'dropDuplicates' is true, keeps only key columns; otherwise
+/// appends dependent non-key columns after the keys.
+RowTypePtr hashJoinTableType(
+    const std::vector<core::FieldAccessTypedExprPtr>& joinKeys,
+    const RowTypePtr& inputType,
+    bool dropDuplicates);
 
 /// Returns the type of the hash table associated with this join.
 RowTypePtr hashJoinTableType(

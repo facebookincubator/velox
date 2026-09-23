@@ -1,0 +1,30 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+namespace facebook.nimble.serialization;
+
+/// Bloom filter for fast negative lookups.
+table BloomFilter {
+  /// Deprecated: the block count is derived from the filter payload, whose
+  /// trailer identifies the layout that fixes the block size.
+  num_blocks:uint32 (deprecated);
+  /// Bits per key used during construction (for diagnostics/rebuild).
+  bits_per_key:float;
+  /// Serialized filter produced by the bloom filter builder. Self-describing:
+  /// a trailer records the layout, so a reader needs nothing from this table
+  /// to interpret it.
+  data:[uint8];
+}

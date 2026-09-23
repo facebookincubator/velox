@@ -392,6 +392,150 @@ TEST_F(VectorSaverTest, flatIntervalDayTime) {
   testRoundTrip(opts, INTERVAL_DAY_TIME());
 }
 
+namespace {
+struct OpaqueValue {
+  explicit OpaqueValue(std::string payload) : payload{std::move(payload)} {}
+  std::string payload;
+};
+} // namespace
+
+// Opaque values are shared_ptr<void>, so no encoding can persist them by
+// copying their in-memory representation; every one of them has to go through
+// the serializer registered for the type. Kept in one fixture rather than split
+// across the flat/constant/dictionary groups because they share a registration.
+class OpaqueVectorSaverTest : public VectorSaverTest {
+ protected:
+  static void SetUpTestCase() {
+    VectorSaverTest::SetUpTestCase();
+    OpaqueType::registerSerialization<OpaqueValue>(
+        "vector_saver_test_opaque_value",
+        [](const std::shared_ptr<OpaqueValue>& value) {
+          return value->payload;
+        },
+        [](const std::string& serialized) {
+          return std::make_shared<OpaqueValue>(serialized);
+        });
+  }
+
+  VectorPtr makeOpaqueVector(
+      const std::vector<std::optional<std::string>>& payloads) {
+    auto vector = BaseVector::create<FlatVector<std::shared_ptr<void>>>(
+        OPAQUE<OpaqueValue>(),
+        static_cast<vector_size_t>(payloads.size()),
+        pool());
+    for (auto i = 0; i < static_cast<vector_size_t>(payloads.size()); ++i) {
+      if (payloads[i].has_value()) {
+        vector->set(i, std::make_shared<OpaqueValue>(*payloads[i]));
+      } else {
+        vector->setNull(i, true);
+      }
+    }
+    return vector;
+  }
+
+  static std::string payloadAt(const VectorPtr& vector, vector_size_t index) {
+    return std::static_pointer_cast<OpaqueValue>(
+               vector->as<SimpleVector<std::shared_ptr<void>>>()->valueAt(
+                   index))
+        ->payload;
+  }
+
+  void assertOpaquePayloads(
+      const VectorPtr& actual,
+      const std::vector<std::optional<std::string>>& expected) {
+    ASSERT_EQ(*actual->type(), *OPAQUE<OpaqueValue>());
+    ASSERT_EQ(actual->size(), static_cast<vector_size_t>(expected.size()));
+    for (auto i = 0; i < static_cast<vector_size_t>(expected.size()); ++i) {
+      if (!expected[i].has_value()) {
+        EXPECT_TRUE(actual->isNullAt(i)) << "at " << i;
+        continue;
+      }
+      ASSERT_FALSE(actual->isNullAt(i)) << "at " << i;
+      EXPECT_EQ(payloadAt(actual, i), *expected[i]) << "at " << i;
+    }
+  }
+};
+
+TEST_F(OpaqueVectorSaverTest, flatOpaque) {
+  const std::vector<std::optional<std::string>> payloads = {
+      "first", "second", "third"};
+  assertOpaquePayloads(takeRoundTrip(makeOpaqueVector(payloads)), payloads);
+}
+
+TEST_F(OpaqueVectorSaverTest, flatOpaqueWithNulls) {
+  const std::vector<std::optional<std::string>> payloads = {
+      "first", std::nullopt, "third", std::nullopt};
+  assertOpaquePayloads(takeRoundTrip(makeOpaqueVector(payloads)), payloads);
+}
+
+TEST_F(OpaqueVectorSaverTest, flatOpaqueEmptyAndEmbeddedNulls) {
+  const std::vector<std::optional<std::string>> payloads = {
+      "", std::string("with\0embedded", 13), "tail"};
+  assertOpaquePayloads(takeRoundTrip(makeOpaqueVector(payloads)), payloads);
+}
+
+// A constant with no base vector holds the value inline, so it needs the same
+// serde treatment as a flat vector's values.
+TEST_F(OpaqueVectorSaverTest, constantOpaque) {
+  auto vector = std::make_shared<ConstantVector<std::shared_ptr<void>>>(
+      pool(),
+      100,
+      false,
+      OPAQUE<OpaqueValue>(),
+      std::static_pointer_cast<void>(
+          std::make_shared<OpaqueValue>("constant payload")));
+
+  auto copy = takeRoundTrip(vector);
+  ASSERT_EQ(copy->encoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_EQ(*copy->type(), *OPAQUE<OpaqueValue>());
+  ASSERT_EQ(copy->size(), 100);
+  ASSERT_FALSE(copy->isNullAt(0));
+  EXPECT_EQ(payloadAt(copy, 0), "constant payload");
+}
+
+TEST_F(OpaqueVectorSaverTest, constantOpaqueNull) {
+  auto copy = takeRoundTrip(
+      BaseVector::createNullConstant(OPAQUE<OpaqueValue>(), 100, pool()));
+  ASSERT_EQ(copy->encoding(), VectorEncoding::Simple::CONSTANT);
+  ASSERT_EQ(*copy->type(), *OPAQUE<OpaqueValue>());
+  EXPECT_TRUE(copy->isNullAt(0));
+}
+
+// A dictionary defers to its base vector, so the values are written once and
+// the indices select among them.
+TEST_F(OpaqueVectorSaverTest, dictionaryOpaque) {
+  auto base = makeOpaqueVector({"first", "second"});
+
+  auto indices = AlignedBuffer::allocate<vector_size_t>(4, pool());
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  rawIndices[0] = 1;
+  rawIndices[1] = 0;
+  rawIndices[2] = 1;
+  rawIndices[3] = 1;
+
+  auto copy = takeRoundTrip(
+      BaseVector::wrapInDictionary(nullptr, indices, 4, std::move(base)));
+  ASSERT_EQ(copy->encoding(), VectorEncoding::Simple::DICTIONARY);
+  assertOpaquePayloads(copy, {"second", "first", "second", "second"});
+}
+
+// registerSerialization allows a persistent name without serialize/deserialize
+// functions. The type then survives saveType, but its values cannot be written.
+// A fully unregistered type fails earlier, when the type itself is written.
+TEST_F(OpaqueVectorSaverTest, nameRegisteredWithoutValueSerdeFails) {
+  struct NameOnly {};
+  OpaqueType::registerSerialization<NameOnly>(
+      "vector_saver_test_name_only_opaque");
+
+  auto vector = BaseVector::create<FlatVector<std::shared_ptr<void>>>(
+      OPAQUE<NameOnly>(), 1, pool());
+  vector->set(0, std::make_shared<NameOnly>());
+
+  std::ostringstream out;
+  VELOX_ASSERT_THROW(
+      saveVector(*vector, out), "No serialization function registered");
+}
+
 TEST_F(VectorSaverTest, row) {
   auto opts = fuzzerOptions();
 
@@ -612,7 +756,7 @@ TEST_F(VectorSaverTest, dictionaryRow) {
   testRoundTrip(fuzzer.fuzzDictionary(fuzzer.fuzzDictionary(flatVector)));
 }
 
-TEST_F(VectorSaverTest, LazyVector) {
+TEST_F(VectorSaverTest, lazyVector) {
   auto opts = fuzzerOptions();
   opts.nullRatio = 0.5;
   SCOPED_TRACE(fmt::format("seed: {}", seed_));

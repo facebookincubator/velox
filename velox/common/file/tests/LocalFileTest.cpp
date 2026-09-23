@@ -576,6 +576,10 @@ class LocalFileIoUringTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    if (!IoUringReader::available()) {
+      GTEST_SKIP() << "io_uring is unavailable";
+    }
+
     ThreadLocalIoUringReader::testingClear();
 
     IoUringReader::Options options;

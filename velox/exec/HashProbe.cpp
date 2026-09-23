@@ -33,6 +33,22 @@ namespace {
 
 // Batch size used when iterating the row container.
 constexpr int kBatchSize = 1024;
+
+template <typename T>
+int64_t applyBloomFilter(
+    const common::BigintValuesUsingBloomFilter& filter,
+    const DecodedVector& decoded,
+    SelectivityVector& rows) {
+  int64_t numAccepted = 0;
+  rows.applyToSelected([&](vector_size_t row) {
+    if (filter.testInt64(decoded.valueAt<T>(row))) {
+      ++numAccepted;
+    } else {
+      rows.setValid(row, false);
+    }
+  });
+  return numAccepted;
+}
 } // namespace
 
 // static
@@ -125,6 +141,8 @@ HashProbe::HashProbe(
               ? driverCtx->makeSpillConfig(operatorId, OperatorType::kHashProbe)
               : std::nullopt),
       outputBatchSize_{outputBatchRows()},
+      preferredOutputBatchBytes_{
+          driverCtx->queryConfig().preferredOutputBatchBytes()},
       joinNode_(std::move(joinNode)),
       joinType_{joinNode_->joinType()},
       nullAware_{joinNode_->isNullAware()},
@@ -136,9 +154,18 @@ HashProbe::HashProbe(
       joinBridge_(operatorCtx_->task()->getHashJoinBridgeLocked(
           operatorCtx_->driverCtx()->splitGroupId,
           planNodeId())),
+      bypassBloomFilterMinRows_{
+          driverCtx->queryConfig().bypassHashProbeBloomFilterMinRows()},
+      bypassBloomFilterMinPct_{
+          driverCtx->queryConfig().bypassHashProbeBloomFilterMinPct()},
+      bypassBloomFilter_{
+          bypassBloomFilterMinRows_ <= 0 || bypassBloomFilterMinPct_ <= 0},
       filterResult_(1),
       outputTableRowsCapacity_(outputBatchSize_) {
   VELOX_CHECK_NOT_NULL(joinBridge_);
+  VELOX_USER_CHECK_GE(bypassBloomFilterMinRows_, 0);
+  VELOX_USER_CHECK_GE(bypassBloomFilterMinPct_, 0);
+  VELOX_USER_CHECK_LE(bypassBloomFilterMinPct_, 100);
 }
 
 void HashProbe::initialize() {
@@ -428,6 +455,74 @@ void HashProbe::pushdownDynamicFilters() {
       tableOutputProjections_.empty() && !filter_ && numFilters > 0 &&
       !table_->hashers()[0]->getBloomFilter() && !isRightJoin(joinType_)) {
     canReplaceWithDynamicFilter_ = true;
+  }
+}
+
+void HashProbe::applyBloomFilterForJoinProbe() {
+  // TODO: Add Bloom filter support for full joins.
+  if (bypassBloomFilter_ || nullAware_ || isSpillInput() ||
+      needToSpillInput() ||
+      !(isLeftJoin(joinType_) || isLeftSemiProjectJoin(joinType_) ||
+        isAntiJoin(joinType_))) {
+    return;
+  }
+
+  bool hasBloomFilter = false;
+  for (const auto& hasher : table_->hashers()) {
+    if (hasher->getBloomFilter()) {
+      hasBloomFilter = true;
+      break;
+    }
+  }
+  if (!hasBloomFilter) {
+    bypassBloomFilter_ = true;
+    return;
+  }
+
+  const int64_t numTested = activeRows_.countSelected();
+  int64_t numAccepted = numTested;
+  const bool isSampling = bloomFilterSampledRows_ < bypassBloomFilterMinRows_;
+  for (auto i = 0; i < hashers_.size(); ++i) {
+    const auto& filter = table_->hashers()[i]->getBloomFilter();
+    if (!filter) {
+      continue;
+    }
+    const auto* bloomFilter =
+        checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
+            filter.get());
+    const auto& decoded = hashers_[i]->decodedVector();
+    switch (hashers_[i]->typeKind()) {
+      case TypeKind::INTEGER:
+        numAccepted =
+            applyBloomFilter<int32_t>(*bloomFilter, decoded, activeRows_);
+        break;
+      case TypeKind::BIGINT:
+        numAccepted =
+            applyBloomFilter<int64_t>(*bloomFilter, decoded, activeRows_);
+        break;
+      default:
+        VELOX_UNREACHABLE();
+    }
+  }
+  activeRows_.updateBounds();
+
+  if (isSampling) {
+    bloomFilterSampledRows_ += numTested;
+    bloomFilterSampleAcceptedRows_ += numAccepted;
+    if (bloomFilterSampledRows_ >= bypassBloomFilterMinRows_) {
+      bypassBloomFilter_ = bloomFilterSampleAcceptedRows_ * 100 >=
+          bloomFilterSampledRows_ * bypassBloomFilterMinPct_;
+      if (bypassBloomFilter_) {
+        addRuntimeStat(std::string(kBloomFilterBypassed), RuntimeCounter(1));
+      }
+    }
+  }
+
+  if (numTested > 0) {
+    addRuntimeStat(
+        std::string(kBloomFilterTestedRows), RuntimeCounter(numTested));
+    addRuntimeStat(
+        std::string(kBloomFilterAcceptedRows), RuntimeCounter(numAccepted));
   }
 }
 
@@ -771,6 +866,9 @@ void HashProbe::addInput(RowVectorPtr input) {
     lockedStats->numNullKeys +=
         activeRows_.size() - activeRows_.countSelected();
   }
+
+  // Remove proven misses before probing the hash table.
+  applyBloomFilterForJoinProbe();
 
   table_->prepareForJoinProbe(*lookup_.get(), input_, activeRows_, false);
 
@@ -1277,7 +1375,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
           joinIncludesMissesFromLeft(joinType_),
           folly::Range(mapping.data(), outputBatchSize),
           folly::Range(outputTableRows, outputBatchSize),
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes());
+          preferredOutputBatchBytes_);
     }
 
     // We are done processing the input batch if there are no more joined rows
@@ -1966,10 +2064,7 @@ void HashProbe::ensureOutputFits() {
   }
 
   const uint64_t bytesToReserve = static_cast<uint64_t>(
-      static_cast<double>(operatorCtx_->driverCtx()
-                              ->queryConfig()
-                              .preferredOutputBatchBytes()) *
-      1.2);
+      static_cast<double>(preferredOutputBatchBytes_) * 1.2);
   if (pool()->availableReservation() >= bytesToReserve) {
     return;
   }
