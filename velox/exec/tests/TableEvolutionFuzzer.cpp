@@ -693,7 +693,11 @@ void generateAggregatesForColumns(
     const auto& aggFunc = supportedAggFuncs[folly::Random::rand32(
         static_cast<uint32_t>(supportedAggFuncs.size()), rng)];
     aggregates.push_back(
-        fmt::format("{}({})", aggFunc, schema->nameOf(shuffled[i])));
+        fmt::format(
+            "{}({})",
+            aggFunc,
+            TableEvolutionFuzzer::quoteIdentifier(
+                schema->nameOf(shuffled[i]))));
   }
 }
 
@@ -918,13 +922,30 @@ fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
 }
 
 // Generate random aggregation configuration for pushdown testing.
+} // namespace
+
+std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
+  std::string quoted;
+  quoted.reserve(name.size() + 2);
+  quoted.push_back('"');
+  for (const char character : name) {
+    if (character == '"') {
+      quoted.push_back('"');
+    }
+    quoted.push_back(character);
+  }
+  quoted.push_back('"');
+  return quoted;
+}
+
 // Only generates aggregations that are eligible for pushdown:
 // - Supported aggregate functions: min, max, bool_and, bool_or
 // - Each column can only be used by at most one aggregate
 // - Grouping keys are optional (can be empty for global aggregation)
 // - Columns with filters (subfield or remaining) are excluded to enable
 // pushdown
-std::optional<AggregationConfig> generateAggregationConfig(
+std::optional<AggregationConfig>
+TableEvolutionFuzzer::generateAggregationConfig(
     const RowTypePtr& schema,
     FuzzerGenerator& rng,
     const std::unordered_set<std::string>& filteredColumns) {
@@ -945,6 +966,8 @@ std::optional<AggregationConfig> generateAggregationConfig(
   for (int i = 0; i < numGroupingKeys && i < schema->size(); ++i) {
     int colIdx = folly::Random::rand32(schema->size(), rng);
     if (usedColumnIndices.count(colIdx) == 0) {
+      // Raw, not quoted: PlanBuilder::aggregation resolves grouping keys with a
+      // direct field lookup rather than by parsing them as expressions.
       groupingKeys.push_back(schema->nameOf(colIdx));
       usedColumnIndices.insert(colIdx);
     }
@@ -1012,8 +1035,6 @@ std::optional<AggregationConfig> generateAggregationConfig(
       .groupingKeys = std::move(groupingKeys),
       .aggregates = std::move(aggregates)};
 }
-
-} // namespace
 
 VectorPtr TableEvolutionFuzzer::liftToType(
     const VectorPtr& input,
@@ -2771,7 +2792,15 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
       builder.project(aggregationBlockingProjectExpressions(
           projectedSchema, *pushdownConfig.aggregationConfig));
     } else {
-      builder.project(projectedSchema->names());
+      // Reachable only when pruned, since the branch above takes every
+      // aggregation case, so the pruned schema is the one to project.
+      const auto& projectedNames = projectedSchema->names();
+      std::vector<std::string> projections;
+      projections.reserve(projectedNames.size());
+      for (const auto& name : projectedNames) {
+        projections.push_back(quoteIdentifier(name));
+      }
+      builder.project(projections);
     }
   }
 
