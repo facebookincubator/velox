@@ -15,6 +15,7 @@
  */
 
 #include "velox/benchmarks/QueryBenchmarkBase.h"
+#include <folly/String.h>
 #include <iostream>
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/common/file/FileSystems.h"
@@ -117,6 +118,13 @@ DEFINE_int32(
     "the current one");
 
 DEFINE_int32(split_preload_per_driver, 2, "Prefetch split metadata");
+
+DEFINE_string(
+    query_configs,
+    "",
+    "Semicolon-separated Velox query configs applied to every query, "
+    "e.g. 'key1=value1;key2=value2'. A same-key entry takes precedence "
+    "over the benchmark's own settings, e.g. -split_preload_per_driver.");
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -254,6 +262,31 @@ void QueryBenchmarkBase::shutdown() {
   }
 }
 
+namespace {
+// Parses the semicolon-separated key=value entries of -query_configs
+// into 'queryConfigs'. A same-key entry overwrites what the benchmark
+// put in earlier (per-query configs, the -split_preload_per_driver
+// injection).
+void applyQueryConfigOverrides(
+    std::unordered_map<std::string, std::string>& queryConfigs) {
+  if (FLAGS_query_configs.empty()) {
+    return;
+  }
+  std::vector<std::string_view> entries;
+  folly::split(";", FLAGS_query_configs, entries);
+  for (const auto& entry : entries) {
+    const auto equals = entry.find('=');
+    VELOX_USER_CHECK_NE(
+        equals,
+        std::string_view::npos,
+        "Invalid -query_configs entry, expected key=value: '{}'",
+        entry);
+    queryConfigs[std::string(entry.substr(0, equals))] =
+        std::string(entry.substr(equals + 1));
+  }
+}
+} // namespace
+
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 QueryBenchmarkBase::run(
     const TpchPlan& tpchPlan,
@@ -267,6 +300,7 @@ QueryBenchmarkBase::run(
       params.queryConfigs = queryConfigs;
       params.queryConfigs[core::QueryConfig::kMaxSplitPreloadPerDriver] =
           std::to_string(FLAGS_split_preload_per_driver);
+      applyQueryConfigOverrides(params.queryConfigs);
       const int numSplitsPerFile = FLAGS_num_splits_per_file;
 
       auto addSplits = [&](TaskCursor* taskCursor) {
