@@ -321,9 +321,24 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
     return false;
   }
 
+  const auto len = expr->inputs().size();
+  if (expr->isCallKind()) {
+    const auto* call = expr->asUnchecked<core::CallTypedExpr>();
+    const auto name =
+        stripPrefix(call->name(), CudfConfig::getInstance().functionNamePrefix);
+    if (name == "in") {
+      try {
+        const auto inputType = veloxToCudfDataType(call->inputs()[0]->type());
+        return len == 2 && isSupportedLiteral(call->inputs()[0]->type()) &&
+            isOpAndInputsSupported(Op::EQUAL, {inputType, inputType});
+      } catch (...) {
+        return false;
+      }
+    }
+  }
+
   // Convert input types to CUDF types once
   std::vector<cudf::data_type> inputCudfDataTypes;
-  const auto len = expr->inputs().size();
   inputCudfDataTypes.reserve(len);
   for (const auto& input : expr->inputs()) {
     try {
@@ -363,12 +378,6 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
                  {inputCudfDataTypes[0], inputCudfDataTypes[2]});
     }
 
-    // In: chain of EQUAL operations
-    if (name == "in") {
-      return len == 2 && isSupportedLiteral(call->inputs()[0]->type()) &&
-          isOpAndInputsSupported(
-                 Op::EQUAL, {inputCudfDataTypes[0], inputCudfDataTypes[0]});
-    }
   }
 
   if (expr->isCastKind()) {
