@@ -215,6 +215,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   convertSplit(split);
 
   cudfSplitReader_ = createCudfSplitReader();
+
   cudfSplitReader_->prepareSplit(runtimeStats_);
 
   // Check if preloaded splits should start pre-fetching the first pass of
@@ -297,11 +298,20 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     cudfSplitReader_->resetSplit();
     return nullptr;
   }
-  auto cudfTable = std::move(chunkOpt.value());
+  // A table with no columns reports zero rows, so the chunk carries the row
+  // count of a scan that reads no columns.
+  auto nRows = chunkOpt.value().numRows;
+  auto cudfTable = std::move(chunkOpt.value().table);
   auto stream = cudfSplitReader_->stream();
 
   uint64_t filterTimeUs{0};
   if (optimizedRemainingFilter_) {
+    // The expression evaluator assumes a single row for a column-less input, so
+    // it cannot produce a mask over a scan that read no columns.
+    VELOX_CHECK_GT(
+        cudfTable->num_columns(),
+        0,
+        "A remaining filter over a scan with no read columns is not supported");
     MicrosecondWallTimer filterTimer(&filterTimeUs);
     auto cudfTableColumns = cudfTable->release();
     std::vector<cudf::column_view> inputViews;
@@ -315,11 +325,10 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
         std::make_unique<cudf::table>(std::move(cudfTableColumns));
     cudfTable = cudf::apply_retention_mask(
         *originalTable, asView(filterResult), stream, get_output_mr());
+    nRows = cudfTable->num_rows();
   }
   totalRemainingFilterTime_.fetch_add(
       filterTimeUs * 1000, std::memory_order_relaxed);
-
-  const auto nRows = cudfTable->num_rows();
 
   if (outputType_->size() < cudfTable->num_columns()) {
     auto cudfTableColumns = cudfTable->release();
@@ -335,11 +344,18 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
   // TODO (dm): Should we only enable table scan if cudf is registered?
   // Earlier we could enable cudf table scans without using other cudf operators
   // We still can, but I'm wondering if this is the right thing to do
-  auto output = cudfIsRegistered()
-      ? std::make_shared<CudfVector>(
-            pool_, outputType_, nRows, std::move(cudfTable), stream)
-      : with_arrow::toVeloxColumn(
-            cudfTable->view(), pool_, outputType_, stream, get_temp_mr());
+  RowVectorPtr output;
+  if (cudfIsRegistered()) {
+    output = std::make_shared<CudfVector>(
+        pool_, outputType_, nRows, std::move(cudfTable), stream);
+  } else if (cudfTable->num_columns() == 0) {
+    // There is no device data to convert, only the row count.
+    output = std::make_shared<RowVector>(
+        pool_, outputType_, nullptr, nRows, std::vector<VectorPtr>{});
+  } else {
+    output = with_arrow::toVeloxColumn(
+        cudfTable->view(), pool_, outputType_, stream, get_temp_mr());
+  }
   stream.sync();
 
   VELOX_CHECK_NOT_NULL(output, "Cudf to Velox conversion yielded a nullptr");

@@ -90,8 +90,16 @@ class CudfSplitReader : public NvtxHelper {
   /// @param runtimeStats Reference to the DataSource's runtime statistics
   void prepareSplit(dwio::common::RuntimeStats& runtimeStats);
 
+  /// A chunk of scanned rows. 'numRows' matches 'table->num_rows()' whenever
+  /// the table has columns. A cudf::table without columns reports zero rows, so
+  /// a scan that reads no columns at all carries its row count here.
+  struct Chunk {
+    std::unique_ptr<cudf::table> table;
+    vector_size_t numRows{0};
+  };
+
   /// Read the next raw cudf table chunk. Returns nullopt when done.
-  virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
+  virtual std::optional<Chunk> next(uint64_t size);
 
   /// Rebinds the query context of a reader prepared in the background to the
   /// context owned by the driver that reads it. Must be called before reading
@@ -130,7 +138,7 @@ class CudfSplitReader : public NvtxHelper {
   // width (DECIMAL64 for short decimals, DECIMAL128 for long decimals) before
   // deferred filters or equality deletes consume the table. A prepended
   // row-index column is not part of the logical read schema.
-  virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
+  virtual std::optional<Chunk> readNextChunk();
 
   // Setup the cuDF data source
   void setupCudfDataSource();
@@ -138,8 +146,19 @@ class CudfSplitReader : public NvtxHelper {
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();
 
+  // Take the split's row count from the Parquet footer instead of creating a
+  // reader, for a projection that reads no columns.
+  void setupFooterRowCount();
+
   // Read file metadatas.
   void fileMetaDatas();
+
+  // Returns the rows of the file that precede this split and the rows the split
+  // owns, taken from the Parquet footer. A row group belongs to the split whose
+  // byte range contains the row group's start offset, which is what cuDF's
+  // `filter_row_groups_with_byte_range()` does for `skip_bytes`/`num_bytes`.
+  // Requires `fileMetaDatas()` to have run.
+  std::pair<std::size_t, std::size_t> computeSplitRowRange() const;
 
   // Return the logical subfield filter AST used after reading.
   const cudf::ast::expression* subfieldFilterAst() const;
@@ -213,6 +232,9 @@ class CudfSplitReader : public NvtxHelper {
   // Wait for any reads of the current pass, then release its column chunk data.
   void releaseCurrentPassData();
 
+  // Emit the next column-less chunk of the footer-derived row count.
+  std::optional<Chunk> nextFooterRowCountChunk();
+
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   memory::MemoryPool* pool_;
 
@@ -235,6 +257,13 @@ class CudfSplitReader : public NvtxHelper {
   cudf::ast::expression const* pushdownFilterExpr_;
   PushdownFilterBuilder pushdownFilterBuilder_;
   bool hasSplitSpecificPushdownFilter_{false};
+
+  // Whether the split reads no columns, so no reader exists and the row count
+  // comes from the Parquet footer.
+  bool footerRowCountOnly_{false};
+
+  // Rows of the split that the footer-derived row count has yet to emit.
+  std::size_t footerRowsRemaining_{0};
 
   struct TotalScanTimeCallbackData {
     uint64_t startTimeUs;
