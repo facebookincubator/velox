@@ -875,8 +875,8 @@ Custom Memory Resources
 *CustomMemoryResource* lets an extension expose memory tiers other than
 host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
 NUMA-bound pools) side-by-side with the default CPU tier. A resource
-bundles a tag, an allocator, an arbitrator, and a factory that builds a
-per-query reclaimer. The constructor requires a non-empty tag and
+bundles a tag, an allocator, an arbitrator, and a reclaimer factory.
+The original constructor requires a non-empty tag and
 non-null allocator, arbitrator, and reclaimerFactory; the resource is
 immutable once constructed:
 
@@ -926,25 +926,31 @@ global scope at process startup, after *initializeMemoryManager*:
       resource->tag(), resource);
 
 For each query that wants to use a registered resource, the caller looks
-the resource up by tag, materializes the per-resource root pool through
-*MemoryManager::addCustomRootPool*, and hands the pool to the *QueryCtx*
-via *Builder::customPool*:
+the resource up by tag, creates the custom root and registers it with the query.
+The caller must keep the resource alive while any pool or allocation backed by
+it remains alive. Registering a pool does not transfer ownership of the resource:
 
 .. code-block:: c++
 
-  auto* manager = memory::memoryManager();
   auto resource =
       memory::CustomMemoryResourceRegistry::global().find("device");
   VELOX_USER_CHECK_NOT_NULL(resource, "Unknown resource tag: device");
-  auto devicePool = manager->addCustomRootPool("query.q0.device", resource);
-  auto queryCtx = core::QueryCtx::Builder()
-                      .customPool("device", std::move(devicePool))
-                      .queryId("q0")
-                      .build();
+  auto root = memory::memoryManager()->addCustomRootPool("query.q0.device", resource);
+  auto queryCtx = core::QueryCtx::Builder().queryId("q0").build();
+  if (resource->hasQueryReclaimerFactory() && root->reclaimer() == nullptr) {
+    auto reclaimer = resource->newQueryReclaimer(queryCtx.get(), root.get());
+    if (reclaimer != nullptr) {
+      root->setReclaimer(std::move(reclaimer));
+    }
+  }
+  queryCtx->addCustomPool(resource->tag(), std::move(root));
 
-*addCustomRootPool* invokes *resource->newReclaimer()* to build the
-pool's reclaimer, uses *resource->maxCapacity()* as the pool capacity, and
-backs the pool with *resource->allocator()* and *resource->arbitrator()*.
+*addCustomRootPool* uses *resource->maxCapacity()* as the pool capacity and backs
+the pool with *resource->allocator()* and *resource->arbitrator()*. With the
+original constructor, its reclaimer comes from the original factory. Existing
+*Builder::customPool(tag, pool)* and *addCustomPool(tag, pool)* calls retain their
+registration-only behavior. Extensions invoke and install configured query
+factories explicitly, as illustrated above.
 The root pool is exposed on *QueryCtx* keyed by tag:
 
 .. code-block:: c++
@@ -957,14 +963,52 @@ Per-Query Pool Hierarchy
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 For every custom root pool registered on *QueryCtx* via
-*Builder::customPool*, *Task* builds a parallel ``task → node → operator``
-aggregate/leaf subtree beneath it that mirrors the default hierarchy.
-Aggregate children under a custom root are created at the same moment as
-their default counterparts. Reclaimers for these aggregates come
-from each resource's ``reclaimerFactory`` via
-*CustomMemoryResource::newReclaimer*, so capacity decisions and reclaim
-on a custom subtree are governed end-to-end by the resource's own
-arbitrator and reclaimer — separate from the default DRAM tier.
+*addCustomPool* or *Builder::customPool*, *Task* builds a
+parallel ``task → node → operator`` aggregate/leaf subtree beneath it that
+mirrors the default hierarchy. Aggregate children under a custom root are
+created at the same moment as their default counterparts.
+
+Existing CXL and other resources using the original constructor continue to
+use their original factory for root, task and node pools without code changes.
+A factory result of ``nullptr`` means no reclaimer; it never selects a fallback.
+
+Extensions can opt into distinct query/task factories with the additional
+constructor overload:
+
+.. code-block:: c++
+
+  auto resource = std::make_shared<memory::CustomMemoryResource>(
+      "device",
+      allocator,
+      arbitrator,
+      []() { return exec::MemoryReclaimer::create(); }, // Node traversal.
+      deviceCapacity,
+      memory::CustomMemoryResource::ExecutionReclaimerFactories{
+          .query = core::QueryCtx::MemoryReclaimer::create,
+          .task = exec::Task::MemoryReclaimer::create});
+
+The explicit query factory receives the query and completed root. When it is
+configured, *addCustomRootPool* defers root-reclaimer installation;
+the extension's query-setup function invokes and installs its result before
+registering the pool. Neither *QueryCtx* nor its
+builder invokes the factory. Preserve any already-installed reclaimer and
+complete setup before creating Tasks or allocating custom memory. Registering
+only after successful factory invocation leaves the pool unregistered if that
+invocation throws.
+
+The explicit task factory receives the task, reclamation priority and resource
+tag. The built-in Task reclaimer uses that tag to traverse only the selected
+custom hierarchy with task pause/resume coordination. If a role-specific factory
+is absent, that role retains the legacy factory behavior. If it is present, its
+result is used exactly, including ``nullptr``. As with ordinary pools, a child
+can have a reclaimer only when its parent has one.
+
+The common memory layer only forward-declares QueryCtx and Task. Extensions
+include the execution headers when selecting built-in factories, or supply
+their own callbacks. Factories should not capture a particular query/task in a
+process-wide resource, and reclaimers should avoid strong ownership cycles.
+Operator leaves remain extension-owned because only the extension knows whether
+and how that operator can release memory.
 
 Server OOM Prevention
 ---------------------

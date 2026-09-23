@@ -297,7 +297,9 @@ std::shared_ptr<MemoryPool> MemoryManager::addCustomRootPool(
   return addRootPoolImpl(
       name,
       resource->maxCapacity(),
-      resource->newReclaimer(),
+      // Query factories need the QueryCtx and the completed root. Their
+      // invocation and installation are the extension's query-setup work.
+      resource->hasQueryReclaimerFactory() ? nullptr : resource->newReclaimer(),
       poolDebugOpts,
       resource->allocator(),
       resource->arbitrator());
