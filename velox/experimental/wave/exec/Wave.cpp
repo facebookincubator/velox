@@ -637,8 +637,8 @@ void WaveStream::exeLaunchInfo(
   exe.localOperands.forEach([&](auto id) {
     auto op = operandAt(id);
     if (op->wrappedAt != AbstractOperand::kNoWrap) {
-      if (info.inputWrap.find(id) == info.inputWrap.end()) {
-        if (info.localWrap.find(op->wrappedAt) == info.localWrap.end()) {
+      if (!info.inputWrap.contains(id)) {
+        if (!info.localWrap.contains(op->wrappedAt)) {
           info.localWrap[op->wrappedAt] = reinterpret_cast<int32_t**>(
               info.localWrap.size() * numBlocks * sizeof(void*));
         }
@@ -648,8 +648,8 @@ void WaveStream::exeLaunchInfo(
   exe.outputOperands.forEach([&](auto id) {
     auto op = operandAt(id);
     if (op->wrappedAt != AbstractOperand::kNoWrap) {
-      if (info.inputWrap.find(id) == info.inputWrap.end()) {
-        if (info.localWrap.find(op->wrappedAt) == info.localWrap.end()) {
+      if (!info.inputWrap.contains(id)) {
+        if (!info.localWrap.contains(op->wrappedAt)) {
           info.localWrap[op->wrappedAt] = reinterpret_cast<int32_t**>(
               info.localWrap.size() * numBlocks * sizeof(void*));
         }
