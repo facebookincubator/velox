@@ -29,6 +29,11 @@
 #include "velox/dwio/nimble/encodings/EncodingSliceFactory.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
+// FrequencyPartition integration (re-enable for
+// NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#endif
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -196,6 +201,13 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::FOR: {
       RETURN_ENCODING_BY_INTEGER_TYPE(ForEncoding, dataType);
     }
+    // FrequencyPartition integration (re-enabled for
+    // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::FrequencyPartition: {
+      RETURN_ENCODING_BY_NON_BOOL_TYPE(FrequencyPartitionEncoding, dataType);
+    }
+#endif
     default: {
       NIMBLE_UNREACHABLE(
           "Trying to deserialize invalid EncodingType:{} -- garbage input?",
@@ -382,6 +394,19 @@ std::string_view EncodingFactory::encode(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "MainlyConstant encoding should not be selected for bool data types.");
     }
+    // FrequencyPartition integration (re-enabled for
+    // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS; was commented out by #636):
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::FrequencyPartition: {
+      if constexpr (std::is_same<T, bool>::value) {
+        NIMBLE_INCOMPATIBLE_ENCODING(
+            "FrequencyPartition encoding should not be selected for bool data types.");
+      } else {
+        return FrequencyPartitionEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+    }
+#endif
     case EncodingType::SparseBool: {
       if constexpr (std::is_same<T, bool>::value) {
         return SparseBoolEncoding::encode(

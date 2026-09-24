@@ -90,6 +90,7 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Keys32Bit = 13;
     // Unencoded partition (raw values that don't fit in any tier)
     static constexpr NestedEncodingIdentifier UnencodedValues = 14;
+    static constexpr NestedEncodingIdentifier TierTags = 15;
   };
 
   struct Pfor {

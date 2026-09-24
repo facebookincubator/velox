@@ -16,9 +16,13 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <span>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -27,6 +31,8 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -55,7 +61,7 @@
 //   4+VV bytes: unencoded values (nested, if any)
 //
 // Wire format extension (any indexed mode — appended at end):
-//   1 byte: formatVersion (= kFormatVersion = 1)
+//   1 byte: formatVersion (= kFormatVersion = 2)
 //   1 byte: indexType (FreqPartIndexType)
 //   4 bytes: indexPayloadBytes
 //   [indexPayloadBytes bytes]: index payload (see below)
@@ -69,9 +75,10 @@
 // Index payload layout (TierTagArray):
 //   1 byte: tagBits = ceilLog2(numTiers + 1), minimum 1
 //   3 bytes: padding
-//   4 bytes: tagArrayByteCount
-//   [tagArrayByteCount]: packed tag array (LSB-first; tag = tier index
-//                        0..numTiers-1, or numTiers for fallback)
+//   4 bytes: tagStreamByteCount
+//   [tagStreamByteCount]: nested encoding of the tag per row (tag = tier
+//                         index 0..numTiers-1, or numTiers for fallback);
+//                         decoded and repacked LSB-first for reads.
 //
 // Index payload layout (EliasFano):
 //   For each non-empty tier (same order as above):
@@ -99,9 +106,22 @@ class FrequencyPartitionEncoding
   using cppDataType = T;
   using physicalType = typename TypeTraits<T>::physicalType;
 
-  static const int kNumPartitionsOffset = Encoding::kPrefixSize;
-  static constexpr uint8_t kFormatVersion = 1;
+  // Version 2 nests the index streams; a version 1 index payload is laid out
+  // differently and is rejected rather than misread.
+  static constexpr uint8_t kFormatVersion = 2;
+
+  // Discount for TierTagArray's tag-stream estimate in estimateSize(). 1.0
+  // (no discount) is the safer default: an optimistic estimate over-selects
+  // FrequencyPartition. Must stay in sync with subintsplit/CostModel.h's
+  // copy of this constant.
+  static constexpr double kFrequencyPartitionNestedIndexDiscount = 1.0;
   static constexpr uint32_t kRankSampleStride = 256;
+  // Upper bound on tiers: one per entry of the key-bit table
+  // {1, 2, 4, 8, 16, 32}, which is what encode() fills.
+  static constexpr uint32_t kMaxTiers = 6;
+  // Run length below which the per-row path beats the cursor walk.
+  // Set above kMaxTiers so the crossover is never the marginal case.
+  static constexpr uint32_t kSequentialThreshold = 8;
 
   FrequencyPartitionEncoding(
       velox::memory::MemoryPool& pool,
@@ -116,11 +136,282 @@ class FrequencyPartitionEncoding
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params);
 
+  /// In-memory size, in bytes, of TierTagArray's decode-time index. Zero
+  /// for any other index type. Rebuilt on every decode, so this is a
+  /// load-time memory cost, not a payload cost.
+  size_t tagRankIndexBytes() const {
+    size_t total = tierRankSamples_.size() * sizeof(uint32_t);
+    total += cursorPos_.size() * sizeof(uint32_t);
+    total += cursorRank_.size() * sizeof(uint32_t);
+    total +=
+        (cursorValid_.size() + 7) / 8; // std::vector<bool> packs 1 bit each.
+    for (const auto& tier : tiers_) {
+      total += tier.resolvedValues.size() * sizeof(T);
+    }
+    return total;
+  }
+
   static std::string_view encode(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  /// Size estimate for encoding selection: mirrors encode()'s tier
+  /// assignment and prices each tier's nested streams with the same
+  /// estimators selection would apply to them. Returns the whole column at
+  /// full width when per-value counts are unavailable.
+  static uint64_t estimateSize(
+      uint64_t rowCount,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options = {}) {
+    if (rowCount == 0) {
+      return Encoding::kPrefixSize;
+    }
+    const uint64_t outerSize =
+        EncodingPrefix::serializedSize(rowCount, options.useVarintRowCount) +
+        4; // numPartitions
+
+    const auto& uniqueCounts = statistics.uniqueCounts();
+    if (!uniqueCounts.has_value() || uniqueCounts->size() == 0) {
+      return outerSize + TrivialEncoding<physicalType>::estimateSize(rowCount);
+    }
+
+    constexpr uint32_t kKeyBitOptions[] = {1, 2, 4, 8, 16, 32};
+    constexpr uint32_t kMaxKeyBits = getMaxKeyBits();
+
+    uint64_t totalCapacity = 0;
+    for (const uint32_t keyBits : kKeyBitOptions) {
+      if (keyBits > kMaxKeyBits) {
+        break;
+      }
+      totalCapacity += getCapacity(keyBits);
+    }
+
+    const uint64_t uniqueCount = uniqueCounts->size();
+    // Values past the last tier's capacity are unencoded at full width
+    // regardless of frequency, so only the ranked prefix needs sorting.
+    const auto ranked =
+        static_cast<size_t>(std::min<uint64_t>(uniqueCount, totalCapacity));
+    std::vector<uint64_t> counts;
+    counts.reserve(static_cast<size_t>(uniqueCount));
+    for (const auto& unique : uniqueCounts.value()) {
+      counts.push_back(unique.second);
+    }
+
+    // A tier needs only the sum of its counts, not their order, so tiers are
+    // split off with nth_element partitioning rather than a full sort.
+    size_t innerTiersEnd = 0;
+    {
+      uint64_t tierStart = 0;
+      for (const uint32_t keyBits : kKeyBitOptions) {
+        if (keyBits > kMaxKeyBits || tierStart >= ranked) {
+          break;
+        }
+        tierStart +=
+            std::min<uint64_t>(getCapacity(keyBits), ranked - tierStart);
+        if (tierStart < counts.size()) {
+          innerTiersEnd = static_cast<size_t>(tierStart);
+        }
+      }
+    }
+    if (innerTiersEnd > 0) {
+      std::nth_element(
+          counts.begin(),
+          counts.begin() + innerTiersEnd,
+          counts.end(),
+          std::greater<uint64_t>());
+    }
+
+    uint64_t payloadSize = 0;
+    uint64_t assigned = 0;
+    uint64_t rowsInTiers = 0;
+    uint32_t tiersCreated = 0;
+    uint32_t nonEmptyTiers = 0;
+
+    for (const uint32_t keyBits : kKeyBitOptions) {
+      if (keyBits > kMaxKeyBits || assigned >= ranked) {
+        break;
+      }
+      ++tiersCreated;
+      const uint64_t dictEntries =
+          std::min<uint64_t>(getCapacity(keyBits), ranked - assigned);
+      // Inside the prefix split off above, so that only the widest tier pays
+      // a pass over every distinct value.
+      const size_t tierEnd = static_cast<size_t>(assigned + dictEntries);
+      if (tierEnd < innerTiersEnd) {
+        std::nth_element(
+            counts.begin() + assigned,
+            counts.begin() + tierEnd,
+            counts.begin() + innerTiersEnd,
+            std::greater<uint64_t>());
+      }
+      uint64_t tierRows = 0;
+      for (uint64_t i = 0; i < dictEntries; ++i) {
+        tierRows += counts[static_cast<size_t>(assigned + i)];
+      }
+      assigned += dictEntries;
+      rowsInTiers += tierRows;
+      if (tierRows == 0) {
+        continue;
+      }
+      ++nonEmptyTiers;
+
+      // The tier's dictionary and key stream; keys index into the
+      // dictionary, so their width follows tier occupancy, not nominal
+      // key bits.
+      const uint64_t dictSize = std::min(
+          TrivialEncoding<physicalType>::estimateSize(dictEntries),
+          FixedBitWidthEncoding<physicalType>::estimateSize(
+              dictEntries, statistics.min(), statistics.max(), options));
+      const uint64_t keysSize = std::min(
+          TrivialEncoding<uint32_t>::estimateSize(tierRows),
+          FixedBitWidthEncoding<uint32_t>::estimateSize(
+              tierRows, /*minValue=*/0, dictEntries - 1, options));
+      payloadSize += 4 + dictSize + 4 + keysSize;
+    }
+
+    // Values that never reached a tier keep their full width.
+    const uint64_t fallbackRows =
+        rowCount > rowsInTiers ? rowCount - rowsInTiers : 0;
+    if (fallbackRows > 0) {
+      const uint64_t unencodedSize = std::min(
+          TrivialEncoding<physicalType>::estimateSize(fallbackRows),
+          FixedBitWidthEncoding<physicalType>::estimateSize(
+              fallbackRows, statistics.min(), statistics.max(), options));
+      payloadSize += 4 + unencodedSize;
+    }
+
+    // Partition offsets and sizes, one entry per tier plus the fallback.
+    const uint64_t numPartitions = tiersCreated + 1;
+    payloadSize +=
+        2 * (4 + TrivialEncoding<uint32_t>::estimateSize(numPartitions));
+
+    // The positional index, without which materialize() would hand back rows
+    // in tier order and desync a SubIntSplit section from its siblings.
+    // Priced per the actual index type rather than always as PerTierBitmaps,
+    // since each index type is packed differently.
+    const auto indexType =
+        static_cast<FreqPartIndexType>(options.frequencyPartitionIndex);
+    if (indexType != FreqPartIndexType::NoIndex && nonEmptyTiers > 0) {
+      payloadSize += 1 + 1 + 4; // formatVersion + indexType + payload length
+      switch (indexType) {
+        case FreqPartIndexType::PerTierBitmaps: {
+          // One N-bit bitmap per active tier, rounded to a 64-bit word.
+          const uint64_t bitmapWords = (rowCount + 63) / 64;
+          payloadSize +=
+              static_cast<uint64_t>(nonEmptyTiers) * (4 + bitmapWords * 8);
+          break;
+        }
+        case FreqPartIndexType::TierTagArray: {
+          // Prices the undiscounted FixedBitWidth packing of one tagBits-wide
+          // tag per row; the real (nested-selected) stream is usually smaller.
+          payloadSize += 8;
+          payloadSize += static_cast<uint64_t>(std::llround(
+              static_cast<double>(FixedBitWidthEncoding<uint32_t>::estimateSize(
+                  rowCount,
+                  /*minValue=*/0,
+                  /*maxValue=*/tiersCreated, // tag values span 0..numTiers
+                  options)) *
+              kFrequencyPartitionNestedIndexDiscount));
+          break;
+        }
+        case FreqPartIndexType::EliasFano: {
+          // No dedicated EliasFano estimator yet: reuses the PerTierBitmaps
+          // formula, which over-states its actual (denser) packing.
+          const uint64_t bitmapWords = (rowCount + 63) / 64;
+          payloadSize +=
+              static_cast<uint64_t>(nonEmptyTiers) * (4 + bitmapWords * 8);
+          break;
+        }
+        case FreqPartIndexType::NoIndex:
+          break;
+      }
+    }
+
+    return outerSize + payloadSize;
+  }
+
+  /// A lower bound on estimateSize's result for `rowCount` rows holding at
+  /// least `distinctLowerBound` distinct values but no known counts. Lets
+  /// selection rule this encoding out for a near-unique stream without
+  /// counting its distinct values.
+  static uint64_t estimateSizeLowerBound(
+      uint64_t rowCount,
+      uint64_t distinctLowerBound,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options = {}) {
+    if (rowCount == 0) {
+      return Encoding::kPrefixSize;
+    }
+    const uint64_t outerSize =
+        EncodingPrefix::serializedSize(rowCount, options.useVarintRowCount) + 4;
+    if (distinctLowerBound == 0) {
+      return outerSize;
+    }
+    constexpr uint32_t kKeyBitOptions[] = {1, 2, 4, 8, 16, 32};
+    constexpr uint32_t kMaxKeyBits = getMaxKeyBits();
+    uint64_t totalCapacity = 0;
+    for (const uint32_t keyBits : kKeyBitOptions) {
+      if (keyBits > kMaxKeyBits) {
+        break;
+      }
+      totalCapacity += getCapacity(keyBits);
+    }
+    const uint64_t ranked = std::min(distinctLowerBound, totalCapacity);
+
+    uint64_t payloadSize = 0;
+    uint64_t assigned = 0;
+    uint32_t tiersCreated = 0;
+    for (const uint32_t keyBits : kKeyBitOptions) {
+      if (keyBits > kMaxKeyBits || assigned >= ranked) {
+        break;
+      }
+      ++tiersCreated;
+      const uint64_t dictEntries =
+          std::min<uint64_t>(getCapacity(keyBits), ranked - assigned);
+      assigned += dictEntries;
+      const uint64_t dictSize = std::min(
+          TrivialEncoding<physicalType>::estimateSize(dictEntries),
+          FixedBitWidthEncoding<physicalType>::estimateSize(
+              dictEntries, statistics.min(), statistics.max(), options));
+      const uint64_t keysSize = std::min(
+          TrivialEncoding<uint32_t>::estimateSize(dictEntries),
+          FixedBitWidthEncoding<uint32_t>::estimateSize(
+              dictEntries, /*minValue=*/0, dictEntries - 1, options));
+      payloadSize += 4 + dictSize + 4 + keysSize;
+    }
+    payloadSize +=
+        2 * (4 + TrivialEncoding<uint32_t>::estimateSize(tiersCreated + 1));
+
+    const auto indexType =
+        static_cast<FreqPartIndexType>(options.frequencyPartitionIndex);
+    if (indexType != FreqPartIndexType::NoIndex && tiersCreated > 0) {
+      payloadSize += 1 + 1 + 4;
+      switch (indexType) {
+        case FreqPartIndexType::PerTierBitmaps:
+        case FreqPartIndexType::EliasFano: {
+          const uint64_t bitmapWords = (rowCount + 63) / 64;
+          payloadSize +=
+              static_cast<uint64_t>(tiersCreated) * (4 + bitmapWords * 8);
+          break;
+        }
+        case FreqPartIndexType::TierTagArray: {
+          payloadSize += 8;
+          payloadSize += static_cast<uint64_t>(std::llround(
+              static_cast<double>(FixedBitWidthEncoding<uint32_t>::estimateSize(
+                  rowCount, /*minValue=*/0, tiersCreated, options)) *
+              kFrequencyPartitionNestedIndexDiscount));
+          break;
+        }
+        case FreqPartIndexType::NoIndex:
+          break;
+      }
+    }
+    return outerSize + payloadSize;
+  }
+#endif // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 
   std::string debugString(int offset) const final;
   uint32_t getTierForRow(uint32_t rowIndex) const;
@@ -137,6 +428,11 @@ class FrequencyPartitionEncoding
     uint32_t startRow; // NoIndex only: offset in encoded stream
     uint32_t size; // NoIndex only: count in encoded stream
 
+    // Opt-in (Options::frequencyPartitionResolveTierValues) rank -> value
+    // table, i.e. resolvedValues[rank] == dictionary[indices[rank]], letting
+    // decode skip the indices/dictionary chain. Empty when the option is off.
+    Vector<T> resolvedValues;
+
     // Index fields — populated based on indexType_:
     uint32_t tierCount{0}; // element count (indexed modes)
     Vector<uint64_t> bitmap; // PerTierBitmaps: N-bit bitmap
@@ -150,6 +446,7 @@ class FrequencyPartitionEncoding
           indices(pool),
           startRow(0),
           size(0),
+          resolvedValues(pool),
           bitmap(pool),
           rankSuperblock(pool),
           efPositions(pool) {}
@@ -326,21 +623,105 @@ class FrequencyPartitionEncoding
     return rank;
   }
 
+  // Counts positions in [begin, end) whose unpacked tag equals `target`,
+  // using word-parallel (SWAR) comparison instead of one unpack per
+  // position: `target` is broadcast into each of a word's packed fields and
+  // XORed against it, a single-bit-step OR-fold reduces each field to one
+  // bit (a doubling step would leak a bit across fields), and popcount
+  // counts the matches. Falls back to the scalar unpack for the head/tail
+  // of the range and any word whose two-word load would read past the end
+  // of tagArray_. Requires tagBits <= 8, which always holds since tagBits is
+  // ceilLog2(numTiers + 1) and numTiers <= kMaxTiers.
+  uint32_t countEqualTag(uint32_t begin, uint32_t end, uint8_t target) const {
+    if (begin >= end) {
+      return 0;
+    }
+    const uint8_t* tagBase = tagArray_.data();
+    const uint32_t fieldsPerWord = 64 / tagBits_;
+    if (fieldsPerWord == 0) {
+      // tagBits_ > 64 cannot happen (max 8), but guards against a nonsense
+      // shift below if it ever did.
+      uint32_t count = 0;
+      for (uint32_t j = begin; j < end; ++j) {
+        count += (unpackTagAt(tagBase, j, tagBits_) == target) ? 1 : 0;
+      }
+      return count;
+    }
+    // One bit set at the low bit of every field: both a per-field "OR-fold
+    // result" mask and, multiplied by `target`, the broadcast of `target`
+    // into every field.
+    uint64_t ones = 0;
+    for (uint32_t i = 0; i < fieldsPerWord; ++i) {
+      ones |= uint64_t{1} << (i * tagBits_);
+    }
+    const uint64_t targetBroadcast = ones * static_cast<uint64_t>(target);
+    const size_t tagArrayBytes = tagArray_.size();
+
+    uint32_t count = 0;
+    uint32_t j = begin;
+    while (j < end) {
+      const uint32_t remaining = end - j;
+      const size_t bitPos = static_cast<size_t>(j) * tagBits_;
+      const size_t byteIdx = bitPos / 8;
+      const uint32_t bitOff = static_cast<uint32_t>(bitPos % 8);
+      if (remaining < fieldsPerWord || byteIdx + 16 > tagArrayBytes) {
+        const uint32_t blockEnd = std::min(j + fieldsPerWord, end);
+        for (uint32_t k = j; k < blockEnd; ++k) {
+          count += (unpackTagAt(tagBase, k, tagBits_) == target) ? 1 : 0;
+        }
+        j = blockEnd;
+        continue;
+      }
+      uint64_t lo;
+      uint64_t hi;
+      std::memcpy(&lo, tagBase + byteIdx, sizeof(lo));
+      std::memcpy(&hi, tagBase + byteIdx + 8, sizeof(hi));
+      const uint64_t word =
+          (bitOff == 0) ? lo : ((lo >> bitOff) | (hi << (64 - bitOff)));
+      uint64_t t = word ^ targetBroadcast;
+      for (uint32_t shift = 1; shift < tagBits_; ++shift) {
+        t |= t >> 1;
+      }
+      const uint64_t matchLowBits = ~t & ones;
+      count += static_cast<uint32_t>(__builtin_popcountll(matchLowBits));
+      j += fieldsPerWord;
+    }
+    return count;
+  }
+
   // Count elements with tag == tierIdx strictly before position `pos`.
-  // Uses tierRankSamples_ and tagArray_. tierIdx == tiers_.size() is fallback.
+  // tierIdx == tiers_.size() is the fallback bucket (a range predicate, not
+  // a single tag value), so it uses the scalar loop instead of the SWAR
+  // path. Reuses the per-tier scan cursor when it sits between the nearest
+  // sample and `pos`, so ascending-order callers rescan only the gap.
   uint32_t tierRankAtForTag(uint32_t tierIdx, uint32_t pos) const {
     const uint32_t sampleIdx = pos / kRankSampleStride;
-    uint32_t rank = tierRankSamples_[tierIdx][sampleIdx];
-    const uint32_t scanStart = sampleIdx * kRankSampleStride;
-    const uint8_t* tagBase = tagArray_.data();
+    const uint32_t sampleStart = sampleIdx * kRankSampleStride;
+
+    uint32_t scanStart = sampleStart;
+    uint32_t rank =
+        tierRankSamples_[tierIdx * numRankSamplesPerBucket_ + sampleIdx];
+    if (cursorValid_[tierIdx] && cursorPos_[tierIdx] <= pos &&
+        cursorPos_[tierIdx] > scanStart) {
+      scanStart = cursorPos_[tierIdx];
+      rank = cursorRank_[tierIdx];
+    }
+
     const uint8_t numActiveTiers = static_cast<uint8_t>(tiers_.size());
-    for (uint32_t j = scanStart; j < pos; ++j) {
-      const uint8_t t = unpackTagAt(tagBase, j, tagBits_);
-      const uint32_t b = (t < numActiveTiers) ? t : numActiveTiers;
-      if (b == tierIdx) {
-        ++rank;
+    if (tierIdx < numActiveTiers) {
+      rank += countEqualTag(scanStart, pos, static_cast<uint8_t>(tierIdx));
+    } else {
+      const uint8_t* tagBase = tagArray_.data();
+      for (uint32_t j = scanStart; j < pos; ++j) {
+        if (unpackTagAt(tagBase, j, tagBits_) >= numActiveTiers) {
+          ++rank;
+        }
       }
     }
+
+    cursorPos_[tierIdx] = pos;
+    cursorRank_[tierIdx] = rank;
+    cursorValid_[tierIdx] = true;
     return rank;
   }
 
@@ -350,6 +731,16 @@ class FrequencyPartitionEncoding
 
   template <FreqPartIndexType I>
   T decodeAtOriginalIndexImpl(uint32_t u) const;
+
+  // Reads the value at `rank` within `tier`, using the resolvedValues table
+  // when built (Options::frequencyPartitionResolveTierValues) to skip the
+  // indices/dictionary chain.
+  static T tierValueAtRank(const TierInfo& tier, uint32_t rank) {
+    if (!tier.resolvedValues.empty()) {
+      return tier.resolvedValues[rank];
+    }
+    return tier.dictionary[tier.indices[rank]];
+  }
 
   template <FreqPartIndexType I>
   void materializeImpl(T* dst, uint32_t start, uint32_t count) const;
@@ -380,9 +771,23 @@ class FrequencyPartitionEncoding
   // TierTagArray fields
   uint8_t tagBits_;
   Vector<uint8_t> tagArray_;
-  // tierRankSamples_[t][si] = count of tag==t in positions [0,
-  // si*kRankSampleStride) Index tiers_.size() is used for the fallback bucket.
-  std::vector<std::vector<uint32_t>> tierRankSamples_;
+  // Flattened [numBuckets x numSamplesPerBucket] table: tierRankSamples_
+  // [t * numRankSamplesPerBucket_ + si] = count of tag==t in positions
+  // [0, si*kRankSampleStride). Index tiers_.size() is the fallback bucket.
+  // Held as one contiguous allocation so a lookup costs one pointer chase
+  // instead of two.
+  std::vector<uint32_t> tierRankSamples_;
+  uint32_t numRankSamplesPerBucket_{0};
+
+  // Forward-scan cursor for tierRankAtForTag, keyed like tierRankSamples_:
+  // cursorPos_[t]/cursorRank_[t] record the position and rank of the most
+  // recent call for tier t, so a later call ahead of the cursor resumes
+  // from there instead of from the nearest sample. Declared mutable as a
+  // cache of already-computed ranks; safe without synchronization since a
+  // decoded Encoding is never shared across threads.
+  mutable std::vector<uint32_t> cursorPos_;
+  mutable std::vector<uint32_t> cursorRank_;
+  mutable std::vector<bool> cursorValid_;
 };
 
 //
@@ -411,7 +816,9 @@ FrequencyPartitionEncoding<T>::FrequencyPartitionEncoding(
       fallbackWordPrefix_{this->pool_},
       tagBits_(0),
       tagArray_{this->pool_} {
-  const auto* pos = data.data() + kNumPartitionsOffset;
+  // Not kPrefixSize: encode() may write a varint row count, a differently
+  // sized prefix that dataOffset() accounts for.
+  const auto* pos = data.data() + this->dataOffset();
   const uint32_t numPartitions = encoding::readUint32(pos);
   const EncodingFactory encodingFactory(options);
 
@@ -498,6 +905,10 @@ FrequencyPartitionEncoding<T>::FrequencyPartitionEncoding(
     const uint32_t payloadBytes = encoding::readUint32(pos);
     const char* payloadStart = pos;
 
+    NIMBLE_CHECK_FILE(
+        fmtVer >= kFormatVersion,
+        fmt::format(
+            "Unsupported FrequencyPartition index format version: {}", fmtVer));
     if (fmtVer > kFormatVersion) {
       // Unknown format version — skip payload gracefully.
       pos += payloadBytes;
@@ -554,25 +965,57 @@ FrequencyPartitionEncoding<T>::FrequencyPartitionEncoding(
         case FreqPartIndexType::TierTagArray: {
           tagBits_ = encoding::read<uint8_t>(pos);
           pos += 3; // skip alignment padding
-          const uint32_t tagArrayByteCount = encoding::readUint32(pos);
-          tagArray_.resize(tagArrayByteCount);
-          std::memcpy(tagArray_.data(), pos, tagArrayByteCount);
-          pos += tagArrayByteCount;
+          const uint32_t tagStreamBytes = encoding::readUint32(pos);
+          {
+            auto tagEncoding = encodingFactory.create(
+                *this->pool_,
+                std::string_view(pos, tagStreamBytes),
+                stringBufferFactory);
+            Vector<uint32_t> tagValues(this->pool_);
+            tagValues.resize(totalRowCount_);
+            tagEncoding->materialize(totalRowCount_, tagValues.data());
+            const size_t packedBytes =
+                (static_cast<size_t>(totalRowCount_) * tagBits_ + 7) / 8;
+            tagArray_.resize(packedBytes);
+            std::fill(tagArray_.begin(), tagArray_.end(), 0);
+            uint64_t acc = 0;
+            size_t accBits = 0;
+            size_t outByte = 0;
+            for (uint32_t i = 0; i < totalRowCount_; ++i) {
+              acc |= static_cast<uint64_t>(tagValues[i]) << accBits;
+              accBits += tagBits_;
+              while (accBits >= 8) {
+                tagArray_[outByte++] = static_cast<uint8_t>(acc & 0xFF);
+                acc >>= 8;
+                accBits -= 8;
+              }
+            }
+            if (accBits > 0) {
+              tagArray_[outByte] = static_cast<uint8_t>(acc & 0xFF);
+            }
+          }
+          pos += tagStreamBytes;
 
-          // Single O(N) pass: build per-tier sampled rank index.
+          // Single O(N) pass: build per-tier sampled rank index, flattened
+          // into one [numBuckets x numSamples] buffer (see tierRankSamples_)
+          // so a lookup chases one pointer instead of two.
           const uint8_t numActiveTiers = static_cast<uint8_t>(tiers_.size());
           const uint32_t numBuckets = static_cast<uint32_t>(numActiveTiers) + 1;
           const uint32_t numSamples =
               (totalRowCount_ + kRankSampleStride - 1) / kRankSampleStride + 1;
+          numRankSamplesPerBucket_ = numSamples;
           tierRankSamples_.assign(
-              numBuckets, std::vector<uint32_t>(numSamples, 0));
+              static_cast<size_t>(numBuckets) * numSamples, 0);
+          cursorPos_.assign(numBuckets, 0);
+          cursorRank_.assign(numBuckets, 0);
+          cursorValid_.assign(numBuckets, false);
 
           std::vector<uint32_t> counts(numBuckets, 0);
           for (uint32_t i = 0; i < totalRowCount_; ++i) {
             if (i % kRankSampleStride == 0) {
               const uint32_t si = i / kRankSampleStride;
               for (uint32_t t = 0; t < numBuckets; ++t) {
-                tierRankSamples_[t][si] = counts[t];
+                tierRankSamples_[t * numRankSamplesPerBucket_ + si] = counts[t];
               }
             }
             const uint8_t tag = unpackTagAt(tagArray_.data(), i, tagBits_);
@@ -584,12 +1027,24 @@ FrequencyPartitionEncoding<T>::FrequencyPartitionEncoding(
           const uint32_t lastSi =
               (totalRowCount_ + kRankSampleStride - 1) / kRankSampleStride;
           for (uint32_t t = 0; t < numBuckets; ++t) {
-            tierRankSamples_[t][lastSi] = counts[t];
+            tierRankSamples_[t * numRankSamplesPerBucket_ + lastSi] = counts[t];
           }
 
           // Set tierCount from the scan.
           for (uint32_t t = 0; t < numActiveTiers; ++t) {
             tiers_[t].tierCount = counts[t];
+          }
+
+          // Opt-in (Options::frequencyPartitionResolveTierValues): a direct
+          // rank -> value table, held alongside indices/dictionary rather
+          // than replacing them, so decode can skip that lookup chain.
+          if (options.frequencyPartitionResolveTierValues) {
+            for (auto& tier : tiers_) {
+              tier.resolvedValues.resize(tier.indices.size());
+              for (uint32_t rank = 0; rank < tier.indices.size(); ++rank) {
+                tier.resolvedValues[rank] = tier.dictionary[tier.indices[rank]];
+              }
+            }
           }
           break;
         }
@@ -728,7 +1183,7 @@ T FrequencyPartitionEncoding<T>::decodeAtOriginalIndexImpl(uint32_t u) const {
     const uint8_t tag = unpackTagAt(tagArray_.data(), u, tagBits_);
     if (tag < numActiveTiers) {
       const uint32_t rank = tierRankAtForTag(tag, u);
-      return tiers_[tag].dictionary[tiers_[tag].indices[rank]];
+      return tierValueAtRank(tiers_[tag], rank);
     }
     const uint32_t fallbackRank = tierRankAtForTag(numActiveTiers, u);
     return unencodedValues_[fallbackRank];
@@ -759,14 +1214,96 @@ T FrequencyPartitionEncoding<T>::decodeAtOriginalIndexImpl(uint32_t u) const {
 // materializeImpl
 // ---------------------------------------------------------------------------
 
+// Walks [start, start + count) once, carrying a per-tier cursor instead of
+// ranking every row: since each tier's key stream is written in ascending
+// original-row order, a per-row rank query collapses to one increment.
+// Ranks are still paid once per tier at `start`, letting a ranged read
+// begin anywhere. decodeAtOriginalIndexImpl remains the point path.
 template <typename T>
 template <FreqPartIndexType I>
 void FrequencyPartitionEncoding<T>::materializeImpl(
     T* dst,
     uint32_t start,
     uint32_t count) const {
+  const uint32_t numTiers = static_cast<uint32_t>(tiers_.size());
+  NIMBLE_CHECK(numTiers <= kMaxTiers, "tier count exceeds cursor capacity");
+
+  // Seeding the cursors costs one rank per tier, so this pays off only once
+  // the run is longer than the tier count; below that, rank just the row's
+  // own tier and skip seeding.
+  if (count <= kSequentialThreshold) {
+    for (uint32_t i = 0; i < count; ++i) {
+      dst[i] = decodeAtOriginalIndexImpl<I>(start + i);
+    }
+    return;
+  }
+
+  // cursor[t] is the number of tier-t rows strictly before the current row.
+  // For EliasFano it doubles as the index into efPositions, which is the same
+  // quantity: efPositions[t][k] is the row of the k-th tier-t element.
+  uint32_t cursor[kMaxTiers] = {};
+  uint32_t fallbackCursor = 0;
+  const bool hasFallback = !unencodedValues_.empty();
+
+  for (uint32_t t = 0; t < numTiers; ++t) {
+    const auto& tier = tiers_[t];
+    if constexpr (I == FreqPartIndexType::PerTierBitmaps) {
+      cursor[t] = tier.bitmap.empty() ? 0 : popcountPrefixFast(tier, start);
+    } else if constexpr (I == FreqPartIndexType::TierTagArray) {
+      cursor[t] = tierRankAtForTag(t, start);
+    } else if constexpr (I == FreqPartIndexType::EliasFano) {
+      cursor[t] = static_cast<uint32_t>(
+          std::lower_bound(
+              tier.efPositions.begin(), tier.efPositions.end(), start) -
+          tier.efPositions.begin());
+    }
+  }
+  if (hasFallback) {
+    if constexpr (I == FreqPartIndexType::TierTagArray) {
+      fallbackCursor = tierRankAtForTag(numTiers, start);
+    } else {
+      fallbackCursor = fallbackRankAt(start);
+    }
+  }
+
+  // Software prefetching a future row's indices/resolvedValues slot was
+  // tried here and measured as a net regression, since the walk's working
+  // set fits the LLC and is not DRAM-latency-bound. Do not reintroduce
+  // without re-measuring.
   for (uint32_t i = 0; i < count; ++i) {
-    dst[i] = decodeAtOriginalIndexImpl<I>(start + i);
+    const uint32_t u = start + i;
+
+    if constexpr (I == FreqPartIndexType::TierTagArray) {
+      const uint8_t tag = unpackTagAt(tagArray_.data(), u, tagBits_);
+      if (tag < numTiers) {
+        dst[i] = tierValueAtRank(tiers_[tag], cursor[tag]++);
+      } else {
+        dst[i] = unencodedValues_[fallbackCursor++];
+      }
+      continue;
+    }
+
+    bool matched = false;
+    for (uint32_t t = 0; t < numTiers; ++t) {
+      const auto& tier = tiers_[t];
+      if constexpr (I == FreqPartIndexType::PerTierBitmaps) {
+        if (tier.bitmap.empty() ||
+            !(tier.bitmap[u >> 6] & (uint64_t{1} << (u & 63)))) {
+          continue;
+        }
+      } else if constexpr (I == FreqPartIndexType::EliasFano) {
+        if (cursor[t] >= tier.efPositions.size() ||
+            tier.efPositions[cursor[t]] != u) {
+          continue;
+        }
+      }
+      dst[i] = tier.dictionary[tier.indices[cursor[t]++]];
+      matched = true;
+      break;
+    }
+    if (!matched) {
+      dst[i] = unencodedValues_[fallbackCursor++];
+    }
   }
 }
 
@@ -926,10 +1463,39 @@ std::string_view FrequencyPartitionEncoding<T>::encode(
       static_cast<FreqPartIndexType>(options.frequencyPartitionIndex);
   const uint32_t valueCount = static_cast<uint32_t>(values.size());
 
-  // Build frequency map
+  // Narrow values are counted in a table rather than hashed one row at a
+  // time. The map is still what tiers are ranked from, since the sort below
+  // is unstable and reads tie order from the map's insertion order; the
+  // distinct values are inserted in first-occurrence order to reproduce it.
+  constexpr bool kCountsInTable = std::is_integral_v<physicalType> &&
+      !std::is_same_v<physicalType, bool> && sizeof(physicalType) <= 2;
+  constexpr size_t kTableSize =
+      kCountsInTable ? size_t{1} << (8 * sizeof(physicalType)) : 0;
+  const bool useTable = kCountsInTable && valueCount >= kTableSize / 16;
+  const auto tableIndex = [](const physicalType& value) -> size_t {
+    if constexpr (kCountsInTable) {
+      return static_cast<std::make_unsigned_t<physicalType>>(value);
+    } else {
+      return 0;
+    }
+  };
+
   folly::F14FastMap<physicalType, uint32_t> frequencyMap;
-  for (const auto& value : values) {
-    frequencyMap[value]++;
+  if (useTable) {
+    std::vector<uint32_t> counts(kTableSize, 0);
+    std::vector<physicalType> firstOccurrences;
+    for (const auto& value : values) {
+      if (counts[tableIndex(value)]++ == 0) {
+        firstOccurrences.push_back(value);
+      }
+    }
+    for (const auto& value : firstOccurrences) {
+      frequencyMap.emplace(value, counts[tableIndex(value)]);
+    }
+  } else {
+    for (const auto& value : values) {
+      frequencyMap[value]++;
+    }
   }
 
   // Sort by frequency (descending)
@@ -954,7 +1520,6 @@ std::string_view FrequencyPartitionEncoding<T>::encode(
     uint32_t keyBits;
     uint32_t capacity;
     Vector<physicalType> dictionary;
-    folly::F14FastMap<physicalType, uint32_t> valueToKey;
 
     explicit TierAssignment(velox::memory::MemoryPool& pool)
         : keyBits(0), capacity(0), dictionary(&pool) {}
@@ -981,38 +1546,112 @@ std::string_view FrequencyPartitionEncoding<T>::encode(
     tier.dictionary.reserve(numToAssign);
 
     for (uint32_t i = 0; i < numToAssign; ++i) {
-      const auto& value = freqVec[valuesAssigned + i].first;
-      tier.dictionary.push_back(value);
-      tier.valueToKey[value] = i;
+      tier.dictionary.push_back(freqVec[valuesAssigned + i].first);
     }
 
     valuesAssigned += numToAssign;
     tierAssignments.push_back(std::move(tier));
   }
 
-  // Build value-to-tier mapping
-  folly::F14FastMap<physicalType, uint32_t> valueToTier;
-  valueToTier.reserve(valuesAssigned);
+  // Each assigned value's tier and key, looked up once per row. Values
+  // reaching no tier are absent from the map, or marked unassigned in the
+  // table.
+  struct Assignment {
+    uint32_t tier;
+    uint32_t key;
+  };
+  constexpr uint32_t kUnassigned = std::numeric_limits<uint32_t>::max();
+  std::vector<Assignment> assignmentTable;
+  folly::F14FastMap<physicalType, Assignment> assignmentMap;
+  if (useTable) {
+    assignmentTable.assign(kTableSize, Assignment{kUnassigned, 0});
+  } else {
+    assignmentMap.reserve(valuesAssigned);
+  }
   for (size_t tierIdx = 0; tierIdx < tierAssignments.size(); ++tierIdx) {
-    for (const auto& [value, key] : tierAssignments[tierIdx].valueToKey) {
-      valueToTier[value] = static_cast<uint32_t>(tierIdx);
+    const auto& dictionary = tierAssignments[tierIdx].dictionary;
+    for (size_t key = 0; key < dictionary.size(); ++key) {
+      const Assignment assignment{
+          static_cast<uint32_t>(tierIdx), static_cast<uint32_t>(key)};
+      if (useTable) {
+        assignmentTable[tableIndex(dictionary[key])] = assignment;
+      } else {
+        assignmentMap.emplace(dictionary[key], assignment);
+      }
     }
   }
 
-  // Assign rows to tiers
-  std::vector<std::vector<uint32_t>> tierRows(tierAssignments.size() + 1);
-  for (auto& vec : tierRows) {
-    vec.reserve(valueCount / tierRows.size());
+  // Assign rows to tiers. Every tier's row count is already known from the
+  // frequencies its dictionary was ranked by, so outputs are sized up front
+  // and each row is written at its tier's cursor rather than appended,
+  // avoiding a branch-per-row that would be unpredictable for values that
+  // alternate tiers.
+  const auto numAssignedTiers = static_cast<uint32_t>(tierAssignments.size());
+  std::vector<uint32_t> tierSizes(numAssignedTiers + 1, 0);
+  {
+    size_t rank = 0;
+    uint32_t rowsAssigned = 0;
+    for (uint32_t tierIdx = 0; tierIdx < numAssignedTiers; ++tierIdx) {
+      for (size_t key = 0; key < tierAssignments[tierIdx].dictionary.size();
+           ++key) {
+        tierSizes[tierIdx] += freqVec[rank++].second;
+      }
+      rowsAssigned += tierSizes[tierIdx];
+    }
+    tierSizes[numAssignedTiers] = valueCount - rowsAssigned;
   }
-
-  for (uint32_t row = 0; row < valueCount; ++row) {
-    const auto& value = values[row];
-    auto tierIt = valueToTier.find(value);
-    if (tierIt == valueToTier.end()) {
-      tierRows.back().push_back(row);
+  std::vector<std::vector<uint32_t>> tierRows(numAssignedTiers + 1);
+  std::vector<Vector<uint32_t>> tierKeys;
+  tierKeys.reserve(numAssignedTiers);
+  // One slot per tier plus fallback; the fallback has no keys, so its key
+  // slot is a scratch word its cursor is masked away from.
+  std::array<uint32_t*, 8> rowOutputs{};
+  std::array<uint32_t*, 8> keyOutputs{};
+  std::array<uint32_t, 8> keyCursorMasks{};
+  uint32_t fallbackKeyScratch = 0;
+  for (uint32_t tierIdx = 0; tierIdx <= numAssignedTiers; ++tierIdx) {
+    tierRows[tierIdx].resize(tierSizes[tierIdx]);
+    rowOutputs[tierIdx] = tierRows[tierIdx].data();
+    if (tierIdx < numAssignedTiers) {
+      tierKeys.emplace_back(pool, tierSizes[tierIdx]);
+      keyOutputs[tierIdx] = tierKeys.back().data();
+      keyCursorMasks[tierIdx] = std::numeric_limits<uint32_t>::max();
     } else {
-      tierRows[tierIt->second].push_back(row);
+      keyOutputs[tierIdx] = &fallbackKeyScratch;
     }
+  }
+
+  // The tier tag of every row is written in the same pass, since it is
+  // exactly the tier each row is placed in.
+  const bool tagRows = indexType == FreqPartIndexType::TierTagArray;
+  Vector<uint32_t> tagValues(pool);
+  if (tagRows) {
+    tagValues.resize(valueCount);
+  }
+  std::array<uint32_t, 8> cursors{};
+  const auto placeRows = [&](const auto& assignmentOf) {
+    for (uint32_t row = 0; row < valueCount; ++row) {
+      const Assignment assignment = assignmentOf(values[row]);
+      // kUnassigned is the largest tier index, so this names the fallback.
+      const uint32_t tier = std::min(assignment.tier, numAssignedTiers);
+      const uint32_t cursor = cursors[tier]++;
+      rowOutputs[tier][cursor] = row;
+      keyOutputs[tier][cursor & keyCursorMasks[tier]] = assignment.key;
+      if (tagRows) {
+        tagValues[row] = tier;
+      }
+    }
+  };
+  if (useTable) {
+    placeRows([&](const physicalType& value) {
+      return assignmentTable[tableIndex(value)];
+    });
+  } else {
+    placeRows([&](const physicalType& value) {
+      const auto it = assignmentMap.find(value);
+      return it == assignmentMap.end() ? Assignment{kUnassigned, 0}
+                                       : it->second;
+    });
   }
 
   // Partition offsets and sizes
@@ -1058,15 +1697,9 @@ std::string_view FrequencyPartitionEncoding<T>::encode(
         scopedBuffer.get(),
         options);
 
-    Vector<uint32_t> keys(pool);
-    keys.reserve(rows.size());
-    for (uint32_t row : rows) {
-      keys.push_back(tier.valueToKey.at(values[row]));
-    }
-
     serializedKeys[tierIdx] = selection.template encodeNested<uint32_t>(
         EncodingIdentifiers::FrequencyPartition::Keys1Bit + tierIdx,
-        {keys},
+        {tierKeys[tierIdx]},
         scopedBuffer.get(),
         options);
   }
@@ -1112,44 +1745,25 @@ std::string_view FrequencyPartitionEncoding<T>::encode(
     // Build tag array: tag[pos] = tier index (0..numTiers-1) or numTiers
     // (fallback).
     const uint8_t tagBits = ceilLog2WithMinOne(numTiers + 1);
-    const size_t tagArrayByteCount =
-        (static_cast<size_t>(valueCount) * tagBits + 7) / 8;
 
-    // Reverse map: row → tag
-    std::vector<uint8_t> rowToTag(valueCount, static_cast<uint8_t>(numTiers));
-    for (uint32_t t = 0; t < numTiers; ++t) {
-      for (uint32_t row : tierRows[t]) {
-        rowToTag[row] = static_cast<uint8_t>(t);
-      }
-    }
-
-    // Pack tags into byte array using accumulator pattern.
-    std::vector<uint8_t> tagArray(tagArrayByteCount, 0);
-    uint64_t tagAcc = 0;
-    size_t tagAccBits = 0;
-    size_t tagByteOut = 0;
-    for (uint32_t pos = 0; pos < valueCount; ++pos) {
-      tagAcc |= static_cast<uint64_t>(rowToTag[pos]) << tagAccBits;
-      tagAccBits += tagBits;
-      while (tagAccBits >= 8) {
-        tagArray[tagByteOut++] = static_cast<uint8_t>(tagAcc & 0xFF);
-        tagAcc >>= 8;
-        tagAccBits -= 8;
-      }
-    }
-    if (tagAccBits > 0) {
-      tagArray[tagByteOut] = static_cast<uint8_t>(tagAcc & 0xFF);
-    }
-
-    // Write: tagBits (1) + padding (3) + tagArrayByteCount (4) + tag data
+    // The tag stream goes through nested selection rather than a fixed
+    // tagBits-wide packing, since the tier distribution it reflects is
+    // skewed by construction and a fixed width cannot exploit that. The
+    // constructor decodes and repacks it once, paying that cost per
+    // encoding rather than per read.
+    const std::string_view serializedTags =
+        selection.template encodeNested<uint32_t>(
+            EncodingIdentifiers::FrequencyPartition::TierTags,
+            {tagValues},
+            scopedBuffer.get(),
+            options);
     indexPayload.push_back(static_cast<char>(tagBits));
-    indexPayload.resize(indexPayload.size() + 3, '\0'); // 3 bytes padding
-    const uint32_t tagByteCount32 = static_cast<uint32_t>(tagArrayByteCount);
-    const char* bc = reinterpret_cast<const char*>(&tagByteCount32);
+    indexPayload.resize(indexPayload.size() + 3, '\0');
+    const uint32_t nestedBytes = static_cast<uint32_t>(serializedTags.size());
+    const char* bc = reinterpret_cast<const char*>(&nestedBytes);
     indexPayload.insert(indexPayload.end(), bc, bc + 4);
-    const char* tagBytes = reinterpret_cast<const char*>(tagArray.data());
     indexPayload.insert(
-        indexPayload.end(), tagBytes, tagBytes + tagArrayByteCount);
+        indexPayload.end(), serializedTags.begin(), serializedTags.end());
 
   } else if (indexType == FreqPartIndexType::EliasFano) {
     // Build per-tier Elias-Fano position encodings.
