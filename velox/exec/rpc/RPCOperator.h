@@ -145,6 +145,12 @@ class RPCOperator : public exec::Operator {
   /// the RPC executor threads, so it moves even while the driver is blocked.
   static inline const std::string kRpcCompletionsSignaled{
       "rpcCompletionsSignaled"};
+  /// Monotonic count of retry attempts the function's transports have
+  /// scheduled. A retry is neither a dispatch nor a completion, so a request
+  /// climbing a doubling backoff schedule leaves both counters above frozen
+  /// for as long as the ladder runs. Advances from the transport executor
+  /// threads, so it moves even while the driver is blocked.
+  static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
 
  private:
   // How much of the accumulator a dispatch is willing to send.
@@ -302,17 +308,18 @@ class RPCOperator : public exec::Operator {
   void addLiveProgressStats(exec::OperatorStats& stats, bool includeGauges)
       const;
 
-  // The two objects addLiveProgressStats() reads. They are published here
-  // instead of being read from state_ / limiter_ directly because stats() runs
-  // on the task stats collector thread while the driver thread may be in
-  // initialize() (which sets limiter_) or close() (which drops state_), and
-  // racing on the pointers themselves is undefined behaviour. Holding the read
-  // lock across the sample also keeps close() from freeing RPCState underneath
-  // an in-progress read. Off every hot path: written twice per operator, read
-  // once per stats sample.
+  // The objects addLiveProgressStats() reads. They are published here instead
+  // of being read from state_ / limiter_ / function_ directly because stats()
+  // runs on the task stats collector thread while the driver thread may be in
+  // initialize() (which sets limiter_ and function_) or close() (which drops
+  // state_ and function_), and racing on the pointers themselves is undefined
+  // behaviour. Holding the read lock across the sample also keeps close() from
+  // freeing RPCState or the function underneath an in-progress read. Off every
+  // hot path: written twice per operator, read once per stats sample.
   struct LiveStatsSources {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
+    std::shared_ptr<AsyncRPCFunction> function;
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
