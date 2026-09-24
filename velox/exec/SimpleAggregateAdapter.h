@@ -102,6 +102,24 @@ class SimpleAggregateAdapter : public Aggregate {
   struct accumulator_is_fixed_size<T, std::void_t<decltype(T::is_fixed_size_)>>
       : std::integral_constant<bool, T::is_fixed_size_> {};
 
+  template <typename T, typename = void>
+  struct aggregate_ignore_duplicates : std::false_type {};
+
+  template <typename T>
+  struct aggregate_ignore_duplicates<
+      T,
+      std::void_t<decltype(T::ignore_duplicates_)>>
+      : std::integral_constant<bool, T::ignore_duplicates_> {};
+
+  template <typename T, typename = void>
+  struct aggregate_order_sensitive : std::true_type {};
+
+  template <typename T>
+  struct aggregate_order_sensitive<
+      T,
+      std::void_t<decltype(T::order_sensitive_)>>
+      : std::integral_constant<bool, T::order_sensitive_> {};
+
   // Assume most aggregate functions have default null behavior, i.e., ignoring
   // rows that have null values in raw input and intermediate results, and
   // returning null for groups of no input rows or only null rows.
@@ -237,6 +255,12 @@ class SimpleAggregateAdapter : public Aggregate {
   template <typename T>
   struct accumulator_is_aligned<T, std::void_t<decltype(T::is_aligned_)>>
       : std::integral_constant<bool, T::is_aligned_> {};
+
+  static constexpr bool aggregate_ignore_duplicates_ =
+      aggregate_ignore_duplicates<FUNC>::value;
+
+  static constexpr bool aggregate_order_sensitive_ =
+      aggregate_order_sensitive<FUNC>::value;
 
   static constexpr bool aggregate_default_null_behavior_ =
       aggregate_default_null_behavior<FUNC>::value;
@@ -792,5 +816,23 @@ class SimpleAggregateAdapter : public Aggregate {
 
   std::unique_ptr<FUNC> fn_;
 };
+
+/// Returns conservative metadata for simple aggregate classes registered under
+/// one function name.
+template <typename... FUNC>
+constexpr AggregateFunctionMetadata simpleAggregateFunctionMetadata() {
+  static_assert(sizeof...(FUNC) > 0);
+  AggregateFunctionMetadata metadata{
+      .ignoreDuplicates = true,
+      .orderSensitive = false,
+      .companionFunction = false,
+  };
+  ((metadata.ignoreDuplicates &=
+    SimpleAggregateAdapter<FUNC>::aggregate_ignore_duplicates_,
+    metadata.orderSensitive |=
+    SimpleAggregateAdapter<FUNC>::aggregate_order_sensitive_),
+   ...);
+  return metadata;
+}
 
 } // namespace facebook::velox::exec
