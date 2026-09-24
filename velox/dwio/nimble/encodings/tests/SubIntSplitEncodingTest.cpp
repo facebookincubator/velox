@@ -26,10 +26,13 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 using namespace facebook;
@@ -165,12 +168,10 @@ std::string_view encodeWithReplayLayout(
 template <typename T>
 std::unique_ptr<nimble::Encoding> decodeEncoding(
     std::string_view encoded,
-    velox::memory::MemoryPool& pool) {
+    velox::memory::MemoryPool& pool,
+    const nimble::Encoding::Options& options = {}) {
   return nimble::EncodingFactory().create(
-      pool,
-      encoded,
-      [](uint32_t) { return nullptr; },
-      nimble::Encoding::Options{});
+      pool, encoded, [](uint32_t) { return nullptr; }, options);
 }
 
 template <typename T>
@@ -407,6 +408,244 @@ TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
 
   const auto decoded = decodeAll<uint64_t>(encoded, *pool);
   expectBitwiseEqual(values, decoded);
+}
+
+TEST(SubIntSplitEncodingTests, heterogeneousSectionEncodingsRoundTrip) {
+  const std::vector<nimble::subintsplit::SectionPlan> segments{
+      {0, 7}, {8, 15}, {16, 31}, {32, 63}};
+  const nimble::EncodingLayout layout{
+      nimble::EncodingType::SubIntSplit,
+      nimble::EncodingLayout::Config{
+          nimble::subintsplit::makePreserveSplitConfig(segments)},
+      nimble::CompressionType::Uncompressed,
+      {
+          nimble::EncodingLayout{
+              nimble::EncodingType::Trivial,
+              {},
+              nimble::CompressionType::Uncompressed},
+          nimble::EncodingLayout{
+              nimble::EncodingType::FixedBitWidth,
+              {},
+              nimble::CompressionType::Uncompressed},
+          nimble::EncodingLayout{
+              nimble::EncodingType::Dictionary,
+              {},
+              nimble::CompressionType::Uncompressed,
+              {
+                  nimble::EncodingLayout{
+                      nimble::EncodingType::Trivial,
+                      {},
+                      nimble::CompressionType::Uncompressed},
+                  nimble::EncodingLayout{
+                      nimble::EncodingType::FixedBitWidth,
+                      {},
+                      nimble::CompressionType::Uncompressed},
+              }},
+          nimble::EncodingLayout{
+              nimble::EncodingType::Constant,
+              {},
+              nimble::CompressionType::Uncompressed},
+      }};
+
+  std::vector<uint64_t> values;
+  values.reserve(513);
+  for (uint64_t i = 0; i < 513; ++i) {
+    const uint64_t low = i & 0xff;
+    const uint64_t middle = ((i * 7) % 31) << 8;
+    const uint64_t dictionary = ((i % 4) * 10'000) << 16;
+    values.push_back((uint64_t{0x12345678} << 32) | dictionary | middle | low);
+  }
+
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const auto encoded = encodeWithReplayLayout<uint64_t>(layout, values, buffer);
+  const auto captured = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
+
+  ASSERT_EQ(captured.childrenCount(), segments.size());
+  EXPECT_EQ(captured.child(0)->encodingType(), nimble::EncodingType::Trivial);
+  EXPECT_EQ(
+      captured.child(1)->encodingType(), nimble::EncodingType::FixedBitWidth);
+  EXPECT_EQ(
+      captured.child(2)->encodingType(), nimble::EncodingType::Dictionary);
+  EXPECT_EQ(captured.child(3)->encodingType(), nimble::EncodingType::Constant);
+
+  nimble::Encoding::Options options;
+  options.subIntSplitDecodeChunkSize = 7;
+  auto decoder = decodeEncoding<uint64_t>(encoded, *pool, options);
+  std::vector<uint64_t> decoded(values.size());
+  size_t offset{0};
+  for (const uint32_t count : {1, 6, 8, 63, 128, 307}) {
+    decoder->materialize(count, decoded.data() + offset);
+    offset += count;
+  }
+  EXPECT_EQ(offset, values.size());
+  EXPECT_EQ(decoded, values);
+
+  decoder->reset();
+  decoder->skip(257);
+  std::vector<uint64_t> suffix(values.size() - 257);
+  decoder->materialize(suffix.size(), suffix.data());
+  EXPECT_EQ(suffix, std::vector<uint64_t>(values.begin() + 257, values.end()));
+}
+
+TEST(SubIntSplitEncodingTests, rejectsMalformedStreamHeader) {
+  const std::vector<uint64_t> values{
+      0x1234567890000000ULL,
+      0x1234567890000001ULL,
+      0x1234567890000002ULL,
+      0x1234567890000003ULL};
+
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const auto segments = makePreserveSegments<uint64_t>();
+  const auto encoded = encodeWithReplayLayout<uint64_t>(
+      makePreserveLayout<uint64_t>(segments), values, buffer);
+  const auto headerOffset = nimble::EncodingPrefix::kFixedPrefixSize;
+  const auto sectionHeadersOffset =
+      headerOffset + nimble::subintsplit::kStreamHeaderSize;
+  const auto expectMalformed = [&](std::string malformed,
+                                   std::string_view expectedMessage) {
+    NIMBLE_ASSERT_FILE_THROW(
+        decodeEncoding<uint64_t>(malformed, *pool), expectedMessage);
+  };
+
+  {
+    std::string malformed{encoded.substr(0, headerOffset + 1)};
+    expectMalformed(malformed, "SubIntSplit stream header is truncated.");
+  }
+  {
+    std::string malformed{encoded};
+    malformed[headerOffset] = 0;
+    expectMalformed(
+        malformed, "SubIntSplit stream must contain at least one section.");
+  }
+  {
+    std::string malformed{encoded};
+    malformed[headerOffset] = 65;
+    expectMalformed(malformed, "SubIntSplit stream has too many sections.");
+  }
+  {
+    std::string malformed{encoded};
+    malformed[headerOffset + 1] = static_cast<char>(0x80);
+    expectMalformed(malformed, "SubIntSplit stream has unsupported flags.");
+  }
+  {
+    std::string malformed{encoded};
+    malformed[headerOffset + 2] = 1;
+    expectMalformed(
+        malformed,
+        "SubIntSplit sections must cover the value bits once in order.");
+  }
+  {
+    std::string malformed{encoded.substr(
+        0,
+        sectionHeadersOffset +
+            segments.size() * nimble::subintsplit::kSectionHeaderSize - 1)};
+    expectMalformed(malformed, "SubIntSplit section headers are truncated.");
+  }
+  {
+    std::string malformed{encoded};
+    malformed[sectionHeadersOffset + nimble::subintsplit::kSectionHeaderSize] =
+        9;
+    expectMalformed(
+        malformed,
+        "SubIntSplit sections must cover the value bits once in order.");
+  }
+  {
+    std::string malformed{encoded};
+    malformed[sectionHeadersOffset + nimble::subintsplit::kSectionHeaderSize] =
+        7;
+    expectMalformed(
+        malformed,
+        "SubIntSplit sections must cover the value bits once in order.");
+  }
+  {
+    std::string malformed{encoded};
+    const auto secondHeader =
+        sectionHeadersOffset + nimble::subintsplit::kSectionHeaderSize;
+    malformed[secondHeader + 1] = 7;
+    expectMalformed(
+        malformed,
+        "SubIntSplit sections must cover the value bits once in order.");
+  }
+  {
+    std::string malformed{encoded};
+    const auto lastHeader = sectionHeadersOffset +
+        (segments.size() - 1) * nimble::subintsplit::kSectionHeaderSize;
+    malformed[lastHeader + 1] = 62;
+    expectMalformed(
+        malformed,
+        "SubIntSplit sections must cover the value bits once in order.");
+  }
+  {
+    std::string malformed{encoded};
+    const auto lastHeader = sectionHeadersOffset +
+        (segments.size() - 1) * nimble::subintsplit::kSectionHeaderSize;
+    malformed[lastHeader + 1] = 64;
+    expectMalformed(
+        malformed,
+        "SubIntSplit sections must cover the value bits once in order.");
+  }
+  {
+    std::string malformed{encoded.substr(0, encoded.size() - 1)};
+    expectMalformed(
+        malformed,
+        "SubIntSplit section payload sizes do not match the stream.");
+  }
+}
+
+TEST(SubIntSplitEncodingTests, largeDecodeChunkSizePreservesCorrectness) {
+  std::vector<uint64_t> values;
+  values.reserve(100);
+  for (uint64_t i = 0; i < 100; ++i) {
+    values.push_back(((i + 1) << 56) | (i * 17));
+  }
+  const std::vector<nimble::subintsplit::SectionPlan> segments{
+      {0, 31}, {32, 63}};
+
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const auto encoded = encodeWithReplayLayout<uint64_t>(
+      makePreserveLayout<uint64_t>(segments), values, buffer);
+  nimble::Encoding::Options options;
+  options.subIntSplitDecodeChunkSize = (uint32_t{1} << 29) + 1;
+  auto decoder = decodeEncoding<uint64_t>(encoded, *pool, options);
+
+  std::vector<uint64_t> actual(values.size());
+  decoder->materialize(actual.size(), actual.data());
+  EXPECT_EQ(actual, values);
+}
+
+TEST(SubIntSplitEncodingTests, rejectsMismatchedSectionDataType) {
+  const std::vector<uint64_t> values{
+      0x1234567890000000ULL,
+      0x1234567890000001ULL,
+      0x1234567890000002ULL,
+      0x1234567890000003ULL};
+  const auto segments = makePreserveSegments<uint64_t>();
+
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  const auto encoded = encodeWithReplayLayout<uint64_t>(
+      makePreserveLayout<uint64_t>(segments), values, buffer);
+  std::string malformed{encoded};
+
+  const char* headerPosition = malformed.data() +
+      nimble::EncodingPrefix::kFixedPrefixSize +
+      nimble::subintsplit::kStreamHeaderSize;
+  size_t payloadOffset = nimble::EncodingPrefix::kFixedPrefixSize +
+      nimble::subintsplit::specificHeaderSize(segments.size());
+  for (size_t i = 0; i + 1 < segments.size(); ++i) {
+    payloadOffset +=
+        nimble::subintsplit::readSectionHeader(headerPosition).encodedSize;
+  }
+  malformed[payloadOffset + nimble::EncodingPrefix::kDataTypeOffset] =
+      static_cast<char>(nimble::DataType::Uint16);
+
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeEncoding<uint64_t>(malformed, *pool),
+      "SubIntSplit section data type does not match its bit width.");
 }
 
 #endif

@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionAccumulator.h"
@@ -188,8 +189,20 @@ void SectionTable<PhysicalType>::load(
     section.range = headers[i].range;
     section.mask = section.range.mask();
     section.storageBytes = sectionStorageBytes(section.range.width());
+
+    const std::string_view sectionData{pos, headers[i].encodedSize};
+    NIMBLE_CHECK_FILE(
+        sectionData.size() >= EncodingPrefix::kRowCountOffset,
+        "SubIntSplit section encoding prefix is truncated.");
+    const auto expectedDataType =
+        dispatchStorageType(section.storageBytes, []<typename StorageType>() {
+          return TypeTraits<StorageType>::dataType;
+        });
+    NIMBLE_CHECK_FILE(
+        EncodingPrefix::dataType(sectionData) == expectedDataType,
+        "SubIntSplit section data type does not match its bit width.");
     section.encoding = EncodingFactory().create(
-        pool_, {pos, headers[i].encodedSize}, stringBufferFactory, options);
+        pool_, sectionData, stringBufferFactory, options);
     pos += headers[i].encodedSize;
 
     if (section.encoding->encodingType() == EncodingType::Constant) {
@@ -256,8 +269,8 @@ void SectionTable<PhysicalType>::decodeChunk(
     return;
   }
 
-  const uint32_t scratchBytes =
-      decodeChunkSize_ * static_cast<uint32_t>(sizeof(PhysicalType));
+  const uint64_t scratchBytes =
+      static_cast<uint64_t>(numValues) * sizeof(PhysicalType);
   if (scratch_.size() < scratchBytes) [[unlikely]] {
     scratch_.resize(scratchBytes);
   }
