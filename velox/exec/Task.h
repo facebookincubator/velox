@@ -941,8 +941,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // Creates driver factories.
   void createDriverFactoriesLocked(uint32_t maxDrivers);
 
-  // Creates the output buffer in partitioned output buffer manager if needed.
-  // Returns false if the task is terminated while creating exchange clients.
+  // Creates exchange clients and the output buffer in the partitioned output
+  // buffer manager. Returns false if the task was terminated before this
+  // initialization acquired 'mutex_'.
   bool initializePartitionOutput();
 
   // Creates and starts drivers.
@@ -1214,10 +1215,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // Creates an exchange client for the leaf plan node of a given pipeline.
   // Resolves the transport 'planNode' names in ExchangeTransportRegistry and
   // creates the client from that entry, keeping the entry so that the matching
-  // exchange operator can be built from it later. Invokes the transport factory
-  // without holding 'mutex_'. Returns false if the task terminates before the
-  // client can be installed. Fails if the transport is not registered.
-  bool createExchangeClient(
+  // exchange operator can be built from it later. Must be called with 'mutex_'
+  // held. Fails if the transport is not registered.
+  void createExchangeClientLocked(
       int32_t pipelineId,
       const core::PlanNodePtr& planNode,
       int32_t numberOfConsumers);

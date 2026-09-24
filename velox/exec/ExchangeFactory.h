@@ -88,6 +88,9 @@ struct ExchangeClientContext {
 };
 
 /// Creates the transport's exchange client for one pipeline of one task.
+/// Invoked synchronously while the owning Task holds its mutex. Implementations
+/// must not perform blocking transport setup or call back into that Task;
+/// defer transport setup until remote task ids are added to the client.
 using ExchangeClientFactory = std::function<std::shared_ptr<ExchangeClient>(
     const ExchangeClientContext& context)>;
 
