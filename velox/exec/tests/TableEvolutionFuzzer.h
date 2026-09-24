@@ -360,7 +360,11 @@ class TableEvolutionFuzzer {
   /// Remaining filters are not generated: the expression fuzzer invents columns
   /// and relies on schema evolution to add them, which a fixed file schema
   /// cannot accommodate.
-  void runOnInputFile(const InputFile& inputFile);
+  ///
+  /// Returns false, having done nothing, when the file carries no columns or no
+  /// rows. Neither is a finding, and neither becomes one on a retry, so a
+  /// caller looping to a deadline should stop rather than call again.
+  bool runOnInputFile(const InputFile& inputFile);
 
   const CoverageAccumulator& coverageStats() const {
     return coverageStats_;
