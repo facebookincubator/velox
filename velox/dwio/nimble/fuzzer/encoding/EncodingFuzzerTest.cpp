@@ -22,6 +22,7 @@
 ///   --fuzzer_seed=N           Fixed seed, 0=random (default: 42)
 ///   --fuzzer_compression      Enable compression testing (default: true)
 
+#include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
@@ -174,6 +175,32 @@ class FixedBitWidthFuzzerTest : public ::testing::Test {};
 TYPED_TEST_SUITE(FixedBitWidthFuzzerTest, FixedBitWidthTypes);
 
 TYPED_TEST(FixedBitWidthFuzzerTest, correctness) {
+  EncodingFuzzer<TypeParam> fuzzer(
+      FLAGS_fuzzer_iterations,
+      FLAGS_fuzzer_max_rows,
+      FLAGS_fuzzer_seed,
+      FLAGS_fuzzer_compression);
+  fuzzer.run();
+}
+
+// FOR: integer types. The generators add a stream whose 128-row frames switch
+// between 1-bit and full-width residuals, and every iteration slices a random
+// row range, which re-packs the frames so a wide one can start mid-byte.
+using ForTypes = ::testing::Types<
+    ForEncoding<int8_t>,
+    ForEncoding<uint8_t>,
+    ForEncoding<int16_t>,
+    ForEncoding<uint16_t>,
+    ForEncoding<int32_t>,
+    ForEncoding<uint32_t>,
+    ForEncoding<int64_t>,
+    ForEncoding<uint64_t>>;
+
+template <typename E>
+class ForFuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(ForFuzzerTest, ForTypes);
+
+TYPED_TEST(ForFuzzerTest, correctness) {
   EncodingFuzzer<TypeParam> fuzzer(
       FLAGS_fuzzer_iterations,
       FLAGS_fuzzer_max_rows,
@@ -702,3 +729,11 @@ TYPED_TEST(SubIntSplitFuzzerTest, emptyInputRejected) {
   EXPECT_THROW(Encoder<TypeParam>::encode(buffer, empty), NimbleUserError);
 }
 #endif // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+
+// Defines main() through folly::Init, as NimbleWriterFuzzerTest does, so the
+// flags above are parsed; gtest_main would leave them at their defaults.
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  folly::Init init(&argc, &argv);
+  return RUN_ALL_TESTS();
+}
