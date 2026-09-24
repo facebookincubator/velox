@@ -17,6 +17,7 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/external/tzdb/time_zone.h"
+#include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimeWithTimezoneInputGenerator.h"
 #include "velox/type/CastRegistry.h"
@@ -100,16 +101,6 @@ void castFromString(
   });
 }
 
-const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
-  const auto sessionTzName = config.sessionTimezone();
-
-  if (!sessionTzName.empty()) {
-    return tz::locateZone(sessionTzName);
-  }
-
-  return tz::locateZone(0); // GMT
-}
-
 // Calculate timezone offset in minutes at the given timestamp.
 // Since TIME has no date component, we use session start time to determine
 // which DST offset to apply.
@@ -174,7 +165,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
 
     if (input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
-      const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+      const auto* sessionTimeZone = functions::getSessionTimeZone(config);
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
       int16_t offsetMinutes =
           getTimezoneOffsetMinutes(sessionTimeZone, sessionStartTimeMs);
