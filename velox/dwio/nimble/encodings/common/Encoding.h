@@ -246,6 +246,64 @@ class Encoding {
     /// planning time.
     bool subIntSplitHybridPlanner{false};
 
+    /// How top-level selection admits SubIntSplit, as a
+    /// subintsplit::SubIntSplitAdmission value. 0 (the default) keeps
+    /// SubIntSplitEncoding::estimateSize competing with the other
+    /// candidates. 1 offers SubIntSplit as a candidate only when the
+    /// bit-flip profile's gradient gate admits the stream; 2 also requires
+    /// the active-bit entropy guard (see subintsplit/TopLevelPolicy.h).
+    /// Under 1 and 2 an admitted stream still has to win the ordinary size
+    /// comparison, unless subIntSplitAdmissionForces says otherwise.
+    uint8_t subIntSplitAdmission{0};
+
+    /// Whether a bit-flip admission decides on its own, rather than only
+    /// which candidates compete. True makes an admitted stream SubIntSplit
+    /// without a size comparison; kept for ablations that separate the
+    /// gate's predictions from what selection does with them. Read only
+    /// when subIntSplitAdmission is not 0.
+    bool subIntSplitAdmissionForces{false};
+
+    /// Consecutive pairs the admission profile is computed over, taken at a
+    /// fixed stride across the stream. 0 uses the statistics' own profile
+    /// over every pair. Only read when subIntSplitAdmission is not 0. The
+    /// default samples so the gate stays cheap enough to run before
+    /// anything expensive.
+    uint32_t subIntSplitAdmissionProfilePairs{1'024};
+
+    /// Whether selection may choose SubIntSplit for a nested stream: an
+    /// RLE's run values, a Dictionary's alphabet, a FrequencyPartition tier.
+    /// True keeps the writer's candidate list; false restricts SubIntSplit
+    /// to top-level selection, so a nested encoding's own size can be told
+    /// apart from the SubIntSplit streams nested in it. A SubIntSplit
+    /// section never chooses SubIntSplit whatever this says.
+    bool subIntSplitInNestedStreams{true};
+
+    /// Whether the streams this selection writes are handed to a substream
+    /// compressor once they are encoded. Set by the selection policy from
+    /// the CompressionOptions it was built with, so a size estimate can tell
+    /// the two worlds apart; a caller does not set it.
+    bool substreamCompression{false};
+
+    /// Whether SubIntSplit's estimate declines to price a split at all when
+    /// substreamCompression says the stream will be compressed afterwards,
+    /// answering FixedBitWidth's bound instead so the split loses. The
+    /// estimate ranks candidates on uncompressed bytes, which disagrees with
+    /// ranking under a general-purpose compressor most where a split's
+    /// uncompressed win is largest. This is a stop-gap for that mismatch,
+    /// not a claim that a split never pays under a compressor; pricing
+    /// compressed bytes directly would remove the need for it. Uncompressed
+    /// selection never reads this field.
+    bool subIntSplitEstimateCompressionGuard{true};
+
+    /// Whether selection may rule SubIntSplit out from the bit-flip gradient
+    /// gate rather than by planning a split (see
+    /// SubIntSplitEncoding::estimateSizeLowerBound). Off by default: the
+    /// gate's bound is a prediction rather than a proof, so it can withhold
+    /// a candidate that would have won, and measured savings from skipping
+    /// the DP are small. On for a writer that expects mostly negatives and
+    /// wants to skip the DP on them.
+    bool subIntSplitEstimateBitFlipScreen{false};
+
     /// Rows a stream's costly candidates are first priced on, before
     /// selection decides whether to price them on the whole stream. Zero,
     /// the default, prices every candidate on every row. MainlyConstant,

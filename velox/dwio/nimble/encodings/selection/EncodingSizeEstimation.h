@@ -37,6 +37,7 @@
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 
@@ -99,6 +100,18 @@ struct EncodingSizeEstimation {
         isBoolType<physicalType>()) {
       return std::nullopt;
     } else {
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      // Bounded from the bit-flip profile rather than from a distinct count,
+      // so it is answered before the preamble below.
+      if (encodingType == EncodingType::SubIntSplit) {
+        if constexpr (sizeof(physicalType) == 4 || sizeof(physicalType) == 8) {
+          return SubIntSplitEncoding<T>::estimateSizeLowerBound(
+              values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       if (encodingType != EncodingType::MainlyConstant &&
           encodingType != EncodingType::Dictionary
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -280,6 +293,20 @@ struct EncodingSizeEstimation {
             statistics, options.blockBitPackingBlockSize);
       }
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::SubIntSplit: {
+        if constexpr (
+            isNumericType<physicalType>() &&
+            (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+          // No values to plan a split over, so this falls back to the
+          // FixedBitWidth bound the encoder's whole-value floor guarantees.
+          return SubIntSplitEncoding<T>::estimateSize(
+              entryCount, {}, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
       case EncodingType::Delta: {
         if constexpr (isIntegralType<physicalType>()) {
           return DeltaEncoding<physicalType>::estimateSize(
@@ -362,6 +389,19 @@ struct EncodingSizeEstimation {
         // of any summary of them.
         if constexpr (isIntegralType<physicalType>()) {
           return ForEncoding<physicalType>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::SubIntSplit: {
+        // Planned over the values, for the same reason FOR is: where the bit
+        // fields of a value sit, and how each behaves down the stream, is not
+        // in any summary of the values.
+        if constexpr (
+            isNumericType<physicalType>() &&
+            (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+          return SubIntSplitEncoding<T>::estimateSize(
+              values.size(), values, statistics, options);
         } else {
           return std::nullopt;
         }

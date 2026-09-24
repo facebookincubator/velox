@@ -391,10 +391,68 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       }
     }
 
+    // A nested stream (one this policy was created for by a parent encoding)
+    // is not offered SubIntSplit when the caller withholds it; see
+    // Encoding::Options::subIntSplitInNestedStreams.
+    if (identifier_.has_value() && !options.subIntSplitInNestedStreams) {
+      candidateEncodingReadFactors.erase(
+          std::remove_if(
+              candidateEncodingReadFactors.begin(),
+              candidateEncodingReadFactors.end(),
+              [](const auto& entry) {
+                return entry.first == EncodingType::SubIntSplit;
+              }),
+          candidateEncodingReadFactors.end());
+    }
+
+    // A bit-flip admission decides from the profile alone whether SubIntSplit
+    // is worth costing: a rejected stream loses the candidate, an admitted
+    // one still has to win the ordinary size comparison.
+    // Options::subIntSplitAdmissionForces instead leaves an admitted stream
+    // with SubIntSplit as its only candidate.
+    bool subIntSplitForced{false};
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    if constexpr (
+        isIntegralType<T>() &&
+        (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+      const auto admission = static_cast<subintsplit::SubIntSplitAdmission>(
+          options.subIntSplitAdmission);
+      const auto subIntSplit = std::find_if(
+          candidateEncodingReadFactors.begin(),
+          candidateEncodingReadFactors.end(),
+          [](const auto& entry) {
+            return entry.first == EncodingType::SubIntSplit;
+          });
+      if (admission != subintsplit::SubIntSplitAdmission::kEstimate &&
+          subIntSplit != candidateEncodingReadFactors.end()) {
+        const bool admitted = options.subIntSplitAdmissionProfilePairs == 0
+            ? subintsplit::bitFlipAdmits(
+                  statistics.bitFlipProfile(),
+                  admission,
+                  subintsplit::TopLevelPolicyConfig{})
+            : subintsplit::bitFlipAdmits(
+                  subintsplit::bitFlipAdmissionProfile(
+                      values,
+                      admission,
+                      options.subIntSplitAdmissionProfilePairs),
+                  admission,
+                  subintsplit::TopLevelPolicyConfig{});
+        if (!admitted) {
+          candidateEncodingReadFactors.erase(subIntSplit);
+        } else if (options.subIntSplitAdmissionForces) {
+          const auto entry = *subIntSplit;
+          candidateEncodingReadFactors.assign(1, entry);
+          subIntSplitForced = true;
+        }
+      }
+    }
+#endif
+
     // Not while decode is priced: the screen compares sizes, and would drop a
     // candidate that loses on size and wins once its decode is counted.
-    if (!options.subIntSplitSectionSelection ||
-        options.subIntSplitDecodeWeight == 0.0) {
+    if (!subIntSplitForced &&
+        (!options.subIntSplitSectionSelection ||
+         options.subIntSplitDecodeWeight == 0.0)) {
       screenCandidatesBySample<T>(
           values, candidateEncodingReadFactors, options);
     }
@@ -408,6 +466,14 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       };
     }
 
+    // A size estimate counts bytes on disk, which are compressed bytes when
+    // this policy hands its streams to a substream compressor; this flag
+    // tells an estimate which world it is pricing. Copied, not mutated,
+    // since the caller's options are shared with the encode.
+    Encoding::Options estimationOptions = options;
+    estimationOptions.substreamCompression = compressionOptions_.has_value() &&
+        compressionOptions_->compressionType != CompressionType::Uncompressed;
+
     // FixedBitWidth's size, when it is a candidate, so effectiveReadFactor
     // can withhold Trivial's discount where taking it would cost compression.
     std::optional<uint64_t> fixedBitWidthSize;
@@ -418,7 +484,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
               return entry.first == EncodingType::FixedBitWidth;
             })) {
       fixedBitWidthSize = detail::EncodingSizeEstimation<T>::estimateSize(
-          EncodingType::FixedBitWidth, values, statistics, options);
+          EncodingType::FixedBitWidth, values, statistics, estimationOptions);
     }
 
     // How much a section's decode counts against its size, and for which
@@ -453,12 +519,12 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
               minCost,
               values,
               statistics,
-              options)) {
+              estimationOptions)) {
         continue;
       }
       const auto estimatedSize =
           detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
+              encodingType, values, statistics, estimationOptions);
       if (!estimatedSize.has_value()) {
         NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
         continue;

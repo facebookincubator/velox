@@ -1206,6 +1206,40 @@ TEST(
       unextendedFactors, nimble::EncodingType::FrequencyPartition));
 }
 
+// A nested stream is not offered SubIntSplit when the caller withholds it, and
+// the top-level stream still is, so a baseline encoding can be measured
+// without SubIntSplit inside it.
+TEST(SubIntSplitEncodingTests, nestedStreamsCanWithholdSubIntSplit) {
+  const auto values = makeStructuredValues<uint64_t>();
+  const auto statistics =
+      nimble::Statistics<uint64_t>::create(std::span<const uint64_t>(values));
+  // SubIntSplit at a factor no other candidate can match, so it is chosen
+  // wherever it is offered.
+  const std::vector<std::pair<nimble::EncodingType, float>> readFactors{
+      {nimble::EncodingType::SubIntSplit, 0.01f},
+      {nimble::EncodingType::Trivial, 1.0f}};
+  nimble::Encoding::Options withheld;
+  withheld.subIntSplitInNestedStreams = false;
+
+  nimble::ManualEncodingSelectionPolicy<uint64_t> topLevel{
+      readFactors, std::nullopt, std::nullopt};
+  EXPECT_EQ(
+      topLevel.select(values, statistics, withheld).encodingType,
+      nimble::EncodingType::SubIntSplit);
+
+  nimble::ManualEncodingSelectionPolicy<uint64_t> nested{
+      readFactors,
+      std::nullopt,
+      nimble::EncodingIdentifiers::RunLength::RunValues};
+  EXPECT_EQ(
+      nested.select(values, statistics, nimble::Encoding::Options{})
+          .encodingType,
+      nimble::EncodingType::SubIntSplit);
+  EXPECT_EQ(
+      nested.select(values, statistics, withheld).encodingType,
+      nimble::EncodingType::Trivial);
+}
+
 TYPED_TEST(SubIntSplitEncodingTest, ExtendedCandidatesRoundTrip) {
   using T = TypeParam;
   const auto values = makeStructuredValues<T>();

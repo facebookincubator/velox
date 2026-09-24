@@ -46,6 +46,7 @@ add_library(
   subintsplit/CostModel.h
   subintsplit/DecodeCost.h
   subintsplit/DeltaTransform.h
+  subintsplit/Estimator.h
   subintsplit/Format.h
   subintsplit/PlanRefiner.cpp
   subintsplit/PlanRefiner.h
@@ -56,6 +57,7 @@ add_library(
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp
   subintsplit/SplitSelector.h
+  subintsplit/TopLevelPolicy.h
   common/Encoding.cpp
   common/EncodingFactory.cpp
   common/EncodingLayout.cpp

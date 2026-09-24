@@ -500,11 +500,10 @@ std::string_view EncodingFactory::encode(
           "types, got {}.",
           TypeTraits<T>::dataType);
     }
-    // Reachable only when something names SubIntSplit explicitly, such as an
-    // encoding-layout replay or a benchmark. EncodingSizeEstimation has no
-    // SubIntSplit case, so estimateSize() returns nullopt for it and the
-    // selection policy skips it as incompatible -- default selection can never
-    // land here.
+    // Reachable when something names SubIntSplit explicitly, such as an
+    // encoding-layout replay or a benchmark, or when a caller puts SubIntSplit
+    // in the read factors: EncodingSizeEstimation prices it only for values it
+    // is handed, and it is absent from the default read factors.
     case EncodingType::SubIntSplit: {
       if constexpr (
           isNumericType<physicalType>() &&
