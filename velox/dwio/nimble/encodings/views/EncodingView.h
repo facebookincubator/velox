@@ -23,6 +23,7 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -55,6 +56,26 @@ class EncodingView {
 
   /// Reads physical values in the given row range into a typed output buffer.
   virtual void read(uint32_t offset, uint32_t length, void* output) const = 0;
+
+  /// Reads ascending, disjoint, non-empty ranges into one typed output buffer
+  /// with room for the sum of their lengths, without validating the list. For
+  /// a caller that built the ranges itself; read(std::span<const RowRange>,
+  /// ...) validates first.
+  virtual void readRanges(std::span<const RowRange> ranges, void* output)
+      const = 0;
+
+  /// Hands back dense ids for rows [offset, offset + length), and the table of
+  /// values those ids stand for, when this encoding already holds its values
+  /// that way. Returns false when it does not, which is the default. Ids are
+  /// dense but carry no defined order; a caller needing value order must
+  /// derive it from the table.
+  virtual bool denseRunIds(
+      uint32_t /*offset*/,
+      uint32_t /*length*/,
+      std::vector<uint32_t>& /*ids*/,
+      std::vector<uint64_t>& /*table*/) const {
+    return false;
+  }
 
   /// Reads selected physical values densely and reports null output positions.
   /// Non-nullable views ignore `setNull` and return `indices.size()`.
@@ -188,18 +209,19 @@ class TypedEncodingView : public EncodingView {
     readPhysical(offset, length, static_cast<physicalType*>(output));
   }
 
+  // Delegates to readPhysicalRanges so a view can decode across ranges in one
+  // pass instead of probing each row individually.
   uint32_t read(
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& /*setNull*/,
       void* output) const override {
     const auto numRows = this->checkReadRanges(ranges);
-    auto* typedOutput = static_cast<physicalType*>(output);
-    uint32_t outputOffset{0};
-    for (const auto& range : ranges) {
-      readPhysical(range.startRow, range.numRows(), typedOutput + outputOffset);
-      outputOffset += range.numRows();
-    }
+    readPhysicalRanges(ranges, static_cast<physicalType*>(output));
     return numRows;
+  }
+
+  void readRanges(std::span<const RowRange> ranges, void* output) const final {
+    readPhysicalRanges(ranges, static_cast<physicalType*>(output));
   }
 
  protected:
@@ -263,6 +285,22 @@ class TypedEncodingView : public EncodingView {
       }
 
       output[outputOffset++] = readPhysicalAt(firstIndex);
+    }
+  }
+
+  // Default per-range read; an encoding whose point read is not cheap
+  // relative to its bulk decode should override this to plan across ranges.
+  virtual void readPhysicalRanges(
+      std::span<const RowRange> ranges,
+      physicalType* output) const {
+    for (const auto& range : ranges) {
+      const uint32_t length = range.numRows();
+      if (length == 1) {
+        *output = readPhysicalAt(range.startRow);
+      } else {
+        readPhysical(range.startRow, length, output);
+      }
+      output += length;
     }
   }
 

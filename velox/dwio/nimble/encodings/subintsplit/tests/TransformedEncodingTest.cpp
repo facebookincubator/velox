@@ -31,7 +31,9 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionTransform.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
+#include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -80,6 +82,18 @@ class TransformedEncodingTest : public ::testing::Test {
     encoding->materialize(values.size(), decoded.data());
     for (size_t i = 0; i < values.size(); ++i) {
       ASSERT_EQ(decoded[i], values[i]) << "row " << i;
+    }
+  }
+
+  // Reads `encoded` through the view's bulk read and checks every row.
+  template <typename Values>
+  static void expectViewReads(
+      const SubIntSplitEncodingView<uint64_t>& view,
+      const Values& values) {
+    std::vector<uint64_t> bulk(values.size());
+    view.read(0, values.size(), bulk.data());
+    for (size_t i = 0; i < values.size(); ++i) {
+      ASSERT_EQ(bulk[i], values[i]) << "bulk row " << i;
     }
   }
 
@@ -485,6 +499,137 @@ TEST_F(TransformedEncodingTest, keySearchReturnsOneOfTheAttemptsItPriced) {
       << "the search produced a stream no single candidate key reproduces";
 }
 
+// A key-derived permutation spans the whole section, and a probe follows the
+// position map rather than rebuilding anything. This is the property that lets
+// it go unblocked: if the map and a full decode ever disagreed, the gain from
+// not blocking would be bought with wrong answers.
+TEST_F(TransformedEncodingTest, keyDerivedProbesAgreeWithAFullDecode) {
+  const auto values = packedIdentifiers(9000);
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitTransform = static_cast<uint8_t>(TransformId::KeyDerived);
+  options.subIntSplitKeySection = 1;
+  options.subIntSplitForceApply = true;
+  const auto encoded = test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+      buffer, values, CompressionType::Uncompressed, options);
+
+  subintsplit::TransformInfo info;
+  subintsplit::parseSections(encoded, Encoding::kPrefixSize, &info);
+  ASSERT_TRUE(info.anyTransform()) << "KeyDerived was not applied";
+
+  SubIntSplitEncodingView<uint64_t> view{encoded, pool_.get(), options};
+  expectViewReads(view, values);
+  // Probed out of order, so a map that only worked when walked forwards would
+  // be caught.
+  for (uint32_t i = 8999; i < values.size(); i -= 331) {
+    ASSERT_EQ(view.readAt(i), values[i]) << "probe row " << i;
+    if (i < 331) {
+      break;
+    }
+  }
+}
+
+// A range-list read on a transformed stream chooses once, for the whole list,
+// between reading each range the way a single-range read would and decoding
+// the column once and copying the ranges out. Both choices have to return the
+// source rows, KeyDerived through the position map. The lists include
+// sparse ones that stay per range and dense ones that decode the column, and
+// the untransformed stream is read the same way as the baseline.
+TEST_F(TransformedEncodingTest, rangeListsAgreeWithTheSourceValues) {
+  const auto values = packedIdentifiers(20'011);
+  std::vector<TransformId> transforms{TransformId::None};
+  const auto underTest = transformsUnderTest();
+  transforms.insert(transforms.end(), underTest.begin(), underTest.end());
+  for (auto id : transforms) {
+    SCOPED_TRACE(toString(id));
+    Buffer buffer{*pool_};
+    Encoding::Options options;
+    if (id != TransformId::None) {
+      options.subIntSplitTransform = static_cast<uint8_t>(id);
+      options.subIntSplitKeySection = 1;
+      options.subIntSplitForceApply = true;
+    }
+    const auto encoded = test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+        buffer, values, CompressionType::Uncompressed, options);
+
+    subintsplit::TransformInfo info;
+    subintsplit::parseSections(encoded, Encoding::kPrefixSize, &info);
+    ASSERT_EQ(info.anyTransform(), id != TransformId::None)
+        << toString(id) << " was not applied as requested";
+
+    SubIntSplitEncodingView<uint64_t> view{encoded, pool_.get(), options};
+    test::expectRangeListReads(view, values);
+  }
+}
+
+// A permuted section is moved at whatever width it was stored at, and the
+// narrow widths are a different code path from the 64-bit one. Every other test
+// here uses values whose sections land at eight bytes, so this shapes them to
+// split into a narrow low section under a low-cardinality high one -- the shape
+// Medicare1.NPI has, and the one that first exercised the narrow path only when
+// a benchmark crashed on it.
+//
+// Needs three fields, not two: a bare (low, high) pair fits in 16 bits and the
+// splitter keeps it as one section, which makes subIntSplitKeySection = 1
+// (and subIntSplitForceApply's precondition) invalid -- that is what threw
+// once this test was forced to actually apply the transform instead of
+// silently declining it. Adding packedIdentifiers' third, wide, slowly-varying
+// field is what reliably produces a multi-section split elsewhere in this
+// file; it does not touch the low field, so the section under test stays
+// exactly as narrow.
+TEST_F(TransformedEncodingTest, permutesNarrowSectionsToo) {
+  Vector<uint64_t> values{pool_.get()};
+  values.resize(20000);
+  std::mt19937_64 rng(31);
+  for (uint32_t i = 0; i < values.size(); ++i) {
+    // Ten low bits, so the low section is far narrower than a word, under a
+    // low-cardinality middle field for the sort to group by, under a wide,
+    // slowly-varying high field that is what makes the splitter cut this
+    // into more than one section at all.
+    const uint64_t low = rng() % 1024;
+    const uint64_t mid = rng() % 40;
+    const uint64_t high = 1'000'000ULL + i / 8;
+    values[i] = (high << 16) | (mid << 10) | low;
+  }
+
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitTransform = static_cast<uint8_t>(TransformId::KeyDerived);
+
+  // Read before pinning, same reasoning as the cache tests: keySection = 1
+  // throws rather than declining if the column does not actually split into
+  // at least two sections.
+  Buffer probeBuffer{*pool_};
+  const auto probeEncoded =
+      test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+          probeBuffer,
+          values,
+          CompressionType::Uncompressed,
+          Encoding::Options{});
+  subintsplit::TransformInfo probeInfo;
+  const auto probeSections = subintsplit::parseSections(
+      probeEncoded, Encoding::kPrefixSize, &probeInfo);
+  ASSERT_GE(probeSections.size(), 2u)
+      << "test needs a multi-section column so keySection=1 is valid; "
+      << "this shape produced only one section";
+  options.subIntSplitKeySection = 1;
+  options.subIntSplitForceApply = true;
+
+  const auto encoded = test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+      buffer, values, CompressionType::Uncompressed, options);
+
+  subintsplit::TransformInfo info;
+  subintsplit::parseSections(encoded, Encoding::kPrefixSize, &info);
+  ASSERT_TRUE(info.anyTransform()) << "KeyDerived was not applied";
+
+  SubIntSplitEncodingView<uint64_t> view{encoded, pool_.get(), options};
+  expectViewReads(view, values);
+  for (uint32_t i = 0; i < values.size(); i += 97) {
+    ASSERT_EQ(view.readAt(i), values[i]) << "probe row " << i;
+  }
+  expectMaterializes(encoded, values, options);
+}
+
 // A retired transform id must be refused by every reader rather than decoded
 // without its inverse, which would hand back plausible wrong values.
 TEST_F(TransformedEncodingTest, readersRejectRetiredTransformIds) {
@@ -522,7 +667,137 @@ TEST_F(TransformedEncodingTest, readersRejectRetiredTransformIds) {
     EXPECT_THROW(
         SubIntSplitEncoding<uint64_t>(*pool_, corrupt, nullptr, options),
         NimbleUserError);
+    EXPECT_THROW(
+        (SubIntSplitEncodingView<uint64_t>{corrupt, pool_.get(), options}),
+        NimbleUserError);
   }
+}
+
+// PositionCache and BlockCache (SubIntSplitEncodingView.h) are thread_local,
+// keyed only on the raw `this` pointer, with nothing to invalidate them.
+// Every other test here builds exactly one view, so address reuse -- a
+// second view constructed where an earlier, destroyed one lived -- has never
+// been exercised. Placement-new forces that reuse deterministically, the way
+// a stack slot in a loop or an allocator size class could produce it in
+// production without any help.
+TEST_F(
+    TransformedEncodingTest,
+    positionCacheDoesNotLeakAcrossViewsAtTheSameAddress) {
+  using ViewType = SubIntSplitEncodingView<uint64_t>;
+
+  // packedIdentifiers with keySection=1 is the shape every passing transform
+  // test in this file already uses to get KeyDerived selected -- two earlier
+  // synthetic generators here (a random key/payload pair, then a
+  // mergeirr-shaped one with no explicit field boundary) both failed for
+  // reasons specific to how the automatic splitter and the opt-in cost gate
+  // work, not because the general idea was wrong. Different seeds so the two
+  // streams' sorted key orders, and therefore their position maps, differ --
+  // and different row counts, not just different seeds, so a leak cannot
+  // hide behind cache.positions already happening to be the right size: the
+  // block-cache leak this same trick found was only visible once the two
+  // streams' cached array sizes actually disagreed.
+  Buffer bufferA{*pool_};
+  const auto valuesA = packedIdentifiers(4096, /*seed=*/111);
+  Encoding::Options optionsA;
+  optionsA.subIntSplitTransform = static_cast<uint8_t>(TransformId::KeyDerived);
+
+  // Read before pinning: subIntSplitKeySection = 1 throws
+  // "key section is outside the split" if the column happens to produce
+  // fewer than two sections, which an uncaught NimbleInternalError from
+  // inside encode() would make confusing to diagnose. The split does not
+  // depend on subIntSplitTransform or subIntSplitKeySection, so probing with
+  // default options finds the same boundaries the real encode below will.
+  Buffer probeBufferA{*pool_};
+  const auto probeEncodedA =
+      test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+          probeBufferA,
+          valuesA,
+          CompressionType::Uncompressed,
+          Encoding::Options{});
+  subintsplit::TransformInfo probeInfoA;
+  const auto sectionsA = subintsplit::parseSections(
+      probeEncodedA, Encoding::kPrefixSize, &probeInfoA);
+  ASSERT_GE(sectionsA.size(), 2u)
+      << "test needs a multi-section column so keySection=1 is valid; "
+      << "packedIdentifiers produced only one section";
+  optionsA.subIntSplitKeySection = 1;
+  optionsA.subIntSplitForceApply = true;
+
+  const auto encodedA = test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+      bufferA, valuesA, CompressionType::Uncompressed, optionsA);
+  subintsplit::TransformInfo infoA;
+  subintsplit::parseSections(encodedA, Encoding::kPrefixSize, &infoA);
+  ASSERT_TRUE(infoA.anyTransform())
+      << "test precondition: KeyDerived must actually be selected for "
+      << "stream A, or this test exercises nothing";
+
+  Buffer bufferB{*pool_};
+  const auto valuesB = packedIdentifiers(9000, /*seed=*/222);
+  Encoding::Options optionsB;
+  optionsB.subIntSplitTransform = static_cast<uint8_t>(TransformId::KeyDerived);
+
+  Buffer probeBufferB{*pool_};
+  const auto probeEncodedB =
+      test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+          probeBufferB,
+          valuesB,
+          CompressionType::Uncompressed,
+          Encoding::Options{});
+  subintsplit::TransformInfo probeInfoB;
+  const auto sectionsB = subintsplit::parseSections(
+      probeEncodedB, Encoding::kPrefixSize, &probeInfoB);
+  ASSERT_GE(sectionsB.size(), 2u)
+      << "test needs a multi-section column so keySection=1 is valid; "
+      << "packedIdentifiers produced only one section";
+  optionsB.subIntSplitKeySection = 1;
+  optionsB.subIntSplitForceApply = true;
+
+  const auto encodedB = test::Encoder<SubIntSplitEncoding<uint64_t>>::encode(
+      bufferB, valuesB, CompressionType::Uncompressed, optionsB);
+  subintsplit::TransformInfo infoB;
+  subintsplit::parseSections(encodedB, Encoding::kPrefixSize, &infoB);
+  ASSERT_TRUE(infoB.anyTransform())
+      << "test precondition: KeyDerived must actually be selected for "
+      << "stream B, or this test exercises nothing";
+
+  // Self-check that a leaked cache would actually be visible: if every row's
+  // value happened to agree between the streams at the positions a leaked
+  // permutation would touch, this test would pass whether or not the bug is
+  // present. Uniform-random low bits over independent seeds make an
+  // across-the-board coincidence astronomically unlikely; assert it directly
+  // rather than trust that.
+  int differing = 0;
+  for (size_t i = 0; i < valuesA.size(); ++i) {
+    differing += (valuesA[i] != valuesB[i]);
+  }
+  ASSERT_GT(differing, static_cast<int>(valuesA.size()) / 2)
+      << "test precondition: streams A and B must mostly disagree row by "
+      << "row, or a leaked cache would not be distinguishable from a correct "
+      << "one";
+
+  alignas(ViewType) unsigned char storage[sizeof(ViewType)];
+
+  auto* viewA = new (storage) ViewType(encodedA, pool_.get(), optionsA);
+  {
+    SCOPED_TRACE("stream A");
+    expectViewReads(*viewA, valuesA);
+  }
+  const void* addressA = static_cast<void*>(viewA);
+  viewA->~ViewType();
+
+  // A different key-derived stream, constructed at the exact address the
+  // first view just vacated. If PositionCache's `cache.owner == this` check
+  // is fooled by the reused address, this bulk read comes back permuted by
+  // stream A's position map instead of stream B's own.
+  auto* viewB = new (storage) ViewType(encodedB, pool_.get(), optionsB);
+  ASSERT_EQ(static_cast<void*>(viewB), addressA)
+      << "test precondition: placement-new must reuse the same address, or "
+      << "this test exercises nothing";
+  {
+    SCOPED_TRACE("stream B");
+    expectViewReads(*viewB, valuesB);
+  }
+  viewB->~ViewType();
 }
 
 #endif // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS

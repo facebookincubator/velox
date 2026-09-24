@@ -1245,15 +1245,17 @@ TEST_P(ReadWithVisitorTest, denseNoFilterWithNulls) {
 // A nullable column read through the visitor with an AlwaysTrue filter has to
 // report its nulls and return its values, whichever encoding stores the
 // non-null values. The values child is pinned by layout so each encoding is
-// exercised whatever default selection would pick for this data: Trivial
-// takes the bulk fast path, FixedBitWidth the per-row path here.
+// exercised whatever default selection would pick for this data: Trivial and
+// SubIntSplit take the bulk fast path, FixedBitWidth the per-row path here.
 TEST_P(ReadWithVisitorTest, denseNoFilterWithNullsPerValuesEncoding) {
   constexpr int kRows = 200;
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(kRows, folly::identity, nullEvery(7))});
   auto rowType = asRowType(input->type());
   for (const auto encodingType :
-       {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+       {EncodingType::Trivial,
+        EncodingType::FixedBitWidth,
+        EncodingType::SubIntSplit}) {
     SCOPED_TRACE(toString(encodingType));
     auto ctx = makeFileContext(
         input,
