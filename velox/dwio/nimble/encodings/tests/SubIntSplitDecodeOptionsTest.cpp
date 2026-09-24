@@ -160,6 +160,9 @@ TEST_F(SubIntSplitDecodeOptionsTest, hugeDecodeCostCollapsesTheActiveRange) {
 
   Encoding::Options prohibitive;
   prohibitive.subIntSplitDecodeCostBitsPerValue = 1'000.0;
+  // The constant high planes become their own free section only when they are
+  // trimmed, which is off by default.
+  prohibitive.subIntSplitTrimConstantPlanes = true;
   const auto encoded = encode(values, prohibitive);
 
   EXPECT_EQ(sectionCount(encoded), 2u);

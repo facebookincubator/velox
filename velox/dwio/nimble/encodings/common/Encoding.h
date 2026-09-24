@@ -140,6 +140,12 @@ class Encoding {
     /// fewer dependent loads on the hot path.
     bool frequencyPartitionResolveTierValues = true;
 
+    /// Encodings SubIntSplit may cost a section against when choosing
+    /// splits. Empty, the default, means every encoding. A restricted set
+    /// only narrows what the selector considers; it does not change the
+    /// format.
+    std::unordered_set<EncodingType> subIntSplitAllowedEncodings;
+
     /// Block size for BlockBitPacking encoding. Determines how many rows
     /// are packed per block. Written to the stream header; the reader
     /// reads it back from the stream (self-describing).
@@ -158,6 +164,22 @@ class Encoding {
     /// When true, FOR-family payloads use the exact required bit width. When
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
+
+    /// Whether SubIntSplit's split planner may cost a bit range as Huffman.
+    /// False by default: no section encoding can actually select Huffman, so
+    /// pricing it only steers split boundaries toward an encoding nothing
+    /// will use. Set true to price it anyway.
+    bool subIntSplitAllowHuffman{false};
+
+    /// Allows the SubIntSplit split planner to cost segments as DeltaBlock.
+    /// False by default: DeltaBlock's serial prefix-sum decode does not
+    /// vectorize and its per-block baselines pay off only for random access,
+    /// not the contiguous scans this was measured on, while its cost model
+    /// is expensive to evaluate per grid cell. Must stay in sync with
+    /// whether DeltaBlock appears in the SubIntSplit nested candidate list
+    /// in nestedEncodingReadFactors, since the planner and section selection
+    /// need to agree on what is available.
+    bool subIntSplitAllowDeltaBlock{false};
 
     /// Rows a stream's costly candidates are first priced on, before
     /// selection decides whether to price them on the whole stream. Zero,
@@ -181,17 +203,13 @@ class Encoding {
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
-    ///
-    /// A monotone counter's low bits are maximally random viewed absolutely
-    /// but nearly constant viewed as deltas, so no per-bit-range encoding can
-    /// compress them while the delta form is trivial. This mirrors OpenZL,
-    /// where ZL_NODE_DELTA_INT feeds a downstream graph rather than acting as
-    /// a leaf codec. The zigzag step keeps decreasing runs from wrapping to
-    /// huge unsigned values.
-    ///
-    /// Delta-encoded streams can only be read sequentially from row 0, so
-    /// skip() and readWithVisitor() reject them. Do not enable for production
-    /// until restatement points are added.
+    /// A monotone counter's low bits are nearly random viewed absolutely but
+    /// nearly constant viewed as deltas, so this can compress cases no
+    /// per-bit-range encoding can. Delta-encoded streams can only be read
+    /// sequentially from row 0: skip() decodes every skipped row, point and
+    /// range reads cost a full scan, and the delta form carries no row frame
+    /// or section transforms. Do not enable for production until restatement
+    /// points are added.
     bool subIntSplitDeltaPreTransform{false};
 
     /// Output elements SubIntSplit combines per pass when decoding.
@@ -227,7 +245,7 @@ class Encoding {
     ///
     /// Raising it prunes candidate boundaries, which shrinks the cost grid
     /// quadratically -- the cheapest way to speed up planning, paid for in
-    /// split quality. Negative selects the default.
+    /// split quality. Negative selects the default of 0.0 (no pruning).
     double subIntSplitBoundaryPruneThreshold{-1.0};
 
     /// Hard ceiling on SubIntSplit's candidate split boundaries.
@@ -251,6 +269,31 @@ class Encoding {
     /// which need low cardinality to win. Above this width both are treated as
     /// unusable and the pass is skipped. 0 is unlimited.
     uint32_t subIntSplitFrequencyMetricsMaxWidth{0};
+
+    /// EXPERIMENTATION: Trims the bit planes constant across SubIntSplit's
+    /// planner sample before the split DP, storing each constant edge as one
+    /// Constant section and scoring the grid over the varying planes alone.
+    /// Off by default: trimming can move the plan and thus changes encoded
+    /// output. Ignored for an edge narrower than the minimum section width,
+    /// or when subIntSplitAllowedEncodings excludes Constant.
+    bool subIntSplitTrimConstantPlanes{false};
+
+    /// Folds SubIntSplit's Constant sections into one pre-shifted word when a
+    /// stream is opened, so the decode loop never materialises them. Decode
+    /// only: encoded output is unchanged. Applies to streams without section
+    /// transforms. On by default.
+    bool subIntSplitFoldConstantSections{true};
+
+    /// Decodes a SubIntSplit stream whose one remaining section holds each
+    /// value verbatim straight into the caller's buffer, skipping the
+    /// scratch copy and the mask-and-shift pass. Decode only. On by default.
+    bool subIntSplitPassThrough{true};
+
+    /// Decodes SubIntSplit a block at a time on the readWithVisitor slow
+    /// path, instead of one value per section per call. Decode only;
+    /// applies to streams with no transform, row frame or delta. Off until
+    /// measured on a workload that reaches the slow path.
+    bool subIntSplitVisitorBlockBuffer{false};
 
     /// Prices a Huffman tree deeper than HuffmanEncoding::kMaxCodeBits at its
     /// Shannon bound instead of declining it. encode() length-limits such a

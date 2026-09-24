@@ -146,6 +146,38 @@ inline std::vector<std::pair<EncodingType, float>> nestedEncodingReadFactors(
       nested.emplace_back(entry);
     }
   }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+  // SubIntSplit decomposes its input into bit-range segments, each
+  // independently re-encoded via encodeNested(); segments often look very
+  // different from the original column, so extra integer-compression
+  // candidates are offered here beyond the global default read factors.
+  // This list reaches the whole subtree, not only direct children of a
+  // SubIntSplit node: recursion is bounded because each candidate's own
+  // encoding type (not SubIntSplit) is what gets passed down to its
+  // children, so it drops itself out at the next level.
+  if (parentEncodingType == EncodingType::SubIntSplit) {
+    for (const auto& pair :
+         {// PFOR, SimdForBitpack and BlockBitPacking are held above the
+          // delta family's factor; levelling them cedes bulk decode
+          // throughput and point latency to a small compression gain. Do
+          // not change without re-measuring.
+          std::pair{EncodingType::PFOR, 0.9f},
+          std::pair{EncodingType::SimdForBitpack, 0.9f},
+          std::pair{EncodingType::BlockBitPacking, 0.9f},
+          std::pair{EncodingType::Delta, 0.85f},
+          std::pair{EncodingType::FOR, 0.85f},
+          // Huffman is deliberately absent: it decodes bit-serially, which
+          // costs bulk decode throughput here. See
+          // Encoding::Options::subIntSplitAllowHuffman for the opt-in.
+          //
+          // DeltaBlock is deliberately absent too: its serial prefix-sum
+          // decode does not vectorize, and its per-block baselines (which
+          // pay off on a gather or low-selectivity read) are untested here.
+          std::pair{EncodingType::FrequencyPartition, 0.85f}}) {
+      nested.push_back(pair);
+    }
+  }
+#endif
 
   // Streams decoded once at construction, rather than on every read, can
   // admit encodings that are rightly withheld from section payloads (where
