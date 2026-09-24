@@ -123,6 +123,9 @@ TEST(IndexConfigTest, buildersPreserveConfiguredValues) {
   ASSERT_NE(hashOptions.bloomFilter, nullptr);
   EXPECT_EQ(hashOptions.bloomFilter->type, BloomFilterType::kBlocked);
   EXPECT_FLOAT_EQ(hashOptions.bloomFilter->bitsPerKey, 7.0f);
+
+  // The writer fills in the key count once it knows it.
+  EXPECT_FALSE(hashOptions.bloomFilter->numKeys.has_value());
   EXPECT_EQ(hashOptions.maxPartitionSizeBytes, 456);
 
   const auto sorted =
