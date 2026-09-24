@@ -69,7 +69,12 @@ class ClusterIndexWriterTest : public ::testing::Test {
 
   void SetUp() override {
     pool_ = velox::memory::memoryManager()->addLeafPool();
-    chunkStatsWriter_ = std::make_unique<ChunkStatsWriter>(*pool_, 0);
+    chunkStatsWriter_ = ChunkStatsWriter::create(
+        *pool_,
+        {
+            .version = ChunkStatsVersion::kV1,
+            .minAvgChunksPerStream = 0,
+        });
   }
 
   // Returns a callback that appends key stream data to TestFileIndex.
@@ -109,6 +114,18 @@ class ClusterIndexWriterTest : public ::testing::Test {
       EXPECT_EQ(name, nimble::kChunkStatsSection);
       fileIndex.chunkRootIndexData = std::string(content);
     };
+  }
+
+  std::shared_ptr<index::ChunkStatsGroup> createV1ChunkStatsGroup(
+      uint32_t firstStripe,
+      uint32_t stripeCount,
+      std::unique_ptr<MetadataBuffer> metadata) const {
+    return index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV1,
+        firstStripe,
+        stripeCount,
+        std::move(metadata),
+        *pool_);
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -669,7 +686,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithSingleGroup) {
 
   // Verify chunk index for stream position data
   {
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         0,
         3,
         std::make_unique<MetadataBuffer>(
@@ -907,7 +924,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroups) {
     EXPECT_EQ(keyStats.chunkKeys, (std::vector<std::string>{"bbb", "ccc"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         0,
         1,
         std::make_unique<MetadataBuffer>(
@@ -950,7 +967,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroups) {
         keyStats.chunkKeys, (std::vector<std::string>{"ddd", "eee", "fff"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         1,
         1,
         std::make_unique<MetadataBuffer>(
@@ -992,7 +1009,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroups) {
     EXPECT_EQ(keyStats.chunkKeys, (std::vector<std::string>{"ggg", "hhh"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         2,
         1,
         std::make_unique<MetadataBuffer>(
@@ -1230,7 +1247,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroupsAndEmptyStream) {
     EXPECT_EQ(keyStats.chunkKeys, (std::vector<std::string>{"bbb", "ccc"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         0,
         1,
         std::make_unique<MetadataBuffer>(
@@ -1288,7 +1305,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroupsAndEmptyStream) {
         keyStats.chunkKeys, (std::vector<std::string>{"ddd", "eee", "fff"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         1,
         1,
         std::make_unique<MetadataBuffer>(
@@ -1345,7 +1362,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroupsAndEmptyStream) {
     EXPECT_EQ(keyStats.chunkKeys, (std::vector<std::string>{"ggg", "hhh"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         2,
         1,
         std::make_unique<MetadataBuffer>(
@@ -1402,7 +1419,7 @@ TEST_F(ClusterIndexWriterTest, writeAndReadWithMultipleGroupsAndEmptyStream) {
     EXPECT_EQ(keyStats.chunkKeys, (std::vector<std::string>{"iii", "jjj"}));
 
     // Verify chunk index for stream position data
-    auto chunkStats = index::ChunkStatsGroup::create(
+    auto chunkStats = createV1ChunkStatsGroup(
         3,
         1,
         std::make_unique<MetadataBuffer>(
@@ -1515,7 +1532,7 @@ TEST_F(ClusterIndexWriterTest, chunkIndexOnlyWriteAndRead) {
   ASSERT_FALSE(fileIndex.chunkRootIndexData.empty());
 
   // Verify ChunkStatsGroup can be loaded and used for chunk seeking.
-  auto chunkStats = index::ChunkStatsGroup::create(
+  auto chunkStats = createV1ChunkStatsGroup(
       0,
       1,
       std::make_unique<MetadataBuffer>(

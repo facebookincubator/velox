@@ -85,12 +85,15 @@ void readTrailerStreamMetadata(
 
 class StreamDataParser {
  public:
-  StreamDataParser(
-      velox::memory::MemoryPool* pool,
-      const DeserializerOptions& options);
+  explicit StreamDataParser(velox::memory::MemoryPool* pool);
 
-  /// Returns number of rows serialized.
-  /// Validates that the version in serialized data matches options.
+  /// @param legacyHeaderless True to parse the removed legacy headerless
+  ///        format (see DeserializerOptions::legacyHeaderless).
+  StreamDataParser(velox::memory::MemoryPool* pool, bool legacyHeaderless);
+
+  /// Returns number of rows serialized. The serialization version is detected
+  /// from the leading version byte. Headerless data starts with a u32 row
+  /// count instead.
   ///
   /// PRECONDITION (kTablet only): the per-slice header
   /// (`[version][rowCount:varint][startRow:varint][endRow:varint]`
@@ -102,8 +105,8 @@ class StreamDataParser {
 
   /// Walks every non-empty stream in the current blob, invoking
   /// `callback(offset, data)` per stream. For kTablet, `data` is the
-  /// chunk-stripped (and decompressed, if needed) payload; for kLegacyCompact
-  /// and kLegacy it is the raw stream bytes. Empty streams are skipped.
+  /// chunk-stripped (and decompressed, if needed) payload; for every other
+  /// version it is the raw stream bytes. Empty streams are skipped.
   /// Must be called at most once per `initialize()` (consumes the per-blob
   /// cursor).
   ///
@@ -117,7 +120,27 @@ class StreamDataParser {
   /// over hundreds of keys).
   template <typename Callback>
   void iterateStreams(Callback&& callback) {
-    if (isTabletVersion(version_)) {
+    if (legacyHeaderless_) {
+      // Legacy headerless format: streams in order with inline u32 sizes.
+      uint32_t offset = 0;
+      while (pos_ < end_) {
+        NIMBLE_CHECK_GE(
+            static_cast<size_t>(end_ - pos_),
+            sizeof(uint32_t),
+            "Truncated legacy headerless stream size");
+        const uint32_t size = encoding::readUint32(pos_);
+        NIMBLE_CHECK_LE(
+            size,
+            static_cast<size_t>(end_ - pos_),
+            "Legacy headerless stream exceeds serialized data");
+        std::string_view streamData(pos_, size);
+        pos_ += size;
+        if (!streamData.empty()) {
+          callback(offset, streamData);
+        }
+        ++offset;
+      }
+    } else if (isTabletVersion(version_)) {
       // kTablet: the trailer stores stream ids, per-stream size indices, and
       // unique sizes. Per-slot sizes and body offsets are reconstructed from
       // (sizeIndex, uniqueSizes); duplicate slots resolve to a single body
@@ -145,7 +168,7 @@ class StreamDataParser {
         }
       }
       pos_ = end_; // Skip past trailer.
-    } else if (nonLegacyFormat(version_)) {
+    } else {
       // kLegacyCompact/kLegacySerialization/kSerialization/kProjection:
       // sizes-only sparse trailer.
       // Each stream's body offset is the prefix sum of preceding sizes, so
@@ -172,18 +195,6 @@ class StreamDataParser {
         callback(streamId, streamData);
       }
       pos_ = end_; // Skip past trailer.
-    } else {
-      // kLegacy: streams in order with inline u32 sizes.
-      uint32_t offset = 0;
-      while (pos_ < end_) {
-        uint32_t size = encoding::readUint32(pos_);
-        std::string_view streamData(pos_, size);
-        pos_ += size;
-        if (!streamData.empty()) {
-          callback(offset, streamData);
-        }
-        ++offset;
-      }
     }
 
     NIMBLE_CHECK(
@@ -194,8 +205,10 @@ class StreamDataParser {
   }
 
   /// Returns the auto-detected serialization version.
-  /// Only valid after initialize() has been called.
+  /// Only valid after initialize() has been called on data with a header.
   SerializationVersion version() const {
+    NIMBLE_CHECK(
+        !legacyHeaderless_, "Legacy headerless data has no version byte");
     return version_;
   }
 
@@ -232,13 +245,12 @@ class StreamDataParser {
   // Lazily acquires the arena backing stripped tablet stream payloads.
   Buffer& ensureStrippedStreamBuffer();
 
-  const DeserializerOptions& options_;
+  // True for the removed legacy headerless format.
+  const bool legacyHeaderless_;
   velox::memory::MemoryPool* const pool_;
 
-  // Serialization version detected from data. If the data has a version
-  // header, this is read from the first byte; otherwise defaults to kLegacy.
-  // When options specify a version, the data version is validated against it.
-  SerializationVersion version_{SerializationVersion::kLegacy};
+  // Serialization version read from the first byte of the current blob.
+  SerializationVersion version_{SerializationVersion::kSerialization};
   // True when Row/FlatMap null streams contain real nulls (read from the header
   // flags byte). Defaults false for versions without a flags byte.
   bool requiresNullBarrier_{false};

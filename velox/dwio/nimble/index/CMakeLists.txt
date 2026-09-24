@@ -13,6 +13,7 @@
 # limitations under the License.
 add_library(
   nimble_index
+  BlockedBloomFilter.cpp
   BloomFilter.cpp
   ChunkStats.cpp
   ChunkStatsGroup.cpp
@@ -62,6 +63,7 @@ add_library(
   ClusterIndex.h
   ChunkStatsGroup.h
   ChunkStats.h
+  BlockedBloomFilter.h
   BloomFilter.h
 )
 
@@ -91,10 +93,9 @@ target_link_libraries(
 add_library(
   nimble_vector_index
   VectorIndex.cpp
-  FaissVectorIndexWriter.cpp
+  VectorIndexWriter.cpp
   VectorIndexUtility.cpp
   VectorIndex.h
-  FaissVectorIndexWriter.h
   VectorIndexUtility.h
 )
 target_link_libraries(

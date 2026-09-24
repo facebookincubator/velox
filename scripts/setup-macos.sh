@@ -111,14 +111,15 @@ function install_velox_deps_from_brew {
 
 function install_gflags {
   wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
-  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+  # Always Release; see the note in setup-centos9.sh.
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DCMAKE_BUILD_TYPE=Release
 }
 
 function install_s3 {
   install_aws_deps
 
-  local MINIO_OS="darwin"
-  install_minio ${MINIO_OS}
+  local SILO_OS="darwin"
+  install_silo ${SILO_OS}
 }
 
 function install_gcs {

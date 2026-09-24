@@ -241,22 +241,12 @@ class ConstantEncodingBase
       return true;
     }
 
-    // For integral types a unique count of one is equivalent to min == max.
-    // Both are lazily populated, but populateMinMax() is a comparison scan
-    // while populateUniques() inserts one hash entry per value. Encoding
-    // selection evaluates ConstantEncoding on every stream, so going through
-    // uniqueCounts() here builds a full unique-value map on high-cardinality
-    // streams purely to discover that the count is not one.
-    //
-    // Only integral types qualify. Statistics has no min/max for booleans, and
-    // their unique counts are bounded at two entries anyway. String min/max are
-    // by length rather than lexicographic, so equal endpoints do not imply
-    // equal values.
-    if constexpr (isIntegralType<T>()) {
-      return statistics.min() == statistics.max();
-    }
-
-    if (statistics.uniqueCounts().value().size() == 1) {
+    // Statistics::isConstant() compares against the first value and stops at
+    // the first mismatch, so a stream that is not constant is settled almost
+    // immediately. Going through uniqueCounts() instead built a hash entry per
+    // value to answer the same question, which on a wide column was the single
+    // largest cost in encoding selection.
+    if (statistics.isConstant()) {
       return true;
     }
 
@@ -319,7 +309,8 @@ ConstantEncoding<T>::ConstantEncoding(
     : ConstantEncodingBase<T>(pool, data, options) {
   const char* pos = data.data() + this->dataOffset();
   this->value_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK_EQ(pos, data.end(), "Unexpected constant encoding end");
+  NIMBLE_CHECK_EQ(
+      pos, data.data() + data.size(), "Unexpected constant encoding end");
 }
 
 // Specialization for bool to override materializeBoolsAsBits
@@ -337,7 +328,8 @@ class ConstantEncoding<bool> final : public ConstantEncodingBase<bool> {
       : ConstantEncodingBase<bool>(pool, data, options) {
     const char* pos = data.data() + this->dataOffset();
     this->value_ = encoding::read<physicalType>(pos);
-    NIMBLE_CHECK_EQ(pos, data.end(), "Unexpected constant encoding end");
+    NIMBLE_CHECK_EQ(
+        pos, data.data() + data.size(), "Unexpected constant encoding end");
   }
 
   void materializeBoolsAsBits(uint32_t rowCount, uint64_t* buffer, int begin)

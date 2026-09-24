@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "velox/common/Casts.h"
+#include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
@@ -32,58 +33,6 @@ using facebook::velox::common::testutil::TestValue;
 namespace facebook::velox::connector::hive {
 
 namespace {
-
-inline void addIoCounterMetric(
-    io::IoCounter& counter,
-    const std::string& key,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (counter.count() > 0) {
-    res.insert({key, RuntimeMetric(counter.count())});
-  }
-}
-
-inline void addIoCounterMetric(
-    uint64_t value,
-    const std::string& key,
-    RuntimeCounter::Unit unit,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (value > 0) {
-    res.insert({key, RuntimeMetric(value, unit)});
-  }
-}
-
-inline void addIoStatsMetric(
-    io::IoCounter& counter,
-    const std::string& key,
-    RuntimeCounter::Unit unit,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (counter.count() > 0) {
-    res.insert(
-        {key,
-         RuntimeMetric(
-             saturateCast(counter.sum()),
-             counter.count(),
-             saturateCast(counter.min()),
-             saturateCast(counter.max()),
-             unit)});
-  }
-}
-
-inline void addIoLatencyMetric(
-    io::IoCounter& counter,
-    const std::string& key,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  if (counter.count() > 0) {
-    res.insert(
-        {key,
-         RuntimeMetric(
-             saturateCast(counter.sum() * 1'000),
-             counter.count(),
-             saturateCast(counter.min() * 1'000),
-             saturateCast(counter.max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
-  }
-}
 
 void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
@@ -105,79 +54,6 @@ void addOperationStatsToRuntimeStats(
     // recover a per-request mean.
     add("latencyInMs", counters.latencyInMs);
   }
-}
-
-void addIoStatsToRuntimeStats(
-    io::IoStatistics& ioStats,
-    std::string_view prefix,
-    std::unordered_map<std::string, RuntimeMetric>& res) {
-  auto key = [&](std::string_view name) {
-    return prefix.empty() ? std::string(name)
-                          : fmt::format("{}.{}", prefix, name);
-  };
-
-  addIoLatencyMetric(
-      ioStats.queryThreadIoLatencyUs(), key(Connector::kIoWaitWallNanos), res);
-  addIoLatencyMetric(
-      ioStats.storageReadLatencyUs(),
-      key(Connector::kStorageReadWallNanos),
-      res);
-  addIoLatencyMetric(
-      ioStats.ssdCacheReadLatencyUs(),
-      key(Connector::kSsdCacheReadWallNanos),
-      res);
-  addIoLatencyMetric(
-      ioStats.cacheWaitLatencyUs(), key(Connector::kCacheWaitWallNanos), res);
-  addIoLatencyMetric(
-      ioStats.coalescedSsdLoadLatencyUs(),
-      key(Connector::kCoalescedSsdLoadWallNanos),
-      res);
-  addIoLatencyMetric(
-      ioStats.coalescedStorageLoadLatencyUs(),
-      key(Connector::kCoalescedStorageLoadWallNanos),
-      res);
-
-  addIoCounterMetric(
-      ioStats.prefetch(), key(FileDataSource::kNumPrefetch), res);
-  addIoStatsMetric(
-      ioStats.prefetch(),
-      key(FileDataSource::kPrefetchBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoCounterMetric(
-      ioStats.totalScanTimeNs(),
-      key(FileDataSource::kTotalScanTime),
-      RuntimeCounter::Unit::kNanos,
-      res);
-  addIoCounterMetric(
-      ioStats.rawOverreadBytes(),
-      key(FileDataSource::kOverreadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-
-  addIoStatsMetric(
-      ioStats.read(),
-      key(FileDataSource::kStorageReadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoCounterMetric(
-      ioStats.ssdRead(), key(FileDataSource::kNumLocalRead), res);
-  addIoStatsMetric(
-      ioStats.ssdRead(),
-      key(FileDataSource::kLocalReadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoCounterMetric(ioStats.ramHit(), key(FileDataSource::kNumRamRead), res);
-  addIoStatsMetric(
-      ioStats.ramHit(),
-      key(FileDataSource::kRamReadBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
-  addIoStatsMetric(
-      ioStats.readGap(),
-      key(FileDataSource::kReadGapBytes),
-      RuntimeCounter::Unit::kBytes,
-      res);
 }
 
 } // namespace
@@ -683,8 +559,8 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
 std::unordered_map<std::string, RuntimeMetric>
 FileDataSource::getRuntimeStats() {
   auto res = runtimeStats_.toRuntimeMetricMap();
-  addIoStatsToRuntimeStats(*dataIoStats_, "", res);
-  addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
+  io::addIoStatsToRuntimeStats(*dataIoStats_, "", res);
+  io::addIoStatsToRuntimeStats(*metadataIoStats_, kMetadataPrefix, res);
   res.insert(
       {{std::string(Connector::kTotalRemainingFilterTime),
         RuntimeMetric(

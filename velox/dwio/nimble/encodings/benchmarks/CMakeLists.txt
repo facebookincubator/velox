@@ -53,6 +53,18 @@ if(VELOX_ENABLE_BENCHMARKS)
     velox_memory
   )
 
+  add_executable(nimble_nullable_benchmark NullableBenchmark.cpp BenchmarkUtils.h)
+
+  target_link_libraries(
+    nimble_nullable_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_common_base
+    velox_memory
+  )
+
   add_executable(nimble_exact_bit_width_storage_benchmark ExactBitWidthStorageBenchmark.cpp)
 
   target_link_libraries(
@@ -171,9 +183,12 @@ if(VELOX_ENABLE_BENCHMARKS)
   target_link_libraries(
     nimble_alp_encoding_benchmark
     nimble_encodings
+    nimble_velox_selective
+    nimble_writer
     nimble_common
     Folly::follybenchmark
     Folly::folly
+    velox_dwio_common
     velox_memory
     fmt::fmt
   )

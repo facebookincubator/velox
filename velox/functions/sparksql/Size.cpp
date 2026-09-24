@@ -62,8 +62,8 @@ struct Size {
 } // namespace
 
 void registerSize(const std::string& prefix) {
-  registerFunction<Size, int32_t, Array<Any>, bool>({prefix});
-  registerFunction<Size, int32_t, Map<Any, Any>, bool>({prefix});
+  registerFunction<Size, int32_t, Array<Any>, bool>({prefix + "size"});
+  registerFunction<Size, int32_t, Map<Any, Any>, bool>({prefix + "size"});
 }
 
 } // namespace facebook::velox::functions::sparksql

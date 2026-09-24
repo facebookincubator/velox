@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
@@ -49,7 +50,6 @@ bool canAggregationBeEvaluatedByCudf(
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -76,6 +76,7 @@ class CudfAggregationSelectionTest : public ::testing::Test,
     execCtx_ = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get());
     facebook::velox::functions::prestosql::registerAllScalarFunctions();
     facebook::velox::aggregate::prestosql::registerAllAggregateFunctions();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
 
     rowType_ = ROW({

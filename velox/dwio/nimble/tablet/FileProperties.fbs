@@ -34,6 +34,11 @@ table FileProperties {
 
   /// Experimental compact encoding state.
   compact_encoding:CompactEncoding;
+
+  /// Whether stripe groups carry per-stream checksums. The algorithm is not
+  /// recorded here: per-stream checksums use the same ChecksumType as the
+  /// whole-file checksum, which the postscript already carries.
+  has_stream_checksums:bool = false;
 }
 
 root_type FileProperties;

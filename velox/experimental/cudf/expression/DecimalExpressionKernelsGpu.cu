@@ -208,14 +208,15 @@ template <typename BuildOp>
 bool launchDecimalDivide(
     cudf::size_type size,
     BuildOp buildOp,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   if (size == 0) {
     return true;
   }
-  rmm::device_scalar<int32_t> overflowFlag{0, stream};
+  int32_t initialOverflowFlag{0};
+  rmm::device_scalar<int32_t> overflowFlag{initialOverflowFlag, stream};
   auto op = buildOp(overflowFlag.data());
   cub::DeviceFor::ForEachN(
-      cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.value());
+      cuda::counting_iterator<cudf::size_type>{0}, size, op, stream.get());
   CUDF_CUDA_TRY(cudaGetLastError());
   return overflowFlag.value(stream) == 0;
 }
@@ -235,7 +236,7 @@ struct divideColumnColumnKernel {
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
@@ -265,7 +266,7 @@ struct divideColumnScalarKernel {
   __int128_t rhsValue;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
@@ -294,7 +295,7 @@ struct divideScalarColumnKernel {
   const cudf::column_view& rhs;
   cudf::mutable_column_view out;
   __int128_t rescaleFactor;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
 
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
@@ -325,7 +326,7 @@ bool decimalDivideColumnColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
@@ -339,7 +340,7 @@ bool decimalDivideColumnScalar(
     __int128_t rhsValue,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},
@@ -353,7 +354,7 @@ bool decimalDivideScalarColumn(
     const cudf::column_view& rhs,
     cudf::mutable_column_view out,
     __int128_t rescaleFactor,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   return cudf::double_type_dispatcher<cudf::dispatch_storage_type>(
       cudf::data_type{inType},
       cudf::data_type{outType},

@@ -167,17 +167,18 @@ uint32_t DirectDataInput::enqueue(Region region) {
   return {payloadSize, prevRegionEnd};
 }
 
-std::vector<DirectDataInput::IoGroup> DirectDataInput::computeIoGroups(
+void DirectDataInput::computeIoGroups(
     const std::vector<EnqueuedRegion>& sortedRegions) {
-  std::vector<int32_t> items(sortedRegions.size());
-  std::iota(items.begin(), items.end(), 0);
+  coalesceIoRanges_.clear();
+  coalesceIoRanges_.resize(sortedRegions.size());
+  std::iota(coalesceIoRanges_.begin(), coalesceIoRanges_.end(), 0);
 
   int64_t coalescedBytes = 0;
-  std::vector<IoGroup> ioGroups;
-  ioGroups.reserve(sortedRegions.size());
+  ioGroups_.clear();
+  ioGroups_.reserve(sortedRegions.size());
 
   const auto coalesceStats = velox::coalesceIo<int32_t, char>(
-      items,
+      coalesceIoRanges_,
       /*maxGap=*/maxCoalesceDistance_,
       /*rangesPerIo=*/std::numeric_limits<int32_t>::max(),
       /*offsetFunc=*/
@@ -223,13 +224,12 @@ std::vector<DirectDataInput::IoGroup> DirectDataInput::computeIoGroups(
         group.readSize = readRegion.length;
         group.payloadSize = payloadSize;
         group.regions = groupRegions;
-        ioGroups.emplace_back(group);
+        ioGroups_.emplace_back(group);
       });
 
   ioStats_->readGap().merge(coalesceStats.gaps);
   ioStats_->incDuplicateRead(
       coalesceStats.duplicateRegions, coalesceStats.duplicateBytes);
-  return ioGroups;
 }
 
 void DirectDataInput::populateBufferRefs(
@@ -280,24 +280,24 @@ void DirectDataInput::executeIoGroups(
     char* buffer,
     uint64_t bufferSize) {
   NIMBLE_CHECK(!ioGroups.empty());
-  std::vector<velox::common::Region> readRegions;
-  readRegions.reserve(ioGroups.size());
-  std::vector<folly::Range<char*>> readBuffers;
-  readBuffers.reserve(ioGroups.size());
+  readRegions_.clear();
+  readRegions_.reserve(ioGroups.size());
+  readBuffers_.clear();
+  readBuffers_.reserve(ioGroups.size());
   for (const auto& ioGroup : ioGroups) {
-    readRegions.emplace_back(ioGroup.readOffset, ioGroup.readSize);
-    readBuffers.emplace_back(
+    readRegions_.emplace_back(ioGroup.readOffset, ioGroup.readSize);
+    readBuffers_.emplace_back(
         buffer + ioGroup.bufferOffset, static_cast<size_t>(ioGroup.readSize));
   }
   const auto bytesRead = file_->preadv(
       folly::Range<const velox::common::Region*>(
-          readRegions.data(), readRegions.size()),
+          readRegions_.data(), readRegions_.size()),
       folly::Range<const folly::Range<char*>*>(
-          readBuffers.data(), readBuffers.size()));
+          readBuffers_.data(), readBuffers_.size()));
   NIMBLE_CHECK_EQ(bytesRead, bufferSize, "preadv returned a short read");
 }
 
-DataInput::Handle DirectDataInput::load() {
+DataInput::Handle DirectDataInput::load(LoadCallback loadCallback) {
   NIMBLE_CHECK_EQ(state_, State::kEnqueuing);
   NIMBLE_CHECK(!bufferRefs_.empty(), "No regions enqueued");
   state_ = State::kLoaded;
@@ -313,18 +313,25 @@ DataInput::Handle DirectDataInput::load() {
         ? groupOffsets_[i + 1]
         : static_cast<uint32_t>(regions_.size());
     NIMBLE_CHECK_LT(start, end, "Read group must contain a region");
-    std::sort(
-        regions_.begin() + start,
-        regions_.begin() + end,
-        [](const EnqueuedRegion& a, const EnqueuedRegion& b) {
-          if (a.region.offset != b.region.offset) {
-            return a.region.offset < b.region.offset;
-          }
-          // Tiebreak equal extents by enqueue index so the first member of each
-          // duplicate run is its stored copy (smallest enqueue index = earliest
-          // processed by the consumer).
-          return a.enqueueIndex < b.enqueueIndex;
-        });
+    // Enqueue order is stream-index order and streams are serialised in the
+    // stripe's file layout in stream-index order too, so this range is
+    // already sorted by (offset, enqueueIndex) in the common case. Guard the
+    // sort with std::is_sorted so we pay one linear pass on the sorted path
+    // instead of full introsort work.
+    const auto beginIt = regions_.begin() + start;
+    const auto endIt = regions_.begin() + end;
+    const auto cmp = [](const EnqueuedRegion& a, const EnqueuedRegion& b) {
+      if (a.region.offset != b.region.offset) {
+        return a.region.offset < b.region.offset;
+      }
+      // Tiebreak equal extents by enqueue index so the first member of each
+      // duplicate run is its stored copy (smallest enqueue index = earliest
+      // processed by the consumer).
+      return a.enqueueIndex < b.enqueueIndex;
+    };
+    if (!std::is_sorted(beginIt, endIt, cmp)) {
+      std::sort(beginIt, endIt, cmp);
+    }
 
     if (i > 0) {
       NIMBLE_CHECK_GE(
@@ -337,9 +344,9 @@ DataInput::Handle DirectDataInput::load() {
     prevGroupEnd = lastRegion.offset + lastRegion.length;
   }
 
-  auto ioGroups = computeIoGroups(regions_);
+  computeIoGroups(regions_);
 
-  const auto [readBytes, payloadBytes] = computeIoSizes(ioGroups);
+  const auto [readBytes, payloadBytes] = computeIoSizes(ioGroups_);
   NIMBLE_CHECK_GE(readBytes, payloadBytes);
   NIMBLE_CHECK_EQ(readBytes % alignment_, 0);
 
@@ -348,10 +355,10 @@ DataInput::Handle DirectDataInput::load() {
   uint64_t ioUs{0};
   {
     velox::MicrosecondTimer ioTimer(&ioUs);
-    executeIoGroups(ioGroups, buffer, readBytes);
+    executeIoGroups(ioGroups_, buffer, readBytes);
   }
 
-  for (const auto& group : ioGroups) {
+  for (const auto& group : ioGroups_) {
     ioStats_->read().increment(group.readSize);
     ioStats_->incRawBytesRead(group.payloadSize);
     ioStats_->incRawOverreadBytes(group.readSize - group.payloadSize);
@@ -359,16 +366,46 @@ DataInput::Handle DirectDataInput::load() {
   ioStats_->storageReadLatencyUs().increment(ioUs);
   ioStats_->incTotalScanTimeNs(ioUs * 1'000);
 
-  populateBufferRefs(ioGroups, buffer);
+  populateBufferRefs(ioGroups_, buffer);
+
+  // Only now does each region have its own {data, length}: the reads above are
+  // coalesced, so the raw buffer spans several regions plus overread gaps.
+  invokeLoadCallback(loadCallback);
 
   regions_.clear();
   return handle;
+}
+
+void DirectDataInput::invokeLoadCallback(LoadCallback loadCallback) {
+  if (loadCallback == nullptr) {
+    return;
+  }
+  try {
+    for (uint32_t i = 0; i < bufferRefs_.size(); ++i) {
+      const auto& ref = bufferRefs_[i];
+      if (ref.canonicalIndex != i) {
+        // A duplicate shares the canonical region's bytes, already visited.
+        continue;
+      }
+      loadCallback(i, std::string_view{ref.data, ref.length});
+    }
+  } catch (...) {
+    // Unwinding frees the load buffer that the refs point into. Reset so a
+    // caller that catches cannot reach them through bufferRef().
+    clear();
+    throw;
+  }
 }
 
 const DataInput::BufferRef& DirectDataInput::bufferRef(uint32_t index) const {
   NIMBLE_CHECK_EQ(state_, State::kLoaded);
   NIMBLE_DCHECK_LT(index, bufferRefs_.size());
   return bufferRefs_[index];
+}
+
+std::span<const DataInput::BufferRef> DirectDataInput::bufferRefs() const {
+  NIMBLE_CHECK_EQ(state_, State::kLoaded);
+  return bufferRefs_;
 }
 
 void DirectDataInput::clear() {
@@ -504,7 +541,8 @@ uint64_t CachedDataInput::populateBufferRefs(
 void CachedDataInput::loadCacheMissGroups(
     std::span<const CacheMissGroup> cacheMissGroups,
     uint64_t stagingBufferSize,
-    const std::vector<velox::cache::CachePin>& cachePins) {
+    const std::vector<velox::cache::CachePin>& cachePins,
+    LoadCallback loadCallback) {
   char* stagingBuffer{nullptr};
   Handle stagingHandle;
   if (alignment_ > 1) {
@@ -553,8 +591,9 @@ void CachedDataInput::loadCacheMissGroups(
   ioStats_->incTotalScanTimeNs(static_cast<int64_t>(storageReadUs) * 1'000);
 
   for (const auto& cacheMissGroup : cacheMissGroups) {
-    auto* entry = cachePins.at(cacheMissGroup.groupIndex).checkedEntry();
-    const auto& group = groups_[cacheMissGroup.groupIndex];
+    const auto groupIndex = cacheMissGroup.groupIndex;
+    auto* entry = cachePins.at(groupIndex).checkedEntry();
+    const auto& group = groups_[groupIndex];
     if (alignment_ > 1) {
       std::memcpy(
           entry->contiguousData(),
@@ -566,11 +605,47 @@ void CachedDataInput::loadCacheMissGroups(
     ioStats_->incRawOverreadBytes(
         static_cast<int64_t>(
             cacheMissGroup.readRegion.length - cacheMissGroup.payloadBytes));
+
+    // The entry is still held exclusively here, so no other reader can observe
+    // it. Rejecting now keeps corrupt bytes out of the cache entirely.
+    //
+    // Note what this does and does not guarantee: an entry is checked by
+    // whoever filled it, not by whoever reads it. A reader that passes no
+    // callback can fill an entry that a later checking reader then hits and
+    // accepts unchecked. That holds only while every reader sharing an
+    // AsyncDataCache agrees on checking.
+    invokeLoadCallback(loadCallback, groupIndex);
+
     entry->setExclusiveToShared(/*ssdSavable=*/false);
   }
 }
 
-DataInput::Handle CachedDataInput::load() {
+uint32_t CachedDataInput::groupEndRegion(size_t groupIndex) const {
+  return groupIndex + 1 < groups_.size()
+      ? groups_[groupIndex + 1].enqueuedRegionOffset
+      : static_cast<uint32_t>(regions_.size());
+}
+
+void CachedDataInput::invokeLoadCallback(
+    LoadCallback loadCallback,
+    size_t groupIndex) const {
+  if (loadCallback == nullptr) {
+    return;
+  }
+  const auto endRegion = groupEndRegion(groupIndex);
+  for (uint32_t i = groups_[groupIndex].enqueuedRegionOffset; i < endRegion;
+       ++i) {
+    const auto enqueueIndex = regions_[i].enqueueIndex;
+    const auto& ref = bufferRefs_[enqueueIndex];
+    if (ref.canonicalIndex != enqueueIndex) {
+      // A duplicate shares the canonical region's bytes, already visited.
+      continue;
+    }
+    loadCallback(enqueueIndex, std::string_view{ref.data, ref.length});
+  }
+}
+
+DataInput::Handle CachedDataInput::load(LoadCallback loadCallback) {
   NIMBLE_CHECK(!loaded_, "Data is already loaded");
   NIMBLE_CHECK(!bufferRefs_.empty(), "No regions enqueued");
   NIMBLE_CHECK(
@@ -587,9 +662,7 @@ DataInput::Handle CachedDataInput::load() {
   uint64_t stagingBufferSize{0};
   for (size_t groupIndex{0}; groupIndex < groups_.size(); ++groupIndex) {
     const auto& group = groups_[groupIndex];
-    const auto endRegion = groupIndex + 1 < groups_.size()
-        ? groups_[groupIndex + 1].enqueuedRegionOffset
-        : static_cast<uint32_t>(regions_.size());
+    const auto endRegion = groupEndRegion(groupIndex);
 
     velox::cache::CachePin pin;
     do {
@@ -641,7 +714,8 @@ DataInput::Handle CachedDataInput::load() {
   }
 
   if (!cacheMissGroups.empty()) {
-    loadCacheMissGroups(cacheMissGroups, stagingBufferSize, *cachePins);
+    loadCacheMissGroups(
+        cacheMissGroups, stagingBufferSize, *cachePins, loadCallback);
   }
 
   regions_.clear();
@@ -652,6 +726,11 @@ const DataInput::BufferRef& CachedDataInput::bufferRef(uint32_t index) const {
   NIMBLE_CHECK(loaded_, "Data has not been loaded");
   NIMBLE_CHECK_LT(index, bufferRefs_.size());
   return bufferRefs_[index];
+}
+
+std::span<const DataInput::BufferRef> CachedDataInput::bufferRefs() const {
+  NIMBLE_CHECK(loaded_, "Data has not been loaded");
+  return bufferRefs_;
 }
 
 void CachedDataInput::clear() {

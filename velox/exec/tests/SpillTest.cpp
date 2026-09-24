@@ -527,7 +527,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
           ASSERT_EQ(
               values_[i].value(),
               stream->current()
-                  .childAt(0)
+                  ->childAt(0)
                   ->asUnchecked<FlatVector<int64_t>>()
                   ->valueAt(stream->currentIndex(&isLastBatch)))
               << i;
@@ -537,7 +537,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
               << i;
         } else {
           ASSERT_TRUE(stream->current()
-                          .childAt(0)
+                          ->childAt(0)
                           ->asUnchecked<FlatVector<int64_t>>()
                           ->isNullAt(stream->currentIndex(&isLastBatch)))
               << i;

@@ -43,6 +43,8 @@
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/StreamSlicer.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
+#include "velox/dwio/nimble/velox/SchemaBuilder.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
@@ -414,7 +416,7 @@ class StreamSlicerTest : public ::testing::Test {
   VectorPtr deserialize(
       std::string_view data,
       const std::shared_ptr<const nimble::Type>& schema) {
-    Deserializer deserializer{schema, pool_.get(), {.hasHeader = true}};
+    Deserializer deserializer{schema, pool_.get(), {}};
     VectorPtr output;
     deserializer.deserialize(data, output);
     return output;
@@ -516,7 +518,7 @@ TEST_P(StreamSlicerPayloadVersionTest, slicesScalarPayload) {
       iobufToString(slicer.slice(payload, /*offset=*/1, /*length=*/3));
   const char* pos = sliced.data();
   const auto header =
-      readSerializationHeader(pos, sliced.data() + sliced.size(), true);
+      readSerializationHeader(pos, sliced.data() + sliced.size());
   EXPECT_EQ(header.version, SerializationVersion::kProjection);
   EXPECT_EQ(header.rowCount, 3);
   EXPECT_TRUE(header.flags.streamEncodingUsesVarintRowCount);
@@ -918,7 +920,7 @@ TEST_P(StreamSlicerPayloadApiTest, slicesFlatMap) {
 
   const char* pos = sliced.data();
   const auto header =
-      readSerializationHeader(pos, sliced.data() + sliced.size(), true);
+      readSerializationHeader(pos, sliced.data() + sliced.size());
   EXPECT_TRUE(header.flags.requiresNullBarrier);
 
   auto output = deserialize(sliced, payload.schema);
@@ -1087,13 +1089,33 @@ TEST_F(StreamSlicerTest, rejectsZeroLengthSlice) {
       "Slice length must be positive");
 }
 
+TEST_F(StreamSlicerTest, rejectsHybridFlatMap) {
+  SchemaBuilder schemaBuilder;
+  auto root = schemaBuilder.createRowTypeBuilder(1);
+  auto hybridMap =
+      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  hybridMap->addGroup(
+      0,
+      {"configured"},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  NIMBLE_ASSERT_THROW(
+      StreamSlicer(schema, pool_.get(), StreamSlicer::Options{}),
+      "Stream slicing does not support hybrid FlatMap.");
+}
+
 TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
   auto type = ROW({{"id", INTEGER()}});
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
   auto [_, schema] = serialize(input, type);
   for (const auto version :
-       {SerializationVersion::kLegacy,
-        SerializationVersion::kLegacyCompact,
+       {SerializationVersion::kLegacyCompact,
         SerializationVersion::kLegacySerialization}) {
     SCOPED_TRACE(toString(version));
     StreamSlicer slicer{

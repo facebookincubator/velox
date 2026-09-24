@@ -37,7 +37,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
-#include "velox/dwio/nimble/tablet/SharedDictionaryReader.h"
 #include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/velox/StreamData.h"
 
@@ -167,9 +166,11 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
   /// encoded.
   ///
   /// Returns nullopt when there is nothing to store: a stripe that fell back to
-  /// non-shared encoding or a scope that has not encoded a value yet. Throws
-  /// for external dictionaries, whose alphabets are resolver-owned and never
-  /// encoded into the file.
+  /// non-shared encoding, a scope that has not encoded a value yet, or a stripe
+  /// the dictionary sat out entirely. Closing releases the active stripe, so
+  /// these all present as no stripe accumulating. Throws for external
+  /// dictionaries, whose alphabets are resolver-owned and never encoded into
+  /// the file.
   /// Throws when the scope committed to shared dictionary encoding but holds no
   /// entries, which would produce a stream no reader could resolve, or when the
   /// active stripe/file dictionary was already finalized.
@@ -186,6 +187,7 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
     SCOPE_EXIT {
       builder_.reset();
       useDictionary_.reset();
+      stripeIndex_.reset();
     };
 
     SCOPE_EXIT {
@@ -211,8 +213,11 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
     if (options_.useExternalAlphabet) {
       NIMBLE_CHECK_EQ(options_.scope, SharedDictionaryScope::File);
       NIMBLE_CHECK_NOT_NULL(externalAlphabet_);
+      // TODO: Populate bounds from the external shared dictionary alphabet.
       return Chunk{
           .rowCount = externalAlphabet_->entryCount(),
+          .minValue = {},
+          .maxValue = {},
           .content = {externalAlphabet_->encodedAlphabet()}};
     }
     NIMBLE_CHECK_NOT_NULL(builder_);
@@ -232,7 +237,12 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         options_.alphabetEncodings,
         buffer,
         alphabetEncodingOptions());
-    return Chunk{.rowCount = rowCount, .content = {encoded}};
+    // TODO: Populate bounds from the encoded shared dictionary alphabet.
+    return Chunk{
+        .rowCount = rowCount,
+        .minValue = {},
+        .maxValue = {},
+        .content = {encoded}};
   }
 
  private:
@@ -435,14 +445,17 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
           options_.dictionaryId);
     }
     // Recorded for every scope, including file and external, because
-    // encodeAlphabet() reads it to tell "nothing encoded yet" apart from a
-    // scope that lost its encoding decision.
+    // encodeAlphabet() reads it to tell a scope with nothing accumulating apart
+    // from one that lost its encoding decision. Closing releases it, so the
+    // stripe this dictionary last saw is the finalized one once it is gone.
+    const auto lastStripe =
+        stripeIndex_.has_value() ? stripeIndex_ : lastFinalizedStripe_;
     NIMBLE_CHECK(
-        !stripeIndex_.has_value() || stripeIndex > *stripeIndex_,
+        !lastStripe.has_value() || stripeIndex > *lastStripe,
         "{} shared dictionary {} cannot move from stripe {} back to stripe {}.",
         options_.scope,
         options_.dictionaryId,
-        *stripeIndex_,
+        *lastStripe,
         stripeIndex);
     stripeIndex_ = stripeIndex;
 

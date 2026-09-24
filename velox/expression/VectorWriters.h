@@ -251,7 +251,7 @@ struct VectorWriter<Map<K, V>> : public VectorWriterBase {
 
 template <typename... T>
 struct VectorWriter<Row<T...>> : public VectorWriterBase {
-  using children_types = std::tuple<T...>;
+  using children_types = std::tuple<FieldType<T>...>;
   using vector_t = typename TypeToFlatVector<Row<T...>>::type;
   using exec_out_t = typename VectorExec::resolver<Row<T...>>::out_type;
 
@@ -348,7 +348,7 @@ struct VectorWriter<Row<T...>> : public VectorWriterBase {
     }
   }
 
-  RowWriter<T...> writer_{};
+  exec_out_t writer_{};
   vector_t* rowVector_ = nullptr;
 };
 

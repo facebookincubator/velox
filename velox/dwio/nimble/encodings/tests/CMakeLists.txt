@@ -44,6 +44,7 @@ add_executable(
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp
+  EncodingViewUtilsTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp
   EncodingLegacyTest.cpp
@@ -60,6 +61,7 @@ add_executable(
   MainlyConstantEncodingTest.cpp
   MainlyConstantEncodingViewTest.cpp
   NullableEncodingTest.cpp
+  NullableEncodingViewTest.cpp
   OpenZLCompressorTest.cpp
   PFOREncodingViewTest.cpp
   PFOREncodingTest.cpp
@@ -86,6 +88,7 @@ add_test(nimble_encodings_tests nimble_encodings_tests)
 
 target_link_libraries(
   nimble_encodings_tests
+  nimble_encoding_layout_test_helper
   nimble_encodings_tests_utils
   nimble_encodings
   nimble_encodings_legacy

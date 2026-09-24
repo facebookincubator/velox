@@ -20,7 +20,6 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
@@ -38,14 +37,18 @@ class TrivialEncodingView final : public TypedEncodingView<T> {
       const Encoding::Options& options)
       : TypedEncodingView<T>{data, pool, options} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Trivial);
+    const char* pos = data.data() + this->dataOffset_;
     const auto compressionType =
-        static_cast<CompressionType>(data[this->dataOffset_]);
-    NIMBLE_CHECK_EQ(
+        static_cast<CompressionType>(encoding::readChar(pos));
+    const auto payload = this->decompressPayload(
         compressionType,
-        CompressionType::Uncompressed,
-        "EncodingView does not support compressed Trivial streams.");
-    values_ = reinterpret_cast<const physicalType*>(
-        data.data() + this->dataOffset_ + sizeof(uint8_t));
+        TypeTraits<T>::dataType,
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+    values_ = reinterpret_cast<const physicalType*>(payload.data());
+    NIMBLE_CHECK_EQ(
+        reinterpret_cast<const char*>(values_ + this->rowCount_),
+        payload.data() + payload.size(),
+        "Unexpected Trivial view end.");
   }
 
  private:
@@ -75,11 +78,15 @@ class TrivialEncodingView<bool> final : public TypedEncodingView<bool> {
     const char* pos = data.data() + this->dataOffset_;
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
-    NIMBLE_CHECK_EQ(
+    const auto payload = this->decompressPayload(
         compressionType,
-        CompressionType::Uncompressed,
-        "EncodingView does not support compressed Trivial streams.");
-    bitmap_ = pos;
+        DataType::Undefined,
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+    bitmap_ = payload.data();
+    NIMBLE_CHECK_EQ(
+        bitmap_ + FixedBitArray::bufferSize(this->rowCount_, 1),
+        payload.data() + payload.size(),
+        "Unexpected Trivial bool view end.");
   }
 
  private:
@@ -115,10 +122,6 @@ class TrivialEncodingView<std::string_view> final
     const char* pos = data.data() + this->dataOffset_;
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
-    NIMBLE_CHECK_EQ(
-        compressionType,
-        CompressionType::Uncompressed,
-        "EncodingView does not support compressed Trivial streams.");
     const auto lengthsSize = encoding::readUint32(pos);
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
     auto lengths = EncodingFactory().create(
@@ -131,7 +134,14 @@ class TrivialEncodingView<std::string_view> final
     for (uint32_t i = 0; i < this->rowCount_; ++i) {
       offsets_[i + 1] += offsets_[i];
     }
-    blob_ = pos + lengthsSize;
+    pos += lengthsSize;
+    const auto payload = this->decompressPayload(
+        compressionType,
+        DataType::String,
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+    blob_ = payload.data();
+    NIMBLE_CHECK_EQ(
+        offsets_.back(), payload.size(), "Unexpected Trivial string view end.");
   }
 
   ~TrivialEncodingView() override {

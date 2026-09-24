@@ -39,7 +39,7 @@ struct EncodingSizeEstimation {
       const nimble::Statistics<physicalType>& statistics) {
     switch (encodingType) {
       case EncodingType::Constant: {
-        return statistics.uniqueCounts().value().size() == 1
+        return statistics.isConstant()
             ? std::optional<uint64_t>{getEncodingOverhead<
                   EncodingType::Constant,
                   physicalType>()}
@@ -163,7 +163,7 @@ struct EncodingSizeEstimation {
       const Statistics<physicalType>& statistics) {
     switch (encodingType) {
       case EncodingType::Constant: {
-        return statistics.uniqueCounts().value().size() == 1
+        return statistics.isConstant()
             ? std::optional<uint64_t>{getEncodingOverhead<
                   EncodingType::Constant,
                   physicalType>()}
@@ -216,7 +216,7 @@ struct EncodingSizeEstimation {
     const uint32_t maxStringSize = statistics.max().size();
     switch (encodingType) {
       case EncodingType::Constant: {
-        return statistics.uniqueCounts().value().size() == 1
+        return statistics.isConstant()
             ? std::optional<uint64_t>{getEncodingOverhead<
                   EncodingType::Constant,
                   physicalType>(maxStringSize)}

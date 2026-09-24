@@ -20,23 +20,27 @@
 namespace facebook::velox::functions {
 namespace {
 
-void registerSimpleFunctions(const std::string& prefix) {
+void registerSimpleFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<XxHash64BigIntFunction, int64_t, int64_t>(
-      {prefix + "xxhash64_internal"});
+      {prefix + "xxhash64_internal"}, {}, true, defaultOwner);
   registerFunction<XxHash64IntegerFunction, int64_t, int32_t>(
-      {prefix + "xxhash64_internal"});
+      {prefix + "xxhash64_internal"}, {}, true, defaultOwner);
   registerFunction<XxHash64SmallIntFunction, int64_t, int16_t>(
-      {prefix + "xxhash64_internal"});
+      {prefix + "xxhash64_internal"}, {}, true, defaultOwner);
   registerFunction<XxHash64TinyIntFunction, int64_t, int8_t>(
-      {prefix + "xxhash64_internal"});
+      {prefix + "xxhash64_internal"}, {}, true, defaultOwner);
 
   registerFunction<CombineHashFunction, int64_t, int64_t, int64_t>(
-      {prefix + "combine_hash_internal"});
+      {prefix + "combine_hash_internal"}, {}, true, defaultOwner);
 }
 } // namespace
 
-void registerIntegerFunctions(const std::string& prefix) {
-  registerSimpleFunctions(prefix);
+void registerIntegerFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerSimpleFunctions(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

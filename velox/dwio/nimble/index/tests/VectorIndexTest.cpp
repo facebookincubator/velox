@@ -40,8 +40,8 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/index/FaissVectorIndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndex.h"
+#include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/VectorIndexGenerated.h"
@@ -168,7 +168,7 @@ class VectorIndexTest : public ::testing::Test {
       const VectorIndexConfig& config,
       const velox::RowTypePtr& type) {
     const std::array configs{config};
-    return FaissVectorIndexWriter::create(configs, type, pool());
+    return VectorIndexWriter::create(configs, type, pool());
   }
 
   // Closes a writer and captures its directory and data sections.
@@ -613,14 +613,32 @@ TEST_F(VectorIndexTest, serializationRoundTrip) {
   }
 }
 
+TEST_F(VectorIndexTest, retainsPoolBackedSerializedIndex) {
+  constexpr uint32_t kNumVectors{500};
+  const auto written = [&] {
+    const auto data = generateRandomVectors(kNumVectors, kDimensions);
+    return writeIndex(
+        makeConfig(VectorIndexType::kIvfRaBitQ),
+        {makeInputFromVectors(data, kDimensions)});
+  }();
+
+  const auto bytesBeforeLoad = pool()->usedBytes();
+  auto reader = readIndex(written);
+  ASSERT_NE(reader, nullptr);
+  EXPECT_GE(pool()->usedBytes() - bytesBeforeLoad, written.indexData.size());
+
+  reader.reset();
+  EXPECT_EQ(pool()->usedBytes(), bytesBeforeLoad);
+}
+
 TEST_F(VectorIndexTest, truncatedFaissIndexRejected) {
   constexpr uint32_t kNumVectors{100};
-  auto written = writeIndex(
+  auto written = std::make_shared<WrittenIndexes>(writeIndex(
       makeConfig(VectorIndexType::kIvfFlat),
       {makeInputFromVectors(
-          generateRandomVectors(kNumVectors, kDimensions), kDimensions)});
-  ASSERT_GT(written.indexData.size(), 1);
-  written.indexData.resize(written.indexData.size() / 2);
+          generateRandomVectors(kNumVectors, kDimensions), kDimensions)}));
+  ASSERT_GT(written->indexData.size(), 1);
+  written->indexData.resize(written->indexData.size() / 2);
 
   EXPECT_THROW(
       VectorIndex::create(
@@ -631,7 +649,8 @@ TEST_F(VectorIndexTest, truncatedFaissIndexRejected) {
               .indexType = VectorIndexType::kIvfFlat,
               .numVectors = kNumVectors,
           },
-          written.indexData),
+          written->indexData,
+          written),
       NimbleUserError);
 }
 
@@ -697,10 +716,10 @@ TEST_F(VectorIndexTest, mismatchedFaissMetadataRejected) {
 
 TEST_F(VectorIndexTest, zeroVectorMetadataRejected) {
   constexpr uint32_t kNumVectors{100};
-  const auto written = writeIndex(
+  const auto written = std::make_shared<const WrittenIndexes>(writeIndex(
       makeConfig(VectorIndexType::kIvfFlat),
       {makeInputFromVectors(
-          generateRandomVectors(kNumVectors, kDimensions), kDimensions)});
+          generateRandomVectors(kNumVectors, kDimensions), kDimensions)}));
 
   NIMBLE_ASSERT_THROW(
       VectorIndex::create(
@@ -711,7 +730,8 @@ TEST_F(VectorIndexTest, zeroVectorMetadataRejected) {
               .indexType = VectorIndexType::kIvfFlat,
               .numVectors = 0,
           },
-          written.indexData),
+          written->indexData,
+          written),
       "VectorIndex vector count must be positive");
 }
 
@@ -745,7 +765,7 @@ TEST_F(VectorIndexTest, writerRoundTripWithMultipleIndexes) {
   secondConfig.columnName = "second_embedding";
   WriterOptions writerOptions;
   writerOptions.vectorIndexConfigs = {firstConfig, secondConfig};
-  writerOptions.vectorIndexWriterFactory = faissVectorIndexWriterFactory();
+  writerOptions.vectorIndexWriterFactory = VectorIndexWriter::create;
 
   std::string fileData;
   auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&fileData);
@@ -986,7 +1006,7 @@ TEST_F(VectorIndexTest, invalidBatchDoesNotMutateOtherIndexes) {
   auto secondConfig = makeConfig(VectorIndexType::kIvfSq8);
   secondConfig.columnName = "second_embedding";
   const std::array configs{firstConfig, secondConfig};
-  auto writer = FaissVectorIndexWriter::create(configs, type, pool());
+  auto writer = VectorIndexWriter::create(configs, type, pool());
 
   input->childAt(2)->setNull(0, true);
   NIMBLE_ASSERT_THROW(
@@ -1050,7 +1070,7 @@ TEST_F(VectorIndexTest, emptyFileOmitsVectorIndex) {
   const auto type = createType();
   WriterOptions writerOptions;
   writerOptions.vectorIndexConfigs = {makeConfig(VectorIndexType::kIvfFlat)};
-  writerOptions.vectorIndexWriterFactory = faissVectorIndexWriterFactory();
+  writerOptions.vectorIndexWriterFactory = VectorIndexWriter::create;
 
   std::string fileData;
   auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&fileData);
@@ -1069,7 +1089,7 @@ TEST_F(VectorIndexTest, emptyFileOmitsVectorIndex) {
 TEST_F(VectorIndexTest, noConfig) {
   auto type = createType();
   NIMBLE_ASSERT_THROW(
-      FaissVectorIndexWriter::create(
+      VectorIndexWriter::create(
           std::span<const VectorIndexConfig>{}, type, pool()),
       "Vector index configs must not be empty");
 }

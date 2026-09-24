@@ -159,7 +159,7 @@ std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
     size_t numRows,
     RowTypePtr rowType,
     std::shared_ptr<BaseTableGenerator> tableGenerator,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Create table using either makeTable or tableGenerator->makeTable()
   std::unique_ptr<cudf::table> table;
   if (tableGenerator == nullptr) {
@@ -169,7 +169,7 @@ std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
   }
 
   // Sync the stream before creating CudfVector
-  stream.synchronize();
+  stream.sync();
 
   // Create and return CudfVector
   return std::make_shared<cudf_velox::CudfVector>(
@@ -183,7 +183,7 @@ std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
 template <typename T>
 std::unique_ptr<cudf::column> make_numeric_column_from_vector(
     const std::vector<T>& host_values,
-    rmm::cuda_stream_view stream = cudf::get_default_stream(),
+    cuda::stream_ref stream = cudf::get_default_stream(),
     rmm::device_async_resource_ref mr =
         cudf::get_current_device_resource_ref()) {
   size_t num_rows = host_values.size();
@@ -197,7 +197,7 @@ std::unique_ptr<cudf::column> make_numeric_column_from_vector(
       host_values.data(),
       num_rows * sizeof(T),
       cudaMemcpyHostToDevice,
-      stream.value());
+      stream.get());
 
   // Build the cudf::column from the device buffer
   return std::make_unique<cudf::column>(
@@ -211,7 +211,7 @@ std::unique_ptr<cudf::column> make_numeric_column_from_vector(
 // Creates device buffer with concatenated string bytes from host vector
 rmm::device_buffer make_chars_buffer_from_host(
     const std::vector<std::string>& host_strings,
-    rmm::cuda_stream_view stream = cudf::get_default_stream(),
+    cuda::stream_ref stream = cudf::get_default_stream(),
     rmm::device_async_resource_ref mr =
         cudf::get_current_device_resource_ref()) {
   // Compute total bytes needed
@@ -234,7 +234,7 @@ rmm::device_buffer make_chars_buffer_from_host(
       host_concat.data(),
       total_bytes,
       cudaMemcpyHostToDevice,
-      stream.value());
+      stream.get());
 
   return chars_buffer;
 }
@@ -277,7 +277,7 @@ std::unique_ptr<cudf::column> make_strings_column_from_host(
 std::unique_ptr<cudf::table> makeTable(
     std::size_t numRows,
     facebook::velox::RowTypePtr rowType,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Create table with default values
   std::vector<std::unique_ptr<cudf::column>> columns;
 
@@ -321,7 +321,7 @@ std::unique_ptr<cudf::table> makeTable(
 std::vector<std::string> getStringCol(
     const cudf::strings_column_view& str_column_view,
     cudf::size_type max_rows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   max_rows =
       str_column_view.size() < max_rows ? str_column_view.size() : max_rows;
   auto offset_view = str_column_view.offsets();

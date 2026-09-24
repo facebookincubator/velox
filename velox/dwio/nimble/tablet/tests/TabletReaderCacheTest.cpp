@@ -16,12 +16,15 @@
 
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 
+#include <optional>
 #include <random>
 #include <stdexcept>
 #include <thread>
 
 #include <gtest/gtest.h>
 
+#include "folly/ScopeGuard.h"
+#include "folly/Singleton.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "folly/synchronization/Latch.h"
 #include "velox/common/file/File.h"
@@ -50,6 +53,36 @@ class NamedInMemoryReadFile : public velox::InMemoryReadFile {
  private:
   const std::string name_;
 };
+
+// Stands in for a folly singleton that a file needs in order to close.
+struct FileCloseDependency {};
+const folly::Singleton<FileCloseDependency> fileCloseDependency;
+
+// Records, on close, whether FileCloseDependency still existed.
+class DependentReadFile : public NamedInMemoryReadFile {
+ public:
+  DependentReadFile(
+      std::string name,
+      std::string_view data,
+      std::shared_ptr<std::optional<bool>> dependencyAliveOnClose)
+      : NamedInMemoryReadFile(std::move(name), data),
+        dependencyAliveOnClose_{std::move(dependencyAliveOnClose)} {}
+
+  ~DependentReadFile() override {
+    *dependencyAliveOnClose_ =
+        folly::Singleton<FileCloseDependency>::try_get() != nullptr;
+  }
+
+ private:
+  const std::shared_ptr<std::optional<bool>> dependencyAliveOnClose_;
+};
+
+// Runs the singleton teardown folly runs at exit, then re-enables singletons
+// so later tests can create them again.
+void destroySingletons() {
+  folly::SingletonVault::singleton()->destroyInstances();
+  folly::SingletonVault::singleton()->reenableInstances();
+}
 } // namespace
 
 class TabletReaderCacheTest : public ::testing::Test {
@@ -457,4 +490,85 @@ TEST_F(TabletReaderCacheTest, singleton) {
   EXPECT_EQ(TabletReaderCache::getInstance().stats().maxSize, 200);
 
   TabletReaderCache::testingReset();
+}
+
+// A file the cache holds may need another folly singleton to close, such as
+// a remote file that looks up its routing config. folly destroys its
+// singletons at exit in reverse creation order, so the cache has to be one of
+// them, created after that dependency, to close its files while the
+// dependency still exists.
+TEST_F(TabletReaderCacheTest, fileDependencyOutlivesCacheAtShutdown) {
+  const auto contents = writeTestFile();
+  auto dependencyAliveOnClose = std::make_shared<std::optional<bool>>();
+  folly::Singleton<FileCloseDependency>::try_get();
+  TabletReaderCache::initialize(makeOptions());
+  TabletReaderCache::getInstance().get(
+      std::make_shared<DependentReadFile>(
+          "file0", contents, dependencyAliveOnClose),
+      {});
+
+  destroySingletons();
+
+  ASSERT_TRUE(dependencyAliveOnClose->has_value())
+      << "the singleton teardown did not destroy the cache";
+  EXPECT_TRUE(dependencyAliveOnClose->value())
+      << "the cache closed its file after the file's dependency was destroyed";
+}
+
+// initialize() runs before the first file open creates the singletons that
+// file needs. The cache is created on the first getInstance() so that it is
+// newer than those singletons, and destroyed before them.
+TEST_F(TabletReaderCacheTest, createdOnFirstUse) {
+  // Starts with no singleton alive, so the dependency is created after
+  // initialize().
+  destroySingletons();
+  const auto contents = writeTestFile();
+  auto dependencyAliveOnClose = std::make_shared<std::optional<bool>>();
+  TabletReaderCache::initialize(makeOptions());
+  folly::Singleton<FileCloseDependency>::try_get();
+  TabletReaderCache::getInstance().get(
+      std::make_shared<DependentReadFile>(
+          "file0", contents, dependencyAliveOnClose),
+      {});
+
+  destroySingletons();
+
+  ASSERT_TRUE(dependencyAliveOnClose->has_value())
+      << "the singleton teardown did not destroy the cache";
+  EXPECT_TRUE(dependencyAliveOnClose->value())
+      << "the cache closed its file after the file's dependency was destroyed";
+}
+
+// A caller still running after the singleton teardown gets an error in place
+// of a destroyed cache. Re-enabling singletons, as tests do, recreates the
+// cache from the options initialize() was given.
+TEST_F(TabletReaderCacheTest, getInstanceAfterShutdown) {
+  TabletReaderCache::initialize(
+      makeOptions(/*numShards=*/2, /*maxEntries=*/50));
+  EXPECT_EQ(TabletReaderCache::getInstance().stats().maxSize, 50);
+  {
+    folly::SingletonVault::singleton()->destroyInstances();
+    SCOPE_EXIT {
+      folly::SingletonVault::singleton()->reenableInstances();
+    };
+    NIMBLE_ASSERT_THROW(
+        TabletReaderCache::getInstance(),
+        "TabletReaderCache was destroyed by the singleton teardown");
+  }
+  EXPECT_EQ(TabletReaderCache::getInstance().stats().maxSize, 50);
+}
+
+// initialize() only stores the options, but it still validates them, so a bad
+// config fails at startup rather than on the first file open.
+TEST_F(TabletReaderCacheTest, initializeRejectsInvalidOptions) {
+  NIMBLE_ASSERT_THROW(
+      TabletReaderCache::initialize(makeOptions(/*numShards=*/3)),
+      "numShards must be a power of 2");
+
+  // A rejected initialize() leaves the cache uninitialized.
+  NIMBLE_ASSERT_THROW(
+      TabletReaderCache::getInstance(),
+      "TabletReaderCache::initialize() must be called before getInstance()");
+  TabletReaderCache::initialize(makeOptions());
+  EXPECT_EQ(TabletReaderCache::getInstance().stats().maxSize, 100);
 }

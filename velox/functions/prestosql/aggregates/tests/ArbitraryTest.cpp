@@ -761,6 +761,116 @@ TEST_F(ArbitraryTest, clusteredInputNotRetainedWhenGroupsSpanBatches) {
       << " suggests input batches are being pinned by the accumulators";
 }
 
+// mayRetainInput opts a plan back into retention when groups span batches.
+// Same shape as the test above with the flag flipped, so the assertion is the
+// inverse: the accumulators pin the batches they read and peak memory tracks
+// the input rather than the group count. Results are identical either way,
+// which is why this has to assert on memory.
+TEST_F(ArbitraryTest, clusteredInputRetainedWhenAllowed) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false,
+                      /*mayRetainInput=*/true)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "clusteredInputRetainedWhenAllowed",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_GT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests mayRetainInput did not re-enable retention";
+}
+
+// An explicit false must disable retention even where noGroupsSpanBatches would
+// have enabled it. Both runs produce the same results, so the observable is
+// memory: the copying accumulator serializes one payload per group into the
+// HashStringAllocator, which the retaining accumulator does not do.
+TEST_F(ArbitraryTest, clusteredInputDisabledWhenMayRetainInputFalse) {
+  constexpr int kNumBatches = 20;
+  constexpr int kBatchRows = 128;
+  constexpr int kPayloadBytes = 8'192;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        // One group per row, so no group spans a batch and
+        // noGroupsSpanBatches=true is a true statement about this input.
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return batch * kBatchRows + row; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  const auto peakBytesWith = [&](std::optional<bool> mayRetainInput,
+                                 const std::string& poolName) {
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .project({"c0", "concat(c1, '') as c1"})
+                    .streamingAggregation(
+                        {"c0"},
+                        {"arbitrary(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/true,
+                        mayRetainInput)
+                    .planNode();
+    auto queryPool = memory::memoryManager()->addRootPool(
+        poolName, memory::kMaxMemory, exec::MemoryReclaimer::create());
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+    auto result =
+        AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+    EXPECT_EQ(result->size(), kNumBatches * kBatchRows);
+    return queryCtx->pool()->peakBytes();
+  };
+
+  const auto retained = peakBytesWith(std::nullopt, "arbitraryRetained");
+  const auto copied = peakBytesWith(false, "arbitraryCopied");
+
+  EXPECT_GT(copied, retained)
+      << "peak with mayRetainInput=false " << copied << " vs unset " << retained
+      << " suggests the explicit false did not disable retention";
+}
+
 TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
   // Use a larger batch size than the number of groups so that the source
   // vector size exceeds numGroups, exercising the existing slice path.

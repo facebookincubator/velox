@@ -31,6 +31,8 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/TimestampConversion.h"
 
+#include <folly/ScopeGuard.h>
+
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox;
 
@@ -44,6 +46,7 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     functions::sparksql::registerFunctions("");
     functions::registerArrayConstructor("array_constructor");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerSparkFunctions("");
   }
@@ -663,6 +666,15 @@ TEST_F(CudfFilterProjectTest, likeInvalidEscapeUsage) {
 }
 
 TEST_F(CudfFilterProjectTest, tryLikeInvalidEscapeUsage) {
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  };
+
   auto input =
       makeNullableFlatVector<std::string>({"test", "testo", std::nullopt});
   auto data = makeRowVector({input});

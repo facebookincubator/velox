@@ -530,7 +530,7 @@ void UcxExchangeSource::onMetadata(
     }
 
     // sync after allocating.
-    stream.synchronize();
+    stream.sync();
 
     VLOG(3) << toString() << " Allocated " << ptr->metadata.dataSizeBytes
             << " bytes of device memory";

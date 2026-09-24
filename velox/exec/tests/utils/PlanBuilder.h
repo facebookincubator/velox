@@ -1087,7 +1087,8 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys) {
+      bool ignoreNullKeys,
+      std::optional<bool> mayRetainInput = std::nullopt) {
     return aggregation(
         groupingKeys,
         preGroupedKeys,
@@ -1095,7 +1096,8 @@ class PlanBuilder {
         masks,
         step,
         ignoreNullKeys,
-        {});
+        {},
+        mayRetainInput);
   }
 
   /// A convenience method to create partial aggregation plan node for the case
@@ -1132,7 +1134,8 @@ class PlanBuilder {
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
-      bool noGroupsSpanBatches = false);
+      bool noGroupsSpanBatches = false,
+      std::optional<bool> mayRetainInput = std::nullopt);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
   /// aggregation inputs and a groupId column name.
@@ -1830,7 +1833,8 @@ class PlanBuilder {
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
-      const std::vector<std::vector<TypePtr>>& rawInputTypes);
+      const std::vector<std::vector<TypePtr>>& rawInputTypes,
+      std::optional<bool> mayRetainInput = std::nullopt);
 
   /// Create WindowNode based on whether input is sorted and then compute the
   /// window functions.
