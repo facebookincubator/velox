@@ -37,6 +37,7 @@ velox_add_library(
   DecimalArithmetic.cpp
   DecimalCeil.cpp
   DecimalCompare.cpp
+  Decode.cpp
   FilterFunction.cpp
   FormatNumber.cpp
   GetJsonObject.cpp
@@ -74,6 +75,7 @@ velox_add_library(
   DecimalArithmetic.h
   DecimalCeil.h
   DecimalUtil.h
+  Decode.h
   Factorial.h
   FormatNumber.h
   GetJsonObject.h
