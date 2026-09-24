@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <map>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -142,6 +143,26 @@ TEST(StatisticsTest, runValues) {
 
   const std::vector<int32_t> empty;
   EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runValues().empty());
+}
+
+TEST(StatisticsTest, runLengths) {
+  const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3, 3};
+  const std::vector<uint32_t> expected = {2, 2, 1, 3};
+  for (const bool populateRunValuesFirst : {false, true}) {
+    SCOPED_TRACE(populateRunValuesFirst);
+    const auto statistics = nimble::Statistics<int32_t>::create(data);
+    if (populateRunValuesFirst) {
+      EXPECT_EQ(statistics.runValues().size(), expected.size());
+    }
+
+    const auto& runLengths = statistics.runLengths();
+    EXPECT_EQ(runLengths, expected);
+    EXPECT_EQ(&statistics.runLengths(), &runLengths);
+    EXPECT_EQ(runLengths.size(), statistics.consecutiveRepeatCount());
+  }
+
+  const std::vector<int32_t> empty;
+  EXPECT_TRUE(nimble::Statistics<int32_t>::create(empty).runLengths().empty());
 }
 
 TEST(StatisticsTest, minMaxBlocks) {
@@ -416,6 +437,96 @@ TYPED_TEST(StatisticsIntegerTests, uniqueCountsDenseRange) {
   }
 }
 
+// Counting picks a table, a hash map or a sort by range and cardinality. Each
+// case below lands on a different one, and all must agree with a plain count.
+TYPED_TEST(StatisticsIntegerTests, uniqueCountsAcrossCountingStrategies) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+  using UnsignedType = std::make_unsigned_t<ValueType>;
+
+  struct Test {
+    std::string_view name;
+    uint64_t distinct;
+    uint64_t step;
+  };
+  // Stepped so that the range is wide even where the distinct count is small,
+  // and anchored at the type's lowest value so that offsets from min cross
+  // zero in the signed types.
+  const uint64_t typeMax = std::numeric_limits<UnsignedType>::max();
+  const std::vector<Test> tests = {
+      {"few distinct over a wide range", 300, 97},
+      {"many distinct over a narrow range", 40'000, 1},
+      {"many distinct over a wide range", 40'000, typeMax / 40'000},
+  };
+
+  std::mt19937 rng{kShuffleSeed};
+  for (const auto& test : tests) {
+    SCOPED_TRACE(test.name);
+    const uint64_t step = std::max<uint64_t>(test.step, 1);
+    const uint64_t distinct = std::min(test.distinct, typeMax / step + 1);
+    std::vector<ValueType> data;
+    std::map<ValueType, uint64_t> expected;
+    for (uint64_t i = 0; i < distinct; ++i) {
+      const auto value = static_cast<ValueType>(static_cast<UnsignedType>(
+          static_cast<uint64_t>(static_cast<UnsignedType>(
+              std::numeric_limits<ValueType>::lowest())) +
+          i * step));
+      // Counts of one to three, so that the counts tie as well as differ.
+      const uint64_t repeats = i % 3 + 1;
+      for (uint64_t repeat = 0; repeat < repeats; ++repeat) {
+        data.push_back(value);
+      }
+      expected[value] += repeats;
+    }
+    std::shuffle(data.begin(), data.end(), rng);
+
+    const auto statistics = T::create({data});
+    const auto& uniqueCounts = statistics.uniqueCounts().value();
+    std::map<ValueType, uint64_t> actual;
+    for (const auto& [value, count] : uniqueCounts) {
+      EXPECT_TRUE(actual.emplace(value, count).second);
+    }
+    EXPECT_EQ(expected, actual);
+    EXPECT_EQ(expected.size(), uniqueCounts.size());
+    for (const auto& [value, count] : expected) {
+      EXPECT_EQ(count, uniqueCounts.at(value));
+    }
+  }
+}
+
+// Exact while the offsets from min fit in the bits it tells apart, a lower
+// bound past that, and the exact count once the unique counts exist.
+TYPED_TEST(StatisticsIntegerTests, distinctLowerBound) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+  using UnsignedType = std::make_unsigned_t<ValueType>;
+
+  std::vector<ValueType> narrow;
+  for (int i = 0; i < 1'000; ++i) {
+    narrow.push_back(
+        static_cast<ValueType>(
+            static_cast<UnsignedType>(
+                std::numeric_limits<ValueType>::lowest()) +
+            static_cast<UnsignedType>(i % 97)));
+  }
+  const auto narrowStatistics = T::create({narrow});
+  EXPECT_EQ(97, narrowStatistics.distinctLowerBound());
+
+  if constexpr (sizeof(ValueType) >= 4) {
+    // Distinct values that collide in their low bits: the bound sees 3 of 6.
+    const uint64_t high = uint64_t{1}
+        << nimble::Statistics<ValueType>::kDistinctBoundBits;
+    std::vector<ValueType> wide;
+    for (uint64_t i = 0; i < 6; ++i) {
+      wide.push_back(static_cast<ValueType>((i % 3) + (i / 3) * high));
+    }
+    const auto wideStatistics = T::create({wide});
+    EXPECT_EQ(3, wideStatistics.distinctLowerBound());
+    EXPECT_EQ(6, wideStatistics.uniqueCounts().value().size());
+    EXPECT_EQ(6, wideStatistics.distinctLowerBound());
+  }
+}
+
 template <typename T>
 void verifyString(
     std::function<T(std::vector<std::string> data)> genStatisticsType) {
@@ -623,6 +734,109 @@ TYPED_TEST(StatisticsIntegerTests, buckets) {
   for (auto i = 0; i < buckets.size(); ++i) {
     EXPECT_EQ(expectedBuckets[i], buckets[i]) << "index: " << i;
   }
+}
+
+// Both are accumulated in blocks, so the reference below walks the rows one
+// at a time, over lengths that leave partial blocks and over values that reach
+// both ends of the type.
+TYPED_TEST(StatisticsIntegerTests, adjacentPairStatsAndMinMaxBlocks) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+  using UnsignedType = std::make_unsigned_t<ValueType>;
+
+  std::mt19937_64 rng{kShuffleSeed};
+  for (const size_t size :
+       {size_t{1}, size_t{2}, size_t{5'000}, size_t{9'000}}) {
+    SCOPED_TRACE(size);
+    std::vector<ValueType> data(size);
+    for (size_t i = 0; i < size; ++i) {
+      // Mostly the extremes, so steps span the whole range.
+      const uint64_t draw = rng();
+      data[i] = draw % 3 == 0 ? std::numeric_limits<ValueType>::max()
+          : draw % 3 == 1     ? std::numeric_limits<ValueType>::lowest()
+                              : static_cast<ValueType>(draw >> 8);
+    }
+    std::vector<UnsignedType> unsignedData(size);
+    for (size_t i = 0; i < size; ++i) {
+      unsignedData[i] = static_cast<UnsignedType>(data[i]);
+    }
+
+    uint64_t nonDecreasingCount{0};
+    uint64_t maxIncrease{0};
+    uint64_t sumAbsoluteDelta{0};
+    for (size_t i = 1; i < size; ++i) {
+      const uint64_t previous = static_cast<UnsignedType>(data[i - 1]);
+      const uint64_t value = static_cast<UnsignedType>(data[i]);
+      if (value >= previous) {
+        ++nonDecreasingCount;
+        maxIncrease = std::max(maxIncrease, value - previous);
+        sumAbsoluteDelta += value - previous;
+      } else {
+        sumAbsoluteDelta += previous - value;
+      }
+    }
+    const auto statistics = T::create({data});
+    const auto& pairs = statistics.adjacentPairStats();
+    EXPECT_EQ(nonDecreasingCount, pairs.nonDecreasingCount);
+    EXPECT_EQ(maxIncrease, pairs.maxIncrease);
+    EXPECT_EQ(sumAbsoluteDelta, pairs.sumAbsoluteDelta);
+
+    constexpr uint16_t kBlockSize{1'024};
+    const auto unsignedStatistics =
+        nimble::Statistics<UnsignedType>::create({unsignedData});
+    const auto& blocks = unsignedStatistics.minMaxBlocks(kBlockSize);
+    ASSERT_EQ((size + kBlockSize - 1) / kBlockSize, blocks.size());
+    for (size_t block = 0; block < blocks.size(); ++block) {
+      const size_t start = block * kBlockSize;
+      const size_t end = std::min(size, start + kBlockSize);
+      const auto [minIt, maxIt] = std::minmax_element(
+          unsignedData.begin() + start, unsignedData.begin() + end);
+      EXPECT_EQ(end - start, blocks[block].count);
+      EXPECT_EQ(*minIt, blocks[block].min);
+      EXPECT_EQ(*maxIt, blocks[block].max);
+    }
+  }
+}
+
+TYPED_TEST(StatisticsIntegerTests, bitFlipProfileConstant) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+
+  std::vector<ValueType> data(100, ValueType{42});
+  auto statistics = T::create({data});
+  const auto& profile = statistics.bitFlipProfile();
+
+  EXPECT_EQ(profile.numBits, static_cast<int>(sizeof(ValueType) * 8));
+  EXPECT_EQ(profile.variance, 0.0);
+  for (int b = 0; b < profile.numBits; ++b) {
+    EXPECT_EQ(profile.flipProbability[b], 0.0) << "bit: " << b;
+  }
+}
+
+TYPED_TEST(StatisticsIntegerTests, bitFlipProfileAlternatingIsFullFlip) {
+  using T = TypeParam;
+  using ValueType = typename T::valueType;
+
+  std::vector<ValueType> data;
+  for (int i = 0; i < 100; ++i) {
+    data.push_back(i % 2 == 0 ? ValueType{0} : static_cast<ValueType>(-1));
+  }
+  auto statistics = T::create({data});
+  const auto& profile = statistics.bitFlipProfile();
+
+  for (int b = 0; b < profile.numBits; ++b) {
+    EXPECT_EQ(profile.flipProbability[b], 1.0) << "bit: " << b;
+  }
+  EXPECT_EQ(profile.variance, 0.0);
+}
+
+TEST(StatisticsTest, bitFlipProfileIsLazyAndCached) {
+  std::vector<uint64_t> data{0, 1, 2, 3, 4, 5};
+  auto statistics = nimble::Statistics<uint64_t>::create({data});
+  const auto& first = statistics.bitFlipProfile();
+  const auto& second = statistics.bitFlipProfile();
+  EXPECT_EQ(&first, &second);
+  EXPECT_EQ(first.numBits, 64);
 }
 
 // Constancy is the only question ConstantEncoding asks, and it used to be

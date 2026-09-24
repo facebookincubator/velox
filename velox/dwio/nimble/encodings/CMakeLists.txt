@@ -93,6 +93,7 @@ add_library(
   selection/EncodingSelectionPolicy.h
   selection/EncodingSelection.h
   selection/EncodingIdentifier.h
+  selection/BitFlipProfile.h
   common/EncodingUtils.h
   common/SortedPositionSlots.h
   common/EncodingType.h

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include "velox/dwio/nimble/common/RadixSort.h"
 #include "velox/dwio/nimble/common/StatsUtil.h"
 #include "velox/dwio/nimble/common/Types.h"
 
@@ -29,6 +30,14 @@ namespace facebook::nimble {
 namespace {
 
 constexpr uint32_t kMaxDenseRangeSize{4096};
+
+// Ranges below this are counted with a table, amortising the cost of
+// clearing and scanning it.
+constexpr uint64_t kMaxTableRangeSize{65'536};
+
+// Distinct values past which counting abandons the hash map for a sort,
+// since the map no longer fits in L2 cache above this point.
+constexpr size_t kMaxHashDistinctCount{16'384};
 
 template <typename T, typename InputType>
 using MapType = typename UniqueValueCounts<T, InputType>::MapType;
@@ -78,28 +87,116 @@ MapType<T, InputType> populateHashUniqueCounts(
 }
 
 template <typename T>
-MapType<T, T> populateRangeUniqueCounts(
+using SortedType = typename UniqueValueCounts<T, T>::SortedType;
+
+// Counts over [minValue, minValue + rangeSize) with a table indexed by
+// offset, emitting entries already in value order.
+template <typename T>
+SortedType<T> populateRangeUniqueCounts(
     std::span<const T> values,
     T minValue,
-    uint32_t rangeSize) {
+    size_t rangeSize) {
+  SortedType<T> uniqueCounts;
   if (rangeSize == 1) {
-    MapType<T, T> uniqueCounts;
-    uniqueCounts.reserve(1);
-    uniqueCounts.emplace(minValue, static_cast<uint64_t>(values.size()));
+    uniqueCounts.emplace_back(minValue, static_cast<uint64_t>(values.size()));
     return uniqueCounts;
   }
 
   std::vector<uint64_t> counts(rangeSize);
-  for (const auto value : values) {
-    ++counts[denseRangeOffset(value, minValue)];
+  // Four tables avoid serialising consecutive increments to the same counter
+  // through store forwarding.
+  const size_t numValues = values.size();
+  if (rangeSize <= kMaxDenseRangeSize &&
+      numValues <= std::numeric_limits<uint32_t>::max()) {
+    std::vector<uint32_t> spread(4 * rangeSize);
+    auto* table0 = spread.data();
+    auto* table1 = table0 + rangeSize;
+    auto* table2 = table1 + rangeSize;
+    auto* table3 = table2 + rangeSize;
+    size_t i{0};
+    for (; i + 4 <= numValues; i += 4) {
+      ++table0[denseRangeOffset(values[i], minValue)];
+      ++table1[denseRangeOffset(values[i + 1], minValue)];
+      ++table2[denseRangeOffset(values[i + 2], minValue)];
+      ++table3[denseRangeOffset(values[i + 3], minValue)];
+    }
+    for (; i < numValues; ++i) {
+      ++table0[denseRangeOffset(values[i], minValue)];
+    }
+    for (size_t offset = 0; offset < rangeSize; ++offset) {
+      counts[offset] = static_cast<uint64_t>(table0[offset]) + table1[offset] +
+          table2[offset] + table3[offset];
+    }
+  } else {
+    for (const auto value : values) {
+      ++counts[denseRangeOffset(value, minValue)];
+    }
   }
 
-  MapType<T, T> uniqueCounts;
-  uniqueCounts.reserve(std::min<size_t>(rangeSize, values.size()));
-  for (uint32_t offset = 0; offset < rangeSize; ++offset) {
+  size_t distinct{0};
+  for (const auto count : counts) {
+    distinct += count > 0;
+  }
+  uniqueCounts.reserve(distinct);
+  for (size_t offset = 0; offset < rangeSize; ++offset) {
     if (counts[offset] > 0) {
-      uniqueCounts.emplace(
-          integralValueAtOffset(minValue, offset), counts[offset]);
+      uniqueCounts.emplace_back(
+          integralValueAtOffset(minValue, static_cast<uint32_t>(offset)),
+          counts[offset]);
+    }
+  }
+  return uniqueCounts;
+}
+
+// Counts by sorting a copy of the values via a radix sort over the offsets
+// from min, avoiding the cache misses a hash map takes once it outgrows the
+// cache.
+template <typename T>
+SortedType<T>
+populateSortedUniqueCounts(std::span<const T> values, T minValue, T maxValue) {
+  using UnsignedT = std::make_unsigned_t<T>;
+  const UnsignedT base = static_cast<UnsignedT>(minValue);
+  std::vector<UnsignedT> offsets(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    offsets[i] = static_cast<UnsignedT>(values[i]) - base;
+  }
+  RadixSort<UnsignedT> sorter;
+  sorter.sortStable(
+      std::span<UnsignedT>(offsets),
+      [](UnsignedT offset) { return offset; },
+      std::bit_width(
+          static_cast<UnsignedT>(static_cast<UnsignedT>(maxValue) - base)));
+
+  size_t distinct{1};
+  for (size_t i = 1; i < offsets.size(); ++i) {
+    distinct += offsets[i] != offsets[i - 1];
+  }
+  SortedType<T> uniqueCounts;
+  uniqueCounts.reserve(distinct);
+  size_t runStart{0};
+  for (size_t i = 1; i <= offsets.size(); ++i) {
+    if (i == offsets.size() || offsets[i] != offsets[runStart]) {
+      uniqueCounts.emplace_back(
+          static_cast<T>(static_cast<UnsignedT>(offsets[runStart] + base)),
+          static_cast<uint64_t>(i - runStart));
+      runStart = i;
+    }
+  }
+  return uniqueCounts;
+}
+
+// Hash counts while the distinct values stay few enough for the map to live
+// in cache, returning nullopt once they outgrow that so the caller falls back
+// to the sort.
+template <typename T>
+std::optional<MapType<T, T>> populateBoundedHashUniqueCounts(
+    std::span<const T> values,
+    size_t distinctLimit) {
+  MapType<T, T> uniqueCounts;
+  for (const auto value : values) {
+    ++uniqueCounts[value];
+    if (uniqueCounts.size() > distinctLimit) {
+      return std::nullopt;
     }
   }
   return uniqueCounts;
@@ -129,6 +226,47 @@ uint64_t countTrueValues(std::span<const bool> values) {
 
 template <typename T, typename InputType>
 void Statistics<T, InputType>::populateRepeats(bool collectRunValues) const {
+  // Numbers take the run lengths in this pass rather than in a scalar loop
+  // that branches on every row. Booleans keep the loop: RLE prices their
+  // lengths from the repeat metrics alone, so building them would be wasted.
+  if constexpr (!nimble::isStringType<T>() && !nimble::isBoolType<T>()) {
+    if (!collectRunValues) {
+      const size_t size = data_.size();
+      // Counted first, in a pass that vectorises, so lengths are allocated
+      // for the runs rather than for the rows.
+      size_t transitions{0};
+      for (size_t i = 1; i < size; ++i) {
+        transitions += static_cast<size_t>(data_[i] != data_[i - 1]);
+      }
+      const size_t runs = transitions + 1;
+      std::vector<uint32_t> lengths(runs);
+      size_t run{0};
+      for (size_t i = 1; i < size; ++i) {
+        lengths[run] = static_cast<uint32_t>(i);
+        run += static_cast<size_t>(data_[i] != data_[i - 1]);
+      }
+      lengths[runs - 1] = static_cast<uint32_t>(size);
+      uint64_t minRepeat = std::numeric_limits<uint64_t>::max();
+      uint64_t maxRepeat = 0;
+      uint32_t previousEnd{0};
+      for (auto& length : lengths) {
+        const uint32_t end = length;
+        length = end - previousEnd;
+        previousEnd = end;
+        minRepeat = std::min<uint64_t>(minRepeat, length);
+        maxRepeat = std::max<uint64_t>(maxRepeat, length);
+      }
+      minRepeat_ = minRepeat;
+      maxRepeat_ = maxRepeat;
+      consecutiveRepeatCount_ = runs;
+      totalStringsRepeatLength_ = 0;
+      if (!runLengths_.has_value()) {
+        runLengths_ = std::move(lengths);
+      }
+      return;
+    }
+  }
+
   uint64_t consecutiveRepeatCount = 0;
   uint64_t minRepeat = std::numeric_limits<uint64_t>::max();
   uint64_t maxRepeat = 0;
@@ -258,13 +396,39 @@ void Statistics<T, InputType>::populateUniques() const {
       nimble::isIntegralType<T>() && std::is_same_v<T, InputType>) {
     const T minValue = min();
     const T maxValue = max();
+    // Cheapest first: a table while the range is small against the rows, a
+    // hash map while distinct values are few, a sort otherwise.
+    const uint64_t rangeDistance = integralRangeDistance(maxValue, minValue);
     if (const auto rangeSize =
             denseRangeSize(minValue, maxValue, data_.size())) {
-      uniqueCounts =
-          populateRangeUniqueCounts<T>(data_, minValue, rangeSize.value());
+      uniqueCounts_.emplace(
+          std::in_place,
+          populateRangeUniqueCounts<T>(data_, minValue, rangeSize.value()));
+    } else if (
+        rangeDistance <
+        std::min<uint64_t>(kMaxTableRangeSize, data_.size() * 8)) {
+      uniqueCounts_.emplace(
+          std::in_place,
+          populateRangeUniqueCounts<T>(
+              data_, minValue, static_cast<size_t>(rangeDistance) + 1));
+    } else if (data_.size() <= kMaxHashDistinctCount) {
+      // A stream this short can never outgrow the bounded map, so hashing
+      // would only pay for rehashing as the map grows. The sort is bounded by
+      // the row count whatever the cardinality, and every reader of the
+      // counts is independent of their order.
+      uniqueCounts_.emplace(
+          std::in_place,
+          populateSortedUniqueCounts<T>(data_, minValue, maxValue));
+    } else if (
+        auto hashCounts =
+            populateBoundedHashUniqueCounts<T>(data_, kMaxHashDistinctCount)) {
+      uniqueCounts_.emplace(std::in_place, std::move(hashCounts.value()));
     } else {
-      uniqueCounts = populateHashUniqueCounts<T, InputType>(data_);
+      uniqueCounts_.emplace(
+          std::in_place,
+          populateSortedUniqueCounts<T>(data_, minValue, maxValue));
     }
+    return;
   } else {
     uniqueCounts = populateHashUniqueCounts<T, InputType>(data_);
   }
@@ -274,20 +438,26 @@ void Statistics<T, InputType>::populateUniques() const {
 template <typename T, typename InputType>
 void Statistics<T, InputType>::populateMinMaxBlocks(uint16_t blockSize) const {
   static_assert(std::is_unsigned_v<T>);
-  static_assert(std::is_same_v<T, InputType>);
-
+  // Block by block rather than value by value, so the min and max of each
+  // block are two reductions over a contiguous span the compiler can
+  // vectorise. A block size of zero leaves one block.
+  const size_t size = data_.size();
+  const size_t step = blockSize == 0 ? std::max<size_t>(size, 1) : blockSize;
   std::vector<BlockStats> blocks;
-  if (data_.empty()) {
-    minMaxBlocks_ = std::move(blocks);
-    return;
-  }
-
-  const size_t effectiveBlockSize = blockSize == 0 ? data_.size() : blockSize;
-  blocks.reserve((data_.size() - 1) / effectiveBlockSize + 1);
-  for (size_t offset = 0; offset < data_.size(); offset += effectiveBlockSize) {
-    const auto count = std::min(effectiveBlockSize, data_.size() - offset);
-    const auto minMax = findMinMax(data_.subspan(offset, count));
-    blocks.push_back({count, minMax.min, minMax.max});
+  blocks.reserve((size + step - 1) / step);
+  for (size_t start = 0; start < size; start += step) {
+    const size_t end = std::min(size, start + step);
+    T blockMin = static_cast<T>(data_[start]);
+    T blockMax = blockMin;
+    for (size_t i = start + 1; i < end; ++i) {
+      const T value = static_cast<T>(data_[i]);
+      blockMin = std::min(blockMin, value);
+      blockMax = std::max(blockMax, value);
+    }
+    blocks.push_back(
+        {static_cast<uint64_t>(end - start),
+         static_cast<uint64_t>(blockMin),
+         static_cast<uint64_t>(blockMax)});
   }
   minMaxBlocks_ = std::move(blocks);
 }
@@ -295,40 +465,103 @@ void Statistics<T, InputType>::populateMinMaxBlocks(uint16_t blockSize) const {
 template <typename T, typename InputType>
 void Statistics<T, InputType>::populateBucketCounts() const {
   using UnsignedT = typename std::make_unsigned<T>::type;
-  // Bucket counts are calculated in two phases. In phase one, we iterate on all
-  // entries, and (efficiently) count the occurrences based on the MSB (most
-  // significant bit) of the entry. In phase two, we merge the results of phase
-  // one, for each consecutive 7 bits.
-  // See benchmarks in
-  // velox/dwio/nimble/encodings/tests:bucket_benchmark for why this method is
-  // used.
-  std::array<uint64_t, std::numeric_limits<UnsignedT>::digits + 1> bitCounts{};
-  for (auto i = 0; i < data_.size(); ++i) {
-    ++(bitCounts
-           [std::numeric_limits<UnsignedT>::digits -
-            std::countl_zero(
-                static_cast<UnsignedT>(
-                    static_cast<UnsignedT>(data_[i]) -
-                    static_cast<UnsignedT>(min())))]);
-  }
-
-  std::vector<uint64_t> bucketCounts(sizeof(T) * 8 / 7 + 1, 0);
-  uint8_t start = 0;
-  uint8_t end = 8;
-  uint8_t iteration = 0;
-  while (start < bitCounts.size()) {
-    for (auto i = start; i < end; ++i) {
-      bucketCounts[iteration] += bitCounts[i];
+  // Each bucket is the difference of two threshold counts, and a threshold
+  // count is a compare-and-sum over the rows that vectorises, unlike counting
+  // a bit width per row directly.
+  const size_t numBuckets = sizeof(T) * 8 / 7 + 1;
+  const auto base = static_cast<UnsignedT>(min());
+  std::vector<uint64_t> reaching(numBuckets + 1, 0);
+  reaching[0] = data_.size();
+  for (size_t bucket = 1; bucket < numBuckets; ++bucket) {
+    const auto threshold = static_cast<UnsignedT>(UnsignedT{1} << (7 * bucket));
+    uint64_t count{0};
+    for (size_t i = 0; i < data_.size(); ++i) {
+      const auto offset =
+          static_cast<UnsignedT>(static_cast<UnsignedT>(data_[i]) - base);
+      count += offset >= threshold;
     }
-    ++iteration;
-    start = end;
-    end += 7;
-    if (bitCounts.size() < end) {
-      end = bitCounts.size();
-    }
+    reaching[bucket] = count;
   }
-
+  std::vector<uint64_t> bucketCounts(numBuckets);
+  for (size_t bucket = 0; bucket < numBuckets; ++bucket) {
+    bucketCounts[bucket] = reaching[bucket] - reaching[bucket + 1];
+  }
   bucketCounts_ = std::move(bucketCounts);
+}
+
+template <typename T, typename InputType>
+void Statistics<T, InputType>::populateBitFlipProfile() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  bitFlipProfile_ = computeBitFlipProfile<T>(data_);
+}
+
+template <typename T, typename InputType>
+void Statistics<T, InputType>::populateAdjacentPairStats() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  AdjacentPairStats stats;
+  // Compared in the unsigned physical domain, which is the domain the
+  // encodings that read this store their deltas in; a signed comparison here
+  // would report steps no delta stream can hold.
+  using unsignedType = typename std::make_unsigned<T>::type;
+  // Written to avoid a conditional on each step's direction: a falling step
+  // is masked to zero rather than branched around.
+  constexpr size_t kBlock{4'096};
+  const size_t size = data_.size();
+  for (size_t start = 1; start < size; start += kBlock) {
+    const size_t end = std::min(size, start + kBlock);
+    uint64_t blockSum{0};
+    uint32_t blockNonDecreasing{0};
+    unsignedType blockMaxIncrease{0};
+    for (size_t i = start; i < end; ++i) {
+      const auto previous = static_cast<unsignedType>(data_[i - 1]);
+      const auto value = static_cast<unsignedType>(data_[i]);
+      const auto larger = std::max(value, previous);
+      const auto delta =
+          static_cast<unsignedType>(larger - std::min(value, previous));
+      const auto rising = static_cast<unsignedType>(larger == value);
+      blockSum += delta;
+      blockNonDecreasing += rising;
+      blockMaxIncrease = std::max(
+          blockMaxIncrease,
+          static_cast<unsignedType>(
+              delta & static_cast<unsignedType>(unsignedType{0} - rising)));
+    }
+    stats.sumAbsoluteDelta += blockSum;
+    stats.nonDecreasingCount += blockNonDecreasing;
+    stats.maxIncrease = std::max<uint64_t>(stats.maxIncrease, blockMaxIncrease);
+  }
+  adjacentPairStats_ = stats;
+}
+
+template <typename T, typename InputType>
+void Statistics<T, InputType>::populateDistinctLowerBound() const {
+  static_assert(nimble::isIntegralType<T>());
+  static_assert(std::is_same_v<T, InputType>);
+  using UnsignedT = std::make_unsigned_t<T>;
+  if (data_.empty()) {
+    distinctLowerBound_ = 0;
+    return;
+  }
+  const auto base = static_cast<UnsignedT>(min());
+  const int bits = std::min<int>(
+      kDistinctBoundBits,
+      static_cast<int>(std::bit_width(
+          static_cast<uint64_t>(
+              static_cast<UnsignedT>(static_cast<UnsignedT>(max()) - base)))));
+  const uint64_t mask = (uint64_t{1} << bits) - 1;
+  std::vector<uint64_t> seen(((uint64_t{1} << bits) + 63) / 64, 0);
+  for (const auto value : data_) {
+    const uint64_t offset =
+        static_cast<UnsignedT>(static_cast<UnsignedT>(value) - base) & mask;
+    seen[offset >> 6] |= uint64_t{1} << (offset & 63);
+  }
+  uint64_t distinct{0};
+  for (const uint64_t word : seen) {
+    distinct += std::popcount(word);
+  }
+  distinctLowerBound_ = distinct;
 }
 
 template <typename T, typename InputType>
@@ -515,5 +748,32 @@ template void Statistics<uint64_t>::populateBucketCounts() const;
 template void Statistics<std::string_view>::populateStringLength() const;
 template void Statistics<std::string_view, std::string>::populateStringLength()
     const;
+
+template void Statistics<int8_t>::populateBitFlipProfile() const;
+template void Statistics<uint8_t>::populateBitFlipProfile() const;
+template void Statistics<int16_t>::populateBitFlipProfile() const;
+template void Statistics<uint16_t>::populateBitFlipProfile() const;
+template void Statistics<int32_t>::populateBitFlipProfile() const;
+template void Statistics<uint32_t>::populateBitFlipProfile() const;
+template void Statistics<int64_t>::populateBitFlipProfile() const;
+template void Statistics<uint64_t>::populateBitFlipProfile() const;
+
+template void Statistics<int8_t>::populateDistinctLowerBound() const;
+template void Statistics<uint8_t>::populateDistinctLowerBound() const;
+template void Statistics<int16_t>::populateDistinctLowerBound() const;
+template void Statistics<uint16_t>::populateDistinctLowerBound() const;
+template void Statistics<int32_t>::populateDistinctLowerBound() const;
+template void Statistics<uint32_t>::populateDistinctLowerBound() const;
+template void Statistics<int64_t>::populateDistinctLowerBound() const;
+template void Statistics<uint64_t>::populateDistinctLowerBound() const;
+
+template void Statistics<int8_t>::populateAdjacentPairStats() const;
+template void Statistics<uint8_t>::populateAdjacentPairStats() const;
+template void Statistics<int16_t>::populateAdjacentPairStats() const;
+template void Statistics<uint16_t>::populateAdjacentPairStats() const;
+template void Statistics<int32_t>::populateAdjacentPairStats() const;
+template void Statistics<uint32_t>::populateAdjacentPairStats() const;
+template void Statistics<int64_t>::populateAdjacentPairStats() const;
+template void Statistics<uint64_t>::populateAdjacentPairStats() const;
 
 } // namespace facebook::nimble

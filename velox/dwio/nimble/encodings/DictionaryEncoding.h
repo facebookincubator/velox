@@ -95,6 +95,31 @@ class DictionaryEncoding
       Buffer& buffer,
       const Encoding::Options& options = {});
 
+  /// Dictionary's price for `rowCount` rows holding `uniqueCount` distinct
+  /// integers in [minValue, maxValue]. Monotonic in uniqueCount, so a lower
+  /// bound on the distinct count prices a lower bound on the encoding.
+  static uint64_t estimateIntegralSize(
+      uint64_t rowCount,
+      uint64_t uniqueCount,
+      physicalType minValue,
+      physicalType maxValue,
+      const Encoding::Options& options) {
+    static_assert(isIntegralType<physicalType>());
+    const uint64_t indicesEncodingSize =
+        FixedBitWidthEncoding<uint32_t>::estimateSize(
+            rowCount,
+            /*minValue=*/0,
+            uniqueCount == 0 ? 0 : uniqueCount - 1,
+            options);
+    const uint64_t alphabetEncodingSize = std::min(
+        TrivialEncoding<physicalType>::estimateSize(uniqueCount),
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            uniqueCount, minValue, maxValue, options));
+    const uint64_t outerEncodingSize =
+        EncodingPrefix::kFixedPrefixSize + sizeof(uint32_t);
+    return outerEncodingSize + alphabetEncodingSize + indicesEncodingSize;
+  }
+
   static uint64_t estimateSize(
       uint64_t rowCount,
       const Statistics<physicalType>& statistics,
@@ -106,6 +131,10 @@ class DictionaryEncoding
     //   indices: one dictionary index per row, estimated as FixedBitWidth.
     const auto& uniqueCounts = statistics.uniqueCounts().value();
     const uint64_t uniqueCount = uniqueCounts.size();
+    if constexpr (!isStringType<physicalType>() && !isFloatingPointType<T>()) {
+      return estimateIntegralSize(
+          rowCount, uniqueCount, statistics.min(), statistics.max(), options);
+    }
     const uint64_t indicesEncodingSize =
         FixedBitWidthEncoding<uint32_t>::estimateSize(
             rowCount,

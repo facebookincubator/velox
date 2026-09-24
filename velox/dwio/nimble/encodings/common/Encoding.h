@@ -159,6 +159,21 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
+    /// Rows a stream's costly candidates are first priced on, before
+    /// selection decides whether to price them on the whole stream. Zero,
+    /// the default, prices every candidate on every row. MainlyConstant,
+    /// Dictionary, RLE, FrequencyPartition and Huffman price from distinct
+    /// values or runs, which is expensive on a long near-unique stream that
+    /// loses to plain bit packing anyway; with this set, a costly candidate
+    /// is only priced on the whole stream if its sample cost is within
+    /// selectionScreenMargin of the cheapest.
+    uint32_t selectionScreenRows{0};
+
+    /// How far a costly candidate's sample cost may exceed the cheapest before
+    /// the screen drops it, as a ratio. Only read when selectionScreenRows is
+    /// set.
+    double selectionScreenMargin{1.25};
+
     /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
     /// encoding selection. False by default; do not enable for production
     /// until ALP is production-ready.
@@ -236,6 +251,11 @@ class Encoding {
     /// which need low cardinality to win. Above this width both are treated as
     /// unusable and the pass is skipped. 0 is unlimited.
     uint32_t subIntSplitFrequencyMetricsMaxWidth{0};
+
+    /// Prices a Huffman tree deeper than HuffmanEncoding::kMaxCodeBits at its
+    /// Shannon bound instead of declining it. encode() length-limits such a
+    /// tree, so it remains encodable. On by default.
+    bool huffmanPriceLengthLimited{true};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;

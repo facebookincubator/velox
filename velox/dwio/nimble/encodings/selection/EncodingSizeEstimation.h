@@ -24,9 +24,12 @@
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
+#include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
@@ -81,7 +84,131 @@ struct EncodingSizeEstimation {
         "Unable to estimate size for type {}.", folly::demangle(typeid(T)));
   }
 
+  /// A size estimateSize never quotes below for `encodingType`, for encodings
+  /// whose estimate counts the stream's distinct values but where a bound can
+  /// be had without counting them (MainlyConstant, Dictionary,
+  /// FrequencyPartition on a too-wide-to-table integer stream). nullopt
+  /// otherwise.
+  static std::optional<uint64_t> estimateSizeLowerBound(
+      const EncodingType encodingType,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    if constexpr (
+        !isIntegralType<T>() || !isIntegralType<physicalType>() ||
+        isBoolType<physicalType>()) {
+      return std::nullopt;
+    } else {
+      if (encodingType != EncodingType::MainlyConstant &&
+          encodingType != EncodingType::Dictionary
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+          && encodingType != EncodingType::FrequencyPartition
+#endif
+      ) {
+        return std::nullopt;
+      }
+      // Below this range Statistics counts distinct values in a table, which
+      // costs less than the pass the bound takes.
+      constexpr uint64_t kMinBoundedRange{65'536};
+      const uint64_t rowCount = values.size();
+      if (rowCount == 0 ||
+          static_cast<uint64_t>(statistics.max() - statistics.min()) <
+              kMinBoundedRange) {
+        return std::nullopt;
+      }
+      const uint64_t distinctLowerBound = statistics.distinctLowerBound();
+      switch (encodingType) {
+        case EncodingType::Dictionary: {
+          // Grows with the distinct count and reads nothing else of the counts.
+          return DictionaryEncoding<T>::estimateIntegralSize(
+              rowCount,
+              distinctLowerBound,
+              statistics.min(),
+              statistics.max(),
+              options);
+        }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+        case EncodingType::FrequencyPartition: {
+          return FrequencyPartitionEncoding<physicalType>::
+              estimateSizeLowerBound(
+                  rowCount, distinctLowerBound, statistics, options);
+        }
+#endif
+        default: {
+          return mainlyConstantSizeLowerBound(
+              values, statistics, distinctLowerBound, options);
+        }
+      }
+    }
+  }
+
  private:
+  // Lower bound for MainlyConstantEncodingBase::estimateSize with the common
+  // value unknown: with D distinct values, at least D - 1 rows are uncommon,
+  // and they span at least the smaller of max - (second smallest) and
+  // (second largest) - min.
+  static std::optional<uint64_t> mainlyConstantSizeLowerBound(
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      uint64_t distinctLowerBound,
+      const Encoding::Options& options) {
+    // Three distinct values guarantee a second smallest and a second largest.
+    if (distinctLowerBound < 3) {
+      return std::nullopt;
+    }
+    const physicalType minValue = statistics.min();
+    const physicalType maxValue = statistics.max();
+    physicalType secondSmallest = maxValue;
+    physicalType secondLargest = minValue;
+    for (const physicalType value : values) {
+      secondSmallest =
+          std::min(secondSmallest, value == minValue ? maxValue : value);
+      secondLargest =
+          std::max(secondLargest, value == maxValue ? minValue : value);
+    }
+    const uint64_t uncommonRange = std::min<uint64_t>(
+        static_cast<uint64_t>(maxValue - secondSmallest),
+        static_cast<uint64_t>(secondLargest - minValue));
+    const uint64_t uncommonCount = distinctLowerBound - 1;
+    const uint64_t otherValuesSize = std::min(
+        TrivialEncoding<physicalType>::estimateSize(uncommonCount),
+        FixedBitWidthEncoding<physicalType>::estimateSize(
+            uncommonCount, 0, uncommonRange, options));
+    const uint64_t isCommonEncodingSize =
+        SparseBoolEncoding::estimateSize(values.size(), uncommonCount, options);
+    const uint64_t outerEncodingSize = EncodingPrefix::kFixedPrefixSize +
+        2 * sizeof(uint32_t) + sizeof(physicalType);
+    return outerEncodingSize + otherValuesSize + isCommonEncodingSize;
+  }
+
+  // Prices RLE's run-lengths stream with the encodings nested selection would
+  // pick for it, rather than only the flat FixedBitWidth RLE's own estimate
+  // uses; that flat price stays a candidate, so this never quotes above it.
+  static uint64_t estimateRunLengthsSize(
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) {
+    const uint64_t runCount = statistics.consecutiveRepeatCount();
+    uint64_t bestSize = FixedBitWidthEncoding<uint32_t>::estimateSize(
+        runCount, statistics.minRepeat(), statistics.maxRepeat(), options);
+    if (runCount < 2) {
+      return bestSize;
+    }
+    const auto& runLengths = statistics.runLengths();
+    const auto runLengthsStatistics = Statistics<uint32_t>::create(
+        std::span<const uint32_t>{runLengths.data(), runLengths.size()});
+    bestSize = std::min(
+        bestSize,
+        MainlyConstantEncoding<uint32_t>::estimateSize(
+            runCount, runLengthsStatistics, options));
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    bestSize = std::min(
+        bestSize,
+        FrequencyPartitionEncoding<uint32_t>::estimateSize(
+            runCount, runLengthsStatistics, options));
+#endif
+    return bestSize;
+  }
+
   static std::optional<uint64_t> estimateNumericSize(
       const EncodingType encodingType,
       const uint64_t entryCount,
@@ -113,7 +240,11 @@ struct EncodingSizeEstimation {
             entryCount, statistics, options);
       }
       case EncodingType::RLE: {
-        return RLEEncoding<T>::estimateSize(entryCount, statistics, options);
+        return RLEEncoding<T>::estimateSize(
+            entryCount,
+            statistics,
+            estimateRunLengthsSize(statistics, options),
+            options);
       }
       case EncodingType::Varint: {
         // Note: the condition below actually support floating point numbers as
@@ -148,6 +279,34 @@ struct EncodingSizeEstimation {
         return BlockBitPackingEncoding<physicalType>::estimateSize(
             statistics, options.blockBitPackingBlockSize);
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::Delta: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return DeltaEncoding<physicalType>::estimateSize(
+              entryCount, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::FOR: {
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(
+              entryCount, statistics);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::FrequencyPartition: {
+        if constexpr (isIntegralType<physicalType>()) {
+          // Options carry the index type, which is a large part of what a
+          // FrequencyPartition encode costs and is not visible from statistics.
+          return FrequencyPartitionEncoding<physicalType>::estimateSize(
+              entryCount, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return std::nullopt;
       }
@@ -196,6 +355,18 @@ struct EncodingSizeEstimation {
           return std::nullopt;
         }
       }
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      case EncodingType::FOR: {
+        // Measured over the values rather than inferred from statistics: a
+        // frame's local range is a property of the values in position, not
+        // of any summary of them.
+        if constexpr (isIntegralType<physicalType>()) {
+          return ForEncoding<physicalType>::estimateSize(values, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+#endif
       default: {
         return estimateNumericSize(
             encodingType, values.size(), statistics, options);
