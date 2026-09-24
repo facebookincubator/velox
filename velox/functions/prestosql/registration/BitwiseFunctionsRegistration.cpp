@@ -20,57 +20,80 @@
 namespace facebook::velox::functions {
 namespace {
 template <template <class> class T>
-void registerBitwiseBinaryIntegral(const std::vector<std::string>& aliases) {
-  registerFunction<T, int64_t, int8_t, int8_t>(aliases);
-  registerFunction<T, int64_t, int16_t, int16_t>(aliases);
-  registerFunction<T, int64_t, int32_t, int32_t>(aliases);
-  registerFunction<T, int64_t, int64_t, int64_t>(aliases);
+void registerBitwiseBinaryIntegral(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner) {
+  registerFunction<T, int64_t, int8_t, int8_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int16_t, int16_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int32_t, int32_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int64_t, int64_t>(
+      aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T>
-void registerBitwiseUnaryIntegral(const std::vector<std::string>& aliases) {
-  registerFunction<T, int64_t, int8_t>(aliases);
-  registerFunction<T, int64_t, int16_t>(aliases);
-  registerFunction<T, int64_t, int32_t>(aliases);
-  registerFunction<T, int64_t, int64_t>(aliases);
+void registerBitwiseUnaryIntegral(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner) {
+  registerFunction<T, int64_t, int8_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int16_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int32_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int64_t>(aliases, {}, true, defaultOwner);
 }
 
 template <template <class> class T>
-void registerShift(const std::vector<std::string>& aliases) {
-  registerFunction<T, int8_t, int8_t, int32_t>(aliases);
-  registerFunction<T, int16_t, int16_t, int32_t>(aliases);
-  registerFunction<T, int32_t, int32_t, int32_t>(aliases);
-  registerFunction<T, int64_t, int64_t, int32_t>(aliases);
+void registerShift(
+    const std::vector<std::string>& aliases,
+    std::string_view defaultOwner) {
+  registerFunction<T, int8_t, int8_t, int32_t>(aliases, {}, true, defaultOwner);
+  registerFunction<T, int16_t, int16_t, int32_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, int32_t, int32_t, int32_t>(
+      aliases, {}, true, defaultOwner);
+  registerFunction<T, int64_t, int64_t, int32_t>(
+      aliases, {}, true, defaultOwner);
 }
 } // namespace
 
-void registerBitwiseFunctions(const std::string& prefix) {
-  registerBitwiseBinaryIntegral<BitwiseAndFunction>({prefix + "bitwise_and"});
-  registerBitwiseUnaryIntegral<BitwiseNotFunction>({prefix + "bitwise_not"});
-  registerBitwiseBinaryIntegral<BitwiseOrFunction>({prefix + "bitwise_or"});
-  registerBitwiseBinaryIntegral<BitwiseXorFunction>({prefix + "bitwise_xor"});
-  registerBitwiseBinaryIntegral<BitCountFunction>({prefix + "bit_count"});
+void registerBitwiseFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerBitwiseBinaryIntegral<BitwiseAndFunction>(
+      {prefix + "bitwise_and"}, defaultOwner);
+  registerBitwiseUnaryIntegral<BitwiseNotFunction>(
+      {prefix + "bitwise_not"}, defaultOwner);
+  registerBitwiseBinaryIntegral<BitwiseOrFunction>(
+      {prefix + "bitwise_or"}, defaultOwner);
+  registerBitwiseBinaryIntegral<BitwiseXorFunction>(
+      {prefix + "bitwise_xor"}, defaultOwner);
+  registerBitwiseBinaryIntegral<BitCountFunction>(
+      {prefix + "bit_count"}, defaultOwner);
   registerFunction<
       BitwiseArithmeticShiftRightFunction,
       int64_t,
       int64_t,
-      int64_t>({prefix + "bitwise_arithmetic_shift_right"});
-  registerShift<BitwiseLeftShiftFunction>({prefix + "bitwise_left_shift"});
-  registerShift<BitwiseRightShiftFunction>({prefix + "bitwise_right_shift"});
+      int64_t>(
+      {prefix + "bitwise_arithmetic_shift_right"}, {}, true, defaultOwner);
+  registerShift<BitwiseLeftShiftFunction>(
+      {prefix + "bitwise_left_shift"}, defaultOwner);
+  registerShift<BitwiseRightShiftFunction>(
+      {prefix + "bitwise_right_shift"}, defaultOwner);
   registerShift<BitwiseRightShiftArithmeticFunction>(
-      {prefix + "bitwise_right_shift_arithmetic"});
+      {prefix + "bitwise_right_shift_arithmetic"}, defaultOwner);
   registerFunction<
       BitwiseLogicalShiftRightFunction,
       int64_t,
       int64_t,
       int64_t,
-      int64_t>({prefix + "bitwise_logical_shift_right"});
+      int64_t>(
+      {prefix + "bitwise_logical_shift_right"}, {}, true, defaultOwner);
   registerFunction<
       BitwiseShiftLeftFunction,
       int64_t,
       int64_t,
       int64_t,
-      int64_t>({prefix + "bitwise_shift_left"});
+      int64_t>({prefix + "bitwise_shift_left"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

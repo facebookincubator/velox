@@ -234,8 +234,13 @@ bool registerStatefulVectorFunction(
     std::vector<FunctionSignaturePtr> signatures,
     VectorFunctionFactory factory,
     VectorFunctionMetadata metadata,
-    bool overwrite) {
+    bool overwrite,
+    std::string_view defaultOwner) {
   auto sanitizedName = sanitizeName(name);
+
+  if (metadata.owner.empty()) {
+    metadata.owner = defaultOwner;
+  }
 
   if (overwrite) {
     vectorFunctionFactories().withWLock([&](auto& functionMap) {
@@ -260,14 +265,15 @@ bool registerVectorFunction(
     std::vector<FunctionSignaturePtr> signatures,
     std::unique_ptr<VectorFunction> func,
     VectorFunctionMetadata metadata,
-    bool overwrite) {
+    bool overwrite,
+    std::string_view defaultOwner) {
   std::shared_ptr<VectorFunction> sharedFunc = std::move(func);
   auto factory = [sharedFunc](
                      const auto& /*name*/,
                      const auto& /*vectorArg*/,
                      const auto& /*config*/) { return sharedFunc; };
   return registerStatefulVectorFunction(
-      name, signatures, factory, metadata, overwrite);
+      name, signatures, factory, metadata, overwrite, defaultOwner);
 }
 
 } // namespace facebook::velox::exec

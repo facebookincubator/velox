@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <type_traits>
 
 #include "velox/common/base/BitUtil.h"
@@ -30,6 +31,11 @@ template <typename T>
 class FOREncodingView final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
+
+  FOREncodingView(const FOREncodingView&) = delete;
+  FOREncodingView& operator=(const FOREncodingView&) = delete;
+  FOREncodingView(FOREncodingView&&) = delete;
+  FOREncodingView& operator=(FOREncodingView&&) = delete;
 
   FOREncodingView(
       std::string_view data,
@@ -47,10 +53,6 @@ class FOREncodingView final : public TypedEncodingView<T> {
     const char* pos = data.data() + this->dataOffset_;
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
-    NIMBLE_CHECK_EQ(
-        compressionType,
-        CompressionType::Uncompressed,
-        "EncodingView does not support compressed FOR streams.");
     frameSize_ = varint::readVarint32(&pos);
     numFrames_ = varint::readVarint32(&pos);
     firstFrameRows_ = varint::readVarint32(&pos);
@@ -99,9 +101,30 @@ class FOREncodingView final : public TypedEncodingView<T> {
     pos += bitOffsetsSize;
 
     const auto packedDataSize = varint::readVarint32(&pos);
-    packedData_ = pos;
-    pos += packedDataSize;
-    NIMBLE_CHECK_EQ(pos, data.data() + data.size(), "Unexpected FOR view end.");
+    const auto payload = this->decompressPayload(
+        compressionType, DataType::Undefined, {pos, packedDataSize});
+#ifndef NDEBUG
+    // Validate every frame's bit range and compute the minimum payload size.
+    uint64_t requiredBits{0};
+    for (uint32_t frame{0}; frame < numFrames_; ++frame) {
+      const auto bitWidth = bitWidths_[frame];
+      NIMBLE_CHECK_LE(bitWidth, sizeof(physicalType) * 8);
+      const auto frameBits =
+          static_cast<uint64_t>(frameRowCount(frame)) * bitWidth;
+      NIMBLE_CHECK_LE(
+          bitOffsets_[frame],
+          std::numeric_limits<uint64_t>::max() - frameBits,
+          "FOR packed payload bit range overflows");
+      requiredBits = std::max(requiredBits, bitOffsets_[frame] + frameBits);
+    }
+    const auto requiredBytes =
+        requiredBits / 8 + static_cast<uint64_t>(requiredBits % 8 != 0);
+    NIMBLE_CHECK_GE(
+        payload.size(),
+        requiredBytes,
+        "FOR packed payload is shorter than required");
+#endif
+    packedData_ = payload.data();
   }
 
   ~FOREncodingView() override {
@@ -177,6 +200,8 @@ class FOREncodingView final : public TypedEncodingView<T> {
       return byteAlignedResidualAt(byteOffset, bitWidth);
     }
 
+    // Velox's loadBits may overread the exact-size serialized payload. Load
+    // only the bytes owned by this view, including the optional ninth byte.
     const auto bytesToRead = velox::bits::nbytes(bitOffsetInByte + bitWidth);
     uint64_t word{0};
     std::memcpy(

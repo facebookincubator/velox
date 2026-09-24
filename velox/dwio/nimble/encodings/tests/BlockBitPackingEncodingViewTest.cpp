@@ -20,9 +20,11 @@
 
 #include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "fmt/core.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 
 using namespace facebook;
@@ -40,6 +42,35 @@ TEST_F(EncodingViewTest, readsBlockBitPackingEncoding) {
   options.blockBitPackingBlockSize = 8;
   expectReads<nimble::BlockBitPackingEncoding<int32_t>>(
       values, {17, 0, 8, 9, 19, 3}, options);
+}
+
+TEST_F(BlockBitPackingEncodingViewTest, readsInternallyCompressedPayload) {
+  const auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/40);
+  const auto positions = randomizedPositions(/*seed=*/41);
+  nimble::Encoding::Options options;
+  options.blockBitPackingBlockSize = 64;
+  for (const auto compressionType :
+       {nimble::CompressionType::Zstd, nimble::CompressionType::MetaInternal}) {
+    SCOPED_TRACE(nimble::toString(compressionType));
+    expectReads<nimble::BlockBitPackingEncoding<uint32_t>>(
+        values, positions, options, compressionType);
+  }
+}
+
+DEBUG_ONLY_TEST_F(
+    BlockBitPackingEncodingViewTest,
+    rejectsTruncatedPackedPayload) {
+  using Encoding = nimble::BlockBitPackingEncoding<uint32_t>;
+  const auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/42);
+  nimble::Encoding::Options options;
+  options.blockBitPackingBlockSize = 64;
+  const auto serialized = nimble::test::Encoder<Encoding>::encode(
+      *buffer_, values, nimble::CompressionType::Uncompressed, options);
+  const std::string truncated{serialized.substr(0, serialized.size() - 1)};
+
+  NIMBLE_ASSERT_THROW(
+      nimble::createEncodingView(truncated, pool_.get(), options),
+      "BlockBitPacking block payload exceeds packed payload");
 }
 
 TEST_F(BlockBitPackingEncodingViewTest, readsIndexedBlockRuns) {

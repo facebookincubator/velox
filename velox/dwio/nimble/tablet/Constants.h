@@ -15,9 +15,18 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 
 namespace facebook::nimble {
+
+/// Selects the on-disk representation for chunk statistics.
+enum class ChunkStatsVersion : uint8_t {
+  /// Stores statistics as raw FlatBuffer arrays.
+  kV1 = 1,
+  /// Stores statistics as Nimble-encoded arrays.
+  kV2 = 2,
+};
 
 constexpr uint16_t kMagicNumber = 0xA1FA;
 constexpr uint64_t kInitialFooterSize = 8 * 1024 * 1024; // 8MB
@@ -43,5 +52,15 @@ constexpr std::string_view kChunkStatsV2Section = "columnar.chunk.stats.v2";
 constexpr std::string_view kPropertiesSection = "columnar.properties";
 constexpr std::string_view kDictionarySection = "columnar.dictionaries";
 constexpr std::string_view kVectorIndexSection = "columnar.vector.index";
+/// Present only in a suspended file, i.e. one closed without being finalized
+/// so that a later writer can reopen it and append. Its presence is the signal
+/// that the file is not final; a finalized file never carries it.
+constexpr std::string_view kCheckpointSection = "columnar.checkpoint";
+
+/// Version written into, and accepted from, the checkpoint section. Versions
+/// start at 1 so that a flatbuffers scalar left at its implicit default is
+/// recognizable as absent rather than read as version 0.
+constexpr uint32_t kCheckpointVersionMin = 1;
+constexpr uint32_t kCheckpointVersion = 1;
 
 } // namespace facebook::nimble

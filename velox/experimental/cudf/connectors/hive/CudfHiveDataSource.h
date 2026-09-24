@@ -34,6 +34,7 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -42,6 +43,10 @@ using namespace facebook::velox::connector;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
+  /// DWIO bytes read, preserved separately from ReadFile bytes.
+  static constexpr std::string_view kDwioStorageReadBytes{
+      "dwio.storageReadBytes"};
+
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -52,6 +57,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  void setFromDataSource(std::unique_ptr<DataSource> source) override;
 
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
@@ -105,8 +112,6 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
 
   // The row type for the data source output, not including filter-only columns.
   const RowTypePtr outputType_;
-
-  bool useExperimentalCudfReader_;
 
   // Cached combined AST filter expression compiled from 'subfieldFilters_',
   // owned by 'subfieldTree_'.

@@ -18,7 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
+#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderByteFetch.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
 #include "velox/common/io/IoStatistics.h"
@@ -30,7 +30,7 @@
 #include "velox/type/Type.h"
 
 #include <cudf/io/datasource.hpp>
-#include <cudf/io/experimental/hybrid_scan.hpp>
+#include <cudf/io/experimental/hybrid_scan_multifile.hpp>
 #include <cudf/io/parquet.hpp>
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
@@ -43,12 +43,9 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 using namespace facebook::velox::connector;
 
-using CudfParquetReader = cudf::io::chunked_parquet_reader;
+using CudfParquetReader =
+    cudf::io::parquet::experimental::hybrid_scan_multifile;
 using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
-
-using CudfHybridScanReader =
-    cudf::io::parquet::experimental::hybrid_scan_reader;
-using CudfHybridScanReaderPtr = std::unique_ptr<CudfHybridScanReader>;
 
 /// Normalizes decimal columns, recursively, to their logical Velox types.
 /// columnTypes must describe every column after numPrependedColumns, which
@@ -74,10 +71,9 @@ class CudfSplitReader : public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      bool useExperimentalCudfReader,
       const cudf::ast::expression* subfieldFilterAst);
 
-  virtual ~CudfSplitReader() = default;
+  virtual ~CudfSplitReader();
 
   using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
       const cudf::io::parquet::FileMetaData&)>;
@@ -97,10 +93,23 @@ class CudfSplitReader : public NvtxHelper {
   /// Read the next raw cudf table chunk. Returns nullopt when done.
   virtual std::optional<std::unique_ptr<cudf::table>> next(uint64_t size);
 
+  /// Rebinds the query context of a reader prepared in the background to the
+  /// context owned by the driver that reads it. Must be called before reading
+  /// from a reader that outlives the context it was prepared with.
+  void setConnectorQueryCtx(const ConnectorQueryCtx* connectorQueryCtx);
+
+  /// Start the reads of the column chunks of the current pass without waiting
+  /// for them. Does nothing when they are already in flight or complete.
+  void startColumnChunkFetch();
+
   /// Get the stream.
   cuda::stream_ref stream() const {
     return stream_;
   }
+
+  /// Releases the reader, data source, parquet metadata and any pending
+  /// column chunk fetches.
+  virtual void resetSplit();
 
  protected:
   // Performs split-specific setup after base reader state is reset.
@@ -109,25 +118,25 @@ class CudfSplitReader : public NvtxHelper {
   // Returns whether the split is skipped.
   virtual bool isSplitSkipped() const;
 
-  // Setup the cuDF reader.
-  virtual void setupReader();
-
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
 
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
-  // Read the next table chunk from the parquet reader (regular or hybrid).
-  // Returns nullopt when no more data. All read decimals, including nested,
-  // filter-only and equality-delete key columns, have their logical Velox
-  // scale and storage width (DECIMAL64 for short decimals, DECIMAL128 for long
-  // decimals) before deferred filters or equality deletes consume the table.
-  // A prepended row-index column is not part of the logical read schema.
+  // Read the next table chunk from the parquet reader. Returns nullopt when no
+  // more data. All read decimals, including nested,filter-only and
+  // equality-delete key columns, have their logical Velox scale and storage
+  // width (DECIMAL64 for short decimals, DECIMAL128 for long decimals) before
+  // deferred filters or equality deletes consume the table. A prepended
+  // row-index column is not part of the logical read schema.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
 
   // Setup the cuDF data source
   void setupCudfDataSource();
+
+  // Create the parquet reader and select the row group passes to read.
+  void createCudfReader();
 
   // Read file metadatas.
   void fileMetaDatas();
@@ -162,17 +171,47 @@ class CudfSplitReader : public NvtxHelper {
   bool prependRowIndex_{false};
 
  private:
-  // Clear splitReaders and datasources after split has been fully processed.
-  void resetSplit();
+  // Stores row group indices for one Parquet source.
+  using RowGroupIndices = std::vector<cudf::size_type>;
+
+  // Stores row group indices by split.
+  using RowGroupIndicesBySplit = std::vector<RowGroupIndices>;
+
+  // Stores per-split row group indices by read pass.
+  using RowGroupPasses = std::vector<RowGroupIndicesBySplit>;
+
+  // Tracks how far the row group passes of the current split have been read.
+  struct RowGroupPassState {
+    // Row groups to read, indexed as passes[pass][split][rowGroup], in read
+    // order.
+    RowGroupPasses passes;
+
+    // The pass being materialized.
+    size_t currentPass{0};
+
+    // Whether the chunked read of the current pass has been set up.
+    bool isChunkingSetup{false};
+
+    // Owns the device data of the current pass.
+    ByteRangeFetch fetch;
+  };
 
   // Setup the cuDF reader options
   void setupReaderOptions();
 
-  // Create the chunked parquet reader.
-  void createCudfReader();
+  // Setup Parquet column and offset indexes for the cudf split reader.
+  void setupPageIndexes();
 
-  // Create the experimental hybrid scan reader.
-  void createExperimentalReader();
+  // Return the row groups to read, grouped into passes bounded by the pass
+  // read limit. Empty when the split has no row groups left after pruning.
+  RowGroupPasses selectRowGroupPasses() const;
+
+  // Wait for the column chunks of the current pass, fetching them first if
+  // that has not started yet, and set up its chunked read.
+  void setupChunkingForCurrentPass(rmm::device_async_resource_ref mr);
+
+  // Wait for any reads of the current pass, then release its column chunk data.
+  void releaseCurrentPassData();
 
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   memory::MemoryPool* pool_;
@@ -181,9 +220,15 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<cudf::io::datasource> dataSource_;
   cudf::io::parquet_reader_options readerOptions_;
   CudfParquetReaderPtr splitReader_;
-  CudfHybridScanReaderPtr exptSplitReader_;
-  std::unique_ptr<HybridScanState> hybridScanState_;
-  bool useExperimentalCudfReader_;
+
+  // Row group passes and byte fetch states.
+  std::unique_ptr<RowGroupPassState> passState_;
+  bool serializeIoRequests_{false};
+
+  // Chunk and pass read limits resolved from the session when the reader is
+  // created.
+  std::size_t chunkReadLimit_{0};
+  std::size_t passReadLimit_{0};
 
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;

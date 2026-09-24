@@ -59,6 +59,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       return 10;
     case Kind::Row:
     case Kind::FlatMap:
+    case Kind::HybridFlatMap:
       return 1;
     case Kind::Array:
     case Kind::ArrayWithOffsets:
@@ -67,6 +68,22 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       return 4;
   }
   NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
+}
+
+// Get the ScalarKind for a type based on its storage format. Types the legacy
+// headerless format never wrote map to Undefined, which StreamData rejects for
+// raw streams.
+inline ScalarKind getScalarKindForType(const Type& type) {
+  if (type.isScalar()) {
+    return type.asScalar().scalarDescriptor().scalarKind();
+  } else if (type.isRow() || type.isFlatMap()) {
+    // Row/FlatMap nulls streams are boolean.
+    return ScalarKind::Bool;
+  } else if (type.isArray() || type.isMap()) {
+    // Array/Map lengths streams are uint32_t.
+    return ScalarKind::UInt32;
+  }
+  return ScalarKind::Undefined;
 }
 
 // Empty scattered reads still need to mark every output row as absent.
@@ -102,6 +119,7 @@ BatchedStreamDecoder::BatchedStreamDecoder(
     : type_{type},
       pool_{pool},
       isInMapStream_{isInMapStream},
+      scalarKind_{getScalarKindForType(*type)},
       typeStorageWidth_{getTypeStorageWidth(*type)},
       bufferPool_{
           bufferPoolCapacity > 0
@@ -115,8 +133,8 @@ BatchedStreamDecoder::BatchedStreamDecoder(
 uint32_t BatchedStreamDecoder::next(
     uint32_t count,
     void* output,
-    std::vector<velox::BufferPtr>& stringBuffers,
     std::function<void*()> getOutputNulls,
+    std::vector<velox::BufferPtr>& stringBuffers,
     const velox::bits::Bitmap* scatterOutputBitmap) {
   NIMBLE_CHECK(
       scatterOutputBitmap == nullptr || !isInMapStream(),
@@ -140,18 +158,38 @@ uint32_t BatchedStreamDecoder::next(
   return nonNullCount;
 }
 
+uint32_t BatchedStreamDecoder::read(
+    std::span<const uint32_t> /*rows*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "BatchedStreamDecoder does not support selective row decoding");
+}
+
+uint32_t BatchedStreamDecoder::read(
+    std::span<const RowRange> /*ranges*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "BatchedStreamDecoder does not support range row decoding");
+}
+
 void BatchedStreamDecoder::skip(uint32_t count) {
   if (count == 0) {
     return;
   }
 
   // For non-in-map streams, an empty `streamSegments_` is only valid
-  // for Row/FlatMap null streams that the writer omitted (all-non-null).
+  // for complex-type null streams that the writer omitted (all-non-null).
   // Nothing decoded → nothing to advance; just bump the cursor.
   if (FOLLY_UNLIKELY(!isInMapStream() && streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap(),
-        "Empty streamSegments_ only valid for Row/FlatMap null streams");
+        type_->isRow() || type_->isFlatMap() || type_->isHybridFlatMap(),
+        "Empty streamSegments_ only valid for complex-type null streams");
     currentRow_ += count;
     return;
   }
@@ -207,12 +245,15 @@ serde::StreamData& BatchedStreamDecoder::ensureStreamData(
   const auto& segment = streamSegments_[streamSegmentIndex_];
   streamData_.emplace(
       segment.data,
+      scalarKind_,
       stringBuffers,
       pool_,
       serde::StreamData::Options{
+          .legacyHeaderless = segment.legacyHeaderless,
           .streamEncodingUsesVarintRowCount =
               segment.streamEncodingUsesVarintRowCount,
-          .bufferPool = bufferPool_.get()});
+          .bufferPool = bufferPool_.get(),
+          .decompressionBuffer = &decompressionBuffer_});
   return *streamData_;
 }
 
@@ -268,6 +309,21 @@ uint32_t BatchedStreamDecoder::fillInMapGap(
   return numGapRows;
 }
 
+serde::StreamData::DecodeResult
+BatchedStreamDecoder::readLegacyHeaderlessSegment(
+    serde::StreamData& streamData,
+    void* output,
+    uint32_t offset,
+    uint32_t count) {
+  const auto width = typeStorageWidth_;
+  if (width > 0) {
+    return streamData.decodeLegacyHeaderless(output, offset, count, width);
+  }
+
+  auto* dest = static_cast<std::string_view*>(output) + offset;
+  return streamData.decodeStrings(count, dest);
+}
+
 serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
     void* output,
     uint32_t offset,
@@ -281,6 +337,13 @@ serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
 
   NIMBLE_CHECK_LT(streamSegmentIndex_, streamSegments_.size());
   auto& streamData = ensureStreamData(stringBuffers);
+  if (!streamData.hasEncoding()) {
+    NIMBLE_CHECK_NULL(
+        scatterOutputBitmap,
+        "scatterOutputBitmap is only used for encoded streams");
+    return readLegacyHeaderlessSegment(streamData, output, offset, count);
+  }
+
   const auto width = typeStorageWidth_;
   return streamData.decode(
       output, offset, count, width, getOutputNulls, scatterOutputBitmap);
@@ -361,12 +424,12 @@ uint32_t BatchedStreamDecoder::denseRead(
   const auto width = typeStorageWidth_;
   if (FOLLY_UNLIKELY(streamSegments_.empty())) {
     NIMBLE_CHECK(
-        type_->isRow() || type_->isFlatMap(),
+        type_->isRow() || type_->isFlatMap() || type_->isHybridFlatMap(),
         "streamSegments_ is empty for unexpected stream type={}",
         type_->kind());
     NIMBLE_CHECK_EQ(
-        width, sizeof(bool), "Row/FlatMap null stream should be bool");
-    // All-non-null Row/FlatMap null streams are omitted on the wire and
+        width, sizeof(bool), "Complex-type null stream should be bool");
+    // All-non-null complex-type null streams are omitted on the wire and
     // reconstructed as all-true here (no null rows).
     std::fill_n(static_cast<bool*>(output), count, true);
     return count;

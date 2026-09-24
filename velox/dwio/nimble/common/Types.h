@@ -226,6 +226,8 @@ std::string toString(CompressionType compressionType);
 CompressionType toCompressionType(std::string_view name);
 std::ostream& operator<<(std::ostream& out, CompressionType compressionType);
 
+/// Written to disk verbatim in the postscript, so an existing enumerator's
+/// number can never change.
 enum class ChecksumType : uint8_t { XXH3_64 = 0 };
 
 std::string toString(ChecksumType type);

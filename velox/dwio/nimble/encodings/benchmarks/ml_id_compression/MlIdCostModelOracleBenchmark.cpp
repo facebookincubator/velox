@@ -46,12 +46,12 @@
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitCostModels.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitMetrics.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitSampler.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitSelector.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/subintsplit/CostModel.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Sampler.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SectionMetrics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 
 DEFINE_bool(validate, false, "Sanity-check oracle encode calls do not throw");
 DEFINE_bool(dry_run, false, "Print sweep plan and exit");
@@ -59,7 +59,7 @@ DEFINE_bool(dry_run, false, "Print sweep plan and exit");
 namespace facebook::nimble::mlidc {
 namespace {
 
-using namespace facebook::nimble::detail::subintsplit;
+using namespace facebook::nimble::subintsplit;
 
 struct CandidateEncoding {
   std::string name;
@@ -209,11 +209,11 @@ OracleDpResult oracleDp(
       break;
     }
     const auto& cell = grid[start][idx - 1];
-    result.segments.push_back(
+    result.sections.push_back(
         {start, idx - 1, cell.bestEncoding, cell.bestBytes});
     idx = start;
   }
-  std::reverse(result.segments.begin(), result.segments.end());
+  std::reverse(result.sections.begin(), result.sections.end());
   return result;
 }
 
@@ -353,7 +353,7 @@ int runBenchmark() {
         }
 
         // Cost model metrics + per-encoding estimates.
-        const SegmentMetrics metrics =
+        const SectionMetrics metrics =
             collector.compute(sectionU64, requiredFlags);
         EncodingType modelBestEnc = EncodingType::Trivial;
         const double modelBestBits =
@@ -472,7 +472,7 @@ int runBenchmark() {
           csv.set("sample_size", static_cast<int64_t>(sampleSize));
           csv.set(
               "min_segment_width",
-              static_cast<int64_t>(selectorCfg.minSegmentWidth));
+              static_cast<int64_t>(selectorCfg.minSectionWidth));
           csv.set("l", static_cast<int64_t>(l));
           csv.set("r", static_cast<int64_t>(r));
           csv.set("width", static_cast<int64_t>(width));
@@ -546,7 +546,7 @@ int runBenchmark() {
     // AutoSIS pick) minus (oracle's best bytes for that same [l..r] range).
     size_t autoTotalSampleBytes = 0;
     size_t regretBytes = 0;
-    for (const auto& seg : autoResult.segments) {
+    for (const auto& seg : autoResult.sections) {
       const auto& cell = oracleGrid[seg.bitStart][seg.bitEnd];
       size_t autoBytesForPick = std::numeric_limits<size_t>::max();
       for (size_t ci = 0; ci < candidates.size(); ++ci) {
@@ -584,12 +584,12 @@ int runBenchmark() {
       csv.set("plan_type", "autosis");
       csv.set(
           "plan_segment_count",
-          static_cast<int64_t>(autoResult.segments.size()));
+          static_cast<int64_t>(autoResult.sections.size()));
       csv.set("skipped", int64_t{0});
       csv.endRow();
     }
 
-    for (const auto& seg : oracleResult.segments) {
+    for (const auto& seg : oracleResult.sections) {
       csv.beginRow();
       csv.set("driver", "bench_costmodel_oracle");
       csv.set("dtype", elemTypeName<Elem>());
@@ -610,7 +610,7 @@ int runBenchmark() {
       csv.set("plan_type", "oracle");
       csv.set(
           "plan_segment_count",
-          static_cast<int64_t>(oracleResult.segments.size()));
+          static_cast<int64_t>(oracleResult.sections.size()));
       csv.set("skipped", int64_t{0});
       csv.endRow();
     }
@@ -624,7 +624,7 @@ int runBenchmark() {
     csv.set("seed", static_cast<int64_t>(seed));
     csv.set("sample_size", static_cast<int64_t>(sampleSize));
     csv.set(
-        "min_segment_width", static_cast<int64_t>(selectorCfg.minSegmentWidth));
+        "min_segment_width", static_cast<int64_t>(selectorCfg.minSectionWidth));
     csv.set("plan_type", "summary");
     csv.set(
         "plan_total_sample_bytes", static_cast<int64_t>(autoTotalSampleBytes));
@@ -636,9 +636,9 @@ int runBenchmark() {
     csv.endRow();
     csv.flush();
 
-    std::cout << "  AutoSIS plan: " << autoResult.segments.size()
+    std::cout << "  AutoSIS plan: " << autoResult.sections.size()
               << " segments, sample_bytes=" << autoTotalSampleBytes << "\n";
-    std::cout << "  Oracle plan:  " << oracleResult.segments.size()
+    std::cout << "  Oracle plan:  " << oracleResult.sections.size()
               << " segments, sample_bytes=" << oracleResult.totalBytes
               << "  regret=" << regretBytes << "\n";
   }

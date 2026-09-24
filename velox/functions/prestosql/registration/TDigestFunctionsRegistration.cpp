@@ -20,37 +20,40 @@
 #include "velox/functions/prestosql/types/TDigestType.h"
 namespace facebook::velox::functions {
 
-void registerTDigestFunctions(const std::string& prefix) {
+void registerTDigestFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   facebook::velox::registerTDigestType();
   registerFunction<
       ValueAtQuantileFunction,
       double,
       SimpleTDigest<double>,
-      double>({prefix + "value_at_quantile"});
+      double>({prefix + "value_at_quantile"}, {}, true, defaultOwner);
   registerFunction<
       ValuesAtQuantilesFunction,
       Array<double>,
       SimpleTDigest<double>,
-      Array<double>>({prefix + "values_at_quantiles"});
+      Array<double>>({prefix + "values_at_quantiles"}, {}, true, defaultOwner);
   registerFunction<
       MergeTDigestFunction,
       SimpleTDigest<double>,
-      Array<SimpleTDigest<double>>>({prefix + "merge_tdigest"});
+      Array<SimpleTDigest<double>>>(
+      {prefix + "merge_tdigest"}, {}, true, defaultOwner);
   registerFunction<
       ScaleTDigestFunction,
       SimpleTDigest<double>,
       SimpleTDigest<double>,
-      double>({prefix + "scale_tdigest"});
+      double>({prefix + "scale_tdigest"}, {}, true, defaultOwner);
   registerFunction<
       QuantileAtValueFunction,
       double,
       SimpleTDigest<double>,
-      double>({prefix + "quantile_at_value"});
+      double>({prefix + "quantile_at_value"}, {}, true, defaultOwner);
   registerFunction<
       QuantilesAtValuesFunction,
       Array<double>,
       SimpleTDigest<double>,
-      Array<double>>({prefix + "quantiles_at_values"});
+      Array<double>>({prefix + "quantiles_at_values"}, {}, true, defaultOwner);
   registerFunction<
       ConstructTDigestFunction,
       SimpleTDigest<double>,
@@ -60,20 +63,20 @@ void registerTDigestFunctions(const std::string& prefix) {
       double,
       double,
       double,
-      int64_t>({prefix + "construct_tdigest"});
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_destructure_tdigest, prefix + "destructure_tdigest");
+      int64_t>({prefix + "construct_tdigest"}, {}, true, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_destructure_tdigest, prefix + "destructure_tdigest", defaultOwner);
   registerFunction<
       TrimmedMeanFunction,
       double,
       SimpleTDigest<double>,
       double,
-      double>({prefix + "trimmed_mean"});
+      double>({prefix + "trimmed_mean"}, {}, true, defaultOwner);
   registerFunction<
       WinsorizedMeanFunction,
       double,
       SimpleTDigest<double>,
       double,
-      double>({prefix + "winsorized_mean"});
+      double>({prefix + "winsorized_mean"}, {}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions
