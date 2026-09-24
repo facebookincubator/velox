@@ -47,6 +47,8 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -97,11 +99,18 @@ std::unique_ptr<cudf::column> rebuildWithTransformedChildren(
 std::unique_ptr<cudf::column> castDecimalColumns(
     std::unique_ptr<cudf::column> col,
     const TypePtr& veloxType,
+    bool preserveCompactDecimals,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // Decimal type (base case)
   if (veloxType->isDecimal()) {
-    auto const targetType = veloxToCudfDataType(veloxType);
+    auto targetType = veloxToCudfDataType(veloxType);
+    if (preserveCompactDecimals) {
+      const auto [precision, scale] = getDecimalPrecisionScale(*veloxType);
+      if (precision <= std::numeric_limits<int32_t>::digits10) {
+        targetType = cudf::data_type{cudf::type_id::DECIMAL32, -scale};
+      }
+    }
     if (col->type() != targetType) {
       return cudf::cast(col->view(), targetType, stream, mr);
     }
@@ -121,7 +130,11 @@ std::unique_ptr<cudf::column> castDecimalColumns(
     return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
       for (size_t i = 0; i < numChildren; ++i) {
         children[i] = castDecimalColumns(
-            std::move(children[i]), rowType.childAt(i), stream, mr);
+            std::move(children[i]),
+            rowType.childAt(i),
+            preserveCompactDecimals,
+            stream,
+            mr);
       }
     });
   }
@@ -137,7 +150,11 @@ std::unique_ptr<cudf::column> castDecimalColumns(
     return rebuildWithTransformedChildren(std::move(col), [&](auto& children) {
       auto const childIdx = cudf::lists_column_view::child_column_index;
       children[childIdx] = castDecimalColumns(
-          std::move(children[childIdx]), veloxType->childAt(0), stream, mr);
+          std::move(children[childIdx]),
+          veloxType->childAt(0),
+          preserveCompactDecimals,
+          stream,
+          mr);
     });
   }
 
@@ -150,6 +167,7 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
+    bool preserveCompactDecimals,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_EQ(
@@ -160,7 +178,11 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
   for (size_t i = 0; i < columnTypes.size(); ++i) {
     const auto columnIndex = numPrependedColumns + i;
     columns[columnIndex] = castDecimalColumns(
-        std::move(columns[columnIndex]), columnTypes[i], stream, mr);
+        std::move(columns[columnIndex]),
+        columnTypes[i],
+        preserveCompactDecimals,
+        stream,
+        mr);
   }
   return std::make_unique<cudf::table>(std::move(columns));
 }
@@ -193,9 +215,13 @@ CudfSplitReader::CudfSplitReader(
       ioStats_(ioStats),
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
+      preserveCompactDecimals_(
+          cudfHiveConfig_->preserveCompactDecimalsSession(
+              connectorQueryCtx_->sessionProperties())),
       baseReaderOpts_(pool_),
       subfieldFilterAst_(subfieldFilterAst),
-      pushdownFilterExpr_(subfieldFilterAst) {
+      pushdownFilterExpr_(subfieldFilterAst),
+      postReadFilterExpr_(subfieldFilterAst) {
   VELOX_CHECK_GE(
       readColumnNames_.size(),
       readColumnTypes_.size(),
@@ -340,6 +366,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
       std::move(tableWithMetadata.tbl),
       readColumnTypes_,
       prependRowIndex_ ? 1 : 0,
+      preserveCompactDecimals_,
       stream_,
       outputMr);
 }
@@ -407,6 +434,7 @@ void CudfSplitReader::resetSplit() {
   dataSource_.reset();
   fileMetaData_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
+  postReadFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
 }
 
@@ -416,6 +444,10 @@ cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
 
 const cudf::ast::expression* CudfSplitReader::subfieldFilterAst() const {
   return subfieldFilterAst_;
+}
+
+const cudf::ast::expression* CudfSplitReader::postReadFilter() const {
+  return postReadFilterExpr_;
 }
 
 bool CudfSplitReader::isSplitSkipped() const {
@@ -589,11 +621,27 @@ void CudfSplitReader::fileMetaDatas() {
         fileMetaData_.size(),
         1,
         "Split-specific pushdown filters require exactly one Parquet metadata");
-    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
+    pushdownFilterExpr_ = pushdownFilterBuilder_(
+        fileMetaData_.front(),
+        pushdownFilterTree_,
+        pushdownFilterScalars_);
     VELOX_CHECK_NOT_NULL(
         pushdownFilterExpr_,
         "Split-specific pushdown filter builder must return an expression");
     hasSplitSpecificPushdownFilter_ = true;
+  }
+  if (postReadFilterBuilder_) {
+    VELOX_CHECK_EQ(
+        fileMetaData_.size(),
+        1,
+        "Split-specific post-read filters require exactly one Parquet metadata");
+    postReadFilterExpr_ = postReadFilterBuilder_(
+        fileMetaData_.front(),
+        postReadFilterTree_,
+        postReadFilterScalars_);
+    VELOX_CHECK_NOT_NULL(
+        postReadFilterExpr_,
+        "Split-specific post-read filter builder must return an expression");
   }
 }
 

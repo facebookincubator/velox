@@ -270,9 +270,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // nothing can be pushed.
   std::optional<TransformedFilter> transformedPushdownFilter_;
 
-  // Transform of the logical filter, held only when a `PushdownFilterBuilder`
-  // has transformed it differently from the pushed filter.
-  std::optional<TransformedFilter> transformedLogicalFilter_;
+  // Transform of the post-read filter, held only when compact preservation
+  // makes it differ from the pushed filter.
+  std::optional<TransformedFilter> transformedPostReadFilter_;
 
   // Top-level column names and total row count from the file metadata
   std::unordered_set<std::string> fileColumnNames_;

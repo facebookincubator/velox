@@ -48,12 +48,16 @@ using CudfParquetReader =
 using CudfParquetReaderPtr = std::unique_ptr<CudfParquetReader>;
 
 /// Normalizes decimal columns, recursively, to their logical Velox types.
-/// columnTypes must describe every column after numPrependedColumns, which
-/// are left unchanged. Casts and buffer releases use the supplied stream.
+/// If preserveCompactDecimals is true, logical precisions up to 9 use
+/// DECIMAL32; other decimals use Velox's native logical width. columnTypes
+/// must describe every column after
+/// numPrependedColumns, which are left unchanged. Casts and buffer releases
+/// use the supplied stream.
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     std::unique_ptr<cudf::table>&& table,
     std::span<const TypePtr> columnTypes,
     size_t numPrependedColumns,
+    bool preserveCompactDecimals,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
@@ -75,15 +79,23 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
-  using PushdownFilterBuilder = std::function<cudf::ast::expression const*(
-      const cudf::io::parquet::FileMetaData&)>;
+  using SplitFilterBuilder = std::function<cudf::ast::expression const*(
+      const cudf::io::parquet::FileMetaData&,
+      cudf::ast::tree&,
+      std::vector<std::unique_ptr<cudf::scalar>>&)>;
 
   /// Sets a builder for a split-specific pushdown filter. The builder is
   /// invoked after the Parquet footer is read and before reader options are
   /// configured. The returned expression must remain alive while the split is
   /// being read.
-  void setPushdownFilterBuilder(PushdownFilterBuilder builder) {
+  void setPushdownFilterBuilder(SplitFilterBuilder builder) {
     pushdownFilterBuilder_ = std::move(builder);
+  }
+
+  /// Sets a builder for a filter matching the physical decimal types after
+  /// reader normalization or compact preservation.
+  void setPostReadFilterBuilder(SplitFilterBuilder builder) {
+    postReadFilterBuilder_ = std::move(builder);
   }
 
   /// Prepare the split: open cudf reader, set up data source and options.
@@ -121,15 +133,21 @@ class CudfSplitReader : public NvtxHelper {
   // Return the split-specific filter to push down to the cuDF reader.
   virtual cudf::ast::expression const* pushdownFilter() const;
 
+  // Return the filter matching post-read physical decimal types.
+  const cudf::ast::expression* postReadFilter() const;
+
+  bool preserveCompactDecimals() const {
+    return preserveCompactDecimals_;
+  }
+
   // Determine the output memory resource for the cuDF reader.
   virtual rmm::device_async_resource_ref determineCudfMemoryResource() const;
 
   // Read the next table chunk from the parquet reader. Returns nullopt when no
-  // more data. All read decimals, including nested,filter-only and
-  // equality-delete key columns, have their logical Velox scale and storage
-  // width (DECIMAL64 for short decimals, DECIMAL128 for long decimals) before
-  // deferred filters or equality deletes consume the table. A prepended
-  // row-index column is not part of the logical read schema.
+  // more data. By default, all decimals have their logical Velox scale and
+  // storage width before downstream processing. When compact preservation is
+  // enabled, logical precisions up to 9 use DECIMAL32. A prepended row-index
+  // column is not part of the logical schema.
   virtual std::optional<std::unique_ptr<cudf::table>> readNextChunk();
 
   // Setup the cuDF data source
@@ -229,11 +247,18 @@ class CudfSplitReader : public NvtxHelper {
   // created.
   std::size_t chunkReadLimit_{0};
   std::size_t passReadLimit_{0};
+  bool preserveCompactDecimals_;
 
   dwio::common::ReaderOptions baseReaderOpts_;
   const cudf::ast::expression* subfieldFilterAst_;
   cudf::ast::expression const* pushdownFilterExpr_;
-  PushdownFilterBuilder pushdownFilterBuilder_;
+  SplitFilterBuilder pushdownFilterBuilder_;
+  std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
+  cudf::ast::tree pushdownFilterTree_;
+  SplitFilterBuilder postReadFilterBuilder_;
+  std::vector<std::unique_ptr<cudf::scalar>> postReadFilterScalars_;
+  cudf::ast::tree postReadFilterTree_;
+  const cudf::ast::expression* postReadFilterExpr_;
   bool hasSplitSpecificPushdownFilter_{false};
 
   struct TotalScanTimeCallbackData {

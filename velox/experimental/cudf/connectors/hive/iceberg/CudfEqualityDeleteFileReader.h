@@ -100,7 +100,8 @@ class CudfEqualityDeleteFileReader {
       const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
       const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
       ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
-      const std::string& connectorId);
+      const std::string& connectorId,
+      bool preserveCompactDecimals);
 
   /// Applies equality deletes to the output CudfVector by clearing the
   /// row mask for rows whose equality column values match any delete key tuple.
@@ -149,6 +150,8 @@ class CudfEqualityDeleteFileReader {
 
   // Column names and types for equality delete comparison.
   std::vector<std::string> equalityColumnNames_;
+  std::vector<TypePtr> equalityColumnTypes_;
+  bool preserveCompactDecimals_;
 
   // Number of delete key tuples loaded from the file.
   size_t numDeleteKeys_{0};
