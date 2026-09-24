@@ -23,10 +23,65 @@
 #include <vector>
 
 #include <folly/ScopeGuard.h>
+#include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
+
+namespace detail {
+
+/// Serves indexed reads over a stream that has no EncodingView of its own by
+/// decoding it once into an owned array and serving each indexed read from
+/// that. Construction cost and memory are O(rowCount), so this is a fallback
+/// path, not the common one.
+///
+/// Not SubIntSplit-specific; SharedDictionaryAlphabet hand-rolls the same
+/// fallback and could reuse this if moved to views/.
+template <typename T>
+class MaterializedEncodingView final : public TypedEncodingView<T> {
+ public:
+  using physicalType = typename TypedEncodingView<T>::physicalType;
+
+  MaterializedEncodingView(
+      std::string_view data,
+      velox::memory::MemoryPool* pool,
+      const Encoding::Options& options)
+      : TypedEncodingView<T>{data, pool, options},
+        values_{this->template getVectorBuffer<physicalType>()} {
+    auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
+    auto encoding = EncodingFactory{options}.create(
+        *this->pool_, data, noStringBufferFactory);
+    NIMBLE_CHECK_NOT_NULL(encoding);
+    NIMBLE_CHECK_EQ(encoding->rowCount(), this->rowCount_);
+    values_.resize(this->rowCount_);
+    if (this->rowCount_ > 0) {
+      encoding->materialize(this->rowCount_, values_.data());
+    }
+  }
+
+  ~MaterializedEncodingView() override {
+    this->releaseVectorBuffer(values_);
+  }
+
+ private:
+  T readTypedAt(uint32_t index) const final {
+    NIMBLE_CHECK_LT(index, this->rowCount_);
+    return detail::castFromPhysicalType<T>(values_[index]);
+  }
+
+  void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
+      const final {
+    this->checkReadRange(offset, length);
+    std::copy_n(values_.data() + offset, length, output);
+  }
+
+  Vector<physicalType> values_;
+};
+
+} // namespace detail
 
 /// Provides random access to integers encoded as independent bit-range
 /// streams.
@@ -47,8 +102,13 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
 
     const char* position = data.data() + this->dataOffset_;
     const auto numSections = encoding::read<uint8_t>(position);
-    // Skip the reserved section-order byte.
-    encoding::read<uint8_t>(position);
+    // Every flag changes how the sections map back to values, and this view
+    // interprets none of them. createEncodingView sends delta streams to
+    // MaterializedEncodingView instead.
+    const auto flags = encoding::read<uint8_t>(position);
+    NIMBLE_CHECK_FILE(
+        flags == 0,
+        fmt::format("Unsupported SubIntSplit view header flags: {}", flags));
     NIMBLE_CHECK_GT(numSections, 0);
 
     struct SerializedSection {
