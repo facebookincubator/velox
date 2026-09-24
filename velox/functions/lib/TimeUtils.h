@@ -17,6 +17,7 @@
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <velox/type/Timestamp.h>
+#include <string_view>
 #include "velox/core/QueryConfig.h"
 #include "velox/expression/ComplexViewTypes.h"
 #include "velox/external/date/date.h"
@@ -33,6 +34,19 @@ inline constexpr int64_t kSecondsInHour = kSecondsInMinute * kMinutesInHour;
 inline constexpr int64_t kSecondsInDay = 86'400;
 inline constexpr int64_t kDaysInWeek = 7;
 extern const folly::F14FastMap<std::string, int8_t> kDayOfWeekNames;
+
+/// Returns the configured session time zone, or UTC when it is unset.
+FOLLY_ALWAYS_INLINE const tz::TimeZone* getSessionTimeZone(
+    std::string_view sessionTimeZoneName) {
+  return sessionTimeZoneName.empty() ? tz::locateZone(0)
+                                     : tz::locateZone(sessionTimeZoneName);
+}
+
+/// Returns the configured session time zone, or UTC when it is unset.
+FOLLY_ALWAYS_INLINE const tz::TimeZone* getSessionTimeZone(
+    const core::QueryConfig& config) {
+  return getSessionTimeZone(config.sessionTimezone());
+}
 
 FOLLY_ALWAYS_INLINE const tz::TimeZone* getTimeZoneFromConfig(
     const core::QueryConfig& config) {

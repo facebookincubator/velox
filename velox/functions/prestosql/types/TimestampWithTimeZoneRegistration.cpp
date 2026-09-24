@@ -18,6 +18,7 @@
 
 #include "velox/expression/CastExpr.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRenderZone.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/fuzzer_utils/TimestampWithTimeZoneInputGenerator.h"
 #include "velox/type/CastRegistry.h"
@@ -25,16 +26,6 @@
 
 namespace facebook::velox {
 namespace {
-const tz::TimeZone* getTimeZoneFromConfig(const core::QueryConfig& config) {
-  const auto sessionTzName = config.sessionTimezone();
-
-  if (!sessionTzName.empty()) {
-    return tz::locateZone(sessionTzName);
-  }
-
-  return tz::locateZone(0); // GMT
-}
-
 // Helper function to calculate midnight in UTC for the given session start
 // time in the session timezone. This can be called once and reused for all
 // rows in a batch.
@@ -71,7 +62,7 @@ void castFromTimestamp(
     const SelectivityVector& rows,
     int64_t* rawResults) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+  const auto* sessionTimeZone = functions::getSessionTimeZone(config);
 
   const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
 
@@ -93,7 +84,7 @@ void castFromDate(
     const SelectivityVector& rows,
     int64_t* rawResults) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+  const auto* sessionTimeZone = functions::getSessionTimeZone(config);
 
   static const int64_t kSecondsInDay = 86400;
 
@@ -133,7 +124,7 @@ void castFromString(
           return;
         }
         const auto& config = context.execCtx()->queryCtx()->queryConfig();
-        timeZone = getTimeZoneFromConfig(config);
+        timeZone = functions::getSessionTimeZone(config);
       }
       ts.toGMT(*timeZone);
       rawResults[row] = pack(ts.toMillis(), timeZone->id());
@@ -147,10 +138,7 @@ void castToString(
     const SelectivityVector& rows,
     BaseVector& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
-  // Resolving under legacy could throw on a session zone this path ignores.
-  const auto* sessionTimeZone =
-      legacyTimestampWithTimezone ? nullptr : getTimeZoneFromConfig(config);
+  const TimestampWithTimeZoneRenderZone renderZone(config);
 
   auto* flatResult = result.as<FlatVector<StringView>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
@@ -166,10 +154,7 @@ void castToString(
     const auto timestampWithTimezone = timestamps->valueAt(row);
 
     const auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    const auto* timezonePtr = legacyTimestampWithTimezone
-        ? tz::locateZone(
-              tz::getTimeZoneName(unpackZoneKeyId(timestampWithTimezone)))
-        : sessionTimeZone;
+    const auto* timezonePtr = renderZone.get(timestampWithTimezone);
 
     exec::StringWriter result(flatResult, row);
 
@@ -190,12 +175,10 @@ void castToTimestamp(
     BaseVector& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
   const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
-  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
-  // Only the non-legacy path with adjust off reads the session zone.
-  const auto* sessionTimeZone =
-      (legacyTimestampWithTimezone || adjustTimestampToTimezone)
-      ? nullptr
-      : getTimeZoneFromConfig(config);
+  std::optional<TimestampWithTimeZoneRenderZone> renderZone;
+  if (!adjustTimestampToTimezone) {
+    renderZone.emplace(config);
+  }
   auto* flatResult = result.as<FlatVector<Timestamp>>();
   const auto* timestamps = input.as<SimpleVector<int64_t>>();
 
@@ -205,10 +188,7 @@ void castToTimestamp(
     // Under adjustTimestampToTimezone the result is the bare UTC instant,
     // which already ignores the embedded zone.
     if (!adjustTimestampToTimezone) {
-      const auto* timeZone = legacyTimestampWithTimezone
-          ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
-          : sessionTimeZone;
-      ts.toTimezone(*timeZone);
+      ts.toTimezone(*renderZone->get(timestampWithTimezone));
     }
     flatResult->set(row, ts);
   });
@@ -220,9 +200,7 @@ void castToDate(
     const SelectivityVector& rows,
     BaseVector& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
-  const auto* sessionTimeZone =
-      legacyTimestampWithTimezone ? nullptr : getTimeZoneFromConfig(config);
+  const TimestampWithTimeZoneRenderZone renderZone(config);
 
   auto* flatResult = result.as<FlatVector<int32_t>>();
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
@@ -230,10 +208,7 @@ void castToDate(
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     auto timestampWithTimezone = timestampVector->valueAt(row);
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
-    const auto* timeZone = legacyTimestampWithTimezone
-        ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
-        : sessionTimeZone;
-    timestamp.toTimezone(*timeZone);
+    timestamp.toTimezone(*renderZone.get(timestampWithTimezone));
 
     const auto days = util::toDate(timestamp, nullptr);
     flatResult->set(row, days);
@@ -246,9 +221,7 @@ void castToTime(
     const SelectivityVector& rows,
     BaseVector& result) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto legacyTimestampWithTimezone = config.legacyTimestampWithTimezone();
-  const auto* sessionTimeZone =
-      legacyTimestampWithTimezone ? nullptr : getTimeZoneFromConfig(config);
+  const TimestampWithTimeZoneRenderZone renderZone(config);
 
   auto* flatResult = result.as<FlatVector<int64_t>>();
   const auto* timestampVector = input.as<SimpleVector<int64_t>>();
@@ -257,10 +230,7 @@ void castToTime(
     auto timestampWithTimezone = timestampVector->valueAt(row);
     auto timestamp = unpackTimestampUtc(timestampWithTimezone);
 
-    const auto* timeZone = legacyTimestampWithTimezone
-        ? tz::locateZone(unpackZoneKeyId(timestampWithTimezone))
-        : sessionTimeZone;
-    timestamp.toTimezone(*timeZone);
+    timestamp.toTimezone(*renderZone.get(timestampWithTimezone));
 
     // Extract time-of-day using std::chrono. floor() rounds towards
     // negative infinity, so this correctly handles negative timestamps.
@@ -290,7 +260,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     if (input.typeKind() == TypeKind::BIGINT &&
         input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
-      const auto* sessionTimeZone = getTimeZoneFromConfig(config);
+      const auto* sessionTimeZone = functions::getSessionTimeZone(config);
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
 
       // Calculate midnight in UTC once (shared by both constant and

@@ -111,94 +111,111 @@ FOLLY_ALWAYS_INLINE int64_t addMillisToTimestampWithTimezone(
       unpackZoneKeyId(timestampWithTimezone));
 }
 
-/// Adds `value` units to a packed TIMESTAMP WITH TIME ZONE, returning the
-/// result packed with the same time zone. Units below a day are fixed
-/// durations and shift the UTC instant, so the local wall clock can move an
-/// extra hour across a daylight saving boundary. A day and above are calendar
-/// units and are applied in local time, where their length varies.
-///
-/// `value` counts units. It is int32, so a caller holding a wider count must
-/// reject what does not fit; a day-to-second interval, whose millisecond count
-/// routinely exceeds int32, goes through `addMillisToTimestampWithTimezone`
-/// instead.
+/// Adds a calendar `value` to a packed TIMESTAMP WITH TIME ZONE in
+/// `renderZone` and preserves the embedded zone key.
 FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
     int64_t timestampWithTimezone,
     DateTimeUnit unit,
-    int32_t value) {
-  int64_t finalSysMs;
-  if (unit < DateTimeUnit::kDay) {
-    auto originalTimestamp = unpackTimestampUtc(timestampWithTimezone);
-    finalSysMs =
-        addToTimestamp(originalTimestamp, unit, (int32_t)value).toMillis();
-  } else {
-    // Use local time to handle crossing daylight savings time boundaries.
-    // E.g. the "day" when the clock moves back an hour is 25 hours long, and
-    // the day it moves forward is 23 hours long. Daylight savings time
-    // doesn't affect time units less than a day, and will produce incorrect
-    // results if we use local time.
-    const tz::TimeZone* timeZone =
-        tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
-    auto originalTimestamp =
-        Timestamp::fromMillis(timeZone
-                                  ->to_local(
-                                      std::chrono::milliseconds(unpackMillisUtc(
-                                          timestampWithTimezone)))
-                                  .count());
-    auto updatedTimeStamp =
-        addToTimestamp(originalTimestamp, unit, (int32_t)value);
-    updatedTimeStamp = Timestamp(
-        timeZone
-            ->correct_nonexistent_time(
-                std::chrono::seconds(updatedTimeStamp.getSeconds()))
-            .count(),
-        updatedTimeStamp.getNanos());
-    finalSysMs = timeZone
-                     ->to_sys(
-                         std::chrono::milliseconds(updatedTimeStamp.toMillis()),
-                         tz::TimeZone::TChoose::kEarliest)
-                     .count();
-  }
+    int32_t value,
+    const tz::TimeZone& renderZone);
 
-  return pack(finalSysMs, unpackZoneKeyId(timestampWithTimezone));
+/// Adds `value` units to a packed TIMESTAMP WITH TIME ZONE. Sub-day units shift
+/// the UTC instant; calendar units use the value's embedded zone.
+FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+    int64_t timestampWithTimezone,
+    const DateTimeUnit unit,
+    const int32_t value) {
+  if (unit < DateTimeUnit::kDay) {
+    const auto result =
+        addToTimestamp(unpackTimestampUtc(timestampWithTimezone), unit, value);
+    return pack(result.toMillis(), unpackZoneKeyId(timestampWithTimezone));
+  }
+  const auto* embeddedZone =
+      tz::locateZone(unpackZoneKeyId(timestampWithTimezone));
+  return addToTimestampWithTimezone(
+      timestampWithTimezone, unit, value, *embeddedZone);
+}
+
+FOLLY_ALWAYS_INLINE int64_t addToTimestampWithTimezone(
+    int64_t timestampWithTimezone,
+    const DateTimeUnit unit,
+    const int32_t value,
+    const tz::TimeZone& renderZone) {
+  VELOX_CHECK(
+      unit >= DateTimeUnit::kDay,
+      "Calendar timestamp arithmetic requires a day-or-larger unit");
+  auto originalTimestamp = Timestamp::fromMillis(
+      renderZone
+          .to_local(
+              std::chrono::milliseconds(unpackMillisUtc(timestampWithTimezone)))
+          .count());
+  auto updatedTimestamp = addToTimestamp(originalTimestamp, unit, value);
+  updatedTimestamp = Timestamp(
+      renderZone
+          .correct_nonexistent_time(
+              std::chrono::seconds(updatedTimestamp.getSeconds()))
+          .count(),
+      updatedTimestamp.getNanos());
+  const auto finalSystemMillis =
+      renderZone
+          .to_sys(
+              std::chrono::milliseconds(updatedTimestamp.toMillis()),
+              tz::TimeZone::TChoose::kEarliest)
+          .count();
+
+  return pack(finalSystemMillis, unpackZoneKeyId(timestampWithTimezone));
+}
+
+/// Returns the difference in a calendar `unit`, interpreting both values in
+/// `renderZone`.
+FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
+    DateTimeUnit unit,
+    int64_t fromTimestampWithTimeZone,
+    int64_t toTimestampWithTimeZone,
+    const tz::TimeZone& renderZone);
+
+/// Returns the difference between values with the same embedded zone.
+FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
+    DateTimeUnit unit,
+    int64_t fromTimestampWithTimeZone,
+    int64_t toTimestampWithTimeZone) {
+  const auto fromTimeZoneId = unpackZoneKeyId(fromTimestampWithTimeZone);
+  const auto toTimeZoneId = unpackZoneKeyId(toTimestampWithTimeZone);
+  VELOX_CHECK_EQ(
+      fromTimeZoneId,
+      toTimeZoneId,
+      "diffTimestampWithTimeZone must receive timestamps in the same time zone.");
+  if (unit < DateTimeUnit::kDay) {
+    return diffTimestamp(
+        unit,
+        unpackTimestampUtc(fromTimestampWithTimeZone),
+        unpackTimestampUtc(toTimestampWithTimeZone));
+  }
+  const auto* embeddedZone = tz::locateZone(fromTimeZoneId);
+  return diffTimestampWithTimeZone(
+      unit, fromTimestampWithTimeZone, toTimestampWithTimeZone, *embeddedZone);
 }
 
 FOLLY_ALWAYS_INLINE int64_t diffTimestampWithTimeZone(
     DateTimeUnit unit,
     int64_t fromTimestampWithTimeZone,
-    int64_t toTimestampWithTimeZone) {
-  auto fromTimeZoneId = unpackZoneKeyId(fromTimestampWithTimeZone);
-  auto toTimeZoneId = unpackZoneKeyId(toTimestampWithTimeZone);
-  VELOX_CHECK_EQ(
-      fromTimeZoneId,
-      toTimeZoneId,
-      "diffTimestampWithTimeZone must receive timestamps in the same time zone.");
-
-  Timestamp fromTimestamp;
-  Timestamp toTimestamp;
-
-  if (unit < DateTimeUnit::kDay) {
-    fromTimestamp = unpackTimestampUtc(fromTimestampWithTimeZone);
-    toTimestamp = unpackTimestampUtc(toTimestampWithTimeZone);
-  } else {
-    // Use local time to handle crossing daylight savings time boundaries.
-    // E.g. the "day" when the clock moves back an hour is 25 hours long, and
-    // the day it moves forward is 23 hours long. Daylight savings time
-    // doesn't affect time units less than a day, and will produce incorrect
-    // results if we use local time.
-    const tz::TimeZone* timeZone = tz::locateZone(fromTimeZoneId);
-    fromTimestamp =
-        Timestamp::fromMillis(timeZone
-                                  ->to_local(
-                                      std::chrono::milliseconds(unpackMillisUtc(
-                                          fromTimestampWithTimeZone)))
-                                  .count());
-    toTimestamp =
-        Timestamp::fromMillis(timeZone
-                                  ->to_local(
-                                      std::chrono::milliseconds(unpackMillisUtc(
-                                          toTimestampWithTimeZone)))
-                                  .count());
-  }
+    int64_t toTimestampWithTimeZone,
+    const tz::TimeZone& renderZone) {
+  VELOX_CHECK(
+      unit >= DateTimeUnit::kDay,
+      "Calendar timestamp difference requires a day-or-larger unit");
+  const auto fromTimestamp =
+      Timestamp::fromMillis(renderZone
+                                .to_local(
+                                    std::chrono::milliseconds(unpackMillisUtc(
+                                        fromTimestampWithTimeZone)))
+                                .count());
+  const auto toTimestamp =
+      Timestamp::fromMillis(renderZone
+                                .to_local(
+                                    std::chrono::milliseconds(unpackMillisUtc(
+                                        toTimestampWithTimeZone)))
+                                .count());
 
   return diffTimestamp(unit, fromTimestamp, toTimestamp);
 }
