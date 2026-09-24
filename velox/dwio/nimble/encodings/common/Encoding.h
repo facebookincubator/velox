@@ -32,6 +32,10 @@
 #include <type_traits>
 #include <vector>
 
+namespace folly {
+class Executor;
+} // namespace folly
+
 /// The Encoding class defines an interface for interacting with encodings
 /// (aka vectors, aka arrays) of encoded data. The API is tailored for
 /// typical usage patterns within query engines, and is designed to be
@@ -140,6 +144,13 @@ class Encoding {
     /// fewer dependent loads on the hot path.
     bool frequencyPartitionResolveTierValues = true;
 
+    /// Executor SubIntSplit encodes its sections on concurrently. Null, the
+    /// default, encodes them one after another on the calling thread. Only
+    /// encodes that search no transform spread their sections, since a
+    /// transform search compares each section's encodes against a bound the
+    /// others move.
+    folly::Executor* subIntSplitSectionExecutor = nullptr;
+
     /// Encodings SubIntSplit may cost a section against when choosing
     /// splits. Empty, the default, means every encoding. A restricted set
     /// only narrows what the selector considers; it does not change the
@@ -180,6 +191,60 @@ class Encoding {
     /// in nestedEncodingReadFactors, since the planner and section selection
     /// need to agree on what is available.
     bool subIntSplitAllowDeltaBlock{false};
+
+    /// How much a SubIntSplit section's decode cost counts against its
+    /// encoded size when the split planner chooses boundaries and encodings.
+    /// Zero, the default, is size-only selection. The unit is bytes of
+    /// encoded size per nanosecond per row of decode; a caller picks this as
+    /// an exchange rate, not a measurement. See subintsplit/DecodeCost.h for
+    /// where the per-encoding rates come from.
+    double subIntSplitDecodeWeight{0.0};
+
+    /// The read shape section decode is costed for when
+    /// subIntSplitDecodeWeight is non-zero: 0 bulk, 1 point, 2 gather, 3
+    /// range. Matches subintsplit::DecodeAccessPattern as a plain integer,
+    /// since this header cannot see that enum. Encodings do not rank the
+    /// same way on every access pattern, so weighting decode without naming
+    /// the pattern would optimise for whichever one the rates were fitted
+    /// on.
+    uint8_t subIntSplitDecodeAccessPattern{0};
+
+    /// The reader section decode is costed for when subIntSplitDecodeWeight
+    /// is non-zero. Matches subintsplit::DecodeReadPath: 0 the cursor
+    /// (SubIntSplitEncoding::materialize) and 1 the view
+    /// (SubIntSplitEncodingView), both with construction amortised; 2 and 3
+    /// the same readers paying each section's construction on every read.
+    /// Choose by how streams are actually read: pricing opens for a reader
+    /// that amortises them buys faster opens at the cost of slower reads.
+    uint8_t subIntSplitDecodeReadPath{0};
+
+    /// Whether these options are the ones a SubIntSplit section is being
+    /// encoded with, rather than a column's own options. Set only by
+    /// sectionEncodingOptions and read only by encoding selection, to decide
+    /// whether subIntSplitDecodeWeight applies; without it the weight would
+    /// reach either every stream in the file or none. Marks the whole
+    /// subtree below a section, so a nested stream (e.g. a FrequencyPartition
+    /// tag stream) is priced on decode too.
+    bool subIntSplitSectionSelection{false};
+
+    /// The most encoded size, as a fraction, that decode weighting may give
+    /// up against what size-only selection would have chosen for the same
+    /// column. subIntSplitDecodeWeight has no floor on its own -- raising it
+    /// far enough can make an uncompressed encoding score as a win -- so this
+    /// bound is enforced separately wherever a decode-weighted choice is
+    /// made: the split planner, the transform key search, and a section's
+    /// encoding selection. Inert at the default decode weight of zero.
+    double subIntSplitMaxSizeRegression{0.05};
+
+    /// Chooses split boundaries with the hybrid planner instead of trusting
+    /// the split DP's argmin. The DP's cost models often misprice a range
+    /// relative to a whole-column encode, so the hybrid planner uses the DP
+    /// only as a cheap shortlister, re-prices a small set of candidate plans
+    /// with the same estimators section selection uses, and then locally
+    /// refines the winner. Decode weighting and subIntSplitMaxSizeRegression
+    /// apply to the re-priced plans. Off by default; costs roughly twice the
+    /// planning time.
+    bool subIntSplitHybridPlanner{false};
 
     /// Rows a stream's costly candidates are first priced on, before
     /// selection decides whether to price them on the whole stream. Zero,

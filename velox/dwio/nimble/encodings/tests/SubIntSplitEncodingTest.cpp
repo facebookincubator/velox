@@ -495,6 +495,26 @@ TYPED_TEST(SubIntSplitEncodingTest, recomputeRoundTripAndReplay) {
   expectBitwiseEqual(values, fullRoundTrip);
 }
 
+TYPED_TEST(SubIntSplitEncodingTest, hybridPlannerRoundTrips) {
+  using T = TypeParam;
+  for (const double decodeWeight : {0.0, 0.02}) {
+    SCOPED_TRACE(decodeWeight);
+    nimble::Encoding::Options options;
+    options.subIntSplitHybridPlanner = true;
+    options.subIntSplitDecodeWeight = decodeWeight;
+    for (const auto& values :
+         {makeStructuredValuesWithLowCardinalityNoise<T>(),
+          makeStructuredValues<T>()}) {
+      const auto encoded = nimble::EncodingFactory::encode<T>(
+          std::make_unique<NonRecursiveSubIntSplitPolicy<T>>(),
+          values,
+          *this->buffer_,
+          options);
+      expectBitwiseEqual(values, decodeAll<T>(encoded, *this->pool_));
+    }
+  }
+}
+
 TYPED_TEST(SubIntSplitEncodingTest, preserveRoundTripExplicitBoundaries) {
   using T = TypeParam;
   const auto values = makeStructuredValues<T>();
@@ -523,6 +543,68 @@ TYPED_TEST(SubIntSplitEncodingTest, preserveRoundTripExplicitBoundaries) {
 
   const auto decoded = decodeAll<T>(encoded, *this->pool_);
   expectBitwiseEqual(values, decoded);
+}
+
+namespace {
+
+// Low 48 bits uniformly random, high 16 bits one of four values held for 2,000
+// rows at a time: one segment over all 64 bits stores every row at full width,
+// while a cut at bit 48 leaves the high bits to RLE.
+std::vector<uint64_t> makeRandomLowRunHighValues() {
+  std::mt19937_64 rng{0x5eed};
+  std::vector<uint64_t> values(20'000);
+  for (size_t i = 0; i < values.size(); ++i) {
+    values[i] =
+        ((uint64_t{i / 2'000} % 4) << 48) | (rng() & ((uint64_t{1} << 48) - 1));
+  }
+  return values;
+}
+
+} // namespace
+
+// Refinement must find a boundary the shortlist missed when a bit-flip cut
+// marks it and splitting there is clearly cheaper.
+TEST(SubIntSplitEncodingTests, hybridRefinementSplitsAtACheaperBitFlipCut) {
+  const auto values = makeRandomLowRunHighValues();
+  const std::vector<std::vector<nimble::subintsplit::SectionPlan>> shortlist{
+      {{.bitStart = 0, .bitEnd = 63}}};
+  std::vector<bool> cuts(65, false);
+  cuts[0] = true;
+  cuts[48] = true;
+  cuts[64] = true;
+
+  const auto refined =
+      nimble::subintsplit::SubIntSplitPlanRefiner::refine<uint64_t>(
+          values,
+          64,
+          shortlist,
+          cuts,
+          nimble::subintsplit::defaultSelectorConfig(),
+          nimble::Encoding::Options{});
+
+  ASSERT_EQ(refined.sections.size(), 2);
+  EXPECT_EQ(refined.sections[0].bitEnd, 47);
+  EXPECT_EQ(refined.sections[1].bitStart, 48);
+}
+
+// A shortlisted plan that does not tile the bit positions is not priced, so
+// the writer falls back to the DP rather than encoding bits twice or never.
+TEST(SubIntSplitEncodingTests, hybridRefinementRejectsPlansThatDoNotTile) {
+  const auto values = makeRandomLowRunHighValues();
+  const std::vector<std::vector<nimble::subintsplit::SectionPlan>> shortlist{
+      {{.bitStart = 0, .bitEnd = 31}},
+      {{.bitStart = 0, .bitEnd = 40}, {.bitStart = 32, .bitEnd = 63}}};
+
+  const auto refined =
+      nimble::subintsplit::SubIntSplitPlanRefiner::refine<uint64_t>(
+          values,
+          64,
+          shortlist,
+          {},
+          nimble::subintsplit::defaultSelectorConfig(),
+          nimble::Encoding::Options{});
+
+  EXPECT_TRUE(refined.sections.empty());
 }
 
 TEST(SubIntSplitEncodingTests, preserveModeRequiresBoundaries) {
@@ -689,6 +771,118 @@ TEST(SubIntSplitEncodingTests, trailingBytesAfterTheSectionsThrow) {
   std::string padded{encoded};
   padded.push_back('\0');
   EXPECT_THROW(decodeAll<uint64_t>(padded, *pool), nimble::NimbleException);
+}
+
+namespace {
+
+// Bytes of `values` stored as one whole-value SubIntSplit section whose
+// encoding section selection chooses, header included.
+template <typename T>
+size_t wholeValueSectionBytes(
+    const std::vector<T>& values,
+    nimble::Buffer& buffer) {
+  const std::vector<nimble::subintsplit::SectionPlan> wholeValue{
+      {.bitStart = 0, .bitEnd = static_cast<int>(sizeof(T) * 8) - 1}};
+  return nimble::EncodingFactory::encode<T>(
+             std::make_unique<ExtendedSubIntSplitPolicy<T>>(
+                 nimble::EncodingLayout::Config{
+                     nimble::subintsplit::makePreserveSplitConfig(wholeValue)}),
+             values,
+             buffer)
+      .size();
+}
+
+// Runs of whole values drawn from `drawValue`, each 1 to 16 rows long.
+std::vector<uint64_t> makeValueRuns(
+    uint32_t numRows,
+    std::mt19937_64& generator,
+    const std::function<uint64_t()>& drawValue) {
+  std::vector<uint64_t> values;
+  values.reserve(numRows);
+  while (values.size() < numRows) {
+    const uint64_t value = drawValue();
+    const uint32_t length = 1 + generator() % 16;
+    for (uint32_t i = 0; i < length && values.size() < numRows; ++i) {
+      values.push_back(value);
+    }
+  }
+  return values;
+}
+
+} // namespace
+
+// A UUIDv7's low half: two constant variant bits over 62 random ones. Nothing
+// stores it in fewer bits than packing the 62, and the stream must not store
+// it in more. It used to: the planner priced one FOR section at 59 bits per
+// value, section selection took Delta on an estimate its read factor carried
+// past FixedBitWidth, and Delta wrote more than the raw column.
+TEST(
+    SubIntSplitEncodingTests,
+    wholeValueFloorBoundsConstantTopBitsOverRandomBits) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  std::mt19937_64 generator{29};
+  std::vector<uint64_t> values(65'536);
+  for (auto& value : values) {
+    value = (uint64_t{0b10} << 62) | (generator() >> 2);
+  }
+
+  const auto encoded = encodeWithExtendedSubIntSplit<uint64_t>(values, buffer);
+  expectBitwiseEqual(values, decodeAll<uint64_t>(encoded, *pool));
+
+  const auto statistics =
+      nimble::Statistics<uint64_t>::create(std::span<const uint64_t>(values));
+  const size_t packedBytes =
+      nimble::Encoding::kPrefixSize +
+      nimble::subintsplit::specificHeaderSize(1) +
+      nimble::FixedBitWidthEncoding<uint64_t>::estimateSize(
+          values.size(),
+          statistics,
+          nimble::subintsplit::sectionEncodingOptions({}));
+  EXPECT_LE(encoded.size(), packedBytes);
+}
+
+// Millisecond timestamps with repeats: whole values in runs, each run a few
+// milliseconds after the last. The planner splits them into sections that each
+// pay for the run boundaries again, and one whole-value section stores them
+// smaller, so the stream must be no larger than that section.
+TEST(SubIntSplitEncodingTests, wholeValueFloorBoundsRunsOfWholeValues) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  std::mt19937_64 generator{31};
+  uint64_t millisecond = uint64_t{1} << 40;
+  const auto values =
+      makeValueRuns(131'072, generator, [&generator, &millisecond] {
+        millisecond += generator() % 50;
+        return millisecond;
+      });
+
+  // What the planner alone would store: its own boundaries, replayed, which the
+  // floor leaves alone.
+  auto plannerConfig = nimble::subintsplit::defaultSelectorConfig();
+  plannerConfig.allowHuffman = false;
+  plannerConfig.allowDeltaBlock = false;
+  std::vector<uint64_t> sample;
+  nimble::subintsplit::sampleIntoU64<uint64_t>(
+      std::span<const uint64_t>(values), sample);
+  const auto planned = nimble::subintsplit::selectSplitsRestricted(
+      sample, 64, values.size(), {}, plannerConfig);
+  ASSERT_GT(planned.sections.size(), 1u);
+  const size_t plannedBytes =
+      nimble::EncodingFactory::encode<uint64_t>(
+          std::make_unique<ExtendedSubIntSplitPolicy<uint64_t>>(
+              nimble::EncodingLayout::Config{
+                  nimble::subintsplit::makePreserveSplitConfig(
+                      planned.sections)}),
+          values,
+          buffer)
+          .size();
+  const size_t wholeValueBytes = wholeValueSectionBytes(values, buffer);
+  ASSERT_GT(plannedBytes, wholeValueBytes);
+
+  const auto encoded = encodeWithExtendedSubIntSplit<uint64_t>(values, buffer);
+  expectBitwiseEqual(values, decodeAll<uint64_t>(encoded, *pool));
+  EXPECT_LE(encoded.size(), wholeValueBytes);
 }
 
 TEST(SubIntSplitEncodingTests, fullWidthSingleSectionRoundTrip) {
