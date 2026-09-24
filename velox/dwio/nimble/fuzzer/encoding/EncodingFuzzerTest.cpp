@@ -443,6 +443,26 @@ TYPED_TEST(SubIntSplitFuzzerTest, correctness) {
   fuzzer.run();
 }
 
+TYPED_TEST(SubIntSplitFuzzerTest, compressionAndRowCountFormats) {
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(
+        ::testing::Message() << "useVarintRowCount=" << useVarintRowCount);
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    EncodingFuzzer<TypeParam> fuzzer(
+        /*iterations=*/1,
+        /*maxRows=*/128,
+        /*seed=*/0x51'51,
+        /*testCompression=*/true,
+        options,
+        /*minDistinctValues=*/1,
+        /*maxDistinctValues=*/std::numeric_limits<uint32_t>::max(),
+        /*largeInputRows=*/0,
+        /*realNestedSelection=*/true);
+    fuzzer.run();
+  }
+}
+
 namespace {
 
 template <typename T>
@@ -602,6 +622,8 @@ std::vector<Vector<T>> makeSubIntSplitDatasets(
   datasets.push_back(makeDominantValueData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeBitStructuredData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeSnowflakeData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(
+      makeAdversarialBitPatternData<T>(pool, rng, rowCount, buffer));
   datasets.push_back(makeMixedRegimeData<T>(pool, rng, rowCount, buffer));
   std::erase_if(datasets, [](const Vector<T>& d) { return d.empty(); });
   return datasets;

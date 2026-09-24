@@ -23,11 +23,14 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -163,6 +166,114 @@ TEST_F(SubIntSplitDeltaTest, splitMaterializeMatchesSingleCall) {
   decoder.materialize(1'000, output.data());
   decoder.materialize(9'000, output.data() + 1'000);
   EXPECT_EQ(output, values);
+}
+
+TEST_F(SubIntSplitDeltaTest, resetRestartsSequentialDecode) {
+  std::vector<uint64_t> values(1'024);
+  std::iota(values.begin(), values.end(), uint64_t{10'000});
+
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitDeltaPreTransform = true;
+  const std::span<const uint64_t> input{values.data(), values.size()};
+  ManualEncodingSelectionPolicyFactory factory;
+  EncodingSelection<uint64_t> selection{
+      EncodingSelectionResult{.encodingType = EncodingType::SubIntSplit},
+      Statistics<uint64_t>::create(input),
+      factory.createPolicy(DataType::Uint64)};
+  const std::string_view encoded =
+      SubIntSplitEncoding<uint64_t>::encode(selection, input, buffer, options);
+
+  SubIntSplitEncoding<uint64_t> decoder{*pool_, encoded, nullptr, options};
+  std::vector<uint64_t> first(257);
+  decoder.materialize(first.size(), first.data());
+  decoder.reset();
+  std::vector<uint64_t> second(first.size());
+  decoder.materialize(second.size(), second.data());
+
+  EXPECT_EQ(first, second);
+  EXPECT_EQ(first, std::vector<uint64_t>(values.begin(), values.begin() + 257));
+}
+
+TEST_F(SubIntSplitDeltaTest, skipAdvancesDeltaStream) {
+  std::vector<uint64_t> values(1'024);
+  std::iota(values.begin(), values.end(), uint64_t{10'000});
+
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitDeltaPreTransform = true;
+  const std::span<const uint64_t> input{values.data(), values.size()};
+  ManualEncodingSelectionPolicyFactory factory;
+  EncodingSelection<uint64_t> selection{
+      EncodingSelectionResult{.encodingType = EncodingType::SubIntSplit},
+      Statistics<uint64_t>::create(input),
+      factory.createPolicy(DataType::Uint64)};
+  const std::string_view encoded =
+      SubIntSplitEncoding<uint64_t>::encode(selection, input, buffer, options);
+
+  SubIntSplitEncoding<uint64_t> decoder{*pool_, encoded, nullptr, options};
+  decoder.skip(17);
+  uint64_t actual{0};
+  decoder.materialize(1, &actual);
+  EXPECT_EQ(actual, values[17]);
+
+  decoder.skip(500);
+  decoder.materialize(1, &actual);
+  EXPECT_EQ(actual, values[518]);
+}
+
+TEST_F(SubIntSplitDeltaTest, interleavedReadsCrossTinyChunkBoundaries) {
+  std::vector<uint64_t> values(5'000);
+  std::iota(values.begin(), values.end(), uint64_t{1'000'000});
+
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitDeltaPreTransform = true;
+  options.subIntSplitDecodeChunkSize = 7;
+  const std::span<const uint64_t> input{values.data(), values.size()};
+  ManualEncodingSelectionPolicyFactory factory;
+  EncodingSelection<uint64_t> selection{
+      EncodingSelectionResult{.encodingType = EncodingType::SubIntSplit},
+      Statistics<uint64_t>::create(input),
+      factory.createPolicy(DataType::Uint64)};
+  const std::string_view encoded =
+      SubIntSplitEncoding<uint64_t>::encode(selection, input, buffer, options);
+
+  const auto flags =
+      static_cast<uint8_t>(encoded[EncodingPrefix::kFixedPrefixSize + 1]);
+  ASSERT_NE(flags & subintsplit::kFlagDelta, 0);
+
+  SubIntSplitEncoding<uint64_t> decoder{*pool_, encoded, nullptr, options};
+  size_t cursor{0};
+  const auto materializeAndExpect = [&](uint32_t count) {
+    std::vector<uint64_t> actual(count);
+    decoder.materialize(count, actual.data());
+    EXPECT_EQ(
+        actual,
+        std::vector<uint64_t>(
+            values.begin() + cursor, values.begin() + cursor + count));
+    cursor += count;
+  };
+  const auto skip = [&](uint32_t count) {
+    decoder.skip(count);
+    cursor += count;
+  };
+
+  materializeAndExpect(5);
+  skip(2);
+  materializeAndExpect(1);
+  skip(248);
+  materializeAndExpect(3);
+  skip(3'836);
+  materializeAndExpect(5);
+  skip(17);
+  materializeAndExpect(19);
+
+  decoder.reset();
+  cursor = 0;
+  materializeAndExpect(13);
+  skip(4'080);
+  materializeAndExpect(20);
 }
 
 } // namespace
