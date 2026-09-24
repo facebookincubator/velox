@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <numeric>
+#include <random>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -31,6 +32,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/Statistics.h"
 #include "velox/dwio/nimble/encodings/subintsplit/Format.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -274,6 +276,83 @@ TEST_F(SubIntSplitDeltaTest, interleavedReadsCrossTinyChunkBoundaries) {
   materializeAndExpect(13);
   skip(4'080);
   materializeAndExpect(20);
+}
+
+// A delta stream can only be decoded from row zero, so createEncodingView must
+// not serve it positionally: reading the stored residuals as values returns
+// wrong results with no error. Every read shape must agree with materialize().
+TEST_F(SubIntSplitDeltaTest, encodingViewReadsDeltaStreams) {
+  // A random walk with small steps: the absolute bits are random, the deltas
+  // narrow, so the encoder keeps the delta form.
+  std::mt19937_64 generator{17};
+  std::vector<uint64_t> values(10'000);
+  uint64_t value = generator();
+  for (auto& v : values) {
+    value += generator() % 16;
+    v = value;
+  }
+
+  Buffer buffer{*pool_};
+  Encoding::Options options;
+  options.subIntSplitDeltaPreTransform = true;
+  const std::span<const uint64_t> input{values.data(), values.size()};
+  ManualEncodingSelectionPolicyFactory factory;
+  EncodingSelection<uint64_t> selection{
+      EncodingSelectionResult{.encodingType = EncodingType::SubIntSplit},
+      Statistics<uint64_t>::create(input),
+      factory.createPolicy(DataType::Uint64)};
+  const std::string_view encoded =
+      SubIntSplitEncoding<uint64_t>::encode(selection, input, buffer, options);
+  ASSERT_TRUE(
+      subintsplit::isDeltaStream(
+          encoded,
+          EncodingPrefix::prefixSize(encoded, options.useVarintRowCount)));
+
+  const auto view = createEncodingView(encoded, pool_.get(), options);
+  ASSERT_EQ(view->rowCount(), values.size());
+
+  std::vector<uint64_t> all(values.size());
+  view->read(0, static_cast<uint32_t>(values.size()), all.data());
+  EXPECT_EQ(all, values);
+
+  for (const uint32_t row : {0u, 1u, 4'999u, 9'999u}) {
+    uint64_t actual{0};
+    view->readAt(row, &actual);
+    EXPECT_EQ(actual, values[row]) << "row " << row;
+  }
+
+  const std::vector<RowRange> ranges{{10, 20}, {500, 501}, {9'990, 10'000}};
+  std::vector<uint64_t> ranged(21);
+  EXPECT_EQ(
+      view->read(
+          std::span<const RowRange>(ranges), [](uint32_t) {}, ranged.data()),
+      21);
+  std::vector<uint64_t> expected(values.begin() + 10, values.begin() + 20);
+  expected.push_back(values[500]);
+  expected.insert(expected.end(), values.begin() + 9'990, values.end());
+  EXPECT_EQ(ranged, expected);
+}
+
+// A flag the view does not interpret changes how the stored sections map to
+// values, so the view must reject it rather than read the stream as if it
+// were absent.
+TEST_F(SubIntSplitDeltaTest, encodingViewRejectsUnknownFlags) {
+  std::vector<uint64_t> values(1'000);
+  std::iota(values.begin(), values.end(), uint64_t{1'700'000'000'000});
+  Buffer buffer{*pool_};
+  const std::span<const uint64_t> input{values.data(), values.size()};
+  ManualEncodingSelectionPolicyFactory factory;
+  EncodingSelection<uint64_t> selection{
+      EncodingSelectionResult{.encodingType = EncodingType::SubIntSplit},
+      Statistics<uint64_t>::create(input),
+      factory.createPolicy(DataType::Uint64)};
+  std::string corrupted{SubIntSplitEncoding<uint64_t>::encode(
+      selection, input, buffer, Encoding::Options{})};
+  const uint32_t flagsOffset = EncodingPrefix::prefixSize(corrupted, false) + 1;
+  corrupted[flagsOffset] = static_cast<char>(0x80);
+  EXPECT_THROW(
+      createEncodingView(corrupted, pool_.get(), Encoding::Options{}),
+      NimbleException);
 }
 
 } // namespace
