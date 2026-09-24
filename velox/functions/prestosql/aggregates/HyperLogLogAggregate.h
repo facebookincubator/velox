@@ -53,14 +53,56 @@ class HyperLogLogAggregate : public exec::Aggregate {
   }
 
   bool supportsToIntermediate() const final {
-    return hllAsRawInput_;
+    return true;
   }
 
   void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       VectorPtr& result) const final {
-    singleInputAsIntermediate(rows, args, result);
+    if (hllAsRawInput_) {
+      singleInputAsIntermediate(rows, args, result);
+      return;
+    }
+
+    if (args.size() > 1) {
+      DecodedVector decodedMaxStandardError(*args[1], rows, true);
+      checkSetMaxStandardError(rows, decodedMaxStandardError);
+    }
+
+    DecodedVector decodedValue(*args[0], rows, true);
+    if constexpr (std::is_same_v<T, bool>) {
+      auto* flatResult = result->asFlatVector<int8_t>();
+      auto* rawNulls = flatResult->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, rows.size(), bits::kNull);
+      auto* rawValues = flatResult->mutableRawValues();
+
+      rows.applyToSelected([&](vector_size_t row) {
+        if (!decodedValue.isNullAt(row)) {
+          bits::clearNull(rawNulls, row);
+          rawValues[row] = 1 << decodedValue.valueAt<bool>(row);
+        }
+      });
+    } else {
+      auto* flatResult = result->asFlatVector<StringView>();
+      auto* rawNulls = flatResult->mutableRawNulls();
+      bits::fillBits(rawNulls, 0, rows.size(), bits::kNull);
+      auto* rawValues = flatResult->mutableRawValues();
+
+      rows.applyToSelected([&](vector_size_t row) {
+        if (!decodedValue.isNullAt(row)) {
+          bits::clearNull(rawNulls, row);
+          char serialized[common::hll::SparseHlls::kSingleHashSerializedSize];
+          common::hll::SparseHlls::serializeSingleHash(
+              velox::common::hll::detail::hashOne<T, HllAsFinalResult>(
+                  decodedValue.valueAt<T>(row)),
+              indexBitLength_,
+              serialized);
+          rawValues[row] = StringView::makeInline(
+              std::string_view(serialized, sizeof(serialized)));
+        }
+      });
+    }
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -306,23 +348,25 @@ class HyperLogLogAggregate : public exec::Aggregate {
     decodedValue_.decode(*args[0], rows, true);
     if (args.size() > 1) {
       decodedMaxStandardError_.decode(*args[1], rows, true);
-      checkSetMaxStandardError(rows);
+      checkSetMaxStandardError(rows, decodedMaxStandardError_);
     }
   }
 
-  void checkSetMaxStandardError(const SelectivityVector& rows) {
-    if (decodedMaxStandardError_.isConstantMapping()) {
-      const auto maxStandardError = decodedMaxStandardError_.valueAt<double>(0);
+  void checkSetMaxStandardError(
+      const SelectivityVector& rows,
+      const DecodedVector& decodedMaxStandardError) const {
+    if (decodedMaxStandardError.isConstantMapping()) {
+      const auto maxStandardError = decodedMaxStandardError.valueAt<double>(0);
       checkSetMaxStandardError(maxStandardError);
       return;
     }
 
     rows.applyToSelected([&](auto row) {
       VELOX_USER_CHECK(
-          !decodedMaxStandardError_.isNullAt(row),
+          !decodedMaxStandardError.isNullAt(row),
           "Max standard error cannot be null");
       const auto maxStandardError =
-          decodedMaxStandardError_.valueAt<double>(row);
+          decodedMaxStandardError.valueAt<double>(row);
       if (maxStandardError_ == -1) {
         checkSetMaxStandardError(maxStandardError);
       } else {
@@ -334,7 +378,7 @@ class HyperLogLogAggregate : public exec::Aggregate {
     });
   }
 
-  void checkSetMaxStandardError(double error) {
+  void checkSetMaxStandardError(double error) const {
     common::hll::checkMaxStandardError(error);
 
     if (maxStandardError_ < 0) {
@@ -356,8 +400,8 @@ class HyperLogLogAggregate : public exec::Aggregate {
   /// serialized HLLs.
   const bool hllAsRawInput_;
 
-  int8_t indexBitLength_;
-  double maxStandardError_{-1};
+  mutable int8_t indexBitLength_;
+  mutable double maxStandardError_{-1};
   DecodedVector decodedValue_;
   DecodedVector decodedMaxStandardError_;
   DecodedVector decodedHll_;
