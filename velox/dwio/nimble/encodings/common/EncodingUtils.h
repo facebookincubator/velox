@@ -214,6 +214,7 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
           "types, got {}.",
           encoding.dataType());
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
       if constexpr (isNumericType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
         return f(static_cast<SubIntSplitEncoding<T>&>(encoding));
       }

@@ -152,14 +152,20 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
     case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered:
       if constexpr (
           isNumericType<physicalType>() &&
           (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
-        // A delta stream requires every prior value to reconstruct a given
-        // index, so it cannot be read positionally and must be materialized.
-        if (subintsplit::isDeltaStream(
-                data,
-                EncodingPrefix::prefixSize(data, options.useVarintRowCount))) {
+        // Only a stream with no flag set is read positionally. A delta stream
+        // requires every prior value to reconstruct a given index, and a row
+        // frame or a section transform is undone by the encoding, so those
+        // streams are decoded once and served from the decoded values.
+        const uint32_t dataOffset =
+            EncodingPrefix::prefixSize(data, options.useVarintRowCount);
+        NIMBLE_CHECK_LE(
+            dataOffset + 2, data.size(), "SubIntSplit stream is truncated.");
+        if (encodingType == EncodingType::SubIntSplitReordered ||
+            static_cast<uint8_t>(data[dataOffset + 1]) != 0) {
           return std::make_unique<detail::MaterializedEncodingView<T>>(
               data, pool, options);
         }
@@ -219,7 +225,8 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::SimdForBitpack,
       EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
-      EncodingType::SubIntSplit};
+      EncodingType::SubIntSplit,
+      EncodingType::SubIntSplitReordered};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),

@@ -192,7 +192,10 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::BitRangeSplit: {
       RETURN_ENCODING_BY_WIDE_INTEGER_TYPE(BitRangeSplitEncoding, dataType);
     }
-    case EncodingType::SubIntSplit: {
+    // Both types are read by the same class; the header says whether the
+    // sections carry a transform.
+    case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered: {
       RETURN_ENCODING_BY_WIDE_NUMERIC_TYPE(SubIntSplitEncoding, dataType);
     }
     case EncodingType::Huffman: {

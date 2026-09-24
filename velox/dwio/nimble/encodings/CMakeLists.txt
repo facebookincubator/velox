@@ -25,6 +25,9 @@ add_subdirectory(legacy)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(selection/tests)
 endif()
+if(NIMBLE_BUILD_TESTING AND NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+  add_subdirectory(subintsplit/tests)
+endif()
 
 add_library(
   nimble_encodings
@@ -50,9 +53,12 @@ add_library(
   subintsplit/Format.h
   subintsplit/PlanRefiner.cpp
   subintsplit/PlanRefiner.h
+  subintsplit/RowFrame.h
   subintsplit/Sampler.h
   subintsplit/SectionAccumulator.h
   subintsplit/SectionMetrics.h
+  subintsplit/SectionTransform.h
+  subintsplit/SectionTransforms.cpp
   subintsplit/SplitBoundaries.cpp
   subintsplit/SplitBoundaries.h
   subintsplit/SplitSelector.cpp

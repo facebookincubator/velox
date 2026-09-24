@@ -51,6 +51,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::Slice, "Slice"},
         {EncodingType::EliasFano, "EliasFano"},
         {EncodingType::BitRangeSplit, "BitRangeSplit"},
+        {EncodingType::SubIntSplitReordered, "SubIntSplitReordered"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({

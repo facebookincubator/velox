@@ -144,6 +144,19 @@ class Encoding {
     /// fewer dependent loads on the hot path.
     bool frequencyPartitionResolveTierValues = true;
 
+    /// Reversible transform applied to SubIntSplit's sections, as a
+    /// subintsplit::TransformId. Zero, the default, applies none. The
+    /// section named by subIntSplitKeySection is always left untransformed,
+    /// since a key-derived permutation is rebuilt from it at read time.
+    uint8_t subIntSplitTransform = 0;
+
+    /// Lets the encoder choose per section whether to apply the key-derived
+    /// transform, pricing it against the untransformed encoding and keeping
+    /// the cheaper. Ignores subIntSplitTransform and is exclusive with
+    /// subIntSplitForceApply. Costs one trial encode per candidate per
+    /// section.
+    bool subIntSplitAutoTransform = false;
+
     /// Executor SubIntSplit encodes its sections on concurrently. Null, the
     /// default, encodes them one after another on the calling thread. Only
     /// encodes that search no transform spread their sections, since a
@@ -151,11 +164,23 @@ class Encoding {
     /// others move.
     folly::Executor* subIntSplitSectionExecutor = nullptr;
 
+    /// Section whose values order a key-derived permutation, and which is
+    /// therefore stored unpermuted. 0xFF, the default, means the encoder
+    /// tries every section and keeps the one that encodes smallest.
+    uint8_t subIntSplitKeySection = 0xFF;
+
     /// Encodings SubIntSplit may cost a section against when choosing
     /// splits. Empty, the default, means every encoding. A restricted set
     /// only narrows what the selector considers; it does not change the
     /// format.
     std::unordered_set<EncodingType> subIntSplitAllowedEncodings;
+
+    /// Test-only: skips the opt-in cost comparison that keeps a SubIntSplit
+    /// transform only where it encodes smaller, and applies
+    /// subIntSplitTransform to every eligible section regardless. Requires
+    /// subIntSplitTransform to name a real transform and subIntSplitKeySection
+    /// to be a valid section. Never set outside tests.
+    bool subIntSplitForceApply = false;
 
     /// Block size for BlockBitPacking encoding. Determines how many rows
     /// are packed per block. Written to the stream header; the reader
@@ -277,6 +302,13 @@ class Encoding {
     /// apart from the SubIntSplit streams nested in it. A SubIntSplit
     /// section never chooses SubIntSplit whatever this says.
     bool subIntSplitInNestedStreams{true};
+
+    /// Whether SubIntSplit may subtract a fitted slope * row + base (a line
+    /// frame) or a per-step baseline (a step frame) from every value before
+    /// planning its sections (see subintsplit/RowFrame.h). Either frame is
+    /// kept only where the planner prices the residuals below the plain
+    /// values; a read pays one multiply-add per row. On by default.
+    bool subIntSplitRowFrame{true};
 
     /// Whether the streams this selection writes are handed to a substream
     /// compressor once they are encoded. Set by the selection policy from

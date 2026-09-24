@@ -26,6 +26,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 
 namespace facebook::nimble {
@@ -222,38 +223,44 @@ EncodingLayout EncodingLayoutCapture::capture(
           encodingConfig);
       break;
     }
-    case EncodingType::SubIntSplit: {
-      const auto dataType = EncodingPrefix::dataType(encoding);
-      const auto physicalBits = detail::dataTypeSize(dataType) * 8;
-      const char* pos = encoding.data() + prefixSize;
-      const auto numSections = encoding::read<uint8_t>(pos);
-      // Skip the reserved section-order byte.
-      encoding::read<uint8_t>(pos);
+    case EncodingType::SubIntSplit:
+    case EncodingType::SubIntSplitReordered: {
+      // Capture each SubIntSplit section's nested encoding as a child, and
+      // preserve the recovered bit boundaries in the encoding config so the
+      // same split layout can be replayed (see
+      // ReplayedEncodingSelectionPolicy). Walked by the shared parser rather
+      // than a local header walk, to avoid a second reader disagreeing with it
+      // on section offsets.
+      subintsplit::RowFrame rowFrame;
+      const auto sections =
+          subintsplit::parseSections(encoding, prefixSize, nullptr, &rowFrame);
 
-      std::vector<subintsplit::SectionPlan> segments;
-      std::vector<uint32_t> encodedSizes;
-      segments.reserve(numSections);
-      encodedSizes.reserve(numSections);
-      uint32_t expectedBitStart{0};
-      for (uint8_t section{0}; section < numSections; ++section) {
-        const auto bitStart = encoding::read<uint8_t>(pos);
-        const auto bitEnd = encoding::read<uint8_t>(pos);
-        NIMBLE_CHECK_EQ(bitStart, expectedBitStart);
-        NIMBLE_CHECK_GE(bitEnd, bitStart);
-        NIMBLE_CHECK_LT(bitEnd, physicalBits);
-        segments.push_back({.bitStart = bitStart, .bitEnd = bitEnd});
-        encodedSizes.push_back(encoding::readUint32(pos));
-        expectedBitStart = bitEnd + 1;
+      children.reserve(sections.size());
+      std::vector<subintsplit::SectionPlan> boundaryPlans;
+      boundaryPlans.reserve(sections.size());
+      for (const auto& section : sections) {
+        children.emplace_back(
+            EncodingLayoutCapture::capture(section.stream, options));
+        subintsplit::SectionPlan segment{};
+        segment.bitStart = section.bitStart;
+        segment.bitEnd = section.bitEnd;
+        boundaryPlans.push_back(segment);
       }
-      NIMBLE_CHECK_EQ(expectedBitStart, physicalBits);
 
-      children.reserve(numSections);
-      for (const auto encodedSize : encodedSizes) {
-        captureChild(children, pos, encodedSize, options);
+      // The captured type is the one the stream carries: reporting it as
+      // plain SubIntSplit would describe a layout that decodes to different
+      // values than the stream it came from.
+      auto config = subintsplit::makePreserveSplitConfig(boundaryPlans);
+      if (rowFrame.active()) {
+        config.emplace(
+            std::string(subintsplit::kRowFrameConfigKey),
+            std::string(subintsplit::kRowFramePresent));
       }
-      encodingConfig = EncodingLayout::Config{
-          subintsplit::makePreserveSplitConfig(segments)};
-      break;
+      return {
+          encodingType,
+          EncodingLayout::Config{std::move(config)},
+          compressionType,
+          std::move(children)};
     }
     case EncodingType::ALP: {
       const char* pos = encoding.data() + prefixSize;

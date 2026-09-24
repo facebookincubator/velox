@@ -239,6 +239,10 @@ TEST_F(SubIntSplitSizeEstimateTest, constantHeavyEstimateIsLooseUpward) {
       makeConstantHeavyStream(kNumRows), 1.0, 4.0, "constant heavy");
 }
 
+TEST_F(SubIntSplitSizeEstimateTest, counterEstimateIsLooseUpward) {
+  expectRatioWithin(makeCounterStream(kNumRows), 1.0, 50.0, "counter");
+}
+
 TEST_F(SubIntSplitSizeEstimateTest, splitIsNotPricedUnderSubstreamCompression) {
   // A counter is a stream the estimate does price a split for, through the
   // row frame, and a substream compressor is what makes that pricing wrong:
