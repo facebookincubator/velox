@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <condition_variable>
+#include <future>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -65,6 +66,10 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/Writer.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/MemoryReclaimer.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/Task.h"
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -10530,6 +10535,241 @@ DEBUG_ONLY_TEST_F(WriterTest, parallelEncodingTaskCount) {
 
     EXPECT_EQ(
         taskCount.load(std::memory_order_relaxed), testCase.expectedTaskCount);
+  }
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, parallelEncodingPreservesNullDriverContext) {
+  velox::common::testutil::TestValue::enable();
+
+  auto type = velox::ROW({
+      {"a", velox::BIGINT()},
+      {"b", velox::BIGINT()},
+      {"c", velox::BIGINT()},
+      {"d", velox::BIGINT()},
+      {"e", velox::BIGINT()},
+      {"f", velox::BIGINT()},
+      {"g", velox::BIGINT()},
+      {"h", velox::BIGINT()},
+  });
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 100, .nullRatio = 0}, leafPool_.get());
+  auto input = fuzzer.fuzzInputRow(type);
+  folly::CPUThreadPoolExecutor encodingExecutor{4};
+
+  for (const bool enableChunking : {false, true}) {
+    SCOPED_TRACE(fmt::format("enableChunking={}", enableChunking));
+
+    std::atomic<uint32_t> numTasks{0};
+    std::atomic<uint32_t> numTasksWithDriverContext{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::Writer::parallelEncodeTask",
+        std::function<void(const uint32_t*)>([&](const uint32_t*) {
+          numTasks.fetch_add(1, std::memory_order_relaxed);
+          if (velox::exec::driverThreadContext() != nullptr) {
+            numTasksWithDriverContext.fetch_add(1, std::memory_order_relaxed);
+          }
+        }));
+
+    nimble::WriterOptions writerOptions;
+    writerOptions.enableChunking = enableChunking;
+    writerOptions.encodingExecutor = folly::getKeepAliveToken(encodingExecutor);
+    writerOptions.maxEncodeParallelism = 4;
+    writerOptions.minStreamsPerEncodingTask = 1;
+
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        writerOptions);
+    writer.write(input);
+    writer.close();
+
+    EXPECT_GT(numTasks.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(numTasksWithDriverContext.load(std::memory_order_relaxed), 0);
+  }
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, parallelEncodingPropagatesDriverContext) {
+  velox::common::testutil::TestValue::enable();
+
+  auto type = velox::ROW({
+      {"a", velox::BIGINT()},
+      {"b", velox::BIGINT()},
+      {"c", velox::BIGINT()},
+      {"d", velox::BIGINT()},
+      {"e", velox::BIGINT()},
+      {"f", velox::BIGINT()},
+      {"g", velox::BIGINT()},
+      {"h", velox::BIGINT()},
+  });
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 100, .nullRatio = 0}, leafPool_.get());
+  auto input = fuzzer.fuzzInputRow(type);
+
+  auto driverExecutor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+  velox::core::PlanFragment planFragment;
+  planFragment.planNode = std::make_shared<velox::core::ValuesNode>(
+      velox::core::PlanNodeId{"0"}, std::vector<velox::RowVectorPtr>{input});
+  auto task = velox::exec::Task::create(
+      "WriterTest.parallelEncodingPropagatesDriverContext",
+      std::move(planFragment),
+      0,
+      velox::core::QueryCtx::create(driverExecutor.get()),
+      velox::exec::Task::ExecutionMode::kParallel);
+  auto driver = velox::exec::Driver::testingCreate(
+      std::make_unique<velox::exec::DriverCtx>(task, 0, 0, 0, 0));
+  const auto* expectedDriverContext = driver->driverCtx();
+  task->testingIncrementThreads();
+  driver->state().setThread();
+
+  // A single executor thread also verifies that queued encoding tasks drain
+  // without depending on concurrent execution.
+  folly::CPUThreadPoolExecutor encodingExecutor{1};
+  for (const bool enableChunking : {false, true}) {
+    SCOPED_TRACE(fmt::format("enableChunking={}", enableChunking));
+
+    auto reclaimer = velox::exec::MemoryReclaimer::create();
+    std::atomic<bool> arbitrateOnce{true};
+    std::atomic<uint32_t> numTasks{0};
+    std::atomic<uint32_t> numTasksWithMatchingDriverContext{0};
+    std::atomic<uint32_t> numSuspensions{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::Writer::parallelEncodeTask",
+        std::function<void(const uint32_t*)>([&](const uint32_t*) {
+          numTasks.fetch_add(1, std::memory_order_relaxed);
+          const auto* driverThreadContext = velox::exec::driverThreadContext();
+          if (driverThreadContext != nullptr &&
+              driverThreadContext->driverCtx() == expectedDriverContext) {
+            numTasksWithMatchingDriverContext.fetch_add(
+                1, std::memory_order_relaxed);
+          }
+          if (arbitrateOnce.exchange(false)) {
+            // This is the same enter/leave pair invoked when an encoder memory
+            // pool must grow. It must suspend the parent driver, even though
+            // this callback is running on the encoding executor.
+            reclaimer->enterArbitration();
+            if (driver->state().suspended()) {
+              numSuspensions.fetch_add(1, std::memory_order_relaxed);
+            }
+            reclaimer->leaveArbitration();
+          }
+        }));
+
+    nimble::WriterOptions writerOptions;
+    writerOptions.enableChunking = enableChunking;
+    writerOptions.encodingExecutor = folly::getKeepAliveToken(encodingExecutor);
+    writerOptions.maxEncodeParallelism = 4;
+    writerOptions.minStreamsPerEncodingTask = 1;
+
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        writerOptions);
+    velox::exec::ScopedDriverThreadContext scopedDriverThreadContext{
+        expectedDriverContext};
+    writer.write(input);
+    writer.close();
+
+    EXPECT_GT(numTasks.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(
+        numTasksWithMatchingDriverContext.load(std::memory_order_relaxed),
+        numTasks.load(std::memory_order_relaxed));
+    EXPECT_EQ(numSuspensions.load(std::memory_order_relaxed), 1);
+    EXPECT_FALSE(driver->state().suspended());
+  }
+
+  std::atomic<bool> failOnce{true};
+  std::atomic<uint32_t> numCompletedTasks{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::Writer::parallelEncodeTask",
+      std::function<void(const uint32_t*)>([&](const uint32_t*) {
+        if (failOnce.exchange(false)) {
+          VELOX_FAIL("injected parallel encoding failure");
+        }
+        numCompletedTasks.fetch_add(1, std::memory_order_relaxed);
+      }));
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.encodingExecutor = folly::getKeepAliveToken(encodingExecutor);
+  writerOptions.maxEncodeParallelism = 4;
+  writerOptions.minStreamsPerEncodingTask = 1;
+  std::string file;
+  nimble::Writer writer(
+      type,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      writerOptions);
+  {
+    velox::exec::ScopedDriverThreadContext scopedDriverThreadContext{
+        expectedDriverContext};
+    writer.write(input);
+    EXPECT_THROW(writer.close(), velox::VeloxException);
+  }
+  // ExecutorBarrier must drain the three remaining callbacks before it
+  // rethrows the first failure.
+  EXPECT_EQ(numCompletedTasks.load(std::memory_order_relaxed), 3);
+  EXPECT_NO_THROW(writer.abort());
+
+  std::promise<bool> contextRestoredPromise;
+  auto contextRestored = contextRestoredPromise.get_future();
+  encodingExecutor.add([&contextRestoredPromise]() {
+    contextRestoredPromise.set_value(
+        velox::exec::driverThreadContext() == nullptr);
+  });
+  EXPECT_TRUE(contextRestored.get());
+
+  task->leave(driver->state(), std::function<void(velox::exec::StopReason)>{});
+}
+
+DEBUG_ONLY_TEST_F(WriterTest, encodingRemainsSequentialUnderMemoryArbitration) {
+  velox::common::testutil::TestValue::enable();
+
+  auto type = velox::ROW({
+      {"a", velox::BIGINT()},
+      {"b", velox::BIGINT()},
+      {"c", velox::BIGINT()},
+      {"d", velox::BIGINT()},
+      {"e", velox::BIGINT()},
+      {"f", velox::BIGINT()},
+      {"g", velox::BIGINT()},
+      {"h", velox::BIGINT()},
+  });
+  velox::VectorFuzzer fuzzer(
+      {.vectorSize = 100, .nullRatio = 0}, leafPool_.get());
+  auto input = fuzzer.fuzzInputRow(type);
+  folly::CPUThreadPoolExecutor encodingExecutor{4};
+
+  for (const bool enableChunking : {false, true}) {
+    SCOPED_TRACE(fmt::format("enableChunking={}", enableChunking));
+
+    std::atomic<uint32_t> numTasks{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::nimble::Writer::parallelEncodeTask",
+        std::function<void(const uint32_t*)>([&](const uint32_t*) {
+          numTasks.fetch_add(1, std::memory_order_relaxed);
+        }));
+
+    nimble::WriterOptions writerOptions;
+    writerOptions.enableChunking = enableChunking;
+    writerOptions.encodingExecutor = folly::getKeepAliveToken(encodingExecutor);
+    writerOptions.maxEncodeParallelism = 4;
+    writerOptions.minStreamsPerEncodingTask = 1;
+
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        writerOptions);
+    velox::memory::ScopedMemoryArbitrationContext arbitrationContext{
+        rootPool_.get()};
+    writer.write(input);
+    writer.close();
+
+    EXPECT_EQ(numTasks.load(std::memory_order_relaxed), 0);
   }
 }
 

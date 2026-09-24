@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <string_view>
 
 #include "velox/buffer/BufferPool.h"

@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/base/Counters.h"
@@ -73,6 +74,8 @@
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
+#include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 
@@ -2801,6 +2804,11 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
   if (!options.encodingExecutor || options.maxEncodeParallelism == 0) {
     return 1;
   }
+  // A reclaim-triggered flush must remain on the reclaiming thread. Dispatching
+  // executor tasks could enter memory arbitration recursively.
+  if (velox::memory::underMemoryArbitration()) {
+    return 1;
+  }
   const auto minStreamsPerEncodingTask =
       std::max(1u, options.minStreamsPerEncodingTask);
   const auto maxByStreams =
@@ -2934,41 +2942,56 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add(
-            [&, taskId, encodingScratchBufferPool, encodingBufferPool]() {
-              velox::common::testutil::TestValue::adjust(
-                  "facebook::nimble::Writer::parallelEncodeTask",
-                  const_cast<uint32_t*>(&taskId));
-              const auto startCpuNanos = velox::process::threadCpuNanos();
-              while (true) {
-                const auto fetchIndex =
-                    nextStream.fetch_add(1, std::memory_order_relaxed);
-                if (fetchIndex >= streamCount) {
-                  break;
-                }
-                const auto streamIndex = orderedIndices[fetchIndex];
-                auto& [nodeId, streamData] = streams[streamIndex];
-                uint64_t streamSize{0};
-                processStream(
-                    *streamData,
-                    encodingScratchBufferPool,
-                    encodingBufferPool,
-                    streamSize,
-                    chunkSize);
-                auto* statsCollector = context_->getStatsCollector(nodeId);
-                if (statsCollector) {
-                  statsCollector->addPhysicalSize(streamSize);
-                }
-              }
-              encodingCpuNanos.fetch_add(
-                  velox::process::threadCpuNanos() - startCpuNanos,
-                  std::memory_order_relaxed);
-            });
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool]() {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTask",
+              const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
+          const auto startCpuNanos = velox::process::threadCpuNanos();
+          while (true) {
+            const auto fetchIndex =
+                nextStream.fetch_add(1, std::memory_order_relaxed);
+            if (fetchIndex >= streamCount) {
+              break;
+            }
+            const auto streamIndex = orderedIndices[fetchIndex];
+            auto& [nodeId, streamData] = streams[streamIndex];
+            uint64_t streamSize{0};
+            processStream(
+                *streamData,
+                encodingScratchBufferPool,
+                encodingBufferPool,
+                streamSize,
+                chunkSize);
+            auto* statsCollector = context_->getStatsCollector(nodeId);
+            if (statsCollector) {
+              statsCollector->addPhysicalSize(streamSize);
+            }
+          }
+          encodingCpuNanos.fetch_add(
+              velox::process::threadCpuNanos() - startCpuNanos,
+              std::memory_order_relaxed);
+        });
       }
       barrier.waitAll();
     } else {
@@ -3322,15 +3345,31 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
+      const velox::exec::DriverCtx* driverCtx = nullptr;
+      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
+        driverCtx = driverThreadCtx->driverCtx();
+      }
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
             this->encodingScratchBufferPool(taskId);
         auto* encodingBufferPool = this->encodingBufferPool(taskId);
-        barrier.add([&, taskId, encodingScratchBufferPool, encodingBufferPool] {
+        barrier.add([&,
+                     driverCtx,
+                     taskId,
+                     encodingScratchBufferPool,
+                     encodingBufferPool] {
+          std::optional<velox::exec::ScopedDriverThreadContext>
+              scopedDriverThreadContext;
+          if (driverCtx != nullptr) {
+            scopedDriverThreadContext.emplace(driverCtx);
+          }
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
+          velox::common::testutil::TestValue::adjust(
+              "facebook::nimble::Writer::parallelEncodeTaskMemoryPool",
+              encodingMemoryPool_.get());
           const auto startCpuNanos = velox::process::threadCpuNanos();
           while (true) {
             const auto inputIndex =
